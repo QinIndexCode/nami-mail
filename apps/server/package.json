@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "node ../../scripts/run-server-node.mjs --watch",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
-    "test": "vitest run",
+    "start": "node ../../scripts/run-server-node.mjs --start",
+    "test": "node ../../scripts/run-server-tests.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -19,6 +19,7 @@
     "imapflow": "^1.4.7",
     "mailparser": "^3.9.14",
     "nodemailer": "^9.0.3",
+    "oauth4webapi": "^3.8.6",
     "zod": "^4.4.3"
   },
   "devDependencies": {

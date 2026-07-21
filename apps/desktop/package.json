@@ -1,0 +1,11 @@
+{
+  "name": "@nami/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test tests/secure-master-key.test.ts tests/update-status.test.ts tests/update-policy.test.ts tests/update-preferences.test.ts tests/update-install-result.test.ts tests/update-trust.test.ts tests/github-zip-update.test.ts tests/updater.test.ts tests/zip-update-installer.test.ts tests/renderer-cache-policy.test.ts"
+  }
+}

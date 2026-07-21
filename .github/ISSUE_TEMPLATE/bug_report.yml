@@ -1,0 +1,64 @@
+name: 缺陷报告
+description: 报告可复现的功能、显示或兼容性问题
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你的报告。请勿提交真实邮件、邮箱地址、附件、密码、OAuth code、访问令牌或本地数据库。安全问题请阅读 SECURITY.md 后使用私有安全通报。
+  - type: input
+    id: version
+    attributes:
+      label: Nami Mail 版本
+      description: 例如 0.1.0；请不要粘贴完整日志路径。
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: 运行方式
+      options:
+        - Windows 安装版
+        - Windows 开发桌面版
+        - 浏览器开发模式
+        - 其他
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: 系统与环境
+      description: Windows 版本、CPU 架构、浏览器版本或网络环境中与问题相关的部分。
+      placeholder: Windows 11 23H2 x64
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 最小复现步骤
+      description: 使用虚构邮箱和示例文本。请从启动状态开始编号描述。
+      placeholder: |
+        1. 使用演示数据打开应用
+        2. 打开设置
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 可附脱敏截图。先移除邮件正文、地址、主题、附件名、Message-ID 和令牌。
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 脱敏诊断信息（可选）
+      description: 仅提供错误分类或最小日志片段；不要提供密钥、会话、OAuth 或邮箱数据。

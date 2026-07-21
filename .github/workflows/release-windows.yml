@@ -1,0 +1,73 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      # v4.2.2; pin the action implementation for a secret-free validation job.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      # v4.4.0; pin the action implementation for a secret-free validation job.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node --test scripts/release-policy.test.mjs
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm --workspace @nami/web run test
+      - run: npm run test:desktop-security
+      - run: npm run smoke:runtime
+      - run: npm audit --omit=dev --audit-level=high
+
+  release:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
+    env:
+      NAMI_MAIL_GITHUB_REPOSITORY: ${{ github.repository }}
+      NAMI_MAIL_RELEASE_DIRECTORY: release-artifacts/${{ github.ref_name }}
+    steps:
+      # v4.2.2; pin the action implementation before this job receives release secrets.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      # v4.4.0; pin the action implementation before this job receives release secrets.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Sign, upload draft, and run package smoke
+        run: npm run publish:github
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          NAMI_MAIL_EXPECTED_WINDOWS_PUBLISHER: ${{ secrets.WINDOWS_CSC_PUBLISHER }}
+          NAMI_MAIL_EXPECTED_WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CSC_THUMBPRINT }}
+          NAMI_MAIL_UPDATE_ED25519_PRIVATE_KEY: ${{ secrets.NAMI_MAIL_UPDATE_ED25519_PRIVATE_KEY }}
+      - name: Verify remote draft and publish stable release
+        run: node scripts/promote-github-release.mjs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

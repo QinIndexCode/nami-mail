@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createImapClient, friendlyMailError } from "../src/mail.js";
+import { createImapClient, friendlyMailError, mailErrorCode } from "../src/mail.js";
 
 describe("IMAP client error isolation", () => {
   it("absorbs a late error event instead of terminating the server", () => {
@@ -18,13 +18,14 @@ describe("IMAP client error isolation", () => {
       serverResponseCode: "AUTHENTICATIONFAILED",
     });
 
-    expect(friendlyMailError(error, "请使用应用专用密码")).toBe(
-      "邮箱拒绝了登录凭据。 请使用应用专用密码",
-    );
+    expect(mailErrorCode(error)).toBe("imap_auth_failed");
+    expect(friendlyMailError(error, "请使用应用专用密码")).toContain("请使用应用专用密码");
   });
 
   it("recognizes transport codes when the message is generic", () => {
     const error = Object.assign(new Error("Connection failed"), { code: "ETIMEDOUT" });
-    expect(friendlyMailError(error)).toBe("连接邮箱服务器超时，请检查网络或稍后重试。");
+
+    expect(mailErrorCode(error)).toBe("timeout");
+    expect(friendlyMailError(error)).not.toContain("ETIMEDOUT");
   });
 });

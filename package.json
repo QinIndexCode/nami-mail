@@ -2,8 +2,27 @@
   "name": "nami-mail",
   "version": "0.1.0",
   "private": true,
-  "description": "A local-first, multi-account web mail client.",
+  "description": "Local-first, multi-account desktop mail client.",
+  "author": "Nami Mail",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QinIndexCode/nami-mail.git"
+  },
+  "bugs": {
+    "url": "https://github.com/QinIndexCode/nami-mail/issues"
+  },
+  "homepage": "https://github.com/QinIndexCode/nami-mail#readme",
+  "keywords": [
+    "email",
+    "imap",
+    "smtp",
+    "electron",
+    "desktop",
+    "local-first"
+  ],
   "type": "module",
+  "main": "apps/desktop/dist/main.mjs",
   "workspaces": [
     "apps/*"
   ],
@@ -11,13 +30,108 @@
     "dev": "concurrently -k -n api,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm --workspace @nami/server run dev",
     "dev:web": "npm --workspace @nami/web run dev",
-    "build": "npm --workspace @nami/web run build && npm --workspace @nami/server run build",
+    "build:brand": "node scripts/build-brand-assets.mjs",
+    "build:brand:check": "node scripts/build-brand-assets.mjs --check",
+    "build": "npm run build:brand && npm --workspace @nami/web run build && npm --workspace @nami/server run build && npm --workspace @nami/desktop run build",
     "start": "npm --workspace @nami/server run start",
     "test": "npm --workspace @nami/server run test",
-    "typecheck": "npm --workspace @nami/server run typecheck && npm --workspace @nami/web run typecheck"
+    "test:desktop-security": "npm --workspace @nami/desktop run test",
+    "test:server": "npm --workspace @nami/server run test",
+    "smoke:runtime": "node scripts/run-server-node.mjs --script scripts/smoke-runtime.mjs",
+    "smoke:server-node": "node scripts/smoke-server-node-abi.mjs",
+    "smoke:desktop": "npm run build && npm run rebuild:electron && node scripts/smoke-desktop.mjs",
+    "smoke:package": "node scripts/smoke-package.mjs",
+    "smoke:installer": "node scripts/smoke-installer.mjs",
+    "prepare:server-sqlite": "node scripts/prepare-server-sqlite.mjs",
+    "rebuild:node": "npm run prepare:server-sqlite",
+    "rebuild:electron": "electron-rebuild --force --only better-sqlite3",
+    "typecheck": "npm --workspace @nami/server run typecheck && npm --workspace @nami/web run typecheck && npm --workspace @nami/desktop run typecheck",
+    "dev:desktop": "npm run build && npm run rebuild:electron && electron .",
+    "package:win": "node scripts/package-win.mjs",
+    "package:win:github": "node scripts/package-win.mjs --github",
+    "publish:github": "node scripts/package-win.mjs --github --publish"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "@fastify/static": "^10.1.0",
+    "better-sqlite3": "^12.11.1",
+    "dotenv": "^17.2.3",
+    "fastify": "^5.10.0",
+    "imapflow": "^1.4.7",
+    "mailparser": "^3.9.14",
+    "nodemailer": "^9.0.3",
+    "oauth4webapi": "^3.8.6",
+    "sharp": "^0.35.3",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "@electron/asar": "^3.4.1",
+    "@electron/rebuild": "^4.2.0",
+    "concurrently": "^9.2.1",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
+    "js-yaml": "^4.1.0"
+  },
+  "build": {
+    "appId": "com.nami.mail",
+    "productName": "Nami Mail",
+    "artifactName": "Nami Mail Setup ${version}.${ext}",
+    "icon": "build/icon.ico",
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "release"
+    },
+    "extraResources": [
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "build/nami-update-trust.json",
+        "to": "nami-update-trust.json"
+      }
+    ],
+    "files": [
+      "apps/desktop/dist/**/*",
+      "apps/server/dist/**/*",
+      "apps/web/dist/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/bindings/**/*",
+      "node_modules/file-uri-to-path/**/*",
+      "node_modules/sharp/**/*",
+      "node_modules/@img/sharp-win32-x64/**/*"
+    ],
+    "npmRebuild": true,
+    "win": {
+      "icon": "build/icon.ico",
+      "signExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerLanguages": [
+        "zh_CN"
+      ],
+      "language": 2052,
+      "include": "build/installer.nsh",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Nami Mail"
+    }
   },
   "engines": {
     "node": ">=22"

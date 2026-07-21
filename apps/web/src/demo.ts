@@ -1,44 +1,7 @@
-import type { Account, Message, ProviderInfo, Stats } from "./types";
+import type { Account, Message, OutboundSubmission, ProviderInfo, Stats } from "./types";
+import { demoProviderCatalog } from "./demoProviderCatalog";
 
-export const demoProviders: ProviderInfo[] = [
-  {
-    id: "gmail", name: "Gmail", domains: ["gmail.com"], credentialHint: "使用 16 位应用专用密码",
-    credentialName: "16 位应用专用密码", basicAuthLimited: false,
-    setupSteps: ["在 Google 账户中开启两步验证。", "打开应用专用密码并为 Nami Mail 生成密码。", "复制 16 位密码并粘贴到密码框。"],
-    helpUrl: "https://myaccount.google.com/apppasswords", helpLabel: "打开 Google 应用专用密码",
-  },
-  {
-    id: "icloud", name: "iCloud Mail", domains: ["icloud.com"], credentialHint: "使用 Apple 应用专用密码",
-    credentialName: "App 专用密码", basicAuthLimited: false,
-    setupSteps: ["确认 Apple 账户已经开启双重认证。", "在登录与安全中生成 App 专用密码。", "将完整结果粘贴到密码框。"],
-    helpUrl: "https://account.apple.com/account/manage", helpLabel: "打开 Apple 账户安全设置",
-  },
-  {
-    id: "qq", name: "QQ Mail", domains: ["qq.com"], credentialHint: "使用 QQ 邮箱授权码",
-    credentialName: "16 位客户端授权码", basicAuthLimited: false,
-    setupSteps: ["登录 QQ 邮箱网页版并进入设置。", "开启 IMAP/SMTP 并完成安全验证。", "复制授权码并粘贴到密码框。"],
-    helpUrl: "https://mail.qq.com/", helpLabel: "打开 QQ 邮箱设置",
-  },
-  {
-    id: "aol", name: "AOL Mail", domains: ["aol.com"], credentialHint: "使用 AOL 第三方应用密码",
-    credentialName: "第三方应用密码", basicAuthLimited: false,
-    setupSteps: ["打开 AOL 账户安全设置。", "创建用于 Nami Mail 的应用密码。", "复制密码并粘贴到密码框。"],
-    helpUrl: "https://help.aol.com/articles/how-do-i-use-other-email-applications-to-send-and-receive-my-aol-mail", helpLabel: "查看 AOL 官方设置",
-  },
-  {
-    id: "fastmail", name: "Fastmail", domains: ["fastmail.com"], credentialHint: "使用 Fastmail 应用专用密码",
-    credentialName: "应用专用密码", basicAuthLimited: false,
-    setupSteps: ["打开 Fastmail 密码与安全设置。", "创建邮件客户端应用密码。", "确认账户方案支持 IMAP/SMTP。"],
-    helpUrl: "https://www.fastmail.help/hc/en-us/articles/1500000278342", helpLabel: "查看 Fastmail 官方设置",
-  },
-  {
-    id: "yandex", name: "Yandex Mail", domains: ["yandex.com", "yandex.ru", "ya.ru"], credentialHint: "启用 IMAP 后使用 Yandex 应用密码",
-    credentialName: "应用专用密码", basicAuthLimited: false,
-    setupSteps: ["在设置中启用 IMAP。", "创建邮件客户端应用密码。", "使用邮箱地址本地部分作为用户名。"],
-    helpUrl: "https://yandex.com/support/yandex-360/customers/mail/en/mail-clients/others", helpLabel: "查看 Yandex 官方设置",
-  },
-];
-
+export const demoProviders: ProviderInfo[] = demoProviderCatalog;
 export const demoAccounts: Account[] = [
   {
     id: "personal",
@@ -50,9 +13,9 @@ export const demoAccounts: Account[] = [
     lastSyncedAt: new Date().toISOString(),
     createdAt: new Date().toISOString(),
     folders: [
-      { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 12, unseen: 3 },
-      { path: "Sent Messages", name: "已发送", specialUse: "\\Sent", total: 8, unseen: 0 },
-      { path: "Drafts", name: "草稿", specialUse: "\\Drafts", total: 1, unseen: 0 },
+      { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 3, unseen: 2 },
+      { path: "Sent Messages", name: "已发送", specialUse: "\\Sent", total: 0, unseen: 0 },
+      { path: "Drafts", name: "草稿", specialUse: "\\Drafts", total: 0, unseen: 0 },
     ],
   },
   {
@@ -64,11 +27,59 @@ export const demoAccounts: Account[] = [
     lastError: null,
     lastSyncedAt: new Date(Date.now() - 62_000).toISOString(),
     createdAt: new Date().toISOString(),
-    folders: [{ path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 18, unseen: 2 }],
+    folders: [{ path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 2, unseen: 0 }],
   },
 ];
 
 const now = Date.now();
+export const demoSubmissions: OutboundSubmission[] = [
+  {
+    id: "demo-submission-unknown",
+    accountId: "work",
+    messageId: "<demo-unknown-7f31c52a@mailer.example>",
+    subject: "合作提案最终确认",
+    recipients: ["reviewer@example.com", "ops@example.test", "legal@example.test", "archive@example.com"],
+    deliveryStatus: "unknown_delivery",
+    errorCode: "connection_failed",
+    errorMessage: "发送连接在等待最终响应时中断，服务端是否接受邮件暂时无法确认。",
+    postSubmitWarning: null,
+    submittedAt: null,
+    confirmedAt: null,
+    createdAt: new Date(now - 17 * 60_000).toISOString(),
+    updatedAt: new Date(now - 16 * 60_000).toISOString(),
+  },
+  {
+    id: "demo-submission-submitting",
+    accountId: "personal",
+    messageId: "<demo-submitting-3ae8901b@mailer.example>",
+    subject: "周末行程与预订信息",
+    recipients: ["friend@example.com"],
+    deliveryStatus: "submitting",
+    errorCode: null,
+    errorMessage: null,
+    postSubmitWarning: null,
+    submittedAt: null,
+    confirmedAt: null,
+    createdAt: new Date(now - 42_000).toISOString(),
+    updatedAt: new Date(now - 18_000).toISOString(),
+  },
+  {
+    id: "demo-submission-confirmed",
+    accountId: "personal",
+    messageId: "<demo-confirmed-91d2bc40@mailer.example>",
+    subject: "照片下载链接",
+    recipients: ["studio@example.com", "editor@example.test"],
+    deliveryStatus: "confirmed",
+    errorCode: null,
+    errorMessage: null,
+    postSubmitWarning: null,
+    submittedAt: new Date(now - 3 * 60 * 60_000).toISOString(),
+    confirmedAt: new Date(now - 2.9 * 60 * 60_000).toISOString(),
+    createdAt: new Date(now - 3 * 60 * 60_000).toISOString(),
+    updatedAt: new Date(now - 2.9 * 60 * 60_000).toISOString(),
+  },
+];
+
 export const demoMessages: Message[] = [
   {
     id: "m1",
@@ -80,6 +91,7 @@ export const demoMessages: Message[] = [
     subject: "周末，在安静的地方见",
     from: { name: "林澈", address: "lin@example.com" },
     to: [{ name: "You", address: "hello@icloud.com" }],
+    cc: [],
     sentAt: new Date(now - 12 * 60_000).toISOString(),
     snippet: "找到一家很安静的新店。窗边的位置下午有很好的光，我们周六四点见？",
     textBody: "找到一家很安静的新店。\n\n窗边的位置下午有很好的光，我们周六四点见？\n\n林澈",
@@ -88,6 +100,7 @@ export const demoMessages: Message[] = [
     seen: false,
     flagged: false,
     hasAttachments: false,
+    attachments: [],
     size: 1832,
   },
   {
@@ -100,6 +113,7 @@ export const demoMessages: Message[] = [
     subject: "Design review · July notes",
     from: { name: "Mira Studio", address: "notes@mira.studio" },
     to: [{ name: "Studio", address: "studio@gmail.com" }],
+    cc: [],
     sentAt: new Date(now - 48 * 60_000).toISOString(),
     snippet: "The quieter navigation direction feels right. We kept the hierarchy and removed three competing accents.",
     textBody: "The quieter navigation direction feels right.\n\nWe kept the hierarchy and removed three competing accents. The prototype is ready for a final pass tomorrow morning.\n\n— Mira",
@@ -108,6 +122,7 @@ export const demoMessages: Message[] = [
     seen: true,
     flagged: true,
     hasAttachments: true,
+    attachments: [{ partId: "2", filename: "july-review-notes.pdf", contentType: "application/pdf", size: 24124, related: false, disposition: "attachment" }],
     size: 24124,
   },
   {
@@ -120,6 +135,7 @@ export const demoMessages: Message[] = [
     subject: "你的七月账单已就绪",
     from: { name: "North Bank", address: "hello@northbank.example" },
     to: [{ name: "You", address: "hello@icloud.com" }],
+    cc: [],
     sentAt: new Date(now - 4 * 60 * 60_000).toISOString(),
     snippet: "本月账单已经生成。相比上月，你的订阅支出减少了 18%。",
     textBody: "本月账单已经生成。相比上月，你的订阅支出减少了 18%。\n\n登录官方客户端可查看明细。",
@@ -128,6 +144,7 @@ export const demoMessages: Message[] = [
     seen: false,
     flagged: false,
     hasAttachments: false,
+    attachments: [],
     size: 4240,
   },
   {
@@ -140,6 +157,7 @@ export const demoMessages: Message[] = [
     subject: "Re: launch checklist",
     from: { name: "Noah", address: "noah@atelier.example" },
     to: [{ name: "Studio", address: "studio@gmail.com" }],
+    cc: [],
     sentAt: new Date(now - 24 * 60 * 60_000).toISOString(),
     snippet: "Everything on my side is signed off. I left one small note on the mobile transition.",
     textBody: "Everything on my side is signed off. I left one small note on the mobile transition.\n\nNo rush — tomorrow is perfect.",
@@ -148,6 +166,7 @@ export const demoMessages: Message[] = [
     seen: true,
     flagged: false,
     hasAttachments: false,
+    attachments: [],
     size: 2860,
   },
   {
@@ -160,6 +179,7 @@ export const demoMessages: Message[] = [
     subject: "照片整理好了",
     from: { name: "陈屿", address: "yu@example.com" },
     to: [{ name: "You", address: "hello@icloud.com" }],
+    cc: [],
     sentAt: new Date(now - 2 * 24 * 60 * 60_000).toISOString(),
     snippet: "上周拍的照片我挑了二十张，原片和调色版本都放在附件里。",
     textBody: "上周拍的照片我挑了二十张，原片和调色版本都放在附件里。\n\n喜欢第三组的光线。",
@@ -168,8 +188,9 @@ export const demoMessages: Message[] = [
     seen: true,
     flagged: false,
     hasAttachments: true,
+    attachments: [{ partId: "2", filename: "weekend-photos.zip", contentType: "application/zip", size: 8842, related: false, disposition: "attachment" }],
     size: 8842,
   },
 ];
 
-export const demoStats: Stats = { accounts: 2, messages: 30, unread: 5 };
+export const demoStats: Stats = { accounts: 2, messages: 5, unread: 2 };
