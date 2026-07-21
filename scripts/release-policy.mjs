@@ -332,14 +332,33 @@ export async function uploadGitHubReleaseAssets({
   return release;
 }
 
-export async function promoteGitHubDraftRelease({ owner, repo, releaseId, tag, token, fetchImpl = globalThis.fetch }) {
+export async function promoteGitHubDraftRelease({
+  owner,
+  repo,
+  releaseId,
+  tag,
+  token,
+  releaseName,
+  releaseNotes,
+  fetchImpl = globalThis.fetch,
+}) {
+  assert.equal(typeof releaseName, "string", "GitHub Release name must be a string.");
+  assert.ok(releaseName.trim(), "GitHub Release name must not be empty.");
+  assert.equal(typeof releaseNotes, "string", "GitHub Release Notes must be a string.");
+  assert.ok(releaseNotes.trim(), "GitHub Release Notes must not be empty.");
   const promoted = await githubJson(
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/${releaseId}`,
     {
       token,
       fetchImpl,
       method: "PATCH",
-      body: { draft: false, prerelease: false, make_latest: "true" },
+      body: {
+        name: releaseName.trim(),
+        body: releaseNotes.trim(),
+        draft: false,
+        prerelease: false,
+        make_latest: "true",
+      },
       label: `GitHub Release promotion ${tag}`,
     },
   );

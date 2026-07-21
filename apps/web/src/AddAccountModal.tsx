@@ -655,8 +655,8 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
   const guideIsPreview = !activeDiscovery && Boolean(selectedProviderGuide);
   const sourceNote = guideProvider?.isCustom
     ? guideIsPreview
-      ? "填写完整企业或学校邮箱后，Nami Mail 会尝试查找连接设置；也可以随时改用手动 IMAP / SMTP。"
-      : "此域名的设置来自自动发现，请与邮箱管理员提供的设置核对。"
+      ? "填写完整企业或学校邮箱后，Nami Mail 会尝试查找可用的连接设置；也可以随时选择手动配置。"
+      : "此邮箱的设置由自动查找得出，请与邮箱管理员提供的信息核对。"
     : guideProvider?.caveat;
   const guideAvailable = Boolean(guideProvider) && (!needsProviderDiscovery || Boolean(selectedProviderId));
   const serverConfiguration = guideProvider && !guideProvider.isCustom
@@ -671,7 +671,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
     const copied = await copySetupTextToClipboard(serverConfiguration);
     if (!mountedRef.current) return;
     if (!copied) {
-      setStatus({ kind: "warning", message: "无法直接复制服务器设置。请手动选择上方 IMAP / SMTP 信息复制。" });
+      setStatus({ kind: "warning", message: "无法直接复制服务器设置。请选中上方 IMAP / SMTP 信息后复制。" });
       return;
     }
     if (serverConfigurationCopyTimerRef.current !== null) window.clearTimeout(serverConfigurationCopyTimerRef.current);
@@ -820,7 +820,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
               {busyAction === "discover" ? "识别中" : "识别服务商"}
             </button>
           </div>
-          <small id="account-email-help" className="account-field-help">支持个人、企业和高校邮箱；企业与学校邮箱会尝试自动发现连接设置。</small>
+          <small id="account-email-help" className="account-field-help">支持个人、企业和高校邮箱；输入完整企业或学校邮箱后，Nami Mail 会查找连接设置。</small>
 
           {activeDiscovery && (
             <section className={`provider-hint account-provider-result${manualReviewRecommended(activeDiscovery) ? " warning" : ""}`} aria-live="polite">

@@ -15,6 +15,7 @@ export type StartupUpdatePromptProps = {
 };
 
 const promptablePhases = new Set<DesktopUpdateSnapshot["phase"]>(["available", "ready", "error"]);
+const updateUnavailableMessage = "自动更新暂时不可用。请退出后重新打开 Nami Mail，再试一次。";
 
 const snoozeOptions = [
   { minutes: 60, label: "1 小时后提醒" },
@@ -63,14 +64,14 @@ function phaseCopy(snapshot: DesktopUpdateSnapshot): { eyebrow: string; title: s
     return {
       eyebrow: "更新已就绪",
       title: `${version} 已准备好安装`,
-      description: "更新包已完成完整性检查。请先保存正在编辑的内容；选择“重启并更新”后，Nami Mail 会关闭本地邮件服务并继续安装。",
+      description: "更新包已通过完整性检查。请先保存正在编辑的内容；选择“重启并更新”后，Nami Mail 会退出并继续安装。",
     };
   }
   if (snapshot.phase === "checking") {
     return {
       eyebrow: "正在检查更新",
       title: "正在检查可用更新",
-      description: "正在核对发布渠道中的版本信息，请稍候。",
+      description: "正在查询是否有可用更新，请稍候。",
     };
   }
   if (snapshot.phase === "error") {
@@ -84,7 +85,7 @@ function phaseCopy(snapshot: DesktopUpdateSnapshot): { eyebrow: string; title: s
     return {
       eyebrow: "更新需要处理",
       title: "上次更新未完成",
-      description: `${version} 未能完成安装。Nami Mail 已恢复正常运行；你可以重新检查，或稍后在设置中处理。`,
+      description: `${version} 尚未完成安装。Nami Mail 已恢复正常运行；你可以重新检查，也可以稍后在设置中处理。`,
     };
   }
   return {
@@ -191,7 +192,7 @@ export default function StartupUpdatePrompt({
   const download = () => {
     const bridge = desktopBridge();
     if (!bridge) {
-      setRequestError("更新组件当前不可用。请关闭并重新打开 Nami Mail 后重新检查。");
+      setRequestError(updateUnavailableMessage);
       return;
     }
     if (snapshot?.targetVersion) setBackgroundDownloadVersion(snapshot.targetVersion);
@@ -201,7 +202,7 @@ export default function StartupUpdatePrompt({
   const skip = () => {
     const bridge = desktopBridge();
     if (!bridge) {
-      setRequestError("更新组件当前不可用。请关闭并重新打开 Nami Mail 后重新检查。");
+      setRequestError(updateUnavailableMessage);
       return;
     }
     void runAction("skip", () => bridge.skipUpdate());
@@ -210,7 +211,7 @@ export default function StartupUpdatePrompt({
   const snooze = () => {
     const bridge = desktopBridge();
     if (!bridge) {
-      setRequestError("更新组件当前不可用。请关闭并重新打开 Nami Mail 后重新检查。");
+      setRequestError(updateUnavailableMessage);
       return;
     }
     void runAction("snooze", () => bridge.snoozeUpdate(snoozeMinutes));
@@ -219,7 +220,7 @@ export default function StartupUpdatePrompt({
   const checkAgain = () => {
     const bridge = desktopBridge();
     if (!bridge) {
-      setRequestError("更新组件当前不可用。请关闭并重新打开 Nami Mail 后重新检查。");
+      setRequestError(updateUnavailableMessage);
       return;
     }
     void runAction("check", () => bridge.checkForUpdates());
@@ -234,7 +235,7 @@ export default function StartupUpdatePrompt({
   const install = async () => {
     const bridge = desktopBridge();
     if (!bridge || busyAction) {
-      if (!bridge) setRequestError("更新组件当前不可用。请关闭并重新打开 Nami Mail 后重新检查。");
+      if (!bridge) setRequestError(updateUnavailableMessage);
       return;
     }
     setBusyAction("install");

@@ -279,10 +279,9 @@ export default function SendingStatusModal({
                   )}
                   <div className="sending-status-meta">
                     <span>{account?.email ?? "已移除的账户"}</span>
-                    <StatusValueTooltip text={`Message-ID：${submission.messageId}`}>
-                      <code className="sending-status-message-id">ID {submissionMessageIdSuffix(submission.messageId)}</code>
+                    <StatusValueTooltip text="用于核对这封邮件的发送记录">
+                      <code className="sending-status-message-id">核对编号 {submissionMessageIdSuffix(submission.messageId)}</code>
                     </StatusValueTooltip>
-                    <code className="sending-status-mobile-value sending-status-message-id">Message-ID：{submission.messageId}</code>
                   </div>
                   <button
                     className="sending-status-details-toggle"
@@ -298,7 +297,7 @@ export default function SendingStatusModal({
                       <div><dt>主题</dt><dd>{title}</dd></div>
                       <div><dt>收件人</dt><dd>{fullRecipients}</dd></div>
                       <div><dt>发件账户</dt><dd>{account?.email ?? "已移除的账户"}</dd></div>
-                      <div><dt>Message-ID</dt><dd><code>{submission.messageId}</code></dd></div>
+                      <div><dt>邮件标识（Message-ID）</dt><dd><code>{submission.messageId}</code></dd></div>
                     </dl>
                   </section>
                   {(canSync || canCreate) && (
@@ -321,7 +320,7 @@ export default function SendingStatusModal({
           <section ref={confirmationRef} className="confirmation-card sending-status-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="confirm-new-message-title" aria-describedby="confirm-new-message-description" tabIndex={-1}>
             <span className="eyebrow">重试草稿</span>
             <h3 id="confirm-new-message-title">新建重试草稿？</h3>
-            <p id="confirm-new-message-description">原邮件的状态不会改变，也不会再次发送。Nami Mail 会继续依据发件服务器响应以及“已发送”中的相同 Message-ID 核对原邮件；新草稿只会预填收件人与主题，发送前仍可修改。</p>
+            <p id="confirm-new-message-description">原邮件的状态不会改变，也不会再次发送。Nami Mail 会继续依据邮件服务商的响应和“已发送”记录核对原邮件；新草稿只会预填收件人与主题，发送前仍可修改。</p>
             <div className="confirmation-actions">
               <button className="secondary-button" type="button" onClick={() => setConfirmReplacement(null)}>继续核对</button>
               <button className="primary-button" type="button" onClick={createReplacement}>新建重试草稿</button>

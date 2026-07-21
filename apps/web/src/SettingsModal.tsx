@@ -487,7 +487,7 @@ export default function SettingsModal({
   const checkForUpdates = () => {
     const bridge = desktopBridge();
     if (!bridge) {
-      setNotice({ kind: "error", message: "更新组件当前不可用。请关闭并重新打开 Nami Mail 后重新检查。" });
+      setNotice({ kind: "error", message: "自动更新暂时不可用。请退出后重新打开 Nami Mail，再试一次。" });
       return;
     }
     void runUpdateAction("check", () => bridge.checkForUpdates());
@@ -496,7 +496,7 @@ export default function SettingsModal({
   const downloadUpdate = () => {
     const bridge = desktopBridge();
     if (!bridge) {
-      setNotice({ kind: "error", message: "更新组件当前不可用。请关闭并重新打开 Nami Mail 后重新检查。" });
+      setNotice({ kind: "error", message: "自动更新暂时不可用。请退出后重新打开 Nami Mail，再试一次。" });
       return;
     }
     void runUpdateAction("download", () => bridge.downloadUpdate());
@@ -505,7 +505,7 @@ export default function SettingsModal({
   const skipUpdate = () => {
     const bridge = desktopBridge();
     if (!bridge) {
-      setNotice({ kind: "error", message: "更新组件当前不可用。请关闭并重新打开 Nami Mail 后重新检查。" });
+      setNotice({ kind: "error", message: "自动更新暂时不可用。请退出后重新打开 Nami Mail，再试一次。" });
       return;
     }
     void runUpdateAction("skip", () => bridge.skipUpdate());
@@ -514,7 +514,7 @@ export default function SettingsModal({
   const snoozeUpdate = () => {
     const bridge = desktopBridge();
     if (!bridge) {
-      setNotice({ kind: "error", message: "更新组件当前不可用。请关闭并重新打开 Nami Mail 后重新检查。" });
+      setNotice({ kind: "error", message: "自动更新暂时不可用。请退出后重新打开 Nami Mail，再试一次。" });
       return;
     }
     void runUpdateAction("snooze", () => bridge.snoozeUpdate(updateSnoozeMinutes));
@@ -524,7 +524,7 @@ export default function SettingsModal({
     if (updateActionBusy) return;
     const bridge = desktopBridge();
     if (!bridge) {
-      setNotice({ kind: "error", message: "更新组件当前不可用。请关闭并重新打开 Nami Mail 后重新检查。" });
+      setNotice({ kind: "error", message: "自动更新暂时不可用。请退出后重新打开 Nami Mail，再试一次。" });
       return;
     }
     setPendingConfirmation(null);
@@ -952,7 +952,7 @@ export default function SettingsModal({
                 : pendingConfirmation === "clear-background"
                 ? "这会删除此设备保存的自定义背景图片，并切换回默认海岸背景。"
                 : pendingConfirmation === "install-update"
-                ? "Nami Mail 会关闭本地邮件服务，然后重启并安装已下载的更新。请先保存正在编辑的内容。"
+                ? "Nami Mail 将退出并继续安装已下载的更新。请先保存正在编辑的内容。"
                 : "这会重置主题、背景、提醒和同步偏好；自定义背景也会被删除。"}
             </p>
             <div className="confirmation-actions">

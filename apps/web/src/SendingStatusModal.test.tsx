@@ -67,6 +67,7 @@ describe("sending status modal presentation", () => {
     expect(markup).toContain('role="region"');
     expect(markup).toContain("one@example.com、two@example.com、three@example.com、four@example.com");
     expect(markup).toContain("&lt;status-check-1234567890@example.com&gt;");
+    expect(markup).not.toContain("核对编号：&lt;status-check-1234567890@example.com&gt;");
     expect(markup).not.toContain('class="sending-status-title app-tooltip"');
     expect(markup).not.toContain('class="sending-status-message-id app-tooltip"');
   });

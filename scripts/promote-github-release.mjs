@@ -21,6 +21,9 @@ if (!workflowTag || workflowTag !== tag) {
   throw new Error(`GITHUB_REF_NAME must equal the stable package tag ${tag}.`);
 }
 if (!token) throw new Error("GH_TOKEN is required to verify and publish the GitHub Release.");
+const releaseNotesPath = path.join(projectRoot, "docs", "releases", `${tag}.md`);
+const releaseNotes = (await fs.readFile(releaseNotesPath, "utf8")).trim();
+if (!releaseNotes) throw new Error(`Release Notes must not be empty: ${path.relative(projectRoot, releaseNotesPath)}.`);
 
 const expectedAssets = await resolveWindowsReleaseAssets({
   projectRoot,
@@ -38,12 +41,15 @@ await promoteGitHubDraftRelease({
   releaseId: draft.id,
   tag,
   token,
+  releaseName: `Nami Mail ${packageManifest.version}`,
+  releaseNotes,
 });
 
 console.log(JSON.stringify({
   repository: `${repository.owner}/${repository.repo}`,
   tag,
   releaseId: draft.id,
+  releaseNotes: path.relative(projectRoot, releaseNotesPath),
   verifiedAssets: expectedAssets.map(({ name, size, sha256 }) => ({ name, size, sha256 })),
   published: true,
 }));

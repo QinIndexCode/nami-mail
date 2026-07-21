@@ -3,6 +3,6 @@ contact_links:
   - name: 使用、安装与邮箱接入指南
     url: https://github.com/QinIndexCode/nami-mail/blob/main/SUPPORT.md
     about: 请先查看支持、安装和邮箱接入说明；不要在这里提交账户或邮件内容。
-  - name: 私下报告安全问题
-    url: https://github.com/QinIndexCode/nami-mail/blob/main/SECURITY.md
-    about: 请不要公开提交凭据、令牌、真实邮件或可利用的安全细节。
+  - name: 私下报告安全漏洞
+    url: https://github.com/QinIndexCode/nami-mail/security/advisories/new
+    about: 使用 GitHub 私密漏洞通报；不要在公开 Issue 提交凭据、令牌、真实邮件或可利用的安全细节。

@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        感谢你的报告。请勿提交真实邮件、邮箱地址、附件、密码、OAuth code、访问令牌或本地数据库。安全问题请阅读 SECURITY.md 后使用私有安全通报。
+        感谢你的报告。请勿提交真实邮件、邮箱地址、附件、密码、OAuth code、访问令牌或本地数据库。安全问题请通过 GitHub 私密漏洞通报提交：https://github.com/QinIndexCode/nami-mail/security/advisories/new
   - type: input
     id: version
     attributes:

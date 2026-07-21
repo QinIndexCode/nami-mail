@@ -18,7 +18,7 @@ Nami Mail 是一个本地优先的多账户邮件客户端。它把 Gmail、iClo
 - [支持指南](SUPPORT.md)：邮箱接入、网络问题和适合提交 Issue 的内容。
 - [安全策略](SECURITY.md)：私下报告漏洞的方式和范围。
 - [贡献指南](CONTRIBUTING.md)、[社区行为准则](CODE_OF_CONDUCT.md)、[开发说明](docs/DEVELOPMENT.md) 与 [架构与信任边界](docs/ARCHITECTURE.md)：本地开发、协作边界、测试、进程边界和 Pull Request 要求。
-- [Windows 发布指南](docs/RELEASING.md) 与 [变更日志](CHANGELOG.md)：签名、GitHub Release 和发行验证。
+- [Windows 发布指南](docs/RELEASING.md)、[Release Notes](docs/releases/README.md) 与 [变更日志](CHANGELOG.md)：签名、GitHub Release、面向用户的版本说明和发行验证。
 
 ## 运行
 

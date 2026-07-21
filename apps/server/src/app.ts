@@ -1584,13 +1584,21 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     return { accounts, messages, unread };
   });
 
-  if (fs.existsSync(config.webDistPath)) {
+  const hasWebDist = fs.existsSync(config.webDistPath);
+  if (hasWebDist) {
     await app.register(fastifyStatic, { root: config.webDistPath, wildcard: false });
-    app.setNotFoundHandler(async (request, reply) => {
-      if (request.url.startsWith("/api/")) return reply.code(404).send({ ok: false, message: "接口不存在。" });
-      return reply.type("text/html").sendFile("index.html");
-    });
   }
+
+  app.setNotFoundHandler(async (request, reply) => {
+    const pathname = localApiPath(request);
+    if (pathname === "/api" || pathname?.startsWith("/api/")) {
+      return reply.code(404).send({ ok: false, message: "接口不存在。" });
+    }
+    if (hasWebDist) {
+      return reply.type("text/html").sendFile("index.html");
+    }
+    return reply.code(404).send({ ok: false, message: "页面不存在。" });
+  });
 
   return app;
 }

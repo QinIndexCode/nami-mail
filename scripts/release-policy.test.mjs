@@ -188,11 +188,19 @@ test("remote draft verification hashes every exact asset before promotion", asyn
     releaseId: draft.id,
     tag: "v1.2.3",
     token: "test-token",
+    releaseName: "Nami Mail 1.2.3",
+    releaseNotes: "# Nami Mail 1.2.3\n\nUser-facing release notes.",
     fetchImpl: fixture.fetchImpl,
   });
   assert.equal(promoted.draft, false);
   const patch = fixture.requests.find((request) => request.options.method === "PATCH");
-  assert.deepEqual(JSON.parse(patch.options.body), { draft: false, prerelease: false, make_latest: "true" });
+  assert.deepEqual(JSON.parse(patch.options.body), {
+    name: "Nami Mail 1.2.3",
+    body: "# Nami Mail 1.2.3\n\nUser-facing release notes.",
+    draft: false,
+    prerelease: false,
+    make_latest: "true",
+  });
 });
 
 test("remote verification rejects a published release and altered bytes", async () => {

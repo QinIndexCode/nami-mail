@@ -9,32 +9,32 @@ export type SubmissionStatusPresentation = {
 const presentations: Record<OutboundSubmissionStatus, SubmissionStatusPresentation> = {
   pending: {
     label: "等待发送",
-    detail: "邮件已准备发送，正在等待连接发件服务器。",
+    detail: "邮件已准备就绪，正在连接发件服务器。",
     tone: "neutral",
   },
   submitting: {
     label: "正在发送",
-    detail: "正在等待发件服务器的最终响应，Nami Mail 会短时自动检查结果。",
+    detail: "正在等待邮件服务商的最终响应，Nami Mail 会短时自动核对结果。",
     tone: "progress",
   },
   submitted: {
     label: "已交给服务器",
-    detail: "发件服务器已接收邮件，Nami Mail 正在“已发送”中自动核对相同的 Message-ID。",
+    detail: "邮件服务商已接收这封邮件，Nami Mail 正在“已发送”中自动核对。",
     tone: "progress",
   },
   confirmed: {
     label: "已核对",
-    detail: "已在邮箱的“已发送”文件夹中找到相同 Message-ID。此状态不代表收件人已读。",
+    detail: "已在邮箱的“已发送”文件夹中核对到这封邮件。此状态不代表收件人已读。",
     tone: "success",
   },
   unknown_delivery: {
     label: "结果待核对",
-    detail: "连接中断时无法确定发件服务器是否已接收邮件。Nami Mail 会继续检查“已发送”；为避免重复邮件，此记录不能直接重新发送。",
+    detail: "连接中断时，暂时无法确认邮件服务商是否已接收邮件。Nami Mail 会继续检查“已发送”；为避免重复邮件，此记录不能直接重新发送。",
     tone: "warning",
   },
   failed: {
     label: "发送失败",
-    detail: "发件服务器明确拒绝此邮件，或发送前的连接未建立。修复问题后，请新建一封邮件再试。",
+    detail: "邮件服务商未接受这封邮件，或尚未建立发送所需的连接。处理相关问题后，请新建一封邮件再试。",
     tone: "danger",
   },
 };
