@@ -845,27 +845,32 @@ async function inspectDesktopSettingsUi(): Promise<DesktopSettingsUiSmokeResult>
 
         const settings = await waitFor(() => document.querySelector('.settings-modal'));
         if (!(settings instanceof HTMLElement)) throw new Error('Settings dialog did not open.');
-        const settingsBackdrop = settings.parentElement;
+        const completeSettings = await waitFor(() => {
+          const settingsBackdrop = settings.parentElement;
+          const lightBrandMark = document.querySelector('.brand-mark-light');
+          const darkBrandMark = document.querySelector('.brand-mark-dark');
+          const title = settings.querySelector('#settings-title');
+          const editable = settings.querySelector('input[type="range"]');
+          const updateRow = settings.querySelector('.update-setting-row');
+          const input = settings.querySelector('input[type="file"]');
+          const uploadButton = settings.querySelector('.background-actions .secondary-button');
+          if (
+            !(settingsBackdrop instanceof HTMLElement)
+            || !(lightBrandMark instanceof HTMLImageElement)
+            || !(darkBrandMark instanceof HTMLImageElement)
+            || !(title instanceof HTMLElement)
+            || !(editable instanceof HTMLInputElement)
+            || !(updateRow instanceof HTMLElement)
+            || !(input instanceof HTMLInputElement)
+            || !(uploadButton instanceof HTMLButtonElement)
+          ) {
+            return null;
+          }
+          return { settingsBackdrop, lightBrandMark, darkBrandMark, title, editable, updateRow, input, uploadButton };
+        });
+        if (!completeSettings) throw new Error('Settings controls were not rendered after waiting for the desktop update status.');
+        const { settingsBackdrop, lightBrandMark, darkBrandMark, title, editable, updateRow, input, uploadButton } = completeSettings;
         const brandName = document.querySelector('.brand-row strong')?.textContent?.trim() ?? '';
-        const lightBrandMark = document.querySelector('.brand-mark-light');
-        const darkBrandMark = document.querySelector('.brand-mark-dark');
-        const title = settings.querySelector('#settings-title');
-        const editable = settings.querySelector('input[type="range"]');
-        const updateRow = settings.querySelector('.update-setting-row');
-        const input = settings.querySelector('input[type="file"]');
-        const uploadButton = settings.querySelector('.background-actions .secondary-button');
-        if (
-          !(settingsBackdrop instanceof HTMLElement)
-          || !(lightBrandMark instanceof HTMLImageElement)
-          || !(darkBrandMark instanceof HTMLImageElement)
-          || !(title instanceof HTMLElement)
-          || !(editable instanceof HTMLInputElement)
-          || !(updateRow instanceof HTMLElement)
-          || !(input instanceof HTMLInputElement)
-          || !(uploadButton instanceof HTMLButtonElement)
-        ) {
-          throw new Error('Settings controls were not rendered.');
-        }
 
         const displayTextUnselectable = getComputedStyle(title).userSelect === 'none';
         const editableTextSelectable = getComputedStyle(editable).userSelect === 'text';
