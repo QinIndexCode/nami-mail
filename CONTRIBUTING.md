@@ -69,13 +69,14 @@ Windows 安装包、签名和发布路径的额外步骤见 [发布指南](docs/
 1. 从上游仓库 fork 项目，基于最新的 `main` 创建名称清晰的功能或修复分支；不要直接向上游 `main` 推送提交。
 2. 在自己的 fork 中提交聚焦的改动。不要把 `.env`、测试账户、OAuth 回调参数、令牌、应用专用密码、证书、构建产物或本地数据一起推送。
 3. 提交前先执行下面的完整本地检查。它与 GitHub 上 `Validate Pull Request / validate` 使用同一组验证命令；仅修正文档时也至少运行与改动相关的检查并在 PR 中说明未运行项。
-4. 向上游 `main` 发起 Pull Request，按模板填写用户可感知变化、验证证据和残余风险。来自 fork 的验证工作流只使用只读令牌，不读取发布或签名凭据；请不要尝试通过 PR 请求这些凭据。
-5. 在 `Validate Pull Request / validate` 通过并完成维护者审查前，不要合并或重新基于过期的 `main` 提交。维护者应在 GitHub 的 `main` 规则集中要求此检查和至少一位审查者，禁止协作者直接推送和任何强制推送；仅管理员可在紧急情况下绕过。仓库内的工作流不能单独替代这项远端保护设置。
+4. 向上游 `main` 发起 Pull Request，按模板填写关联 Issue、用户可感知变化、验证证据和残余风险。来自 fork 的验证工作流只使用只读令牌，不读取发布或签名凭据；请不要尝试通过 PR 请求这些凭据。
+5. 先等待 `Validate Pull Request / validate` 成功，再请求审查。当前 `main` 规则要求 PR、已解决的讨论、至少一位有效审批，以及基于最新 `main` 的 `validate`；新提交会使旧审批失效。`.github/CODEOWNERS` 会将 PR 自动路由给维护者，但不能替代远端规则或人工审查。常规协作者不能直接推送或强推；管理员仅应在紧急情况下绕过，并留下可审计的后续 PR。
 
 完整本地检查：
 
 ```powershell
 npm.cmd ci
+npm.cmd run build:brand:check
 node --test scripts/release-policy.test.mjs
 npm.cmd run typecheck
 npm.cmd run build
@@ -95,3 +96,9 @@ npm.cmd audit --omit=dev --audit-level=high
 - 更新 README、隐私、安全或发布文档，只在行为实际改变时调整声明。
 
 维护者会重点检查数据安全、错误恢复、兼容性和可复现验证，而不只看页面是否能显示。
+
+## 审查与合并
+
+- 审查者应确认 PR 描述中的关联 Issue、用户影响、测试结果和未覆盖风险与改动一致；绿色 CI 不能替代对邮件服务商、OAuth 或安装更新路径的实际核对。
+- 合并前确认 `validate` 对当前 PR 提交仍为成功、讨论已解决且审批没有因新提交而失效。需要重新基于 `main` 时，更新分支后重新等待检查和审批。
+- 不把发布凭据、签名、生产账户或真实用户数据交给 PR 工作流。发布只由受保护的标签工作流在发布环境中完成。

@@ -151,6 +151,7 @@ async function authenticodeSignature(filePath) {
 async function inspectZipUpdateArchive(zipPath) {
   const powershell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const command = [
+    "Add-Type -AssemblyName System.IO.Compression.FileSystem",
     "$archive = [IO.Compression.ZipFile]::OpenRead($env:NAMI_MAIL_ZIP_UPDATE_ARCHIVE)",
     "try { [PSCustomObject]@{ Entries = @($archive.Entries | ForEach-Object { $_.FullName }) } | ConvertTo-Json -Compress } finally { $archive.Dispose() }",
   ].join("; ");
