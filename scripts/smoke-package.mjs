@@ -6,17 +6,24 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
-import asar from "@electron/asar";
-import yaml from "js-yaml";
+import * as asar from "@electron/asar";
+import * as yaml from "js-yaml";
 import {
   assertWindowsSignatureMatchesExpectedIdentity,
   parseExpectedWindowsSigningIdentity,
   resolveReleaseDirectory,
 } from "./release-policy.mjs";
 import { canonicalUpdateManifestPayload, githubZipUpdateAssetNames } from "./github-update-assets.mjs";
+import { expectedWindowsSqlitePrebuild } from "./sqlite-native.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageManifest = JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8"));
+const smokeArguments = process.argv.slice(2);
+const skipInstallerSmoke = smokeArguments.length === 1 && smokeArguments[0] === "--skip-installer-smoke";
+assert.ok(
+  smokeArguments.length === 0 || skipInstallerSmoke,
+  "Usage: node scripts/smoke-package.mjs [--skip-installer-smoke]",
+);
 const releaseDirectory = resolveReleaseDirectory(projectRoot);
 const expectedInstallerName = `Nami Mail Setup ${packageManifest.version}.exe`;
 const archivePath = path.join(releaseDirectory, "win-unpacked", "resources", "app.asar");
@@ -130,6 +137,34 @@ function yamlRecord(contents, label) {
   const parsed = yaml.load(contents);
   assert.ok(parsed && typeof parsed === "object" && !Array.isArray(parsed), `${label} must contain a YAML object.`);
   return parsed;
+}
+
+async function runningNamiMailPids() {
+  const powershell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const { stdout } = await execFileAsync(powershell, [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "@([System.Diagnostics.Process]::GetProcessesByName('Nami Mail') | ForEach-Object { [int]$_.Id } | Sort-Object) | ConvertTo-Json -Compress",
+  ], {
+    windowsHide: true,
+  });
+  const parsed = JSON.parse(stdout.trim() || "[]");
+  return Array.isArray(parsed) ? parsed : [parsed].filter(Number.isInteger);
+}
+
+async function waitForPackagedDesktopExit() {
+  const deadline = Date.now() + 20_000;
+  let pids = await runningNamiMailPids();
+  while (pids.length > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    pids = await runningNamiMailPids();
+  }
+  assert.deepEqual(
+    pids,
+    [],
+    `Installer smoke requires all Nami Mail processes to exit before it starts: ${pids.join(", ")}`,
+  );
 }
 
 async function authenticodeSignature(filePath) {
@@ -253,17 +288,16 @@ if (expectedUpdateOwner && expectedUpdateRepo) {
   }
   updateMetadataVerified = true;
 }
-await fs.access(path.join(
+const unpackedSqliteModule = path.join(
   releaseDirectory,
   "win-unpacked",
   "resources",
   "app.asar.unpacked",
   "node_modules",
   "better-sqlite3",
-  "build",
-  "Release",
-  "better_sqlite3.node",
-));
+);
+const unpackedSqlitePrebuild = expectedWindowsSqlitePrebuild(unpackedSqliteModule);
+await fs.access(unpackedSqlitePrebuild);
 for (const sharpNativeBinaryName of sharpNativeBinaryNames) {
   await fs.access(path.join(
     releaseDirectory,
@@ -320,33 +354,36 @@ assert.equal(packagedSmoke.desktopLifecycle?.appUserModelId, "com.nami.mail");
 assert.equal(packagedSmoke.desktopLifecycle?.closeBehavior, "ask");
 assert.equal(packagedSmoke.desktopLifecycle?.trayCreated, true);
 
-const installerSmokeResult = await execFileAsync(
-  process.execPath,
-  [path.join(projectRoot, "scripts", "smoke-installer.mjs")],
-  {
-    cwd: projectRoot,
-    env: {
-      ...cleanEnvironment,
-      NAMI_MAIL_EXPECTED_INSTALLER: installerPath,
-      ...(Number.isFinite(packageStartedAt) ? { NAMI_MAIL_PACKAGE_STARTED_AT: String(packageStartedAt) } : {}),
+let installerSmoke = false;
+if (!skipInstallerSmoke) {
+  await waitForPackagedDesktopExit();
+  const installerSmokeResult = await execFileAsync(
+    process.execPath,
+    [path.join(projectRoot, "scripts", "smoke-installer.mjs")],
+    {
+      cwd: projectRoot,
+      env: {
+        ...cleanEnvironment,
+        NAMI_MAIL_EXPECTED_INSTALLER: installerPath,
+        ...(Number.isFinite(packageStartedAt) ? { NAMI_MAIL_PACKAGE_STARTED_AT: String(packageStartedAt) } : {}),
+      },
+      timeout: 240_000,
+      windowsHide: true,
     },
-    timeout: 240_000,
-    windowsHide: true,
-  },
-);
-const installerSmokeOutput = installerSmokeResult.stdout.trim();
-assert.ok(installerSmokeOutput, `Installer smoke produced no output.${installerSmokeResult.stderr ? ` ${installerSmokeResult.stderr.trim()}` : ""}`);
-let installerSmoke;
-try {
-  installerSmoke = JSON.parse(installerSmokeOutput);
-} catch {
-  throw new Error(`Installer smoke did not return JSON: ${installerSmokeOutput}`);
+  );
+  const installerSmokeOutput = installerSmokeResult.stdout.trim();
+  assert.ok(installerSmokeOutput, `Installer smoke produced no output.${installerSmokeResult.stderr ? ` ${installerSmokeResult.stderr.trim()}` : ""}`);
+  try {
+    installerSmoke = JSON.parse(installerSmokeOutput);
+  } catch {
+    throw new Error(`Installer smoke did not return JSON: ${installerSmokeOutput}`);
+  }
+  assert.equal(installerSmoke.installer, path.relative(projectRoot, installerPath));
+  assert.equal(installerSmoke.uninstalled, true);
+  assert.equal(installerSmoke.sameVersionSilentReinstall, true);
+  assert.equal(installerSmoke.noNewNamiMailProcesses, true);
+  assert.equal(installerSmoke.desktopSmoke?.title, "Nami Mail");
 }
-assert.equal(installerSmoke.installer, path.relative(projectRoot, installerPath));
-assert.equal(installerSmoke.uninstalled, true);
-assert.equal(installerSmoke.sameVersionSilentReinstall, true);
-assert.equal(installerSmoke.noNewNamiMailProcesses, true);
-assert.equal(installerSmoke.desktopSmoke?.title, "Nami Mail");
 
 console.log(JSON.stringify({
   archive: path.relative(projectRoot, archivePath),
@@ -354,7 +391,8 @@ console.log(JSON.stringify({
   installerBytes: installerStat.size,
   verifiedEntries: expectedFiles.length,
   packagedDesktopSmoke: true,
-  installerSmoke: true,
+  installerSmoke: installerSmoke !== false,
+  installerSmokeSkipped: skipInstallerSmoke,
   updateMetadataVerified,
   signedUpdateArtifacts,
 }));

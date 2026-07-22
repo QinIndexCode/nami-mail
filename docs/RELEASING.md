@@ -20,7 +20,7 @@ Nami Mail 的桌面更新只面向公开 GitHub Releases。客户端不携带 Gi
 
 ## 前提与信任根
 
-- 使用 Windows x64、Node.js 22 或更高版本；
+- 使用 Windows x64、Node.js 22.14.0 或更高版本；
 - 使用公开仓库 `QinIndexCode/nami-mail`，或在仓库迁移后更新所有构建和发行配置；
 - `package.json` 的版本必须是精确的稳定语义版本 `x.y.z`，tag 必须精确为 `v<version>`；
 - 发布输出目录必须是仓库内的相对隔离目录，例如 `release-artifacts/0.1.0`。默认输出已按当前版本使用 `release-artifacts/<package.json version>`；正式发布和并行验证仍应显式指定目录，不能复用旧构建物；
@@ -60,6 +60,14 @@ npm.cmd run build
 npm.cmd run smoke:runtime
 npm.cmd audit --omit=dev
 ```
+
+升级 `better-sqlite3` 的主版本时，还必须针对一个已安装依赖的较旧稳定版工作树执行物理数据库兼容验证。该检查由旧版 Electron 保持一个 WAL 数据库连接，再由当前 Node 读取、写入、执行 `integrity_check`、checkpoint 和重开，最后重新由旧版读取；它不把旧版作为当前项目依赖，也不在 CI 中伪造旧二进制：
+
+```powershell
+npm.cmd run verify:legacy-sqlite-compat -- --legacy-root <older-stable-release-checkout>
+```
+
+传入路径必须是较旧稳定版本的独立工作树，不得指向正在使用的工作树或真实用户数据。旧版 `better-sqlite3` 需要先针对旧版 Electron ABI 编译：在该独立工作树中依次执行 `npm.cmd ci`、`node node_modules/electron/install.js` 和 `npm.cmd run rebuild:electron`，再运行上述命令。兼容检查只读取旧工作树，绝不会下载、重建或改写它；检查会在系统临时目录创建并在完成后删除无业务数据的测试数据库。
 
 普通本地安装包不配置 GitHub 更新通道，可用于安装器基本验证：
 

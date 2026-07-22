@@ -4,7 +4,7 @@
 
 ## 前置条件
 
-- Node.js 22 或更高版本；
+- Node.js 22.14.0 或更高版本；
 - Windows（构建 NSIS 安装包和验证 Electron 路径时需要）；
 - 用于实际邮箱验证的测试账户和应用专用密码/授权码。不要使用主密码，也不要把任何凭据写入代码、测试、截图或提交记录。
 
@@ -22,10 +22,11 @@ npm.cmd ci
 | --- | --- | --- |
 | 联调前端和本地服务 | `npm.cmd run dev` | Vite 默认在 `127.0.0.1:5173`，本地 API 默认在 `127.0.0.1:3187`。 |
 | 构建后服务 | `npm.cmd run build` 后执行 `npm.cmd start` | 用于检查构建产物和本地静态页面。 |
-| Windows 桌面应用 | `npm.cmd run dev:desktop` | 会构建应用、重建 Electron ABI 的 SQLite 模块并启动 Electron。 |
-| 命令行 Node SQLite 准备 | `npm.cmd run prepare:server-sqlite` | 仅准备 `apps/server/.native/` 的 Node ABI 缓存。 |
+| Windows 桌面应用 | `npm.cmd run dev:desktop` | 会构建应用、验证 Electron 的 SQLite N-API 加载路径并启动 Electron。 |
+| 命令行 Node SQLite 验证 | `npm.cmd run verify:node-sqlite` | 验证 Node 能加载根目录的共享 Windows x64 N-API 模块。 |
+| Electron SQLite 验证 | `npm.cmd run verify:electron-sqlite` | 验证 Electron 能加载同一个 Windows x64 N-API 模块。 |
 
-项目同时依赖 Node 和 Electron 的 `better-sqlite3` 原生模块。不要把它们视作可互换的二进制文件。运行命令行测试/服务前使用项目脚本准备 Node ABI；运行桌面版或打包前使用 `npm.cmd run rebuild:electron`。不要在已打开的 Electron 应用上执行会覆盖原生模块的手工重建。
+项目同时在 Node 和 Electron 中加载 `better-sqlite3`。Windows x64 的 v13 使用 `prebuilds/win32-x64.node` N-API 预编译模块，因此不再要求为每个 ABI 覆盖根目录二进制文件，也不再创建服务端 ABI 缓存。运行命令行测试/服务前可使用项目脚本验证 Node 的实际加载；运行桌面版或打包前使用 `npm.cmd run verify:electron-sqlite` 验证 Electron 的实际加载路径。不要在已打开的 Electron 应用上执行会覆盖根目录模块的手工重建。
 
 ## 目录结构
 
@@ -34,7 +35,7 @@ npm.cmd ci
 | `apps/web` | React/Vite 阅读、撰写、设置和服务商引导界面。 |
 | `apps/server` | 本地 Fastify API、IMAP/SMTP、OAuth、SQLite、同步和加密数据处理。 |
 | `apps/desktop` | Electron 主进程、preload、本机密钥保护、托盘/单实例和更新边界。 |
-| `scripts` | 原生模块准备、构建、安装包 smoke 和 GitHub Release 校验。 |
+| `scripts` | 原生模块验证、构建、安装包 smoke 和 GitHub Release 校验。 |
 | `build` | 受版本控制的品牌与 Windows 安装器资源。 |
 
 本地运行数据和生成输出不应提交。`data/`、`.env`、旧本地构建目录 `release/`、`release-current/`、当前版本化输出 `release-artifacts/`、`artifacts/`、`output/`、SQLite 旁车文件、证书和密钥文件已经由 [`.gitignore`](../.gitignore) 排除。`build/` 保留品牌资源、安装器脚本和默认的空更新信任配置，属于受版本控制的源码，不能用宽泛忽略规则排除。

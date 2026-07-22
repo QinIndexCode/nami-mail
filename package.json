@@ -27,6 +27,7 @@
     "apps/*"
   ],
   "scripts": {
+    "postinstall": "node scripts/ensure-electron-runtime.mjs",
     "dev": "concurrently -k -n api,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm --workspace @nami/server run dev",
     "dev:web": "npm --workspace @nami/web run dev",
@@ -39,14 +40,19 @@
     "test:server": "npm --workspace @nami/server run test",
     "smoke:runtime": "node scripts/run-server-node.mjs --script scripts/smoke-runtime.mjs",
     "smoke:server-node": "node scripts/smoke-server-node-abi.mjs",
-    "smoke:desktop": "npm run build && npm run rebuild:electron && node scripts/smoke-desktop.mjs",
+    "smoke:desktop": "npm run build && npm run verify:electron-sqlite && node scripts/smoke-desktop.mjs",
     "smoke:package": "node scripts/smoke-package.mjs",
     "smoke:installer": "node scripts/smoke-installer.mjs",
-    "prepare:server-sqlite": "node scripts/prepare-server-sqlite.mjs",
-    "rebuild:node": "npm run prepare:server-sqlite",
-    "rebuild:electron": "electron-rebuild --force --only better-sqlite3",
+    "ensure:electron-runtime": "node scripts/ensure-electron-runtime.mjs",
+    "verify:node-sqlite": "node scripts/verify-node-sqlite.mjs",
+    "verify:electron-sqlite": "npm run ensure:electron-runtime && node scripts/verify-electron-sqlite.mjs",
+    "verify:legacy-sqlite-compat": "node scripts/verify-legacy-sqlite-compat.mjs",
+    "prepare:server-sqlite": "npm run verify:node-sqlite",
+    "prepare:electron-sqlite": "npm run verify:electron-sqlite",
+    "rebuild:node": "npm run verify:node-sqlite",
+    "rebuild:electron": "npm run verify:electron-sqlite",
     "typecheck": "npm --workspace @nami/server run typecheck && npm --workspace @nami/web run typecheck && npm --workspace @nami/desktop run typecheck",
-    "dev:desktop": "npm run build && npm run rebuild:electron && electron .",
+    "dev:desktop": "npm run build && npm run verify:electron-sqlite && electron .",
     "package:win": "node scripts/package-win.mjs",
     "package:win:github": "node scripts/package-win.mjs --github",
     "publish:github": "node scripts/package-win.mjs --github --publish"
@@ -54,7 +60,7 @@
   "dependencies": {
     "@fastify/cors": "^11.1.0",
     "@fastify/static": "^10.1.0",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.1",
     "dotenv": "^17.2.3",
     "fastify": "^5.10.0",
     "imapflow": "^1.4.8",
@@ -65,12 +71,12 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@electron/asar": "^3.4.1",
+    "@electron/asar": "^4.2.1",
     "@electron/rebuild": "^4.2.0",
-    "concurrently": "^9.2.1",
-    "electron": "^43.1.1",
+    "concurrently": "^9.2.4",
+    "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^5.2.1"
   },
   "build": {
     "appId": "com.nami.mail",
@@ -99,8 +105,6 @@
     "asar": true,
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
-      "node_modules/bindings/**/*",
-      "node_modules/file-uri-to-path/**/*",
       "node_modules/sharp/**/*",
       "node_modules/@img/sharp-win32-x64/**/*"
     ],
@@ -133,6 +137,6 @@
     }
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.14.0"
   }
 }

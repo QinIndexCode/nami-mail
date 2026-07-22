@@ -4,9 +4,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { ensureServerNodeSqlite, projectRoot, serverRoot } from "./prepare-server-sqlite.mjs";
+import {
+  assertWindowsSqlitePrebuild,
+  projectRoot,
+  sqliteModulePath,
+} from "./sqlite-native.mjs";
 
-const rootNativeModule = path.join(projectRoot, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node");
 const electronExecutable = path.join(projectRoot, "node_modules", "electron", "dist", "electron.exe");
 
 function hashFile(filePath) {
@@ -27,38 +30,34 @@ function run(command, args, environment = process.env) {
   return result.stdout.trim();
 }
 
-assert.ok(fs.existsSync(rootNativeModule), `Electron native module is missing: ${rootNativeModule}`);
+const prebuildPath = assertWindowsSqlitePrebuild(sqliteModulePath);
 assert.ok(fs.existsSync(electronExecutable), `Electron executable is missing: ${electronExecutable}`);
 
-const rootHashBefore = hashFile(rootNativeModule);
-const nodeModule = ensureServerNodeSqlite();
-const serverNodeModules = path.join(serverRoot, "node_modules");
-const moduleRelativeToServerNodeModules = path.relative(serverNodeModules, nodeModule);
-assert.ok(
-  moduleRelativeToServerNodeModules.startsWith("..") || path.isAbsolute(moduleRelativeToServerNodeModules),
-  "The Node ABI cache must not live in apps/server/node_modules, where it could shadow Electron.",
-);
-
+const prebuildHashBefore = hashFile(prebuildPath);
 const nodeProbe = run(process.execPath, [
   "--eval",
-  `const Database = require(${JSON.stringify(nodeModule)}); const database = new Database(':memory:'); database.close(); console.log(process.versions.modules);`,
+  "const Database = require('better-sqlite3'); const database = new Database(':memory:'); const row = database.prepare('SELECT 13 AS value').get(); database.close(); if (row.value !== 13) process.exit(1); console.log(process.versions.modules);",
 ]);
-assert.equal(nodeProbe, process.versions.modules, "The isolated module did not load in the command-line Node runtime.");
+assert.equal(nodeProbe, process.versions.modules, "better-sqlite3 did not load in the command-line Node runtime.");
 
 const electronProbe = run(
   electronExecutable,
   [
     "--eval",
-    "const Database = require('better-sqlite3'); const database = new Database(':memory:'); database.close(); console.log(process.versions.modules);",
+    "const Database = require('better-sqlite3'); const database = new Database(':memory:'); const row = database.prepare('SELECT 13 AS value').get(); database.close(); if (row.value !== 13) process.exit(1); console.log(process.versions.modules);",
   ],
   { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
 );
 assert.notEqual(electronProbe, nodeProbe, "The Electron and command-line Node ABIs should remain distinct in this checkout.");
-assert.equal(hashFile(rootNativeModule), rootHashBefore, "Preparing the Node cache changed Electron's native module.");
+assert.equal(
+  hashFile(prebuildPath),
+  prebuildHashBefore,
+  "Loading the shared N-API prebuild changed the installed native module.",
+);
 
 console.log(JSON.stringify({
   nodeAbi: nodeProbe,
   electronAbi: electronProbe,
-  nodeModule: path.relative(projectRoot, nodeModule),
-  rootElectronModuleUnchanged: true,
+  prebuild: path.relative(projectRoot, prebuildPath),
+  sharedPrebuildUnchanged: true,
 }));

@@ -30,9 +30,14 @@ jobs:
       # v4.4.0; pin the action implementation for untrusted pull-request code.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22
+          node-version: 22.14.0
           cache: npm
       - run: npm ci
+      # better-sqlite3 v13 uses a shared Windows x64 N-API prebuild. Verify
+      # both runtime loaders before source-only checks can mask a regression.
+      - run: npm run verify:node-sqlite
+      - run: npm run verify:electron-sqlite
+      - run: npm run smoke:server-node
       # Fail when committed icons or theme marks no longer match their source artwork.
       - run: npm run build:brand:check
       - run: node --test scripts/release-policy.test.mjs

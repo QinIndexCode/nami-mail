@@ -3,7 +3,9 @@ import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { ensureServerNodeSqlite, projectRoot, serverRoot } from "./prepare-server-sqlite.mjs";
+
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const serverRoot = path.join(projectRoot, "apps", "server");
 
 const tsxCli = path.join(projectRoot, "node_modules", "tsx", "dist", "cli.mjs");
 
@@ -35,15 +37,9 @@ function resolveLaunch(argv) {
 
 async function main() {
   const launch = resolveLaunch(process.argv.slice(2));
-  const sqliteModule = ensureServerNodeSqlite();
   const child = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
-    env: {
-      ...process.env,
-      NAMI_MAIL_NODE_SQLITE_RUNTIME: "1",
-      NAMI_MAIL_NODE_SQLITE_ABI: process.versions.modules,
-      NAMI_MAIL_NODE_SQLITE_MODULE: sqliteModule,
-    },
+    env: process.env,
     stdio: "inherit",
     windowsHide: true,
   });

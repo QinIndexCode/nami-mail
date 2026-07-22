@@ -1,6 +1,14 @@
 # Nami Mail
 
+<p align="center">
+  <img src="build/icon.png" alt="Nami Mail" width="112" />
+</p>
+
 Nami Mail 是一个本地优先的多账户邮件客户端。它把 Gmail、iCloud、QQ、163、Outlook/Hotmail、Yahoo、AOL、Fastmail、Yandex 以及其他支持 IMAP/SMTP 的邮箱集中到由你本机运行的统一收件箱中。常见邮箱可使用应用专用密码/授权码；已配置的 Google 与 Microsoft 账户可使用 OAuth 2.0 登录。
+
+<p align="center">
+  <img src="docs/nami-mail-inbox.png" alt="Nami Mail 收件箱界面" width="1200" />
+</p>
 
 > 密码输入框只用于服务商要求的长期专用凭据：Gmail 和 iCloud 通常填写应用专用密码，QQ/网易填写客户端授权码，普通自建邮箱填写邮箱密码。凭据不会发送到 Nami Mail 以外的服务，只用于直接连接对应邮箱服务商；OAuth 刷新令牌同样仅加密保存在本机。
 
@@ -22,7 +30,7 @@ Nami Mail 是一个本地优先的多账户邮件客户端。它把 Gmail、iClo
 
 ## 运行
 
-需要 Node.js 22 或更高版本。
+需要 Node.js 22.14.0 或更高版本。
 
 ```powershell
 # 在本项目根目录执行
@@ -37,16 +45,17 @@ npm.cmd start
 npm.cmd run dev
 ```
 
-开发服务会把命令行 Node 所需的 `better-sqlite3` 编译到 `apps/server/.native/` 的专用缓存，并仅在该服务子进程中显式选用它；不会改写根目录供 Electron 使用的二进制模块。可单独预编译或验证该缓存：
+开发服务直接使用根目录的 `better-sqlite3`。Windows x64 的 v13 使用 `prebuilds/win32-x64.node` N-API 预编译模块，命令行 Node 与 Electron 都会分别执行真实查询验证该文件；不需要在项目中交换 ABI 专用二进制文件。可单独验证两个运行时的加载路径：
 
 ```powershell
-npm.cmd run prepare:server-sqlite
+npm.cmd run verify:node-sqlite
+npm.cmd run verify:electron-sqlite
 npm.cmd run smoke:server-node
 ```
 
 ## Windows 桌面安装包
 
-Nami Mail 可以作为原生 Windows 应用运行。桌面版使用原生窗口边框，不包含网页演示中的 macOS 模拟标题栏；邮件界面、交互和动画与 Web 版共用同一套 React/CSS 实现。
+Nami Mail 可以作为原生 Windows 应用运行。邮件界面、交互和动画与 Web 版共用同一套 React/CSS 实现。
 
 普通用户应使用 Release 中的 `Nami Mail Setup <version>.exe`，不要把更新 ZIP 解压后直接运行。安装前和遇到 Windows 信任提示时，请按 [Windows 安装与更新指南](docs/INSTALLING.md) 核对来源与签名状态。
 
@@ -64,7 +73,7 @@ npm.cmd run package:win
 - 已安装版本高于当前安装包时，交互式安装程序会默认取消降级，只有明确确认后才继续；静默降级必须额外传入 `--nami-allow-downgrade`，否则退出码为 `3`。
 - 卸载时会询问是否同时删除当前 Windows 用户的 Nami Mail 本地数据，默认保留。选择删除只会移除 `%APPDATA%\Nami Mail`，其中包括本地数据库、加密密钥、已保存设置和 OAuth 公共配置，不会删除邮箱服务商上的邮件。静默卸载默认保留数据；需要显式删除时使用 `Uninstall Nami Mail.exe /S --nami-delete-data`。通过 `NAMI_MAIL_USER_DATA_DIR` 指定的测试或自定义目录不会被安装程序自动删除。
 
-桌面版与 Web 服务端都使用 SQLite 原生模块。项目脚本会在运行 Web/测试时自动使用 Node ABI，在运行桌面版或构建安装包时自动使用 Electron ABI；请通过这些脚本启动，不要手动混用两个运行时。
+桌面版与 Web 服务端都使用 SQLite 原生模块。`better-sqlite3 13` 在 Windows x64 使用同一个 N-API 预编译模块；桌面启动或打包前，项目会实际验证 Electron 能加载根目录模块。
 
 面向普通 Windows 用户的公开分发，强烈建议使用带时间戳的 Authenticode 证书签名最终安装程序；未签名安装程序仍可依靠 Ed25519 清单信任根进行更新，但 Windows SmartScreen 可能显示来源警告。
 
