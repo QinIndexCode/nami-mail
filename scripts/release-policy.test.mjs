@@ -19,6 +19,7 @@ import {
   verifyGitHubDraftRelease,
   verifyPublicGitHubRepository,
 } from "./release-policy.mjs";
+import { resolveLocalWindowsElectronDist } from "./electron-dist.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -50,6 +51,28 @@ test("release artifacts stay inside an explicitly isolated repository directory"
   assert.equal(resolveReleaseDirectory(root), path.join(root, "release"));
   assert.throws(() => resolveReleaseDirectory(root, "."), /isolated directory/);
   assert.throws(() => resolveReleaseDirectory(root, "../outside"), /inside this repository/);
+});
+
+test("Windows packaging reuses a local Electron distribution only when its executable exists", async (t) => {
+  const temporaryProjectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nami-electron-dist-"));
+  t.after(() => fs.rm(temporaryProjectRoot, { recursive: true, force: true }));
+  const electronDist = path.join(temporaryProjectRoot, "node_modules", "electron", "dist");
+
+  assert.equal(await resolveLocalWindowsElectronDist(temporaryProjectRoot), undefined);
+  await fs.mkdir(electronDist, { recursive: true });
+  assert.equal(await resolveLocalWindowsElectronDist(temporaryProjectRoot), undefined);
+  await fs.writeFile(path.join(electronDist, "electron.exe"), "Electron");
+  assert.equal(await resolveLocalWindowsElectronDist(temporaryProjectRoot), electronDist);
+
+  const packageManifest = JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8"));
+  assert.equal(
+    packageManifest.build.electronDist,
+    undefined,
+    "The package manifest must not force CI runners to use a local Electron directory.",
+  );
+  const packageScript = await fs.readFile(path.join(projectRoot, "scripts", "package-win.mjs"), "utf8");
+  assert.match(packageScript, /resolveLocalWindowsElectronDist\(projectRoot\)/);
+  assert.match(packageScript, /--config\.electronDist=\$\{localElectronDist\}/);
 });
 
 test("release repository and signing identity inputs are strict", () => {

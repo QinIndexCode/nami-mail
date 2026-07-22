@@ -77,7 +77,6 @@
     "productName": "Nami Mail",
     "artifactName": "Nami Mail Setup ${version}.${ext}",
     "icon": "build/icon.ico",
-    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"
     },

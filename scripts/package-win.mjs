@@ -17,6 +17,7 @@ import {
   readEd25519SigningKey,
   writeEd25519UpdateTrust,
 } from "./github-update-assets.mjs";
+import { resolveLocalWindowsElectronDist } from "./electron-dist.mjs";
 
 if (process.platform !== "win32") {
   throw new Error("Windows NSIS packaging can only run on Windows.");
@@ -63,6 +64,7 @@ if (githubMode) {
 const npmCli = process.env.npm_execpath
   ?? path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
 const electronBuilderCli = path.join(projectRoot, "node_modules", "electron-builder", "cli.js");
+const localElectronDist = await resolveLocalWindowsElectronDist(projectRoot);
 const trustConfigPath = path.join(projectRoot, "build", "nami-update-trust.json");
 const originalTrustConfig = await fs.readFile(trustConfigPath).catch((error) => {
   if (error?.code === "ENOENT") return undefined;
@@ -125,6 +127,7 @@ try {
     publishRequested ? "always" : "never",
     `--config.directories.output=${releaseDirectory}`,
   ];
+  if (localElectronDist) builderArguments.push(`--config.electronDist=${localElectronDist}`);
   if (githubRepository) {
     builderArguments.push(
       "--config.publish.provider=github",
