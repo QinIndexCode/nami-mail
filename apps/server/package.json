@@ -13,7 +13,7 @@
   "dependencies": {
     "@fastify/cors": "^11.1.0",
     "@fastify/static": "^10.1.0",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.1",
     "dotenv": "^17.2.3",
     "fastify": "^5.10.0",
     "imapflow": "^1.4.8",
@@ -25,8 +25,8 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/mailparser": "^3.4.6",
-    "@types/node": "^24.10.0",
-    "@types/nodemailer": "^7.0.11",
+    "@types/node": "^26.1.1",
+    "@types/nodemailer": "^8.0.1",
     "tsx": "^4.20.6",
     "typescript": "^7.0.2",
     "vitest": "^4.0.18"

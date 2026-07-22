@@ -117,7 +117,7 @@ if (ed25519SigningKey) await writeEd25519UpdateTrust(trustConfigPath, ed25519Sig
 
 try {
   await run(process.execPath, [npmCli, "run", "build"], cleanEnvironment);
-  await run(process.execPath, [npmCli, "run", "rebuild:electron"], cleanEnvironment);
+  await run(process.execPath, [npmCli, "run", "verify:electron-sqlite"], cleanEnvironment);
 
   const packageStartedAt = Date.now();
   const builderArguments = [

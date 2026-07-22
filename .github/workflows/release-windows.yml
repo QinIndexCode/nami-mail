@@ -26,9 +26,12 @@ jobs:
       # v4.4.0; pin the action implementation for a secret-free validation job.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22
+          node-version: 22.14.0
           cache: npm
       - run: npm ci
+      - run: npm run verify:node-sqlite
+      - run: npm run verify:electron-sqlite
+      - run: npm run smoke:server-node
       - run: node --test scripts/release-policy.test.mjs
       - run: npm run typecheck
       - run: npm run build
@@ -56,7 +59,7 @@ jobs:
       # v4.4.0; pin the action implementation before this job receives release secrets.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22
+          node-version: 22.14.0
           cache: npm
       - run: npm ci
       - name: Sign, upload draft, and run package smoke
