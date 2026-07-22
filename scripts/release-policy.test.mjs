@@ -382,3 +382,35 @@ test("release workflow isolates read-only validation from credential-minimized p
   const promotionIndex = workflow.jobs.release.steps.findIndex((step) => step.run === "node scripts/promote-github-release.mjs");
   assert.ok(promotionIndex > packageIndex, "Remote verification and promotion must run only after package and installer smoke.");
 });
+
+test("pull request validation runs the release gate without write credentials", async () => {
+  const workflow = yaml.load(await fs.readFile(path.join(projectRoot, ".github", "workflows", "validate.yml"), "utf8"));
+  assert.equal(workflow.name, "Validate Pull Request");
+  assert.deepEqual(workflow.on.pull_request.branches, ["main"]);
+  assert.ok("workflow_dispatch" in workflow.on, "Maintainers must be able to rerun validation without creating a PR.");
+  assert.equal(workflow.permissions.contents, "read");
+  assert.equal(workflow.jobs.validate.permissions.contents, "read");
+  assert.equal(workflow.jobs.validate["runs-on"], "windows-latest");
+  assert.equal(workflow.concurrency["cancel-in-progress"], true);
+  const checkout = workflow.jobs.validate.steps.find(
+    (step) => step.uses === "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+  );
+  assert.equal(checkout.with["persist-credentials"], false);
+  assert.ok(
+    workflow.jobs.validate.steps.some(
+      (step) => step.uses === "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+    ),
+  );
+  const commands = workflow.jobs.validate.steps.map((step) => step.run).filter(Boolean);
+  assert.deepEqual(commands, [
+    "npm ci",
+    "node --test scripts/release-policy.test.mjs",
+    "npm run typecheck",
+    "npm run build",
+    "npm run test",
+    "npm --workspace @nami/web run test",
+    "npm run test:desktop-security",
+    "npm run smoke:runtime",
+    "npm audit --omit=dev --audit-level=high",
+  ]);
+});

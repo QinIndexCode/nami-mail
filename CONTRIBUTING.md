@@ -64,6 +64,28 @@ npm.cmd run smoke:runtime
 
 Windows 安装包、签名和发布路径的额外步骤见 [发布指南](docs/RELEASING.md)。
 
+## Fork 与 Pull Request
+
+1. 从上游仓库 fork 项目，基于最新的 `main` 创建名称清晰的功能或修复分支；不要直接向上游 `main` 推送提交。
+2. 在自己的 fork 中提交聚焦的改动。不要把 `.env`、测试账户、OAuth 回调参数、令牌、应用专用密码、证书、构建产物或本地数据一起推送。
+3. 提交前先执行下面的完整本地检查。它与 GitHub 上 `Validate Pull Request / validate` 使用同一组验证命令；仅修正文档时也至少运行与改动相关的检查并在 PR 中说明未运行项。
+4. 向上游 `main` 发起 Pull Request，按模板填写用户可感知变化、验证证据和残余风险。来自 fork 的验证工作流只使用只读令牌，不读取发布或签名凭据；请不要尝试通过 PR 请求这些凭据。
+5. 在 `Validate Pull Request / validate` 通过并完成维护者审查前，不要合并或重新基于过期的 `main` 提交。维护者应在 GitHub 的 `main` 规则集中要求此检查和至少一位审查者，禁止协作者直接推送和任何强制推送；仅管理员可在紧急情况下绕过。仓库内的工作流不能单独替代这项远端保护设置。
+
+完整本地检查：
+
+```powershell
+npm.cmd ci
+node --test scripts/release-policy.test.mjs
+npm.cmd run typecheck
+npm.cmd run build
+npm.cmd run test
+npm.cmd --workspace @nami/web run test
+npm.cmd run test:desktop-security
+npm.cmd run smoke:runtime
+npm.cmd audit --omit=dev --audit-level=high
+```
+
 ## Pull Request 要求
 
 - 使用仓库中的 PR 模板，说明用户可感知的变化、验证方式和未覆盖的风险。

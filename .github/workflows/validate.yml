@@ -1,0 +1,43 @@
+name: Validate Pull Request
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# This workflow executes pull-request code, including code from forks. Keep its
+# token read-only and do not use pull_request_target or repository secrets.
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-pr-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      # v4.2.2; pin the action implementation for untrusted pull-request code.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      # v4.4.0; pin the action implementation for untrusted pull-request code.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node --test scripts/release-policy.test.mjs
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run test
+      - run: npm --workspace @nami/web run test
+      - run: npm run test:desktop-security
+      - run: npm run smoke:runtime
+      - run: npm audit --omit=dev --audit-level=high
