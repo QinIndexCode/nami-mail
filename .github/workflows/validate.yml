@@ -33,6 +33,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Fail when committed icons or theme marks no longer match their source artwork.
+      - run: npm run build:brand:check
       - run: node --test scripts/release-policy.test.mjs
       - run: npm run typecheck
       - run: npm run build

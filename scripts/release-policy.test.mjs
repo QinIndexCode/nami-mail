@@ -80,6 +80,11 @@ test("Windows packaging reuses a local Electron distribution only when its execu
   const packageSmokeIndex = packageScript.indexOf('path.join(projectRoot, "scripts", "smoke-package.mjs")');
   const draftCreationIndex = packageScript.indexOf("const draft = await createGitHubDraftRelease");
   assert.ok(packageSmokeIndex >= 0 && draftCreationIndex > packageSmokeIndex, "Remote draft creation must follow local package smoke.");
+
+  const packageSmokeScript = await fs.readFile(path.join(projectRoot, "scripts", "smoke-package.mjs"), "utf8");
+  const zipAssemblyLoadIndex = packageSmokeScript.indexOf("Add-Type -AssemblyName System.IO.Compression.FileSystem");
+  const zipOpenIndex = packageSmokeScript.indexOf("[IO.Compression.ZipFile]::OpenRead");
+  assert.ok(zipAssemblyLoadIndex >= 0 && zipOpenIndex > zipAssemblyLoadIndex, "ZIP package smoke must load the ZipFile assembly before opening update archives.");
 });
 
 test("release repository and signing identity inputs are strict", () => {
@@ -582,6 +587,7 @@ test("pull request validation runs the release gate without write credentials", 
   }
   assert.deepEqual(commands, [
     "npm ci",
+    "npm run build:brand:check",
     "node --test scripts/release-policy.test.mjs",
     "npm run typecheck",
     "npm run build",
