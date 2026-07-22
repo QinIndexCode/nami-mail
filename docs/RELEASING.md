@@ -87,7 +87,7 @@ npm.cmd run package:win:github
 1. `validate` 只拥有读取权限，执行发布策略、类型检查、服务端/Web/桌面测试、运行时 smoke 与生产依赖审计。
 2. `release` 绑定 GitHub 的 `release` Environment。验证通过后，受指定发布者批准，才会获得 Release 写入权限和 GitHub Secrets；不要移除这一人工确认，也不要在未受保护的环境中运行发布脚本。
 3. `release` 固定 `NAMI_MAIL_RELEASE_DIRECTORY=release-artifacts/<tag>`，以 GitHub Secrets 完成签名或清单签名。
-4. 打包步骤把 electron-builder 的安装程序、blockmap、`latest.yml` 上传到草稿 Release，并将 ZIP 和 JSON 清单上传到同一草稿。
+4. 打包步骤先在 runner 本地完成 Electron/NSIS 构建、ZIP 清单生成和打包 smoke；随后发布脚本创建唯一草稿 Release，并一次性上传安装程序、blockmap、`latest.yml`、ZIP 和 JSON 清单。若同一 tag 已有任何 Release 或出现多个草稿，流程会失败，维护者必须先检查并清理残留，不能拼接半成品资源。
 5. 提升步骤使用同一隔离目录重新解析本地五项资源，下载远端草稿的每一项，核对大小和 SHA-256 后才发布稳定 Release。
 
 本地手动发布仅适用于已具备发布权限的维护者：它还要求 `GH_TOKEN`、`GITHUB_REF_NAME=v<package.json version>` 和同一组 GitHub/信任根环境变量。优先推送签名 tag 并让工作流发布，避免在个人工作站混用不同的构建环境。

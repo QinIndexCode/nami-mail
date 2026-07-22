@@ -9,6 +9,7 @@ import yaml from "js-yaml";
 import {
   assertStableReleaseVersion,
   assertWindowsSignatureMatchesExpectedIdentity,
+  createGitHubDraftRelease,
   expectedStableReleaseTag,
   parseExpectedWindowsSigningIdentity,
   parseGitHubRepository,
@@ -73,6 +74,12 @@ test("Windows packaging reuses a local Electron distribution only when its execu
   const packageScript = await fs.readFile(path.join(projectRoot, "scripts", "package-win.mjs"), "utf8");
   assert.match(packageScript, /resolveLocalWindowsElectronDist\(projectRoot\)/);
   assert.match(packageScript, /--config\.electronDist=\$\{localElectronDist\}/);
+  assert.match(packageScript, /"--publish",\s*"never"/);
+  assert.match(packageScript, /await createGitHubDraftRelease\(/);
+  assert.match(packageScript, /await resolveWindowsReleaseAssets\(/);
+  const packageSmokeIndex = packageScript.indexOf('path.join(projectRoot, "scripts", "smoke-package.mjs")');
+  const draftCreationIndex = packageScript.indexOf("const draft = await createGitHubDraftRelease");
+  assert.ok(packageSmokeIndex >= 0 && draftCreationIndex > packageSmokeIndex, "Remote draft creation must follow local package smoke.");
 });
 
 test("release repository and signing identity inputs are strict", () => {
@@ -155,7 +162,7 @@ test("release assets are resolved using the exact names in latest.yml", async (t
   assert.equal(assets[1].sha256, sha256(blockmap));
 });
 
-function createDraftFixture({ draft = true, remoteOverrides = {} } = {}) {
+function createDraftFixture({ draft = true, remoteOverrides = {}, additionalReleases = [] } = {}) {
   const contents = new Map([
     ["nami-mail-setup-1.2.3.exe", Buffer.from("installer")],
     ["nami-mail-setup-1.2.3.exe.blockmap", Buffer.from("blockmap")],
@@ -175,14 +182,22 @@ function createDraftFixture({ draft = true, remoteOverrides = {} } = {}) {
     url: `https://api.github.com/assets/${index + 1}`,
     ...remoteOverrides[asset.name],
   }));
+  const release = {
+    id: 42,
+    tag_name: "v1.2.3",
+    draft,
+    prerelease: false,
+    assets: remoteAssets,
+    upload_url: "https://uploads.github.com/repos/Nami/mail/releases/42/assets{?name,label}",
+  };
   const requests = [];
   const fetchImpl = async (url, options = {}) => {
     requests.push({ url: String(url), options });
     if (String(url).endsWith("/repos/Nami/mail")) {
       return jsonResponse({ full_name: "Nami/mail", private: false, visibility: "public" });
     }
-    if (String(url).endsWith("/releases/tags/v1.2.3")) {
-      return jsonResponse({ id: 42, tag_name: "v1.2.3", draft, prerelease: false, assets: remoteAssets });
+    if (String(url).endsWith("/releases?per_page=100")) {
+      return jsonResponse([release, ...additionalReleases]);
     }
     const asset = remoteAssets.find((candidate) => candidate.url === String(url));
     if (asset) return new Response(contents.get(asset.name), { status: 200 });
@@ -191,8 +206,145 @@ function createDraftFixture({ draft = true, remoteOverrides = {} } = {}) {
     }
     return jsonResponse({ message: "not found" }, 404);
   };
-  return { expectedAssets, fetchImpl, requests, contents };
+  return { expectedAssets, fetchImpl, requests, contents, release };
 }
+
+test("draft creation owns one release and rejects existing tag collisions", async () => {
+  const requests = [];
+  const created = {
+    id: 42,
+    tag_name: "v1.2.3",
+    draft: true,
+    prerelease: false,
+    assets: [],
+    upload_url: "https://uploads.github.com/repos/Nami/mail/releases/42/assets{?name,label}",
+  };
+  const fetchImpl = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    if (String(url).endsWith("/releases?per_page=100")) return jsonResponse([]);
+    if (String(url).endsWith("/releases") && options.method === "POST") return jsonResponse(created, 201);
+    return jsonResponse({ message: "not found" }, 404);
+  };
+  const draft = await createGitHubDraftRelease({
+    owner: "Nami",
+    repo: "mail",
+    tag: "v1.2.3",
+    token: "test-token",
+    fetchImpl,
+  });
+  assert.equal(draft.id, 42);
+  const createRequest = requests.find((request) => request.options.method === "POST");
+  assert.deepEqual(JSON.parse(createRequest.options.body), {
+    tag_name: "v1.2.3",
+    draft: true,
+    prerelease: false,
+    generate_release_notes: false,
+  });
+
+  await assert.rejects(createGitHubDraftRelease({
+    owner: "Nami",
+    repo: "mail",
+    tag: "v1.2.3",
+    token: "test-token",
+    fetchImpl: async () => jsonResponse([created]),
+  }), /found 1 existing matching Release/);
+});
+
+test("single-owner draft flow uploads, verifies, and promotes exactly five assets", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-release-single-owner-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const sourceAssets = new Map([
+    ["nami-mail-setup-1.2.3.exe", Buffer.from("installer")],
+    ["nami-mail-setup-1.2.3.exe.blockmap", Buffer.from("blockmap")],
+    ["latest.yml", Buffer.from("version: 1.2.3\n")],
+    ["nami-mail-update-1.2.3-win-x64.zip", Buffer.from("zip-update")],
+    ["nami-mail-update-1.2.3-win-x64.json", Buffer.from("{\"schemaVersion\":1}\n")],
+  ]);
+  const assets = await Promise.all([...sourceAssets].map(async ([name, bytes]) => {
+    const filePath = path.join(directory, name);
+    await fs.writeFile(filePath, bytes);
+    return { name, filePath, size: bytes.length, sha256: sha256(bytes) };
+  }));
+  let draft;
+  let nextAssetId = 1;
+  const remoteContents = new Map();
+  const fetchImpl = async (url, options = {}) => {
+    const requestUrl = String(url);
+    if (requestUrl.endsWith("/repos/Nami/mail")) {
+      return jsonResponse({ full_name: "Nami/mail", private: false, visibility: "public" });
+    }
+    if (requestUrl.endsWith("/releases?per_page=100")) return jsonResponse(draft ? [draft] : []);
+    if (requestUrl.endsWith("/releases") && options.method === "POST") {
+      draft = {
+        id: 42,
+        tag_name: "v1.2.3",
+        draft: true,
+        prerelease: false,
+        assets: [],
+        upload_url: "https://uploads.github.com/repos/Nami/mail/releases/42/assets{?name,label}",
+      };
+      return jsonResponse(draft, 201);
+    }
+    if (requestUrl.startsWith("https://uploads.github.com/")) {
+      const name = new URL(requestUrl).searchParams.get("name");
+      const bytes = Buffer.from(options.body);
+      const asset = {
+        id: nextAssetId,
+        name,
+        size: bytes.length,
+        url: `https://api.github.com/assets/${nextAssetId}`,
+      };
+      nextAssetId += 1;
+      draft.assets.push(asset);
+      remoteContents.set(asset.url, bytes);
+      return jsonResponse(asset, 201);
+    }
+    const remote = draft?.assets.find((asset) => asset.url === requestUrl);
+    if (remote) return new Response(remoteContents.get(remote.url), { status: 200 });
+    if (requestUrl.endsWith("/releases/42") && options.method === "PATCH") {
+      draft = { ...draft, draft: false, prerelease: false };
+      return jsonResponse(draft);
+    }
+    return jsonResponse({ message: "not found" }, 404);
+  };
+
+  const created = await createGitHubDraftRelease({
+    owner: "Nami",
+    repo: "mail",
+    tag: "v1.2.3",
+    token: "test-token",
+    fetchImpl,
+  });
+  await uploadGitHubReleaseAssets({
+    owner: "Nami",
+    repo: "mail",
+    tag: "v1.2.3",
+    token: "test-token",
+    release: created,
+    assets,
+    fetchImpl,
+  });
+  const verified = await verifyGitHubDraftRelease({
+    owner: "Nami",
+    repo: "mail",
+    tag: "v1.2.3",
+    token: "test-token",
+    expectedAssets: assets,
+    fetchImpl,
+  });
+  assert.deepEqual(verified.assets.map((asset) => asset.name).sort(), assets.map((asset) => asset.name).sort());
+  const promoted = await promoteGitHubDraftRelease({
+    owner: "Nami",
+    repo: "mail",
+    releaseId: verified.id,
+    tag: "v1.2.3",
+    token: "test-token",
+    releaseName: "Nami Mail 1.2.3",
+    releaseNotes: "# Nami Mail 1.2.3\n\nVerified release.",
+    fetchImpl,
+  });
+  assert.equal(promoted.draft, false);
+});
 
 test("remote draft verification hashes every exact asset before promotion", async () => {
   const fixture = createDraftFixture();
@@ -247,6 +399,25 @@ test("remote verification rejects a published release and altered bytes", async 
     expectedAssets: altered.expectedAssets,
     fetchImpl: altered.fetchImpl,
   }), /SHA-256/);
+
+  const duplicate = createDraftFixture({
+    additionalReleases: [{
+      id: 43,
+      tag_name: "v1.2.3",
+      draft: true,
+      prerelease: false,
+      assets: [],
+      upload_url: "https://uploads.github.com/repos/Nami/mail/releases/43/assets{?name,label}",
+    }],
+  });
+  await assert.rejects(verifyGitHubDraftRelease({
+    owner: "Nami",
+    repo: "mail",
+    tag: "v1.2.3",
+    token: "test-token",
+    expectedAssets: duplicate.expectedAssets,
+    fetchImpl: duplicate.fetchImpl,
+  }), /exactly one matching Release; found 2/);
 });
 
 test("uploads the generated ZIP update assets only to the verified draft release", async (t) => {
@@ -259,14 +430,15 @@ test("uploads the generated ZIP update assets only to the verified draft release
   const uploads = [];
   const fetchImpl = async (url, options = {}) => {
     const requestUrl = String(url);
-    if (requestUrl.endsWith("/releases/tags/v1.2.3")) {
-      return jsonResponse({
+    if (requestUrl.endsWith("/releases?per_page=100")) {
+      return jsonResponse([{
         id: 42,
+        tag_name: "v1.2.3",
         draft: true,
         prerelease: false,
         assets: [{ name: "Nami Mail Setup 1.2.3.exe" }],
         upload_url: "https://uploads.github.com/repos/Nami/mail/releases/42/assets{?name,label}",
-      });
+      }]);
     }
     if (requestUrl.startsWith("https://uploads.github.com/")) {
       uploads.push({ requestUrl, options });
@@ -311,14 +483,15 @@ test("reuses previously uploaded ZIP update assets only after byte-for-byte veri
   const uploads = [];
   const fetchImpl = async (url, options = {}) => {
     const requestUrl = String(url);
-    if (requestUrl.endsWith("/releases/tags/v1.2.3")) {
-      return jsonResponse({
+    if (requestUrl.endsWith("/releases?per_page=100")) {
+      return jsonResponse([{
         id: 42,
+        tag_name: "v1.2.3",
         draft: true,
         prerelease: false,
         assets: remoteAssets,
         upload_url: "https://uploads.github.com/repos/Nami/mail/releases/42/assets{?name,label}",
-      });
+      }]);
     }
     const remote = remoteAssets.find((asset) => asset.url === requestUrl);
     if (remote) return new Response(contents.get(remote.name), { status: 200 });

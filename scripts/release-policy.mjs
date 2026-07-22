@@ -124,6 +124,65 @@ async function githubJson(pathname, options = {}) {
   return response.json();
 }
 
+function githubReleasesPath(owner, repo) {
+  return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases`;
+}
+
+async function listGitHubReleases({ owner, repo, token, fetchImpl }) {
+  const releases = await githubJson(`${githubReleasesPath(owner, repo)}?per_page=100`, {
+    token,
+    fetchImpl,
+    label: `GitHub Releases for ${owner}/${repo}`,
+  });
+  if (!Array.isArray(releases)) throw new Error(`GitHub Releases for ${owner}/${repo} returned an invalid list.`);
+  return releases;
+}
+
+function releasesWithTag(releases, tag) {
+  return releases.filter((release) => release && release.tag_name === tag);
+}
+
+function assertGitHubDraftRelease(release, tag, { requireUploadTarget = false } = {}) {
+  if (!Number.isInteger(release?.id) || release.id <= 0) throw new Error(`GitHub Release ${tag} has no valid release id.`);
+  if (release.tag_name !== tag) throw new Error(`GitHub Release tag ${release.tag_name ?? "<missing>"} does not match ${tag}.`);
+  if (release.draft !== true) throw new Error(`GitHub Release ${tag} is not a draft; refusing to overwrite or re-promote it.`);
+  if (release.prerelease !== false) throw new Error(`GitHub Release ${tag} is marked as a prerelease; refusing stable promotion.`);
+  if (!Array.isArray(release.assets)) throw new Error(`GitHub draft Release ${tag} returned no asset list.`);
+  if (requireUploadTarget && typeof release.upload_url !== "string") {
+    throw new Error(`GitHub draft Release ${tag} has no valid upload target.`);
+  }
+  return release;
+}
+
+async function findUniqueGitHubDraftRelease({ owner, repo, tag, token, fetchImpl }) {
+  const matches = releasesWithTag(await listGitHubReleases({ owner, repo, token, fetchImpl }), tag);
+  if (matches.length !== 1) {
+    throw new Error(`GitHub draft Release ${tag} must have exactly one matching Release; found ${matches.length}.`);
+  }
+  return assertGitHubDraftRelease(matches[0], tag, { requireUploadTarget: true });
+}
+
+export async function createGitHubDraftRelease({ owner, repo, tag, token, fetchImpl = globalThis.fetch }) {
+  if (!token?.trim()) throw new Error("GH_TOKEN is required to create a GitHub Release draft.");
+  const existing = releasesWithTag(await listGitHubReleases({ owner, repo, token, fetchImpl }), tag);
+  if (existing.length > 0) {
+    throw new Error(`Refusing to create GitHub draft Release ${tag}: found ${existing.length} existing matching Release(s).`);
+  }
+  const created = await githubJson(githubReleasesPath(owner, repo), {
+    token,
+    fetchImpl,
+    method: "POST",
+    body: {
+      tag_name: tag,
+      draft: true,
+      prerelease: false,
+      generate_release_notes: false,
+    },
+    label: `GitHub draft Release creation ${tag}`,
+  });
+  return assertGitHubDraftRelease(created, tag, { requireUploadTarget: true });
+}
+
 export async function verifyPublicGitHubRepository({ owner, repo, token, fetchImpl = globalThis.fetch }) {
   const metadata = await githubJson(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {
     token,
@@ -233,15 +292,7 @@ export async function verifyGitHubDraftRelease({
 }) {
   if (!token?.trim()) throw new Error("GH_TOKEN is required to verify a draft GitHub Release.");
   await verifyPublicGitHubRepository({ owner, repo, token, fetchImpl });
-  const release = await githubJson(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/tags/${encodeURIComponent(tag)}`,
-    { token, fetchImpl, label: `GitHub draft Release ${tag}` },
-  );
-  if (!Number.isInteger(release.id) || release.id <= 0) throw new Error(`GitHub Release ${tag} has no valid release id.`);
-  if (release.tag_name !== tag) throw new Error(`GitHub Release tag ${release.tag_name ?? "<missing>"} does not match ${tag}.`);
-  if (release.draft !== true) throw new Error(`GitHub Release ${tag} is not a draft; refusing to overwrite or re-promote it.`);
-  if (release.prerelease !== false) throw new Error(`GitHub Release ${tag} is marked as a prerelease; refusing stable promotion.`);
-  if (!Array.isArray(release.assets)) throw new Error(`GitHub Release ${tag} returned no asset list.`);
+  const release = await findUniqueGitHubDraftRelease({ owner, repo, tag, token, fetchImpl });
 
   const expectedNames = expectedAssets.map((asset) => asset.name).sort();
   const remoteNames = release.assets.map((asset) => asset?.name).sort();
@@ -264,21 +315,14 @@ export async function uploadGitHubReleaseAssets({
   tag,
   token,
   assets,
+  release: suppliedRelease,
   fetchImpl = globalThis.fetch,
 }) {
   if (!token?.trim()) throw new Error("GH_TOKEN is required to upload GitHub Release assets.");
-  if (!Array.isArray(assets) || assets.length === 0) throw new Error("At least one ZIP update asset must be uploaded.");
-  const release = await githubJson(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/tags/${encodeURIComponent(tag)}`,
-    { token, fetchImpl, label: `GitHub draft Release ${tag}` },
-  );
-  if (!Number.isInteger(release.id) || release.id <= 0 || typeof release.upload_url !== "string") {
-    throw new Error(`GitHub draft Release ${tag} has no valid upload target.`);
-  }
-  if (release.draft !== true || release.prerelease !== false) {
-    throw new Error(`GitHub Release ${tag} must remain a stable draft while update assets are uploaded.`);
-  }
-  if (!Array.isArray(release.assets)) throw new Error(`GitHub draft Release ${tag} returned no asset list.`);
+  if (!Array.isArray(assets) || assets.length === 0) throw new Error("At least one GitHub Release asset must be uploaded.");
+  const release = suppliedRelease
+    ? assertGitHubDraftRelease(suppliedRelease, tag, { requireUploadTarget: true })
+    : await findUniqueGitHubDraftRelease({ owner, repo, tag, token, fetchImpl });
   const remoteAssetsByName = new Map(release.assets.map((asset) => [asset?.name, asset]));
   const baseUploadUrl = release.upload_url.replace(/\{[^}]*\}$/, "");
   const parsedBaseUploadUrl = new URL(baseUploadUrl);
@@ -287,10 +331,10 @@ export async function uploadGitHubReleaseAssets({
   }
 
   for (const asset of assets) {
-    const name = releaseAssetName(asset?.name, "GitHub ZIP update asset name");
+    const name = releaseAssetName(asset?.name, "GitHub Release asset name");
     const stat = await fs.stat(asset.filePath);
     if (!stat.isFile() || stat.size !== asset.size || stat.size < 1) {
-      throw new Error(`GitHub ZIP update asset ${name} does not match its generated local file.`);
+      throw new Error(`GitHub Release asset ${name} does not match its generated local file.`);
     }
     const existing = remoteAssetsByName.get(name);
     if (existing !== undefined) {
@@ -325,7 +369,7 @@ export async function uploadGitHubReleaseAssets({
     if (!response.ok) throw await responseError(response, `GitHub upload ${name}`);
     const uploaded = await response.json();
     if (uploaded?.name !== name || uploaded?.size !== stat.size) {
-      throw new Error(`GitHub did not confirm the expected uploaded ZIP update asset ${name}.`);
+      throw new Error(`GitHub did not confirm the expected uploaded Release asset ${name}.`);
     }
     remoteAssetsByName.set(name, uploaded);
   }
