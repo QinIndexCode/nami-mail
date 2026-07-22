@@ -1,6 +1,14 @@
 # Nami Mail
 
+<p align="center">
+  <img src="build/icon.png" alt="Nami Mail" width="112" />
+</p>
+
 Nami Mail 是一个本地优先的多账户邮件客户端。它把 Gmail、iCloud、QQ、163、Outlook/Hotmail、Yahoo、AOL、Fastmail、Yandex 以及其他支持 IMAP/SMTP 的邮箱集中到由你本机运行的统一收件箱中。常见邮箱可使用应用专用密码/授权码；已配置的 Google 与 Microsoft 账户可使用 OAuth 2.0 登录。
+
+<p align="center">
+  <img src="docs/nami-mail-inbox.png" alt="Nami Mail 收件箱界面" width="1200" />
+</p>
 
 > 密码输入框只用于服务商要求的长期专用凭据：Gmail 和 iCloud 通常填写应用专用密码，QQ/网易填写客户端授权码，普通自建邮箱填写邮箱密码。凭据不会发送到 Nami Mail 以外的服务，只用于直接连接对应邮箱服务商；OAuth 刷新令牌同样仅加密保存在本机。
 
@@ -47,7 +55,7 @@ npm.cmd run smoke:server-node
 
 ## Windows 桌面安装包
 
-Nami Mail 可以作为原生 Windows 应用运行。桌面版使用原生窗口边框，不包含网页演示中的 macOS 模拟标题栏；邮件界面、交互和动画与 Web 版共用同一套 React/CSS 实现。
+Nami Mail 可以作为原生 Windows 应用运行。邮件界面、交互和动画与 Web 版共用同一套 React/CSS 实现。
 
 普通用户应使用 Release 中的 `Nami Mail Setup <version>.exe`，不要把更新 ZIP 解压后直接运行。安装前和遇到 Windows 信任提示时，请按 [Windows 安装与更新指南](docs/INSTALLING.md) 核对来源与签名状态。
 
