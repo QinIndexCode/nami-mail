@@ -12,6 +12,29 @@ const execFileAsync = promisify(execFile);
 
 const sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
+function isTransientWindowsHandleError(error: unknown): boolean {
+  if (process.platform !== "win32" || typeof error !== "object" || error === null || !("code" in error)) {
+    return false;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "EPERM" || code === "EBUSY";
+}
+
+async function removeFixtureDirectoryAfterWindowsHandleRelease(directory: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  let retryDelay = 25;
+  while (true) {
+    try {
+      await fs.rm(directory, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (!isTransientWindowsHandleError(error) || Date.now() >= deadline) throw error;
+      await sleep(retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 250);
+    }
+  }
+}
+
 async function waitForFileSignal(
   filePath: string,
   child: ChildProcess,
@@ -204,7 +227,18 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
     return;
   }
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-installer-success-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let helper: ChildProcess | undefined;
+  t.after(async () => {
+    if (helper && helper.exitCode === null && helper.signalCode === null) {
+      helper.kill();
+      await waitForChildExit(helper, "forced Windows update-helper cleanup", 2_000).catch(() => undefined);
+    }
+    // The helper restarts the current executable after it exits. Its process
+    // can retain the source fixture's EXE handle briefly, even after the
+    // helper's exit event. Retrying only transient Windows lock errors makes
+    // cleanup wait for those real handles rather than masking other failures.
+    await removeFixtureDirectoryAfterWindowsHandleRelease(directory);
+  });
   const powershell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const installerName = "Nami-Mail-Setup.exe";
   const sourceDirectory = path.join(directory, "release");
@@ -263,7 +297,7 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
   assert.equal(archiveProbe.trim(), `${archiveSize}|${archiveSha512}`);
   await fs.writeFile(helperPath, createZipUpdateInstallerScript(), "utf8");
 
-  const helper = spawn(powershell, [
+  helper = spawn(powershell, [
     "-NoProfile",
     "-NonInteractive",
     "-ExecutionPolicy",
@@ -296,20 +330,16 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
     stdio: "ignore",
     windowsHide: true,
   });
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
-    const timeout = setTimeout(() => {
+  let exitCode: number | null;
+  try {
+    exitCode = await waitForChildExit(helper, "the Windows update helper", 10_000);
+  } catch (error) {
+    if (helper.exitCode === null && helper.signalCode === null) {
       helper.kill();
-      reject(new Error("The detached update helper did not exit within 10 seconds."));
-    }, 10_000);
-    helper.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    helper.once("exit", (code) => {
-      clearTimeout(timeout);
-      resolve(code);
-    });
-  });
+      await waitForChildExit(helper, "forced Windows update-helper cleanup", 2_000).catch(() => undefined);
+    }
+    throw error;
+  }
   assert.equal(exitCode, 0);
 
   await assert.rejects(fs.access(archivePath), /ENOENT/);

@@ -1755,7 +1755,7 @@ export default function App() {
         <div className="window-bar">
           <div className="traffic-lights" aria-hidden="true"><span /><span /><span /></div>
           <span className="window-title">Nami Mail</span>
-          <div className="window-actions"><span className="local-pill"><span /> 本机服务</span><IconButton label={theme === "light" ? "切换深色" : "切换浅色"} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton></div>
+          <div className="window-actions"><span className="local-pill"><span /> 本地加密</span><IconButton label={theme === "light" ? "切换深色" : "切换浅色"} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton></div>
         </div>
       )}
 
