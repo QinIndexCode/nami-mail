@@ -32,7 +32,7 @@ Fastify 本地服务 (127.0.0.1，桌面版使用动态端口)
 | `apps/server` | Fastify 路由、IMAP/SMTP、OAuth、服务商发现、同步、草稿/发件队列、SQLite 与应用层加密。 |
 | `apps/desktop` | Electron 生命周期、单实例、托盘、Windows 通知、DPAPI 主密钥、preload IPC、更新检查与安装助手。 |
 | `build` | 受版本控制的品牌资源、Windows 安装器资源及默认空更新信任配置。 |
-| `scripts` | 原生 SQLite ABI 准备、构建、安装器 smoke、Release 资源与发布策略校验。 |
+| `scripts` | 原生 SQLite 加载验证、构建、安装器 smoke、Release 资源与发布策略校验。 |
 
 ## 数据与进程边界
 
@@ -52,7 +52,7 @@ Fastify 本地服务 (127.0.0.1，桌面版使用动态端口)
 
 1. 界面变更同时验证桌面、窄窗口、浅色/深色主题、焦点顺序和可复制的邮件内容。
 2. 服务端协议或数据变更同时验证网络/TLS 错误分类、幂等性、迁移兼容性和敏感数据不落明文。
-3. Electron 变更同时验证单实例、托盘、关闭行为、更新前安全关闭和 Node/Electron 两套 SQLite ABI。
+3. Electron 变更同时验证单实例、托盘、关闭行为、更新前安全关闭和 Node/Electron 两个运行时的 SQLite 加载路径。
 4. 发布或更新变更必须通过资源完整性、签名信任根和实际安装路径验证；单元测试或草稿 Release 不能替代真实线上升级验收。
 
 相关开发命令与验证基线见 [开发说明](DEVELOPMENT.md)，协作约定见 [贡献指南](../CONTRIBUTING.md)。

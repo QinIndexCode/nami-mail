@@ -11,7 +11,7 @@
 
 ## 本地开发
 
-项目要求 Node.js 22 或更高版本。在项目根目录执行：
+项目要求 Node.js 22.14.0 或更高版本。在项目根目录执行：
 
 ```powershell
 npm.cmd ci
@@ -33,11 +33,11 @@ npm.cmd run dev:desktop
 
 复制 [`.env.example`](.env.example) 为 `.env` 后，才按需填写本地开发配置。Google 和 Microsoft 的配置仅接受公共客户端 ID；不要在该文件或任何 Issue 中填写 client secret。
 
-`better-sqlite3` 同时被命令行 Node 和 Electron 使用，两者 ABI 不同。请使用项目脚本准备或重建原生模块，不要在运行中的桌面应用旁随意执行通用 `npm rebuild`：
+请使用项目脚本验证 Node 与 Electron 的实际加载路径；不要在运行中的桌面应用旁随意执行通用 `npm rebuild`：
 
 ```powershell
-npm.cmd run prepare:server-sqlite
-npm.cmd run rebuild:electron
+npm.cmd run verify:node-sqlite
+npm.cmd run verify:electron-sqlite
 ```
 
 更多目录结构、测试和打包注意事项见 [开发说明](docs/DEVELOPMENT.md)。

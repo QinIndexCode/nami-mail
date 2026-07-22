@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import { githubZipUpdateAssetNames } from "./github-update-assets.mjs";
 
 const githubApiBaseUrl = "https://api.github.com";
