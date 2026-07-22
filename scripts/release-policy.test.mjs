@@ -388,8 +388,10 @@ test("pull request validation runs the release gate without write credentials", 
   assert.equal(workflow.name, "Validate Pull Request");
   assert.deepEqual(workflow.on.pull_request.branches, ["main"]);
   assert.ok("workflow_dispatch" in workflow.on, "Maintainers must be able to rerun validation without creating a PR.");
+  assert.equal("pull_request_target" in workflow.on, false, "Untrusted pull requests must not run with the base branch token.");
   assert.equal(workflow.permissions.contents, "read");
   assert.equal(workflow.jobs.validate.permissions.contents, "read");
+  assert.equal("environment" in workflow.jobs.validate, false, "Pull-request validation must not receive a protected environment.");
   assert.equal(workflow.jobs.validate["runs-on"], "windows-latest");
   assert.equal(workflow.concurrency["cancel-in-progress"], true);
   const checkout = workflow.jobs.validate.steps.find(
@@ -402,6 +404,9 @@ test("pull request validation runs the release gate without write credentials", 
     ),
   );
   const commands = workflow.jobs.validate.steps.map((step) => step.run).filter(Boolean);
+  for (const step of workflow.jobs.validate.steps) {
+    assert.doesNotMatch(JSON.stringify(step), /\$\{\{\s*secrets\./i, "Pull-request validation must not interpolate repository secrets.");
+  }
   assert.deepEqual(commands, [
     "npm ci",
     "node --test scripts/release-policy.test.mjs",
