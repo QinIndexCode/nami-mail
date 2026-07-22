@@ -345,6 +345,10 @@ test("release workflow isolates read-only validation from credential-minimized p
     workflow.jobs.validate.steps.some((step) => step.run === "npm audit --omit=dev --audit-level=high"),
     "Validation must enforce the documented production dependency audit.",
   );
+  const validateBuildIndex = workflow.jobs.validate.steps.findIndex((step) => step.run === "npm run build");
+  const runtimeSmokeIndex = workflow.jobs.validate.steps.findIndex((step) => step.run === "npm run smoke:runtime");
+  assert.ok(validateBuildIndex >= 0, "Validation must build the distributable runtime before smoke testing it.");
+  assert.ok(runtimeSmokeIndex > validateBuildIndex, "Runtime smoke must execute against freshly built server and renderer artifacts.");
   assert.equal(packageStep.env.NAMI_MAIL_EXPECTED_WINDOWS_PUBLISHER, "${{ secrets.WINDOWS_CSC_PUBLISHER }}");
   assert.equal(packageStep.env.NAMI_MAIL_EXPECTED_WINDOWS_CERTIFICATE_THUMBPRINT, "${{ secrets.WINDOWS_CSC_THUMBPRINT }}");
   assert.equal(packageStep.env.NAMI_MAIL_UPDATE_ED25519_PRIVATE_KEY, "${{ secrets.NAMI_MAIL_UPDATE_ED25519_PRIVATE_KEY }}");

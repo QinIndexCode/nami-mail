@@ -31,6 +31,7 @@ jobs:
       - run: npm ci
       - run: node --test scripts/release-policy.test.mjs
       - run: npm run typecheck
+      - run: npm run build
       - run: npm run test
       - run: npm --workspace @nami/web run test
       - run: npm run test:desktop-security
