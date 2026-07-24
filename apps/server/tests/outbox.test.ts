@@ -25,6 +25,7 @@ const request = {
   text: "The latest details are attached.",
   attachmentTokens: [],
 };
+const migrationTestTimeoutMs = 30_000;
 
 function insertAccount(db: DatabaseHandle): void {
   db.prepare(`
@@ -299,6 +300,7 @@ describe("durable outbound submissions", () => {
     })).toThrow(SubmissionConflictError);
   });
 
+  // VACUUM and WAL checkpointing can exceed Vitest's default timeout on constrained Windows runners.
   it("physically removes outbound plaintext canaries from SQLite and WAL during migration", () => {
     db.close();
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nami-outbox-encryption-"));
@@ -338,5 +340,5 @@ describe("durable outbound submissions", () => {
       .map((filePath) => fs.readFileSync(filePath)));
     const disk = bytes.toString("utf8");
     for (const canary of Object.values(canaries)) expect(disk).not.toContain(canary);
-  });
+  }, migrationTestTimeoutMs);
 });

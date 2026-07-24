@@ -4,6 +4,13 @@
 
 This is the English translation of the Chinese source changelog. `CHANGELOG.md` remains the authoritative version history. It follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories and Semantic Versioning.
 
+## [0.1.2] - 2026-07-24
+
+### Fixed
+
+- Prevented Windows checkout line-ending differences from falsely marking generated locale catalogs as stale.
+- Set an explicit, bounded 30-second limit for the two security migration tests that perform SQLite `VACUUM` and physical WAL checks, avoiding false timeouts on constrained Windows runners.
+
 ## [0.1.1] - 2026-07-24
 
 ### Added

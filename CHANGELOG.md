@@ -4,6 +4,13 @@
 
 本文件记录面向用户的显著变化，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的分类方式和语义化版本号。
 
+## [0.1.2] - 2026-07-24
+
+### 修复
+
+- 修复 Windows checkout 的换行符差异会误判生成语言目录过期的问题；
+- 为执行 SQLite `VACUUM` 和 WAL 实体检查的两条安全迁移测试设置明确且受限的 30 秒上限，避免受限 Windows runner 上的错误超时。
+
 ## [0.1.1] - 2026-07-24
 
 ### 新增
