@@ -1,5 +1,7 @@
 # Windows 安装与更新指南
 
+[简体中文](INSTALLING.md) | [English](INSTALLING.en.md)
+
 本指南面向日常使用 Nami Mail 的 Windows 用户。Nami Mail 当前的桌面发行范围是 Windows x64；从源码启动的 Web 或开发桌面会话不等同于正式安装版，也不会作为自动更新验证对象。
 
 ## 从可信来源安装

@@ -212,6 +212,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
   let microsoftOAuthCallbackBridge: Server | undefined;
   let closePromise: Promise<void> | undefined;
   let masterKey: Buffer | undefined;
+  const translationAbortController = new AbortController();
 
   try {
     const database = openDatabase(config.databasePath);
@@ -254,6 +255,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     };
     const fastify = await buildApp(runtimeContext, {
       localApiAccessToken: config.localApiAccessToken,
+      translationAbortSignal: translationAbortController.signal,
     });
     app = fastify;
 
@@ -282,6 +284,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
 
     const close = () => {
       closePromise ??= (async () => {
+        translationAbortController.abort();
         try {
           await closeMicrosoftOAuthCallbackBridge(microsoftOAuthCallbackBridge);
         } finally {
@@ -308,6 +311,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       close,
     };
   } catch (error) {
+    translationAbortController.abort();
     await closeMicrosoftOAuthCallbackBridge(microsoftOAuthCallbackBridge).catch(() => undefined);
     await scheduler?.close();
     if (app) await app.close().catch(() => undefined);

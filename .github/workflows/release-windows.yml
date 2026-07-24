@@ -32,7 +32,10 @@ jobs:
       - run: npm run verify:node-sqlite
       - run: npm run verify:electron-sqlite
       - run: npm run smoke:server-node
+      - run: npm run build:brand:check
       - run: node --test scripts/release-policy.test.mjs
+      - run: node --test scripts/build-locale-catalog.test.mjs
+      - run: node scripts/build-locale-catalog.mjs --check
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test

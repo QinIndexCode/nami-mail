@@ -14,6 +14,7 @@ export const demoAccounts: Account[] = [
     createdAt: new Date().toISOString(),
     folders: [
       { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 3, unseen: 2 },
+      { path: "Archive", name: "归档", specialUse: "\\Archive", total: 0, unseen: 0 },
       { path: "Sent Messages", name: "已发送", specialUse: "\\Sent", total: 0, unseen: 0 },
       { path: "Drafts", name: "草稿", specialUse: "\\Drafts", total: 0, unseen: 0 },
     ],
@@ -27,7 +28,10 @@ export const demoAccounts: Account[] = [
     lastError: null,
     lastSyncedAt: new Date(Date.now() - 62_000).toISOString(),
     createdAt: new Date().toISOString(),
-    folders: [{ path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 2, unseen: 0 }],
+    folders: [
+      { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 2, unseen: 0 },
+      { path: "[Gmail]/All Mail", name: "所有邮件", specialUse: "\\All", total: 0, unseen: 0 },
+    ],
   },
 ];
 
@@ -192,5 +196,46 @@ export const demoMessages: Message[] = [
     size: 8842,
   },
 ];
+
+const demoTranslatedBodies: Record<string, { detectedLanguage: string; zh: string; en: string }> = {
+  m1: {
+    detectedLanguage: "zh",
+    zh: "找到一家很安静的新店。\n\n窗边的位置下午有很好的光，我们周六四点见？\n\n林澈",
+    en: "I found a lovely new quiet place.\n\nThe window seats have beautiful light in the afternoon. Shall we meet at four on Saturday?\n\nLin Che",
+  },
+  m2: {
+    detectedLanguage: "en",
+    zh: "更安静的导航方向感觉很对。\n\n我们保留了信息层级，并移除了三处相互竞争的视觉强调。原型已准备好，明天上午可以进行最后一轮检查。\n\n— Mira",
+    en: "The quieter navigation direction feels right.\n\nWe kept the hierarchy and removed three competing accents. The prototype is ready for a final pass tomorrow morning.\n\n— Mira",
+  },
+  m3: {
+    detectedLanguage: "zh",
+    zh: "本月账单已经生成。相比上月，你的订阅支出减少了 18%。\n\n登录官方客户端可查看明细。",
+    en: "Your July statement is ready. Compared with last month, your subscription spending is down 18%.\n\nSign in to the official app to view the details.",
+  },
+  m4: {
+    detectedLanguage: "en",
+    zh: "我这边都已确认。我在移动端过渡部分留了一条小建议。\n\n不用着急，明天处理正合适。",
+    en: "Everything on my side is signed off. I left one small note on the mobile transition.\n\nNo rush — tomorrow is perfect.",
+  },
+  m5: {
+    detectedLanguage: "zh",
+    zh: "上周拍的照片我挑了二十张，原片和调色版本都放在附件里。\n\n喜欢第三组的光线。",
+    en: "I sorted the photos from last week and picked twenty. The originals and color-graded versions are in the attachment.\n\nI like the light in the third set.",
+  },
+};
+
+/** Returns deterministic demo copy so demo mode never submits mail content to a network service. */
+export function demoMessageTranslation(message: Message, targetLocale: string): {
+  translatedText: string;
+  detectedLanguage?: string;
+} {
+  const entry = demoTranslatedBodies[message.id];
+  if (!entry) return { translatedText: message.textBody || message.snippet };
+  return {
+    translatedText: targetLocale.toLowerCase().startsWith("zh") ? entry.zh : entry.en,
+    detectedLanguage: entry.detectedLanguage,
+  };
+}
 
 export const demoStats: Stats = { accounts: 2, messages: 5, unread: 2 };

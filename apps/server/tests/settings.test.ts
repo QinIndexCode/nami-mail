@@ -45,11 +45,23 @@ describe("app settings migrations", () => {
     try {
       expect(getAppSettings(migrated)).toMatchObject({
         theme: "dark",
+        locale: "zh-CN",
         backgroundPreset: "night",
         closeBehavior: "ask",
       });
       expect(updateAppSettings(migrated, { closeBehavior: "tray" })).toMatchObject({ closeBehavior: "tray" });
       expect(getAppSettings(migrated)).toMatchObject({ closeBehavior: "tray" });
+      expect(updateAppSettings(migrated, { locale: "en-US" })).toMatchObject({ locale: "en-US" });
+      expect(getAppSettings(migrated)).toMatchObject({ locale: "en-US" });
+      migrated.prepare("UPDATE app_settings SET locale = ? WHERE id = 1").run("en-us");
+      expect(getAppSettings(migrated)).toMatchObject({ locale: "en-US" });
+      expect((migrated.prepare("SELECT locale FROM app_settings WHERE id = 1").get() as { locale: string }).locale).toBe("en-US");
+      migrated.prepare("UPDATE app_settings SET locale = ? WHERE id = 1").run("fr-FR");
+      expect(getAppSettings(migrated)).toMatchObject({ locale: "zh-CN" });
+      expect((migrated.prepare("SELECT locale FROM app_settings WHERE id = 1").get() as { locale: string }).locale).toBe("zh-CN");
+      const columns = migrated.prepare("PRAGMA table_info(app_settings)").all() as Array<{ name: string }>;
+      expect(columns.some((column) => column.name === "translation_configuration")).toBe(true);
+      expect(columns.some((column) => column.name === "translation_configuration_version")).toBe(true);
     } finally {
       migrated.close();
     }

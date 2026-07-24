@@ -546,12 +546,26 @@ test("release workflow isolates read-only validation from credential-minimized p
     assert.equal(setupNode.with["node-version"], "22.14.0", `${jobName} must use the supported Node.js minimum.`);
   }
   const packageStep = workflow.jobs.release.steps.find((step) => step.run === "npm run publish:github");
-  assert.ok(
-    workflow.jobs.validate.steps.some((step) => step.run === "npm audit --omit=dev --audit-level=high"),
-    "Validation must enforce the documented production dependency audit.",
-  );
-  const validateBuildIndex = workflow.jobs.validate.steps.findIndex((step) => step.run === "npm run build");
-  const runtimeSmokeIndex = workflow.jobs.validate.steps.findIndex((step) => step.run === "npm run smoke:runtime");
+  const validateCommands = workflow.jobs.validate.steps.map((step) => step.run).filter(Boolean);
+  assert.deepEqual(validateCommands, [
+    "npm ci",
+    "npm run verify:node-sqlite",
+    "npm run verify:electron-sqlite",
+    "npm run smoke:server-node",
+    "npm run build:brand:check",
+    "node --test scripts/release-policy.test.mjs",
+    "node --test scripts/build-locale-catalog.test.mjs",
+    "node scripts/build-locale-catalog.mjs --check",
+    "npm run typecheck",
+    "npm run build",
+    "npm run test",
+    "npm --workspace @nami/web run test",
+    "npm run test:desktop-security",
+    "npm run smoke:runtime",
+    "npm audit --omit=dev --audit-level=high",
+  ]);
+  const validateBuildIndex = validateCommands.indexOf("npm run build");
+  const runtimeSmokeIndex = validateCommands.indexOf("npm run smoke:runtime");
   assert.ok(validateBuildIndex >= 0, "Validation must build the distributable runtime before smoke testing it.");
   assert.ok(runtimeSmokeIndex > validateBuildIndex, "Runtime smoke must execute against freshly built server and renderer artifacts.");
   assert.equal(packageStep.env.NAMI_MAIL_EXPECTED_WINDOWS_PUBLISHER, "${{ secrets.WINDOWS_CSC_PUBLISHER }}");
@@ -600,6 +614,8 @@ test("pull request validation runs the release gate without write credentials", 
     "npm run smoke:server-node",
     "npm run build:brand:check",
     "node --test scripts/release-policy.test.mjs",
+    "node --test scripts/build-locale-catalog.test.mjs",
+    "node scripts/build-locale-catalog.mjs --check",
     "npm run typecheck",
     "npm run build",
     "npm run test",

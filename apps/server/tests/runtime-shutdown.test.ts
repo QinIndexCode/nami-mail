@@ -12,6 +12,9 @@ const mocks = vi.hoisted(() => ({
     microsoftOAuthClientId: undefined as string | undefined,
     port: 0,
     syncMessageLimit: 10,
+    translationApiKey: undefined as string | undefined,
+    translationEndpoint: undefined as string | undefined,
+    translationTimeoutMs: 25_000,
   },
   getAppSettings: vi.fn(),
   loadOrCreateMasterKey: vi.fn(),
@@ -103,15 +106,18 @@ describe("server runtime shutdown", () => {
 
     const server = await startServer({ masterKey: suppliedKey });
     const context = mocks.buildApp.mock.calls[0]?.[0] as { masterKey: Buffer };
+    const buildOptions = mocks.buildApp.mock.calls[0]?.[1] as { translationAbortSignal?: AbortSignal };
 
     expect(mocks.loadOrCreateMasterKey).not.toHaveBeenCalled();
     expect(context.masterKey).not.toBe(suppliedKey);
     expect(context.masterKey).toEqual(suppliedKey);
+    expect(buildOptions.translationAbortSignal?.aborted).toBe(false);
 
     await server.close();
 
     expect(context.masterKey.equals(Buffer.alloc(32))).toBe(true);
     expect(suppliedKey.equals(Buffer.alloc(32, 7))).toBe(true);
+    expect(buildOptions.translationAbortSignal?.aborted).toBe(true);
   });
 
   it("stops HTTP intake and waits for mailbox sync before closing the database", async () => {
