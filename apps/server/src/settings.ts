@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from "./db.js";
+import { defaultLocale, normalizeLocale, type SupportedLocale } from "./localization.js";
 
 export const BACKGROUND_PRESETS = ["none", "paper", "mist", "coast", "dawn", "night", "custom"] as const;
 export const NOTIFICATION_SOUNDS = ["system", "soft", "bright", "none"] as const;
@@ -11,6 +12,7 @@ export type AppTheme = "system" | "light" | "dark";
 
 export type AppSettings = {
   theme: AppTheme;
+  locale: SupportedLocale;
   backgroundPreset: BackgroundPreset;
   backgroundIntensity: number;
   notificationsEnabled: boolean;
@@ -28,6 +30,7 @@ export type AppSettingsPatch = Partial<Omit<AppSettings, "customBackgroundFilena
 
 const defaults: Omit<AppSettings, "updatedAt"> = {
   theme: "system",
+  locale: defaultLocale,
   backgroundPreset: "coast",
   backgroundIntensity: 68,
   notificationsEnabled: true,
@@ -40,6 +43,7 @@ const defaults: Omit<AppSettings, "updatedAt"> = {
 
 type SettingsRow = {
   theme: AppTheme;
+  locale: string;
   background_preset: BackgroundPreset;
   background_intensity: number;
   notifications_enabled: number;
@@ -54,10 +58,10 @@ type SettingsRow = {
 function ensureSettingsRow(db: DatabaseHandle): void {
   db.prepare(`
     INSERT OR IGNORE INTO app_settings (
-      id, theme, background_preset, background_intensity,
+      id, theme, locale, background_preset, background_intensity,
       notifications_enabled, notify_when_focused, notification_sound,
       refresh_interval_seconds, close_behavior, custom_background_filename, updated_at
-    ) VALUES (1, @theme, @backgroundPreset, @backgroundIntensity, @notificationsEnabled,
+    ) VALUES (1, @theme, @locale, @backgroundPreset, @backgroundIntensity, @notificationsEnabled,
       @notifyWhenFocused, @notificationSound, @refreshIntervalSeconds, @closeBehavior, NULL, @updatedAt)
   `).run({
     ...defaults,
@@ -70,6 +74,7 @@ function ensureSettingsRow(db: DatabaseHandle): void {
 function rowToSettings(row: SettingsRow): AppSettings {
   return {
     theme: row.theme,
+    locale: normalizeLocale(row.locale),
     backgroundPreset: row.background_preset,
     backgroundIntensity: row.background_intensity,
     notificationsEnabled: Boolean(row.notifications_enabled),
@@ -85,7 +90,11 @@ function rowToSettings(row: SettingsRow): AppSettings {
 export function getAppSettings(db: DatabaseHandle): AppSettings {
   ensureSettingsRow(db);
   const row = db.prepare("SELECT * FROM app_settings WHERE id = 1").get() as SettingsRow;
-  return rowToSettings(row);
+  const settings = rowToSettings(row);
+  if (row.locale !== settings.locale) {
+    db.prepare("UPDATE app_settings SET locale = ? WHERE id = 1").run(settings.locale);
+  }
+  return settings;
 }
 
 export function updateAppSettings(db: DatabaseHandle, patch: AppSettingsPatch): AppSettings {
@@ -93,12 +102,14 @@ export function updateAppSettings(db: DatabaseHandle, patch: AppSettingsPatch): 
   const next: AppSettings = {
     ...current,
     ...patch,
+    locale: normalizeLocale(patch.locale ?? current.locale),
     updatedAt: new Date().toISOString(),
   };
 
   db.prepare(`
     UPDATE app_settings SET
       theme = @theme,
+      locale = @locale,
       background_preset = @backgroundPreset,
       background_intensity = @backgroundIntensity,
       notifications_enabled = @notificationsEnabled,

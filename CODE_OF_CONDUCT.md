@@ -1,5 +1,7 @@
 # 社区行为准则
 
+[简体中文](CODE_OF_CONDUCT.md) | [English](CODE_OF_CONDUCT.en.md)
+
 Nami Mail 希望成为一个让用户和贡献者能够平等、专业地协作的项目。参与 Issue、讨论、Pull Request、代码审查、发布和其他项目空间时，请以尊重、清晰和可验证的方式交流。
 
 ## 期望的行为

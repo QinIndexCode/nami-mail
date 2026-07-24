@@ -99,8 +99,28 @@ describe("account transport migration", () => {
       expect(columns.some((column) => column.name === "cc_json")).toBe(true);
       expect(columns.some((column) => column.name === "in_reply_to")).toBe(true);
       expect(columns.some((column) => column.name === "references_json")).toBe(true);
-      expect(migrated.prepare("SELECT cc_json, in_reply_to, references_json FROM messages WHERE id = ?").get("legacy-message"))
-        .toEqual({ cc_json: null, in_reply_to: null, references_json: null });
+      expect(columns.some((column) => column.name === "remote_id_lookup")).toBe(true);
+      expect(columns.some((column) => column.name === "all_mail_archived")).toBe(true);
+      expect(columns.some((column) => column.name === "pending_move_destination")).toBe(true);
+      expect(columns.some((column) => column.name === "pending_move_state")).toBe(true);
+      expect(columns.some((column) => column.name === "pending_move_candidate_uid")).toBe(true);
+      expect(columns.some((column) => column.name === "pending_move_special_use")).toBe(true);
+      expect(migrated.prepare(`
+        SELECT cc_json, in_reply_to, references_json, remote_id_lookup, all_mail_archived,
+               pending_move_destination, pending_move_state, pending_move_candidate_uid, pending_move_special_use
+        FROM messages WHERE id = ?
+      `).get("legacy-message"))
+        .toEqual({
+          cc_json: null,
+          in_reply_to: null,
+          references_json: null,
+          remote_id_lookup: null,
+          all_mail_archived: null,
+          pending_move_destination: null,
+          pending_move_state: null,
+          pending_move_candidate_uid: null,
+          pending_move_special_use: null,
+        });
     } finally {
       migrated.close();
     }

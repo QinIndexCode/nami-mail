@@ -142,6 +142,23 @@ describe("mail transport error API responses", () => {
     expect(moveResponse.body).not.toContain(secret);
   });
 
+  it("keeps a confirmed move successful while scheduling a best-effort cache refresh", async () => {
+    moveMessage.mockResolvedValueOnce({ accountId: "account-1", destination: "[Gmail]/All Mail", refreshPending: true });
+    syncAccount.mockRejectedValueOnce(new Error("refresh unavailable"));
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/messages/message-1/move",
+      payload: { target: "archive" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, destination: "[Gmail]/All Mail", refreshPending: true });
+    await vi.waitFor(() => {
+      expect(syncAccount).toHaveBeenCalledWith(db, expect.any(Buffer), "account-1", expect.any(Number), undefined);
+    });
+  });
+
   it("keeps draft-save and attachment-download transport failures classified and redacted", async () => {
     insertAccount(db);
     const secret = "do-not-return-this-secret";

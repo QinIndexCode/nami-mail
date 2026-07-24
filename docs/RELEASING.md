@@ -1,5 +1,7 @@
 # Windows 发布指南
 
+[简体中文](RELEASING.md) | [English](RELEASING.en.md)
+
 本文面向维护者，说明 Nami Mail 的 Windows 安装包、GitHub Release 与 ZIP 自动更新流程。它只描述代码已经实现的行为；本地构建、单元测试或草稿 Release 都不能替代一次真实旧版到新版的安装验证。
 
 ## 发布模型
@@ -110,7 +112,7 @@ npm.cmd run package:win:github
 - 数据兼容性、需要用户重新登录/重新授权的情况，以及是否存在不可逆迁移；
 - 仅下载本 Release 的 `Nami Mail Setup <version>.exe` 进行手动安装。版本化 ZIP 和 JSON 是自动更新内部资源，不应让用户自行解压或运行。
 
-本仓库将可公开审阅的版本说明放在 [Release Notes 目录](releases/README.md)。首发可直接使用 [v0.1.0 说明](releases/v0.1.0.md)；后续 `0.1.1` 应从 [候选模板](releases/v0.1.1-candidate.md) 生成。模板故意保留“尚未完成真实线上升级验收”的安全文案，只有完成本页末尾的全部真实验证并保存证据后，才可替换为“已完成”文案。
+本仓库将可公开审阅的版本说明放在 [Release Notes 目录](releases/README.md)。首发可直接使用 [v0.1.0 说明](releases/v0.1.0.md)，当前 `0.1.1` 使用 [正式说明](releases/v0.1.1.md)。保留的 [候选模板](releases/v0.1.1-candidate.md) 仅用于发布前检查；正式说明故意保留“尚未完成真实线上升级验收”的安全文案，只有完成本页末尾的全部真实验证并保存证据后，才能在后续版本说明中写为已完成。
 
 发布说明不得包含 `GH_TOKEN`、证书、私钥、OAuth 凭据、真实邮件、测试账户数据或本地绝对路径。若发布后发现资源、签名、版本或更新清单不一致，应先撤销或标记该 Release，而不是静默替换文件。
 

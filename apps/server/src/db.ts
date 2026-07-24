@@ -68,6 +68,22 @@ CREATE TABLE IF NOT EXISTS messages (
   account_id TEXT NOT NULL,
   mailbox TEXT NOT NULL,
   uid INTEGER NOT NULL,
+  -- Opaque, keyed lookup of the provider's stable message identifier. It
+  -- enables folder-membership reconciliation without storing that identifier.
+  remote_id_lookup TEXT,
+  -- NULL means unknown. \All rows are shown as archived only after this is 1.
+  all_mail_archived INTEGER CHECK (all_mail_archived IN (0, 1) OR all_mail_archived IS NULL),
+  -- An intent is written before a MOVE reaches the provider. Confirmed moves
+  -- without UIDPLUS retain this encrypted cache row until destination sync can
+  -- reconcile it by remote_id_lookup.
+  pending_move_destination TEXT,
+  pending_move_state TEXT CHECK (pending_move_state IN ('intent', 'confirmed') OR pending_move_state IS NULL),
+  -- A previously verified destination UID can be fetched directly even when
+  -- it has fallen outside the normal rolling sync window.
+  pending_move_candidate_uid INTEGER,
+  -- Retains the destination's special-use classification while a later LIST
+  -- response is incomplete, so a confirmed archive move stays discoverable.
+  pending_move_special_use TEXT,
   message_id TEXT,
   subject TEXT NOT NULL DEFAULT '',
   from_name TEXT NOT NULL DEFAULT '',
@@ -185,6 +201,9 @@ CREATE TABLE IF NOT EXISTS app_settings (
   notification_sound TEXT NOT NULL DEFAULT 'soft' CHECK (notification_sound IN ('system', 'soft', 'bright', 'none')),
   refresh_interval_seconds INTEGER NOT NULL DEFAULT 60 CHECK (refresh_interval_seconds IN (30, 60, 180, 300)),
   close_behavior TEXT NOT NULL DEFAULT 'ask' CHECK (close_behavior IN ('ask', 'tray', 'quit')),
+  locale TEXT NOT NULL DEFAULT 'zh-CN',
+  translation_configuration TEXT,
+  translation_configuration_version INTEGER NOT NULL DEFAULT 0,
   custom_background_filename TEXT,
   updated_at TEXT NOT NULL
 );
@@ -257,6 +276,27 @@ function migrateDatabase(db: DatabaseHandle): void {
   if (!messageColumns.some((column) => column.name === "payload_version")) {
     db.exec("ALTER TABLE messages ADD COLUMN payload_version INTEGER NOT NULL DEFAULT 0");
   }
+  if (!messageColumns.some((column) => column.name === "remote_id_lookup")) {
+    db.exec("ALTER TABLE messages ADD COLUMN remote_id_lookup TEXT");
+  }
+  if (!messageColumns.some((column) => column.name === "all_mail_archived")) {
+    db.exec("ALTER TABLE messages ADD COLUMN all_mail_archived INTEGER");
+  }
+  if (!messageColumns.some((column) => column.name === "pending_move_destination")) {
+    db.exec("ALTER TABLE messages ADD COLUMN pending_move_destination TEXT");
+  }
+  if (!messageColumns.some((column) => column.name === "pending_move_state")) {
+    db.exec("ALTER TABLE messages ADD COLUMN pending_move_state TEXT");
+  }
+  if (!messageColumns.some((column) => column.name === "pending_move_candidate_uid")) {
+    db.exec("ALTER TABLE messages ADD COLUMN pending_move_candidate_uid INTEGER");
+  }
+  if (!messageColumns.some((column) => column.name === "pending_move_special_use")) {
+    db.exec("ALTER TABLE messages ADD COLUMN pending_move_special_use TEXT");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_messages_account_mailbox_remote_id ON messages(account_id, mailbox, remote_id_lookup)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_messages_pending_move_remote_id ON messages(account_id, pending_move_destination, remote_id_lookup)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_messages_pending_move_candidate ON messages(account_id, pending_move_destination, pending_move_candidate_uid)");
   // Sender data no longer remains in this plaintext compatibility column.
   db.exec("DROP INDEX IF EXISTS idx_messages_from");
 
@@ -287,5 +327,14 @@ function migrateDatabase(db: DatabaseHandle): void {
   const settingsColumns = db.prepare("PRAGMA table_info(app_settings)").all() as Array<{ name: string }>;
   if (!settingsColumns.some((column) => column.name === "close_behavior")) {
     db.exec("ALTER TABLE app_settings ADD COLUMN close_behavior TEXT NOT NULL DEFAULT 'ask' CHECK (close_behavior IN ('ask', 'tray', 'quit'))");
+  }
+  if (!settingsColumns.some((column) => column.name === "locale")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN locale TEXT NOT NULL DEFAULT 'zh-CN'");
+  }
+  if (!settingsColumns.some((column) => column.name === "translation_configuration")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN translation_configuration TEXT");
+  }
+  if (!settingsColumns.some((column) => column.name === "translation_configuration_version")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN translation_configuration_version INTEGER NOT NULL DEFAULT 0");
   }
 }

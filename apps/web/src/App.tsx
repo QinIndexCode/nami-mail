@@ -41,24 +41,48 @@ import { api } from "./api";
 import { presentAttachment, type AttachmentKind } from "./attachmentPresentation";
 import { summarizeComposeAttachments } from "./attachmentWorkflow";
 import { desktopBridge, type DesktopUpdateSnapshot } from "./desktop";
-import { demoAccounts, demoMessages, demoProviders, demoStats, demoSubmissions } from "./demo";
+import { demoAccounts, demoMessageTranslation, demoMessages, demoProviders, demoStats, demoSubmissions } from "./demo";
 import { accountHealthIssue, mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
 import { buildForwardDraft, buildReplyDraft } from "./mailActions";
 import { mailBackgroundColor, mailReaderSurface, mailSurfaceForBackground, shouldResetMailForeground, type MailSurface } from "./mailHtmlTheme";
-import { applyMessageMove, applyMessageSeenChange, isVisibleInUnreadView, mergeUnreadViewSnapshot, nextUnreadViewRecentlyReadIds, sidebarBadgeCounts } from "./mailListState";
+import {
+  applyMessageMove,
+  applyMessageSeenChange,
+  isArchivedMessage,
+  isInboxMessage,
+  matchesServerMessageQuery,
+  mergePendingArchiveMoves,
+  mergeUnreadViewSnapshot,
+  nextMessageTotalForMove,
+  nextUnreadViewRecentlyReadIds,
+  sidebarBadgeCounts,
+  type MessageListQuery,
+  type PendingArchiveMove,
+} from "./mailListState";
 import SettingsModal from "./SettingsModal";
 import SendingStatusModal from "./SendingStatusModal";
 import StartupUpdatePrompt from "./StartupUpdatePrompt";
 import { pollSubmittingSubmission, sortSubmissions } from "./sendingStatus";
+import { providerDisplayName } from "./providerOnboarding";
 import { canPlayCustomNotificationSound, playNotificationSound, primeNotificationSound } from "./sounds";
+import { saveLocalePreference } from "./localePreference";
+import { createSettingsLoadCoordinator } from "./settingsLoadCoordinator";
 import ThemedSelect from "./ThemedSelect";
+import TranslationPanel, { type TranslationAvailability, type TranslationContent, type TranslationPanelState } from "./TranslationPanel";
+import { translationErrorMessage } from "./translationPresentation";
 import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type MessageAttachment, type OutboundAttachment, type OutboundSubmission, type ProviderInfo, type Stats } from "./types";
 import { useDialogFocus } from "./useDialogFocus";
 import { findVerificationCodes } from "./verificationCode";
+import { resolveLocale, type Translate, useI18n } from "./i18n";
 
-type MailView = "inbox" | "unread" | "starred";
+type MailView = MessageListQuery["messageView"];
 type ToastKind = "success" | "error" | "info" | "warning";
 type ToastNotice = { kind: ToastKind; message: string } | null;
+type TranslationSession = {
+  messageId: string;
+  targetLocale: string;
+  state: TranslationPanelState;
+};
 type PendingAttachmentUpload = {
   id: string;
   file: File;
@@ -70,6 +94,17 @@ type AttachmentDownloadState = {
   phase: "downloading" | "ready" | "error";
   detail?: string;
 };
+
+function retainedTranslationContent(state: TranslationPanelState): TranslationContent | undefined {
+  if (state.phase === "ready") {
+    return {
+      translatedText: state.translatedText,
+      ...(state.detectedLanguage ? { detectedLanguage: state.detectedLanguage } : {}),
+      visible: state.visible,
+    };
+  }
+  return state.phase === "loading" || state.phase === "error" ? state.previous : undefined;
+}
 
 const submissionStatusesNeedingRefresh = new Set<OutboundSubmission["deliveryStatus"]>([
   "submitting",
@@ -85,17 +120,17 @@ const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 const isDesktop = new URLSearchParams(window.location.search).get("desktop") === "1";
 const isDesktopSmoke = new URLSearchParams(window.location.search).get("desktopSmoke") === "1";
 
-function formatMessageTime(value: string): string {
+function formatMessageTime(value: string, locale: string): string {
   const date = new Date(value);
   const now = new Date();
   const sameDay = date.toDateString() === now.toDateString();
-  if (sameDay) return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(date);
+  if (sameDay) return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(date);
   const sameYear = date.getFullYear() === now.getFullYear();
-  return new Intl.DateTimeFormat("zh-CN", sameYear ? { month: "numeric", day: "numeric" } : { year: "2-digit", month: "numeric", day: "numeric" }).format(date);
+  return new Intl.DateTimeFormat(locale, sameYear ? { month: "numeric", day: "numeric" } : { year: "2-digit", month: "numeric", day: "numeric" }).format(date);
 }
 
-function formatFullDate(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+function formatFullDate(value: string, locale: string): string {
+  return new Intl.DateTimeFormat(locale, {
     year: "numeric",
     month: "long",
     day: "numeric",
@@ -104,15 +139,16 @@ function formatFullDate(value: string): string {
   }).format(new Date(value));
 }
 
-function formatSyncFreshness(value: string | null): string {
-  if (!value) return "尚未同步";
+function formatSyncFreshness(value: string | null, t: Translate): string {
+  if (!value) return t("mail.sync.never");
   const elapsedSeconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
-  if (!Number.isFinite(elapsedSeconds) || elapsedSeconds < 60) return "刚刚同步";
+  if (!Number.isFinite(elapsedSeconds) || elapsedSeconds < 60) return t("mail.sync.justNow");
   const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-  if (elapsedMinutes < 60) return `${elapsedMinutes} 分钟前同步`;
+  if (elapsedMinutes < 60) return t(elapsedMinutes === 1 ? "mail.sync.minuteAgo" : "mail.sync.minutesAgo", { count: elapsedMinutes });
   const elapsedHours = Math.floor(elapsedMinutes / 60);
-  if (elapsedHours < 24) return `${elapsedHours} 小时前同步`;
-  return `${Math.floor(elapsedHours / 24)} 天前同步`;
+  if (elapsedHours < 24) return t(elapsedHours === 1 ? "mail.sync.hourAgo" : "mail.sync.hoursAgo", { count: elapsedHours });
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  return t(elapsedDays === 1 ? "mail.sync.dayAgo" : "mail.sync.daysAgo", { count: elapsedDays });
 }
 
 function isCompactMailLayout(): boolean {
@@ -138,11 +174,12 @@ function buildMessageQuery({
   if (folder) query.set("folder", folder);
   if (messageView === "starred") query.set("starred", "1");
   if (messageView === "unread") query.set("unread", "1");
+  if (messageView === "archived") query.set("archived", "1");
   if (search.trim()) query.set("q", search.trim());
   return query.toString();
 }
 
-function demoMessageTotal(messages: readonly Message[], {
+function demoMessageTotal(messages: readonly Message[], accounts: readonly Account[], {
   accountId,
   folder,
   search,
@@ -157,11 +194,23 @@ function demoMessageTotal(messages: readonly Message[], {
   return messages.filter((message) => {
     if (accountId !== "all" && message.accountId !== accountId) return false;
     if (folder && message.mailbox !== folder) return false;
+    if (!folder && messageView === "inbox" && !isInboxMessage(message, accounts)) return false;
     if (messageView === "unread" && message.seen) return false;
     if (messageView === "starred" && !message.flagged) return false;
+    if (messageView === "archived" && !isArchivedMessage(message, accounts)) return false;
     if (!normalizedQuery) return true;
     return `${message.subject} ${message.from.name} ${message.from.address} ${message.snippet}`.toLowerCase().includes(normalizedQuery);
   }).length;
+}
+
+function demoMoveDestination(accounts: readonly Account[], accountId: string, target: "archive" | "trash"): string {
+  const specialUses = target === "archive" ? ["\\Archive", "\\All"] : ["\\Trash"];
+  const folders = accounts.find((account) => account.id === accountId)?.folders ?? [];
+  for (const specialUse of specialUses) {
+    const folder = folders.find((item) => item.specialUse === specialUse);
+    if (folder) return folder.path;
+  }
+  return "";
 }
 
 function formatFileSize(bytes: number): string {
@@ -360,6 +409,7 @@ function createSubmissionIdempotencyKey(): string {
 }
 
 function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftDiscarded, onSubmissionChanged, fallbackFocusRef }: { accounts: Account[]; draft: ComposeDraft; onClose: () => void; onSent: (message: string, kind?: ToastKind) => void; onDraftSaved: (accountId: string) => void; onDraftDiscarded: (messageId: string) => void; onSubmissionChanged: () => void; fallbackFocusRef?: RefObject<HTMLElement | null> }) {
+  const { t } = useI18n();
   const [accountId, setAccountId] = useState(draft.accountId ?? accounts[0]?.id ?? "");
   const [to, setTo] = useState(draft.to ?? "");
   const [cc, setCc] = useState(draft.cc ?? "");
@@ -395,9 +445,9 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
   const hasUploadErrors = pendingUploads.some((upload) => upload.phase === "error");
   const attachmentSummary = summarizeComposeAttachments(attachments, pendingUploads);
   const attachmentStatus = [
-    attachmentSummary.uploadingCount > 0 ? `正在上传 ${attachmentSummary.uploadingCount} 个附件` : "",
-    attachmentSummary.failedCount > 0 ? `${attachmentSummary.failedCount} 个附件未上传` : "",
-  ].filter(Boolean).join(" · ");
+    attachmentSummary.uploadingCount > 0 ? t("compose.attachment.uploadingCount", { count: attachmentSummary.uploadingCount }) : "",
+    attachmentSummary.failedCount > 0 ? t("compose.attachment.failedCount", { count: attachmentSummary.failedCount }) : "",
+  ].filter(Boolean).join(t("common.dotSeparator"));
   const hasUnsavedChanges = accountId !== initialDraft.accountId
     || to !== initialDraft.to
     || cc !== initialDraft.cc
@@ -428,7 +478,7 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
       }
       onClose();
     } catch (reason) {
-      setError(mailErrorMessage(reason, "无法清理未保存的附件"));
+      setError(mailErrorMessage(reason, t("compose.error.cleanupAttachments"), t));
       setConfirmAction(null);
     } finally {
       setDiscarding(false);
@@ -444,7 +494,7 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
       onDraftDiscarded(draft.sourceDraftId);
       onClose();
     } catch (reason) {
-      setError(mailErrorMessage(reason, "无法删除草稿"));
+      setError(mailErrorMessage(reason, t("compose.error.deleteDraft"), t));
       setConfirmAction(null);
     } finally {
       setDiscarding(false);
@@ -481,7 +531,7 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
       setRecentAttachmentTokens((current) => new Set(current).add(attachment.token));
       setPendingUploads((current) => current.filter((upload) => upload.id !== uploadId));
     } catch (reason) {
-      const detail = mailErrorMessage(reason, "附件上传失败");
+      const detail = mailErrorMessage(reason, t("compose.error.uploadAttachment"), t);
       setPendingUploads((current) => current.map((upload) => upload.id === uploadId
         ? { ...upload, phase: "error", retryable: true, error: detail }
         : upload));
@@ -493,25 +543,25 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
     event.currentTarget.value = "";
     if (!files.length || busy || uploading || uploadInFlightRef.current) return;
     if (!accountId) {
-      setError("请先选择发件邮箱。");
+      setError(t("compose.error.selectSender"));
       return;
     }
     const validFiles = files.filter((file) => file.size > 0 && file.size <= 10 * 1024 * 1024);
     if (attachmentSummary.reservedCount + validFiles.length > 10) {
-      setError("每封邮件最多添加 10 个附件。");
+      setError(t("compose.error.maxAttachments"));
       return;
     }
     const totalSize = attachmentSummary.reservedBytes + validFiles.reduce((sum, file) => sum + file.size, 0);
     if (totalSize > 25 * 1024 * 1024) {
-      setError("所有附件合计不能超过 25 MB。");
+      setError(t("compose.error.maxAttachmentSize"));
       return;
     }
 
     const nextUploads: PendingAttachmentUpload[] = files.map((file) => {
       const error = file.size <= 0
-        ? "空文件不能作为附件添加。"
+        ? t("compose.error.emptyAttachment")
         : file.size > 10 * 1024 * 1024
-          ? "单个附件不能超过 10 MB。"
+          ? t("compose.error.maxSingleAttachmentSize")
           : undefined;
       return { id: createLocalId("upload"), file, phase: error ? "error" : "uploading", retryable: !error, error };
     });
@@ -558,7 +608,7 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
         return next;
       });
     } catch (reason) {
-      setError(mailErrorMessage(reason, "无法移除附件"));
+      setError(mailErrorMessage(reason, t("compose.error.removeAttachment"), t));
     }
   };
 
@@ -566,25 +616,25 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
     event.preventDefault();
     if (busy || uploading || discarding) return;
     if (hasPendingUploads) {
-      setError("请先等待附件上传完成，或重试/移除失败的文件。");
+      setError(t("compose.error.pendingAttachments"));
       return;
     }
     const recipientValues = recipients();
     const ccValues = copiedRecipients();
     if (!accountId) {
-      setError("请先选择发件邮箱。");
+      setError(t("compose.error.selectSender"));
       return;
     }
     if (!recipientValues.length) {
-      setError("请填写至少一位收件人。");
+      setError(t("compose.error.recipientRequired"));
       return;
     }
     if ([...recipientValues, ...ccValues].some((recipient) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient))) {
-      setError("请检查收件人邮箱地址。");
+      setError(t("compose.error.recipientInvalid"));
       return;
     }
     if (!text.trim() && !attachments.length) {
-      setError("请输入正文或添加附件。");
+      setError(t("compose.error.messageRequired"));
       return;
     }
     setBusy(true);
@@ -625,34 +675,38 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
           }
           onSubmissionChanged();
           if (submission.deliveryStatus === "submitting") {
-            setDeliveryNotice("正在等待发件服务器响应。此窗口会保持打开；再次点击发送会沿用同一请求，不会创建重复邮件。");
-            onSent("正在等待发件服务器响应，Nami Mail 会自动在“已发送”中核对。", "info");
+            setDeliveryNotice(t("compose.delivery.waitingNotice"));
+            onSent(t("compose.delivery.waitingToast"), "info");
             return;
           }
           if (submission.deliveryStatus === "failed") {
-            setError(submission.errorMessage || "发件服务器明确拒绝了这次发送，请检查后重试。");
+            setError(mailErrorMessage(
+              { code: submission.errorCode ?? undefined, message: submission.errorMessage ?? "" },
+              t("compose.error.sendRejected"),
+              t,
+            ));
             return;
           }
         }
         if (submission.deliveryStatus === "unknown_delivery") {
           onSent(
-            result.message ?? "暂时无法确认发件服务器是否已接收邮件。Nami Mail 会继续在“已发送”中自动核对，请不要再次发送。",
+            t("compose.delivery.unknown"),
             "warning",
           );
         } else {
           if (draft.sourceDraftId && !result.draftDiscardWarning) onDraftDiscarded(draft.sourceDraftId);
           const deliveryMessage = submission.deliveryStatus === "confirmed"
-            ? "已在“已发送”中核对到此邮件"
-            : "发件服务器已接收邮件，正在“已发送”中自动核对";
-          onSent(result.draftDiscardWarning ? `${deliveryMessage}，但旧草稿仍在：${result.draftDiscardWarning}` : deliveryMessage);
+            ? t("compose.delivery.confirmed")
+            : t("compose.delivery.submitted");
+          onSent(result.draftDiscardWarning ? t("compose.delivery.previousDraftRemains", { message: deliveryMessage }) : deliveryMessage);
         }
       } else {
         await new Promise((resolve) => setTimeout(resolve, 650));
-        onSent("邮件已发送（演示模式）");
+        onSent(t("compose.delivery.demoSent"));
       }
       onClose();
     } catch (reason) {
-      setError(mailErrorMessage(reason, "邮件未能发送"));
+      setError(mailErrorMessage(reason, t("compose.error.send"), t));
     } finally {
       setBusy(false);
     }
@@ -661,7 +715,7 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
   const saveDraft = async () => {
     if (!accountId || busy || uploading || discarding) return;
     if (hasPendingUploads) {
-      setError("请先等待附件上传完成，或重试/移除失败的文件。");
+      setError(t("compose.error.pendingAttachments"));
       return;
     }
     setBusy(true);
@@ -680,23 +734,23 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
           attachmentTokens: attachments.map((attachment) => attachment.token),
         });
         if (!result.serverConfirmed) {
-          setError("草稿尚未写入邮箱草稿箱。当前编辑内容已保留，请稍后重试。");
+          setError(t("compose.error.draftUnconfirmed"));
           return;
         }
         if (draft.sourceDraftId && !result.replaceWarning) onDraftDiscarded(draft.sourceDraftId);
         const warnings = [
-          result.replaceWarning ? `旧草稿仍在：${result.replaceWarning}` : "",
-          result.attachmentWarning ?? "",
+          result.replaceWarning ? t("compose.save.replaceWarning") : "",
+          result.attachmentWarning ? t("compose.save.attachmentWarning") : "",
         ].filter(Boolean);
-        onSent(warnings.length ? `草稿已确认保存到邮箱草稿箱，但${warnings.join("；")}` : "草稿已确认保存到邮箱草稿箱");
+        onSent(warnings.length ? t("compose.save.confirmedWithWarnings", { warnings: warnings.join(t("common.listSeparator")) }) : t("compose.save.confirmed"));
       } else {
         await new Promise((resolve) => setTimeout(resolve, 380));
-        onSent("草稿已保存（演示模式）");
+        onSent(t("compose.save.demo"));
       }
       onDraftSaved(accountId);
       onClose();
     } catch (reason) {
-      setError(mailErrorMessage(reason, "草稿未能保存"));
+      setError(mailErrorMessage(reason, t("compose.error.saveDraft"), t));
     } finally {
       setBusy(false);
     }
@@ -710,42 +764,42 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
     }}>
       <section ref={composeDialogRef} className="compose-card" role="dialog" aria-modal="true" aria-labelledby="compose-title" tabIndex={-1}>
         <header className="compose-header">
-          <div><span className="eyebrow">{draft.sourceDraftId ? "草稿" : "新邮件"}</span><h2 id="compose-title">{draft.sourceDraftId ? "编辑草稿" : "新邮件"}</h2></div>
-          <div className="compose-header-actions">{draft.sourceDraftId && <IconButton label="删除草稿" onClick={() => setConfirmAction("delete")} disabled={busy || uploading || discarding}><Trash2 size={18} /></IconButton>}<IconButton label="关闭" onClick={requestClose} disabled={busy || uploading || discarding}><X size={18} /></IconButton></div>
+          <div><span className="eyebrow">{draft.sourceDraftId ? t("compose.draft") : t("compose.new")}</span><h2 id="compose-title">{draft.sourceDraftId ? t("compose.editDraft") : t("compose.new")}</h2></div>
+          <div className="compose-header-actions">{draft.sourceDraftId && <IconButton label={t("compose.deleteDraft")} onClick={() => setConfirmAction("delete")} disabled={busy || uploading || discarding}><Trash2 size={18} /></IconButton>}<IconButton label={t("common.close")} onClick={requestClose} disabled={busy || uploading || discarding}><X size={18} /></IconButton></div>
         </header>
         <form noValidate onSubmit={submit}>
-          <label className="compose-row" htmlFor="compose-account"><span>发件人</span><ThemedSelect id="compose-account" value={accountId} onValueChange={(value) => {
+          <label className="compose-row" htmlFor="compose-account"><span>{t("compose.sender")}</span><ThemedSelect id="compose-account" value={accountId} onValueChange={(value) => {
             if ((attachments.length || pendingUploads.length) && value !== accountId) {
-              setError("已添加或正在处理的附件绑定当前发件邮箱。处理完成后才能切换账户。");
+              setError(t("compose.error.senderLocked"));
               return;
             }
             setAccountId(value);
           }} disabled={busy || uploading || discarding}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}</ThemedSelect></label>
-          <label className="compose-row" htmlFor="compose-to"><span>收件人</span><input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => setTo(event.target.value)} placeholder="email@example.com" disabled={busy || discarding} /></label>
-          <label className="compose-row" htmlFor="compose-cc"><span>抄送</span><input id="compose-cc" type="text" value={cc} onChange={(event) => setCc(event.target.value)} placeholder="可选，多个邮箱用逗号分隔" disabled={busy || discarding} /></label>
-          <label className="compose-row" htmlFor="compose-subject"><span>主题</span><input id="compose-subject" type="text" value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="简洁的主题" disabled={busy || discarding} /></label>
-          <label className="visually-hidden" htmlFor="compose-body">邮件正文</label>
-          <textarea id="compose-body" className="compose-body" value={text} onChange={(event) => setText(event.target.value)} placeholder="开始写邮件…" disabled={busy || discarding} />
-          <section className="compose-attachments" aria-label={`附件，已添加 ${attachmentSummary.attachedCount} 个${attachmentStatus ? `，${attachmentStatus}` : ""}`}>
-            <div className="compose-attachments-heading"><span><Paperclip size={16} />附件</span><small aria-live="polite">{attachmentSummary.attachedCount} / 10 · {formatFileSize(attachmentSummary.attachedBytes)}{attachmentStatus ? ` · ${attachmentStatus}` : ""}</small><button className="compose-attachment-add" type="button" onClick={chooseFiles} disabled={busy || uploading || discarding || !accountId}>{uploading ? <LoaderCircle className="spin" size={15} /> : <Paperclip size={15} />}{uploading ? "正在上传" : "添加文件"}</button></div>
+          <label className="compose-row" htmlFor="compose-to"><span>{t("compose.to")}</span><input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => setTo(event.target.value)} placeholder="email@example.com" disabled={busy || discarding} /></label>
+          <label className="compose-row" htmlFor="compose-cc"><span>{t("compose.cc")}</span><input id="compose-cc" type="text" value={cc} onChange={(event) => setCc(event.target.value)} placeholder={t("compose.ccPlaceholder")} disabled={busy || discarding} /></label>
+          <label className="compose-row" htmlFor="compose-subject"><span>{t("compose.subject")}</span><input id="compose-subject" type="text" value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={t("compose.subjectPlaceholder")} disabled={busy || discarding} /></label>
+          <label className="visually-hidden" htmlFor="compose-body">{t("compose.body")}</label>
+          <textarea id="compose-body" className="compose-body" value={text} onChange={(event) => setText(event.target.value)} placeholder={t("compose.bodyPlaceholder")} disabled={busy || discarding} />
+          <section className="compose-attachments" aria-label={t("compose.attachment.aria", { count: attachmentSummary.attachedCount, status: attachmentStatus })}>
+            <div className="compose-attachments-heading"><span><Paperclip size={16} />{t("compose.attachments")}</span><small aria-live="polite">{attachmentSummary.attachedCount} / 10{t("common.dotSeparator")}{formatFileSize(attachmentSummary.attachedBytes)}{attachmentStatus ? `${t("common.dotSeparator")}${attachmentStatus}` : ""}</small><button className="compose-attachment-add" type="button" onClick={chooseFiles} disabled={busy || uploading || discarding || !accountId}>{uploading ? <LoaderCircle className="spin" size={15} /> : <Paperclip size={15} />}{uploading ? t("compose.attachment.uploading") : t("compose.attachment.add")}</button></div>
             <input ref={fileInputRef} className="visually-hidden" type="file" tabIndex={-1} multiple onChange={(event) => void addFiles(event)} />
             {(attachments.length > 0 || pendingUploads.length > 0) && <div className="compose-attachment-list">{attachments.map((attachment) => {
-              const presentation = presentAttachment(attachment.filename, attachment.contentType);
+              const presentation = presentAttachment(attachment.filename, attachment.contentType, t);
               const recentlyAdded = recentAttachmentTokens.has(attachment.token);
-              return <div className={`compose-attachment-item${recentlyAdded ? " is-success" : ""}`} key={attachment.token}><AttachmentFileIcon kind={presentation.kind} /><span><strong className="truncated-tooltip" data-tooltip={attachment.filename}><span>{attachment.filename}</span></strong><small aria-live={recentlyAdded ? "polite" : undefined}>{recentlyAdded ? "已添加 · " : ""}{presentation.label} · {formatFileSize(attachment.size)}</small></span><IconButton label={`移除 ${attachment.filename}`} onClick={() => void removeAttachment(attachment)} disabled={busy || uploading || discarding}><X size={16} /></IconButton></div>;
+              return <div className={`compose-attachment-item${recentlyAdded ? " is-success" : ""}`} key={attachment.token}><AttachmentFileIcon kind={presentation.kind} /><span><strong className="truncated-tooltip" data-tooltip={attachment.filename}><span>{attachment.filename}</span></strong><small aria-live={recentlyAdded ? "polite" : undefined}>{recentlyAdded ? `${t("compose.attachment.added")}${t("common.dotSeparator")}` : ""}{presentation.label}{t("common.dotSeparator")}{formatFileSize(attachment.size)}</small></span><IconButton label={t("compose.attachment.remove", { filename: attachment.filename })} onClick={() => void removeAttachment(attachment)} disabled={busy || uploading || discarding}><X size={16} /></IconButton></div>;
             })}{pendingUploads.map((upload) => {
-              const presentation = presentAttachment(upload.file.name, upload.file.type || "application/octet-stream");
+              const presentation = presentAttachment(upload.file.name, upload.file.type || "application/octet-stream", t);
               const isUploading = upload.phase === "uploading";
               const isRetryable = !isUploading && upload.retryable;
-              return <div className={`compose-attachment-item is-${upload.phase}${isRetryable ? " has-retry" : ""}`} key={upload.id}><AttachmentFileIcon kind={presentation.kind} /><span><strong className="truncated-tooltip" data-tooltip={upload.file.name}><span>{upload.file.name}</span></strong><small className="truncated-tooltip" aria-live="polite" data-tooltip={upload.error}><span>{isUploading ? "正在上传…" : upload.error}</span></small></span>{isUploading ? <span className="attachment-transfer-state" role="status" aria-label={`正在上传 ${upload.file.name}`}><LoaderCircle className="spin" size={16} /></span> : <span className="attachment-upload-actions">{isRetryable && <IconButton label={`重试添加 ${upload.file.name}`} onClick={() => void retryPendingUpload(upload)} disabled={busy || uploading || discarding}><RefreshCw size={16} /></IconButton>}<IconButton label={`移除 ${upload.file.name}`} onClick={() => removePendingUpload(upload.id)} disabled={busy || uploading || discarding}><X size={16} /></IconButton></span>}</div>;
+              return <div className={`compose-attachment-item is-${upload.phase}${isRetryable ? " has-retry" : ""}`} key={upload.id}><AttachmentFileIcon kind={presentation.kind} /><span><strong className="truncated-tooltip" data-tooltip={upload.file.name}><span>{upload.file.name}</span></strong><small className="truncated-tooltip" aria-live="polite" data-tooltip={upload.error}><span>{isUploading ? t("compose.attachment.uploadingEllipsis") : upload.error}</span></small></span>{isUploading ? <span className="attachment-transfer-state" role="status" aria-label={t("compose.attachment.uploadingFile", { filename: upload.file.name })}><LoaderCircle className="spin" size={16} /></span> : <span className="attachment-upload-actions">{isRetryable && <IconButton label={t("compose.attachment.retry", { filename: upload.file.name })} onClick={() => void retryPendingUpload(upload)} disabled={busy || uploading || discarding}><RefreshCw size={16} /></IconButton>}<IconButton label={t("compose.attachment.remove", { filename: upload.file.name })} onClick={() => removePendingUpload(upload.id)} disabled={busy || uploading || discarding}><X size={16} /></IconButton></span>}</div>;
             })}</div>}
-            {hasPendingUploads && <p className={`compose-attachment-hint${hasUploadErrors ? " error" : ""}`} role={hasUploadErrors ? "alert" : "status"}>{hasUploadErrors ? "部分附件未上传。请重试可重试的文件，或移除不符合要求的文件后再保存或发送。" : "附件正在上传，你可以继续编辑邮件。"}</p>}
+            {hasPendingUploads && <p className={`compose-attachment-hint${hasUploadErrors ? " error" : ""}`} role={hasUploadErrors ? "alert" : "status"}>{hasUploadErrors ? t("compose.attachment.failedHint") : t("compose.attachment.uploadingHint")}</p>}
           </section>
           {deliveryNotice && <div className="form-status warning" role="status"><LoaderCircle className="spin" size={17} />{deliveryNotice}</div>}
           {error && <div id="compose-error" className="form-status error" role="alert"><X size={17} />{error}</div>}
           <footer className="compose-footer">
-            <button className="secondary-button" type="button" disabled={busy || uploading || discarding || hasPendingUploads || !accountId} onClick={() => void saveDraft()}>{busy ? <LoaderCircle className="spin" size={17} /> : <FileText size={17} />}保存草稿</button>
-            <button className="primary-button" type="submit" disabled={busy || uploading || discarding || hasPendingUploads || !accountId}>{busy ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}{busy ? "发送中…" : "发送"}</button>
+            <button className="secondary-button" type="button" disabled={busy || uploading || discarding || hasPendingUploads || !accountId} onClick={() => void saveDraft()}>{busy ? <LoaderCircle className="spin" size={17} /> : <FileText size={17} />}{t("compose.saveDraft")}</button>
+            <button className="primary-button" type="submit" disabled={busy || uploading || discarding || hasPendingUploads || !accountId}>{busy ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}{busy ? t("compose.sending") : t("compose.send")}</button>
           </footer>
         </form>
         {confirmAction && (
@@ -754,9 +808,9 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
             if (event.target === event.currentTarget) setConfirmAction(null);
           }}>
             <section ref={discardConfirmDialogRef} className="compose-confirm" role="alertdialog" aria-modal="true" aria-labelledby="discard-compose-title" aria-describedby="discard-compose-copy" tabIndex={-1}>
-              <h3 id="discard-compose-title">{confirmAction === "delete" ? "删除这封草稿？" : "放弃本次编辑？"}</h3>
-              <p id="discard-compose-copy">{confirmAction === "delete" ? "草稿将从邮箱中删除，相关附件也会一并清理。" : "未保存的正文和新添加的附件将被移除；已保存的草稿会保留。"}</p>
-              <div><button className="secondary-button" type="button" onClick={() => setConfirmAction(null)} disabled={discarding}>{confirmAction === "delete" ? "保留草稿" : "继续编辑"}</button><button className="danger-button" type="button" onClick={() => void (confirmAction === "delete" ? deleteSavedDraft() : discardAndClose())} disabled={discarding}>{discarding ? "正在处理…" : confirmAction === "delete" ? "删除草稿" : "放弃并关闭"}</button></div>
+              <h3 id="discard-compose-title">{confirmAction === "delete" ? t("compose.confirm.deleteTitle") : t("compose.confirm.discardTitle")}</h3>
+              <p id="discard-compose-copy">{confirmAction === "delete" ? t("compose.confirm.deleteDescription") : t("compose.confirm.discardDescription")}</p>
+              <div><button className="secondary-button" type="button" onClick={() => setConfirmAction(null)} disabled={discarding}>{confirmAction === "delete" ? t("compose.confirm.keepDraft") : t("compose.confirm.continueEditing")}</button><button className="danger-button" type="button" onClick={() => void (confirmAction === "delete" ? deleteSavedDraft() : discardAndClose())} disabled={discarding}>{discarding ? t("compose.processing") : confirmAction === "delete" ? t("compose.deleteDraft") : t("compose.confirm.discardAction")}</button></div>
             </section>
           </div>
         )}
@@ -766,16 +820,21 @@ function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftD
 }
 
 export default function App() {
+  const { locale, setLocale, t } = useI18n();
   const [systemTheme, setSystemTheme] = useState<"light" | "dark">(currentSystemTheme);
-  const [settings, setSettings] = useState<AppSettings>(defaultAppSettings);
+  const [settings, setSettings] = useState<AppSettings>(() => ({ ...defaultAppSettings, locale }));
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [pendingArchiveMoves, setPendingArchiveMoves] = useState<PendingArchiveMove[]>([]);
+  const [pendingMoveVerifications, setPendingMoveVerifications] = useState<string[]>([]);
   const [messageTotal, setMessageTotal] = useState(0);
   const [messagePage, setMessagePage] = useState(1);
   const [stats, setStats] = useState<Stats>({ accounts: 0, messages: 0, unread: 0 });
   const [unreadViewRecentlyReadIds, setUnreadViewRecentlyReadIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [translationSession, setTranslationSession] = useState<TranslationSession | null>(null);
+  const [translationAvailability, setTranslationAvailability] = useState<TranslationAvailability>(isDemo ? "available" : "checking");
   const [view, setView] = useState<MailView>("inbox");
   const [selectedAccount, setSelectedAccount] = useState("all");
   const [selectedFolder, setSelectedFolder] = useState("");
@@ -809,10 +868,14 @@ export default function App() {
   const readerMoreRef = useRef<HTMLDivElement>(null);
   const messageButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const messagesRef = useRef<Message[]>([]);
+  const pendingArchiveMovesRef = useRef<PendingArchiveMove[]>([]);
   const unreadViewRecentlyReadIdsRef = useRef<ReadonlySet<string>>(new Set());
   const seenMutationIdsRef = useRef(new Set<string>());
   const viewRef = useRef<MailView>("inbox");
   const lastOpenedMessageIdRef = useRef<string | null>(null);
+  const translationRequestIdRef = useRef(0);
+  const translationAvailabilityRequestIdRef = useRef(0);
+  const settingsLoadCoordinatorRef = useRef(createSettingsLoadCoordinator());
   const demoLoadedRef = useRef(false);
   const selectionInitializedRef = useRef(false);
   const loadRequestRef = useRef(0);
@@ -821,6 +884,11 @@ export default function App() {
   const theme = resolveTheme(settings.theme, systemTheme);
   const activeBackgroundUrl = backgroundUrl(settings);
   const accountIdsKey = accounts.map((account) => account.id).sort().join("|");
+  const pendingMoveVerificationKey = [...new Set([
+    ...pendingMoveVerifications,
+    ...pendingArchiveMoves.map((move) => move.id),
+    ...messages.filter((message) => message.movePending === true).map((message) => message.id),
+  ])].sort().join("|");
   const submissionStatusRefreshIdsKey = submissions
     .filter((submission) => submissionStatusNeedsRefresh(submission.deliveryStatus))
     .map((submission) => submission.id)
@@ -834,6 +902,13 @@ export default function App() {
   const showToast = useCallback((message: string, kind: ToastKind = "success") => {
     setToast({ kind, message });
   }, []);
+  const applySettings = useCallback((nextSettings: AppSettings) => {
+    const normalizedSettings = { ...nextSettings, locale: resolveLocale(nextSettings.locale) };
+    settingsLoadCoordinatorRef.current.recordSettingsChange();
+    setSettings(normalizedSettings);
+    setLocale(normalizedSettings.locale);
+    if (!isDemo) saveLocalePreference(normalizedSettings.locale);
+  }, [setLocale]);
   const clearUnreadViewRecentlyRead = useCallback(() => {
     const next = new Set<string>();
     unreadViewRecentlyReadIdsRef.current = next;
@@ -881,10 +956,13 @@ export default function App() {
 
     const firstFailure = settled.find((result) => result.status === "rejected");
     setSubmissionLoadError(firstFailure?.status === "rejected"
-      ? `${failedAccountIds.size} 个邮箱的发送状态暂时无法读取：${mailErrorToastMessage(firstFailure.reason, "本地服务暂时不可用")}`
+      ? t("sending.loadError", {
+        count: failedAccountIds.size,
+        message: mailErrorToastMessage(firstFailure.reason, t("error.localServiceUnavailable.title"), t),
+      })
       : null);
     setSubmissionLoading(false);
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -914,6 +992,11 @@ export default function App() {
     viewRef.current = view;
   }, [view]);
 
+  const replacePendingArchiveMoves = useCallback((next: PendingArchiveMove[]) => {
+    pendingArchiveMovesRef.current = next;
+    setPendingArchiveMoves(next);
+  }, []);
+
   const load = useCallback(async ({
     silent = false,
     accountId = selectedAccount,
@@ -934,6 +1017,7 @@ export default function App() {
       if (isDemo) {
         const demoTotal = demoMessageTotal(
           demoLoadedRef.current && messagesRef.current.length ? messagesRef.current : demoMessages,
+          demoAccounts,
           { accountId, folder, search, messageView },
         );
         if (!demoLoadedRef.current) {
@@ -963,8 +1047,14 @@ export default function App() {
         if (requestId !== loadRequestRef.current) return;
         const shouldInitializeSelection = !selectionInitializedRef.current;
         selectionInitializedRef.current = true;
-        const nextMessages = mergeUnreadViewSnapshot(
+        const pendingMerge = mergePendingArchiveMoves(
           messagePage.items,
+          pendingArchiveMovesRef.current,
+          nextAccounts,
+          { accountId, folder, search, messageView },
+        );
+        const nextMessages = mergeUnreadViewSnapshot(
+          pendingMerge.items,
           messagesRef.current,
           unreadViewRecentlyReadIdsRef.current,
           messageView === "unread",
@@ -973,7 +1063,7 @@ export default function App() {
         setProviders(nextProviders);
         messagesRef.current = nextMessages;
         setMessages(nextMessages);
-        setMessageTotal(messagePage.total);
+        setMessageTotal(Math.max(messagePage.total, pendingMerge.items.length));
         setMessagePage(messagePage.page);
         setStats(nextStats);
         setSelectedId((current) => {
@@ -984,34 +1074,35 @@ export default function App() {
       }
     } catch (error) {
       if (requestId === loadRequestRef.current) {
-        setFatalError(presentMailError(error));
+        setFatalError(presentMailError(error, t));
         setSubmissionLoading(false);
-        setSubmissionLoadError(mailErrorToastMessage(error, "无法读取发送状态"));
+        setSubmissionLoadError(mailErrorToastMessage(error, t("sending.error.load"), t));
       }
     } finally {
       if (requestId === loadRequestRef.current) setLoading(false);
     }
-  }, [selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, view]);
+  }, [selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, replacePendingArchiveMoves, t, view]);
 
   const loadSettings = useCallback(async () => {
-    if (isDemo) {
-      setSettings(defaultAppSettings);
-      return;
-    }
+    if (isDemo) return;
+    const ticket = settingsLoadCoordinatorRef.current.beginLoad();
     try {
-      setSettings(await api.settings());
+      const nextSettings = await api.settings();
+      if (!settingsLoadCoordinatorRef.current.canApplyLoad(ticket)) return;
+      applySettings(nextSettings);
     } catch (error) {
-      showToast(`无法读取设置：${mailErrorToastMessage(error)}`, "error");
+      if (!settingsLoadCoordinatorRef.current.canApplyLoad(ticket)) return;
+      showToast(t("settings.error.load", { message: mailErrorToastMessage(error, undefined, t) }), "error");
     }
-  }, [showToast]);
+  }, [applySettings, showToast, t]);
 
   const updateSettings = useCallback(async (patch: AppSettingsPatch) => {
     if (isDemo) {
-      setSettings((current) => ({ ...current, ...patch, updatedAt: new Date().toISOString() }));
+      applySettings({ ...settings, ...patch, updatedAt: new Date().toISOString() });
       return;
     }
-    setSettings(await api.updateSettings(patch));
-  }, []);
+    applySettings(await api.updateSettings(patch));
+  }, [applySettings, settings]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { void loadSettings(); }, [loadSettings]);
@@ -1049,6 +1140,37 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [load, settings.refreshIntervalSeconds]);
   useEffect(() => {
+    if (isDemo || !pendingMoveVerificationKey) return undefined;
+    const pendingIds = pendingMoveVerificationKey.split("|").filter(Boolean);
+    let cancelled = false;
+    let timer = 0;
+    let attempt = 0;
+
+    const verifyPendingMoves = async () => {
+      const results = await Promise.allSettled(pendingIds.map(async (id) => ({ id, message: await api.message(id) })));
+      if (cancelled) return;
+      const resolvedIds = new Set(results.flatMap((result) =>
+        result.status === "fulfilled"
+          && result.value.message.id === result.value.id
+          && result.value.message.movePending === false
+          ? [result.value.id]
+          : []
+      ));
+      if (resolvedIds.size) {
+        setPendingMoveVerifications((current) => current.filter((id) => !resolvedIds.has(id)));
+        replacePendingArchiveMoves(pendingArchiveMovesRef.current.filter((move) => !resolvedIds.has(move.id)));
+        void load({ silent: true });
+      }
+      if (cancelled || resolvedIds.size === pendingIds.length) return;
+      attempt += 1;
+      const delay = Math.min(5_000, 750 * (2 ** Math.min(attempt, 3)));
+      timer = window.setTimeout(() => void verifyPendingMoves(), delay);
+    };
+
+    timer = window.setTimeout(() => void verifyPendingMoves(), 750);
+    return () => window.clearTimeout(timer);
+  }, [load, pendingMoveVerificationKey, replacePendingArchiveMoves]);
+  useEffect(() => {
     if (isDemo || !submissionStatusRefreshIdsKey || !accountIdsKey) return undefined;
     let cancelled = false;
     let attempts = 0;
@@ -1072,23 +1194,21 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const filteredMessages = useMemo(() => messages.filter((message) => {
-    if (selectedAccount !== "all" && message.accountId !== selectedAccount) return false;
-    if (selectedFolder && message.mailbox !== selectedFolder) return false;
-    if (view === "unread" && !isVisibleInUnreadView(message, unreadViewRecentlyReadIds)) return false;
-    if (view === "starred" && !message.flagged) return false;
-    if (query.trim()) {
-      const haystack = `${message.subject} ${message.from.name} ${message.from.address} ${message.snippet}`.toLowerCase();
-      if (!haystack.includes(query.trim().toLowerCase())) return false;
-    }
-    return true;
-  }), [messages, query, selectedAccount, selectedFolder, unreadViewRecentlyReadIds, view]);
+  const filteredMessages = useMemo(() => messages.filter((message) => matchesServerMessageQuery(
+    message,
+    accounts,
+    { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view },
+    unreadViewRecentlyReadIds,
+  )), [accounts, messages, query, selectedAccount, selectedFolder, unreadViewRecentlyReadIds, view]);
 
-  const loadedServerMessageCount = useMemo(() => view === "unread"
-    ? messages.filter((message) => !message.seen || !unreadViewRecentlyReadIds.has(message.id)).length
-    : messages.length, [messages, unreadViewRecentlyReadIds, view]);
+  const loadedServerMessageCount = useMemo(() => {
+    if (isDemo) return filteredMessages.length;
+    return view === "unread"
+      ? messages.filter((message) => !message.seen || !unreadViewRecentlyReadIds.has(message.id)).length
+      : messages.length;
+  }, [filteredMessages, messages, unreadViewRecentlyReadIds, view]);
   const currentMessageTotal = useMemo(() => isDemo
-    ? demoMessageTotal(messages, {
+    ? demoMessageTotal(messages, demoAccounts, {
       accountId: selectedAccount,
       folder: selectedFolder,
       search: debouncedQuery,
@@ -1099,18 +1219,24 @@ export default function App() {
     ? filteredMessages.filter((message) => message.seen && unreadViewRecentlyReadIds.has(message.id)).length
     : 0, [filteredMessages, unreadViewRecentlyReadIds, view]);
   const messageCountDescription = view === "unread"
-    ? `${currentMessageTotal} 封未读${recentlyReadVisibleCount ? `；当前列表暂留 ${recentlyReadVisibleCount} 封已读邮件` : ""}`
-    : `${currentMessageTotal} 封邮件`;
+    ? recentlyReadVisibleCount
+      ? t("mail.count.unreadWithRetained", { count: currentMessageTotal, retained: recentlyReadVisibleCount })
+      : t("mail.count.unread", { count: currentMessageTotal })
+    : t("mail.count.total", { count: currentMessageTotal });
   const listToolbarStatus = query
-    ? `“${query}” 的结果`
+    ? t("mail.search.results", { query })
     : recentlyReadVisibleCount
-      ? `${recentlyReadVisibleCount} 封已读邮件暂留在此处；切换到其他视图后会移入收件箱`
+      ? t("mail.unread.retained", { count: recentlyReadVisibleCount })
       : currentMessageTotal > loadedServerMessageCount
-        ? `已显示 ${loadedServerMessageCount} / ${currentMessageTotal}`
-        : "最近同步";
-  const sendingStatusDescription = submissionOutstandingCount
-    ? `${submissionAttentionCount ? `${submissionAttentionCount} 条需要留意` : ""}${submissionAttentionCount && submissionActiveCount ? "，" : ""}${submissionActiveCount ? `${submissionActiveCount} 条正在核对` : ""}`
-    : "所有发件记录均已核对";
+        ? t("mail.loaded", { loaded: loadedServerMessageCount, total: currentMessageTotal })
+        : t("mail.recentlySynced");
+  const sendingStatusDescription = submissionAttentionCount && submissionActiveCount
+    ? t("sending.sidebarAttentionAndActive", { attention: submissionAttentionCount, active: submissionActiveCount })
+    : submissionAttentionCount
+      ? t("sending.sidebarAttention", { count: submissionAttentionCount })
+      : submissionActiveCount
+        ? t("sending.sidebarActive", { count: submissionActiveCount })
+        : t("sending.sidebarComplete");
 
   useEffect(() => {
     if (!selectedId || filteredMessages.some((message) => message.id === selectedId)) return;
@@ -1133,14 +1259,20 @@ export default function App() {
       });
       const nextPage = await api.messages(nextQuery);
       if (requestId !== loadRequestRef.current) return;
+      const pendingMerge = mergePendingArchiveMoves(
+        nextPage.items,
+        pendingArchiveMovesRef.current,
+        accounts,
+        { accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view },
+      );
       setMessages((items) => {
         const existingIds = new Set(items.map((item) => item.id));
-        return [...items, ...nextPage.items.filter((item) => !existingIds.has(item.id))];
+        return [...items, ...pendingMerge.items.filter((item) => !existingIds.has(item.id))];
       });
       setMessagePage(nextPage.page);
-      setMessageTotal(nextPage.total);
+      setMessageTotal(Math.max(nextPage.total, pendingMerge.items.length));
     } catch (error) {
-      if (requestId === loadRequestRef.current) showToast(mailErrorToastMessage(error), "error");
+      if (requestId === loadRequestRef.current) showToast(mailErrorToastMessage(error, undefined, t), "error");
     } finally {
       loadingMoreRef.current = false;
       setLoadingMore(false);
@@ -1148,28 +1280,62 @@ export default function App() {
   };
 
   const selected = filteredMessages.find((message) => message.id === selectedId) ?? null;
+  const selectedIsArchived = selected ? isArchivedMessage(selected, accounts) : false;
+  const selectedMovePending = selected ? selected.movePending === true || pendingArchiveMoves.some((move) => move.id === selected.id) : false;
+  const selectedMoveLocationUnverified = selected?.moveLocationUnverified === true;
+  const selectedRemoteActionsBlocked = selectedMovePending || selectedMoveLocationUnverified;
+  const selectedMoveActionLabel = selectedMovePending
+    ? t("mail.action.moveRefreshing")
+    : selectedMoveLocationUnverified
+      ? t("mail.action.locationUnverified")
+      : null;
+  const translationState: TranslationPanelState = selected
+    && translationSession?.messageId === selected.id
+    && translationSession.targetLocale === locale
+    ? translationSession.state
+    : { phase: "idle" };
+  const refreshTranslationAvailability = useCallback(async () => {
+    const requestId = ++translationAvailabilityRequestIdRef.current;
+    if (isDemo) {
+      setTranslationAvailability("available");
+      return;
+    }
+    setTranslationAvailability("checking");
+    try {
+      const status = await api.translationStatus();
+      if (requestId === translationAvailabilityRequestIdRef.current) {
+        setTranslationAvailability(status.configurationError ? "invalid" : status.enabled ? "available" : "unavailable");
+      }
+    } catch {
+      if (requestId === translationAvailabilityRequestIdRef.current) setTranslationAvailability("unknown");
+    }
+  }, []);
+  const selectedMessageAccount = selected ? accounts.find((account) => account.id === selected.accountId) : undefined;
   const visibleAttachments = selected?.attachments.filter((attachment) => !attachment.related) ?? [];
   const selectedAccountRecord = accounts.find((account) => account.id === selectedAccount);
+  const localizedProviderName = (account: Pick<Account, "provider" | "providerName">) => providerDisplayName({ id: account.provider, name: account.providerName }, locale, t);
   const sentFolder = selectedAccountRecord?.folders.find((folder) => folder.specialUse === "\\Sent");
   const draftsFolder = selectedAccountRecord?.folders.find((folder) => folder.specialUse === "\\Drafts");
   const selectedFolderRecord = selectedAccountRecord?.folders.find((folder) => folder.path === selectedFolder);
   const emptyMessageList = query.trim()
-    ? { title: "未找到匹配的邮件", description: "换一个关键词，或清除搜索后查看全部邮件。", canClearSearch: true }
+    ? { title: t("mail.empty.searchTitle"), description: t("mail.empty.searchDescription"), canClearSearch: true }
     : view === "unread"
-      ? { title: "暂时没有未读邮件", description: "新收到且尚未阅读的邮件会显示在这里。", canClearSearch: false }
-      : view === "starred"
-        ? { title: "暂时没有已标星邮件", description: "给重要邮件加星标后，可以在这里集中查看。", canClearSearch: false }
-        : selectedFolderRecord
-          ? { title: `${selectedFolderRecord.name}为空`, description: "同步完成后，此文件夹中的邮件会显示在这里。", canClearSearch: false }
-          : { title: "收件箱为空", description: "同步完成后，新邮件会显示在这里。", canClearSearch: false };
+      ? { title: t("mail.empty.unreadTitle"), description: t("mail.empty.unreadDescription"), canClearSearch: false }
+    : view === "starred"
+      ? { title: t("mail.empty.starredTitle"), description: t("mail.empty.starredDescription"), canClearSearch: false }
+      : view === "archived"
+        ? { title: t("mail.empty.archiveTitle"), description: t("mail.empty.archiveDescription"), canClearSearch: false }
+      : selectedFolderRecord
+          ? { title: t("mail.empty.folderTitle", { folder: selectedFolderRecord.name }), description: t("mail.empty.folderDescription"), canClearSearch: false }
+          : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false };
   const accountIssues = useMemo(() => {
     const issues = new Map<string, MailErrorPresentation>();
     for (const account of accounts) {
-      const issue = accountHealthIssue(account);
+      const issue = accountHealthIssue(account, t);
       if (issue) issues.set(account.id, issue);
     }
     return issues;
-  }, [accounts]);
+  }, [accounts, t]);
   const accountsNeedingAttention = accounts.filter((account) => accountIssues.has(account.id));
   const primaryAccountNeedingAttention = accountsNeedingAttention[0];
   const primaryAccountIssue = primaryAccountNeedingAttention ? accountIssues.get(primaryAccountNeedingAttention.id) : undefined;
@@ -1185,10 +1351,69 @@ export default function App() {
       body: [selected.textBody, selected.snippet, htmlText].filter(Boolean).join("\n"),
     });
   }, [safeHtml, selected]);
+  useEffect(() => {
+    // Translation is view-local and target-language specific. Never retain a
+    // result when the user changes the selected mail or interface language.
+    translationRequestIdRef.current += 1;
+    setTranslationSession(null);
+  }, [locale, selected?.id]);
+  useEffect(() => {
+    void refreshTranslationAvailability();
+    return () => {
+      translationAvailabilityRequestIdRef.current += 1;
+    };
+  }, [refreshTranslationAvailability]);
+  const translateSelectedMessage = useCallback(async () => {
+    if (!selected || translationState.phase === "loading") return;
+    const messageId = selected.id;
+    const targetLocale = locale;
+    const previous = retainedTranslationContent(translationState);
+    const requestId = ++translationRequestIdRef.current;
+    setTranslationSession({ messageId, targetLocale, state: { phase: "loading", ...(previous ? { previous } : {}) } });
+    try {
+      const result = isDemo
+        ? demoMessageTranslation(selected, targetLocale)
+        : await api.translateMessage(messageId, targetLocale);
+      if (requestId !== translationRequestIdRef.current) return;
+      setTranslationSession({
+        messageId,
+        targetLocale,
+        state: {
+          phase: "ready",
+          translatedText: result.translatedText,
+          ...(result.detectedLanguage ? { detectedLanguage: result.detectedLanguage } : {}),
+          visible: true,
+        },
+      });
+    } catch (error) {
+      if (requestId !== translationRequestIdRef.current) return;
+      setTranslationSession({
+        messageId,
+        targetLocale,
+        state: { phase: "error", message: translationErrorMessage(error, t), ...(previous ? { previous } : {}) },
+      });
+    }
+  }, [locale, selected, t, translationState.phase]);
+  const showSelectedTranslation = useCallback(() => {
+    setTranslationSession((current) => {
+      if (!selected || !current || current.messageId !== selected.id || current.targetLocale !== locale || current.state.phase !== "ready") {
+        return current;
+      }
+      return { ...current, state: { ...current.state, visible: true } };
+    });
+  }, [locale, selected]);
+  const hideSelectedTranslation = useCallback(() => {
+    setTranslationSession((current) => {
+      if (!selected || !current || current.messageId !== selected.id || current.targetLocale !== locale || current.state.phase !== "ready") {
+        return current;
+      }
+      return { ...current, state: { ...current.state, visible: false } };
+    });
+  }, [locale, selected]);
   const copyDetectedVerificationCode = useCallback(async (code: string) => {
     const copied = await copyVerificationCodeToClipboard(code);
-    showToast(copied ? `验证码 ${code} 已复制到剪贴板` : "未能复制验证码，请手动选择后复制。", copied ? "success" : "error");
-  }, [showToast]);
+    showToast(copied ? t("mail.verification.copied", { code }) : t("mail.verification.copyFailed"), copied ? "success" : "error");
+  }, [showToast, t]);
 
   const applyLocalSeenChange = useCallback((message: Message, nextSeen: boolean) => {
     if (message.seen === nextSeen) return;
@@ -1221,7 +1446,7 @@ export default function App() {
             attachments = (await api.importDraftOutboundAttachments(message.id)).items;
           }
         } catch (error) {
-          showToast(mailErrorToastMessage(error, "无法读取草稿附件"), "error");
+          showToast(mailErrorToastMessage(error, t("mail.error.readDraftAttachments"), t), "error");
         }
       }
       openCompose({
@@ -1252,13 +1477,13 @@ export default function App() {
           const readMessage = { ...message, seen: true, flags: [...new Set([...message.flags, "\\Seen"])] };
           updateUnreadViewRecentlyRead(readMessage, false);
           applyLocalSeenChange(readMessage, false);
-          showToast(`未能标记已读：${mailErrorToastMessage(error, "未能标记已读")}`, "error");
+          showToast(t("mail.error.markRead", { message: mailErrorToastMessage(error, t("mail.error.markReadFallback"), t) }), "error");
         }).finally(() => {
           seenMutationIdsRef.current.delete(message.id);
         });
       }
     }
-  }, [accounts, applyLocalSeenChange, openCompose, showToast, updateUnreadViewRecentlyRead]);
+  }, [accounts, applyLocalSeenChange, openCompose, showToast, t, updateUnreadViewRecentlyRead]);
 
   const closeReader = useCallback((restoreFocus = false) => {
     const messageId = lastOpenedMessageIdRef.current;
@@ -1334,37 +1559,126 @@ export default function App() {
   }, [openCompose, safeHtml, selected]);
 
   const moveSelectedMessage = async (target: "archive" | "trash") => {
-    if (!selected || messageAction) return;
+    if (!selected || messageAction || messageFlagging || selectedRemoteActionsBlocked || (target === "archive" && selectedIsArchived)) return;
+    // A response started before this confirmed MOVE still describes the
+    // source mailbox. Keep it from replacing the local destination state.
+    if (!isDemo) loadRequestRef.current += 1;
     setMessageAction(target);
     try {
-      const move = isDemo ? null : await api.moveMessage(selected.id, target);
-      const destination = move?.destination ?? "";
+      const move = isDemo
+        ? { destination: demoMoveDestination(accounts, selected.accountId, target), uid: undefined, refreshPending: false, uncertain: false, locationUnverified: false }
+        : await api.moveMessage(selected.id, target);
+      if (move.uncertain) {
+        // Do not optimistically move an item when the provider connection ended
+        // after the command was issued. The durable server intent will resolve
+        // from protocol evidence during the background refresh.
+        setSelectedId(null);
+        setPendingMoveVerifications((current) => current.includes(selected.id) ? current : [...current, selected.id]);
+        void load({ silent: true });
+        showToast(t("mail.action.moveChecking"), "info");
+        return;
+      }
+      const destination = move.destination;
+      const movedSnapshot = applyMessageMove(
+        accounts,
+        [selected],
+        stats,
+        selected.id,
+        destination,
+        move.uid,
+        move.refreshPending,
+        move.locationUnverified,
+      ).messages[0];
       setMessages((items) => {
-        const next = applyMessageMove(accounts, items, stats, selected.id, destination).messages;
+        const next = applyMessageMove(
+          accounts,
+          items,
+          stats,
+          selected.id,
+          destination,
+          move.uid,
+          move.refreshPending,
+          move.locationUnverified,
+        ).messages;
         messagesRef.current = next;
         return next;
       });
-      setAccounts((items) => applyMessageMove(items, [selected], stats, selected.id, destination).accounts);
-      setStats((current) => applyMessageMove(accounts, [selected], current, selected.id, destination).stats);
-      setMessageTotal((total) => Math.max(0, total - 1));
+      setAccounts((items) => applyMessageMove(
+        items,
+        [selected],
+        stats,
+        selected.id,
+        destination,
+        move.uid,
+        move.refreshPending,
+        move.locationUnverified,
+      ).accounts);
+      setStats((current) => applyMessageMove(
+        accounts,
+        [selected],
+        current,
+        selected.id,
+        destination,
+        move.uid,
+        move.refreshPending,
+        move.locationUnverified,
+      ).stats);
+      if (movedSnapshot) {
+        const currentQuery: MessageListQuery = {
+          accountId: selectedAccount,
+          folder: selectedFolder,
+          search: debouncedQuery,
+          messageView: view,
+        };
+        const wasIncluded = matchesServerMessageQuery(selected, accounts, currentQuery);
+        const remainsIncluded = matchesServerMessageQuery(movedSnapshot, accounts, currentQuery);
+        setMessageTotal((total) => nextMessageTotalForMove(total, wasIncluded, remainsIncluded));
+        if (!isDemo && target === "archive" && move.refreshPending) {
+          replacePendingArchiveMoves([
+            ...pendingArchiveMovesRef.current.filter((pending) => pending.id !== selected.id),
+            { id: selected.id, accountId: selected.accountId, destination, snapshot: movedSnapshot },
+          ]);
+        }
+        if (!isDemo && move.refreshPending) {
+          setPendingMoveVerifications((current) => current.includes(selected.id) ? current : [...current, selected.id]);
+        }
+      }
       if (unreadViewRecentlyReadIdsRef.current.has(selected.id)) {
         const nextRecentlyRead = new Set(unreadViewRecentlyReadIdsRef.current);
         nextRecentlyRead.delete(selected.id);
         unreadViewRecentlyReadIdsRef.current = nextRecentlyRead;
         setUnreadViewRecentlyReadIds(nextRecentlyRead);
       }
-      setSelectedId(null);
-      showToast(target === "archive" ? "邮件已归档" : "邮件已移到废纸篓");
-      if (!isDemo) void load({ silent: true });
+      if (move.locationUnverified && target === "archive") {
+        // The server confirmed the archive move, but no stable remote UID is
+        // available. Keep the user in the retained local snapshot instead of
+        // leaving the only explanation behind a transient toast.
+        setView("archived");
+        setSelectedFolder("");
+        setQuery("");
+        setDebouncedQuery("");
+        setSelectedId(selected.id);
+      } else {
+        setSelectedId(null);
+      }
+      showToast(
+        move.locationUnverified
+          ? t("mail.action.movedLocationUnverified")
+          : move.refreshPending
+          ? t("mail.action.moveRefreshing")
+          : target === "archive" ? t("mail.action.archived") : t("mail.action.trashed"),
+        move.refreshPending || move.locationUnverified ? "info" : "success",
+      );
+      if (!isDemo && !move.refreshPending) void load({ silent: true });
     } catch (error) {
-      showToast(mailErrorToastMessage(error, "无法移动邮件"), "error");
+      showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
     } finally {
       setMessageAction(null);
     }
   };
 
   const toggleSelectedStar = async () => {
-    if (!selected || messageFlagging) return;
+    if (!selected || messageFlagging || selectedRemoteActionsBlocked) return;
     const nextFlagged = !selected.flagged;
     setMessageFlagging(true);
     try {
@@ -1377,16 +1691,16 @@ export default function App() {
         return { ...item, flagged: nextFlagged, flags: [...flags] };
       }));
       if (view === "starred" && !nextFlagged) setSelectedId(null);
-      showToast(nextFlagged ? "邮件已标星" : "已取消标星");
+      showToast(nextFlagged ? t("mail.action.starred") : t("mail.action.unstarred"));
     } catch (error) {
-      showToast(mailErrorToastMessage(error, "无法更新标星状态"), "error");
+      showToast(mailErrorToastMessage(error, t("mail.error.updateStar"), t), "error");
     } finally {
       setMessageFlagging(false);
     }
   };
 
   const toggleSelectedSeen = async () => {
-    if (!selected || messageFlagging || seenMutationIdsRef.current.has(selected.id)) return;
+    if (!selected || messageFlagging || selectedRemoteActionsBlocked || seenMutationIdsRef.current.has(selected.id)) return;
     const nextSeen = !selected.seen;
     seenMutationIdsRef.current.add(selected.id);
     setMessageFlagging(true);
@@ -1394,12 +1708,12 @@ export default function App() {
     applyLocalSeenChange(selected, nextSeen);
     try {
       if (!isDemo) await api.updateMessageFlags(selected.id, { seen: nextSeen });
-      showToast(nextSeen ? "邮件已标为已读" : "邮件已标为未读");
+      showToast(nextSeen ? t("mail.action.markedRead") : t("mail.action.markedUnread"));
     } catch (error) {
       const changedMessage = { ...selected, seen: nextSeen, flags: nextSeen ? [...new Set([...selected.flags, "\\Seen"])] : selected.flags.filter((flag) => flag !== "\\Seen") };
       updateUnreadViewRecentlyRead(changedMessage, selected.seen);
       applyLocalSeenChange(changedMessage, selected.seen);
-      showToast(mailErrorToastMessage(error, "无法更新已读状态"), "error");
+      showToast(mailErrorToastMessage(error, t("mail.error.updateRead"), t), "error");
     } finally {
       seenMutationIdsRef.current.delete(selected.id);
       setMessageFlagging(false);
@@ -1407,8 +1721,16 @@ export default function App() {
   };
 
   const downloadAttachment = async (message: Message, attachment: MessageAttachment) => {
+    if (pendingArchiveMovesRef.current.some((move) => move.id === message.id) || message.movePending) {
+      showToast(t("mail.action.moveRefreshing"), "info");
+      return;
+    }
+    if (message.moveLocationUnverified) {
+      showToast(t("mail.action.locationUnverified"), "info");
+      return;
+    }
     if (isDemo) {
-      showToast("演示模式不提供附件下载", "info");
+      showToast(t("mail.attachment.demoUnavailable"), "info");
       return;
     }
     const downloadKey = `${message.id}:${attachment.partId}`;
@@ -1433,11 +1755,11 @@ export default function App() {
           return next;
         });
       }, 3_600);
-      showToast(`已开始下载 ${attachment.filename}`);
+      showToast(t("mail.attachment.downloadStarted", { filename: attachment.filename }));
     } catch (error) {
-      const detail = mailErrorMessage(error, "附件下载失败");
+      const detail = mailErrorMessage(error, t("mail.error.downloadAttachment"), t);
       setAttachmentDownloads((current) => ({ ...current, [downloadKey]: { phase: "error", detail } }));
-      showToast(mailErrorToastMessage(error, "附件下载失败"), "error");
+      showToast(mailErrorToastMessage(error, t("mail.error.downloadAttachment"), t), "error");
     }
   };
 
@@ -1482,32 +1804,32 @@ export default function App() {
   const toggleTheme = () => {
     const nextTheme = theme === "light" ? "dark" : "light";
     void updateSettings({ theme: nextTheme }).catch((error: unknown) => {
-      showToast(mailErrorToastMessage(error, "无法更新主题"), "error");
+      showToast(mailErrorToastMessage(error, t("settings.error.updateTheme"), t), "error");
     });
   };
 
   const testDesktopNotification = useCallback(async (testSettings: AppSettings) => {
     const bridge = desktopBridge();
-    if (isDesktop && !bridge) throw new Error("桌面通知服务不可用，请重启应用。");
+    if (isDesktop && !bridge) throw new Error(t("settings.error.desktopNotificationsUnavailable"));
     const customSound = testSettings.notificationSound === "soft" || testSettings.notificationSound === "bright";
     const customSoundReady = customSound && await primeNotificationSound();
     reportCustomNotificationSoundAvailability();
     const payload = {
       title: "Nami Mail",
-      body: "这是一条新邮件提醒测试。",
+      body: t("settings.notifications.testBody"),
       silent: testSettings.notificationSound === "none" || customSoundReady,
     };
     if (bridge) {
       const result = await bridge.notify(payload);
-      if (!result.shown) throw new Error("当前系统无法显示桌面通知。");
+      if (!result.shown) throw new Error(t("settings.error.systemNotificationsUnavailable"));
       return;
     }
-    if (!("Notification" in window)) throw new Error("当前浏览器不支持桌面通知。");
+    if (!("Notification" in window)) throw new Error(t("settings.error.browserNotificationsUnsupported"));
     let permission = Notification.permission;
     if (permission === "default") permission = await Notification.requestPermission();
-    if (permission !== "granted") throw new Error("请允许 Nami Mail 发送桌面通知。");
+    if (permission !== "granted") throw new Error(t("settings.error.notificationsPermission"));
     new Notification(payload.title, payload);
-  }, []);
+  }, [t]);
 
   const testNotificationSound = useCallback(async (sound: AppSettings["notificationSound"]) => {
     if (sound === "none") return;
@@ -1534,10 +1856,10 @@ export default function App() {
       setMessages((items) => items.some((item) => item.id === message.id) ? items : [message, ...items]);
       await openMessage(message);
     } catch (error) {
-      showToast(mailErrorToastMessage(error, "无法打开新邮件"), "error");
+      showToast(mailErrorToastMessage(error, t("mail.error.openNew"), t), "error");
       void load({ silent: true });
     }
-  }, [load, openMessage, showToast]);
+  }, [load, openMessage, showToast, t]);
 
   useEffect(() => {
     const unlockAudio = () => {
@@ -1566,14 +1888,16 @@ export default function App() {
       if (!notice.shouldAlert) return;
       if (notice.playCustomSound && !playNotificationSound(settings.notificationSound)) {
         bridge.setCustomNotificationSoundReady(false);
-        const sender = notice.fromName || notice.fromAddress || "新联系人";
+        const sender = notice.fromName || notice.fromAddress || t("mail.notification.newContact");
         void bridge.notify({
-          title: notice.count === 1 ? `${sender} · Nami Mail` : `Nami Mail · ${notice.count} 封新邮件`,
-          body: notice.count === 1 ? notice.subject : `${sender} 等邮件已同步到收件箱`,
+          title: notice.count === 1 ? t("mail.notification.singleTitle", { sender }) : t("mail.notification.multipleTitle", { count: notice.count }),
+          body: notice.count === 1 ? notice.subject : t("mail.notification.multipleBody", { sender }),
           silent: false,
         }).catch(() => undefined);
       }
-      showToast(notice.count === 1 ? `收到来自 ${notice.fromName || notice.fromAddress} 的新邮件` : `已同步 ${notice.count} 封新邮件`);
+      showToast(notice.count === 1
+        ? t("mail.notification.singleToast", { sender: notice.fromName || notice.fromAddress || t("mail.notification.newContact") })
+        : t("mail.notification.multipleToast", { count: notice.count }));
     });
     const unsubscribeOpenMessage = bridge.onOpenMessage((messageId) => {
       void openNotifiedMessage(messageId);
@@ -1582,7 +1906,7 @@ export default function App() {
       unsubscribeNewMail();
       unsubscribeOpenMessage();
     };
-  }, [load, openNotifiedMessage, settings.notificationSound, showToast]);
+  }, [load, openNotifiedMessage, settings.notificationSound, showToast, t]);
 
   useEffect(() => {
     if (!isDesktopSmoke) return;
@@ -1681,23 +2005,25 @@ export default function App() {
         const folders = results.reduce((sum, result) => sum + result.folders, 0);
         const failedFolders = results.reduce((sum, result) => sum + result.failedFolders, 0);
         const firstFailure = settled.find((result) => result.status === "rejected");
-        const failureIssue = firstFailure?.status === "rejected" ? presentMailError(firstFailure.reason) : null;
+        const failureIssue = firstFailure?.status === "rejected" ? presentMailError(firstFailure.reason, t) : null;
         if (!results.length && failedAccounts) {
-          throw firstFailure?.status === "rejected" ? firstFailure.reason : new Error("所有邮箱同步失败");
+          throw firstFailure?.status === "rejected" ? firstFailure.reason : new Error(t("mail.sync.allFailed"));
         }
         const partialFailure = failedAccounts > 0 || failedFolders > 0;
         showToast(
           partialFailure
-            ? `已同步 ${synced} 封邮件 · ${failedAccounts ? `${failedAccounts} 个账户待处理${failureIssue ? `（${failureIssue.title}）` : ""}` : `${failedFolders} 个文件夹未完成`}`
-            : `已同步 ${synced} 封邮件 · ${folders} 个文件夹`,
+            ? failedAccounts
+              ? t("mail.sync.partialAccounts", { synced, accounts: failedAccounts, issue: failureIssue?.title ?? "" })
+              : t("mail.sync.partialFolders", { synced, folders: failedFolders })
+            : t("mail.sync.completed", { synced, folders }),
           partialFailure ? "error" : "success",
         );
       } else {
         await new Promise((resolve) => setTimeout(resolve, 700));
-        showToast("本地演示数据已刷新");
+        showToast(t("mail.sync.demoRefreshed"));
       }
     } catch (error) {
-      showToast(`${mailErrorToastMessage(error)} 请在账户设置中查看处理方法。`, "error");
+      showToast(t("mail.sync.failed", { message: mailErrorToastMessage(error, undefined, t) }), "error");
     } finally {
       setSyncing(false);
     }
@@ -1753,9 +2079,8 @@ export default function App() {
       <div className={`app-frame${isDesktop ? " desktop-app" : ""}`}>
       {!isDesktop && (
         <div className="window-bar">
-          <div className="traffic-lights" aria-hidden="true"><span /><span /><span /></div>
           <span className="window-title">Nami Mail</span>
-          <div className="window-actions"><span className="local-pill"><span /> 本地加密</span><IconButton label={theme === "light" ? "切换深色" : "切换浅色"} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton></div>
+          <div className="window-actions"><span className="local-pill"><span /> {t("app.localEncryption")}</span><IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton></div>
         </div>
       )}
 
@@ -1765,7 +2090,7 @@ export default function App() {
           className={`sidebar ${mobileSidebar ? "open" : ""}`}
           role={mobileSidebar ? "dialog" : undefined}
           aria-modal={mobileSidebar ? true : undefined}
-          aria-label={mobileSidebar ? "邮箱导航" : undefined}
+          aria-label={mobileSidebar ? t("navigation.mail") : undefined}
           tabIndex={mobileSidebar ? -1 : undefined}
         >
           <div className="brand-row">
@@ -1773,30 +2098,33 @@ export default function App() {
               <img className="brand-mark-image brand-mark-light" src="/brand/mark-light.png" alt="" />
               <img className="brand-mark-image brand-mark-dark" src="/brand/mark-dark.png" alt="" />
             </div>
-            <div><strong>Nami Mail</strong><span>本机邮件空间</span></div>
-            <IconButton label="关闭菜单" className="mobile-only" onClick={() => setMobileSidebar(false)}><X size={18} /></IconButton>
+            <div><strong>Nami Mail</strong><span>{t("app.localMailSpace")}</span></div>
+            <IconButton label={t("navigation.closeMenu")} className="mobile-only" onClick={() => setMobileSidebar(false)}><X size={18} /></IconButton>
           </div>
 
-          <button className="compose-button" type="button" onClick={() => { setMobileSidebar(false); if (accounts.length) openCompose(); else setAddOpen(true); }}><PenLine size={18} />写邮件</button>
+          <button className="compose-button" type="button" onClick={() => { setMobileSidebar(false); if (accounts.length) openCompose(); else setAddOpen(true); }}><PenLine size={18} />{t("mail.compose")}</button>
 
-          <nav className="nav-section" aria-label="邮箱视图">
-            <button aria-pressed={view === "inbox" && !selectedFolder} className={view === "inbox" && !selectedFolder ? "active" : ""} onClick={() => chooseView("inbox")}><Inbox size={18} /><span>统一收件箱</span><em className="sidebar-count" data-tooltip="收件箱邮件总数">{sidebarCounts.inbox || ""}</em></button>
-            <button aria-pressed={view === "unread"} className={view === "unread" ? "active" : ""} onClick={() => chooseView("unread")}><Mail size={18} /><span>未读</span><em className="sidebar-count" data-tooltip="收件箱未读邮件数">{sidebarCounts.unread || ""}</em></button>
-            <button aria-pressed={view === "starred"} className={view === "starred" ? "active" : ""} onClick={() => chooseView("starred")}><Star size={18} /><span>已标星</span></button>
-            <button className={selectedFolder === draftsFolder?.path ? "active" : ""} disabled={!draftsFolder} onClick={() => draftsFolder && chooseFolder(draftsFolder.path)}><FileText size={18} /><span>草稿</span></button>
-            <button className={selectedFolder === sentFolder?.path ? "active" : ""} disabled={!sentFolder} onClick={() => sentFolder && chooseFolder(sentFolder.path)}><Send size={18} /><span>已发送</span></button>
-            <button className={`sending-status-nav${submissionAttentionCount ? " attention" : ""}`} aria-label={`发送状态：${sendingStatusDescription}`} aria-haspopup="dialog" data-tooltip={sendingStatusDescription} onClick={() => { setMobileSidebar(false); setSendingStatusOpen(true); void refreshSubmissions(accounts, { silent: true }); }}>{submissionAttentionCount ? <CircleAlert size={18} /> : <Send size={18} />}<span>发送状态</span><em aria-hidden="true">{submissionOutstandingCount || ""}</em></button>
+          <nav className="nav-section" aria-label={t("navigation.mailViews")}>
+            <button aria-pressed={view === "inbox" && !selectedFolder} className={view === "inbox" && !selectedFolder ? "active" : ""} onClick={() => chooseView("inbox")}><Inbox size={18} /><span>{t("mail.unifiedInbox")}</span><em className="sidebar-count" data-tooltip={t("mail.inboxCountTooltip")}>{sidebarCounts.inbox || ""}</em></button>
+            <button aria-pressed={view === "unread"} className={view === "unread" ? "active" : ""} onClick={() => chooseView("unread")}><Mail size={18} /><span>{t("mail.unread")}</span><em className="sidebar-count" data-tooltip={t("mail.unreadCountTooltip")}>{sidebarCounts.unread || ""}</em></button>
+            <button aria-pressed={view === "starred"} className={view === "starred" ? "active" : ""} onClick={() => chooseView("starred")}><Star size={18} /><span>{t("mail.starred")}</span></button>
+            <button aria-pressed={view === "archived"} className={view === "archived" ? "active" : ""} onClick={() => chooseView("archived")}><Archive size={18} /><span>{t("mail.action.archive")}</span></button>
+            <button className={selectedFolder === draftsFolder?.path ? "active" : ""} disabled={!draftsFolder} onClick={() => draftsFolder && chooseFolder(draftsFolder.path)}><FileText size={18} /><span>{t("mail.drafts")}</span></button>
+            <button className={selectedFolder === sentFolder?.path ? "active" : ""} disabled={!sentFolder} onClick={() => sentFolder && chooseFolder(sentFolder.path)}><Send size={18} /><span>{t("mail.sent")}</span></button>
+            <button className={`sending-status-nav${submissionAttentionCount ? " attention" : ""}`} aria-label={t("sending.sidebarAria", { status: sendingStatusDescription })} aria-haspopup="dialog" data-tooltip={sendingStatusDescription} onClick={() => { setMobileSidebar(false); setSendingStatusOpen(true); void refreshSubmissions(accounts, { silent: true }); }}>{submissionAttentionCount ? <CircleAlert size={18} /> : <Send size={18} />}<span>{t("sending.title")}</span><em aria-hidden="true">{submissionOutstandingCount || ""}</em></button>
           </nav>
 
-          <div className="accounts-heading"><span>邮箱账户</span><IconButton label="添加邮箱" onClick={() => { setMobileSidebar(false); setAddOpen(true); }}><Plus size={16} /></IconButton></div>
+          <div className="accounts-heading"><span>{t("mail.accounts")}</span><IconButton label={t("account.add")} onClick={() => { setMobileSidebar(false); setAddOpen(true); }}><Plus size={16} /></IconButton></div>
           <div className="account-list">
-            <button aria-pressed={selectedAccount === "all"} className={selectedAccount === "all" ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount("all"); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}><span className="account-avatar all"><Sparkles size={14} /></span><span className="account-copy"><strong>所有邮箱</strong><small>{accounts.length} 个账户</small></span></button>
+            <button aria-pressed={selectedAccount === "all"} className={selectedAccount === "all" ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount("all"); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}><span className="account-avatar all"><Sparkles size={14} /></span><span className="account-copy"><strong>{t("mail.allAccounts")}</strong><small>{t("mail.accountCount", { count: accounts.length })}</small></span></button>
             {accounts.map((account) => {
               const issue = accountIssues.get(account.id);
+              const providerName = localizedProviderName(account);
+              const freshness = formatSyncFreshness(account.lastSyncedAt, t);
               return (
-                <button key={account.id} aria-pressed={selectedAccount === account.id} className={selectedAccount === account.id ? "active" : ""} data-tooltip={issue ? `${issue.title}：${issue.guidance}` : `${account.providerName} · ${formatSyncFreshness(account.lastSyncedAt)}`} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}>
+                <button key={account.id} aria-pressed={selectedAccount === account.id} className={selectedAccount === account.id ? "active" : ""} data-tooltip={issue ? t("mail.accountIssueTooltip", { title: issue.title, guidance: issue.guidance }) : t("mail.accountFreshness", { provider: providerName, freshness })} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}>
                   <span className={`account-avatar tone-${accountTone(account.email)}`}>{account.email[0]?.toUpperCase()}</span>
-                  <span className="account-copy"><strong>{account.email.split("@")[0]}</strong><small>{issue?.title ?? `${account.providerName} · ${formatSyncFreshness(account.lastSyncedAt)}`}</small></span>
+                  <span className="account-copy"><strong>{account.email.split("@")[0]}</strong><small>{issue?.title ?? t("mail.accountFreshness", { provider: providerName, freshness })}</small></span>
                   <span className={`status-dot ${issue ? "error" : account.status}`} aria-hidden="true" />
                 </button>
               );
@@ -1805,7 +2133,7 @@ export default function App() {
 
           {selectedAccountRecord && selectedAccountRecord.folders.length > 0 && (
             <div className="folder-list">
-              <span className="folder-title">文件夹</span>
+              <span className="folder-title">{t("mail.folders")}</span>
               {selectedAccountRecord.folders.map((folder) => (
                 <button key={folder.path} className={selectedFolder === folder.path ? "active" : ""} onClick={() => chooseFolder(folder.path)}><Archive size={15} /><span>{folder.name}</span><em>{folder.unseen || ""}</em></button>
               ))}
@@ -1813,53 +2141,53 @@ export default function App() {
           )}
 
           <div className="sidebar-footer">
-            <div><ShieldCheck size={16} /><span><strong>本地加密</strong><small>凭据仅保存在此设备</small></span></div>
-            <div className="sidebar-footer-actions"><IconButton label="设置" onClick={() => { setMobileSidebar(false); setSettingsOpen(true); }}><Settings size={17} /></IconButton><span className="version">v{__NAMI_APP_VERSION__}</span></div>
+            <div><ShieldCheck size={16} /><span><strong>{t("app.localEncryption")}</strong><small>{t("app.credentialsLocal")}</small></span></div>
+            <div className="sidebar-footer-actions"><IconButton label={t("settings.title")} onClick={() => { setMobileSidebar(false); setSettingsOpen(true); }}><Settings size={17} /></IconButton><span className="version">v{__NAMI_APP_VERSION__}</span></div>
           </div>
         </aside>
 
         <section className="message-column">
           <header className="column-header">
-            <IconButton label="打开菜单" className="mobile-only" buttonRef={mobileMenuButtonRef} onClick={() => setMobileSidebar(true)}><Menu size={19} /></IconButton>
-            <div><span className="eyebrow">{selectedAccount === "all" ? "统一邮箱" : selectedAccountRecord?.providerName.toUpperCase()}</span><h1>{view === "unread" ? "未读邮件" : view === "starred" ? "已标星" : selectedFolderRecord?.name || "收件箱"}</h1></div>
-            <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label="写邮件" className="mobile-only mobile-compose-action" onClick={() => accounts.length ? openCompose() : setAddOpen(true)}><PenLine size={17} /></IconButton>{isDesktop && <IconButton label={theme === "light" ? "切换深色" : "切换浅色"} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label="同步邮件" onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton></div>
+            <IconButton label={t("navigation.openMenu")} className="mobile-only" buttonRef={mobileMenuButtonRef} onClick={() => setMobileSidebar(true)}><Menu size={19} /></IconButton>
+            <div><span className="eyebrow">{selectedAccount === "all" ? t("mail.unifiedMailbox") : selectedAccountRecord ? localizedProviderName(selectedAccountRecord).toUpperCase() : ""}</span><h1>{view === "unread" ? t("mail.unread") : view === "starred" ? t("mail.starred") : view === "archived" ? t("mail.action.archive") : selectedFolderRecord?.name || t("mail.inbox")}</h1></div>
+            <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? openCompose() : setAddOpen(true)}><PenLine size={17} /></IconButton>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton></div>
           </header>
 
-          <div className="search-wrap"><Search size={17} /><label className="visually-hidden" htmlFor="mail-search">搜索邮件</label><input id="mail-search" ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索发件人、主题或正文" />{query && <IconButton label="清除搜索" className="search-clear" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}><X size={15} /></IconButton>}</div>
+          <div className="search-wrap"><Search size={17} /><label className="visually-hidden" htmlFor="mail-search">{t("mail.search")}</label><input id="mail-search" ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("mail.searchPlaceholder")} />{query && <IconButton label={t("mail.clearSearch")} className="search-clear" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}><X size={15} /></IconButton>}</div>
 
           {accountsNeedingAttention.length > 0 && (
             <div className="account-health-banner" role="status">
               <CircleAlert size={17} />
-              <span><strong>{accountsNeedingAttention.length} 个邮箱需要处理</strong><small>{primaryAccountNeedingAttention && primaryAccountIssue ? `${primaryAccountNeedingAttention.email} · ${primaryAccountIssue.title}` : "其他已连接邮箱仍可继续使用"}</small></span>
-              <button type="button" onClick={() => setSettingsOpen(true)}>查看原因</button>
+              <span><strong>{t("mail.accountAttention", { count: accountsNeedingAttention.length })}</strong><small>{primaryAccountNeedingAttention && primaryAccountIssue ? t("mail.accountProblem", { email: primaryAccountNeedingAttention.email, title: primaryAccountIssue.title }) : t("mail.otherAccountsAvailable")}</small></span>
+              <button type="button" onClick={() => setSettingsOpen(true)}>{t("mail.viewReason")}</button>
             </div>
           )}
 
-          <div className="list-toolbar"><span className="sort-label">最新优先</span><span className={recentlyReadVisibleCount ? "unread-retention-note" : ""} aria-live={recentlyReadVisibleCount ? "polite" : undefined}>{listToolbarStatus}</span></div>
+          <div className="list-toolbar"><span className="sort-label">{t("mail.newestFirst")}</span><span className={recentlyReadVisibleCount ? "unread-retention-note" : ""} aria-live={recentlyReadVisibleCount ? "polite" : undefined}>{listToolbarStatus}</span></div>
 
           <div className="message-list">
-            {loading && <div className="center-state"><LoaderCircle className="spin" size={24} /><p>正在加载邮箱…</p></div>}
-            {!loading && fatalError && <div className="center-state error-state"><X size={24} /><h3>{fatalError.title}</h3><p>{fatalError.message} {fatalError.guidance}</p><button className="secondary-button" onClick={() => void load()}>重新连接</button></div>}
+            {loading && <div className="center-state"><LoaderCircle className="spin" size={24} /><p>{t("mail.loading")}</p></div>}
+            {!loading && fatalError && <div className="center-state error-state"><X size={24} /><h3>{fatalError.title}</h3><p>{fatalError.message} {fatalError.guidance}</p><button className="secondary-button" onClick={() => void load()}>{t("mail.reconnect")}</button></div>}
             {!loading && !fatalError && !accounts.length && (
-              <div className="center-state empty-state"><div className="empty-orb"><Mail size={28} /></div><h3>添加第一个邮箱</h3><p>添加后即可在这里查看、搜索和处理邮件。</p><button className="primary-button" onClick={() => setAddOpen(true)}><Plus size={17} />添加邮箱</button></div>
+              <div className="center-state empty-state"><div className="empty-orb"><Mail size={28} /></div><h3>{t("mail.empty.firstAccountTitle")}</h3><p>{t("mail.empty.firstAccountDescription")}</p><button className="primary-button" onClick={() => setAddOpen(true)}><Plus size={17} />{t("account.add")}</button></div>
             )}
             {!loading && accounts.length > 0 && filteredMessages.length === 0 && (
               <div className="center-state empty-state">
                 {emptyMessageList.canClearSearch ? <Search size={24} /> : <Mail size={24} />}
                 <h3>{emptyMessageList.title}</h3>
                 <p>{emptyMessageList.description}</p>
-                {emptyMessageList.canClearSearch && <button className="secondary-button" type="button" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}>清除搜索</button>}
+                {emptyMessageList.canClearSearch && <button className="secondary-button" type="button" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}>{t("mail.clearSearch")}</button>}
               </div>
             )}
             {filteredMessages.map((message) => (
               <button key={message.id} ref={(node) => { if (node) messageButtonRefs.current.set(message.id, node); else messageButtonRefs.current.delete(message.id); }} className={`message-item ${selectedId === message.id ? "selected" : ""} ${message.seen ? "" : "unread"} ${view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id) ? "recently-read-in-unread" : ""}`} onClick={() => void openMessage(message)}>
-                <span className="visually-hidden">{message.seen ? "已读" : "未读"}{message.flagged ? "，已标星" : ""}{message.hasAttachments ? "，含附件" : ""}</span>
+                <span className="visually-hidden">{t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
                 <span className={`sender-avatar tone-${accountTone(message.from.address)}`}>{initials(message.from.name, message.from.address)}</span>
                 <span className="message-copy">
-                  <span className="message-meta"><strong>{message.from.name || message.from.address}</strong><time>{formatMessageTime(message.sentAt)}</time></span>
+                  <span className="message-meta"><strong>{message.from.name || message.from.address}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
                   <span className="message-subject">{message.subject}</span>
                   <span className="message-snippet">{message.snippet}</span>
-                  <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
+                  <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
                 </span>
                 {!message.seen && <span className="unread-dot" />}
               </button>
@@ -1867,7 +2195,7 @@ export default function App() {
             {!loading && !fatalError && filteredMessages.length > 0 && loadedServerMessageCount < currentMessageTotal && query === debouncedQuery && (
               <div className="list-footer">
                 <button className="secondary-button" type="button" onClick={() => void loadMore()} disabled={loading || loadingMore}>
-                  {loadingMore ? <LoaderCircle className="spin" size={15} /> : null}{loadingMore ? "正在加载" : "加载更多"} <span>{loadedServerMessageCount} / {currentMessageTotal}</span>
+                  {loadingMore ? <LoaderCircle className="spin" size={15} /> : null}{loadingMore ? t("common.loading") : t("mail.loadMore")} <span>{loadedServerMessageCount} / {currentMessageTotal}</span>
                 </button>
               </div>
             )}
@@ -1878,85 +2206,94 @@ export default function App() {
           {selected ? (
             <>
               <header className="reader-toolbar">
-                <IconButton label="返回邮件列表" className="reader-back" onClick={() => closeReader(true)}><ArrowLeft size={18} /></IconButton>
+                <IconButton label={t("mail.reader.backToList")} className="reader-back" onClick={() => closeReader(true)}><ArrowLeft size={18} /></IconButton>
                 <div className="reader-actions">
-                  <IconButton label="回复" onClick={openReply}><Reply size={18} /></IconButton>
-                  <IconButton label="回复全部" className="reader-action-secondary" onClick={openReplyAll}><ReplyAll size={18} /></IconButton>
-                  <IconButton label="转发" className="reader-action-secondary" onClick={openForward}><Forward size={18} /></IconButton>
+                  <IconButton label={t("mail.action.reply")} onClick={openReply}><Reply size={18} /></IconButton>
+                  <IconButton label={t("mail.action.replyAll")} className="reader-action-secondary" onClick={openReplyAll}><ReplyAll size={18} /></IconButton>
+                  <IconButton label={t("mail.action.forward")} className="reader-action-secondary" onClick={openForward}><Forward size={18} /></IconButton>
                   <span className="toolbar-divider" aria-hidden="true" />
-                  <IconButton label={selected.seen ? "标记为未读" : "标记为已读"} onClick={() => void toggleSelectedSeen()} disabled={messageFlagging}>{selected.seen ? <Mail size={18} /> : <MailOpen size={18} />}</IconButton>
-                  <IconButton label={selected.flagged ? "取消标星" : "标记为星标"} className={selected.flagged ? "active-star" : ""} onClick={() => void toggleSelectedStar()} disabled={messageFlagging}><Star size={18} fill={selected.flagged ? "currentColor" : "none"} /></IconButton>
-                  <IconButton label="归档" className="reader-action-secondary" onClick={() => void moveSelectedMessage("archive")} disabled={messageAction !== null}><Archive size={18} /></IconButton>
-                  <IconButton label="移动到废纸篓" className="reader-action-secondary" onClick={() => void moveSelectedMessage("trash")} disabled={messageAction !== null}><Trash2 size={18} /></IconButton>
+                  <IconButton label={selectedMoveActionLabel ?? (selected.seen ? t("mail.action.markUnread") : t("mail.action.markRead"))} onClick={() => void toggleSelectedSeen()} disabled={messageFlagging || selectedRemoteActionsBlocked}>{selected.seen ? <Mail size={18} /> : <MailOpen size={18} />}</IconButton>
+                  <IconButton label={selectedMoveActionLabel ?? (selected.flagged ? t("mail.action.unstar") : t("mail.action.star"))} className={selected.flagged ? "active-star" : ""} onClick={() => void toggleSelectedStar()} disabled={messageFlagging || selectedRemoteActionsBlocked}><Star size={18} fill={selected.flagged ? "currentColor" : "none"} /></IconButton>
+                  <IconButton label={selectedMoveActionLabel ?? t("mail.action.archive")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("archive")} disabled={messageAction !== null || messageFlagging || selectedRemoteActionsBlocked || selectedIsArchived}><Archive size={18} /></IconButton>
+                  <IconButton label={selectedMoveActionLabel ?? t("mail.action.moveToTrash")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("trash")} disabled={messageAction !== null || messageFlagging || selectedRemoteActionsBlocked}><Trash2 size={18} /></IconButton>
                   <div className="reader-more" ref={readerMoreRef}>
-                    <IconButton label="更多邮件操作" className="reader-more-toggle" onClick={() => setReaderMoreOpen((value) => !value)} expanded={readerMoreOpen}><MoreHorizontal size={19} /></IconButton>
+                    <IconButton label={t("mail.action.more")} className="reader-more-toggle" onClick={() => setReaderMoreOpen((value) => !value)} expanded={readerMoreOpen}><MoreHorizontal size={19} /></IconButton>
                     {readerMoreOpen && (
-                      <div className="reader-more-menu" role="menu" aria-label="更多邮件操作">
-                        <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openReplyAll(); }}><ReplyAll size={16} />回复全部</button>
-                        <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openForward(); }}><Forward size={16} />转发</button>
-                        <button type="button" role="menuitem" disabled={messageAction !== null} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />归档</button>
-                        <button type="button" role="menuitem" className="reader-more-danger" disabled={messageAction !== null} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("trash"); }}><Trash2 size={16} />移动到废纸篓</button>
+                      <div className="reader-more-menu" role="menu" aria-label={t("mail.action.more")}>
+                        <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openReplyAll(); }}><ReplyAll size={16} />{t("mail.action.replyAll")}</button>
+                        <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openForward(); }}><Forward size={16} />{t("mail.action.forward")}</button>
+                        <button type="button" role="menuitem" disabled={messageAction !== null || messageFlagging || selectedRemoteActionsBlocked || selectedIsArchived} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />{t("mail.action.archive")}</button>
+                        <button type="button" role="menuitem" className="reader-more-danger" disabled={messageAction !== null || messageFlagging || selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("trash"); }}><Trash2 size={16} />{t("mail.action.moveToTrash")}</button>
                       </div>
                     )}
                   </div>
                 </div>
               </header>
-              <article className="mail-reader">
-                <header className="mail-title"><span className="account-badge">{selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people"><span className={`sender-avatar large tone-${accountTone(selected.from.address)}`}>{initials(selected.from.name, selected.from.address)}</span><div className="mail-people-copy"><strong>{selected.from.name || selected.from.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={selected.from.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>发给我 <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>发件人</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>收件人</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join("，") : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>抄送</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join("，")}</strong></>}</div>}</div><time>{formatFullDate(selected.sentAt)}</time></div></header>
+                {selectedMoveLocationUnverified && <section className="move-location-notice" role="status"><CircleAlert size={18} /><div><strong>{t("mail.moveLocationUnverified.title")}</strong><p>{t("mail.moveLocationUnverified.description")}</p></div></section>}
+                <article className="mail-reader">
+                <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people"><span className={`sender-avatar large tone-${accountTone(selected.from.address)}`}>{initials(selected.from.name, selected.from.address)}</span><div className="mail-people-copy"><strong>{selected.from.name || selected.from.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={selected.from.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div><time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
                 {verificationCodes.length > 0 && (
-                  <section className="verification-code-list" aria-label="检测到的验证码">
+                  <section className="verification-code-list" aria-label={t("mail.verification.detected") }>
                     {verificationCodes.map((candidate, index) => {
                       const isPrimaryVerificationCode = index === 0;
-                      const sourceLabel = candidate.source === "subject" ? "来自主题" : "来自正文";
+                      const sourceLabel = candidate.source === "subject" ? t("mail.verification.subject") : t("mail.verification.body");
                       return (
-                        <section className={`verification-code-panel ${isPrimaryVerificationCode ? "primary" : "candidate"}`} key={`${candidate.code}:${candidate.source}`} aria-label={isPrimaryVerificationCode ? "检测到的验证码" : "其他候选数字"}>
-                          <div><span>{isPrimaryVerificationCode ? `验证码 · ${sourceLabel}` : `其他候选数字 · ${sourceLabel}`}</span><strong>{candidate.code}</strong></div>
-                          <button className="secondary-button verification-code-copy" type="button" onClick={() => void copyDetectedVerificationCode(candidate.code)} aria-label={`复制验证码 ${candidate.code} 到剪贴板`} data-tooltip="复制验证码到剪贴板"><Copy size={15} />{isPrimaryVerificationCode ? "复制验证码" : "复制"}</button>
+                        <section className={`verification-code-panel ${isPrimaryVerificationCode ? "primary" : "candidate"}`} key={`${candidate.code}:${candidate.source}`} aria-label={isPrimaryVerificationCode ? t("mail.verification.detected") : t("mail.verification.otherCandidate")}>
+                          <div><span>{isPrimaryVerificationCode ? t("mail.verification.label", { source: sourceLabel }) : t("mail.verification.otherLabel", { source: sourceLabel })}</span><strong>{candidate.code}</strong></div>
+                          <button className="secondary-button verification-code-copy" type="button" onClick={() => void copyDetectedVerificationCode(candidate.code)} aria-label={t("mail.verification.copyAria", { code: candidate.code })} data-tooltip={t("mail.verification.copyTooltip")}><Copy size={15} />{isPrimaryVerificationCode ? t("mail.verification.copy") : t("common.copy")}</button>
                         </section>
                       );
                     })}
                   </section>
                 )}
+                <TranslationPanel
+                  availability={translationAvailability}
+                  state={translationState}
+                  onCheckAvailability={() => void refreshTranslationAvailability()}
+                  onTranslate={() => void translateSelectedMessage()}
+                  onShow={showSelectedTranslation}
+                  onHide={hideSelectedTranslation}
+                />
                 <div className="mail-content">
                   {selected.htmlBody ? <div className="mail-html" dangerouslySetInnerHTML={{ __html: safeHtml }} /> : <div className="mail-text">{selected.textBody || selected.snippet}</div>}
                 </div>
                 {visibleAttachments.length > 0 && (
-                  <section className="attachment-list" aria-label={`附件，共 ${visibleAttachments.length} 个`}>
-                    <div className="attachment-list-heading"><Paperclip size={15} /><span>附件</span><small>{visibleAttachments.length} 个文件</small></div>
+                  <section className="attachment-list" aria-label={t("mail.attachment.aria", { count: visibleAttachments.length })}>
+                    <div className="attachment-list-heading"><Paperclip size={15} /><span>{t("compose.attachments")}</span><small>{t("mail.attachment.fileCount", { count: visibleAttachments.length })}</small></div>
                     {visibleAttachments.map((attachment) => {
-                      const presentation = presentAttachment(attachment.filename, attachment.contentType);
+                      const presentation = presentAttachment(attachment.filename, attachment.contentType, t);
                       const downloadKey = `${selected.id}:${attachment.partId}`;
                       const download = attachmentDownloads[downloadKey];
                       const isDownloading = download?.phase === "downloading";
                       const downloadDetail = isDownloading
-                        ? "正在准备下载…"
+                        ? t("mail.attachment.preparing")
                         : download?.phase === "ready"
-                          ? `已交由系统下载 · ${presentation.label} · ${formatFileSize(attachment.size)}`
+                          ? t("mail.attachment.ready", { type: presentation.label, size: formatFileSize(attachment.size) })
                           : download?.phase === "error"
-                            ? `下载失败 · ${download.detail ?? "请检查后重试。"}`
-                            : `${presentation.label} · ${formatFileSize(attachment.size)}`;
+                            ? t("mail.attachment.failed", { message: download.detail ?? t("error.retry") })
+                            : t("mail.attachment.detail", { type: presentation.label, size: formatFileSize(attachment.size) });
                       return (
                         <div className={`attachment-card${download?.phase ? ` is-${download.phase}` : ""}`} key={attachment.partId}>
                           <AttachmentFileIcon kind={presentation.kind} />
                           <span><strong className="truncated-tooltip" data-tooltip={attachment.filename}><span>{attachment.filename}</span></strong><small className="truncated-tooltip" aria-live="polite" data-tooltip={download?.detail}><span>{downloadDetail}</span></small></span>
-                          <IconButton label={download?.phase === "error" ? `重试下载 ${attachment.filename}` : `下载 ${attachment.filename}`} disabled={isDownloading} onClick={() => void downloadAttachment(selected, attachment)}>{isDownloading ? <LoaderCircle className="spin" size={16} /> : download?.phase === "error" ? <RefreshCw size={16} /> : <Download size={16} />}</IconButton>
+                          <IconButton label={selectedMoveActionLabel ?? (download?.phase === "error" ? t("mail.attachment.retryDownload", { filename: attachment.filename }) : t("mail.attachment.download", { filename: attachment.filename }))} disabled={isDownloading || selectedRemoteActionsBlocked} onClick={() => void downloadAttachment(selected, attachment)}>{isDownloading ? <LoaderCircle className="spin" size={16} /> : download?.phase === "error" ? <RefreshCw size={16} /> : <Download size={16} />}</IconButton>
                         </div>
                       );
                     })}
                   </section>
                 )}
-                <footer className="quick-reply"><span className={`sender-avatar small tone-${accountTone(selected.accountEmail)}`}>{selected.accountEmail[0]?.toUpperCase()}</span><button onClick={openReply}>回复 {selected.from.name || selected.from.address}…</button></footer>
+                <footer className="quick-reply"><span className={`sender-avatar small tone-${accountTone(selected.accountEmail)}`}>{selected.accountEmail[0]?.toUpperCase()}</span><button onClick={openReply}>{t("mail.reader.replyTo", { sender: selected.from.name || selected.from.address })}</button></footer>
               </article>
             </>
           ) : (
-            <div className="reader-empty"><div className="reader-orb"><Mail size={32} /></div><h2>选择一封邮件</h2><p>邮件内容仅在打开时加载。为减少追踪，远程图片默认不显示。</p></div>
+            <div className="reader-empty"><div className="reader-orb"><Mail size={32} /></div><h2>{t("mail.reader.emptyTitle")}</h2><p>{t("mail.reader.emptyDescription")}</p></div>
           )}
         </section>
       </main>
 
       {addOpen && <AccountConnectionModal providers={providers} onClose={() => setAddOpen(false)} onAdded={load} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} />}
       {composeOpen && <ComposeModal accounts={accounts} draft={composeDraft} onClose={() => setComposeOpen(false)} onSent={(message, kind) => showToast(message, kind)} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} />}
-      {settingsOpen && <SettingsModal settings={settings} accounts={accounts} onClose={() => setSettingsOpen(false)} onSettingsChange={setSettings} onAccountRemoved={removeAccountFromView} onAccountSync={retryAccountSync} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} />}
+      {settingsOpen && <SettingsModal settings={settings} accounts={accounts} onClose={() => setSettingsOpen(false)} onSettingsChange={applySettings} onAccountRemoved={removeAccountFromView} onAccountSync={retryAccountSync} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} />}
       {sendingStatusOpen && <SendingStatusModal accounts={accounts} submissions={submissions} loading={submissionLoading} loadError={submissionLoadError} onClose={() => setSendingStatusOpen(false)} onRefresh={() => refreshSubmissions(accounts)} onSyncAccount={async (accountId) => { await retryAccountSync(accountId); }} onCreateNewMessage={(draft) => { setSendingStatusOpen(false); openCompose(draft); }} fallbackFocusRef={mobileMenuButtonRef} />}
       <StartupUpdatePrompt
         snapshot={desktopUpdateStatus}
@@ -1964,8 +2301,8 @@ export default function App() {
         defer={addOpen || composeOpen || settingsOpen || sendingStatusOpen || mobileSidebar || syncing}
         onVisibilityChange={setUpdatePromptOpen}
       />
-      {mobileSidebar && <button className="mobile-scrim" aria-label="关闭菜单" onClick={() => setMobileSidebar(false)} />}
-      {toast && <div className={`toast ${toast.kind}`} role={toast.kind === "error" || toast.kind === "warning" ? "alert" : "status"} aria-atomic="true"><span className="toast-icon" aria-hidden="true">{toast.kind === "error" || toast.kind === "warning" ? <CircleAlert size={17} /> : toast.kind === "info" ? <Sparkles size={17} /> : <Check size={17} />}</span><span className="toast-message">{toast.message}</span><button className="toast-dismiss" type="button" aria-label="关闭提示" data-tooltip="关闭提示" onClick={() => setToast(null)}><X size={16} /></button></div>}
+      {mobileSidebar && <button className="mobile-scrim" aria-label={t("navigation.closeMenu")} onClick={() => setMobileSidebar(false)} />}
+      {toast && <div className={`toast ${toast.kind}`} role={toast.kind === "error" || toast.kind === "warning" ? "alert" : "status"} aria-atomic="true"><span className="toast-icon" aria-hidden="true">{toast.kind === "error" || toast.kind === "warning" ? <CircleAlert size={17} /> : toast.kind === "info" ? <Sparkles size={17} /> : <Check size={17} />}</span><span className="toast-message">{toast.message}</span><button className="toast-dismiss" type="button" aria-label={t("common.closeNotification")} data-tooltip={t("common.closeNotification")} onClick={() => setToast(null)}><X size={16} /></button></div>}
       </div>
     </div>
   );

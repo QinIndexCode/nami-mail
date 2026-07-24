@@ -65,6 +65,12 @@ export type Message = {
   providerName: string;
   mailbox: string;
   uid: number;
+  /** Whether this message is confirmed as archived, including a verified pending move. */
+  archived?: boolean;
+  /** A move is reconciling, so actions that require stable folder membership stay disabled. */
+  movePending?: boolean;
+  /** The server confirmed a move but cannot safely identify the target UID. */
+  moveLocationUnverified?: boolean;
   subject: string;
   from: MailAddress;
   to: MailAddress[];
@@ -194,6 +200,7 @@ export type CloseBehavior = "ask" | "tray" | "quit";
 
 export type AppSettings = {
   theme: AppTheme;
+  locale: string;
   backgroundPreset: BackgroundPreset;
   backgroundIntensity: number;
   notificationsEnabled: boolean;
@@ -207,11 +214,12 @@ export type AppSettings = {
 
 export type AppSettingsPatch = Partial<Pick<
   AppSettings,
-  "theme" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "closeBehavior"
+  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "closeBehavior"
 >>;
 
 export const defaultAppSettings: AppSettings = {
   theme: "system",
+  locale: "zh-CN",
   backgroundPreset: "coast",
   backgroundIntensity: 68,
   notificationsEnabled: true,

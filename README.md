@@ -1,6 +1,10 @@
 # Nami Mail
 
 <p align="center">
+  <a href="README.md">简体中文</a> · <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
   <img src="build/icon.png" alt="Nami Mail" width="112" />
 </p>
 
@@ -20,13 +24,16 @@ Nami Mail 是一个本地优先的多账户邮件客户端。它把 Gmail、iClo
 
 ## 文档
 
+- [文档导航](docs/README.md)：按使用、贡献和发布任务查找中英文文档。
 - [Windows 安装与更新指南](docs/INSTALLING.md)：下载、安装、首次启动、卸载、更新提示和 SmartScreen 风险说明。
 - [邮箱接入指南](docs/EMAIL-PROVIDERS.md)：服务商认证准备、OAuth、手动 IMAP/SMTP 和常见连接问题。
+- [邮件正文翻译](docs/TRANSLATION.md)：可选翻译服务的配置、主动发送边界和隐私注意事项。
 - [隐私与本地数据说明](docs/PRIVACY.md)：本地保存内容、加密边界和第三方连接。
 - [支持指南](SUPPORT.md)：邮箱接入、网络问题和适合提交 Issue 的内容。
 - [安全策略](SECURITY.md)：私下报告漏洞的方式和范围。
 - [贡献指南](CONTRIBUTING.md)、[社区行为准则](CODE_OF_CONDUCT.md)、[开发说明](docs/DEVELOPMENT.md) 与 [架构与信任边界](docs/ARCHITECTURE.md)：本地开发、协作边界、测试、进程边界和 Pull Request 要求。
 - [Windows 发布指南](docs/RELEASING.md)、[Release Notes](docs/releases/README.md) 与 [变更日志](CHANGELOG.md)：签名、GitHub Release、面向用户的版本说明和发行验证。
+- [本地化说明](docs/LOCALIZATION.md)：界面语言包与文档翻译的维护约定。
 
 ## 运行
 

@@ -1,5 +1,6 @@
 import type { DatabaseHandle } from "./db.js";
 import type { OAuthService } from "./oauth.js";
+import type { TranslationService } from "./translation.js";
 import type { AppSettings } from "./settings.js";
 
 export type AccountRecord = {
@@ -53,6 +54,9 @@ export type RuntimeContext = {
   // Keep Google available when the machine cannot bind the Microsoft-only
   // IPv6 loopback callback bridge.
   microsoftOAuthCallbackUnavailable?: string;
+  // The runtime owns translation endpoint configuration. The route only
+  // submits a message after the user explicitly requests it.
+  translationService?: TranslationService;
 };
 
 export function publicAccount(row: AccountRecord) {
