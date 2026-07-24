@@ -18,6 +18,46 @@ export type SendMessageResult = {
   draftDiscardWarning?: string;
 };
 
+export type MoveMessageResult = {
+  ok: boolean;
+  destination: string;
+  uid?: number;
+  refreshPending?: boolean;
+  /** The provider connection ended after MOVE was issued, so the outcome is reconciling. */
+  uncertain?: boolean;
+  /** The provider confirmed MOVE but supplied no stable target identifier. */
+  locationUnverified?: boolean;
+};
+
+export type MessageTranslationResult = {
+  ok: true;
+  targetLocale: string;
+  translatedText: string;
+  detectedLanguage?: string;
+};
+
+export type TranslationServiceStatus = {
+  enabled: boolean;
+  configurationError?: "invalid" | "unreadable";
+};
+
+export type TranslationConfiguration = {
+  ok: true;
+  enabled: boolean;
+  endpoint: string;
+  timeoutMs: number;
+  apiKeyConfigured: boolean;
+  source: "environment" | "local" | "none";
+  configurationError?: "invalid" | "unreadable";
+};
+
+export type TranslationConfigurationPatch = {
+  endpoint?: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
+  timeoutMs?: number;
+};
+
 export class ApiError extends Error {
   constructor(message: string, readonly code?: string, readonly status?: number) {
     super(message);
@@ -87,6 +127,21 @@ export const api = {
   messages: (query = "") =>
     request<MessagePage>(`/api/messages${query ? `?${query}` : ""}`),
   message: (id: string) => request<Message>(`/api/messages/${encodeURIComponent(id)}`),
+  translationStatus: () => request<TranslationServiceStatus>("/api/translation/status"),
+  translationConfiguration: () => request<TranslationConfiguration>("/api/translation/configuration"),
+  updateTranslationConfiguration: (patch: TranslationConfigurationPatch) =>
+    request<TranslationConfiguration>("/api/translation/configuration", {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  removeTranslationConfiguration: () => request<TranslationConfiguration>("/api/translation/configuration", {
+    method: "DELETE",
+  }),
+  translateMessage: (id: string, targetLocale: string) =>
+    request<MessageTranslationResult>(`/api/messages/${encodeURIComponent(id)}/translate`, {
+      method: "POST",
+      body: JSON.stringify({ targetLocale }),
+    }),
   attachmentDownloadUrl: (messageId: string, partId: string) =>
     `/api/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(partId)}`,
   draftOutboundAttachments: (messageId: string) =>
@@ -160,7 +215,7 @@ export const api = {
   updateMessageFlags: (id: string, patch: { seen?: boolean; flagged?: boolean }) =>
     request<{ ok: boolean }>(`/api/messages/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   moveMessage: (id: string, target: "archive" | "trash") =>
-    request<{ ok: boolean; destination: string }>(`/api/messages/${encodeURIComponent(id)}/move`, {
+    request<MoveMessageResult>(`/api/messages/${encodeURIComponent(id)}/move`, {
       method: "POST",
       body: JSON.stringify({ target }),
     }),

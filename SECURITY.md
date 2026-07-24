@@ -1,5 +1,7 @@
 # 安全策略
 
+[简体中文](SECURITY.md) | [English](SECURITY.en.md)
+
 Nami Mail 处理账户凭据、OAuth 刷新令牌和本地邮件缓存。请不要把安全问题、真实邮件、令牌、附件或可用于定位用户的数据发布到公开 Issue、讨论区或 Pull Request。
 
 ## 支持范围

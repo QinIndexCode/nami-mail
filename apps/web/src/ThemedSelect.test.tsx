@@ -1,14 +1,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { I18nProvider } from "./i18n";
 import ThemedSelect from "./ThemedSelect";
 
 describe("themed select", () => {
   it("renders an app-owned select-only combobox trigger instead of a browser select control", () => {
     const markup = renderToStaticMarkup(
-      <ThemedSelect id="mailbox" value="gmail" onValueChange={() => undefined}>
-        <option value="gmail">Gmail</option>
-        <option value="outlook">Outlook</option>
-      </ThemedSelect>,
+      <I18nProvider>
+        <ThemedSelect id="mailbox" value="gmail" onValueChange={() => undefined}>
+          <option value="gmail">Gmail</option>
+          <option value="outlook">Outlook</option>
+        </ThemedSelect>
+      </I18nProvider>,
     );
 
     expect(markup).toContain('aria-haspopup="listbox"');

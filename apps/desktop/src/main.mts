@@ -3,6 +3,7 @@ import { parse as parseDotenv } from "dotenv";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { desktopLocalConfigurationFiles } from "./local-configuration.mjs";
 import {
   clearLegacyRendererMailCache,
   isLocalApiRequestUrl,
@@ -10,6 +11,7 @@ import {
   localApiNoStoreResponseHeaders,
   type RendererCacheCleanupResult,
 } from "./renderer-cache-policy.mjs";
+import { nativeText, type NativeCopyKey, type NativeTranslationValues } from "./native-localization.mjs";
 import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
 import type { DesktopUpdateSnapshot } from "./update-status.mjs";
 import { DesktopUpdater } from "./updater.mjs";
@@ -17,6 +19,7 @@ import { DesktopUpdater } from "./updater.mjs";
 type RunningServer = {
   url: string;
   getSettings: () => {
+    locale: string;
     notificationsEnabled: boolean;
     notifyWhenFocused: boolean;
     notificationSound: NotificationSound;
@@ -195,30 +198,26 @@ const smokeResultPath = process.env.NAMI_MAIL_SMOKE_RESULT_PATH?.trim()
 const isDesktopSmoke = process.env.NAMI_MAIL_SMOKE === "1" && Boolean(smokeResultPath);
 const desktopLoopbackPort = "0";
 const desktopShutdownTimeoutMs = 8_000;
-const desktopOAuthEnvironmentNames = [
-  "NAMI_MAIL_GOOGLE_OAUTH_CLIENT_ID",
-  "NAMI_MAIL_MICROSOFT_OAUTH_CLIENT_ID",
-  "NAMI_MAIL_MICROSOFT_TENANT",
-  "NAMI_MAIL_OAUTH_FLOW_TTL_SECONDS",
-] as const;
-
-async function loadDesktopOAuthEnvironment(): Promise<void> {
+async function loadDesktopLocalConfiguration(): Promise<void> {
   // The installed app cannot rely on a project-root .env. Restrict the
-  // user-data file to public OAuth configuration so it cannot change the
-  // desktop service's loopback, database, or key paths.
-  const paths = [path.join(app.getPath("userData"), "nami-mail.env")];
-  if (!app.isPackaged) paths.push(path.join(app.getAppPath(), ".env"));
+  // user-data file to public OAuth settings and non-secret translation
+  // endpoint/timing values so it cannot change loopback, database, or keys.
+  const configurationFiles = desktopLocalConfigurationFiles({
+    userDataPath: app.getPath("userData"),
+    appPath: app.getAppPath(),
+    isPackaged: app.isPackaged,
+  });
 
-  for (const filePath of paths) {
+  for (const { filePath, environmentNames } of configurationFiles) {
     try {
       const values = parseDotenv(await fs.readFile(filePath, "utf8"));
-      for (const name of desktopOAuthEnvironmentNames) {
+      for (const name of environmentNames) {
         const value = values[name]?.trim();
         if (value && process.env[name] === undefined) process.env[name] = value;
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.warn(`Nami Mail could not read desktop OAuth configuration: ${filePath}`, error);
+        console.warn(`Nami Mail could not read desktop configuration: ${filePath}`, error);
       }
     }
   }
@@ -250,6 +249,7 @@ function clearLocalApiAccessToken(): void {
 
 function focusMainWindow(): void {
   if (!mainWindow) return;
+  if (tray && !tray.isDestroyed()) refreshTrayMenu(tray);
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
@@ -270,17 +270,37 @@ function destroyTray(): void {
   tray = undefined;
 }
 
-function ensureTray(): Tray {
-  if (tray && !tray.isDestroyed()) return tray;
-  const nextTray = new Tray(appIcon ?? loadDesktopIcon());
-  nextTray.setToolTip("Nami Mail");
-  nextTray.setContextMenu(Menu.buildFromTemplate([
-    { label: "打开 Nami Mail", click: focusMainWindow },
+function currentNativeLocale(): string | undefined {
+  try {
+    return localServer?.getSettings().locale;
+  } catch {
+    return undefined;
+  }
+}
+
+function nativeCopy(key: NativeCopyKey, values?: NativeTranslationValues): string {
+  return nativeText(currentNativeLocale(), key, values);
+}
+
+function refreshTrayMenu(targetTray: Tray): void {
+  targetTray.setToolTip(nativeCopy("trayTooltip"));
+  targetTray.setContextMenu(Menu.buildFromTemplate([
+    { label: nativeCopy("trayOpen"), click: focusMainWindow },
     { type: "separator" },
-    { label: "退出 Nami Mail", click: () => app.quit() },
+    { label: nativeCopy("trayQuit"), click: () => app.quit() },
   ]));
+}
+
+function ensureTray(): Tray {
+  if (tray && !tray.isDestroyed()) {
+    refreshTrayMenu(tray);
+    return tray;
+  }
+  const nextTray = new Tray(appIcon ?? loadDesktopIcon());
+  refreshTrayMenu(nextTray);
   nextTray.on("click", focusMainWindow);
   nextTray.on("double-click", focusMainWindow);
+  nextTray.on("right-click", () => refreshTrayMenu(nextTray));
   tray = nextTray;
   return nextTray;
 }
@@ -294,8 +314,8 @@ function hideMainWindowToTray(): boolean {
   } catch (error) {
     console.error("Nami Mail could not create its tray icon", error);
     dialog.showErrorBox(
-      "无法最小化到托盘",
-      "系统托盘图标创建失败，窗口将保持打开。请重新启动 Nami Mail 后再试。",
+      nativeCopy("trayFailureTitle"),
+      nativeCopy("trayFailureMessage"),
     );
     return false;
   }
@@ -335,14 +355,14 @@ async function askHowToClose(): Promise<void> {
   try {
     const result = await showClosePrompt(targetWindow, {
       type: "question",
-      title: "关闭窗口时",
-      message: "关闭窗口后，Nami Mail 要继续在后台接收新邮件吗？",
-      detail: "最小化到托盘后会继续同步邮件和发送通知。以后可在“设置 > 桌面应用”中更改。",
-      buttons: ["最小化到托盘", "退出 Nami Mail", "取消"],
+      title: nativeCopy("closePromptTitle"),
+      message: nativeCopy("closePromptMessage"),
+      detail: nativeCopy("closePromptDetail"),
+      buttons: [nativeCopy("closePromptMinimize"), nativeCopy("closePromptQuit"), nativeCopy("closePromptCancel")],
       defaultId: 0,
       cancelId: 2,
       noLink: true,
-      checkboxLabel: "记住我的选择",
+      checkboxLabel: nativeCopy("closePromptRemember"),
       checkboxChecked: true,
     });
     if (result.response === 2) return;
@@ -354,7 +374,7 @@ async function askHowToClose(): Promise<void> {
         await rememberCloseBehavior(closeBehavior);
       } catch (error) {
         console.error("Nami Mail could not save its close behavior", error);
-        dialog.showErrorBox("无法保存关闭偏好", "本次选择仍会执行，但下次关闭窗口时会再次询问。");
+        dialog.showErrorBox(nativeCopy("closePreferenceFailureTitle"), nativeCopy("closePreferenceFailureMessage"));
       }
     }
     if (closeBehavior === "quit") quitFromClosePrompt();
@@ -838,8 +858,7 @@ async function inspectDesktopSettingsUi(): Promise<DesktopSettingsUiSmokeResult>
             color: style.backgroundColor,
           };
         };
-        const settingsButton = Array.from(document.querySelectorAll('button'))
-          .find((button) => button.getAttribute('aria-label') === '设置');
+        const settingsButton = document.querySelector('.sidebar-footer-actions .icon-button');
         if (!(settingsButton instanceof HTMLButtonElement)) throw new Error('Settings button was not rendered.');
         settingsButton.click();
 
@@ -928,7 +947,7 @@ async function inspectDesktopSettingsUi(): Promise<DesktopSettingsUiSmokeResult>
           const settingsStillOpenAfterEscape = Boolean(document.querySelector('.settings-modal'));
           const focusRestoredToUpload = Boolean(await waitFor(() => document.activeElement === uploadButton));
 
-          const closeButton = settings.querySelector('button[aria-label="关闭设置"]');
+          const closeButton = settings.querySelector('.settings-heading .icon-button');
           if (closeButton instanceof HTMLButtonElement) closeButton.click();
           await waitFor(() => !document.querySelector('.settings-modal'));
 
@@ -1134,9 +1153,12 @@ function notifyNewMail(messages: NewMailPayload[]): void {
   });
   if (!shouldAlert) return;
 
-  const sender = first.fromName || first.fromAddress || "新联系人";
-  const title = messages.length === 1 ? `${sender} · Nami Mail` : `Nami Mail · ${messages.length} 封新邮件`;
-  const body = messages.length === 1 ? first.subject : `${sender} 等邮件已同步到收件箱`;
+  const locale = currentNativeLocale();
+  const sender = first.fromName || first.fromAddress || nativeText(locale, "notificationUnknownSender");
+  const title = messages.length === 1
+    ? nativeText(locale, "notificationSingleTitle", { sender })
+    : nativeText(locale, "notificationMultipleTitle", { count: messages.length });
+  const body = messages.length === 1 ? first.subject : nativeText(locale, "notificationMultipleBody", { sender });
   // Soft and bright sounds are muted only after the renderer has explicitly
   // reported a user-unlocked running AudioContext in the focused window.
   // All other paths fall back to the Windows sound; "none" remains silent.
@@ -1265,7 +1287,7 @@ async function recordSingleInstanceSmokeActivation(commandLine: string[]): Promi
 async function boot(): Promise<void> {
   await app.whenReady();
   appIcon = loadDesktopIcon();
-  await loadDesktopOAuthEnvironment();
+  await loadDesktopLocalConfiguration();
   configureLocalService();
 
   try {
@@ -1348,12 +1370,16 @@ async function boot(): Promise<void> {
       timer.unref();
     }
   } catch (error) {
+    const locale = currentNativeLocale();
     console.error("Nami Mail startup failed", error);
     await writeSmokeResult({ error: error instanceof Error ? error.message : "Local service startup failed." }).catch(() => undefined);
     await localServer?.close().catch(() => undefined);
     localServer = undefined;
     clearLocalApiAccessToken();
-    dialog.showErrorBox("Nami Mail 无法启动", error instanceof Error ? error.message : "本地服务启动失败。");
+    dialog.showErrorBox(
+      nativeText(locale, "startupFailureTitle"),
+      error instanceof Error ? error.message : nativeText(locale, "startupFailureMessage"),
+    );
     app.exit(1);
   }
 }

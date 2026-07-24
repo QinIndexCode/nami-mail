@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { githubZipUpdateAssetNames } from "../src/github-zip-update.mts";
+import { removeUpdateVersionCache } from "../src/update-install-result.mts";
 import { canonicalUpdateManifestPayload } from "../src/update-trust.mts";
 import { DesktopUpdater } from "../src/updater.mts";
 
@@ -78,18 +79,24 @@ test("discovers a release without downloading until the user accepts it", async 
   const { updater } = await createUpdater(t);
   const available = await updater.checkForUpdates();
   assert.deepEqual({
+    schemaVersion: available.schemaVersion,
     phase: available.phase,
     targetVersion: available.targetVersion,
     suppression: available.suppression,
+    reason: available.reason,
+    args: available.args,
   }, {
+    schemaVersion: 2,
     phase: "available",
     targetVersion,
     suppression: "none",
+    reason: "releaseAvailable",
+    args: {},
   });
   updater.dispose();
 });
 
-test("surfaces a sanitized helper installation failure once after restarting the old version", async (t) => {
+test("reports a persisted helper installation failure using typed result data", async (t) => {
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), "nami-desktop-updater-install-result-"));
   t.after(() => fs.rm(profile, { recursive: true, force: true }));
   const configPath = path.join(profile, "app-update.yml");
@@ -133,8 +140,9 @@ test("surfaces a sanitized helper installation failure once after restarting the
   assert.equal(restored.phase, "error");
   assert.equal(restored.targetVersion, targetVersion);
   assert.equal(restored.checkedAt, "2026-07-22T08:00:00.0000000Z");
-  assert.match(restored.message, /重新检查并下载更新/);
-  assert.doesNotMatch(restored.message, /Users|private|zip/i);
+  assert.equal(restored.reason, "installResult");
+  assert.deepEqual(restored.args, { installStage: "install" });
+  assert.equal("message" in restored, false);
   assert.ok(phases.includes("error"));
   await assert.rejects(fs.access(resultPath), /ENOENT/);
   await assert.rejects(fs.access(versionDirectory), /ENOENT/);
@@ -142,7 +150,7 @@ test("surfaces a sanitized helper installation failure once after restarting the
   updater.dispose();
 });
 
-test("cleans a persisted successful-update cache by its validated target version on startup", async (t) => {
+test("represents completed and pending update-cache cleanup outcomes structurally", async (t) => {
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), "nami-desktop-updater-cleanup-result-"));
   t.after(() => fs.rm(profile, { recursive: true, force: true }));
   const configPath = path.join(profile, "app-update.yml");
@@ -180,10 +188,58 @@ test("cleans a persisted successful-update cache by its validated target version
   const restored = await updater.start();
   assert.equal(restored.phase, "up-to-date");
   assert.equal(restored.targetVersion, targetVersion);
-  assert.match(restored.message, /已在启动时清理/);
+  assert.equal(restored.reason, "installResult");
+  assert.deepEqual(restored.args, { installStage: "cleanup", cleanupComplete: true });
   await assert.rejects(fs.access(versionDirectory), /ENOENT/);
   await assert.rejects(fs.access(resultPath), /ENOENT/);
   updater.dispose();
+
+  await fs.mkdir(versionDirectory, { recursive: true });
+  await fs.writeFile(path.join(versionDirectory, assetNames.archiveName), archiveBytes);
+  await fs.writeFile(resultPath, JSON.stringify({
+    schemaVersion: 1,
+    version: targetVersion,
+    stage: "cleanup",
+    occurredAt: "2026-07-22T08:00:00.0000000Z",
+  }), "utf8");
+  let cleanupAttempts = 0;
+  const pendingCleanupUpdater = new DesktopUpdater({
+    currentVersion: targetVersion,
+    isPackaged: true,
+    updateConfigPath: configPath,
+    updateTrustPath: path.join(profile, "nami-update-trust.json"),
+    userDataPath: profile,
+    executablePath: path.join(profile, "Nami Mail.exe"),
+    disabled: false,
+    platform: "win32",
+    automaticCheckDelayMs: 3_600_000,
+    periodicCheckIntervalMs: 3_600_000,
+    fetchImpl: updateFetch,
+    readTrustedSigner: async () => ({ publisher: "Nami Mail", thumbprint: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }),
+    removeCachedVersion: async (directory, version) => {
+      cleanupAttempts += 1;
+      if (cleanupAttempts === 1) return false;
+      return removeUpdateVersionCache(directory, version);
+    },
+    broadcast: () => undefined,
+    prepareForInstall: async () => true,
+    recoverAfterInstallFailure: () => undefined,
+    quitForInstall: () => undefined,
+  });
+
+  const pending = await pendingCleanupUpdater.start();
+  assert.equal(pending.phase, "error");
+  assert.equal(pending.reason, "installResult");
+  assert.deepEqual(pending.args, { installStage: "cleanup", cleanupComplete: false });
+  await fs.access(versionDirectory);
+  await fs.access(resultPath);
+  const retried = await pendingCleanupUpdater.checkForUpdates();
+  assert.equal(retried.phase, "up-to-date");
+  assert.equal(retried.reason, "installResult");
+  assert.deepEqual(retried.args, { installStage: "cleanup", cleanupComplete: true });
+  await assert.rejects(fs.access(versionDirectory), /ENOENT/);
+  await assert.rejects(fs.access(resultPath), /ENOENT/);
+  pendingCleanupUpdater.dispose();
 });
 
 test("uses the embedded Ed25519 release trust when the installed executable is unsigned", async (t) => {
@@ -332,6 +388,8 @@ test("does not launch an installer when local mail data cannot close safely", as
   const installed = await updater.installDownloadedUpdate();
   assert.equal(installed.accepted, false);
   assert.equal(installed.snapshot.phase, "error");
+  assert.equal(installed.snapshot.reason, "mailDataBusy");
+  assert.deepEqual(installed.snapshot.args, {});
   assert.deepEqual(calls, []);
   updater.dispose();
 });

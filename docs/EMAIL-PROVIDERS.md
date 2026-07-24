@@ -1,5 +1,7 @@
 # 邮箱接入指南
 
+[简体中文](EMAIL-PROVIDERS.md) | [English](EMAIL-PROVIDERS.en.md)
+
 Nami Mail 通过 IMAP 同步和 SMTP 发送邮件。它会优先使用内置服务商预设，并为自定义域名尝试 DNS 自动发现；发现结果是连接起点，不会替代企业管理员或邮箱服务商给出的最终配置。
 
 ## 开始前

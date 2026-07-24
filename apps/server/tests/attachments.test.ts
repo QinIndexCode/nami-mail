@@ -16,7 +16,7 @@ import {
   parseAttachmentMetadata,
 } from "../src/attachments.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import { messagePayloadForRow, type MessageStorageRow } from "../src/message-storage.js";
+import { PENDING_MOVE_RECONCILIATION_ERROR, messagePayloadForRow, type MessageStorageRow } from "../src/message-storage.js";
 import { syncAccount } from "../src/sync.js";
 
 const now = "2026-07-18T00:00:00.000Z";
@@ -293,6 +293,34 @@ describe("attachment metadata and IMAP downloads", () => {
       expect(client.download).toHaveBeenCalledWith(42, "2", { uid: true });
       expect(lock.release).toHaveBeenCalledTimes(1);
       expect(client.logout).toHaveBeenCalledTimes(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not access a stale IMAP UID while a confirmed move is pending reconciliation", async () => {
+    const db = openDatabase(":memory:");
+    insertAccount(db);
+    insertMessage(db, attachmentJson());
+    db.prepare("UPDATE messages SET uid = ?, pending_move_destination = ? WHERE id = ?")
+      .run(-42, "Archive", "message-1");
+    const client = {
+      usable: true,
+      connect: vi.fn(async () => undefined),
+      getMailboxLock: vi.fn(),
+      fetchOne: vi.fn(),
+      download: vi.fn(),
+      logout: vi.fn(async () => undefined),
+    };
+    imapClientForAccount.mockReturnValue(client);
+
+    try {
+      await expect(downloadMessageAttachment(db, Buffer.alloc(32, 7), "message-1", "2"))
+        .rejects.toThrow(PENDING_MOVE_RECONCILIATION_ERROR);
+      expect(client.connect).not.toHaveBeenCalled();
+      expect(client.getMailboxLock).not.toHaveBeenCalled();
+      expect(client.fetchOne).not.toHaveBeenCalled();
+      expect(client.download).not.toHaveBeenCalled();
     } finally {
       db.close();
     }

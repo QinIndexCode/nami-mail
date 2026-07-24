@@ -3,6 +3,8 @@ import { decryptTextEnvelope, deriveEncryptionKey, encryptTextEnvelope } from ".
 
 export const MESSAGE_PAYLOAD_VERSION = 1;
 export const MAX_ENCRYPTED_SEARCH_CANDIDATES = 5_000;
+export const PENDING_MOVE_RECONCILIATION_ERROR = "邮件正在同步移动后的新位置，请稍后重试。";
+export const MOVE_LOCATION_UNVERIFIED_ERROR = "邮件已移动，但邮箱服务器未提供可验证的新位置。请刷新目标文件夹后再修改邮件或下载附件。";
 
 const MESSAGE_MIGRATION_ID = "message-payload-v1";
 const messageKeyPurpose = "message-payload-v1";
@@ -41,6 +43,43 @@ export type MessageStorageRow = Record<string, unknown> & {
   encrypted_payload?: string | null;
   payload_version?: number | null;
 };
+
+function pendingMoveDestinationValue(row: unknown): string | null {
+  const destination = row && typeof row === "object"
+    ? (row as Record<string, unknown>).pending_move_destination
+    : undefined;
+  return typeof destination === "string" && destination.length > 0 ? destination : null;
+}
+
+/** A persisted intent exists before a MOVE command reaches the provider. */
+export function pendingMoveIsIntent(row: unknown): boolean {
+  if (!pendingMoveDestinationValue(row) || !row || typeof row !== "object") return false;
+  return (row as Record<string, unknown>).pending_move_state === "intent";
+}
+
+/** A confirmed move without UIDPLUS or a provider-scoped stable message ID. */
+export function hasUnverifiedMoveLocation(row: unknown): boolean {
+  if (!pendingMoveDestinationValue(row) || !row || typeof row !== "object") return false;
+  const value = row as Record<string, unknown>;
+  if (value.pending_move_state !== "confirmed") return false;
+  return typeof value.remote_id_lookup !== "string" || value.remote_id_lookup.length === 0;
+}
+
+export function hasPendingMove(row: unknown): boolean {
+  return pendingMoveDestinationValue(row) !== null && !hasUnverifiedMoveLocation(row);
+}
+
+/** Returns the precise user-safe reason when a cached row cannot address a remote message. */
+export function moveActionBlockedError(row: unknown): string | null {
+  if (hasPendingMove(row)) return PENDING_MOVE_RECONCILIATION_ERROR;
+  if (hasUnverifiedMoveLocation(row)) return MOVE_LOCATION_UNVERIFIED_ERROR;
+  return null;
+}
+
+/** Returns the effective destination only after the provider has confirmed the move. */
+export function pendingMoveDestination(row: unknown): string | null {
+  return pendingMoveIsIntent(row) ? null : pendingMoveDestinationValue(row);
+}
 
 function payloadAad(id: string, accountId: string): string {
   return `messages\0${accountId}\0${id}\0payload-v1`;

@@ -16,10 +16,13 @@ import {
 import { api } from "./api";
 import { desktopBridge } from "./desktop";
 import { mailErrorMessage, presentMailError } from "./errorPresentation";
+import { type Translate, useI18n } from "./i18n";
 import {
   CUSTOM_IMAP_PROVIDER_ID,
+  localizedProviderOnboarding,
   orderedProviderCatalog,
   providerAuthLabel,
+  providerDisplayName,
   providerMonogram,
   providerServerConfiguration,
   quickProviderCatalog,
@@ -52,11 +55,6 @@ type AddAccountModalProps = {
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DISCOVERY_DEBOUNCE_MS = 600;
-const providerPriorityLabels = {
-  P0: "常用服务商",
-  P1: "更多服务商",
-  P2: "其他支持的服务商",
-} as const;
 
 function validEmail(value: string): boolean {
   return emailPattern.test(value.trim());
@@ -79,12 +77,12 @@ function oauthProviderFor(provider: Pick<ProviderDiscovery, "id" | "family">): O
   return undefined;
 }
 
-function providerFallback(provider: ProviderInfo | undefined, domain: string): ProviderDiscovery | undefined {
+function providerFallback(provider: ProviderInfo | undefined, domain: string, t: Translate): ProviderDiscovery | undefined {
   if (!domain) return undefined;
   const authMethods = providerAuthMethods(provider);
   return {
     id: provider?.id ?? "custom",
-    name: provider?.name ?? "其他邮箱（IMAP）",
+    name: provider?.name ?? t("account.provider.custom_name"),
     family: provider?.family ?? "custom",
     priority: provider?.priority,
     domain,
@@ -93,15 +91,15 @@ function providerFallback(provider: ProviderInfo | undefined, domain: string): P
     confidence: provider ? "high" : "low",
     authMethods,
     recommendedAuthMethod: provider?.recommendedAuthMethod ?? authMethods[0],
-    credentialLabel: provider?.credentialLabel ?? provider?.credentialName ?? "邮箱密码或应用专用密码",
-    credentialName: provider?.credentialName ?? "邮箱密码或应用专用密码",
-    credentialHint: provider?.credentialHint ?? "请使用邮箱服务商允许第三方客户端使用的密码、应用专用密码或授权码。",
+    credentialLabel: provider?.credentialLabel ?? provider?.credentialName ?? t("account.provider.default_credential"),
+    credentialName: provider?.credentialName ?? t("account.provider.default_credential"),
+    credentialHint: provider?.credentialHint ?? t("account.provider.default_credential_hint"),
     helpText: provider?.helpText,
     caveat: provider?.caveat,
     setupSteps: provider?.setupSteps ?? [
-      "在邮箱设置中开启 IMAP 和 SMTP 服务。",
-      "如已开启两步验证，请生成应用专用密码或客户端授权码。",
-      "请勿填写短信、邮箱或验证器中的一次性验证码。",
+      t("account.provider.default_setup_step_imap"),
+      t("account.provider.default_setup_step_credential"),
+      t("account.provider.default_setup_step_no_otp"),
     ],
     helpUrl: provider?.helpUrl,
     helpLabel: provider?.helpLabel,
@@ -145,8 +143,8 @@ function manualConfigFor(email: string, provider?: ProviderDiscovery): ManualAcc
   };
 }
 
-function friendlyError(error: unknown): string {
-  return mailErrorMessage(error);
+function friendlyError(error: unknown, t: Translate): string {
+  return mailErrorMessage(error, undefined, t);
 }
 
 function serverModeLabel(transport: MailTransport): string {
@@ -168,9 +166,9 @@ function manualReviewRecommended(provider: ProviderDiscovery): boolean {
   return provider.isCustom || provider.source !== "preset" || provider.confidence !== "high";
 }
 
-function resultForDemo(email: string, fallback: ProviderDiscovery | undefined): AccountDiscoveryResult {
-  const provider = fallback ?? providerFallback(undefined, emailDomain(email));
-  if (!provider) throw new Error("请输入邮箱地址后继续。");
+function resultForDemo(email: string, fallback: ProviderDiscovery | undefined, t: Translate): AccountDiscoveryResult {
+  const provider = fallback ?? providerFallback(undefined, emailDomain(email), t);
+  if (!provider) throw new Error(t("account.error.email_required"));
   const oauthProvider = oauthProviderFor(provider);
   return { ok: true, provider, ...(oauthProvider ? { oauthProvider, oauthAvailable: true } : { oauthAvailable: false }) };
 }
@@ -206,6 +204,7 @@ async function copySetupTextToClipboard(text: string): Promise<boolean> {
 }
 
 export default function AddAccountModal({ providers, onClose, onAdded, fallbackFocusRef, demoMode = false }: AddAccountModalProps) {
+  const { locale, t } = useI18n();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busyAction, setBusyAction] = useState<BusyAction>("idle");
@@ -247,23 +246,33 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
     [domain, normalizedEmail, providers],
   );
   const fallbackProvider = useMemo(
-    () => validEmail(normalizedEmail) ? providerFallback(matchedProvider, domain) : undefined,
-    [domain, matchedProvider, normalizedEmail],
+    () => validEmail(normalizedEmail) ? providerFallback(matchedProvider, domain, t) : undefined,
+    [domain, matchedProvider, normalizedEmail, t],
   );
   const activeDiscovery = discoveryEmail === normalizedEmail ? discovery?.provider ?? fallbackProvider : fallbackProvider;
+  const activeOnboarding = useMemo(
+    () => activeDiscovery ? localizedProviderOnboarding(activeDiscovery, locale, t) : undefined,
+    [activeDiscovery, locale, t],
+  );
   const selectedProvider = useMemo(
     () => providers.find((item) => item.id === selectedProviderId),
     [providers, selectedProviderId],
   );
   const selectedProviderGuide = useMemo(() => {
-    if (selectedProvider) return providerFallback(selectedProvider, selectedProvider.domains[0] ?? "");
+    if (selectedProvider) return providerFallback(selectedProvider, selectedProvider.domains[0] ?? "", t);
     return selectedProviderId === CUSTOM_IMAP_PROVIDER_ID
-      ? providerFallback(undefined, "your-domain.example")
+      ? providerFallback(undefined, "your-domain.example", t)
       : undefined;
-  }, [selectedProvider, selectedProviderId]);
+  }, [selectedProvider, selectedProviderId, t]);
   const guideProvider = activeDiscovery ?? selectedProviderGuide;
-  const orderedProviders = useMemo(() => orderedProviderCatalog(providers), [providers]);
-  const quickProviders = useMemo(() => quickProviderCatalog(providers), [providers]);
+  const guideOnboarding = useMemo(
+    () => guideProvider ? localizedProviderOnboarding(guideProvider, locale, t) : undefined,
+    [guideProvider, locale, t],
+  );
+  const activeProviderName = activeOnboarding?.name ?? activeDiscovery?.name ?? "";
+  const guideProviderName = guideOnboarding?.name ?? guideProvider?.name ?? "";
+  const orderedProviders = useMemo(() => orderedProviderCatalog(providers, locale), [locale, providers]);
+  const quickProviders = useMemo(() => quickProviderCatalog(providers, locale), [locale, providers]);
   const activeOAuthProvider = discoveryEmail === normalizedEmail && discovery
     ? discovery.oauthProvider
     : activeDiscovery ? oauthProviderFor(activeDiscovery) : undefined;
@@ -393,20 +402,20 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
     setStatus({ kind: "idle", message: "" });
     try {
       const localProvider = providers.find((item) => item.domains.some((knownDomain) => knownDomain.toLowerCase() === emailDomain(candidate)));
-      const fallback = providerFallback(localProvider, emailDomain(candidate));
-      const result = demoMode ? resultForDemo(candidate, fallback) : await api.discoverAccount(candidate);
+      const fallback = providerFallback(localProvider, emailDomain(candidate), t);
+      const result = demoMode ? resultForDemo(candidate, fallback, t) : await api.discoverAccount(candidate);
       if (!mountedRef.current || requestId !== discoveryRequestIdRef.current || candidate !== emailValueRef.current.trim().toLowerCase()) return null;
       setDiscovery(result);
       setDiscoveryEmail(candidate);
       if (manualReviewRecommended(result.provider)) {
-        setStatus({ kind: "warning", message: "已找到可能的连接设置。请核对服务器信息，必要时改用手动配置。" });
+        setStatus({ kind: "warning", message: t("account.status.discovery_manual_review") });
       }
       return result;
     } catch (error) {
       if (mountedRef.current && requestId === discoveryRequestIdRef.current && candidate === emailValueRef.current.trim().toLowerCase()) {
         setDiscovery(null);
         setDiscoveryEmail(candidate);
-        setStatus({ kind: "warning", message: "未能自动识别服务商。你仍可手动填写 IMAP/SMTP 设置继续。" });
+        setStatus({ kind: "warning", message: t("account.status.discovery_unavailable") });
       }
       return null;
     } finally {
@@ -414,7 +423,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
         setBusyAction((current) => current === "discover" ? "idle" : current);
       }
     }
-  }, [demoMode, discovery, discoveryEmail, providers]);
+  }, [demoMode, discovery, discoveryEmail, providers, t]);
 
   useEffect(() => {
     if (!discoveryRequired || emailFocused || busy || accountAdded) return;
@@ -469,9 +478,9 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
       setStatus({ kind: "success", message });
       scheduleClose();
     } catch {
-      if (mountedRef.current) setStatus({ kind: "warning", message: "邮箱已添加。邮件列表暂未刷新，请关闭并重新打开 Nami Mail 后查看。" });
+      if (mountedRef.current) setStatus({ kind: "warning", message: t("account.status.refresh_unavailable") });
     }
-  }, [onAdded, scheduleClose]);
+  }, [onAdded, scheduleClose, t]);
 
   const cancelOAuth = () => {
     clearOAuthPolling();
@@ -481,7 +490,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
     setOauthAttemptId(null);
     setOauthUrl(null);
     setBusyAction("idle");
-    setStatus({ kind: "warning", message: "已停止等待授权。浏览器中的页面可以直接关闭。" });
+    setStatus({ kind: "warning", message: t("account.status.oauth_canceled") });
   };
 
   const pollOAuthAttempt = useCallback((attemptId: string) => {
@@ -499,13 +508,13 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
         activeOAuthAttemptRef.current = null;
         setBusyAction("idle");
         if (result.status === "success" && result.accountId) {
-          await finishAddedAccount("授权已完成，邮箱已添加。");
+          await finishAddedAccount(t("account.status.oauth_completed"));
           return;
         }
         showError(mailErrorMessage({
           code: result.code ?? (result.status === "expired" ? "oauth_expired" : "oauth_failed"),
           message: result.message ?? "",
-        }));
+        }, undefined, t));
       } catch (error) {
         if (!mountedRef.current || activeOAuthAttemptRef.current !== attemptId) return;
         clearOAuthPolling();
@@ -513,15 +522,15 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
         setOauthUrl(null);
         activeOAuthAttemptRef.current = null;
         setBusyAction("idle");
-        showError(friendlyError(error));
+        showError(friendlyError(error, t));
       }
     };
     void poll();
-  }, [clearOAuthPolling, finishAddedAccount, showError]);
+  }, [clearOAuthPolling, finishAddedAccount, showError, t]);
 
   const startOAuth = async () => {
     if (!validEmail(normalizedEmail)) {
-      showError("请输入有效的邮箱地址后继续登录。", "email");
+      showError(t("account.error.email_required_for_login"), "email");
       return;
     }
 
@@ -534,7 +543,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
       const provider = nextDiscovery?.oauthProvider ?? activeOAuthProvider;
       if (!provider) {
         popup?.close();
-        showError("该邮箱当前没有可用的安全登录方式。请使用应用专用密码或手动配置。", "email");
+        showError(t("account.error.oauth_unavailable"), "email");
         return;
       }
 
@@ -556,7 +565,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
           setOauthUrl(null);
           activeOAuthAttemptRef.current = null;
           setBusyAction("idle");
-          void finishAddedAccount("授权已完成（演示模式）。");
+          void finishAddedAccount(t("account.status.oauth_demo_completed"));
         }, 700);
         return;
       }
@@ -575,22 +584,22 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
       setOauthUrl(null);
       activeOAuthAttemptRef.current = null;
       setBusyAction("idle");
-      showError(friendlyError(error));
+      showError(friendlyError(error, t));
     }
   };
 
   const submitPassword = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!validEmail(normalizedEmail)) {
-      showError("请输入有效的邮箱地址。", "email");
+      showError(t("account.error.email_invalid"), "email");
       return;
     }
     if (!password) {
-      showError(`请填写${activeDiscovery?.credentialLabel ?? "密码或授权码"}。`, "password");
+      showError(t("account.error.credential_required", { credential: activeOnboarding?.credentialLabel ?? t("account.credential.fallback") }), "password");
       return;
     }
     if (manualOpen && !isServerConfigValid(manualConfig)) {
-      showError("请填写有效的 IMAP 与 SMTP 主机、端口和 TLS 模式。", "manual");
+      showError(t("account.error.manual_invalid"), "manual");
       return;
     }
 
@@ -599,7 +608,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
     try {
       if (demoMode) {
         await new Promise((resolve) => window.setTimeout(resolve, 700));
-        await finishAddedAccount("邮箱已连接，已同步最近邮件。");
+        await finishAddedAccount(t("account.status.demo_connected"));
         return;
       }
       const result = manualOpen
@@ -620,47 +629,51 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
           ...(manualConfig.smtp.username.trim() ? { smtpUsername: manualConfig.smtp.username.trim() } : {}),
         })
         : await api.addAccount(normalizedEmail, password);
-      const detail = result.sync ? `，已同步 ${result.sync.synced} 封邮件 / ${result.sync.folders} 个文件夹` : "";
+      const detail = result.sync
+        ? t("account.status.sync_details", { synced: result.sync.synced, folders: result.sync.folders })
+        : "";
       if (result.syncWarning) {
         setAccountAdded(true);
         setPassword("");
         await onAdded();
         const issue = result.account.lastErrorCode
-          ? presentMailError({ code: result.account.lastErrorCode, message: result.syncWarning })
+          ? presentMailError({ code: result.account.lastErrorCode, message: result.syncWarning }, t)
           : null;
         setStatus({
           kind: "warning",
           message: issue
-            ? `邮箱已添加，但首次同步未完成。${issue.title}：${issue.guidance}`
-            : `邮箱已添加，${result.syncWarning}。可稍后在账户设置中重新同步。`,
+            ? t("account.status.sync_warning_issue", { title: issue.title, guidance: issue.guidance })
+            : locale === "zh-CN"
+              ? t("account.status.sync_warning", { warning: result.syncWarning })
+              : t("account.status.sync_warning_generic"),
         });
         return;
       }
-      await finishAddedAccount(`邮箱已连接${detail}。`);
+      await finishAddedAccount(t("account.status.connected", { detail }));
     } catch (error) {
-      const issue = presentMailError(error);
+      const issue = presentMailError(error, t);
       // A network, TLS, or protocol problem is not corrected by retyping a
       // password, so keep focus on the status guidance in those cases.
-      showError(friendlyError(error), issue.kind === "authentication" ? (manualOpen ? "manual" : "password") : undefined);
+      showError(friendlyError(error, t), issue.kind === "authentication" ? (manualOpen ? "manual" : "password") : undefined);
     } finally {
       if (mountedRef.current) setBusyAction("idle");
     }
   };
 
   const credentialName = showPasswordFallback && activeOAuthProvider
-    ? activeDiscovery?.credentialName ?? "应用专用密码或授权码"
-    : activeDiscovery?.credentialLabel ?? "密码或授权码";
-  const passwordFallbackName = activeDiscovery?.credentialName ?? "应用专用密码或授权码";
-  const setupSteps = guideProvider?.setupSteps ?? [];
+    ? activeOnboarding?.credentialName ?? t("account.credential.oauth_fallback")
+    : activeOnboarding?.credentialLabel ?? t("account.credential.fallback");
+  const passwordFallbackName = activeOnboarding?.credentialName ?? t("account.credential.oauth_fallback");
+  const setupSteps = guideOnboarding?.setupSteps ?? [];
   const guideIsPreview = !activeDiscovery && Boolean(selectedProviderGuide);
   const sourceNote = guideProvider?.isCustom
     ? guideIsPreview
-      ? "填写完整企业或学校邮箱后，Nami Mail 会尝试查找可用的连接设置；也可以随时选择手动配置。"
-      : "此邮箱的设置由自动查找得出，请与邮箱管理员提供的信息核对。"
-    : guideProvider?.caveat;
+      ? t("account.guide.custom_preview")
+      : t("account.guide.custom_discovered")
+    : guideOnboarding?.caveat;
   const guideAvailable = Boolean(guideProvider) && (!needsProviderDiscovery || Boolean(selectedProviderId));
   const serverConfiguration = guideProvider && !guideProvider.isCustom
-    ? providerServerConfiguration(guideProvider.name, guideProvider.imap, guideProvider.smtp)
+    ? providerServerConfiguration(guideOnboarding?.name ?? guideProvider.name, guideProvider.imap, guideProvider.smtp, t)
     : null;
   const emailInvalid = status.kind === "error" && status.field === "email";
   const passwordInvalid = status.kind === "error" && status.field === "password";
@@ -671,7 +684,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
     const copied = await copySetupTextToClipboard(serverConfiguration);
     if (!mountedRef.current) return;
     if (!copied) {
-      setStatus({ kind: "warning", message: "无法直接复制服务器设置。请选中上方 IMAP / SMTP 信息后复制。" });
+      setStatus({ kind: "warning", message: t("account.status.copy_server_settings_failed") });
       return;
     }
     if (serverConfigurationCopyTimerRef.current !== null) window.clearTimeout(serverConfigurationCopyTimerRef.current);
@@ -695,10 +708,10 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
       >
         <div className="modal-heading">
           <div>
-            <span className="eyebrow">添加账户</span>
-            <h2 id="add-account-title">添加邮箱</h2>
+            <span className="eyebrow">{t("account.eyebrow")}</span>
+            <h2 id="add-account-title">{t("account.title")}</h2>
           </div>
-          <button className="icon-button" type="button" aria-label="关闭" data-tooltip="关闭" onClick={requestClose} disabled={blockingBusy}>
+          <button className="icon-button" type="button" aria-label={t("common.close")} data-tooltip={t("common.close")} onClick={requestClose} disabled={blockingBusy}>
             <X size={18} />
           </button>
         </div>
@@ -711,14 +724,14 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
           <span className="orbit-chip chip-d">163</span>
         </div>
 
-        <p id="add-account-description" className="modal-intro">输入邮箱地址后，选择服务商支持的安全登录方式。服务器设置和凭据仅用于连接你选择的邮件服务商。</p>
+        <p id="add-account-description" className="modal-intro">{t("account.description")}</p>
 
         <form noValidate onSubmit={submitPassword} className="account-form" aria-busy={busy}>
           <section className="provider-picker" aria-labelledby="provider-picker-title">
             <div className="provider-picker-heading">
               <div>
-                <span className="eyebrow">快速设置</span>
-                <strong id="provider-picker-title">选择服务商，查看连接方式</strong>
+                <span className="eyebrow">{t("account.provider.eyebrow")}</span>
+                <strong id="provider-picker-title">{t("account.provider.title")}</strong>
               </div>
               <button
                 className="provider-catalog-toggle"
@@ -727,7 +740,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                 onClick={() => setProviderCatalogOpen((value) => !value)}
                 disabled={busy || accountAdded}
               >
-                {providerCatalogOpen ? "收起列表" : "更多服务商"}
+                {providerCatalogOpen ? t("account.provider.collapse_catalog") : t("account.provider.more")}
                 <ChevronDown className={providerCatalogOpen ? "open" : ""} size={14} />
               </button>
             </div>
@@ -738,13 +751,13 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                   className={`provider-choice${selectedProviderId === provider.id ? " selected" : ""}`}
                   type="button"
                   aria-pressed={selectedProviderId === provider.id}
-                  aria-label={`选择 ${provider.name}，查看接入步骤`}
+                  aria-label={t("account.provider.select_aria", { provider: providerDisplayName(provider, locale, t) })}
                   onClick={() => selectProvider(provider.id)}
                   disabled={busy || accountAdded}
                 >
                   <span className="provider-choice-mark" aria-hidden="true">{providerMonogram(provider)}</span>
                   <span className="provider-choice-copy">
-                    <strong>{provider.name}</strong>
+                    <strong>{providerDisplayName(provider, locale, t)}</strong>
                     <small>{provider.domains[0]}</small>
                   </span>
                 </button>
@@ -758,39 +771,39 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
               >
                 <span className="provider-choice-mark" aria-hidden="true"><Server size={15} /></span>
                 <span className="provider-choice-copy">
-                  <strong>其他邮箱</strong>
-                  <small>企业、高校或自定义域</small>
+                  <strong>{t("account.provider.custom_name")}</strong>
+                  <small>{t("account.provider.custom_description")}</small>
                 </span>
               </button>
             </div>
             {providerCatalogOpen && (
               <label className="provider-catalog-select" htmlFor="account-provider-catalog">
-                <span>从服务商列表选择</span>
+                <span>{t("account.provider.catalog_label")}</span>
                 <ThemedSelect
                   id="account-provider-catalog"
                   value={selectedProviderId}
                   onValueChange={selectProvider}
                   disabled={busy || accountAdded}
                 >
-                  <option value="">稍后选择服务商</option>
+                  <option value="">{t("account.provider.catalog_placeholder")}</option>
                   {(["P0", "P1", "P2"] as const).map((priority) => {
                     const options = orderedProviders.filter((provider) => provider.priority === priority);
                     return options.length ? (
-                      <optgroup key={priority} label={providerPriorityLabels[priority]}>
-                        {options.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.domains[0]}</option>)}
+                      <optgroup key={priority} label={t(`account.provider.priority.${priority.toLowerCase()}`)}>
+                        {options.map((provider) => <option key={provider.id} value={provider.id}>{providerDisplayName(provider, locale, t)} · {provider.domains[0]}</option>)}
                       </optgroup>
                     ) : null;
                   })}
-                  <option value={CUSTOM_IMAP_PROVIDER_ID}>其他邮箱 / 企业邮箱</option>
+                  <option value={CUSTOM_IMAP_PROVIDER_ID}>{t("account.provider.custom_option")}</option>
                 </ThemedSelect>
               </label>
             )}
-            <small className="provider-picker-note">选择服务商只会展示登录与服务器说明，不会填写或提交你的邮箱地址。</small>
+            <small className="provider-picker-note">{t("account.provider.picker_note")}</small>
           </section>
 
           <div className="account-email-row">
             <label htmlFor="account-email">
-              <span>邮箱地址</span>
+              <span>{t("account.email.label")}</span>
               <input
                 ref={emailRef}
                 id="account-email"
@@ -817,17 +830,17 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
             </label>
             <button className="secondary-button account-discover-button" type="button" onClick={() => void discoverProvider()} disabled={busy || accountAdded || !validEmail(normalizedEmail)}>
               {busyAction === "discover" ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />}
-              {busyAction === "discover" ? "识别中" : "识别服务商"}
+              {busyAction === "discover" ? t("account.email.discover_busy") : t("account.email.discover")}
             </button>
           </div>
-          <small id="account-email-help" className="account-field-help">支持个人、企业和高校邮箱；输入完整企业或学校邮箱后，Nami Mail 会查找连接设置。</small>
+          <small id="account-email-help" className="account-field-help">{t("account.email.help")}</small>
 
           {activeDiscovery && (
             <section className={`provider-hint account-provider-result${manualReviewRecommended(activeDiscovery) ? " warning" : ""}`} aria-live="polite">
               <ShieldCheck size={17} />
               <div>
-                <strong>{activeDiscovery.name}</strong>
-                <span>{activeDiscovery.helpText ?? activeDiscovery.credentialHint}</span>
+                <strong>{activeProviderName}</strong>
+                <span>{activeOnboarding?.helpText ?? activeOnboarding?.credentialHint}</span>
                 {sourceNote && <small>{sourceNote}</small>}
               </div>
             </section>
@@ -837,8 +850,8 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
             <section className="account-discovery-pending" role="status" aria-live="polite">
               {busyAction === "discover" ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}
               <span>{busyAction === "discover"
-                ? "正在查找此企业或学校邮箱的连接设置。"
-                : "输入完整邮箱地址后，将自动查找企业或学校邮箱的连接设置。"}</span>
+                ? t("account.discovery.busy")
+                : t("account.discovery.idle")}</span>
             </section>
           )}
 
@@ -846,24 +859,26 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
             <>
               <button className="guide-toggle" type="button" aria-expanded={showGuide} onClick={() => setShowGuide((value) => !value)} disabled={busy}>
                 <KeyRound size={15} />
-                <span>{guideIsPreview ? `查看 ${guideProvider.name} 接入指南` : `查看 ${guideProvider.name} 连接步骤`}</span>
+                <span>{guideIsPreview
+                  ? t("account.guide.toggle_preview", { provider: guideProviderName })
+                  : t("account.guide.toggle", { provider: guideProviderName })}</span>
                 <ChevronDown className={showGuide ? "open" : ""} size={15} />
               </button>
 
               {showGuide && (
-                <section className="setup-guide" aria-label={`${guideProvider.name} 连接步骤`}>
+                <section className="setup-guide" aria-label={t("account.guide.aria", { provider: guideProviderName })}>
                   <div className="setup-guide-title">
                     <div>
-                      <span>连接指南</span>
-                      <strong>{guideProvider.name}</strong>
+                      <span>{t("account.guide.title")}</span>
+                      <strong>{guideProviderName}</strong>
                     </div>
                     <ShieldCheck size={17} />
                   </div>
-                  {guideIsPreview && <p className="setup-guide-preview">填写完整邮箱地址后，才会开始验证连接设置。</p>}
+                  {guideIsPreview && <p className="setup-guide-preview">{t("account.guide.preview")}</p>}
                   <div className="setup-guide-auth">
-                    <span>推荐登录方式</span>
-                    <strong>{providerAuthLabel(guideProvider.recommendedAuthMethod)}</strong>
-                    <small>{guideProvider.credentialLabel}</small>
+                    <span>{t("account.guide.recommended_login")}</span>
+                    <strong>{providerAuthLabel(guideProvider.recommendedAuthMethod, t)}</strong>
+                    <small>{guideOnboarding?.credentialLabel}</small>
                   </div>
                   <ol>
                     {setupSteps.map((step) => <li key={step}>{step}</li>)}
@@ -871,25 +886,27 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                   {serverConfiguration && (
                     <div className="setup-guide-server-settings">
                       <dl className="setup-guide-endpoints">
-                        <div><dt>IMAP</dt><dd>{serverEndpointLabel(guideProvider.imap)}</dd></div>
-                        <div><dt>SMTP</dt><dd>{serverEndpointLabel(guideProvider.smtp)}</dd></div>
+                        <div><dt>IMAP</dt><dd>{serverEndpointLabel(guideProvider.imap, t)}</dd></div>
+                        <div><dt>SMTP</dt><dd>{serverEndpointLabel(guideProvider.smtp, t)}</dd></div>
                       </dl>
                       <button
                         className={`setup-guide-copy${serverConfigurationCopied ? " copied" : ""}`}
                         type="button"
                         onClick={() => void copyServerConfiguration()}
-                        aria-label={serverConfigurationCopied ? "服务器设置已复制" : `复制 ${guideProvider.name} 服务器设置`}
+                        aria-label={serverConfigurationCopied
+                          ? t("account.server.copied_aria")
+                          : t("account.server.copy_aria", { provider: guideProviderName })}
                       >
                         {serverConfigurationCopied ? <Check size={14} /> : <Copy size={14} />}
-                        <span>{serverConfigurationCopied ? "已复制服务器设置" : "复制服务器设置"}</span>
+                        <span>{serverConfigurationCopied ? t("account.server.copied") : t("account.server.copy")}</span>
                       </button>
-                      <small className="setup-guide-copy-note">仅复制 IMAP / SMTP 地址、端口和加密方式，不含邮箱地址或凭据。</small>
+                      <small className="setup-guide-copy-note">{t("account.server.copy_note")}</small>
                     </div>
                   )}
-                  {sourceNote && <p><strong>注意：</strong>{sourceNote}</p>}
+                  {sourceNote && <p><strong>{t("account.guide.note")}</strong>{sourceNote}</p>}
                   {guideProvider.helpUrl && (
                     <a href={guideProvider.helpUrl} target="_blank" rel="noreferrer">
-                      {guideProvider.helpLabel ?? "打开服务商官方设置"}
+                      {guideOnboarding?.helpLabel ?? t("account.guide.open_official")}
                       <ExternalLink size={13} />
                     </a>
                   )}
@@ -901,18 +918,22 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
           {activeOAuthProvider && !manualOpen && !showPasswordFallback && !accountAdded && (
             <section className="account-oauth-panel" aria-labelledby="oauth-login-title">
               <div>
-                <span className="eyebrow">推荐方式</span>
-                <strong id="oauth-login-title">使用 {activeOAuthProvider === "google" ? "Google" : "Microsoft"} 登录</strong>
-                <p>通过官方安全登录授权。Nami Mail 不会要求你输入该服务商的网页登录密码。</p>
+                <span className="eyebrow">{t("account.oauth.eyebrow")}</span>
+                <strong id="oauth-login-title">{t("account.oauth.title", { provider: activeOAuthProvider === "google" ? "Google" : "Microsoft" })}</strong>
+                <p>{t("account.oauth.description")}</p>
               </div>
-              {!oauthAvailable && <small className="oauth-config-note">此设备尚未配置 {activeOAuthProvider === "google" ? "Google" : "Microsoft"} 安全登录；请查看上方连接步骤。若这是组织部署的应用，请联系管理员完成配置。</small>}
+              {!oauthAvailable && <small className="oauth-config-note">{t("account.oauth.config_unavailable", { provider: activeOAuthProvider === "google" ? "Google" : "Microsoft" })}</small>}
               <button className="primary-button large oauth-button" type="button" onClick={() => void startOAuth()} disabled={busy || !oauthAvailable}>
                 {busyAction === "oauth" ? <LoaderCircle className="spin" size={18} /> : <ShieldCheck size={18} />}
-                {busyAction === "oauth" ? "等待浏览器授权…" : oauthAvailable ? `使用 ${activeOAuthProvider === "google" ? "Google" : "Microsoft"} 登录` : "安全登录尚未配置"}
+                {busyAction === "oauth"
+                  ? t("account.oauth.waiting_browser")
+                  : oauthAvailable
+                    ? t("account.oauth.sign_in", { provider: activeOAuthProvider === "google" ? "Google" : "Microsoft" })
+                    : t("account.oauth.unavailable")}
               </button>
               {canUsePassword && (
                 <button className="account-link-button" type="button" onClick={() => setShowPasswordFallback(true)} disabled={busy}>
-                  改用{passwordFallbackName}
+                  {t("account.oauth.use_password_fallback", { credential: passwordFallbackName })}
                 </button>
               )}
             </section>
@@ -922,11 +943,11 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
             <section className="account-oauth-wait" role="status" aria-live="polite">
               <LoaderCircle className="spin" size={18} />
               <div>
-                <strong>等待安全登录完成</strong>
-                <span>请在系统浏览器中完成授权；此窗口会自动继续。</span>
-                {oauthUrl && !desktopBridge() && <a href={oauthUrl} target="_blank" rel="noopener noreferrer">浏览器没有打开？在此继续登录 <ExternalLink size={12} /></a>}
+                <strong>{t("account.oauth.waiting_title")}</strong>
+                <span>{t("account.oauth.waiting_description")}</span>
+                {oauthUrl && !desktopBridge() && <a href={oauthUrl} target="_blank" rel="noopener noreferrer">{t("account.oauth.open_browser")} <ExternalLink size={12} /></a>}
               </div>
-              <button className="secondary-button" type="button" onClick={cancelOAuth}>取消</button>
+              <button className="secondary-button" type="button" onClick={cancelOAuth}>{t("common.cancel")}</button>
             </section>
           )}
 
@@ -934,17 +955,17 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
             <>
               {activeOAuthProvider && !manualOpen && (
                 <button className="account-link-button account-link-back" type="button" onClick={() => setShowPasswordFallback(false)} disabled={busy}>
-                  返回使用 {activeOAuthProvider === "google" ? "Google" : "Microsoft"} 登录
+                  {t("account.oauth.back_to_sign_in", { provider: activeOAuthProvider === "google" ? "Google" : "Microsoft" })}
                 </button>
               )}
               <label htmlFor="account-password">
-                <span className="credential-label">{credentialName}<em>请勿填写一次性验证码</em></span>
+                <span className="credential-label">{credentialName}<em>{t("account.credential.no_one_time_code")}</em></span>
                 <input
                   ref={passwordRef}
                   id="account-password"
                   type="password"
                   autoComplete="new-password"
-                  placeholder={`粘贴${credentialName}`}
+                  placeholder={t("account.credential.paste", { credential: credentialName })}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   disabled={busy}
@@ -953,25 +974,25 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                   aria-describedby={passwordInvalid ? "account-form-status" : "account-credential-help"}
                 />
               </label>
-              <small id="account-credential-help" className="account-field-help">{activeDiscovery?.credentialHint ?? "请使用服务商允许第三方客户端使用的专用凭据。"}</small>
+              <small id="account-credential-help" className="account-field-help">{activeOnboarding?.credentialHint ?? t("account.credential.help")}</small>
 
               <button className="account-link-button manual-config-toggle" type="button" onClick={openManualConfig} disabled={busy} aria-expanded={manualOpen}>
-                {manualOpen ? "收起手动服务器设置" : "手动设置 IMAP / SMTP 服务器"}
+                {manualOpen ? t("account.manual.collapse") : t("account.manual.open")}
               </button>
 
               {manualOpen && (
                 <fieldset className="manual-server-config" disabled={busy}>
-                  <legend>手动服务器设置</legend>
-                  <p>仅支持 TLS/SSL 或 STARTTLS。连接前会同时验证收件和发件服务器。</p>
+                  <legend>{t("account.manual.legend")}</legend>
+                  <p>{t("account.manual.description")}</p>
                   {(["imap", "smtp"] as const).map((server) => {
                     const config = manualConfig[server];
                     const label = server.toUpperCase();
                     return (
                       <section key={server} className="manual-server-group" aria-labelledby={`manual-${server}-title`}>
-                        <div className="manual-server-title"><strong id={`manual-${server}-title`}>{label}</strong><small>{server === "imap" ? "收件" : "发件"}</small></div>
+                        <div className="manual-server-title"><strong id={`manual-${server}-title`}>{label}</strong><small>{server === "imap" ? t("account.manual.incoming") : t("account.manual.outgoing")}</small></div>
                         <div className="manual-server-grid">
                           <label className="manual-host-field" htmlFor={`manual-${server}-host`}>
-                            <span>服务器</span>
+                            <span>{t("account.manual.server")}</span>
                             <input
                               ref={server === "imap" ? manualRef : undefined}
                               id={`manual-${server}-host`}
@@ -986,7 +1007,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                             />
                           </label>
                           <label htmlFor={`manual-${server}-port`}>
-                            <span>端口</span>
+                            <span>{t("account.manual.port")}</span>
                             <input
                               id={`manual-${server}-port`}
                               type="number"
@@ -999,25 +1020,25 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                             />
                           </label>
                           <label htmlFor={`manual-${server}-transport`}>
-                            <span>加密</span>
+                            <span>{t("account.manual.encryption")}</span>
                             <ThemedSelect id={`manual-${server}-transport`} value={config.transport} onValueChange={(value) => updateManualServer(server, "transport", value)} aria-invalid={manualInvalid}>
                               <option value="tls">TLS/SSL</option>
                               <option value="starttls">STARTTLS</option>
                             </ThemedSelect>
                           </label>
                           <label className="manual-username-field" htmlFor={`manual-${server}-username`}>
-                            <span>用户名 <em>可选</em></span>
+                            <span>{t("account.manual.username")} <em>{t("account.manual.optional")}</em></span>
                             <input
                               id={`manual-${server}-username`}
                               type="text"
                               autoComplete="username"
                               value={config.username}
                               onChange={(event) => updateManualServer(server, "username", event.target.value)}
-                              placeholder={normalizedEmail || "通常为邮箱地址"}
+                              placeholder={normalizedEmail || t("account.manual.username_placeholder")}
                             />
                           </label>
                         </div>
-                        <small className="manual-transport-note">当前使用 {serverModeLabel(config.transport)}；不支持明文连接。</small>
+                        <small className="manual-transport-note">{t("account.manual.transport_note", { transport: serverModeLabel(config.transport) })}</small>
                       </section>
                     );
                   })}
@@ -1026,12 +1047,16 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
 
               <button className="primary-button large" type="submit" disabled={busy || !password}>
                 {busyAction === "password" || busyAction === "manual" ? <LoaderCircle className="spin" size={18} /> : <Plus size={18} />}
-                {busyAction === "password" || busyAction === "manual" ? "正在验证收件和发件服务器…" : manualOpen ? "验证设置并添加" : "验证并添加"}
+                {busyAction === "password" || busyAction === "manual"
+                  ? t("account.manual.validating")
+                  : manualOpen
+                    ? t("account.manual.validate_and_add")
+                    : t("account.manual.verify_and_add")}
               </button>
             </>
           )}
 
-          {accountAdded && <button className="primary-button large" type="button" onClick={onClose}>完成</button>}
+          {accountAdded && <button className="primary-button large" type="button" onClick={onClose}>{t("account.done")}</button>}
 
           {status.kind !== "idle" && (
             <div
@@ -1047,7 +1072,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
             </div>
           )}
         </form>
-        <p className="privacy-note">仅使用 TLS 加密连接 · 凭据加密保存在此设备 · OAuth 授权以服务商验证结果为准</p>
+        <p className="privacy-note">{t("account.privacy_note")}</p>
       </section>
     </div>
   );

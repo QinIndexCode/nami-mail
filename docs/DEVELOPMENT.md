@@ -1,5 +1,7 @@
 # 开发说明
 
+[简体中文](DEVELOPMENT.md) | [English](DEVELOPMENT.en.md)
+
 本文面向在本地构建、测试或修改 Nami Mail 的贡献者。项目主要面向 Windows 桌面版，同时保留本机 Web 开发流程。
 
 ## 前置条件

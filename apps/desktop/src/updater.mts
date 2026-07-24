@@ -22,12 +22,12 @@ import {
   updateRetryDelay,
 } from "./update-policy.mjs";
 import {
-  describeUpdateInstallFailure,
   removeUpdateVersionCache,
   UpdateInstallResultStore,
   updateInstallResultPath,
+  type UpdateInstallFailure,
 } from "./update-install-result.mjs";
-import { createUpdateSnapshot, describeUpdateError, type DesktopUpdateSnapshot } from "./update-status.mjs";
+import { classifyUpdateError, createUpdateSnapshot, type DesktopUpdateSnapshot } from "./update-status.mjs";
 import { loadEd25519UpdateTrust, verifyEd25519UpdateManifest, type Ed25519UpdateTrust } from "./update-trust.mjs";
 import {
   launchZipUpdateInstaller,
@@ -55,6 +55,7 @@ type DesktopUpdaterOptions = {
   fetchImpl?: typeof globalThis.fetch;
   readTrustedSigner?: (executablePath: string) => Promise<TrustedWindowsSigner | undefined>;
   launchInstaller?: (plan: ZipUpdateInstallerPlan) => Promise<boolean>;
+  removeCachedVersion?: typeof removeUpdateVersionCache;
   broadcast: (snapshot: DesktopUpdateSnapshot) => void;
   prepareForInstall: () => Promise<boolean>;
   recoverAfterInstallFailure: () => void;
@@ -64,17 +65,6 @@ type DesktopUpdaterOptions = {
 const defaultAutomaticCheckDelayMs = 3_000;
 const updateCacheDirectoryName = "updates";
 const updatePreferencesFileName = "update-preferences.json";
-
-function targetVersionLabel(version: string | null): string {
-  return version ? `v${version}` : "新版本";
-}
-
-function formattedReminder(value: string | null): string {
-  if (!value) return "稍后";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "稍后";
-  return date.toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit", month: "numeric", day: "numeric" });
-}
 
 export class DesktopUpdater {
   private snapshot: DesktopUpdateSnapshot;
@@ -95,7 +85,7 @@ export class DesktopUpdater {
     this.snapshot = createUpdateSnapshot(
       options.currentVersion,
       "unavailable",
-      "正在初始化更新服务。",
+      "initializing",
     );
     this.cacheDirectory = path.join(options.userDataPath, updateCacheDirectoryName);
     this.preferences = new UpdatePreferencesStore(path.join(options.userDataPath, updatePreferencesFileName));
@@ -103,7 +93,7 @@ export class DesktopUpdater {
   }
 
   getSnapshot(): DesktopUpdateSnapshot {
-    return { ...this.snapshot };
+    return { ...this.snapshot, args: { ...this.snapshot.args } };
   }
 
   private now(): number {
@@ -118,16 +108,45 @@ export class DesktopUpdater {
 
   private transition(
     phase: DesktopUpdateSnapshot["phase"],
-    message: string,
-    patch: Partial<Omit<DesktopUpdateSnapshot, "currentVersion" | "phase" | "message">> = {},
+    reason: DesktopUpdateSnapshot["reason"],
+    patch: Partial<Omit<DesktopUpdateSnapshot, "schemaVersion" | "currentVersion" | "phase" | "reason">> = {},
   ): DesktopUpdateSnapshot {
-    return this.publish(createUpdateSnapshot(this.options.currentVersion, phase, message, {
+    return this.publish(createUpdateSnapshot(this.options.currentVersion, phase, reason, {
       targetVersion: this.snapshot.targetVersion,
       checkedAt: this.snapshot.checkedAt,
       suppression: this.snapshot.suppression,
       remindAt: this.snapshot.remindAt,
       ...patch,
     }));
+  }
+
+  private clearCachedVersion(version: string): Promise<boolean> {
+    return (this.options.removeCachedVersion ?? removeUpdateVersionCache)(this.cacheDirectory, version);
+  }
+
+  private async publishInstallResult(installFailure: UpdateInstallFailure): Promise<DesktopUpdateSnapshot> {
+    const cacheCleared = await this.clearCachedVersion(installFailure.version);
+    if (cacheCleared) await this.installResults.clearFailure();
+    if (installFailure.stage === "cleanup" && cacheCleared) {
+      return this.transition("up-to-date", "installResult", {
+        targetVersion: this.options.currentVersion,
+        checkedAt: installFailure.occurredAt,
+        percent: null,
+        suppression: "none",
+        remindAt: null,
+        args: { installStage: "cleanup", cleanupComplete: true },
+      });
+    }
+    return this.transition("error", "installResult", {
+      targetVersion: installFailure.version,
+      checkedAt: installFailure.occurredAt,
+      percent: null,
+      suppression: "none",
+      remindAt: null,
+      args: installFailure.stage === "cleanup"
+        ? { installStage: "cleanup", cleanupComplete: false }
+        : { installStage: installFailure.stage },
+    });
   }
 
   private clearScheduledCheck(): void {
@@ -169,18 +188,18 @@ export class DesktopUpdater {
     this.started = true;
 
     if (this.options.disabled) {
-      return this.transition("unavailable", "自动更新在当前测试会话中已停用。", { percent: null });
+      return this.transition("unavailable", "disabled", { percent: null });
     }
     if (!this.options.isPackaged) {
-      return this.transition("unavailable", "自动更新仅在已安装的正式发行版中启用。", { percent: null });
+      return this.transition("unavailable", "unpackaged", { percent: null });
     }
     if ((this.options.platform ?? process.platform) !== "win32") {
-      return this.transition("unavailable", "此发行版尚未提供当前系统可用的自动更新包。", { percent: null });
+      return this.transition("unavailable", "platformUnsupported", { percent: null });
     }
     try {
       const source = await loadGitHubUpdateSource(this.options.updateConfigPath);
       if (!source) {
-        return this.transition("unavailable", "此安装包尚未配置自动更新通道。", { percent: null });
+        return this.transition("unavailable", "sourceUnconfigured", { percent: null });
       }
       const trustedSigner = await (this.options.readTrustedSigner ?? readTrustedWindowsSigner)(this.options.executablePath);
       if (trustedSigner) {
@@ -190,7 +209,7 @@ export class DesktopUpdater {
         if (!ed25519Trust) {
           return this.transition(
             "unavailable",
-            "此安装包没有可验证的发布签名，已停用 ZIP 自动更新以保护本机。",
+            "trustUnavailable",
             { percent: null },
           );
         }
@@ -204,47 +223,21 @@ export class DesktopUpdater {
         // extracted installer, or the ZIP behind. Clear only the validated
         // version directory and keep the recovery record when Windows still
         // has a file locked, so a later startup can retry safely.
-        const cacheCleared = await removeUpdateVersionCache(this.cacheDirectory, installFailure.version);
-        if (cacheCleared) await this.installResults.clearFailure();
-        if (installFailure.stage === "cleanup" && cacheCleared) {
-          this.transition("up-to-date", `v${installFailure.version} 已安装，遗留的临时更新文件已在启动时清理。`, {
-            targetVersion: this.options.currentVersion,
-            checkedAt: installFailure.occurredAt,
-            percent: null,
-            suppression: "none",
-            remindAt: null,
-          });
-        } else {
-          const message = cacheCleared
-            ? describeUpdateInstallFailure(installFailure)
-            : `${describeUpdateInstallFailure(installFailure)} 临时更新文件将在下次启动时继续尝试清理。`;
-          this.transition("error", message, {
-            targetVersion: installFailure.version,
-            checkedAt: installFailure.occurredAt,
-            percent: null,
-            suppression: "none",
-            remindAt: null,
-          });
-        }
+        await this.publishInstallResult(installFailure);
       } else {
-        this.transition("idle", "将在启动后检查已发布的正式更新。", { percent: null });
+        this.transition("idle", "scheduled", { percent: null });
       }
       this.scheduleCheck(Math.max(1_000, this.options.automaticCheckDelayMs ?? defaultAutomaticCheckDelayMs));
       return this.getSnapshot();
     } catch (error) {
-      return this.transition("unavailable", describeUpdateError(error), { percent: null });
+      return this.transition("unavailable", classifyUpdateError(error), { percent: null });
     }
   }
 
   private publishAvailableUpdate(update: GitHubZipUpdate, cached: boolean): DesktopUpdateSnapshot {
     const policy = resolveUpdatePromptPolicy(this.preferences.get(), update.version, this.now());
     if (cached) {
-      const message = policy.suppression === "skipped"
-        ? `已跳过 ${targetVersionLabel(update.version)}，已下载的临时更新包已清理。`
-        : policy.suppression === "snoozed"
-          ? `${targetVersionLabel(update.version)} 已下载，将在 ${formattedReminder(policy.remindAt)} 后再次提醒。`
-          : `${targetVersionLabel(update.version)} 已下载，可在方便时重启并更新。`;
-      return this.transition("ready", message, {
+      return this.transition("ready", "downloadReady", {
         targetVersion: update.version,
         checkedAt: new Date(this.now()).toISOString(),
         percent: 100,
@@ -252,12 +245,7 @@ export class DesktopUpdater {
         remindAt: policy.remindAt,
       });
     }
-    const message = policy.suppression === "skipped"
-      ? `已跳过 ${targetVersionLabel(update.version)}；发现更高版本时仍会提醒。`
-      : policy.suppression === "snoozed"
-        ? `${targetVersionLabel(update.version)} 将在 ${formattedReminder(policy.remindAt)} 后再次提醒。`
-        : `发现 ${targetVersionLabel(update.version)}。请选择下载、跳过此版本或稍后提醒。`;
-    return this.transition("available", message, {
+    return this.transition("available", "releaseAvailable", {
       targetVersion: update.version,
       checkedAt: new Date(this.now()).toISOString(),
       percent: null,
@@ -274,15 +262,29 @@ export class DesktopUpdater {
 
     this.checkPromise = (async () => {
       try {
-        this.transition("checking", "正在检查可用更新。", {
+        const installFailure = await this.installResults.readFailure();
+        if (installFailure?.stage === "cleanup") {
+          const cleanupResult = await this.publishInstallResult(installFailure);
+          this.schedulePeriodicCheck();
+          return cleanupResult;
+        }
+        this.transition("checking", "checking", {
           percent: null,
           suppression: "none",
           remindAt: null,
         });
         const source = await loadGitHubUpdateSource(this.options.updateConfigPath);
-        if (!source) throw new Error("GitHub update configuration is unavailable.");
+        if (!source) {
+          this.transition("error", "sourceUnconfigured", { percent: null, suppression: "none", remindAt: null });
+          this.scheduleRetry();
+          return this.getSnapshot();
+        }
         const updateTrust = this.updateTrust;
-        if (!updateTrust) throw new Error("No trusted release identity is available.");
+        if (!updateTrust) {
+          this.transition("error", "trustUnavailable", { percent: null, suppression: "none", remindAt: null });
+          this.scheduleRetry();
+          return this.getSnapshot();
+        }
         const update = await discoverGitHubZipUpdate({
           source,
           currentVersion: this.options.currentVersion,
@@ -293,7 +295,7 @@ export class DesktopUpdater {
         });
         if (!update) {
           this.update = undefined;
-          this.transition("up-to-date", "当前已经是最新版本。", {
+          this.transition("up-to-date", "upToDate", {
             targetVersion: this.options.currentVersion,
             checkedAt: new Date(this.now()).toISOString(),
             percent: null,
@@ -309,7 +311,7 @@ export class DesktopUpdater {
         }
         this.schedulePeriodicCheck();
       } catch (error) {
-        this.transition("error", describeUpdateError(error), { percent: null, suppression: "none", remindAt: null });
+        this.transition("error", classifyUpdateError(error), { percent: null, suppression: "none", remindAt: null });
         this.scheduleRetry();
       } finally {
         this.checkPromise = undefined;
@@ -326,7 +328,7 @@ export class DesktopUpdater {
     const update = this.update;
     this.downloadPromise = (async () => {
       try {
-        this.transition("downloading", `正在下载 ${targetVersionLabel(update.version)} · 0%`, {
+        this.transition("downloading", "downloading", {
           targetVersion: update.version,
           percent: 0,
           suppression: "none",
@@ -337,7 +339,7 @@ export class DesktopUpdater {
           update,
           fetchImpl: this.options.fetchImpl,
           onProgress: (progress) => {
-            this.transition("downloading", `正在下载 ${targetVersionLabel(update.version)} · ${progress.percent}%`, {
+            this.transition("downloading", "downloading", {
               targetVersion: update.version,
               percent: progress.percent,
             });
@@ -345,7 +347,7 @@ export class DesktopUpdater {
         });
         this.publishAvailableUpdate(update, true);
       } catch (error) {
-        this.transition("error", describeUpdateError(error), { targetVersion: update.version, percent: null });
+        this.transition("error", classifyUpdateError(error), { targetVersion: update.version, percent: null });
         this.scheduleRetry();
       } finally {
         this.downloadPromise = undefined;
@@ -373,7 +375,7 @@ export class DesktopUpdater {
       this.publishAvailableUpdate(this.update, cached);
       this.schedulePeriodicCheck();
     } catch (error) {
-      this.transition("error", describeUpdateError(error), { percent: null });
+      this.transition("error", classifyUpdateError(error), { percent: null });
     }
     return this.getSnapshot();
   }
@@ -395,7 +397,7 @@ export class DesktopUpdater {
     if (!updateTrust) return { accepted: false, snapshot: this.getSnapshot() };
     const archivePath = path.join(this.cacheDirectory, update.version, update.archiveName);
     if (!await hasVerifiedCachedUpdate(this.cacheDirectory, update)) {
-      const snapshot = this.transition("error", "已下载的更新包未通过完整性复核，请重新下载。", { percent: null });
+      const snapshot = this.transition("error", "archiveIntegrityInvalid", { percent: null });
       return { accepted: false, snapshot };
     }
     try {
@@ -420,18 +422,18 @@ export class DesktopUpdater {
       if (result === "not-prepared") {
         const snapshot = this.transition(
           "error",
-          "邮件数据尚未安全关闭，因此没有启动更新。请等待同步结束后重试。",
+          "mailDataBusy",
           { percent: null },
         );
         return { accepted: false, snapshot };
       }
       if (result === "installer-not-started") {
-        const snapshot = this.transition("error", "更新安装程序无法启动，应用仍可继续使用。请重新下载后再试。", { percent: null });
+        const snapshot = this.transition("error", "installerNotStarted", { percent: null });
         return { accepted: false, snapshot };
       }
       return { accepted: true, snapshot: this.getSnapshot() };
     } catch (error) {
-      const snapshot = this.transition("error", describeUpdateError(error), { percent: null });
+      const snapshot = this.transition("error", classifyUpdateError(error), { percent: null });
       return { accepted: false, snapshot };
     }
   }

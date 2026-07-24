@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { translate } from "./i18n";
 import type { ProviderInfo } from "./types";
 import {
   CUSTOM_IMAP_PROVIDER_ID,
@@ -9,6 +10,8 @@ import {
   quickProviderCatalog,
   serverEndpointLabel,
 } from "./providerOnboarding";
+
+const zh = (key: string, values?: Record<string, string | number>) => translate("zh-CN", key, values);
 
 function provider(id: string, name: string, priority: "P0" | "P1" | "P2", domain = `${id}.example.com`): ProviderInfo {
   return {
@@ -53,8 +56,8 @@ describe("provider onboarding catalog", () => {
   });
 
   it("labels authentication requirements without exposing raw protocol terms", () => {
-    expect(providerAuthLabel("oauth2")).toBe("安全登录（OAuth2）");
-    expect(providerAuthLabel("client-authorization-code")).toBe("客户端授权码");
+    expect(providerAuthLabel("oauth2")).toBe(zh("provider.auth.oauth2"));
+    expect(providerAuthLabel("client-authorization-code")).toBe(zh("provider.auth.clientAuthorizationCode"));
     expect(providerMonogram(provider("gmail", "Gmail", "P0", "gmail.com"))).toBe("GM");
     expect(providerMonogram(provider("netease-163", "163 Mail", "P0", "163.com"))).toBe("163");
     expect(CUSTOM_IMAP_PROVIDER_ID).toBe("__custom_imap__");
@@ -67,15 +70,15 @@ describe("provider onboarding catalog", () => {
     expect(serverEndpointLabel(imap)).toBe("imap.gmail.com:993 · TLS/SSL");
     expect(serverEndpointLabel(smtp)).toBe("smtp.gmail.com:587 · STARTTLS");
     expect(providerServerConfiguration("Gmail", imap, smtp)).toBe([
-      "Gmail 邮件服务器设置",
-      "IMAP（收件）",
-      "服务器：imap.gmail.com",
-      "端口：993",
-      "加密：TLS/SSL",
-      "SMTP（发件）",
-      "服务器：smtp.gmail.com",
-      "端口：587",
-      "加密：STARTTLS",
+      zh("provider.server.title", { provider: "Gmail" }),
+      zh("provider.server.imap"),
+      zh("provider.server.host", { host: "imap.gmail.com" }),
+      zh("provider.server.port", { port: 993 }),
+      zh("provider.server.encryption", { transport: "TLS/SSL" }),
+      zh("provider.server.smtp"),
+      zh("provider.server.host", { host: "smtp.gmail.com" }),
+      zh("provider.server.port", { port: 587 }),
+      zh("provider.server.encryption", { transport: "STARTTLS" }),
     ].join("\n"));
   });
 });
