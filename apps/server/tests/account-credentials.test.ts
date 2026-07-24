@@ -29,6 +29,7 @@ import type { AccountRecord } from "../src/types.js";
 
 const temporaryDirectories: string[] = [];
 const databases: DatabaseHandle[] = [];
+const migrationTestTimeoutMs = 30_000;
 
 function testDatabase(): DatabaseHandle {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nami-account-credentials-"));
@@ -123,6 +124,7 @@ afterEach(() => {
 });
 
 describe("account-bound credential storage", () => {
+  // VACUUM can exceed Vitest's default timeout on constrained Windows runners.
   it("migrates legacy password and OAuth secrets once, then rejects a legacy downgrade", () => {
     const db = testDatabase();
     const masterKey = randomBytes(32);
@@ -152,7 +154,7 @@ describe("account-bound credential storage", () => {
     db.prepare("UPDATE accounts SET encrypted_password = ?, credential_crypto_version = 0 WHERE id = ?")
       .run(encryptSecret("password-secret", masterKey), passwordAccount.id);
     expect(() => migrateAccountCredentialStorage(db, masterKey)).toThrow(AccountCredentialIntegrityError);
-  });
+  }, migrationTestTimeoutMs);
 
   it("rewraps only known legacy iCloud and Yandex username defaults", () => {
     const db = testDatabase();
