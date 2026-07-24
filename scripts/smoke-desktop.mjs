@@ -257,7 +257,7 @@ try {
   assert.equal(renderer.desktopSettingsUi?.displayTextUnselectable, true, "Application display text must not be selectable.");
   assert.equal(renderer.desktopSettingsUi?.editableTextSelectable, true, "Editable controls must keep normal text selection.");
   assert.equal(renderer.desktopSettingsUi?.updateStatusPresent, true, "Desktop settings must render the software update status.");
-  assert.match(renderer.desktopSettingsUi?.updateStatusText ?? "", /软件更新.*v0\.1\.0.*测试会话中已停用/s, "Desktop settings must explain the current update state.");
+  assert.match(renderer.desktopSettingsUi?.updateStatusText ?? "", new RegExp(`软件更新.*v${packageManifest.version.replace(/\./g, "\\.")}.*测试会话中已停用`, "s"), "Desktop settings must explain the current update state.");
   assert.equal(renderer.desktopSettingsUi?.updateActionCount, 0, "A disabled update channel must not expose a misleading check button.");
   assert.equal(renderer.desktopSettingsSync?.error, undefined, renderer.desktopSettingsSync?.error ?? "Desktop settings synchronization failed.");
   assert.equal(renderer.desktopSettingsSync?.initialCloseBehavior, "ask", "A fresh settings dialog must show the ask behavior.");
