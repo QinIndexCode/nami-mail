@@ -1,7 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { I18nProvider, translate } from "./i18n";
 import SendingStatusModal, { submissionNoticeMessage } from "./SendingStatusModal";
 import type { Account, OutboundSubmission } from "./types";
+
+const zh = (key: string, values?: Record<string, string | number>) => translate("zh-CN", key, values);
 
 const account: Account = {
   id: "account-1",
@@ -33,16 +36,18 @@ const submission: OutboundSubmission = {
 
 function renderStatusModal(): string {
   return renderToStaticMarkup(
-    <SendingStatusModal
-      accounts={[account]}
-      submissions={[submission]}
-      loading={false}
-      loadError={null}
-      onClose={() => undefined}
-      onRefresh={async () => undefined}
-      onSyncAccount={async () => undefined}
-      onCreateNewMessage={() => undefined}
-    />,
+    <I18nProvider>
+      <SendingStatusModal
+        accounts={[account]}
+        submissions={[submission]}
+        loading={false}
+        loadError={null}
+        onClose={() => undefined}
+        onRefresh={async () => undefined}
+        onSyncAccount={async () => undefined}
+        onCreateNewMessage={() => undefined}
+      />
+    </I18nProvider>,
   );
 }
 
@@ -52,7 +57,7 @@ describe("sending status modal presentation", () => {
 
     expect(markup).toContain('role="tooltip"');
     expect(markup).toContain("aria-describedby");
-    expect(markup).toContain("新建重试草稿");
+    expect(markup).toContain(zh("sending.modal.createRetryDraft"));
     expect(markup).not.toContain("确认未送达并新建");
     expect(markup).not.toContain(" title=");
   });
@@ -63,7 +68,7 @@ describe("sending status modal presentation", () => {
     expect(markup).toContain('role="list"');
     expect(markup).toContain('role="listitem"');
     expect(markup).toContain('aria-expanded="false"');
-    expect(markup).toContain("查看邮件详情");
+    expect(markup).toContain(zh("sending.modal.expandDetails"));
     expect(markup).toContain('role="region"');
     expect(markup).toContain("one@example.com、two@example.com、three@example.com、four@example.com");
     expect(markup).toContain("&lt;status-check-1234567890@example.com&gt;");
@@ -80,23 +85,25 @@ describe("sending status modal presentation", () => {
       errorMessage: protocolDetail,
     });
 
-    expect(mapped).toContain("邮件状态仍待核对");
+    expect(mapped).toContain(zh("sending.notice.unknownDelivery"));
     expect(mapped).not.toContain("socket hang up");
 
     const markup = renderToStaticMarkup(
-      <SendingStatusModal
-        accounts={[account]}
-        submissions={[{ ...submission, errorCode: null, errorMessage: protocolDetail }]}
-        loading={false}
-        loadError={null}
-        onClose={() => undefined}
-        onRefresh={async () => undefined}
-        onSyncAccount={async () => undefined}
-        onCreateNewMessage={() => undefined}
-      />,
+      <I18nProvider>
+        <SendingStatusModal
+          accounts={[account]}
+          submissions={[{ ...submission, errorCode: null, errorMessage: protocolDetail }]}
+          loading={false}
+          loadError={null}
+          onClose={() => undefined}
+          onRefresh={async () => undefined}
+          onSyncAccount={async () => undefined}
+          onCreateNewMessage={() => undefined}
+        />
+      </I18nProvider>,
     );
 
-    expect(markup).toContain("邮件状态仍待核对");
+    expect(markup).toContain(zh("sending.notice.unknownDelivery"));
     expect(markup).not.toContain("socket hang up");
   });
 });

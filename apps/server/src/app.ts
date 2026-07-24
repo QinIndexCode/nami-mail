@@ -22,6 +22,11 @@ import {
   messagePayloadForRow,
   messagePayloadMatchesQuery,
   migrateMessageStorage,
+  hasPendingMove,
+  hasUnverifiedMoveLocation,
+  pendingMoveDestination,
+  MOVE_LOCATION_UNVERIFIED_ERROR,
+  PENDING_MOVE_RECONCILIATION_ERROR,
   type MessageStorageRow,
 } from "./message-storage.js";
 import {
@@ -58,6 +63,9 @@ import {
 } from "./outbox.js";
 import { detectProvider, loginUsername, providerPresets, resolveProvider, type DetectedProvider, type ProviderPreset } from "./providers.js";
 import { OAuthError, isSupportedOAuthProvider } from "./oauth.js";
+import { normalizeLocale, oauthCallbackCopy, supportedLocale } from "./localization.js";
+import { TranslationConfigurationStore, type TranslationConfigurationPatch } from "./translation-configuration.js";
+import { TranslationService, TranslationServiceError, translationErrorStatus } from "./translation.js";
 import {
   moveMessage,
   scheduleSentSubmissionVerification,
@@ -165,8 +173,27 @@ const messageFlagsPatchSchema = z.object({
   { message: "至少需要更新已读或标星状态。" },
 );
 
+const interfaceLocaleSchema = z.string().trim().max(32)
+  .refine((value) => Boolean(supportedLocale(value)), { message: "Unsupported interface language." })
+  .transform((value) => supportedLocale(value)!);
+
+const messageTranslationSchema = z.object({
+  targetLocale: interfaceLocaleSchema,
+}).strict();
+
+const translationConfigurationPatchSchema = z.object({
+  endpoint: z.string().trim().max(2_048).optional(),
+  apiKey: z.string().max(2_048).optional(),
+  clearApiKey: z.boolean().optional(),
+  timeoutMs: z.number().int().min(1_000).max(60_000).optional(),
+}).strict().refine(
+  (patch) => Object.keys(patch).length > 0,
+  { message: "At least one translation configuration value is required." },
+);
+
 const settingsPatchSchema = z.object({
   theme: z.enum(["system", "light", "dark"]).optional(),
+  locale: interfaceLocaleSchema.optional(),
   backgroundPreset: z.enum(BACKGROUND_PRESETS).optional(),
   backgroundIntensity: z.number().int().min(0).max(80).optional(),
   notificationsEnabled: z.boolean().optional(),
@@ -199,13 +226,24 @@ class BackgroundUploadError extends Error {
 function messageRow(row: MessageStorageRow, masterKey: Buffer) {
   const flags = JSON.parse(String(row.flags_json ?? "[]")) as string[];
   const payload = messagePayloadForRow(row, masterKey);
+  const pendingDestination = pendingMoveDestination(row);
+  const movePending = hasPendingMove(row);
+  const moveLocationUnverified = hasUnverifiedMoveLocation(row);
+  const pendingArchive = pendingDestination !== null
+    && (row.pending_move_special_use === "\\Archive"
+      || (row.pending_move_special_use === "\\All" && row.all_mail_archived === 1));
   return {
     id: row.id,
     accountId: row.account_id,
     accountEmail: row.account_email,
     providerName: row.provider_name,
-    mailbox: row.mailbox,
+    mailbox: pendingDestination ?? row.mailbox,
     uid: row.uid,
+    movePending,
+    moveLocationUnverified,
+    // This is a local, derived membership state for \All; the provider's
+    // identifier and its opaque lookup value never leave the service.
+    archived: row.all_mail_archived === 1 || pendingArchive,
     subject: payload.subject,
     from: { name: payload.fromName, address: payload.fromAddress },
     to: payload.to,
@@ -373,10 +411,22 @@ function oauthCallbackOrigin(
   return `http://127.0.0.1:${port}`;
 }
 
-function oauthCallbackDocument(success: boolean): string {
-  const title = success ? "Nami Mail 授权完成" : "Nami Mail 授权未完成";
-  const message = success ? "授权已完成，可以关闭此窗口并返回 Nami Mail。" : "授权未完成，请返回 Nami Mail 查看原因并重试。";
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head><body><main><h1>${title}</h1><p>${message}</p></main></body></html>`;
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>'"]/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "'": "&#39;",
+    '"': "&quot;",
+  })[character] ?? character);
+}
+
+function oauthCallbackDocument(locale: unknown, success: boolean): string {
+  const normalizedLocale = normalizeLocale(locale);
+  const copy = oauthCallbackCopy(normalizedLocale, success);
+  const title = escapeHtml(copy.title);
+  const message = escapeHtml(copy.message);
+  return `<!doctype html><html lang="${normalizedLocale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head><body><main><h1>${title}</h1><p>${message}</p></main></body></html>`;
 }
 
 function startOAuthInitialSync(app: FastifyInstance, context: RuntimeContext, accountId: string): void {
@@ -395,13 +445,15 @@ function moveActionErrorMessage(error: unknown): string {
     "邮件服务器未确认移动操作，请稍后重试。",
     "这个邮箱没有提供可用的归档文件夹。",
     "这个邮箱没有提供可用的废纸篓文件夹。",
+    PENDING_MOVE_RECONCILIATION_ERROR,
+    MOVE_LOCATION_UNVERIFIED_ERROR,
   ]);
   return knownLocalErrors.has(message) ? message : friendlyMailError(error);
 }
 
 function messageFlagActionErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
-  const knownLocalErrors = new Set(["Message not found.", "Account not found."]);
+  const knownLocalErrors = new Set(["Message not found.", "Account not found.", PENDING_MOVE_RECONCILIATION_ERROR, MOVE_LOCATION_UNVERIFIED_ERROR]);
   return knownLocalErrors.has(message) ? message : friendlyMailError(error);
 }
 
@@ -435,6 +487,8 @@ function attachmentActionErrorMessage(error: unknown): string {
     "Attachment is no longer available in this mailbox. Sync this message again.",
     "Account not found.",
     "Attachment download did not return a readable stream.",
+    PENDING_MOVE_RECONCILIATION_ERROR,
+    MOVE_LOCATION_UNVERIFIED_ERROR,
   ]);
   return knownLocalErrors.has(message) ? message : friendlyMailError(error);
 }
@@ -507,6 +561,7 @@ function publicSettings(context: RuntimeContext, settings: AppSettings) {
   const hasCustomBackground = Boolean(customPath && fs.existsSync(customPath));
   return {
     theme: settings.theme,
+    locale: settings.locale,
     backgroundPreset: settings.backgroundPreset === "custom" && !hasCustomBackground ? "coast" : settings.backgroundPreset,
     backgroundIntensity: settings.backgroundIntensity,
     notificationsEnabled: settings.notificationsEnabled,
@@ -570,13 +625,46 @@ async function normalizeBackgroundImage(bytes: Buffer, contentType: BackgroundIn
   throw new BackgroundUploadError("这张图片优化后仍超过 8 MB，请选择分辨率更低的图片。", 413);
 }
 
+const effectiveMailboxExpression = "CASE WHEN m.pending_move_state = 'intent' THEN m.mailbox ELSE COALESCE(NULLIF(m.pending_move_destination, ''), m.mailbox) END";
+
 const inboxMessageFilter = `(
-  UPPER(m.mailbox) = 'INBOX'
+  UPPER(${effectiveMailboxExpression}) = 'INBOX'
   OR EXISTS (
     SELECT 1 FROM folders f
     WHERE f.account_id = m.account_id
-      AND f.path = m.mailbox
+      AND f.path = ${effectiveMailboxExpression}
       AND f.special_use = '\\Inbox'
+  )
+)`;
+
+const archivedMessageFilter = `(
+  (
+    m.pending_move_destination IS NOT NULL
+    AND COALESCE(m.pending_move_state, 'confirmed') = 'confirmed'
+    AND (
+      m.pending_move_special_use = '\\Archive'
+      OR (m.pending_move_special_use = '\\All' AND m.all_mail_archived = 1)
+    )
+  )
+  OR EXISTS (
+    SELECT 1 FROM folders f
+    WHERE f.account_id = m.account_id
+      AND f.path = ${effectiveMailboxExpression}
+      AND f.special_use = '\\Archive'
+  )
+  OR (
+    m.all_mail_archived = 1
+    AND EXISTS (
+      SELECT 1 FROM folders f
+      WHERE f.account_id = m.account_id
+        AND f.path = ${effectiveMailboxExpression}
+        AND f.special_use = '\\All'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM folders archive_folder
+      WHERE archive_folder.account_id = m.account_id
+        AND archive_folder.special_use = '\\Archive'
+    )
   )
 )`;
 
@@ -615,6 +703,9 @@ export type BuildAppOptions = {
   // Empty in browser-only development. The desktop host passes a fresh token
   // through this option rather than persisting it with the mail database.
   localApiAccessToken?: string;
+  // The owning runtime aborts in-flight external translation requests before
+  // Fastify begins waiting for open request handlers during shutdown.
+  translationAbortSignal?: AbortSignal;
 };
 
 const localApiAccessHeader = "x-nami-api-token";
@@ -660,6 +751,18 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     logger: { level: config.logLevel },
     bodyLimit: 3 * 1024 * 1024,
   });
+  const translationConfigurationStore = new TranslationConfigurationStore(context.db, context.masterKey, {
+    endpoint: config.translationEndpoint,
+    apiKey: config.translationApiKey,
+    timeoutMs: config.translationTimeoutMs,
+  });
+  const translationConfigurationManaged = !context.translationService;
+  let translationService = context.translationService ?? translationConfigurationStore.createService();
+  const translationAbortController = new AbortController();
+  const abortTranslationsForShutdown = () => translationAbortController.abort();
+  const externalTranslationAbortSignal = options.translationAbortSignal;
+  if (externalTranslationAbortSignal?.aborted) abortTranslationsForShutdown();
+  else externalTranslationAbortSignal?.addEventListener("abort", abortTranslationsForShutdown, { once: true });
   const sentVerificationAbortController = new AbortController();
   const submittedVerificationMessage = "发件服务器已接受邮件，Nami Mail 正在自动同步“已发送”核对。";
   const unknownDeliveryVerificationMessage = "投递状态尚未确认。Nami Mail 正在自动检查“已发送”；为避免重复发送，不会自动重投这封邮件。";
@@ -679,8 +782,14 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       },
     );
   };
+  // Fastify runs onClose only after active handlers have drained. Abort first
+  // so a translation request cannot make application shutdown wait for its timeout.
+  app.addHook("preClose", () => {
+    abortTranslationsForShutdown();
+  });
   app.addHook("onClose", async () => {
     sentVerificationAbortController.abort();
+    externalTranslationAbortSignal?.removeEventListener("abort", abortTranslationsForShutdown);
   });
   const recoveredSubmissions = recoverInterruptedSubmissions(context.db, context.masterKey);
   if (recoveredSubmissions) {
@@ -713,7 +822,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       "http://127.0.0.1:5173",
       "http://localhost:5173",
     ],
-    methods: ["GET", "POST", "PATCH", "DELETE"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
   });
 
   app.addHook("onRequest", async (request, reply) => {
@@ -889,10 +998,10 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       return reply.code(unavailable ? 503 : 422).send({ ok: false, ...details });
     }
   });
-
   app.get<{ Params: { provider: string } }>("/api/oauth/:provider/callback", async (request, reply) => {
+    const locale = getAppSettings(context.db).locale;
     if (!isSupportedOAuthProvider(request.params.provider) || !context.oauthService) {
-      return reply.code(404).type("text/html; charset=utf-8").send(oauthCallbackDocument(false));
+      return reply.code(404).type("text/html; charset=utf-8").send(oauthCallbackDocument(locale, false));
     }
     try {
       const callbackUrl = new URL(
@@ -904,14 +1013,14 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       return reply
         .type("text/html; charset=utf-8")
         .header("content-security-policy", "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; style-src 'unsafe-inline'")
-        .send(oauthCallbackDocument(true));
+        .send(oauthCallbackDocument(locale, true));
     } catch (error) {
       const details = oauthErrorBody(error);
       app.log.warn({ provider: request.params.provider, code: details.code }, "OAuth callback failed");
       return reply
         .type("text/html; charset=utf-8")
         .header("content-security-policy", "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; style-src 'unsafe-inline'")
-        .send(oauthCallbackDocument(false));
+        .send(oauthCallbackDocument(locale, false));
     }
   });
 
@@ -1155,7 +1264,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
-  app.get<{ Querystring: { accountId?: string; folder?: string; q?: string; page?: string; pageSize?: string; starred?: string; unread?: string } }>(
+  app.get<{ Querystring: { accountId?: string; folder?: string; q?: string; page?: string; pageSize?: string; starred?: string; unread?: string; archived?: string } }>(
     "/api/messages",
     async (request, reply) => {
       const page = Math.max(1, Number.parseInt(request.query.page ?? "1", 10) || 1);
@@ -1167,8 +1276,10 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         params.push(request.query.accountId);
       }
       if (request.query.folder) {
-        filters.push("m.mailbox = ?");
+        filters.push(`${effectiveMailboxExpression} = ?`);
         params.push(request.query.folder);
+      } else if (request.query.archived === "1") {
+        filters.push(archivedMessageFilter);
       } else if (request.query.starred === "1") {
         // Starred is a cross-folder view, unlike the normal unified inbox.
         filters.push("m.flags_json LIKE '%\\\\Flagged%'");
@@ -1232,6 +1343,132 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       .get(request.params.id) as MessageStorageRow | undefined;
     if (!row) return reply.code(404).send({ ok: false, message: "邮件不存在。" });
     return messageRow(row, context.masterKey);
+  });
+
+  // This exposes capability only. It deliberately never returns endpoint,
+  // provider, or credential details to the reader UI.
+  app.get("/api/translation/status", async () => {
+    if (!translationConfigurationManaged) return { enabled: translationService.isConfigured() };
+    const summary = translationConfigurationStore.summary();
+    return {
+      enabled: summary.enabled,
+      ...(summary.configurationError ? { configurationError: summary.configurationError } : {}),
+    };
+  });
+
+  // The settings surface is intentionally separate from the reader capability
+  // route. It returns the endpoint and whether an API key exists, never the
+  // API key itself or any selected mail content.
+  app.get("/api/translation/configuration", async (request, reply) => {
+    if (!translationConfigurationManaged) {
+      return reply.code(409).send({
+        ok: false,
+        code: "translation_configuration_managed",
+        message: "Translation configuration is managed by this runtime.",
+      });
+    }
+    return { ok: true, ...translationConfigurationStore.summary() };
+  });
+
+  app.put("/api/translation/configuration", async (request, reply) => {
+    if (!translationConfigurationManaged) {
+      return reply.code(409).send({
+        ok: false,
+        code: "translation_configuration_managed",
+        message: "Translation configuration is managed by this runtime.",
+      });
+    }
+    const parsed = translationConfigurationPatchSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        ok: false,
+        code: "translation_configuration_invalid",
+        message: "Translation configuration is invalid.",
+      });
+    }
+    try {
+      const summary = translationConfigurationStore.update(parsed.data as TranslationConfigurationPatch);
+      translationService = translationConfigurationStore.createService();
+      return { ok: true, ...summary };
+    } catch (error) {
+      if (error instanceof TranslationServiceError) {
+        return reply.code(400).send({
+          ok: false,
+          code: "translation_configuration_invalid",
+          message: "Translation configuration is invalid.",
+        });
+      }
+      app.log.warn("Could not save translation configuration");
+      return reply.code(500).send({
+        ok: false,
+        code: "translation_configuration_failed",
+        message: "Translation configuration could not be saved.",
+      });
+    }
+  });
+
+  app.delete("/api/translation/configuration", async (_request, reply) => {
+    if (!translationConfigurationManaged) {
+      return reply.code(409).send({
+        ok: false,
+        code: "translation_configuration_managed",
+        message: "Translation configuration is managed by this runtime.",
+      });
+    }
+    try {
+      const summary = translationConfigurationStore.clear();
+      translationService = translationConfigurationStore.createService();
+      return { ok: true, ...summary };
+    } catch {
+      app.log.warn("Could not remove translation configuration");
+      return reply.code(500).send({
+        ok: false,
+        code: "translation_configuration_failed",
+        message: "Translation configuration could not be removed.",
+      });
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/messages/:id/translate", async (request, reply) => {
+    const parsed = messageTranslationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        ok: false,
+        code: "translation_invalid_target",
+        message: "The translation target is invalid.",
+      });
+    }
+
+    try {
+      const stored = messagePayloadById(context.db, context.masterKey, request.params.id);
+      if (!stored) {
+        return reply.code(404).send({
+          ok: false,
+          code: "translation_content_unavailable",
+          message: "The selected message is no longer available.",
+        });
+      }
+
+      // `textBody` is the parser-produced plain-text mail body. Do not send
+      // headers, addresses, attachments, snippets, or raw HTML to a provider.
+      const result = await translationService.translate(stored.payload.textBody, parsed.data.targetLocale, translationAbortController.signal);
+      return { ok: true, targetLocale: parsed.data.targetLocale, ...result };
+    } catch (error) {
+      if (error instanceof TranslationServiceError) {
+        return reply.code(translationErrorStatus(error)).send({
+          ok: false,
+          code: error.code,
+          message: error.message,
+        });
+      }
+      // Keep message data and provider details out of logs and HTTP errors.
+      app.log.warn({ messageId: request.params.id }, "Selected message translation failed");
+      return reply.code(500).send({
+        ok: false,
+        code: "translation_failed",
+        message: "The selected message could not be translated.",
+      });
+    }
   });
 
   app.get<{ Params: { id: string } }>("/api/messages/:id/outbound-attachments", async (request, reply) => {
@@ -1380,7 +1617,15 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const parsed = messageMoveSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
     try {
-      const result = await moveMessage(context.db, context.masterKey, request.params.id, parsed.data.target, context.oauthService);
+      const { accountId, ...result } = await moveMessage(context.db, context.masterKey, request.params.id, parsed.data.target, context.oauthService);
+      if (result.refreshPending || result.locationUnverified) {
+        // UIDPLUS may be unavailable, a provider may omit a stable message ID,
+        // or a transport failure may have made the outcome ambiguous. Do not
+        // delay the response on a full refresh; the renderer receives either
+        // pending reconciliation or a read-only retained local snapshot.
+        void syncAccount(context.db, context.masterKey, accountId, config.syncMessageLimit, context.oauthService)
+          .catch(() => request.log.warn({ messageId: request.params.id }, "Message move cache refresh is pending"));
+      }
       return { ok: true, ...result };
     } catch (error) {
       const failure = mailFailure(error);

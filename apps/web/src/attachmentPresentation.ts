@@ -1,43 +1,55 @@
-export type AttachmentKind = "archive" | "document" | "image" | "pdf" | "spreadsheet" | "other";
+import { translate, type Translate } from "./i18n";
+
+export type AttachmentKind = "archive" | "document" | "image" | "pdf" | "spreadsheet" | "text" | "other";
 
 export type AttachmentPresentation = {
   kind: AttachmentKind;
   label: string;
 };
 
-const extensionKinds: Record<string, AttachmentPresentation> = {
-  "7z": { kind: "archive", label: "压缩文件" },
-  csv: { kind: "spreadsheet", label: "表格" },
-  doc: { kind: "document", label: "文档" },
-  docx: { kind: "document", label: "文档" },
-  gif: { kind: "image", label: "图片" },
-  jpeg: { kind: "image", label: "图片" },
-  jpg: { kind: "image", label: "图片" },
-  md: { kind: "document", label: "文本" },
-  pdf: { kind: "pdf", label: "PDF" },
-  png: { kind: "image", label: "图片" },
-  ppt: { kind: "document", label: "演示文稿" },
-  pptx: { kind: "document", label: "演示文稿" },
-  rar: { kind: "archive", label: "压缩文件" },
-  rtf: { kind: "document", label: "文档" },
-  tar: { kind: "archive", label: "压缩文件" },
-  txt: { kind: "document", label: "文本" },
-  webp: { kind: "image", label: "图片" },
-  xls: { kind: "spreadsheet", label: "表格" },
-  xlsx: { kind: "spreadsheet", label: "表格" },
-  zip: { kind: "archive", label: "压缩文件" },
+const extensionKinds: Record<string, AttachmentKind> = {
+  "7z": "archive",
+  csv: "spreadsheet",
+  doc: "document",
+  docx: "document",
+  gif: "image",
+  jpeg: "image",
+  jpg: "image",
+  md: "text",
+  pdf: "pdf",
+  png: "image",
+  ppt: "document",
+  pptx: "document",
+  rar: "archive",
+  rtf: "document",
+  tar: "archive",
+  txt: "text",
+  webp: "image",
+  xls: "spreadsheet",
+  xlsx: "spreadsheet",
+  zip: "archive",
 };
 
-export function presentAttachment(filename: string, contentType: string): AttachmentPresentation {
+function presentAttachmentKind(kind: AttachmentKind, t: Translate, extension = ""): AttachmentPresentation {
+  if (kind === "other") {
+    return { kind, label: extension && extension.length <= 5 ? extension.toUpperCase() : t("attachment.file") };
+  }
+  return { kind, label: t(`attachment.${kind}`) };
+}
+
+const defaultTranslate: Translate = (key, values) => translate("zh-CN", key, values);
+
+export function presentAttachment(filename: string, contentType: string, t: Translate = defaultTranslate): AttachmentPresentation {
   const extension = filename.trim().toLowerCase().match(/\.([a-z0-9]{1,8})$/)?.[1] ?? "";
   const byExtension = extensionKinds[extension];
-  if (byExtension) return byExtension;
+  if (byExtension) return presentAttachmentKind(byExtension, t, extension);
 
   const mime = contentType.trim().toLowerCase();
-  if (mime === "application/pdf") return { kind: "pdf", label: "PDF" };
-  if (mime.startsWith("image/")) return { kind: "image", label: "图片" };
-  if (/zip|compressed|archive|tar|rar/.test(mime)) return { kind: "archive", label: "压缩文件" };
-  if (/spreadsheet|excel|csv/.test(mime)) return { kind: "spreadsheet", label: "表格" };
-  if (/document|word|presentation|powerpoint|text\//.test(mime)) return { kind: "document", label: "文档" };
-  return { kind: "other", label: extension && extension.length <= 5 ? extension.toUpperCase() : "文件" };
+  if (mime === "application/pdf") return presentAttachmentKind("pdf", t, extension);
+  if (mime.startsWith("image/")) return presentAttachmentKind("image", t, extension);
+  if (/zip|compressed|archive|tar|rar/.test(mime)) return presentAttachmentKind("archive", t, extension);
+  if (/spreadsheet|excel|csv/.test(mime)) return presentAttachmentKind("spreadsheet", t, extension);
+  if (mime.startsWith("text/")) return presentAttachmentKind("text", t, extension);
+  if (/document|word|presentation|powerpoint/.test(mime)) return presentAttachmentKind("document", t, extension);
+  return presentAttachmentKind("other", t, extension);
 }

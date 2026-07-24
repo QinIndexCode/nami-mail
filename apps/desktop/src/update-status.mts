@@ -10,7 +10,47 @@ export type DesktopUpdatePhase =
 
 export type DesktopUpdateSuppression = "none" | "skipped" | "snoozed";
 
+export type DesktopUpdateReason =
+  | "initializing"
+  | "disabled"
+  | "unpackaged"
+  | "platformUnsupported"
+  | "sourceUnconfigured"
+  | "trustUnavailable"
+  | "scheduled"
+  | "checking"
+  | "upToDate"
+  | "releaseAvailable"
+  | "downloading"
+  | "downloadReady"
+  | "network"
+  | "tls"
+  | "releaseUnavailable"
+  | "rateLimited"
+  | "signatureInvalid"
+  | "integrityInvalid"
+  | "archiveIntegrityInvalid"
+  | "mailDataBusy"
+  | "installerNotStarted"
+  | "installResult"
+  | "unknown";
+
+export type DesktopUpdateInstallStage =
+  | "wait"
+  | "verify-archive"
+  | "extract"
+  | "verify-installer"
+  | "install"
+  | "cleanup"
+  | "restart";
+
+export type DesktopUpdateSnapshotArgs = {
+  installStage?: DesktopUpdateInstallStage;
+  cleanupComplete?: boolean;
+};
+
 export type DesktopUpdateSnapshot = {
+  schemaVersion: 2;
   phase: DesktopUpdatePhase;
   currentVersion: string;
   targetVersion: string | null;
@@ -18,7 +58,8 @@ export type DesktopUpdateSnapshot = {
   checkedAt: string | null;
   suppression: DesktopUpdateSuppression;
   remindAt: string | null;
-  message: string;
+  reason: DesktopUpdateReason;
+  args: DesktopUpdateSnapshotArgs;
 };
 
 function updateErrorEvidence(error: unknown): string {
@@ -29,36 +70,42 @@ function updateErrorEvidence(error: unknown): string {
   return typeof error === "string" ? error.toLowerCase() : "";
 }
 
-export function describeUpdateError(error: unknown): string {
+export type DesktopUpdateErrorReason = Extract<
+  DesktopUpdateReason,
+  "network" | "tls" | "signatureInvalid" | "integrityInvalid" | "releaseUnavailable" | "rateLimited" | "unknown"
+>;
+
+export function classifyUpdateError(error: unknown): DesktopUpdateErrorReason {
   const evidence = updateErrorEvidence(error);
-  if (/signature|publisher|code.?sign|not signed|certificate.*identity/.test(evidence)) {
-    return "更新包签名验证失败，Nami Mail 已拒绝安装。请等待发布方修复。";
+  if (/signature|publisher|code.?sign|not signed|authenticode|certificate.*identity/.test(evidence)) {
+    return "signatureInvalid";
   }
   if (/cert_|certificate|self signed|unable to verify|tls|ssl/.test(evidence)) {
-    return "更新服务的证书验证失败。请检查系统时间、代理或安全软件后重试。";
+    return "tls";
   }
-  if (/enotfound|eai_again|enetunreach|ehostunreach|econnrefused|econnreset|etimedout|timeout|network/.test(evidence)) {
-    return "无法连接更新服务。请检查网络、代理或 DNS 后重试。";
-  }
-  if (/404|not found|no published versions|latest\.ya?ml|asset_missing/.test(evidence)) {
-    return "更新渠道暂不可用，尚未找到可安装的正式版本。";
+  if (/integrity|sha.?512|manifest[_ ]invalid|checksum|hash.?mismatch/.test(evidence)) {
+    return "integrityInvalid";
   }
   if (/403|rate[ _-]?limit|forbidden/.test(evidence)) {
-    return "更新服务暂时限制了请求，请稍后再试。";
+    return "rateLimited";
   }
-  if (/integrity|sha.?512|manifest_invalid|signature|authenticode/.test(evidence)) {
-    return "更新包完整性校验失败，Nami Mail 已拒绝安装。请等待发布方修复。";
+  if (/404|not found|no published versions|latest\.ya?ml|asset_missing/.test(evidence)) {
+    return "releaseUnavailable";
   }
-  return "无法完成更新检查，请稍后重试。";
+  if (/enotfound|eai_again|enetunreach|ehostunreach|econnrefused|econnreset|etimedout|timeout|network/.test(evidence)) {
+    return "network";
+  }
+  return "unknown";
 }
 
 export function createUpdateSnapshot(
   currentVersion: string,
   phase: DesktopUpdatePhase,
-  message: string,
-  patch: Partial<Omit<DesktopUpdateSnapshot, "currentVersion" | "phase" | "message">> = {},
+  reason: DesktopUpdateReason,
+  patch: Partial<Omit<DesktopUpdateSnapshot, "schemaVersion" | "currentVersion" | "phase" | "reason">> = {},
 ): DesktopUpdateSnapshot {
   return {
+    schemaVersion: 2,
     phase,
     currentVersion,
     targetVersion: null,
@@ -66,7 +113,8 @@ export function createUpdateSnapshot(
     checkedAt: null,
     suppression: "none",
     remindAt: null,
-    message,
+    reason,
+    args: {},
     ...patch,
   };
 }

@@ -34,4 +34,7 @@ export const config = {
   microsoftOAuthClientId: optionalEnv("NAMI_MAIL_MICROSOFT_OAUTH_CLIENT_ID"),
   microsoftOAuthTenant: optionalEnv("NAMI_MAIL_MICROSOFT_TENANT") || "common",
   oauthFlowTtlSeconds: integerEnv("NAMI_MAIL_OAUTH_FLOW_TTL_SECONDS", 600, 60, 900),
+  translationEndpoint: optionalEnv("NAMI_MAIL_TRANSLATION_ENDPOINT"),
+  translationApiKey: optionalEnv("NAMI_MAIL_TRANSLATION_API_KEY"),
+  translationTimeoutMs: integerEnv("NAMI_MAIL_TRANSLATION_TIMEOUT_MS", 25_000, 1_000, 60_000),
 };

@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import type { DatabaseHandle } from "./db.js";
 import { friendlyMailError, imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
+import { moveActionBlockedError } from "./message-storage.js";
 import type { ResolvedOutboundAttachment } from "./outbound-attachments.js";
 import type { AccountRecord } from "./types.js";
 
@@ -27,6 +28,8 @@ type StoredDraft = {
   mailbox: string;
   uid: number;
   special_use: string | null;
+  pending_move_destination: string | null;
+  pending_move_state: string | null;
 };
 
 function safeDraftReplacementWarning(error: unknown): string {
@@ -122,12 +125,14 @@ export async function discardDraft(
   accessTokenProvider?: AccountAccessTokenProvider,
 ): Promise<void> {
   const stored = db.prepare(`
-    SELECT m.account_id, m.mailbox, m.uid, f.special_use
+    SELECT m.account_id, m.mailbox, m.uid, m.pending_move_destination, m.pending_move_state, f.special_use
     FROM messages m
     LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.mailbox
     WHERE m.id = ?
   `).get(messageId) as StoredDraft | undefined;
   if (!stored) throw new Error("Draft not found.");
+  const moveBlockedError = moveActionBlockedError(stored);
+  if (moveBlockedError) throw new Error(moveBlockedError);
   if (stored.account_id !== account.id || stored.special_use !== "\\Drafts") {
     throw new Error("Message is not a draft.");
   }

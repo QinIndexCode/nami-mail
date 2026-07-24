@@ -1,13 +1,17 @@
 {
   "name": "@nami/server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node ../../scripts/build-locale-catalog.mjs",
     "dev": "node ../../scripts/run-server-node.mjs --watch",
+    "prebuild": "node ../../scripts/build-locale-catalog.mjs",
     "build": "tsc -p tsconfig.json",
     "start": "node ../../scripts/run-server-node.mjs --start",
+    "pretest": "node ../../scripts/build-locale-catalog.mjs --check",
     "test": "node ../../scripts/run-server-tests.mjs",
+    "pretypecheck": "node ../../scripts/build-locale-catalog.mjs --check",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

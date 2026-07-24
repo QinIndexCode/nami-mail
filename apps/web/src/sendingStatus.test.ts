@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { translate } from "./i18n";
 import type { OutboundSubmission } from "./types";
 import {
   newMessageDraftFromSubmission,
@@ -8,6 +9,8 @@ import {
   submissionMessageIdSuffix,
   submissionStatusPresentation,
 } from "./sendingStatus";
+
+const zh = (key: string, values?: Record<string, string | number>) => translate("zh-CN", key, values);
 
 const baseSubmission: OutboundSubmission = {
   id: "submission-1",
@@ -25,19 +28,19 @@ const baseSubmission: OutboundSubmission = {
 
 describe("sending status presentation", () => {
   it("keeps every durable state distinct and warns against retrying unknown delivery", () => {
-    expect(submissionStatusPresentation("submitting")).toMatchObject({ label: "正在发送", tone: "progress" });
-    expect(submissionStatusPresentation("submitted")).toMatchObject({ label: "已交给服务器", tone: "progress" });
-    expect(submissionStatusPresentation("confirmed")).toMatchObject({ label: "已核对", tone: "success" });
-    expect(submissionStatusPresentation("unknown_delivery")).toMatchObject({ label: "结果待核对", tone: "warning" });
-    expect(submissionStatusPresentation("failed")).toMatchObject({ label: "发送失败", tone: "danger" });
-    expect(submissionStatusPresentation("unknown_delivery").detail).toContain("不能直接重新发送");
-    expect(submissionStatusPresentation("submitted").detail).toContain("自动核对");
-    expect(submissionStatusPresentation("confirmed").detail).toContain("不代表收件人已读");
+    expect(submissionStatusPresentation("submitting")).toMatchObject({ label: zh("sending.submitting.label"), tone: "progress" });
+    expect(submissionStatusPresentation("submitted")).toMatchObject({ label: zh("sending.submitted.label"), tone: "progress" });
+    expect(submissionStatusPresentation("confirmed")).toMatchObject({ label: zh("sending.confirmed.label"), tone: "success" });
+    expect(submissionStatusPresentation("unknown_delivery")).toMatchObject({ label: zh("sending.unknownDelivery.label"), tone: "warning" });
+    expect(submissionStatusPresentation("failed")).toMatchObject({ label: zh("sending.failed.label"), tone: "danger" });
+    expect(submissionStatusPresentation("unknown_delivery").detail).toBe(zh("sending.unknownDelivery.detail"));
+    expect(submissionStatusPresentation("submitted").detail).toBe(zh("sending.submitted.detail"));
+    expect(submissionStatusPresentation("confirmed").detail).toBe(zh("sending.confirmed.detail"));
   });
 
   it("limits the visible recipient summary to three while retaining the total", () => {
     expect(recipientSummary(["a@example.com", "b@example.com", "c@example.com", "d@example.com"]))
-      .toBe("a@example.com、b@example.com、c@example.com 等 4 人");
+      .toBe(zh("sending.recipientsMore", { recipients: "a@example.com、b@example.com、c@example.com", count: 4 }));
     expect(recipientSummary([])).toBeNull();
   });
 

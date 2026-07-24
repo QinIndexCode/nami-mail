@@ -10,6 +10,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { useI18n } from "./i18n";
 
 type SelectOption = {
   value: string;
@@ -84,6 +85,7 @@ export default function ThemedSelect({
   "aria-invalid": ariaInvalid,
   "aria-label": ariaLabel,
 }: ThemedSelectProps) {
+  const { t } = useI18n();
   const options = useMemo(() => extractOptions(children), [children]);
   const selectedValue = String(value);
   const selected = options.find((option) => option.value === selectedValue) ?? options.find((option) => !option.disabled);
@@ -215,7 +217,7 @@ export default function ThemedSelect({
         }}
         onKeyDown={handleKeyDown}
       >
-        <span className="themed-select-value">{selected?.label ?? "未选择"}</span>
+        <span className="themed-select-value">{selected?.label ?? t("common.notSelected")}</span>
         <ChevronDown className={`select-control-icon${open ? " open" : ""}`} size={15} aria-hidden="true" />
       </button>
       {open && (

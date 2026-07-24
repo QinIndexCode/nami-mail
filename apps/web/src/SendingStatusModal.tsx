@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type M
 import { createPortal } from "react-dom";
 import { Check, CircleAlert, LoaderCircle, Mail, PenLine, RefreshCw, Send, X } from "lucide-react";
 import { mailErrorMessage, mailErrorToastMessage } from "./errorPresentation";
+import { translate, type Translate, useI18n } from "./i18n";
 import {
   newMessageDraftFromSubmission,
   recipientSummary,
@@ -32,17 +33,20 @@ type StatusIconButtonProps = {
 
 export function submissionNoticeMessage(
   submission: Pick<OutboundSubmission, "deliveryStatus" | "errorCode" | "errorMessage" | "postSubmitWarning">,
+  t: Translate = (key, values) => translate("zh-CN", key, values),
 ): string | null {
   if (submission.errorMessage) {
     return mailErrorMessage(
       { code: submission.errorCode ?? undefined, message: submission.errorMessage },
-      submission.deliveryStatus === "unknown_delivery" ? "邮件状态仍待核对" : "邮件发送未完成",
+      submission.deliveryStatus === "unknown_delivery" ? t("sending.notice.unknownDelivery") : t("sending.notice.incomplete"),
+      t,
     );
   }
   if (submission.postSubmitWarning) {
     return mailErrorMessage(
       { code: submission.errorCode ?? undefined, message: submission.postSubmitWarning },
-      "邮件已发送，但后续处理未全部完成",
+      t("sending.notice.postSubmitIncomplete"),
+      t,
     );
   }
   return null;
@@ -127,15 +131,19 @@ function StatusValueTooltip({ text, children }: { text: string; children: ReactN
   );
 }
 
-function formatSubmissionTime(value: string): string {
+function formatSubmissionTime(
+  value: string,
+  formatDate: (input: Date | number | string, options?: Intl.DateTimeFormatOptions) => string,
+  t: Translate,
+): string {
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
+  if (!Number.isFinite(date.getTime())) return t("sending.timeUnknown");
+  return formatDate(date, {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(date);
+  });
 }
 
 export default function SendingStatusModal({
@@ -149,6 +157,7 @@ export default function SendingStatusModal({
   onCreateNewMessage,
   fallbackFocusRef,
 }: SendingStatusModalProps) {
+  const { formatDate, t } = useI18n();
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmReplacement, setConfirmReplacement] = useState<OutboundSubmission | null>(null);
@@ -183,7 +192,7 @@ export default function SendingStatusModal({
     try {
       await onRefresh();
     } catch (error) {
-      setActionError(mailErrorToastMessage(error, "无法刷新发送状态"));
+      setActionError(mailErrorToastMessage(error, t("sending.error.refresh"), t));
     } finally {
       setBusyAction(null);
     }
@@ -197,7 +206,7 @@ export default function SendingStatusModal({
       await onSyncAccount(submission.accountId);
       await onRefresh();
     } catch (error) {
-      setActionError(mailErrorToastMessage(error, "无法同步已发送"));
+      setActionError(mailErrorToastMessage(error, t("sending.error.sync"), t));
     } finally {
       setBusyAction(null);
     }
@@ -217,37 +226,37 @@ export default function SendingStatusModal({
       }}>
         <section ref={dialogRef} className="modal-card sending-status-modal" role="dialog" aria-modal="true" aria-labelledby="sending-status-title" tabIndex={-1}>
           <header className="modal-heading sending-status-heading">
-            <div><span className="eyebrow">发送与核对</span><h2 id="sending-status-title">发件记录</h2></div>
+            <div><span className="eyebrow">{t("sending.modal.eyebrow")}</span><h2 id="sending-status-title">{t("sending.modal.title")}</h2></div>
             <div className="sending-status-heading-actions">
-              <StatusIconButton label="刷新发件记录" onClick={() => void refresh()} disabled={loading || Boolean(busyAction)}>
+              <StatusIconButton label={t("sending.modal.refreshTooltip")} onClick={() => void refresh()} disabled={loading || Boolean(busyAction)}>
                 {loading || busyAction === "refresh" ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}
               </StatusIconButton>
-              <StatusIconButton label="关闭发件记录" onClick={onClose}><X size={18} /></StatusIconButton>
+              <StatusIconButton label={t("sending.modal.closeTooltip")} onClick={onClose}><X size={18} /></StatusIconButton>
             </div>
           </header>
 
-          <div className="sending-status-overview" aria-label="发件记录摘要">
-            <span><strong>{counts.active}</strong><small>待核对</small></span>
-            <span className={counts.attention ? "attention" : ""}><strong>{counts.attention}</strong><small>需留意</small></span>
-            <span><strong>{counts.confirmed}</strong><small>已核对</small></span>
+          <div className="sending-status-overview" aria-label={t("sending.modal.overviewLabel")}>
+            <span><strong>{counts.active}</strong><small>{t("sending.modal.active")}</small></span>
+            <span className={counts.attention ? "attention" : ""}><strong>{counts.attention}</strong><small>{t("sending.modal.attention")}</small></span>
+            <span><strong>{counts.confirmed}</strong><small>{t("sending.modal.confirmed")}</small></span>
           </div>
 
           {(actionError || loadError) && <div className="form-status error sending-status-error" role="alert"><CircleAlert size={16} />{actionError || loadError}</div>}
 
-          <div className="sending-status-list" role="list" aria-label="发件记录" aria-live="polite" aria-busy={loading}>
-            {loading && submissions.length === 0 && <div className="sending-status-empty"><LoaderCircle className="spin" size={24} /><p>正在加载发件记录…</p></div>}
-            {!loading && submissions.length === 0 && <div className="sending-status-empty"><Mail size={26} /><h3>暂无发件记录</h3><p>通过 Nami Mail 发出的邮件会显示在这里，应用会自动与“已发送”记录核对。</p></div>}
+          <div className="sending-status-list" role="list" aria-label={t("sending.modal.listLabel")} aria-live="polite" aria-busy={loading}>
+            {loading && submissions.length === 0 && <div className="sending-status-empty"><LoaderCircle className="spin" size={24} /><p>{t("sending.modal.loading")}</p></div>}
+            {!loading && submissions.length === 0 && <div className="sending-status-empty"><Mail size={26} /><h3>{t("sending.modal.emptyTitle")}</h3><p>{t("sending.modal.emptyDescription")}</p></div>}
             {submissions.map((submission) => {
-              const presentation = submissionStatusPresentation(submission.deliveryStatus);
+              const presentation = submissionStatusPresentation(submission.deliveryStatus, t);
               const account = accountById.get(submission.accountId);
-              const recipients = recipientSummary(submission.recipients);
-              const fullRecipients = recipientSummary(submission.recipients, Number.MAX_SAFE_INTEGER) ?? "收件人未记录";
+              const recipients = recipientSummary(submission.recipients, 3, t);
+              const fullRecipients = recipientSummary(submission.recipients, Number.MAX_SAFE_INTEGER, t) ?? t("sending.modal.recipientsMissing");
               const title = submission.subject === undefined || submission.subject === null
-                ? `发送记录 · ${submissionMessageIdSuffix(submission.messageId)}`
-                : submission.subject || "（无主题）";
+                ? t("sending.modal.recordTitle", { id: submissionMessageIdSuffix(submission.messageId) })
+                : submission.subject || t("sending.modal.untitled");
               const canSync = submission.deliveryStatus === "unknown_delivery" || submission.deliveryStatus === "submitted";
               const canCreate = submission.deliveryStatus === "unknown_delivery" || submission.deliveryStatus === "failed";
-              const statusMessage = submissionNoticeMessage(submission);
+              const statusMessage = submissionNoticeMessage(submission, t);
               const detailsId = `sending-status-details-${submission.id}`;
               const detailsExpanded = expandedSubmissionId === submission.id;
               return (
@@ -257,7 +266,7 @@ export default function SendingStatusModal({
                       {submission.deliveryStatus === "submitting" ? <LoaderCircle className="spin" size={13} /> : submission.deliveryStatus === "confirmed" ? <Check size={13} /> : submission.deliveryStatus === "failed" ? <X size={13} /> : submission.deliveryStatus === "unknown_delivery" ? <CircleAlert size={13} /> : <Send size={13} />}
                       {presentation.label}
                     </span>
-                    <time dateTime={submission.updatedAt}>{formatSubmissionTime(submission.updatedAt)}</time>
+                    <time dateTime={submission.updatedAt}>{formatSubmissionTime(submission.updatedAt, formatDate, t)}</time>
                   </div>
                   <h3 className="sending-status-title">
                     <StatusValueTooltip text={title}>
@@ -267,10 +276,10 @@ export default function SendingStatusModal({
                   </h3>
                   {recipients && (
                     <p className="sending-status-recipients">
-                      <StatusValueTooltip text={`收件人：${fullRecipients}`}>
-                        <span className="sending-status-truncate">收件人：{recipients}</span>
+                      <StatusValueTooltip text={t("sending.modal.recipientsValue", { recipients: fullRecipients })}>
+                        <span className="sending-status-truncate">{t("sending.modal.recipientsValue", { recipients })}</span>
                       </StatusValueTooltip>
-                      <span className="sending-status-mobile-value">收件人：{fullRecipients}</span>
+                      <span className="sending-status-mobile-value">{t("sending.modal.recipientsValue", { recipients: fullRecipients })}</span>
                     </p>
                   )}
                   <p className="sending-status-detail">{presentation.detail}</p>
@@ -278,9 +287,9 @@ export default function SendingStatusModal({
                     <p className="sending-status-message">{statusMessage}</p>
                   )}
                   <div className="sending-status-meta">
-                    <span>{account?.email ?? "已移除的账户"}</span>
-                    <StatusValueTooltip text="用于核对这封邮件的发送记录">
-                      <code className="sending-status-message-id">核对编号 {submissionMessageIdSuffix(submission.messageId)}</code>
+                    <span>{account?.email ?? t("sending.modal.removedAccount")}</span>
+                    <StatusValueTooltip text={t("sending.modal.verifyTooltip")}>
+                      <code className="sending-status-message-id">{t("sending.modal.verifyId", { id: submissionMessageIdSuffix(submission.messageId) })}</code>
                     </StatusValueTooltip>
                   </div>
                   <button
@@ -290,20 +299,20 @@ export default function SendingStatusModal({
                     aria-expanded={detailsExpanded}
                     onClick={() => setExpandedSubmissionId((current) => current === submission.id ? null : submission.id)}
                   >
-                    {detailsExpanded ? "收起邮件详情" : "查看邮件详情"}
+                    {detailsExpanded ? t("sending.modal.collapseDetails") : t("sending.modal.expandDetails")}
                   </button>
-                  <section id={detailsId} className="sending-status-expanded-details" role="region" aria-label={`发件记录详情：${title}`} hidden={!detailsExpanded}>
+                  <section id={detailsId} className="sending-status-expanded-details" role="region" aria-label={t("sending.modal.detailsRegion", { title })} hidden={!detailsExpanded}>
                     <dl>
-                      <div><dt>主题</dt><dd>{title}</dd></div>
-                      <div><dt>收件人</dt><dd>{fullRecipients}</dd></div>
-                      <div><dt>发件账户</dt><dd>{account?.email ?? "已移除的账户"}</dd></div>
-                      <div><dt>邮件标识（Message-ID）</dt><dd><code>{submission.messageId}</code></dd></div>
+                      <div><dt>{t("sending.modal.subject")}</dt><dd>{title}</dd></div>
+                      <div><dt>{t("sending.modal.recipientsLabel")}</dt><dd>{fullRecipients}</dd></div>
+                      <div><dt>{t("sending.modal.account")}</dt><dd>{account?.email ?? t("sending.modal.removedAccount")}</dd></div>
+                      <div><dt>{t("sending.modal.messageId")}</dt><dd><code>{submission.messageId}</code></dd></div>
                     </dl>
                   </section>
                   {(canSync || canCreate) && (
                     <div className="sending-status-actions">
-                      {canSync && <button className="secondary-button" type="button" onClick={() => void syncSent(submission)} disabled={Boolean(busyAction)}>{busyAction === submission.id ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}检查“已发送”</button>}
-                      {canCreate && <button className="secondary-button" type="button" onClick={() => submission.deliveryStatus === "unknown_delivery" ? setConfirmReplacement(submission) : onCreateNewMessage(newMessageDraftFromSubmission(submission))} disabled={Boolean(busyAction)}><PenLine size={14} />新建重试草稿</button>}
+                      {canSync && <button className="secondary-button" type="button" onClick={() => void syncSent(submission)} disabled={Boolean(busyAction)}>{busyAction === submission.id ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}{t("sending.modal.syncSent")}</button>}
+                      {canCreate && <button className="secondary-button" type="button" onClick={() => submission.deliveryStatus === "unknown_delivery" ? setConfirmReplacement(submission) : onCreateNewMessage(newMessageDraftFromSubmission(submission))} disabled={Boolean(busyAction)}><PenLine size={14} />{t("sending.modal.createRetryDraft")}</button>}
                     </div>
                   )}
                 </article>
@@ -318,12 +327,12 @@ export default function SendingStatusModal({
           if (event.target === event.currentTarget) setConfirmReplacement(null);
         }}>
           <section ref={confirmationRef} className="confirmation-card sending-status-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="confirm-new-message-title" aria-describedby="confirm-new-message-description" tabIndex={-1}>
-            <span className="eyebrow">重试草稿</span>
-            <h3 id="confirm-new-message-title">新建重试草稿？</h3>
-            <p id="confirm-new-message-description">原邮件的状态不会改变，也不会再次发送。Nami Mail 会继续依据邮件服务商的响应和“已发送”记录核对原邮件；新草稿只会预填收件人与主题，发送前仍可修改。</p>
+            <span className="eyebrow">{t("sending.retry.eyebrow")}</span>
+            <h3 id="confirm-new-message-title">{t("sending.retry.title")}</h3>
+            <p id="confirm-new-message-description">{t("sending.retry.description")}</p>
             <div className="confirmation-actions">
-              <button className="secondary-button" type="button" onClick={() => setConfirmReplacement(null)}>继续核对</button>
-              <button className="primary-button" type="button" onClick={createReplacement}>新建重试草稿</button>
+              <button className="secondary-button" type="button" onClick={() => setConfirmReplacement(null)}>{t("sending.retry.continue")}</button>
+              <button className="primary-button" type="button" onClick={createReplacement}>{t("sending.retry.create")}</button>
             </div>
           </section>
         </div>

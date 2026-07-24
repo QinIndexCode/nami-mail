@@ -1,5 +1,7 @@
 # 支持指南
 
+[简体中文](SUPPORT.md) | [English](SUPPORT.en.md)
+
 Nami Mail 是本地优先的邮件客户端。它直接连接你配置的邮箱服务商，不运营一个用于代管邮件或重置密码的 Nami Mail 云端账户系统。
 
 ## 先检查这些内容

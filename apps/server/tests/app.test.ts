@@ -277,6 +277,7 @@ describe("local API", () => {
     expect(response.statusCode).toBe(200);
     expect(settings).toMatchObject({
       theme: "system",
+      locale: "zh-CN",
       backgroundPreset: "coast",
       backgroundIntensity: 68,
       notificationsEnabled: true,
@@ -294,6 +295,7 @@ describe("local API", () => {
   it("persists a valid settings patch", async () => {
     const patch = {
       theme: "dark",
+      locale: "en-us",
       backgroundPreset: "night",
       backgroundIntensity: 72,
       notificationsEnabled: false,
@@ -304,11 +306,12 @@ describe("local API", () => {
     } as const;
     const update = await app.inject({ method: "PATCH", url: "/api/settings", payload: patch });
     const persisted = await app.inject({ method: "GET", url: "/api/settings" });
+    const expected = { ...patch, locale: "en-US" };
 
     expect(update.statusCode).toBe(200);
-    expect(update.json()).toMatchObject(patch);
+    expect(update.json()).toMatchObject(expected);
     expect(persisted.statusCode).toBe(200);
-    expect(persisted.json()).toMatchObject(patch);
+    expect(persisted.json()).toMatchObject(expected);
     expect(refreshIntervalChanges).toEqual([180]);
   });
 
@@ -326,6 +329,8 @@ describe("local API", () => {
   it("rejects invalid settings enums, ranges, and unconfigured custom backgrounds", async () => {
     const invalidPatches = [
       { theme: "sepia" },
+      { locale: "not a locale" },
+      { locale: "fr-FR" },
       { backgroundPreset: "aurora" },
       { backgroundIntensity: -1 },
       { backgroundIntensity: 81 },
@@ -351,6 +356,46 @@ describe("local API", () => {
       refreshIntervalSeconds: 60,
       closeBehavior: "ask",
     });
+  });
+
+  it("uses the persisted interface locale for OAuth callback pages without rendering callback values", async () => {
+    const localeUpdate = await app.inject({ method: "PATCH", url: "/api/settings", payload: { locale: "en-US" } });
+    const failedCallback = await app.inject({
+      method: "GET",
+      url: "/api/oauth/unsupported/callback?code=authorization-code-secret&state=oauth-state-secret",
+    });
+    const oauthService = {
+      finish: async () => ({ status: "success" }),
+    } as unknown as OAuthService;
+    const successfulCallbackApp = await buildApp({
+      db,
+      masterKey: Buffer.alloc(32, 7),
+      backgroundDirectory,
+      oauthService,
+      oauthCallbackOrigin: "http://127.0.0.1:43125",
+    });
+
+    try {
+      const successfulCallback = await successfulCallbackApp.inject({
+        method: "GET",
+        url: "/api/oauth/google/callback?code=authorization-code-secret&state=oauth-state-secret",
+      });
+
+      expect(localeUpdate.statusCode).toBe(200);
+      expect(failedCallback.statusCode).toBe(404);
+      expect(failedCallback.headers["content-type"]).toContain("text/html");
+      expect(failedCallback.body).toContain('lang="en-US"');
+      expect(failedCallback.body).toContain("Nami Mail authorization not completed");
+      expect(successfulCallback.statusCode).toBe(200);
+      expect(successfulCallback.body).toContain('lang="en-US"');
+      expect(successfulCallback.body).toContain("Nami Mail authorization complete");
+      for (const response of [failedCallback, successfulCallback]) {
+        expect(response.body).not.toContain("authorization-code-secret");
+        expect(response.body).not.toContain("oauth-state-secret");
+      }
+    } finally {
+      await successfulCallbackApp.close();
+    }
   });
 
   it("stores a binary PNG as WebP behind a fixed API route without exposing the file path", async () => {
@@ -547,5 +592,145 @@ describe("local API", () => {
 
     const stats = await app.inject({ method: "GET", url: "/api/stats" });
     expect(stats.json()).toMatchObject({ accounts: 1, messages: 2, unread: 1 });
+  });
+
+  it("lists direct Archive mail and only confirmed Gmail All Mail archives", async () => {
+    const now = new Date().toISOString();
+    const insertAccount = db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertAccount.run("account-archive", "archive@example.com", "custom", "Archive provider", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
+    insertAccount.run("account-gmail", "gmail@example.com", "gmail", "Gmail", "encrypted", "imap.gmail.com", 993, 1, "smtp.gmail.com", 465, 1, "email", "connected", now);
+    const insertFolder = db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)");
+    insertFolder.run("account-archive", "Archive", "Archive", "\\Archive", 1, 0);
+    insertFolder.run("account-archive", "All Mail", "All Mail", "\\All", 1, 0);
+    insertFolder.run("account-gmail", "INBOX", "Inbox", "\\Inbox", 1, 0);
+    insertFolder.run("account-gmail", "[Gmail]/All Mail", "All Mail", "\\All", 3, 0);
+    const insertMessage = db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, all_mail_archived, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertMessage.run("direct-archive", "account-archive", "Archive", 1, 0, "Stored in Archive", "Archive", "archive@example.com", "[]", now, "", "", "", "[\"\\\\Seen\"]", 0, 0, now);
+    insertMessage.run("archive-account-all", "account-archive", "All Mail", 2, 1, "All Mail duplicate", "Archive", "archive@example.com", "[]", now, "", "", "", "[\"\\\\Seen\"]", 0, 0, now);
+    insertMessage.run("gmail-archived", "account-gmail", "[Gmail]/All Mail", 10, 1, "Archived Gmail mail", "Gmail", "gmail@example.com", "[]", now, "", "", "", "[\"\\\\Seen\"]", 0, 0, now);
+    insertMessage.run("gmail-all-inbox", "account-gmail", "[Gmail]/All Mail", 11, 0, "Inbox Gmail mail", "Gmail", "gmail@example.com", "[]", now, "", "", "", "[\"\\\\Seen\"]", 0, 0, now);
+    insertMessage.run("gmail-all-unknown", "account-gmail", "[Gmail]/All Mail", 12, null, "Unknown Gmail mail", "Gmail", "gmail@example.com", "[]", now, "", "", "", "[\"\\\\Seen\"]", 0, 0, now);
+    insertMessage.run("gmail-inbox", "account-gmail", "INBOX", 13, null, "Current inbox mail", "Gmail", "gmail@example.com", "[]", now, "", "", "", "[\"\\\\Seen\"]", 0, 0, now);
+
+    const archived = await app.inject({ method: "GET", url: "/api/messages?archived=1" });
+
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json().items.map((message: { id: string }) => message.id).sort())
+      .toEqual(["direct-archive", "gmail-archived"]);
+    expect(archived.json().items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "direct-archive", archived: false }),
+      expect.objectContaining({ id: "gmail-archived", archived: true }),
+    ]));
+
+    const allMail = await app.inject({
+      method: "GET",
+      url: "/api/messages?accountId=account-gmail&folder=%5BGmail%5D%2FAll%20Mail",
+    });
+    expect(allMail.statusCode).toBe(200);
+    expect(allMail.json().items
+      .map((message: { id: string; archived: boolean }) => ({ id: message.id, archived: message.archived }))
+      .sort((left: { id: string }, right: { id: string }) => left.id.localeCompare(right.id)))
+      .toEqual([
+        { id: "gmail-all-inbox", archived: false },
+        { id: "gmail-all-unknown", archived: false },
+        { id: "gmail-archived", archived: true },
+      ]);
+  });
+
+  it("lists a pending move in its effective destination without leaving it in the inbox", async () => {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("pending-account", "pending@example.com", "custom", "Pending", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
+    const insertFolder = db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)");
+    insertFolder.run("pending-account", "INBOX", "Inbox", "\\Inbox", 3, 0);
+    insertFolder.run("pending-account", "Archive", "Archive", "\\Archive", 1, 0);
+    insertFolder.run("pending-account", "Trash", "Trash", "\\Trash", 1, 0);
+    const insertMessage = db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, pending_move_destination, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertMessage.run("pending-archive", "pending-account", "INBOX", -1, "Archive", "Archive after confirmation", "Demo", "demo@example.com", "[]", now, "", "", "", "[\"\\\\Seen\"]", 0, 0, now);
+    insertMessage.run("pending-trash", "pending-account", "INBOX", -2, "Trash", "Trash after confirmation", "Demo", "demo@example.com", "[]", now, "", "", "", "[\"\\\\Seen\"]", 0, 0, now);
+    insertMessage.run("remaining-inbox", "pending-account", "INBOX", 3, null, "Still in inbox", "Demo", "demo@example.com", "[]", now, "", "", "", "[\"\\\\Seen\"]", 0, 0, now);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, pending_move_destination, pending_move_special_use,
+        subject, from_name, from_address, to_json, sent_at, snippet, text_body, html_body,
+        flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "pending-unlisted-archive", "pending-account", "INBOX", -4, "Archive/2026", "\\Archive",
+      "Archive while folder list refreshes", "Demo", "demo@example.com", "[]", now, "", "", "", "[\"\\\\Seen\"]", 0, 0, now,
+    );
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, pending_move_destination, pending_move_state, pending_move_special_use,
+        subject, from_name, from_address, to_json, sent_at, snippet, text_body, html_body,
+        flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "pending-intent", "pending-account", "INBOX", 2, "Archive", "intent", "\\Archive",
+      "Archive request still being confirmed", "Demo", "demo@example.com", "[]", now, "", "", "", "[\"\\\\Seen\"]", 0, 0, now,
+    );
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, pending_move_destination, pending_move_state, pending_move_special_use,
+        subject, from_name, from_address, to_json, sent_at, snippet, text_body, html_body,
+        flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "unverified-archive", "pending-account", "INBOX", -5, "Archive", "confirmed", "\\Archive",
+      "Archive retained without a stable remote identifier", "Demo", "demo@example.com", "[]", now, "", "", "", "[\"\\\\Seen\"]", 0, 0, now,
+    );
+
+    const inbox = await app.inject({ method: "GET", url: "/api/messages?accountId=pending-account" });
+    const sourceFolder = await app.inject({ method: "GET", url: "/api/messages?accountId=pending-account&folder=INBOX" });
+    const archive = await app.inject({ method: "GET", url: "/api/messages?accountId=pending-account&folder=Archive" });
+    const trash = await app.inject({ method: "GET", url: "/api/messages?accountId=pending-account&folder=Trash" });
+    const archived = await app.inject({ method: "GET", url: "/api/messages?accountId=pending-account&archived=1" });
+    const detail = await app.inject({ method: "GET", url: "/api/messages/pending-archive" });
+    const intentDetail = await app.inject({ method: "GET", url: "/api/messages/pending-intent" });
+
+    expect(inbox.json().items.map((message: { id: string }) => message.id).sort()).toEqual(["pending-intent", "remaining-inbox"]);
+    expect(sourceFolder.json().items.map((message: { id: string }) => message.id).sort()).toEqual(["pending-intent", "remaining-inbox"]);
+    expect(archive.json()).toMatchObject({
+      total: 2,
+      items: expect.arrayContaining([
+        expect.objectContaining({ id: "pending-archive", mailbox: "Archive", movePending: true }),
+        expect.objectContaining({ id: "unverified-archive", mailbox: "Archive", movePending: false, moveLocationUnverified: true }),
+      ]),
+    });
+    expect(trash.json()).toMatchObject({
+      total: 1,
+      items: [expect.objectContaining({ id: "pending-trash", mailbox: "Trash", movePending: true })],
+    });
+    expect(archived.json()).toMatchObject({
+      total: 3,
+      items: expect.arrayContaining([
+        expect.objectContaining({ id: "pending-archive", mailbox: "Archive", movePending: true }),
+        expect.objectContaining({ id: "pending-unlisted-archive", mailbox: "Archive/2026", movePending: true, archived: true }),
+        expect.objectContaining({ id: "unverified-archive", mailbox: "Archive", movePending: false, moveLocationUnverified: true }),
+      ]),
+    });
+    expect(detail.json()).toMatchObject({ id: "pending-archive", mailbox: "Archive", movePending: true });
+    expect(intentDetail.json()).toMatchObject({ id: "pending-intent", mailbox: "INBOX", movePending: true, archived: false });
   });
 });

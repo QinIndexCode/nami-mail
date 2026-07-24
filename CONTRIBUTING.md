@@ -1,10 +1,12 @@
 # 贡献指南
 
+[简体中文](CONTRIBUTING.md) | [English](CONTRIBUTING.en.md)
+
 感谢你帮助改进 Nami Mail。这个项目会处理真实邮件、账户凭据和本地缓存；每一项贡献都应把用户数据边界、可恢复性和可验证性放在功能速度之前。
 
 ## 开始前
 
-- 使用前先阅读 [README](README.md)、[隐私与本地数据说明](docs/PRIVACY.md)、[安全策略](SECURITY.md) 和 [社区行为准则](CODE_OF_CONDUCT.md)。
+- 使用前先阅读 [README](README.md)、[隐私与本地数据说明](docs/PRIVACY.md)、[安全策略](SECURITY.md)、[社区行为准则](CODE_OF_CONDUCT.md) 和 [本地化说明](docs/LOCALIZATION.md)。
 - 漏洞、凭据泄露、可能读取其他用户邮件的路径，不要开公开 Issue；按 [SECURITY.md](SECURITY.md) 的流程私下报告。
 - 不要提交真实邮件、附件、完整地址、OAuth 回调参数、访问令牌、应用专用密码、`.env` 或 `data/` 中的任何文件。用于复现的截图和日志必须脱敏。
 - 涉及新服务商、同步语义、加密格式、数据库迁移、OAuth 权限或自动更新的较大改动，请先说明问题和方案，确认范围后再实现。

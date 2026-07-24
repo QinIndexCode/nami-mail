@@ -3,7 +3,11 @@ import type { MessageStructureObject } from "imapflow";
 import type { Attachment } from "mailparser";
 import type { DatabaseHandle } from "./db.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
-import { messagePayloadForRow, type MessageStorageRow } from "./message-storage.js";
+import {
+  moveActionBlockedError,
+  messagePayloadForRow,
+  type MessageStorageRow,
+} from "./message-storage.js";
 import type { AccountRecord } from "./types.js";
 
 const attachmentPartIdPattern = /^(?:[1-9]\d*)(?:\.[1-9]\d*)*$/;
@@ -148,6 +152,8 @@ export async function downloadMessageAttachment(
     SELECT * FROM messages WHERE id = ?
   `).get(messageId) as MessageStorageRow | undefined;
   if (!message) throw new Error("Message not found.");
+  const moveBlockedError = moveActionBlockedError(message);
+  if (moveBlockedError) throw new Error(moveBlockedError);
   const attachment = (messagePayloadForRow(message, masterKey).attachments ?? []).find((item) => item.partId === partId);
   if (!attachment) throw new Error("Attachment not found. Sync this message again.");
 

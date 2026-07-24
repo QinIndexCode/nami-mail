@@ -41,6 +41,8 @@ jobs:
       # Fail when committed icons or theme marks no longer match their source artwork.
       - run: npm run build:brand:check
       - run: node --test scripts/release-policy.test.mjs
+      - run: node --test scripts/build-locale-catalog.test.mjs
+      - run: node scripts/build-locale-catalog.mjs --check
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test

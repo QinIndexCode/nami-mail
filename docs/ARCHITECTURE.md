@@ -1,5 +1,7 @@
 # 架构与信任边界
 
+[简体中文](ARCHITECTURE.md) | [English](ARCHITECTURE.en.md)
+
 本文面向贡献者和维护者，说明 Nami Mail 当前的本地运行结构、进程边界与主要信任假设。它是代码导览，不替代 [隐私与本地数据说明](PRIVACY.md)、[安全策略](../SECURITY.md) 或 [Windows 发布指南](RELEASING.md)。
 
 ## 运行结构
