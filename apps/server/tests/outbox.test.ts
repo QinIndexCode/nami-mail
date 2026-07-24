@@ -301,7 +301,7 @@ describe("durable outbound submissions", () => {
   });
 
   // VACUUM and WAL checkpointing can exceed Vitest's default timeout on constrained Windows runners.
-  it("physically removes outbound plaintext canaries from SQLite and WAL during migration", () => {
+  it("physically removes outbound plaintext canaries from SQLite and WAL during migration", { timeout: 30_000 }, () => {
     db.close();
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nami-outbox-encryption-"));
     temporaryDirectories.push(directory);

@@ -125,7 +125,7 @@ afterEach(() => {
 
 describe("account-bound credential storage", () => {
   // VACUUM can exceed Vitest's default timeout on constrained Windows runners.
-  it("migrates legacy password and OAuth secrets once, then rejects a legacy downgrade", () => {
+  it("migrates legacy password and OAuth secrets once, then rejects a legacy downgrade", { timeout: 30_000 }, () => {
     const db = testDatabase();
     const masterKey = randomBytes(32);
     const passwordAccount = account("password-account", "password@example.test");
