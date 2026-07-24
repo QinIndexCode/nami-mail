@@ -287,7 +287,7 @@ try {
   assert.equal(renderer.desktopLifecycle?.trayCreated, true, "The system tray entry must be creatable before the window can be hidden.");
   assert.equal(renderer.desktopUpdate?.phase, "unavailable", "Desktop smoke must not contact the live GitHub update channel.");
   assert.equal(renderer.desktopUpdate?.currentVersion, packageManifest.version, "The updater must report the packaged application version.");
-  assert.match(renderer.desktopUpdate?.message ?? "", /自动更新/, "The updater must explain why live checks are disabled during smoke.");
+  assert.equal(renderer.desktopUpdate?.reason, "disabled", "The updater must explain why live checks are disabled during smoke.");
   assert.equal(renderer.desktopApiAvailable, true);
   assert.equal(renderer.desktopNotificationTest?.invoked, true, renderer.desktopNotificationTest?.error ?? "Desktop notification bridge was not invoked.");
   assert.equal(typeof renderer.desktopNotificationTest?.shown, "boolean");
