@@ -269,11 +269,15 @@ function renderDesktopCatalog(packs) {
   ].join("\n");
 }
 
+export function normalizeLineEndings(value) {
+  return value?.replace(/\r\n?/g, "\n");
+}
+
 async function writeOrVerify(outputPath, output, checkOnly) {
   const current = await fs.readFile(outputPath, "utf8").catch(() => undefined);
   if (checkOnly) {
-    assert.equal(current, output, `Generated locale catalog is stale: ${path.relative(projectRoot, outputPath)}`);
-  } else if (current !== output) {
+    assert.equal(normalizeLineEndings(current), output, `Generated locale catalog is stale: ${path.relative(projectRoot, outputPath)}`);
+  } else if (normalizeLineEndings(current) !== output) {
     await fs.writeFile(outputPath, output, "utf8");
   }
 }

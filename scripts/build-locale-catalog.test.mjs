@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateLocalePacks } from "./build-locale-catalog.mjs";
+import { normalizeLineEndings, validateLocalePacks } from "./build-locale-catalog.mjs";
 
 function localePack(file, locale, messages) {
   return {
@@ -64,4 +64,9 @@ test("requires zh-CN as the baseline locale pack", () => {
   ]);
 
   assert.ok(result.issues.includes("Missing required zh-CN locale pack."));
+});
+
+test("compares generated catalogs independently of checkout line endings", () => {
+  assert.equal(normalizeLineEndings("first\r\nsecond\rthird\n"), "first\nsecond\nthird\n");
+  assert.equal(normalizeLineEndings(undefined), undefined);
 });
