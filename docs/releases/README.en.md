@@ -5,7 +5,8 @@
 This directory contains reviewable, reusable GitHub Release bodies. Every release note should serve real users rather than copy build logs, CI output, or internal environment variables.
 
 - [v0.1.0](v0.1.0.en.md) is the ready-to-paste text for the first public release.
-- [v0.1.1](v0.1.1.en.md) is the current ready-to-paste release note and records the real online automatic-update verification that remains outstanding.
+- [v0.1.2](v0.1.2.en.md) is the current ready-to-paste release note and records the real online automatic-update verification that remains outstanding.
+- [v0.1.1](v0.1.1.en.md) corresponds only to an unpublished source tag and must not be used as an installation or automatic-update source.
 - [v0.1.1 candidate](v0.1.1-candidate.en.md) remains a pre-release checklist and must not be used as the published Release body.
 
 ## Rules of Use
