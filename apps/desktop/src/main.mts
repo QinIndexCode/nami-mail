@@ -33,6 +33,7 @@ type ServerRuntimeModule = {
   startServer: (options?: {
     onNewInboxMessages?: (messages: NewMailPayload[]) => void;
     masterKey?: Buffer;
+    translationCacheDir?: string;
   }) => Promise<RunningServer>;
 };
 
@@ -1303,6 +1304,7 @@ async function boot(): Promise<void> {
       localServer = await runtime.startServer({
         masterKey: desktopMasterKey.key,
         onNewInboxMessages: notifyNewMail,
+        translationCacheDir: path.join(app.getPath("userData"), "translation-models"),
       });
     } finally {
       // startServer copies the key for its own lifetime. This copy exists only

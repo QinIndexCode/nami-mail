@@ -1,7 +1,18 @@
 import type { DatabaseHandle } from "./db.js";
 import type { OAuthService } from "./oauth.js";
-import type { TranslationService } from "./translation.js";
+import type { TranslationResult } from "./translation.js";
+import type { TranslationServiceError } from "./translation.js";
 import type { AppSettings } from "./settings.js";
+
+/**
+ * Structured translation service interface shared by external HTTP endpoints
+ * and the local NLLB-200 implementation, keeping routes implementation-agnostic.
+ */
+export interface TranslationServiceLike {
+  isConfigured(): boolean;
+  configurationIssue(): TranslationServiceError | undefined;
+  translate(text: string, targetLocale: string, shutdownSignal?: AbortSignal): Promise<TranslationResult>;
+}
 
 export type AccountRecord = {
   id: string;
@@ -55,8 +66,9 @@ export type RuntimeContext = {
   // IPv6 loopback callback bridge.
   microsoftOAuthCallbackUnavailable?: string;
   // The runtime owns translation endpoint configuration. The route only
-  // submits a message after the user explicitly requests it.
-  translationService?: TranslationService;
+  // submits a message after the user explicitly requests it. This may be
+  // an external HTTP service or a local on-device model.
+  translationService?: TranslationServiceLike;
 };
 
 export function publicAccount(row: AccountRecord) {
