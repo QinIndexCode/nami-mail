@@ -78,7 +78,7 @@
     "concurrently": "^10.0.3",
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
-    "js-yaml": "^5.2.1"
+    "js-yaml": "^5.2.2"
   },
   "overrides": {
     "@huggingface/transformers": {
