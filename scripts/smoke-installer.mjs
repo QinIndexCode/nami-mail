@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { resolveInstallerSmokeBaseDirectory } from "./installer-smoke-location.mjs";
 import { resolveReleaseDirectory } from "./release-policy.mjs";
-import { redactSmokeDiagnosticText } from "./smoke-diagnostics.mjs";
+import { writeSmokeDiagnostic } from "./smoke-diagnostics.mjs";
 
 if (process.platform !== "win32") {
   throw new Error("The NSIS installer smoke test can only run on Windows.");
@@ -19,14 +19,11 @@ const diagnosticReportPath = path.join(projectRoot, "output", "installer-smoke-d
 let installerSmokeStage = "initializing";
 
 async function writeInstallerSmokeDiagnostic(error) {
-  const message = redactSmokeDiagnosticText(error instanceof Error ? error.message : String(error));
-  const diagnostic = {
-    checkedAt: new Date().toISOString(),
+  await writeSmokeDiagnostic({
+    filePath: diagnosticReportPath,
     stage: installerSmokeStage,
-    error: message.slice(0, 8_000),
-  };
-  await fs.mkdir(path.dirname(diagnosticReportPath), { recursive: true });
-  await fs.writeFile(diagnosticReportPath, `${JSON.stringify(diagnostic, null, 2)}\n`, "utf8");
+    error,
+  });
 }
 
 async function main() {
@@ -267,7 +264,9 @@ async function smokeInstalledExecutable(executable) {
   return result;
 }
 
-const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nami-mail-installer-"));
+const installerSmokeBaseDirectory = resolveInstallerSmokeBaseDirectory(projectRoot);
+await fs.mkdir(installerSmokeBaseDirectory, { recursive: true });
+const temporaryRoot = await fs.mkdtemp(path.join(installerSmokeBaseDirectory, "nami-mail-installer-"));
 installerSmokeStage = "prepared";
 const installDirectory = path.join(temporaryRoot, "app");
 let uninstaller;
@@ -414,8 +413,14 @@ try {
       uninstallVerified = false;
     }
   }
-  if (uninstallVerified || !installationCreated) await fs.rm(temporaryRoot, { recursive: true, force: true });
-  else process.stderr.write(`Installer smoke retained its temporary directory for inspection: ${temporaryRoot}\n`);
+  if (uninstallVerified || !installationCreated) {
+    await fs.rm(temporaryRoot, { recursive: true, force: true });
+    await fs.rmdir(installerSmokeBaseDirectory).catch((error) => {
+      if (error?.code !== "ENOTEMPTY" && error?.code !== "ENOENT") throw error;
+    });
+  } else {
+    process.stderr.write(`Installer smoke retained its temporary directory for inspection: ${temporaryRoot}\n`);
+  }
 }
 }
 
