@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -61,6 +62,78 @@ describe("local API", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ ok: true, service: "nami-mail" });
     expect(response.headers["content-security-policy"]).toContain("default-src 'self'");
+  });
+
+  it("keeps Agent confirmation decisions off the HTTP surface", async () => {
+    const unavailable = await app.inject({
+      method: "POST",
+      url: "/api/agent/confirmations/confirmation-1",
+      payload: { decision: "approve" },
+    });
+    const malformed = await app.inject({
+      method: "POST",
+      url: "/api/agent/confirmations/confirmation-1",
+      payload: { decision: "approved" },
+    });
+
+    expect(unavailable.statusCode).toBe(501);
+    expect(unavailable.json()).toMatchObject({ ok: false, code: "not_supported" });
+    expect(malformed.statusCode).toBe(400);
+  });
+
+  it("aborts an active Agent stream when the client closes its response", async () => {
+    let observeAbort!: () => void;
+    const streamAborted = new Promise<void>((resolve) => { observeAbort = resolve; });
+    const agentService = {
+      start: () => undefined,
+      close: async () => undefined,
+      async *streamMessage(_conversationId: string, _input: unknown, signal?: AbortSignal) {
+        signal?.addEventListener("abort", observeAbort, { once: true });
+        yield { type: "status", message: "Streaming" };
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+      },
+    };
+    const streamingApp = await buildApp({
+      db,
+      masterKey: Buffer.alloc(32, 7),
+      backgroundDirectory,
+      agentService: agentService as never,
+    });
+    await streamingApp.listen({ host: "127.0.0.1", port: 0 });
+    const address = streamingApp.server.address();
+    if (!address || typeof address === "string") throw new Error("Expected a TCP listener.");
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const client = httpRequest({
+          hostname: "127.0.0.1",
+          port: address.port,
+          method: "POST",
+          path: "/api/agent/conversations/conversation-1/messages",
+          headers: { "content-type": "application/json" },
+        }, (response) => {
+          response.once("data", () => {
+            client.destroy();
+            resolve();
+          });
+        });
+        client.on("error", () => undefined);
+        client.once("error", reject);
+        client.end(JSON.stringify({
+          content: "Stream this request",
+          providerId: "provider-1",
+          mode: "agent",
+          scope: { mode: "selected_account", accountIds: ["account-1"], messageIds: [] },
+          context: {},
+        }));
+      });
+      await Promise.race([
+        streamAborted,
+        new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("Response close did not abort the Agent stream.")), 1_000)),
+      ]);
+    } finally {
+      await streamingApp.close();
+    }
   });
 
   it("requires a desktop capability token for local API routes while preserving health and OAuth callbacks", async () => {

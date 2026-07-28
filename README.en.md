@@ -18,7 +18,7 @@ Nami Mail is a local-first, multi-account mail client. It brings Gmail, iCloud, 
 
 ## Get Started
 
-For everyday use, download the Windows x64 `Nami Mail Setup <version>.exe` only from [GitHub Releases](https://github.com/QinIndexCode/nami-mail/releases). The `zip` and `json` assets are verified resources for in-app automatic updates, not manual installers. Running from source is for development and contribution only.
+For everyday use, download only the Windows x64 `.exe` installer listed on that version's [GitHub Release](https://github.com/QinIndexCode/nami-mail/releases) page. The `zip` and `json` assets are verified resources for in-app automatic updates, not manual installers. Running from source is for development and contribution only.
 
 See [Windows installation and updates](docs/INSTALLING.en.md) for first installation, SmartScreen, reinstalling the same version, downgrade protection, retained data, uninstallation, and update behavior. See [email provider setup](docs/EMAIL-PROVIDERS.en.md) for account preparation, provider differences, OAuth prerequisites, and manual configuration.
 
@@ -64,7 +64,7 @@ npm.cmd run smoke:server-node
 
 Nami Mail can run as a native Windows app. Its mail UI, interactions, and animations share the same React/CSS implementation as the Web build.
 
-Regular users should use the Release asset `Nami Mail Setup <version>.exe`, not extract and run an update ZIP. Before installation and whenever Windows shows a trust warning, verify the source and signing state through [Windows installation and updates](docs/INSTALLING.en.md).
+Regular users should use the Windows `.exe` installer listed on the Release page, not extract and run an update ZIP. Before installation and whenever Windows shows a trust warning, verify the source and signing state through [Windows installation and updates](docs/INSTALLING.en.md).
 
 ```powershell
 npm.cmd install
@@ -104,7 +104,7 @@ Building a GitHub update package must target the public repository `QinIndexCode
 
 ```powershell
 $env:NAMI_MAIL_GITHUB_REPOSITORY="QinIndexCode/nami-mail"
-$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/0.1.0"
+$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 # Configure at least one trust root below. The private key exists only in this process or GitHub Secrets.
 $env:NAMI_MAIL_UPDATE_ED25519_PRIVATE_KEY="<Base64 PKCS#8 Ed25519 private key>"
 # Authenticode additionally needs a fixed signing identity.
@@ -209,7 +209,7 @@ Do not commit `data/`, `.env`, database sidecar files, outbound attachment direc
 ```powershell
 git remote -v
 git status --short --ignored
-git check-ignore -v data/master.key data/master.key.dpapi .env release-artifacts/0.1.0/update.zip
+git check-ignore -v data/master.key data/master.key.dpapi .env release-artifacts/<version>/update.zip
 ```
 
 You can copy `.env.example` to `.env` to change the port, data path, or log level. Mail sync frequency is controlled in app settings and takes effect immediately.
@@ -222,7 +222,7 @@ npm.cmd run test
 npm.cmd run build
 npm.cmd run smoke:runtime
 npm.cmd run smoke:desktop
-$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/0.1.0"
+$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 npm.cmd run package:win
 npm.cmd run smoke:installer
 npm.cmd audit --omit=dev

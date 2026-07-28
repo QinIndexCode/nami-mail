@@ -1,0 +1,32 @@
+{
+  "name": "@nami/agent-core",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Transport-independent Agent runtime primitives for Nami Mail.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --tsconfig tsconfig.test.json --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@nami/agent-contracts": "file:../agent-contracts",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "tsx": "^4.20.6",
+    "typescript": "^7.0.2"
+  }
+}

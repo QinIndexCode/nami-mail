@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
 import DOMPurify from "dompurify";
 import {
   Archive,
@@ -12,8 +12,11 @@ import {
   FileImage,
   FileSpreadsheet,
   FileText,
+  Folder,
   Forward,
   Inbox,
+  Layers3,
+  ListChecks,
   LoaderCircle,
   Mail,
   MailOpen,
@@ -74,6 +77,8 @@ import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPat
 import { useDialogFocus } from "./useDialogFocus";
 import { findVerificationCodes } from "./verificationCode";
 import { resolveLocale, type Translate, useI18n } from "./i18n";
+
+const AgentWorkspace = lazy(() => import("./AgentWorkspace"));
 
 type MailView = MessageListQuery["messageView"];
 type ToastKind = "success" | "error" | "info" | "warning";
@@ -229,6 +234,21 @@ function AttachmentFileIcon({ kind }: { kind: AttachmentKind }) {
         ? <FileSpreadsheet size={19} />
         : <FileText size={19} />;
   return <span className={`attachment-file-icon kind-${kind}`} aria-hidden="true">{icon}</span>;
+}
+
+function FolderNavigationIcon({ specialUse }: { specialUse: string | null }) {
+  const icon = specialUse === "\\Inbox"
+    ? <Inbox size={15} />
+    : specialUse === "\\Archive" || specialUse === "\\All"
+      ? <Archive size={15} />
+      : specialUse === "\\Sent"
+        ? <Send size={15} />
+        : specialUse === "\\Drafts"
+          ? <FileText size={15} />
+          : specialUse === "\\Trash"
+            ? <Trash2 size={15} />
+            : <Folder size={15} />;
+  return <span aria-hidden="true">{icon}</span>;
 }
 
 function initials(name: string, address: string): string {
@@ -847,6 +867,8 @@ export default function App() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeDraft, setComposeDraft] = useState<ComposeDraft>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentProviderSettingsRequestId, setAgentProviderSettingsRequestId] = useState(0);
   const [sendingStatusOpen, setSendingStatusOpen] = useState(false);
   const [submissions, setSubmissions] = useState<OutboundSubmission[]>([]);
   const [submissionLoading, setSubmissionLoading] = useState(true);
@@ -864,6 +886,7 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const agentLaunchButtonRef = useRef<HTMLButtonElement>(null);
   const readerTitleRef = useRef<HTMLHeadingElement>(null);
   const readerMoreRef = useRef<HTMLDivElement>(null);
   const messageButtonRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -2111,12 +2134,12 @@ export default function App() {
             <button aria-pressed={view === "archived"} className={view === "archived" ? "active" : ""} onClick={() => chooseView("archived")}><Archive size={18} /><span>{t("mail.action.archive")}</span></button>
             <button className={selectedFolder === draftsFolder?.path ? "active" : ""} disabled={!draftsFolder} onClick={() => draftsFolder && chooseFolder(draftsFolder.path)}><FileText size={18} /><span>{t("mail.drafts")}</span></button>
             <button className={selectedFolder === sentFolder?.path ? "active" : ""} disabled={!sentFolder} onClick={() => sentFolder && chooseFolder(sentFolder.path)}><Send size={18} /><span>{t("mail.sent")}</span></button>
-            <button className={`sending-status-nav${submissionAttentionCount ? " attention" : ""}`} aria-label={t("sending.sidebarAria", { status: sendingStatusDescription })} aria-haspopup="dialog" data-tooltip={sendingStatusDescription} onClick={() => { setMobileSidebar(false); setSendingStatusOpen(true); void refreshSubmissions(accounts, { silent: true }); }}>{submissionAttentionCount ? <CircleAlert size={18} /> : <Send size={18} />}<span>{t("sending.title")}</span><em aria-hidden="true">{submissionOutstandingCount || ""}</em></button>
+            <button className={`sending-status-nav${submissionAttentionCount ? " attention" : ""}`} aria-label={t("sending.sidebarAria", { status: sendingStatusDescription })} aria-haspopup="dialog" data-tooltip={sendingStatusDescription} onClick={() => { setMobileSidebar(false); setSendingStatusOpen(true); void refreshSubmissions(accounts, { silent: true }); }}>{submissionAttentionCount ? <CircleAlert size={18} /> : <ListChecks size={18} />}<span>{t("sending.title")}</span><em aria-hidden="true">{submissionOutstandingCount || ""}</em></button>
           </nav>
 
           <div className="accounts-heading"><span>{t("mail.accounts")}</span><IconButton label={t("account.add")} onClick={() => { setMobileSidebar(false); setAddOpen(true); }}><Plus size={16} /></IconButton></div>
           <div className="account-list">
-            <button aria-pressed={selectedAccount === "all"} className={selectedAccount === "all" ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount("all"); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}><span className="account-avatar all"><Sparkles size={14} /></span><span className="account-copy"><strong>{t("mail.allAccounts")}</strong><small>{t("mail.accountCount", { count: accounts.length })}</small></span></button>
+            <button aria-pressed={selectedAccount === "all"} className={selectedAccount === "all" ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount("all"); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}><span className="account-avatar all"><Layers3 size={14} /></span><span className="account-copy"><strong>{t("mail.allAccounts")}</strong><small>{t("mail.accountCount", { count: accounts.length })}</small></span></button>
             {accounts.map((account) => {
               const issue = accountIssues.get(account.id);
               const providerName = localizedProviderName(account);
@@ -2135,7 +2158,7 @@ export default function App() {
             <div className="folder-list">
               <span className="folder-title">{t("mail.folders")}</span>
               {selectedAccountRecord.folders.map((folder) => (
-                <button key={folder.path} className={selectedFolder === folder.path ? "active" : ""} onClick={() => chooseFolder(folder.path)}><Archive size={15} /><span>{folder.name}</span><em>{folder.unseen || ""}</em></button>
+                <button key={folder.path} className={selectedFolder === folder.path ? "active" : ""} aria-pressed={selectedFolder === folder.path} onClick={() => chooseFolder(folder.path)}><FolderNavigationIcon specialUse={folder.specialUse} /><span>{folder.name}</span><em>{folder.unseen || ""}</em></button>
               ))}
             </div>
           )}
@@ -2150,7 +2173,7 @@ export default function App() {
           <header className="column-header">
             <IconButton label={t("navigation.openMenu")} className="mobile-only" buttonRef={mobileMenuButtonRef} onClick={() => setMobileSidebar(true)}><Menu size={19} /></IconButton>
             <div><span className="eyebrow">{selectedAccount === "all" ? t("mail.unifiedMailbox") : selectedAccountRecord ? localizedProviderName(selectedAccountRecord).toUpperCase() : ""}</span><h1>{view === "unread" ? t("mail.unread") : view === "starred" ? t("mail.starred") : view === "archived" ? t("mail.action.archive") : selectedFolderRecord?.name || t("mail.inbox")}</h1></div>
-            <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? openCompose() : setAddOpen(true)}><PenLine size={17} /></IconButton>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton></div>
+            <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? openCompose() : setAddOpen(true)}><PenLine size={17} /></IconButton><button ref={agentLaunchButtonRef} className="agent-launch-button" type="button" onClick={() => setAgentOpen(true)} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><Sparkles size={16} /></span><span>{t("agent.launch")}</span></button>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton></div>
           </header>
 
           <div className="search-wrap"><Search size={17} /><label className="visually-hidden" htmlFor="mail-search">{t("mail.search")}</label><input id="mail-search" ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("mail.searchPlaceholder")} />{query && <IconButton label={t("mail.clearSearch")} className="search-clear" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}><X size={15} /></IconButton>}</div>
@@ -2289,11 +2312,20 @@ export default function App() {
             <div className="reader-empty"><div className="reader-orb"><Mail size={32} /></div><h2>{t("mail.reader.emptyTitle")}</h2><p>{t("mail.reader.emptyDescription")}</p></div>
           )}
         </section>
+        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} providerSettingsRequestId={agentProviderSettingsRequestId} onClose={() => setAgentOpen(false)} onOpenMessage={(messageId) => {
+          setAgentOpen(false);
+          const message = messagesRef.current.find((item) => item.id === messageId);
+          if (message) {
+            void openMessage(message);
+            return;
+          }
+          void api.message(messageId).then((fetched) => openMessage(fetched)).catch((error: unknown) => showToast(mailErrorToastMessage(error, t("mail.error.openNew"), t), "error"));
+        }} /></Suspense>}
       </main>
 
       {addOpen && <AccountConnectionModal providers={providers} onClose={() => setAddOpen(false)} onAdded={load} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} />}
       {composeOpen && <ComposeModal accounts={accounts} draft={composeDraft} onClose={() => setComposeOpen(false)} onSent={(message, kind) => showToast(message, kind)} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} />}
-      {settingsOpen && <SettingsModal settings={settings} accounts={accounts} onClose={() => setSettingsOpen(false)} onSettingsChange={applySettings} onAccountRemoved={removeAccountFromView} onAccountSync={retryAccountSync} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} />}
+      {settingsOpen && <SettingsModal settings={settings} accounts={accounts} onClose={() => setSettingsOpen(false)} onSettingsChange={applySettings} onAccountRemoved={removeAccountFromView} onAccountSync={retryAccountSync} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} onOpenAgentProviderSettings={() => { setSettingsOpen(false); setAgentProviderSettingsRequestId((requestId) => requestId + 1); setAgentOpen(true); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} />}
       {sendingStatusOpen && <SendingStatusModal accounts={accounts} submissions={submissions} loading={submissionLoading} loadError={submissionLoadError} onClose={() => setSendingStatusOpen(false)} onRefresh={() => refreshSubmissions(accounts)} onSyncAccount={async (accountId) => { await retryAccountSync(accountId); }} onCreateNewMessage={(draft) => { setSendingStatusOpen(false); openCompose(draft); }} fallbackFocusRef={mobileMenuButtonRef} />}
       <StartupUpdatePrompt
         snapshot={desktopUpdateStatus}

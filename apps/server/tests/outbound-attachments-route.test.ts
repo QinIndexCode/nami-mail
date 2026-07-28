@@ -172,6 +172,7 @@ describe("outbound attachment API", () => {
       expect.objectContaining({ attachments: [expect.objectContaining({ filename: "draft-reference.txt" })] }),
       { replaceDraftId: undefined },
       undefined,
+      undefined,
     );
 
     const now = new Date().toISOString();

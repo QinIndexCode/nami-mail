@@ -1,0 +1,600 @@
+import { createHash, randomUUID } from "node:crypto";
+import type { AgentSourceEvent, Citation } from "@nami/agent-contracts";
+import type { DatabaseHandle } from "./db.js";
+import { messagePayloadById } from "./message-storage.js";
+import { chunkMailContent, cleanMailContent } from "./agent/index.js";
+import { CitationRevalidator, SqliteCitationAuthority, type StoredCitationReference } from "./agent/citations.js";
+import { AccountLifecycleStore, type AccountGenerationLease } from "./agent/lifecycle.js";
+import { EncryptedRagPageStore, type DecryptedRagPage, type RagPageMetadata } from "./agent/rag-page-store.js";
+import { AgentSourceEventOutbox, type ClaimedSourceEvent } from "./agent/source-events.js";
+import { agentOpaqueDigest, canonicalAgentJson } from "./agent/store-crypto.js";
+
+const RAG_PAYLOAD_VERSION = 1;
+const workerIntervalMs = 1_500;
+const maximumPagesPerAccount = 10_000;
+const maximumSearchTerms = 32;
+const maximumInitialBackfillScan = 100;
+
+export type AgentRagPagePayload = {
+  version: typeof RAG_PAYLOAD_VERSION;
+  kind: "mail-chunk";
+  messageId: string;
+  sourceRevision: string;
+  chunkId: string;
+  chunkIndex: number;
+  content: string;
+  contentHash: string;
+  subject: string;
+  sender: string;
+  sentAt?: string;
+  mailbox: string;
+  cleaner: {
+    version: string;
+    source: "text" | "html" | "empty";
+    truncated: boolean;
+    removedQuotedContent: boolean;
+    removedSignatureOrDisclaimer: boolean;
+  };
+};
+
+export type AgentRagSearchResult = {
+  citation: Citation;
+  content: string;
+  score: number;
+};
+
+export type AgentRagWorkerOptions = {
+  db: DatabaseHandle;
+  masterKey: Buffer;
+  lifecycle: AccountLifecycleStore;
+  sourceEvents: AgentSourceEventOutbox;
+  pollIntervalMs?: number;
+  now?: () => string;
+};
+
+type IndexedPage = {
+  accountId: string;
+  accountGeneration: number;
+  pageId: string;
+  pageRevision: number;
+  payload: AgentRagPagePayload;
+  terms: readonly string[];
+};
+
+type BackfillCursor = {
+  generation: number;
+  lastRowId: number;
+  exhausted: boolean;
+};
+
+type BackfillMessageRow = {
+  row_id: number;
+  id: string;
+  account_id: string;
+  mailbox: string;
+  uid: number;
+  created_at: string;
+};
+
+function stableId(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("base64url").slice(0, 60);
+}
+
+function pageIdFor(messageId: string, chunkIndex: number): string {
+  return `message:${messageId}:chunk:${chunkIndex}`;
+}
+
+function pagePrefix(messageId: string): string {
+  return `message:${messageId}:chunk:`;
+}
+
+function searchTerms(value: string): string[] {
+  const normalized = value.toLocaleLowerCase().normalize("NFC");
+  const terms = normalized.match(/[\u3400-\u9FFF\uF900-\uFAFF]|[\p{L}\p{N}_-]{2,}/gu) ?? [];
+  return [...new Set(terms)].slice(0, maximumSearchTerms);
+}
+
+function parsePayload(value: unknown): AgentRagPagePayload | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const item = value as Record<string, unknown>;
+  const cleaner = item.cleaner;
+  if (!cleaner || typeof cleaner !== "object" || Array.isArray(cleaner)) return undefined;
+  const detail = cleaner as Record<string, unknown>;
+  if (
+    item.version !== RAG_PAYLOAD_VERSION
+    || item.kind !== "mail-chunk"
+    || typeof item.messageId !== "string"
+    || typeof item.sourceRevision !== "string"
+    || typeof item.chunkId !== "string"
+    || typeof item.chunkIndex !== "number"
+    || typeof item.content !== "string"
+    || typeof item.contentHash !== "string"
+    || typeof item.subject !== "string"
+    || typeof item.sender !== "string"
+    || typeof item.mailbox !== "string"
+    || typeof detail.version !== "string"
+    || (detail.source !== "text" && detail.source !== "html" && detail.source !== "empty")
+    || typeof detail.truncated !== "boolean"
+    || typeof detail.removedQuotedContent !== "boolean"
+    || typeof detail.removedSignatureOrDisclaimer !== "boolean"
+  ) return undefined;
+  return {
+    version: RAG_PAYLOAD_VERSION,
+    kind: "mail-chunk",
+    messageId: item.messageId,
+    sourceRevision: item.sourceRevision,
+    chunkId: item.chunkId,
+    chunkIndex: item.chunkIndex,
+    content: item.content,
+    contentHash: item.contentHash,
+    subject: item.subject,
+    sender: item.sender,
+    ...(typeof item.sentAt === "string" ? { sentAt: item.sentAt } : {}),
+    mailbox: item.mailbox,
+    cleaner: {
+      version: detail.version,
+      source: detail.source,
+      truncated: detail.truncated,
+      removedQuotedContent: detail.removedQuotedContent,
+      removedSignatureOrDisclaimer: detail.removedSignatureOrDisclaimer,
+    },
+  };
+}
+
+function metadataKey(accountId: string, generation: number, pageId: string): string {
+  return `${accountId}\u0000${generation}\u0000${pageId}`;
+}
+
+function indexKey(accountId: string, generation: number, pageId: string, revision: number): string {
+  return `${metadataKey(accountId, generation, pageId)}\u0000${revision}`;
+}
+
+function scorePage(queryTerms: readonly string[], entry: IndexedPage): number {
+  if (!queryTerms.length) return 0;
+  const haystack = `${entry.payload.subject}\n${entry.payload.sender}\n${entry.payload.content}`.toLocaleLowerCase();
+  let lexical = 0;
+  for (const term of queryTerms) {
+    if (!haystack.includes(term)) continue;
+    const titleWeight = entry.payload.subject.toLocaleLowerCase().includes(term) ? 1.25 : 0;
+    lexical += 1 + titleWeight;
+  }
+  const overlap = queryTerms.filter((term) => entry.terms.includes(term)).length;
+  const semantic = overlap / Math.max(queryTerms.length, entry.terms.length, 1);
+  return lexical + semantic;
+}
+
+function excerpt(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= 360 ? normalized : `${normalized.slice(0, 357).trimEnd()}...`;
+}
+
+function asCitation(entry: IndexedPage, confidence: number): StoredCitationReference {
+  const payload = entry.payload;
+  return {
+    accountGeneration: entry.accountGeneration,
+    sourceRevision: payload.sourceRevision,
+    citation: {
+      id: `rag_${stableId(`${entry.accountId}\u0000${payload.messageId}\u0000${payload.chunkId}\u0000${payload.sourceRevision}`)}`,
+      source: "rag-chunk",
+      accountId: entry.accountId,
+      messageId: payload.messageId,
+      chunkId: payload.chunkId,
+      subject: payload.subject,
+      ...(payload.sender ? { sender: payload.sender } : {}),
+      ...(payload.sentAt ? { sentAt: payload.sentAt } : {}),
+      mailbox: payload.mailbox,
+      excerpt: excerpt(payload.content),
+      confidence,
+      sourceRevision: payload.sourceRevision,
+      target: { kind: "message", id: payload.messageId },
+    },
+  };
+}
+
+/**
+ * Consumes the transactional mail-event outbox and keeps the local encrypted
+ * RAG pages in sync. Its index is intentionally process-local; only encrypted
+ * pages survive restarts and account key revocation immediately makes them unreadable.
+ */
+export class AgentRagWorker {
+  private readonly pageStore: EncryptedRagPageStore;
+  private readonly citations: CitationRevalidator;
+  private readonly index = new Map<string, IndexedPage>();
+  private readonly workerId = `nami-rag-${randomUUID()}`;
+  private readonly pollIntervalMs: number;
+  private readonly now: () => string;
+  private readonly backfillCursors = new Map<string, BackfillCursor>();
+  private timer: NodeJS.Timeout | undefined;
+  private draining: Promise<void> | undefined;
+  private stopped = false;
+
+  constructor(private readonly options: AgentRagWorkerOptions) {
+    this.pageStore = new EncryptedRagPageStore(options.db, options.masterKey, options.lifecycle, options.now);
+    this.citations = new CitationRevalidator(new SqliteCitationAuthority(options.db, options.masterKey));
+    this.pollIntervalMs = Math.max(250, Math.min(30_000, options.pollIntervalMs ?? workerIntervalMs));
+    this.now = options.now ?? (() => new Date().toISOString());
+  }
+
+  start(): void {
+    if (this.stopped) return;
+    this.schedule(0);
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    await this.draining;
+    this.index.clear();
+    this.backfillCursors.clear();
+  }
+
+  async drainOnce(limit = 25): Promise<void> {
+    if (this.stopped) return;
+    if (this.draining) return this.draining;
+    const work = this.drain(limit).finally(() => {
+      if (this.draining === work) this.draining = undefined;
+    });
+    this.draining = work;
+    return work;
+  }
+
+  /**
+   * When `allowedMessageIds` is supplied, it is an exact authorization
+   * boundary. The worker never expands an anchor message into a thread;
+   * callers must resolve and authorize every permitted message before search.
+   */
+  async search(
+    accountIds: readonly string[],
+    query: string,
+    limit = 8,
+    signal?: AbortSignal,
+    allowedMessageIds?: readonly string[],
+  ): Promise<AgentRagSearchResult[]> {
+    if (signal?.aborted) return [];
+    const terms = searchTerms(query);
+    if (!terms.length || !accountIds.length || (allowedMessageIds !== undefined && !allowedMessageIds.length)) return [];
+    const accountSet = new Set(accountIds);
+    const messageSet = allowedMessageIds === undefined ? undefined : new Set(allowedMessageIds);
+    for (const accountId of accountSet) {
+      if (signal?.aborted) return [];
+      let lease: AccountGenerationLease;
+      try {
+        lease = this.options.lifecycle.acquireLease(accountId);
+      } catch {
+        continue;
+      }
+      this.warmAccount(lease);
+    }
+    const candidates = [...this.index.values()]
+      .filter((entry) => accountSet.has(entry.accountId) && (messageSet === undefined || messageSet.has(entry.payload.messageId)))
+      .map((entry) => ({ entry, score: scorePage(terms, entry) }))
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score || left.entry.pageId.localeCompare(right.entry.pageId))
+      .slice(0, Math.max(1, Math.min(30, limit * 4)));
+    const maximum = Math.max(1, Math.min(30, limit));
+    const results: AgentRagSearchResult[] = [];
+    for (const candidate of candidates) {
+      if (signal?.aborted || results.length >= maximum) break;
+      const confidence = Math.min(1, candidate.score / Math.max(terms.length * 2.25, 1));
+      const reference = asCitation(candidate.entry, confidence);
+      const validated = this.citations.revalidate(reference);
+      if (!validated.valid) {
+        this.index.delete(indexKey(candidate.entry.accountId, candidate.entry.accountGeneration, candidate.entry.pageId, candidate.entry.pageRevision));
+        continue;
+      }
+      results.push({ citation: validated.citation, content: candidate.entry.payload.content, score: candidate.score });
+    }
+    return results;
+  }
+
+  evictAccount(accountId: string, generationAtMost = Number.MAX_SAFE_INTEGER): void {
+    for (const [key, entry] of this.index) {
+      if (entry.accountId === accountId && entry.accountGeneration <= generationAtMost) this.index.delete(key);
+    }
+  }
+
+  private schedule(delay: number): void {
+    if (this.stopped || this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      void this.drainOnce().finally(() => this.schedule(this.pollIntervalMs));
+    }, delay);
+    this.timer.unref?.();
+  }
+
+  private async drain(limit: number): Promise<void> {
+    this.queueInitialBackfill(limit);
+    const claims = this.options.sourceEvents.claimPending({ limit, owner: this.workerId });
+    for (const claim of claims) {
+      try {
+        this.processClaim(claim);
+        this.options.sourceEvents.complete(claim);
+      } catch (error) {
+        const code = error instanceof Error && error.message.includes("account")
+          ? "account_state_unavailable"
+          : "rag_ingestion_failed";
+        try {
+          this.options.sourceEvents.fail(claim, code);
+        } catch {
+          // A lost claim is safe: the durable outbox recovery path will decide its next state.
+        }
+      }
+    }
+  }
+
+  /**
+   * Older mail may predate Agent source events. Seed it through the same
+   * encrypted outbox used by live sync, in small batches, so it receives the
+   * normal lifecycle, retry, and deletion guarantees instead of a parallel
+   * indexing path. A source event is written at most once per active account
+   * generation; after a restart the cursor can safely rescan metadata.
+   */
+  private queueInitialBackfill(limit: number): void {
+    const target = Math.max(1, Math.min(limit, maximumInitialBackfillScan));
+    let remaining = target;
+    const accounts = this.options.db.prepare("SELECT id FROM accounts ORDER BY created_at, id").all() as Array<{ id: string }>;
+    for (const account of accounts) {
+      if (remaining <= 0) break;
+      let lease: AccountGenerationLease;
+      try {
+        lease = this.options.lifecycle.acquireLease(account.id);
+      } catch {
+        this.backfillCursors.delete(account.id);
+        continue;
+      }
+      const current = this.backfillCursors.get(account.id);
+      const cursor = current && current.generation === lease.generation
+        ? current
+        : { generation: lease.generation, lastRowId: 0, exhausted: false } satisfies BackfillCursor;
+      if (cursor.exhausted) continue;
+      const task = this.options.lifecycle.registerTask(lease);
+      try {
+        const rows = this.options.db.prepare(`
+          SELECT rowid AS row_id, id, account_id, mailbox, uid, created_at
+          FROM messages
+          WHERE account_id = ? AND rowid > ?
+          ORDER BY rowid
+          LIMIT ?
+        `).all(account.id, cursor.lastRowId, Math.max(remaining * 4, target)) as BackfillMessageRow[];
+        if (!rows.length) {
+          cursor.exhausted = true;
+          this.backfillCursors.set(account.id, cursor);
+          continue;
+        }
+        for (const row of rows) {
+          cursor.lastRowId = row.row_id;
+          task.assertCurrent();
+          if (this.hasSourceEvent(lease, row.id)) continue;
+          const occurredAt = this.now();
+          this.options.sourceEvents.enqueue({
+            lease,
+            event: {
+              eventId: randomUUID(),
+              type: "message-upserted",
+              accountId: lease.accountId,
+              accountGeneration: lease.generation,
+              revision: this.backfillRevision(row),
+              source: { kind: "message", messageId: row.id },
+              occurredAt,
+            },
+            payloadForDigest: {
+              source: "initial-backfill",
+              messageId: row.id,
+              accountId: lease.accountId,
+              accountGeneration: lease.generation,
+            },
+          });
+          remaining -= 1;
+          if (remaining <= 0) break;
+        }
+        if (rows.length < Math.max(remaining * 4, target)) cursor.exhausted = true;
+        this.backfillCursors.set(account.id, cursor);
+      } finally {
+        task.release();
+      }
+    }
+  }
+
+  private hasSourceEvent(lease: AccountGenerationLease, messageId: string): boolean {
+    const sourceLocatorOpaque = agentOpaqueDigest(
+      this.options.masterKey,
+      "source-locator",
+      canonicalAgentJson({ accountId: lease.accountId, source: { kind: "message", messageId } }),
+    );
+    return Boolean(this.options.db.prepare(`
+      SELECT 1 FROM agent_source_events
+      WHERE account_id = ? AND account_generation = ?
+        AND source_locator_opaque = ? AND event_type = 'message-upserted'
+      LIMIT 1
+    `).get(lease.accountId, lease.generation, sourceLocatorOpaque));
+  }
+
+  private backfillRevision(row: BackfillMessageRow): string {
+    return `initial-backfill-v1:${stableId(canonicalAgentJson({
+      messageId: row.id,
+      accountId: row.account_id,
+      mailbox: row.mailbox,
+      uid: row.uid,
+      createdAt: row.created_at,
+    }))}`;
+  }
+
+  private processClaim(claim: ClaimedSourceEvent): void {
+    const lifecycle = this.options.lifecycle.current(claim.accountId);
+    const needsAccountData = claim.eventType === "message-upserted" || claim.eventType === "message-deleted"
+      || claim.eventType === "attachment-upserted" || claim.eventType === "attachment-deleted";
+    if (!lifecycle || lifecycle.generation !== claim.accountGeneration) {
+      throw new Error("Source event account lifecycle is unavailable.");
+    }
+    if (!needsAccountData) {
+      const event = this.options.sourceEvents.recoverClaimedEvent(claim);
+      this.processLifecycleEvent(event);
+      return;
+    }
+    const lease = this.options.lifecycle.acquireLease(claim.accountId);
+    const event = this.options.sourceEvents.recoverClaimedEvent(claim, lease);
+    if (event.type === "message-upserted") {
+      this.upsertMessage(lease, event);
+      return;
+    }
+    if (event.type === "message-deleted") {
+      const messageId = event.source?.messageId ?? "";
+      // Mail-state transactions remove the primary row before appending a
+      // delete event. If a row with the same deterministic cache id exists
+      // again, it was re-ingested after that deletion (for example after a
+      // UIDVALIDITY reset). A retried old delete must not tombstone its newer
+      // pages.
+      if (!this.currentMessageExists(lease, messageId)) {
+        this.tombstoneMessagePages(lease, messageId);
+      }
+      return;
+    }
+    // Attachment metadata is represented on the parent message. A later
+    // attachment extractor can replace this with its own safe page type.
+    this.upsertMessage(lease, { ...event, type: "message-upserted" });
+  }
+
+  private processLifecycleEvent(event: AgentSourceEvent): void {
+    this.evictAccount(event.accountId, event.accountGeneration);
+    if (event.type !== "account-deleted" && event.type !== "account-generation-advanced") return;
+    // The lifecycle event may run after its DEK was deliberately discarded,
+    // so deletion uses only identifiers and never attempts decryption.
+    this.options.db.prepare(`
+      DELETE FROM agent_rag_pages
+      WHERE account_id = ? AND account_generation <= ?
+    `).run(event.accountId, event.accountGeneration);
+  }
+
+  private upsertMessage(lease: AccountGenerationLease, event: AgentSourceEvent): void {
+    const messageId = event.source?.messageId;
+    if (!messageId) throw new Error("Message source event has no message id.");
+    const stored = messagePayloadById(this.options.db, this.options.masterKey, messageId);
+    if (!stored || stored.row.account_id !== lease.accountId) {
+      this.tombstoneMessagePages(lease, messageId);
+      return;
+    }
+    const payload = stored.payload;
+    const cleaned = cleanMailContent({
+      subject: payload.subject,
+      textBody: payload.textBody,
+      htmlBody: payload.htmlBody,
+    });
+    const chunks = chunkMailContent({
+      messageId,
+      sourceRevision: String(event.revision),
+      subject: cleaned.normalizedSubject,
+      text: cleaned.text,
+    });
+    const current = this.pageStore.listMetadata(lease);
+    const byPageId = new Map(current.map((page) => [page.pageId, page]));
+    const retained = new Set<string>();
+    for (const chunk of chunks) {
+      const pageId = pageIdFor(messageId, chunk.chunkIndex);
+      retained.add(pageId);
+      const nextPayload: AgentRagPagePayload = {
+        version: RAG_PAYLOAD_VERSION,
+        kind: "mail-chunk",
+        messageId,
+        sourceRevision: String(event.revision),
+        chunkId: chunk.chunkId,
+        chunkIndex: chunk.chunkIndex,
+        content: chunk.content,
+        contentHash: chunk.contentHash,
+        subject: cleaned.normalizedSubject,
+        sender: [payload.fromName, payload.fromAddress].filter(Boolean).join(" <").replace(/ <([^<]+)$/, " <$1>"),
+        ...(typeof stored.row.sent_at === "string" ? { sentAt: stored.row.sent_at } : {}),
+        mailbox: stored.row.mailbox,
+        cleaner: {
+          version: cleaned.cleanerVersion,
+          source: cleaned.source,
+          truncated: cleaned.truncated,
+          removedQuotedContent: cleaned.removedQuotedContent,
+          removedSignatureOrDisclaimer: cleaned.removedSignatureOrDisclaimer,
+        },
+      };
+      const existing = byPageId.get(pageId);
+      const existingPage = existing?.state === "active" ? this.pageStore.get(lease, pageId) : undefined;
+      const existingPayload = parsePayload(existingPage?.payload);
+      if (existingPayload?.sourceRevision === nextPayload.sourceRevision && existingPayload.contentHash === nextPayload.contentHash) {
+        this.upsertIndex(existingPage!);
+        continue;
+      }
+      const page = this.pageStore.put({
+        lease,
+        pageId,
+        pageRevision: this.nextPageRevision(lease, pageId, existing),
+        pageKind: "mail-chunk",
+        payload: nextPayload,
+      });
+      this.upsertIndex({ ...page, payload: nextPayload });
+    }
+    for (const page of current) {
+      if (!page.pageId.startsWith(pagePrefix(messageId)) || retained.has(page.pageId)) continue;
+      this.pageStore.tombstone(lease, page.pageId);
+      this.removeIndex(lease.accountId, lease.generation, page.pageId);
+    }
+  }
+
+  private tombstoneMessagePages(lease: AccountGenerationLease, messageId: string): void {
+    if (!messageId) return;
+    for (const page of this.pageStore.listMetadata(lease)) {
+      if (!page.pageId.startsWith(pagePrefix(messageId))) continue;
+      this.pageStore.tombstone(lease, page.pageId);
+      this.removeIndex(lease.accountId, lease.generation, page.pageId);
+    }
+  }
+
+  private currentMessageExists(lease: AccountGenerationLease, messageId: string): boolean {
+    if (!messageId) return false;
+    return Boolean(this.options.db.prepare(`
+      SELECT 1 FROM messages WHERE id = ? AND account_id = ?
+    `).get(messageId, lease.accountId));
+  }
+
+  private nextPageRevision(
+    lease: AccountGenerationLease,
+    pageId: string,
+    visibleCurrent: RagPageMetadata | undefined,
+  ): number {
+    if (visibleCurrent) return visibleCurrent.pageRevision + 1;
+    const row = this.options.db.prepare(`
+      SELECT COALESCE(MAX(page_revision), 0) AS page_revision
+      FROM agent_rag_pages
+      WHERE account_id = ? AND account_generation = ? AND page_id = ?
+    `).get(lease.accountId, lease.generation, pageId) as { page_revision: number };
+    return row.page_revision + 1;
+  }
+
+  private warmAccount(lease: AccountGenerationLease): void {
+    const pages = this.pageStore.listMetadata(lease).slice(0, maximumPagesPerAccount);
+    for (const page of pages) {
+      const key = indexKey(lease.accountId, lease.generation, page.pageId, page.pageRevision);
+      if (this.index.has(key)) continue;
+      const decrypted = this.pageStore.get(lease, page.pageId);
+      if (decrypted) this.upsertIndex(decrypted);
+    }
+  }
+
+  private upsertIndex(page: DecryptedRagPage): void {
+    const payload = parsePayload(page.payload);
+    if (!payload) return;
+    this.removeIndex(page.accountId, page.accountGeneration, page.pageId);
+    const key = indexKey(page.accountId, page.accountGeneration, page.pageId, page.pageRevision);
+    this.index.set(key, {
+      accountId: page.accountId,
+      accountGeneration: page.accountGeneration,
+      pageId: page.pageId,
+      pageRevision: page.pageRevision,
+      payload,
+      terms: searchTerms(`${payload.subject}\n${payload.sender}\n${payload.content}`),
+    });
+  }
+
+  private removeIndex(accountId: string, generation: number, pageId: string): void {
+    const prefix = `${metadataKey(accountId, generation, pageId)}\u0000`;
+    for (const key of this.index.keys()) {
+      if (key.startsWith(prefix)) this.index.delete(key);
+    }
+  }
+}
