@@ -15,7 +15,7 @@ After the interface ships, `--output json` will be the scripting interface. Each
   "error": null,
   "meta": {
     "durationMs": 18,
-    "version": "0.2.0"
+    "version": "0.2.1"
   }
 }
 ```

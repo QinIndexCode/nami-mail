@@ -1,6 +1,6 @@
 {
   "name": "@nami/agent-contracts",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Versioned contracts shared by Nami Mail Agent hosts and clients.",

@@ -85,6 +85,23 @@ test("Windows packaging reuses a local Electron distribution only when its execu
   const zipAssemblyLoadIndex = packageSmokeScript.indexOf("Add-Type -AssemblyName System.IO.Compression.FileSystem");
   const zipOpenIndex = packageSmokeScript.indexOf("[IO.Compression.ZipFile]::OpenRead");
   assert.ok(zipAssemblyLoadIndex >= 0 && zipOpenIndex > zipAssemblyLoadIndex, "ZIP package smoke must load the ZipFile assembly before opening update archives.");
+  assert.match(
+    packageSmokeScript,
+    /const packagedDesktopSmokeSupervisorTimeoutMs = 90_000;[\s\S]*?timeout: packagedDesktopSmokeSupervisorTimeoutMs,/,
+    "The package smoke must not terminate the packaged desktop smoke before its own diagnostic is available.",
+  );
+  assert.match(
+    packageSmokeScript,
+    /const installerSmokeSupervisorTimeoutMs = 360_000;[\s\S]*?timeout: installerSmokeSupervisorTimeoutMs,/,
+    "The package smoke must leave the installer smoke enough time to return its own diagnostic.",
+  );
+
+  const installerSmokeScript = await fs.readFile(path.join(projectRoot, "scripts", "smoke-installer.mjs"), "utf8");
+  assert.match(
+    installerSmokeScript,
+    /const installedDesktopSmokeSupervisorTimeoutMs = 90_000;[\s\S]*?timeout: installedDesktopSmokeSupervisorTimeoutMs,/,
+    "The installer smoke must not terminate the desktop smoke at its own diagnostic boundary.",
+  );
 });
 
 test("release repository and signing identity inputs are strict", () => {
