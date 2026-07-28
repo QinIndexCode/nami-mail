@@ -25,7 +25,7 @@ Nami Mail 的桌面更新只面向公开 GitHub Releases。客户端不携带 Gi
 - 使用 Windows x64、Node.js 22.14.0 或更高版本；
 - 使用公开仓库 `QinIndexCode/nami-mail`，或在仓库迁移后更新所有构建和发行配置；
 - `package.json` 的版本必须是精确的稳定语义版本 `x.y.z`，tag 必须精确为 `v<version>`；
-- 发布输出目录必须是仓库内的相对隔离目录，例如 `release-artifacts/0.1.0`。默认输出已按当前版本使用 `release-artifacts/<package.json version>`；正式发布和并行验证仍应显式指定目录，不能复用旧构建物；
+- 发布输出目录必须是仓库内的相对隔离目录，例如 `release-artifacts/<version>`。默认输出已按当前版本使用 `release-artifacts/<package.json version>`；正式发布和并行验证仍应显式指定目录，不能复用旧构建物；
 - 至少配置一种更新信任根。生产发行建议同时配置带时间戳的 Authenticode 签名和 Ed25519 清单签名。
 
 | 信任根 | 需要的值 | 运行时行为 |
@@ -74,7 +74,7 @@ npm.cmd run verify:legacy-sqlite-compat -- --legacy-root <older-stable-release-c
 普通本地安装包不配置 GitHub 更新通道，可用于安装器基本验证：
 
 ```powershell
-$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/0.1.0"
+$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 npm.cmd run package:win
 npm.cmd run smoke:installer
 ```
@@ -83,7 +83,7 @@ GitHub 更新包预检使用公开仓库、隔离目录和至少一种信任根�
 
 ```powershell
 $env:NAMI_MAIL_GITHUB_REPOSITORY="QinIndexCode/nami-mail"
-$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/0.1.0"
+$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 $env:NAMI_MAIL_UPDATE_ED25519_PRIVATE_KEY="<Base64 PKCS#8 Ed25519 private key>"
 npm.cmd run package:win:github
 ```
@@ -110,9 +110,9 @@ npm.cmd run package:win:github
 - 是否完成了真实旧版到新版的公开网络更新验收。尚未完成时必须明确写为待验证；
 - 该精确安装程序的 Authenticode 签名状态。没有有效签名时，必须说明 Windows SmartScreen 可能显示未知发布者提示，不能暗示用户应绕过系统警告；
 - 数据兼容性、需要用户重新登录/重新授权的情况，以及是否存在不可逆迁移；
-- 仅下载本 Release 的 `Nami Mail Setup <version>.exe` 进行手动安装。版本化 ZIP 和 JSON 是自动更新内部资源，不应让用户自行解压或运行。
+- 仅下载本 Release 页面列出的 Windows `.exe` 安装程序进行手动安装。版本化 ZIP 和 JSON 是自动更新内部资源，不应让用户自行解压或运行。
 
-本仓库将可公开审阅的版本说明放在 [Release Notes 目录](releases/README.md)。首发可直接使用 [v0.1.0 说明](releases/v0.1.0.md)，当前 `0.1.2` 使用 [正式说明](releases/v0.1.2.md)。保留的 [候选模板](releases/v0.1.1-candidate.md) 仅用于发布前检查；`v0.1.1` 仅为未发布资产的源码标签，不应作为安装来源。正式说明故意保留“尚未完成真实线上升级验收”的安全文案，只有完成本页末尾的全部真实验证并保存证据后，才能在后续版本说明中写为已完成。
+本仓库将可公开审阅的版本说明放在 [Release Notes 目录](releases/README.md)。当前 `0.2.0` 使用 [正式说明](releases/v0.2.0.md)，上一版为 [v0.1.2 说明](releases/v0.1.2.md)。保留的 [候选模板](releases/v0.1.1-candidate.md) 仅用于发布前检查；`v0.1.1` 仅为未发布资产的源码标签，不应作为安装来源。正式说明故意保留“尚未完成真实线上升级验收”的安全文案，只有完成本页末尾的全部真实验证并保存证据后，才能在后续版本说明中写为已完成。
 
 发布说明不得包含 `GH_TOKEN`、证书、私钥、OAuth 凭据、真实邮件、测试账户数据或本地绝对路径。若发布后发现资源、签名、版本或更新清单不一致，应先撤销或标记该 Release，而不是静默替换文件。
 

@@ -7,6 +7,8 @@ import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import sharp from "sharp";
 import { z } from "zod";
+import { AgentService, AgentServiceError, type AgentConversationScope, type AgentMessageInput, type AgentProviderInput } from "./agent-service.js";
+import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
 import {
   ACCOUNT_CREDENTIAL_CRYPTO_VERSION,
   encryptAccountPassword,
@@ -201,6 +203,53 @@ const settingsPatchSchema = z.object({
   notificationSound: z.enum(NOTIFICATION_SOUNDS).optional(),
   refreshIntervalSeconds: z.union([z.literal(30), z.literal(60), z.literal(180), z.literal(300)]).optional(),
   closeBehavior: z.enum(CLOSE_BEHAVIORS).optional(),
+}).strict();
+
+const agentProviderSchema = z.object({
+  label: z.string().trim().min(1).max(128),
+  kind: z.enum(["openai-compatible", "ollama"]),
+  endpoint: z.string().trim().min(1).max(2_048),
+  model: z.string().trim().min(1).max(256),
+  apiKey: z.string().max(8_192).optional(),
+  clearApiKey: z.boolean().optional(),
+  timeoutMs: z.number().int().min(1_000).max(120_000),
+  allowCloudMailContent: z.boolean(),
+  makeDefault: z.boolean().optional(),
+}).strict();
+
+const agentScopeSchema = z.object({
+  mode: z.enum(["all_accounts", "selected_account", "current_message", "current_thread"]),
+  accountIds: z.array(z.string().trim().min(1).max(128)).max(100),
+  messageIds: z.array(z.string().trim().min(1).max(128)).max(100),
+}).strict();
+
+const agentConversationCreateSchema = z.object({
+  title: z.string().trim().min(1).max(120).optional(),
+  providerId: z.string().trim().min(1).max(128).optional(),
+  scope: agentScopeSchema.optional(),
+}).strict();
+
+const agentConversationPatchSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+}).strict();
+
+const agentMessageSchema = z.object({
+  content: z.string().trim().min(1).max(16_000),
+  providerId: z.string().trim().min(1).max(128),
+  mode: z.enum(["agent", "chat"]),
+  scope: agentScopeSchema,
+  context: z.object({
+    currentMessageId: z.string().trim().min(1).max(128).optional(),
+    currentThreadMessageIds: z.array(z.string().trim().min(1).max(128)).max(100).optional(),
+  }).strict(),
+}).strict();
+
+const agentConversationQuerySchema = z.object({
+  query: z.string().trim().max(256).optional(),
+}).strict();
+
+const agentConfirmationDecisionSchema = z.object({
+  decision: z.enum(["approve", "reject"]),
 }).strict();
 
 // Allow contemporary 4K/8K wallpapers without retaining their original size.
@@ -430,7 +479,14 @@ function oauthCallbackDocument(locale: unknown, success: boolean): string {
 }
 
 function startOAuthInitialSync(app: FastifyInstance, context: RuntimeContext, accountId: string): void {
-  void syncAccount(context.db, context.masterKey, accountId, config.syncMessageLimit, context.oauthService)
+  void syncAccount(
+    context.db,
+    context.masterKey,
+    accountId,
+    config.syncMessageLimit,
+    context.oauthService,
+    context.agentMailEvents,
+  )
     .catch((error) => {
       const failure = mailFailure(error);
       app.log.warn({ accountId, code: failure.body.code }, "Initial OAuth mailbox sync failed");
@@ -747,6 +803,26 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   migrateMessageStorage(context.db, context.masterKey);
   migrateOutboundAttachments(context.db, outboundAttachmentDirectory(context), context.masterKey);
   migrateOutboundSubmissionStorage(context.db, context.masterKey);
+  const ownedAgentMailApplication = !context.agentService && context.agentLifecycle && context.agentSourceEvents
+    ? new SqliteMailApplicationService({
+      db: context.db,
+      masterKey: context.masterKey,
+      oauthService: context.oauthService,
+      agentMailEvents: context.agentMailEvents,
+      syncMessageLimit: config.syncMessageLimit,
+    })
+    : undefined;
+  const ownedAgentService = !context.agentService && context.agentLifecycle && context.agentSourceEvents
+    ? new AgentService({
+      db: context.db,
+      masterKey: context.masterKey,
+      lifecycle: context.agentLifecycle,
+      sourceEvents: context.agentSourceEvents,
+      mailApplication: ownedAgentMailApplication,
+    })
+    : undefined;
+  const agentService = context.agentService ?? ownedAgentService;
+  agentService?.start();
   const app = Fastify({
     logger: { level: config.logLevel },
     bodyLimit: 3 * 1024 * 1024,
@@ -790,6 +866,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   app.addHook("onClose", async () => {
     sentVerificationAbortController.abort();
     externalTranslationAbortSignal?.removeEventListener("abort", abortTranslationsForShutdown);
+    await agentService?.close();
   });
   const recoveredSubmissions = recoverInterruptedSubmissions(context.db, context.masterKey);
   if (recoveredSubmissions) {
@@ -836,6 +913,187 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   });
 
   app.get("/api/health", async () => ({ ok: true, service: "nami-mail", time: new Date().toISOString() }));
+
+  const agentFailure = (reply: { code: (statusCode: number) => { send: (body: unknown) => unknown } }, error: unknown) => {
+    if (error instanceof AgentServiceError) {
+      return reply.code(error.statusCode).send({
+        ok: false,
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable,
+        ...(error.suggestion ? { suggestion: error.suggestion } : {}),
+      });
+    }
+    return reply.code(500).send({ ok: false, code: "agent_internal", message: "Agent 本地服务未能完成请求，请稍后重试。", retryable: true });
+  };
+
+  app.get("/api/agent/providers", async (_request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      return agentService.providerList();
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.post("/api/agent/providers", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const parsed = agentProviderSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      return reply.code(201).send(agentService.createProvider(parsed.data as AgentProviderInput));
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/agent/providers/:id", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const parsed = agentProviderSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      return agentService.updateProvider(request.params.id, parsed.data as AgentProviderInput);
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/agent/providers/:id/check", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      return await agentService.checkProvider(request.params.id);
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/agent/providers/:id", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      agentService.deleteProvider(request.params.id);
+      return { ok: true as const };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.get("/api/agent/bootstrap", async (_request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      return agentService.bootstrap();
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.get("/api/agent/conversations", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const parsed = agentConversationQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      return { items: agentService.listConversations(parsed.data.query ?? "") };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.post("/api/agent/conversations", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const parsed = agentConversationCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      return reply.code(201).send(agentService.createConversation(parsed.data as { title?: string; providerId?: string; scope?: AgentConversationScope }));
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/api/agent/conversations/:id", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      return agentService.getConversation(request.params.id);
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/agent/conversations/:id", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const parsed = agentConversationPatchSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      return agentService.renameConversation(request.params.id, parsed.data.title);
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/agent/conversations/:id", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      agentService.deleteConversation(request.params.id);
+      return { ok: true as const };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/agent/conversations/:id/messages", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const parsed = agentMessageSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    const streamAbortController = new AbortController();
+    const abortStream = () => streamAbortController.abort();
+    const responseSocket = reply.raw.socket;
+    request.raw.once("aborted", abortStream);
+    reply.raw.once("close", abortStream);
+    responseSocket?.once("close", abortStream);
+    reply.hijack();
+    reply.raw.statusCode = 200;
+    reply.raw.setHeader("content-type", "text/event-stream; charset=utf-8");
+    reply.raw.setHeader("cache-control", "no-store, no-cache");
+    reply.raw.setHeader("connection", "keep-alive");
+    try {
+      for await (const event of agentService.streamMessage(request.params.id, parsed.data as AgentMessageInput, streamAbortController.signal)) {
+        if (reply.raw.destroyed) {
+          abortStream();
+          break;
+        }
+        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+      }
+    } catch (error) {
+      if (!reply.raw.destroyed) {
+        const body = error instanceof AgentServiceError
+          ? { type: "error", error: { code: error.code, message: error.message, retryable: error.retryable } }
+          : { type: "error", error: { code: "agent_internal", message: "Agent 本地服务未能完成请求。", retryable: true } };
+        reply.raw.write(`data: ${JSON.stringify(body)}\n\n`);
+        reply.raw.write(`data: ${JSON.stringify({ type: "completed", reason: "error" })}\n\n`);
+      }
+    } finally {
+      request.raw.removeListener("aborted", abortStream);
+      reply.raw.removeListener("close", abortStream);
+      responseSocket?.removeListener("close", abortStream);
+      if (!reply.raw.destroyed) reply.raw.end();
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/agent/conversations/:id/cancel", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const parsed = emptyBodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    agentService.cancelRun(request.params.id);
+    return { ok: true as const };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/agent/confirmations/:id", async (request, reply) => {
+    const parsed = agentConfirmationDecisionSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    return reply.code(501).send({
+      ok: false,
+      code: "not_supported",
+      message: "当前版本尚未启用可执行的 Agent 高风险操作确认。",
+    });
+  });
 
   app.get("/api/providers", async () =>
     providerPresets.map((provider) => {
@@ -1103,7 +1361,14 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     let sync: Awaited<ReturnType<typeof syncAccount>> | null = null;
     let syncWarning: string | null = null;
     try {
-      sync = await syncAccount(context.db, context.masterKey, id, config.syncMessageLimit, context.oauthService);
+      sync = await syncAccount(
+        context.db,
+        context.masterKey,
+        id,
+        config.syncMessageLimit,
+        context.oauthService,
+        context.agentMailEvents,
+      );
       if (sync.failedFolders > 0) syncWarning = `${sync.failedFolders} 个文件夹同步失败，其他邮件已完成同步`;
     } catch (error) {
       const failure = mailFailure(error, detected.credentialHint);
@@ -1211,7 +1476,14 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     let sync: Awaited<ReturnType<typeof syncAccount>> | null = null;
     let syncWarning: string | null = null;
     try {
-      sync = await syncAccount(context.db, context.masterKey, id, config.syncMessageLimit, context.oauthService);
+      sync = await syncAccount(
+        context.db,
+        context.masterKey,
+        id,
+        config.syncMessageLimit,
+        context.oauthService,
+        context.agentMailEvents,
+      );
       if (sync.failedFolders > 0) {
         syncWarning = `${sync.failedFolders} 个文件夹同步失败，其他邮件已完成同步`;
       }
@@ -1232,8 +1504,22 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     } catch (error) {
       app.log.warn({ error, accountId: request.params.id }, "Could not clean outbound attachments while removing account");
     }
-    const result = context.db.prepare("DELETE FROM accounts WHERE id = ?").run(request.params.id);
-    if (!result.changes) return reply.code(404).send({ ok: false, message: "邮箱不存在。" });
+    if (context.agentMailEvents) {
+      const deletion = context.agentMailEvents.beginAccountDeletion(request.params.id, () => {
+        const result = context.db.prepare("DELETE FROM accounts WHERE id = ?").run(request.params.id);
+        if (!result.changes) throw new Error("Account deletion did not remove the primary account row.");
+      });
+      try {
+        context.agentMailEvents.completeAccountDeletion(request.params.id, deletion.deletionGeneration);
+      } catch (error) {
+        // The account row and cleanup event are already atomically durable. A
+        // later startup can continue cleanup from the deleting lifecycle state.
+        app.log.error({ error, accountId: request.params.id }, "Agent account deletion finalization deferred");
+      }
+    } else {
+      const result = context.db.prepare("DELETE FROM accounts WHERE id = ?").run(request.params.id);
+      if (!result.changes) return reply.code(404).send({ ok: false, message: "邮箱不存在。" });
+    }
     return { ok: true };
   });
 
@@ -1255,7 +1541,14 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
 
   app.post<{ Params: { id: string } }>("/api/accounts/:id/sync", async (request, reply) => {
     try {
-      const result = await syncAccount(context.db, context.masterKey, request.params.id, config.syncMessageLimit, context.oauthService);
+      const result = await syncAccount(
+        context.db,
+        context.masterKey,
+        request.params.id,
+        config.syncMessageLimit,
+        context.oauthService,
+        context.agentMailEvents,
+      );
       return { ok: true, ...result };
     } catch (error) {
       const account = context.db.prepare("SELECT * FROM accounts WHERE id = ?").get(request.params.id) as AccountRecord | undefined;
@@ -1584,7 +1877,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     if (!stored) return reply.code(404).send({ ok: false, message: "草稿不存在。" });
     try {
       const draftMessageId = storedDraftMessageId(context, stored.id, request.params.id);
-      await discardDraft(context.db, context.masterKey, stored, request.params.id, context.oauthService);
+      await discardDraft(context.db, context.masterKey, stored, request.params.id, context.oauthService, context.agentMailEvents);
       try {
         discardDraftOutboundAttachments(context.db, outboundAttachmentDirectory(context), stored.id, draftMessageId);
       } catch (cleanupError) {
@@ -1605,7 +1898,14 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const parsed = messageFlagsPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
     try {
-      await updateMessageFlags(context.db, context.masterKey, request.params.id, parsed.data, context.oauthService);
+      await updateMessageFlags(
+        context.db,
+        context.masterKey,
+        request.params.id,
+        parsed.data,
+        context.oauthService,
+        context.agentMailEvents,
+      );
       return { ok: true };
     } catch (error) {
       const failure = mailFailure(error);
@@ -1617,13 +1917,27 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const parsed = messageMoveSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
     try {
-      const { accountId, ...result } = await moveMessage(context.db, context.masterKey, request.params.id, parsed.data.target, context.oauthService);
+      const { accountId, ...result } = await moveMessage(
+        context.db,
+        context.masterKey,
+        request.params.id,
+        parsed.data.target,
+        context.oauthService,
+        context.agentMailEvents,
+      );
       if (result.refreshPending || result.locationUnverified) {
         // UIDPLUS may be unavailable, a provider may omit a stable message ID,
         // or a transport failure may have made the outcome ambiguous. Do not
         // delay the response on a full refresh; the renderer receives either
         // pending reconciliation or a read-only retained local snapshot.
-        void syncAccount(context.db, context.masterKey, accountId, config.syncMessageLimit, context.oauthService)
+        void syncAccount(
+          context.db,
+          context.masterKey,
+          accountId,
+          config.syncMessageLimit,
+          context.oauthService,
+          context.agentMailEvents,
+        )
           .catch(() => request.log.warn({ messageId: request.params.id }, "Message move cache refresh is pending"));
       }
       return { ok: true, ...result };
@@ -1713,7 +2027,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       let draftDiscardWarning: string | undefined;
       if (discardDraftId) {
         try {
-          await discardDraft(context.db, context.masterKey, account, discardDraftId, context.oauthService);
+          await discardDraft(context.db, context.masterKey, account, discardDraftId, context.oauthService, context.agentMailEvents);
           // Existing draft attachments are still retained by the submission
           // link. Remove the draft association first, then release the sent
           // submission's temporary files below.
@@ -1793,7 +2107,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         ...draft,
         ...completedThreadingHeaders(draft),
         attachments,
-      }, { replaceDraftId }, context.oauthService);
+      }, { replaceDraftId }, context.oauthService, context.agentMailEvents);
       let attachmentWarning: string | undefined;
       try {
         linkOutboundAttachmentsToDraft(context.db, account.id, result.messageId, attachmentTokens);

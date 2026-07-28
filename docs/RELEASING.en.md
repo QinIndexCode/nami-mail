@@ -25,7 +25,7 @@ The release script first creates a draft Release, then downloads the five assets
 - Use Windows x64 and Node.js 22.14.0 or later.
 - Use the public repository `QinIndexCode/nami-mail`, or update all build and release configuration if the repository moves.
 - The `package.json` version must be an exact stable semantic version `x.y.z`; the tag must be exactly `v<version>`.
-- The release output directory must be an isolated repository-relative directory, for example `release-artifacts/0.1.0`. The default output uses `release-artifacts/<package.json version>` for the current version. A production release and parallel verification must still set a directory explicitly and must not reuse old build output.
+- The release output directory must be an isolated repository-relative directory, for example `release-artifacts/<version>`. The default output uses `release-artifacts/<package.json version>` for the current version. A production release and parallel verification must still set a directory explicitly and must not reuse old build output.
 - Configure at least one update trust root. Production releases should use both timestamped Authenticode signing and Ed25519 manifest signing.
 
 | Trust root | Required values | Runtime behavior |
@@ -74,7 +74,7 @@ The supplied path must be an independent worktree for an older stable version. I
 An ordinary local installer has no GitHub update channel and can be used for basic installer validation:
 
 ```powershell
-$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/0.1.0"
+$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 npm.cmd run package:win
 npm.cmd run smoke:installer
 ```
@@ -83,7 +83,7 @@ GitHub update-package preflight uses a public repository, an isolated directory,
 
 ```powershell
 $env:NAMI_MAIL_GITHUB_REPOSITORY="QinIndexCode/nami-mail"
-$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/0.1.0"
+$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 $env:NAMI_MAIL_UPDATE_ED25519_PRIVATE_KEY="<Base64 PKCS#8 Ed25519 private key>"
 npm.cmd run package:win:github
 ```
@@ -110,9 +110,9 @@ Every stable Release should provide brief user-facing notes instead of copying b
 - Whether real public-network upgrade acceptance from an earlier version to a newer version has been completed. If it has not, explicitly state that it is pending verification.
 - The Authenticode signing status of that exact installer. Without a valid signature, state that Windows SmartScreen may show an unknown publisher warning. Do not imply that users should bypass a system warning.
 - Data compatibility, when users need to sign in or authorize again, and any irreversible migration.
-- That users should download only `Nami Mail Setup <version>.exe` from this Release for manual installation. The versioned ZIP and JSON are internal automatic-update assets and must not be manually extracted or run.
+- That users should download only the Windows `.exe` installer listed on this Release page for manual installation. The versioned ZIP and JSON are internal automatic-update assets and must not be manually extracted or run.
 
-This repository keeps publicly reviewable release text in the [Release Notes directory](releases/README.en.md). The first release can use the [v0.1.0 notes](releases/v0.1.0.en.md) directly, and the current `0.1.2` release uses the [published notes](releases/v0.1.2.en.md). The retained [candidate template](releases/v0.1.1-candidate.en.md) is only a pre-release checklist; `v0.1.1` is an unpublished source tag and must not be used as an installation source. The published notes deliberately retain the safety wording that real online upgrade acceptance has not yet been completed; only a later release may describe it as complete after the real verification at the end of this page has been completed and evidence retained.
+This repository keeps publicly reviewable release text in the [Release Notes directory](releases/README.en.md). The current `0.2.0` release uses the [published notes](releases/v0.2.0.en.md), with [v0.1.2 notes](releases/v0.1.2.en.md) for the preceding release. The retained [candidate template](releases/v0.1.1-candidate.en.md) is only a pre-release checklist; `v0.1.1` is an unpublished source tag and must not be used as an installation source. The published notes deliberately retain the safety wording that real online upgrade acceptance has not yet been completed; only a later release may describe it as complete after the real verification at the end of this page has been completed and evidence retained.
 
 Release notes must not contain `GH_TOKEN`, certificates, private keys, OAuth credentials, real mail, test-account data, or local absolute paths. If a released asset, signature, version, or update manifest is inconsistent, revoke or mark the Release first instead of silently replacing a file.
 

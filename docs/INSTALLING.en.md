@@ -7,7 +7,7 @@ This guide is for people using Nami Mail on Windows. The current desktop release
 ## Install from a Trusted Source
 
 1. Open [GitHub Releases](https://github.com/QinIndexCode/nami-mail/releases) and confirm that the repository is `QinIndexCode/nami-mail`.
-2. Download the `Nami Mail Setup <version>.exe` asset matching the version you want. Do not download or run `nami-mail-update-*.zip`, `.json`, `latest.yml`, or `.blockmap` by hand. They are internal release-validation or in-app update assets.
+2. Download the Windows `.exe` installer listed on the Release page for the version you want. Do not download or run `nami-mail-update-*.zip`, `.json`, `latest.yml`, or `.blockmap` by hand. They are internal release-validation or in-app update assets.
 3. Close a running copy of Nami Mail, then run the installer. You can choose the installation directory during setup.
 
 Early or unsigned Windows installers can be labeled as an "unknown publisher" by SmartScreen. That is neither proof that a file is trustworthy nor a reason to bypass a Windows warning. Return to the official Release page, check the repository, version, and Release Notes, and stop if the source, version, or signing state is unclear. Report the issue through the [support guide](../SUPPORT.en.md).

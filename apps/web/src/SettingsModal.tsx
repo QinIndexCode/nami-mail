@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
 import {
   Bell,
+  Bot,
   Check,
   CircleHelp,
   Clock3,
@@ -26,6 +27,7 @@ import {
   Upload,
   Volume2,
   VolumeX,
+  Wrench,
   X,
 } from "lucide-react";
 import { api, type TranslationConfiguration } from "./api";
@@ -53,7 +55,7 @@ import type {
 } from "./types";
 import { defaultAppSettings } from "./types";
 
-const isDesktopRuntime = new URLSearchParams(window.location.search).get("desktop") === "1";
+const isDesktopRuntime = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("desktop") === "1";
 
 export type BackgroundPresetOption = {
   id: Exclude<BackgroundPreset, "custom">;
@@ -87,6 +89,8 @@ export type SettingsModalProps = {
   onTestSound?: (sound: NotificationSound) => void | Promise<void>;
   /** Refreshes reader translation status after service configuration changes. */
   onTranslationConfigurationChanged?: () => void | Promise<void>;
+  /** Opens the existing model-provider manager after this dialog has closed. */
+  onOpenAgentProviderSettings: () => void;
   /** Visible control used only when the original trigger disappears, such as a closed mobile drawer. */
   fallbackFocusRef?: RefObject<HTMLElement | null>;
   /** Demo settings are intentionally in-memory and are never sent to the local API. */
@@ -100,7 +104,8 @@ type PendingSettingsConfirmation =
   | "install-update"
   | "remove-translation-configuration"
   | "remove-translation-api-key"
-  | "discard-translation-changes";
+  | "discard-translation-changes"
+  | "discard-translation-changes-and-open-agent";
 
 const restoreDefaultsPatch: AppSettingsPatch = {
   theme: defaultAppSettings.theme,
@@ -211,6 +216,7 @@ export default function SettingsModal({
   onTestNotification,
   onTestSound,
   onTranslationConfigurationChanged,
+  onOpenAgentProviderSettings,
   fallbackFocusRef,
   demoMode = false,
 }: SettingsModalProps) {
@@ -247,6 +253,8 @@ export default function SettingsModal({
     apiKey: translationApiKey,
     timeoutMs: translationTimeoutMs,
   });
+  const pendingTranslationDiscard = pendingConfirmation === "discard-translation-changes"
+    || pendingConfirmation === "discard-translation-changes-and-open-agent";
 
   const dismissBackgroundUploadError = () => {
     setBackgroundUploadError(null);
@@ -259,6 +267,15 @@ export default function SettingsModal({
       return;
     }
     onClose();
+  };
+
+  const requestAgentProviderSettings = () => {
+    if (controlsBusy || demoMode) return;
+    if (hasUnsavedTranslationDraft) {
+      setPendingConfirmation("discard-translation-changes-and-open-agent");
+      return;
+    }
+    onOpenAgentProviderSettings();
   };
 
   useEffect(() => {
@@ -817,7 +834,7 @@ export default function SettingsModal({
           ? t("settings.confirmation.removeTranslationServiceTitle")
           : pendingConfirmation === "remove-translation-api-key"
             ? t("settings.confirmation.removeTranslationApiKeyTitle")
-            : pendingConfirmation === "discard-translation-changes"
+            : pendingTranslationDiscard
               ? t("settings.confirmation.discardTranslationChangesTitle")
               : t("settings.confirmation.restoreDefaultsTitle");
   const confirmationDescription = pendingRemovalAccount
@@ -830,7 +847,7 @@ export default function SettingsModal({
           ? t("settings.confirmation.removeTranslationServiceDescription")
           : pendingConfirmation === "remove-translation-api-key"
             ? t("settings.confirmation.removeTranslationApiKeyDescription")
-            : pendingConfirmation === "discard-translation-changes"
+            : pendingTranslationDiscard
               ? t("settings.confirmation.discardTranslationChangesDescription")
               : t("settings.confirmation.restoreDefaultsDescription");
   const confirmationAction = pendingRemovalAccount
@@ -843,7 +860,9 @@ export default function SettingsModal({
           ? t("settings.confirmation.removeTranslationServiceAction")
           : pendingConfirmation === "remove-translation-api-key"
             ? t("settings.confirmation.removeTranslationApiKeyAction")
-            : pendingConfirmation === "discard-translation-changes"
+            : pendingConfirmation === "discard-translation-changes-and-open-agent"
+              ? t("settings.confirmation.discardTranslationChangesAndOpenAgentAction")
+              : pendingConfirmation === "discard-translation-changes"
               ? t("settings.confirmation.discardTranslationChangesAction")
               : t("settings.confirmation.restoreDefaultsAction");
 
@@ -1140,6 +1159,26 @@ export default function SettingsModal({
           </label>
         </section>
 
+        <section className="settings-section" aria-labelledby="agent-settings">
+          <div className="settings-section-title">
+            <Bot size={16} />
+            <div><span>{t("agent.launch")}</span><p id="agent-settings">{demoMode ? t("agent.demo.description") : t("agent.providers.description")}</p></div>
+          </div>
+          {demoMode ? (
+            <p className="settings-empty" role="status">{t("agent.demo.actionUnavailable")}</p>
+          ) : (
+            <div className="setting-row agent-provider-settings-row">
+              <div>
+                <strong>{t("agent.providers.title")}</strong>
+                <span>{t("agent.providers.emptyDescription")}</span>
+              </div>
+              <button className="secondary-button" type="button" disabled={controlsBusy} onClick={requestAgentProviderSettings}>
+                <Wrench size={15} />{t("agent.providers.configure")}
+              </button>
+            </div>
+          )}
+        </section>
+
         <section className="settings-section" aria-labelledby="translation-settings">
           <div className="settings-section-title">
             <KeyRound size={16} />
@@ -1310,11 +1349,12 @@ export default function SettingsModal({
                   else if (action === "install-update") void installUpdate();
                   else if (action === "remove-translation-configuration") void removeTranslationConfiguration();
                   else if (action === "remove-translation-api-key") void removeTranslationApiKey();
+                  else if (action === "discard-translation-changes-and-open-agent") onOpenAgentProviderSettings();
                   else if (action === "discard-translation-changes") onClose();
                   else void restoreDefaults();
                 }}
               >
-                {pendingRemovalAccount && busyAction === `account-remove-${pendingRemovalAccount.id}` ? <LoaderCircle className="spin" size={14} /> : pendingRemovalAccount ? <Trash2 size={14} /> : pendingConfirmation === "install-update" ? <RotateCcw size={14} /> : pendingConfirmation === "remove-translation-configuration" ? <Trash2 size={14} /> : pendingConfirmation === "remove-translation-api-key" ? <KeyRound size={14} /> : pendingConfirmation === "discard-translation-changes" ? <X size={14} /> : null}
+                {pendingRemovalAccount && busyAction === `account-remove-${pendingRemovalAccount.id}` ? <LoaderCircle className="spin" size={14} /> : pendingRemovalAccount ? <Trash2 size={14} /> : pendingConfirmation === "install-update" ? <RotateCcw size={14} /> : pendingConfirmation === "remove-translation-configuration" ? <Trash2 size={14} /> : pendingConfirmation === "remove-translation-api-key" ? <KeyRound size={14} /> : pendingTranslationDiscard ? <X size={14} /> : null}
                 {confirmationAction}
               </button>
             </div>

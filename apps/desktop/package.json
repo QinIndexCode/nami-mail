@@ -1,6 +1,6 @@
 {
   "name": "@nami/desktop",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,9 @@
     "pretypecheck": "node ../../scripts/build-locale-catalog.mjs --check",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pretest": "node ../../scripts/build-locale-catalog.mjs --check",
-    "test": "node --import tsx --test tests/secure-master-key.test.ts tests/update-status.test.ts tests/update-policy.test.ts tests/update-preferences.test.ts tests/update-install-result.test.ts tests/update-trust.test.ts tests/github-zip-update.test.ts tests/updater.test.ts tests/zip-update-installer.test.ts tests/renderer-cache-policy.test.ts tests/native-localization.test.ts tests/local-configuration.test.ts"
+    "test": "node --import tsx --test tests/secure-master-key.test.ts tests/update-status.test.ts tests/update-policy.test.ts tests/update-preferences.test.ts tests/update-install-result.test.ts tests/update-trust.test.ts tests/github-zip-update.test.ts tests/updater.test.ts tests/zip-update-installer.test.ts tests/renderer-cache-policy.test.ts tests/native-localization.test.ts tests/local-configuration.test.ts tests/agent-host-lifecycle.test.ts tests/agent-desktop-integration.test.ts tests/agent-broker-protocol.test.ts tests/agent-cli.test.ts tests/agent-service-start.test.ts tests/agent-mcp.test.ts"
+  },
+  "dependencies": {
+    "@nami/agent-contracts": "file:../../packages/agent-contracts"
   }
 }

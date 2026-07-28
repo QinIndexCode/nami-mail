@@ -18,7 +18,7 @@ Nami Mail 是一个本地优先的多账户邮件客户端。它把 Gmail、iClo
 
 ## 获取和首次使用
 
-面向日常使用，请只从 [GitHub Releases](https://github.com/QinIndexCode/nami-mail/releases) 下载 Windows x64 的 `Nami Mail Setup <version>.exe`。`zip` 和 `json` 资源是应用自动更新使用的受校验资源，不是手动安装包；从源码运行的方式仅适用于开发和贡献。
+面向日常使用，请只从 [GitHub Releases](https://github.com/QinIndexCode/nami-mail/releases) 下载该版本页面列出的 Windows x64 `.exe` 安装程序。`zip` 和 `json` 资源是应用自动更新使用的受校验资源，不是手动安装包；从源码运行的方式仅适用于开发和贡献。
 
 首次安装、Windows SmartScreen、同版本重装、降级保护、数据保留、卸载与自动更新的用户路径见 [Windows 安装与更新指南](docs/INSTALLING.md)。邮箱的认证准备、服务商差异、OAuth 前置条件和手动配置说明见 [邮箱接入指南](docs/EMAIL-PROVIDERS.md)。
 
@@ -64,7 +64,7 @@ npm.cmd run smoke:server-node
 
 Nami Mail 可以作为原生 Windows 应用运行。邮件界面、交互和动画与 Web 版共用同一套 React/CSS 实现。
 
-普通用户应使用 Release 中的 `Nami Mail Setup <version>.exe`，不要把更新 ZIP 解压后直接运行。安装前和遇到 Windows 信任提示时，请按 [Windows 安装与更新指南](docs/INSTALLING.md) 核对来源与签名状态。
+普通用户应使用 Release 页面列出的 Windows `.exe` 安装程序，不要把更新 ZIP 解压后直接运行。安装前和遇到 Windows 信任提示时，请按 [Windows 安装与更新指南](docs/INSTALLING.md) 核对来源与签名状态。
 
 ```powershell
 npm.cmd install
@@ -104,7 +104,7 @@ npm.cmd run package:win
 
 ```powershell
 $env:NAMI_MAIL_GITHUB_REPOSITORY="QinIndexCode/nami-mail"
-$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/0.1.0"
+$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 # 至少配置以下两类信任根之一；私钥只存在于当前进程或 GitHub Secrets 中。
 $env:NAMI_MAIL_UPDATE_ED25519_PRIVATE_KEY="<Base64 PKCS#8 Ed25519 private key>"
 # 如使用 Authenticode，还需要独立固定签名身份：
@@ -209,7 +209,7 @@ OAuth 回调会回到本机的 `/api/oauth/google/callback` 或 `/api/oauth/micr
 ```powershell
 git remote -v
 git status --short --ignored
-git check-ignore -v data/master.key data/master.key.dpapi .env release-artifacts/0.1.0/update.zip
+git check-ignore -v data/master.key data/master.key.dpapi .env release-artifacts/<version>/update.zip
 ```
 
 可以复制 `.env.example` 为 `.env` 修改端口、数据路径或日志级别；邮件同步频率由应用设置页控制并即时生效。
@@ -222,7 +222,7 @@ npm.cmd run test
 npm.cmd run build
 npm.cmd run smoke:runtime
 npm.cmd run smoke:desktop
-$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/0.1.0"
+$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 npm.cmd run package:win
 npm.cmd run smoke:installer
 npm.cmd audit --omit=dev

@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "paths": {
+      "@nami/agent-contracts": ["./../agent-contracts/src/index.ts"]
+    },
+    "noEmit": true
+  }
+}

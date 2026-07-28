@@ -2,6 +2,13 @@ import { createServer, type IncomingMessage, type OutgoingHttpHeaders, type Serv
 import type { AddressInfo } from "node:net";
 import type { FastifyInstance } from "fastify";
 import { migrateAccountCredentialStorage, migrateKnownProviderUsernameCredentials } from "./account-credentials.js";
+import { AgentService, type AgentConfirmationResolution } from "./agent-service.js";
+import type { TrustedDesktopConfirmationVerifier } from "./agent/confirmations.js";
+import { AccountLifecycleStore } from "./agent/lifecycle.js";
+import { AgentMailStateEvents } from "./agent/mail-state-events.js";
+import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
+import { applyAgentStoreSchema } from "./agent/schema.js";
+import { AgentSourceEventOutbox } from "./agent/source-events.js";
 import { buildApp } from "./app.js";
 import { config } from "./config.js";
 import { loadOrCreateMasterKey } from "./crypto.js";
@@ -17,6 +24,8 @@ export type RunningServer = {
   app: FastifyInstance;
   url: string;
   port: number;
+  /** Present only for the Electron main-process runtime that supplied an opaque capability. */
+  resolveAgentConfirmation?: (confirmationId: string, decision: "approve" | "reject") => Promise<AgentConfirmationResolution>;
   getSettings: () => AppSettings;
   updateSettings: (patch: AppSettingsPatch) => AppSettings;
   close: () => Promise<void>;
@@ -30,6 +39,14 @@ export type ServerRuntimeOptions = {
   // Electron provides a user-data subdirectory for the local NLLB-200 model.
   // Leaving it empty keeps local translation disabled in command-line development.
   translationCacheDir?: string;
+  /**
+   * Desktop-only confirmation authority. This object is passed directly from
+   * Electron main and intentionally never enters Fastify's runtime context.
+   */
+  desktopConfirmation?: Readonly<{
+    capability: unknown;
+    verifier: TrustedDesktopConfirmationVerifier;
+  }>;
 };
 
 export type SyncScheduler = {
@@ -216,6 +233,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
   let microsoftOAuthCallbackBridge: Server | undefined;
   let closePromise: Promise<void> | undefined;
   let masterKey: Buffer | undefined;
+  let agentService: AgentService | undefined;
   const translationAbortController = new AbortController();
 
   try {
@@ -228,7 +246,27 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     // routes, or any mail client can initiate a network connection.
     migrateAccountCredentialStorage(database, runtimeMasterKey);
     migrateKnownProviderUsernameCredentials(database, runtimeMasterKey);
+    applyAgentStoreSchema(database);
+    const agentLifecycle = new AccountLifecycleStore(database, runtimeMasterKey);
+    const agentSourceEvents = new AgentSourceEventOutbox(database, runtimeMasterKey, agentLifecycle);
+    const agentMailEvents = new AgentMailStateEvents(runtimeMasterKey, agentLifecycle, agentSourceEvents);
     const oauthService = new OAuthService(database, runtimeMasterKey);
+    const mailApplication = new SqliteMailApplicationService({
+      db: database,
+      masterKey: runtimeMasterKey,
+      oauthService,
+      agentMailEvents,
+      syncMessageLimit: config.syncMessageLimit,
+    });
+    agentService = new AgentService({
+      db: database,
+      masterKey: runtimeMasterKey,
+      lifecycle: agentLifecycle,
+      sourceEvents: agentSourceEvents,
+      mailApplication,
+      ...(options.desktopConfirmation ? { desktopConfirmation: options.desktopConfirmation } : {}),
+    });
+    agentService.start();
     const outboundDirectory = outboundAttachmentDirectory({});
     try {
       cleanupExpiredOutboundAttachments(database, outboundDirectory);
@@ -238,7 +276,14 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     const syncAll = async () => {
       const accounts = database.prepare("SELECT * FROM accounts ORDER BY created_at").all() as AccountRecord[];
       const results = await Promise.allSettled(
-        accounts.map((account) => syncAccount(database, runtimeMasterKey, account.id, config.syncMessageLimit, oauthService)),
+        accounts.map((account) => syncAccount(
+          database,
+          runtimeMasterKey,
+          account.id,
+          config.syncMessageLimit,
+          oauthService,
+          agentMailEvents,
+        )),
       );
       const newInboxMessages = results.flatMap((result) => result.status === "fulfilled" ? result.value.newInboxMessages : []);
       if (newInboxMessages.length && options.onNewInboxMessages) {
@@ -253,6 +298,10 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     const runtimeContext: RuntimeContext = {
       db: database,
       masterKey: runtimeMasterKey,
+      agentMailEvents,
+      agentLifecycle,
+      agentSourceEvents,
+      agentService,
       outboundAttachmentDirectory: outboundDirectory,
       onRefreshIntervalChanged: () => scheduler?.reschedule(),
       oauthService,
@@ -301,6 +350,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
             await Promise.all([
               scheduler?.close(),
               fastify.close(),
+              agentService?.close(),
             ]);
           } finally {
             database.close();
@@ -317,12 +367,17 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       port,
       getSettings: () => getAppSettings(database),
       updateSettings: (patch) => updateAppSettings(database, patch),
+      ...(options.desktopConfirmation ? {
+        resolveAgentConfirmation: (confirmationId: string, decision: "approve" | "reject") =>
+          agentService!.resolveDesktopConfirmation(confirmationId, decision),
+      } : {}),
       close,
     };
   } catch (error) {
     translationAbortController.abort();
     await closeMicrosoftOAuthCallbackBridge(microsoftOAuthCallbackBridge).catch(() => undefined);
     await scheduler?.close();
+    await agentService?.close();
     if (app) await app.close().catch(() => undefined);
     db?.close();
     masterKey?.fill(0);
