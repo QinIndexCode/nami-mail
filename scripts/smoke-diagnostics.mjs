@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 const sensitiveEnvironmentNames = [
   "GH_TOKEN",
   "GITHUB_TOKEN",
@@ -21,4 +24,15 @@ export function redactSmokeDiagnosticText(value, environment = process.env) {
     if (secret && secret.length >= 4) redacted = redacted.replaceAll(secret, "[redacted]");
   }
   return redacted;
+}
+
+export async function writeSmokeDiagnostic({ filePath, stage, error, environment = process.env }) {
+  const diagnostic = {
+    checkedAt: new Date().toISOString(),
+    stage: redactSmokeDiagnosticText(stage, environment).slice(0, 160),
+    error: redactSmokeDiagnosticText(error instanceof Error ? error.message : String(error), environment).slice(0, 8_000),
+  };
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify(diagnostic, null, 2)}\n`, "utf8");
+  return diagnostic;
 }
