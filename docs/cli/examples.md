@@ -9,7 +9,7 @@
 适配器发布后，预留的 `version` 命令将可在本地返回类似如下的非敏感版本数据，而不读取邮件数据：
 
 ```json
-{"name":"NamiMail","version":"0.2.1"}
+{"name":"NamiMail","version":"0.2.2"}
 ```
 
 ## 未来只读查询
