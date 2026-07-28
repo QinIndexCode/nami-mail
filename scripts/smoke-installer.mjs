@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { resolveReleaseDirectory } from "./release-policy.mjs";
+import { redactSmokeDiagnosticText } from "./smoke-diagnostics.mjs";
 
 if (process.platform !== "win32") {
   throw new Error("The NSIS installer smoke test can only run on Windows.");
@@ -14,6 +15,22 @@ if (process.platform !== "win32") {
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const reportPath = path.join(projectRoot, "output", "installer-smoke.json");
+const diagnosticReportPath = path.join(projectRoot, "output", "installer-smoke-diagnostic.json");
+let installerSmokeStage = "initializing";
+
+async function writeInstallerSmokeDiagnostic(error) {
+  const message = redactSmokeDiagnosticText(error instanceof Error ? error.message : String(error));
+  const diagnostic = {
+    checkedAt: new Date().toISOString(),
+    stage: installerSmokeStage,
+    error: message.slice(0, 8_000),
+  };
+  await fs.mkdir(path.dirname(diagnosticReportPath), { recursive: true });
+  await fs.writeFile(diagnosticReportPath, `${JSON.stringify(diagnostic, null, 2)}\n`, "utf8");
+}
+
+async function main() {
+  await fs.rm(diagnosticReportPath, { force: true });
 const packageManifest = JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8"));
 const releaseDirectory = resolveReleaseDirectory(projectRoot);
 const appId = packageManifest.build?.appId;
@@ -26,10 +43,10 @@ const expectedInstallerName = `Nami Mail Setup ${packageManifest.version}.exe`;
 const expectedInstallerOverride = process.env.NAMI_MAIL_EXPECTED_INSTALLER?.trim();
 const packageStartedAt = Number.parseInt(process.env.NAMI_MAIL_PACKAGE_STARTED_AT ?? "", 10);
 const execFileAsync = promisify(execFile);
-// The nested desktop smoke owns its 45-second diagnostic deadline. Keep this
-// supervisor budget longer so a slow cold start returns that diagnostic instead
-// of being terminated by the installer smoke at the same boundary.
-const installedDesktopSmokeSupervisorTimeoutMs = 90_000;
+// The nested desktop smoke owns a 90-second diagnostic deadline and bounded
+// cleanup. Keep this supervisor beyond that window so its failure is preserved.
+const installedDesktopSmokeSupervisorTimeoutMs = 150_000;
+const powerShellProbeTimeoutMs = 15_000;
 
 assert.equal(typeof appId, "string", "package.json build.appId is required for installer safety checks.");
 assert.equal(typeof productName, "string", "package.json build.productName is required for installer safety checks.");
@@ -139,7 +156,10 @@ async function existingNamiMailInstallations() {
     "$namiInstallations = foreach ($root in $roots) { if (Test-Path -LiteralPath $root) { Get-ChildItem -LiteralPath $root | ForEach-Object { $properties = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue; if ($_.PSChildName -eq '" + powerShellLiteral(expectedUninstallKey) + "' -or ($_.PSChildName -eq '" + powerShellLiteral(appId) + "' -and $properties.DisplayName -like '" + powerShellLiteral(productName) + "*')) { [pscustomobject]@{ Key = $_.PSChildName; RegistryPath = $_.PSPath; DisplayName = $properties.DisplayName; DisplayVersion = $properties.DisplayVersion; Publisher = $properties.Publisher; InstallLocation = $properties.InstallLocation; UninstallString = $properties.UninstallString } } } } }",
     "@($namiInstallations) | ConvertTo-Json -Compress",
   ].join("; ");
-  const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true });
+  const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    timeout: powerShellProbeTimeoutMs,
+    windowsHide: true,
+  });
   const value = stdout.trim();
   if (!value) return [];
   const parsed = JSON.parse(value);
@@ -154,6 +174,7 @@ async function setInstalledVersion(installation, version) {
     `(Get-ItemProperty -LiteralPath '${powerShellLiteral(installation.RegistryPath)}').DisplayVersion`,
   ].join("; ");
   const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    timeout: powerShellProbeTimeoutMs,
     windowsHide: true,
   });
   assert.equal(stdout.trim(), version, "The installer smoke could not stage its isolated version branch.");
@@ -209,6 +230,7 @@ async function runningNamiMailPids() {
     "ConvertTo-Json -InputObject $pids -Compress",
   ].join("; ");
   const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    timeout: powerShellProbeTimeoutMs,
     windowsHide: true,
   });
   const value = stdout.trim();
@@ -246,6 +268,7 @@ async function smokeInstalledExecutable(executable) {
 }
 
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nami-mail-installer-"));
+installerSmokeStage = "prepared";
 const installDirectory = path.join(temporaryRoot, "app");
 let uninstaller;
 let installationCreated = false;
@@ -276,6 +299,7 @@ try {
 
   // NSIS accepts /D only as its final argument. The test directory is unique
   // for this invocation, so it cannot overwrite an existing installation.
+  installerSmokeStage = "initial-install";
   await execFileAsync(installer, ["/S", `/D=${installDirectory}`], {
     cwd: projectRoot,
     timeout: 120_000,
@@ -300,6 +324,7 @@ try {
     "The version-branch test must only modify the uninstall record for its isolated Nami Mail installation.",
   );
 
+  installerSmokeStage = "version-branches";
   await setInstalledVersion(testInstallations[0], "99.0.0");
   await expectInstallerExitCode(installer, ["/S", `/D=${installDirectory}`], 3);
   const blockedInstallations = await existingNamiMailInstallations();
@@ -345,7 +370,9 @@ try {
   await fs.access(installedExecutable);
   await fs.access(uninstaller);
 
+  installerSmokeStage = "installed-desktop-smoke";
   const desktopSmoke = await smokeInstalledExecutable(installedExecutable);
+  installerSmokeStage = "uninstall";
   await execFileAsync(uninstaller, ["/S"], {
     cwd: installDirectory,
     timeout: 120_000,
@@ -389,4 +416,15 @@ try {
   }
   if (uninstallVerified || !installationCreated) await fs.rm(temporaryRoot, { recursive: true, force: true });
   else process.stderr.write(`Installer smoke retained its temporary directory for inspection: ${temporaryRoot}\n`);
+}
+}
+
+try {
+  await main();
+} catch (error) {
+  await writeInstallerSmokeDiagnostic(error).catch((diagnosticError) => {
+    const message = diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError);
+    process.stderr.write(`Installer smoke could not write its diagnostic: ${message}\n`);
+  });
+  throw error;
 }

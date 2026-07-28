@@ -246,6 +246,9 @@ const smokeExitDelay = Number.isFinite(requestedSmokeExitDelay) && requestedSmok
 const smokeResultPath = process.env.NAMI_MAIL_SMOKE_RESULT_PATH?.trim()
   ? path.resolve(process.env.NAMI_MAIL_SMOKE_RESULT_PATH)
   : undefined;
+const smokeProgressPath = process.env.NAMI_MAIL_SMOKE_PROGRESS_PATH?.trim()
+  ? path.resolve(process.env.NAMI_MAIL_SMOKE_PROGRESS_PATH)
+  : undefined;
 const isDesktopSmoke = process.env.NAMI_MAIL_SMOKE === "1" && Boolean(smokeResultPath);
 const desktopLoopbackPort = "0";
 const desktopShutdownTimeoutMs = 8_000;
@@ -1261,6 +1264,9 @@ async function createMainWindow(): Promise<void> {
       nodeIntegration: false,
       sandbox: true,
       preload: path.join(import.meta.dirname, "preload.cjs"),
+      // The smoke window is intentionally hidden. Keep its polling probes on
+      // their normal timer cadence without changing production window behavior.
+      backgroundThrottling: !isDesktopSmoke,
     },
   });
 
@@ -1341,6 +1347,16 @@ async function writeSmokeResult(result: Record<string, unknown>): Promise<void> 
   await fs.writeFile(smokeResultPath, JSON.stringify(result), "utf8");
 }
 
+async function writeDesktopSmokeProgress(stage: string): Promise<void> {
+  if (!isDesktopSmoke || !smokeProgressPath) return;
+  try {
+    await fs.mkdir(path.dirname(smokeProgressPath), { recursive: true });
+    await fs.writeFile(smokeProgressPath, JSON.stringify({ stage, checkedAt: new Date().toISOString() }), "utf8");
+  } catch {
+    desktopSmokeDiagnostics.push("Desktop smoke progress could not be written.");
+  }
+}
+
 async function recordSingleInstanceSmokeActivation(commandLine: string[]): Promise<void> {
   if (!isDesktopSmoke || !commandLine.includes("--nami-single-instance-smoke")) return;
   const activationCount = (singleInstanceSmokeResult?.activationCount ?? 0) + 1;
@@ -1356,16 +1372,20 @@ async function recordSingleInstanceSmokeActivation(commandLine: string[]): Promi
 }
 
 async function boot(): Promise<void> {
+  await writeDesktopSmokeProgress("waiting-for-electron-ready");
   await app.whenReady();
+  await writeDesktopSmokeProgress("electron-ready");
   appIcon = loadDesktopIcon();
   await loadDesktopLocalConfiguration();
   configureLocalService();
+  await writeDesktopSmokeProgress("configuration-loaded");
 
   try {
     // The session exists only after `ready`. Clear historical HTTP and
     // Service Worker cache before creating or loading any renderer window.
     // This deliberately excludes cookies, auth cache, localStorage and IDB.
     rendererCacheCleanup = await clearLegacyRendererMailCache(session.defaultSession);
+    await writeDesktopSmokeProgress("renderer-cache-cleared");
     const runtimePath = "../../server/dist/runtime.js";
     const runtime = await import(runtimePath) as ServerRuntimeModule;
     const dataDirectory = path.join(app.getPath("userData"), "data");
@@ -1380,12 +1400,14 @@ async function boot(): Promise<void> {
           verifier: desktopConfirmationVerifier,
         },
       });
+      await writeDesktopSmokeProgress("local-service-ready");
     } finally {
       // startServer copies the key for its own lifetime. This copy exists only
       // to cross the Electron-to-runtime boundary and is no longer needed.
       desktopMasterKey.key.fill(0);
     }
     await createMainWindow();
+    await writeDesktopSmokeProgress("window-loaded");
     desktopUpdater = new DesktopUpdater({
       currentVersion: app.getVersion(),
       isPackaged: app.isPackaged,
@@ -1401,21 +1423,26 @@ async function boot(): Promise<void> {
     });
     const desktopUpdate: DesktopUpdateSnapshot = await desktopUpdater.start();
     powerMonitor.on("resume", checkForUpdatesAfterExternalTrigger);
-    const desktopNotificationTest = smokeResultPath
-      ? await waitForDesktopSmokeNotification()
-      : undefined;
+    if (smokeResultPath) await writeDesktopSmokeProgress("notification-probe");
+    const desktopNotificationTest = smokeResultPath ? await waitForDesktopSmokeNotification() : undefined;
     const simulatedWebFrameVisible = !smokeResultPath
       ? undefined
       : !mainWindow
         ? true
         : await mainWindow.webContents.executeJavaScript("Boolean(document.querySelector('.window-bar'))").catch(() => true);
+    await writeDesktopSmokeProgress("wallpaper-probe");
     const desktopWallpaper = smokeResultPath ? await inspectDesktopWallpaper() : undefined;
+    await writeDesktopSmokeProgress("settings-ui-probe");
     const desktopSettingsUi = smokeResultPath ? await inspectDesktopSettingsUi() : undefined;
+    await writeDesktopSmokeProgress("settings-sync-probe");
     const desktopSettingsSync = smokeResultPath ? await inspectDesktopSettingsSync() : undefined;
+    await writeDesktopSmokeProgress("close-prompt-probe");
     const desktopClosePrompt = smokeResultPath ? await inspectDesktopClosePrompt() : undefined;
     const desktopLifecycle = smokeResultPath ? inspectDesktopLifecycle() : undefined;
+    await writeDesktopSmokeProgress("local-api-probe");
     const desktopLocalApiSmoke = isDesktopSmoke ? await inspectDesktopLocalApiSmoke() : undefined;
     if (isDesktopSmoke) mainWindow?.minimize();
+    await writeDesktopSmokeProgress("writing-result");
     await writeSmokeResult({
       rendererUrl: mainWindow?.webContents.getURL(),
       title: mainWindow?.getTitle(),
@@ -1441,6 +1468,7 @@ async function boot(): Promise<void> {
       desktopUpdate,
       desktopDiagnostics: desktopSmokeDiagnostics,
     });
+    await writeDesktopSmokeProgress("result-written");
     if (smokeExitDelay) {
       const timer = setTimeout(() => app.quit(), smokeExitDelay);
       timer.unref();
@@ -1448,6 +1476,7 @@ async function boot(): Promise<void> {
   } catch (error) {
     const locale = currentNativeLocale();
     console.error("Nami Mail startup failed", error);
+    await writeDesktopSmokeProgress("startup-failed");
     await writeSmokeResult({ error: error instanceof Error ? error.message : "Local service startup failed." }).catch(() => undefined);
     await localServer?.close().catch(() => undefined);
     localServer = undefined;

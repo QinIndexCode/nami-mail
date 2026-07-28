@@ -66,6 +66,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Sign, upload draft, and run package smoke
+        timeout-minutes: 30
         run: npm run publish:github
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -78,3 +79,14 @@ jobs:
         run: node scripts/promote-github-release.mjs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload release smoke diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-smoke-diagnostics-${{ github.ref_name }}
+          path: |
+            output/desktop-smoke-diagnostic.json
+            output/installer-smoke-diagnostic.json
+            output/package-smoke-diagnostic.json
+          if-no-files-found: ignore
+          retention-days: 7
