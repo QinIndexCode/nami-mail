@@ -33,6 +33,12 @@ const packagedExecutable = path.join(
   process.platform === "win32" ? "Nami Mail.exe" : "Nami Mail",
 );
 const execFileAsync = promisify(execFile);
+// The packaged desktop smoke owns its readiness and cleanup deadlines. Keep
+// the parent budget longer so its structured result or diagnostic is preserved.
+const packagedDesktopSmokeSupervisorTimeoutMs = 90_000;
+// The installer smoke contains its own bounded desktop check and several NSIS
+// lifecycle probes. Leave enough headroom for it to report its own failure.
+const installerSmokeSupervisorTimeoutMs = 360_000;
 const expectedInstallerOverride = process.env.NAMI_MAIL_EXPECTED_INSTALLER?.trim();
 const packageStartedAt = Number.parseInt(process.env.NAMI_MAIL_PACKAGE_STARTED_AT ?? "", 10);
 const {
@@ -334,7 +340,7 @@ const { stdout, stderr } = await execFileAsync(
       ...cleanEnvironment,
       NAMI_MAIL_DESKTOP_EXECUTABLE: packagedExecutable,
     },
-    timeout: 60_000,
+    timeout: packagedDesktopSmokeSupervisorTimeoutMs,
     windowsHide: true,
   },
 );
@@ -367,7 +373,7 @@ if (!skipInstallerSmoke) {
         NAMI_MAIL_EXPECTED_INSTALLER: installerPath,
         ...(Number.isFinite(packageStartedAt) ? { NAMI_MAIL_PACKAGE_STARTED_AT: String(packageStartedAt) } : {}),
       },
-      timeout: 240_000,
+      timeout: installerSmokeSupervisorTimeoutMs,
       windowsHide: true,
     },
   );

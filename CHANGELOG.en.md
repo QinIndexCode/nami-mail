@@ -4,7 +4,7 @@
 
 This is the English translation of the Chinese source changelog. `CHANGELOG.md` remains the authoritative version history. It follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories and Semantic Versioning.
 
-## [0.2.0] - 2026-07-28
+## [0.2.1] - 2026-07-28
 
 ### Added
 
@@ -17,10 +17,19 @@ This is the English translation of the Chinese source changelog. `CHANGELOG.md` 
 - Strengthened account selected, hover, and keyboard-focus states without a left-side accent strip. Account and folder regions now scroll independently when space is constrained while keeping Settings and local-encryption status reachable.
 - Tightened public Agent/RAG boundaries to state the actual status of lexical retrieval, attachment-body ingestion, and external interfaces.
 
+### Fixed
+
+- Fixed the nested Windows release-smoke timeout race so a cold-start failure retains an actionable desktop diagnostic.
+- Fixed the case where pressing `Esc` on an expanded themed select in Settings could also close the Settings dialog.
+
 ### Documentation
 
-- Added publishable [v0.2.0 release notes](docs/releases/v0.2.0.en.md) and maintained the paired Chinese note.
+- Added publishable [v0.2.1 release notes](docs/releases/v0.2.1.en.md) and maintained the paired Chinese note.
 - Changed download guidance to refer to the Windows `.exe` installer displayed on the Release page, avoiding confusion between local build filenames and remote asset display names.
+
+## [0.2.0] - 2026-07-28 (unpublished)
+
+`v0.2.0` remains only an unpublished source tag whose release validation did not complete. It has no public GitHub Release or update assets and must not be used as an installation or automatic-update source; its user-visible changes continue in `0.2.1`.
 
 ## [0.1.2] - 2026-07-24
 
