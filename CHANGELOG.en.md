@@ -4,7 +4,26 @@
 
 This is the English translation of the Chinese source changelog. `CHANGELOG.md` remains the authoritative version history. It follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories and Semantic Versioning.
 
-## [0.2.1] - 2026-07-28
+## [0.2.2] - 2026-07-28
+
+### Added
+
+- Carried the experimental NamiMail Agent workspace from unpublished source tags into the `0.2.2` prepared release: configure an OpenAI-compatible or Ollama provider and use local lexical retrieval with citations inside an explicit account scope.
+- Agent tools remain limited to reading accounts, folders, messages, threads, and attachment metadata, plus creating, editing, or deleting drafts. High-risk mail actions remain in the primary mail UI.
+
+### Improved
+
+- Carried forward the multi-account sidebar, themed Settings controls, and experimental user-triggered translation improvements.
+- Separated the Windows package, installer, and desktop smoke supervisor budgets so a cold-start failure preserves an actionable desktop diagnostic instead of being terminated early by a parent process.
+
+### Documentation
+
+- Added paired `v0.2.2` prepared release notes and correctly marked `v0.2.0` and `v0.2.1` as source tags without public Release or update assets.
+- `0.2.2` does not describe local builds, CI, or generated assets as completed real online automatic-update acceptance.
+
+## [0.2.1] - 2026-07-28 (unpublished source tag)
+
+`v0.2.1` is only a source tag. It has no public GitHub Release, Windows installer, or update assets and must not be used as an installation or automatic-update source; its user-visible work is carried forward by the prepared `0.2.2` release.
 
 ### Added
 
@@ -24,12 +43,12 @@ This is the English translation of the Chinese source changelog. `CHANGELOG.md` 
 
 ### Documentation
 
-- Added publishable [v0.2.1 release notes](docs/releases/v0.2.1.en.md) and maintained the paired Chinese note.
+- Retained [v0.2.1 release notes](docs/releases/v0.2.1.en.md) as the historical record for an unpublished source tag and maintained the paired Chinese note.
 - Changed download guidance to refer to the Windows `.exe` installer displayed on the Release page, avoiding confusion between local build filenames and remote asset display names.
 
 ## [0.2.0] - 2026-07-28 (unpublished)
 
-`v0.2.0` remains only an unpublished source tag whose release validation did not complete. It has no public GitHub Release or update assets and must not be used as an installation or automatic-update source; its user-visible changes continue in `0.2.1`.
+`v0.2.0` remains only an unpublished source tag whose release validation did not complete. It has no public GitHub Release or update assets and must not be used as an installation or automatic-update source; its user-visible changes continue through the `0.2.1` source tag and are carried forward by the prepared `0.2.2` release.
 
 ## [0.1.2] - 2026-07-24
 

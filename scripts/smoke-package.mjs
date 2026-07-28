@@ -15,8 +15,25 @@ import {
 } from "./release-policy.mjs";
 import { canonicalUpdateManifestPayload, githubZipUpdateAssetNames } from "./github-update-assets.mjs";
 import { expectedWindowsSqlitePrebuild } from "./sqlite-native.mjs";
+import { redactSmokeDiagnosticText } from "./smoke-diagnostics.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const diagnosticReportPath = path.join(projectRoot, "output", "package-smoke-diagnostic.json");
+let packageSmokeStage = "initializing";
+
+async function writePackageSmokeDiagnostic(error) {
+  const message = redactSmokeDiagnosticText(error instanceof Error ? error.message : String(error));
+  const diagnostic = {
+    checkedAt: new Date().toISOString(),
+    stage: packageSmokeStage,
+    error: message.slice(0, 8_000),
+  };
+  await fs.mkdir(path.dirname(diagnosticReportPath), { recursive: true });
+  await fs.writeFile(diagnosticReportPath, `${JSON.stringify(diagnostic, null, 2)}\n`, "utf8");
+}
+
+async function main() {
+  await fs.rm(diagnosticReportPath, { force: true });
 const packageManifest = JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8"));
 const smokeArguments = process.argv.slice(2);
 const skipInstallerSmoke = smokeArguments.length === 1 && smokeArguments[0] === "--skip-installer-smoke";
@@ -33,12 +50,12 @@ const packagedExecutable = path.join(
   process.platform === "win32" ? "Nami Mail.exe" : "Nami Mail",
 );
 const execFileAsync = promisify(execFile);
-// The packaged desktop smoke owns its readiness and cleanup deadlines. Keep
-// the parent budget longer so its structured result or diagnostic is preserved.
-const packagedDesktopSmokeSupervisorTimeoutMs = 90_000;
-// The installer smoke contains its own bounded desktop check and several NSIS
-// lifecycle probes. Leave enough headroom for it to report its own failure.
-const installerSmokeSupervisorTimeoutMs = 360_000;
+// The desktop smoke owns a 90-second readiness deadline plus bounded cleanup.
+// Keep its parent long enough to preserve the child diagnostic on slow runners.
+const packagedDesktopSmokeSupervisorTimeoutMs = 150_000;
+// The installer smoke performs five bounded install branches, an installed-app
+// desktop smoke, an uninstall, and may need one bounded cleanup retry.
+const installerSmokeSupervisorTimeoutMs = 1_080_000;
 const expectedInstallerOverride = process.env.NAMI_MAIL_EXPECTED_INSTALLER?.trim();
 const packageStartedAt = Number.parseInt(process.env.NAMI_MAIL_PACKAGE_STARTED_AT ?? "", 10);
 const {
@@ -109,6 +126,7 @@ assert.equal(
 );
 const installerPath = resolveExactInstaller(expectedInstallerOverride ?? path.join(releaseDirectory, expectedInstallerName));
 
+packageSmokeStage = "package-inspection";
 await fs.access(archivePath);
 const packagedIconPath = path.join(releaseDirectory, "win-unpacked", "resources", "icon.ico");
 await fs.access(packagedIconPath);
@@ -330,6 +348,7 @@ if (Number.isFinite(packageStartedAt)) {
 // Verify the exact Electron executable that electron-builder produced. The
 // normal desktop smoke uses the development runtime, which cannot prove that
 // the packaged asar, preload and native SQLite module boot together.
+packageSmokeStage = "packaged-desktop-smoke";
 await fs.access(packagedExecutable);
 const { stdout, stderr } = await execFileAsync(
   process.execPath,
@@ -362,6 +381,7 @@ assert.equal(packagedSmoke.desktopLifecycle?.trayCreated, true);
 
 let installerSmoke = false;
 if (!skipInstallerSmoke) {
+  packageSmokeStage = "installer-smoke";
   await waitForPackagedDesktopExit();
   const installerSmokeResult = await execFileAsync(
     process.execPath,
@@ -402,3 +422,14 @@ console.log(JSON.stringify({
   updateMetadataVerified,
   signedUpdateArtifacts,
 }));
+}
+
+try {
+  await main();
+} catch (error) {
+  await writePackageSmokeDiagnostic(error).catch((diagnosticError) => {
+    const message = diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError);
+    process.stderr.write(`Package smoke could not write its diagnostic: ${message}\n`);
+  });
+  throw error;
+}

@@ -15,7 +15,7 @@
   "error": null,
   "meta": {
     "durationMs": 18,
-    "version": "0.2.1"
+    "version": "0.2.2"
   }
 }
 ```

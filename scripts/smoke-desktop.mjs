@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { redactSmokeDiagnosticText } from "./smoke-diagnostics.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageManifest = JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8"));
@@ -48,23 +49,123 @@ for (const name of [
 }
 const execFileAsync = promisify(execFile);
 const reportPath = path.join(projectRoot, "output", "desktop-smoke.json");
+const diagnosticReportPath = path.join(projectRoot, "output", "desktop-smoke-diagnostic.json");
 const gracefulExitTimeoutMs = 10_000;
 const forcedExitTimeoutMs = 10_000;
+const smokeResultTimeoutMs = 90_000;
+const smokeResultPollIntervalMs = 200;
+const capturedOutputTailLimit = 4_096;
+const rendererFetchTimeoutMs = 10_000;
 
-async function waitForResult(resultPath, processHandle) {
-  const deadline = Date.now() + 45_000;
+function appendOutputTail(existing, chunk) {
+  const combined = `${existing}${redactSmokeDiagnosticText(String(chunk).replaceAll("\0", ""))}`;
+  return combined.length > capturedOutputTailLimit ? combined.slice(-capturedOutputTailLimit) : combined;
+}
+
+function createProcessOutputCapture(processHandle) {
+  let stdoutTail = "";
+  let stderrTail = "";
+  let launchError;
+  processHandle.stdout?.on("data", (chunk) => {
+    stdoutTail = appendOutputTail(stdoutTail, chunk);
+  });
+  processHandle.stderr?.on("data", (chunk) => {
+    stderrTail = appendOutputTail(stderrTail, chunk);
+  });
+  processHandle.once("error", (error) => {
+    launchError = redactSmokeDiagnosticText(error instanceof Error ? error.message : String(error));
+  });
+  return {
+    snapshot() {
+      return {
+        stdoutTail: stdoutTail.trim(),
+        stderrTail: stderrTail.trim(),
+        launchError,
+      };
+    },
+  };
+}
+
+async function readSmokeProgress(progressPath) {
+  try {
+    const progress = JSON.parse(await fs.readFile(progressPath, "utf8"));
+    if (!progress || typeof progress !== "object" || typeof progress.stage !== "string") return undefined;
+    return {
+      stage: progress.stage.slice(0, 160),
+      checkedAt: typeof progress.checkedAt === "string" ? progress.checkedAt.slice(0, 64) : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function describeDesktopProcess(progressPath, processHandle, outputCapture) {
+  const progress = await readSmokeProgress(progressPath);
+  const { stdoutTail, stderrTail, launchError } = outputCapture?.snapshot() ?? {};
+  const details = [
+    `lastStage=${progress?.stage ?? "unavailable"}`,
+    `stageAt=${progress?.checkedAt ?? "unavailable"}`,
+    `pid=${processHandle?.pid ?? "unavailable"}`,
+    `exitCode=${processHandle?.exitCode ?? "running"}`,
+    `signal=${processHandle?.signalCode ?? "none"}`,
+  ];
+  if (launchError) details.push(`launchError=${JSON.stringify(launchError)}`);
+  if (stderrTail) details.push(`stderrTail=${JSON.stringify(stderrTail)}`);
+  if (stdoutTail) details.push(`stdoutTail=${JSON.stringify(stdoutTail)}`);
+  return details.join("; ");
+}
+
+async function writeDesktopSmokeDiagnostic(error, progressPath, processHandle, outputCapture) {
+  const progress = await readSmokeProgress(progressPath);
+  const { stdoutTail, stderrTail, launchError } = outputCapture?.snapshot() ?? {};
+  const message = redactSmokeDiagnosticText(error instanceof Error ? error.message : String(error));
+  const diagnostic = {
+    checkedAt: new Date().toISOString(),
+    error: message.slice(0, 8_000),
+    lastStage: progress?.stage ?? "unavailable",
+    lastStageAt: progress?.checkedAt ?? "unavailable",
+    process: {
+      pid: processHandle?.pid ?? null,
+      exitCode: processHandle?.exitCode ?? null,
+      signal: processHandle?.signalCode ?? null,
+    },
+    ...(launchError ? { launchError } : {}),
+    ...(stderrTail ? { stderrTail } : {}),
+    ...(stdoutTail ? { stdoutTail } : {}),
+  };
+  await fs.mkdir(path.dirname(diagnosticReportPath), { recursive: true });
+  await fs.writeFile(diagnosticReportPath, `${JSON.stringify(diagnostic, null, 2)}\n`, "utf8");
+}
+
+async function fetchRenderer(url) {
+  try {
+    return await fetch(url, { signal: AbortSignal.timeout(rendererFetchTimeoutMs) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Desktop renderer HTTP probe did not complete within ${rendererFetchTimeoutMs / 1_000} seconds: ${message}`);
+  }
+}
+
+async function waitForResult(resultPath, progressPath, processHandle, outputCapture) {
+  const deadline = Date.now() + smokeResultTimeoutMs;
   while (Date.now() < deadline) {
+    const { launchError } = outputCapture.snapshot();
+    if (launchError) {
+      throw new Error(`Electron could not start before writing its smoke result. ${await describeDesktopProcess(progressPath, processHandle, outputCapture)}`);
+    }
     if (processHandle.exitCode !== null) {
-      throw new Error("Electron exited before writing its smoke result.");
+      throw new Error(`Electron exited before writing its smoke result. ${await describeDesktopProcess(progressPath, processHandle, outputCapture)}`);
     }
     try {
       return JSON.parse(await fs.readFile(resultPath, "utf8"));
     } catch {
       // Electron needs a short moment to create the renderer and inspect its DOM.
     }
-    await delay(200);
+    await delay(smokeResultPollIntervalMs);
   }
-  throw new Error("Electron did not write a smoke result within 45 seconds.");
+  throw new Error(
+    `Electron did not write a smoke result within ${smokeResultTimeoutMs / 1_000} seconds. ${await describeDesktopProcess(progressPath, processHandle, outputCapture)}`,
+  );
 }
 
 async function waitForSingleInstanceResult(resultPath, processHandle) {
@@ -167,10 +268,13 @@ let desktopProcess;
 let secondDesktopProcess;
 const desktopProcessIds = new Set();
 let primaryFailure;
+let desktopOutputCapture;
+const resultPath = path.join(temporaryUserData, "smoke-result.json");
+const progressPath = path.join(temporaryUserData, "smoke-progress.json");
 
 try {
+  await fs.rm(diagnosticReportPath, { force: true });
   await fs.access(electronExecutable);
-  const resultPath = path.join(temporaryUserData, "smoke-result.json");
   desktopProcess = spawn(electronExecutable, desktopArguments, {
     cwd: desktopWorkingDirectory,
     env: {
@@ -179,12 +283,14 @@ try {
       NAMI_MAIL_SMOKE: "1",
       NAMI_MAIL_SMOKE_EXIT_AFTER_READY_MS: "8000",
       NAMI_MAIL_SMOKE_RESULT_PATH: resultPath,
+      NAMI_MAIL_SMOKE_PROGRESS_PATH: progressPath,
     },
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+  desktopOutputCapture = createProcessOutputCapture(desktopProcess);
 
-  const renderer = await waitForResult(resultPath, desktopProcess);
+  const renderer = await waitForResult(resultPath, progressPath, desktopProcess, desktopOutputCapture);
   rememberDesktopProcess(desktopProcess, desktopProcessIds);
   const report = {
     checkedAt: new Date().toISOString(),
@@ -324,7 +430,7 @@ try {
   }
   assert.equal(localApiSmoke.googleRedirectUri, `http://127.0.0.1:${runtimePort}/api/oauth/google/callback`);
   assert.equal(localApiSmoke.microsoftRedirectUri, `http://localhost:${runtimePort}/api/oauth/microsoft/callback`);
-  const rendererResponse = await fetch(renderer.rendererUrl);
+  const rendererResponse = await fetchRenderer(renderer.rendererUrl);
   assert.match(rendererResponse.headers.get("content-security-policy") ?? "", /default-src 'self'/);
   report.contentSecurityPolicy = true;
   await fs.access(path.join(temporaryUserData, "data", "nami-mail.db"));
@@ -344,6 +450,10 @@ try {
   console.log(JSON.stringify(report));
 } catch (error) {
   primaryFailure = error;
+  await writeDesktopSmokeDiagnostic(error, progressPath, desktopProcess, desktopOutputCapture).catch((diagnosticError) => {
+    const message = diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError);
+    process.stderr.write(`Desktop smoke could not write its diagnostic: ${message}\n`);
+  });
   throw error;
 } finally {
   let cleanupFailure;
@@ -362,6 +472,12 @@ try {
   }
   if (cleanupFailure) {
     if (primaryFailure) process.stderr.write(`Desktop smoke cleanup failed: ${cleanupFailure.message}\n`);
-    else throw cleanupFailure;
+    else {
+      await writeDesktopSmokeDiagnostic(cleanupFailure, progressPath, desktopProcess, desktopOutputCapture).catch((diagnosticError) => {
+        const message = diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError);
+        process.stderr.write(`Desktop smoke could not write its diagnostic: ${message}\n`);
+      });
+      throw cleanupFailure;
+    }
   }
 }
