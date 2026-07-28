@@ -1,3 +1,14 @@
+import type {
+  AgentBootstrap,
+  AgentConversation,
+  AgentConversationScope,
+  AgentConversationSummary,
+  AgentMessageRequest,
+  AgentProviderInput,
+  AgentProviderList,
+  AgentProviderSummary,
+  AgentStreamEvent,
+} from "./agentTypes";
 import type { Account, AccountDiscoveryResult, AppSettings, AppSettingsPatch, ManualAccountConfig, Message, OAuthAttempt, OAuthAttemptStatus, OAuthProvider, OutboundAttachment, OutboundSubmission, ProviderInfo, Stats } from "./types";
 import { desktopBridge } from "./desktop";
 
@@ -103,6 +114,55 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await requestResponse(path, init);
   if (!response.ok) throw await apiError(response);
   return (await response.json().catch(() => ({}))) as T;
+}
+
+function parseAgentEvent(value: unknown): AgentStreamEvent | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const event = value as { type?: unknown };
+  return typeof event.type === "string" ? value as AgentStreamEvent : null;
+}
+
+async function consumeAgentStream(response: Response, onEvent: (event: AgentStreamEvent) => void): Promise<void> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (contentType.includes("application/json")) {
+    const body = await response.json().catch(() => ({})) as { events?: unknown[] };
+    for (const value of body.events ?? []) {
+      const event = parseAgentEvent(value);
+      if (event) onEvent(event);
+    }
+    return;
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new ApiError("Agent 响应没有可读取的数据流。", "agent_stream_unavailable");
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let payloadLines: string[] = [];
+  const flush = () => {
+    if (!payloadLines.length) return;
+    const payload = payloadLines.join("\n");
+    payloadLines = [];
+    try {
+      const event = parseAgentEvent(JSON.parse(payload));
+      if (event) onEvent(event);
+    } catch {
+      throw new ApiError("Agent 返回了无法识别的流式事件。", "agent_stream_invalid");
+    }
+  };
+  while (true) {
+    const next = await reader.read();
+    buffer += decoder.decode(next.value ?? new Uint8Array(), { stream: !next.done });
+    const lines = buffer.split(/\r?\n/);
+    buffer = next.done ? "" : (lines.pop() ?? "");
+    for (const line of lines) {
+      if (!line) {
+        flush();
+      } else if (line.startsWith("data:")) {
+        payloadLines.push(line.slice(5).trimStart());
+      }
+    }
+    if (next.done) break;
+  }
+  flush();
 }
 
 export const api = {
@@ -258,4 +318,41 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  agentProviders: () => request<AgentProviderList>("/api/agent/providers"),
+  createAgentProvider: (input: AgentProviderInput) =>
+    request<AgentProviderSummary>("/api/agent/providers", { method: "POST", body: JSON.stringify(input) }),
+  updateAgentProvider: (id: string, input: AgentProviderInput) =>
+    request<AgentProviderSummary>(`/api/agent/providers/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  checkAgentProvider: (id: string) =>
+    request<AgentProviderSummary>(`/api/agent/providers/${encodeURIComponent(id)}/check`, { method: "POST" }),
+  deleteAgentProvider: (id: string) =>
+    request<{ ok: true }>(`/api/agent/providers/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  agentBootstrap: () => request<AgentBootstrap>("/api/agent/bootstrap"),
+  agentConversations: (query = "") => request<{ items: AgentConversationSummary[] }>(`/api/agent/conversations${query ? `?${query}` : ""}`),
+  agentConversation: (id: string) => request<AgentConversation>(`/api/agent/conversations/${encodeURIComponent(id)}`),
+  createAgentConversation: (input: { title?: string; providerId?: string; scope?: AgentConversationScope }) =>
+    request<AgentConversation>("/api/agent/conversations", { method: "POST", body: JSON.stringify(input) }),
+  renameAgentConversation: (id: string, title: string) =>
+    request<AgentConversationSummary>(`/api/agent/conversations/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  deleteAgentConversation: (id: string) =>
+    request<{ ok: true }>(`/api/agent/conversations/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  streamAgentMessage: async (
+    conversationId: string,
+    payload: AgentMessageRequest,
+    onEvent: (event: AgentStreamEvent) => void,
+    signal?: AbortSignal,
+  ) => {
+    const response = await requestResponse(`/api/agent/conversations/${encodeURIComponent(conversationId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+      signal,
+      headers: { accept: "text/event-stream, application/json" },
+    });
+    if (!response.ok) throw await apiError(response);
+    await consumeAgentStream(response, onEvent);
+  },
+  cancelAgentRun: (conversationId: string) =>
+    request<{ ok: true }>(`/api/agent/conversations/${encodeURIComponent(conversationId)}/cancel`, { method: "POST", body: "{}" }),
+  resolveAgentConfirmation: (confirmationId: string, decision: "approve" | "reject") =>
+    request<{ ok: true }>(`/api/agent/confirmations/${encodeURIComponent(confirmationId)}`, { method: "POST", body: JSON.stringify({ decision }) }),
 };

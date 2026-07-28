@@ -59,7 +59,7 @@ npm.cmd run smoke:runtime
 Real Windows installer validation also requires:
 
 ```powershell
-$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/0.1.0"
+$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 npm.cmd run package:win
 npm.cmd run smoke:installer
 ```
@@ -69,7 +69,7 @@ Installer smoke creates and removes an isolated installation directory. It refus
 GitHub update releases use a versioned isolated directory so output from different builds cannot be mixed into one Release set:
 
 ```powershell
-$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/0.1.0"
+$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 npm.cmd run package:win:github
 ```
 

@@ -1,4 +1,8 @@
 import type { DatabaseHandle } from "./db.js";
+import type { AccountLifecycleStore } from "./agent/lifecycle.js";
+import type { AgentMailStateEvents } from "./agent/mail-state-events.js";
+import type { AgentService } from "./agent-service.js";
+import type { AgentSourceEventOutbox } from "./agent/source-events.js";
 import type { OAuthService } from "./oauth.js";
 import type { TranslationResult } from "./translation.js";
 import type { TranslationServiceError } from "./translation.js";
@@ -45,6 +49,17 @@ export type AccountRecord = {
 export type RuntimeContext = {
   db: DatabaseHandle;
   masterKey: Buffer;
+  // Runtime-owned Agent bridge for mail-state events and account lifecycle
+  // fencing. It is optional so embedded/test hosts retain the pre-Agent path.
+  agentMailEvents?: AgentMailStateEvents;
+  // These are the same runtime instances used by `agentMailEvents`. Future
+  // Agent services must reuse them so deletion revokes in-flight work across
+  // RAG, conversations, CLI, and MCP entry points.
+  agentLifecycle?: AccountLifecycleStore;
+  agentSourceEvents?: AgentSourceEventOutbox;
+  // The runtime owns one Agent service instance. HTTP, desktop, CLI, and MCP
+  // adapters must reuse it instead of opening a second database-facing core.
+  agentService?: AgentService;
   // Tests and embedded hosts can keep custom assets alongside their own data.
   backgroundDirectory?: string;
   // Outbound files live only under this runtime-owned directory. The API

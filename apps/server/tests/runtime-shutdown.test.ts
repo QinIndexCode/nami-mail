@@ -3,6 +3,17 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  AccountLifecycleStore: vi.fn(),
+  AgentMailStateEvents: vi.fn(),
+  AgentService: vi.fn(function AgentService() {
+    return {
+      start: vi.fn(),
+      close: vi.fn(async () => undefined),
+      resolveDesktopConfirmation: mocks.resolveDesktopConfirmation,
+    };
+  }),
+  AgentSourceEventOutbox: vi.fn(),
+  applyAgentStoreSchema: vi.fn(),
   buildApp: vi.fn(),
   cleanupExpiredOutboundAttachments: vi.fn(),
   config: {
@@ -24,11 +35,27 @@ const mocks = vi.hoisted(() => ({
   outboundAttachmentDirectory: vi.fn(),
   syncAccount: vi.fn(),
   updateAppSettings: vi.fn(),
+  resolveDesktopConfirmation: vi.fn(async () => ({ ok: true })),
 }));
 
 vi.mock("../src/account-credentials.js", () => ({
   migrateAccountCredentialStorage: mocks.migrateAccountCredentialStorage,
   migrateKnownProviderUsernameCredentials: mocks.migrateKnownProviderUsernameCredentials,
+}));
+vi.mock("../src/agent/lifecycle.js", () => ({
+  AccountLifecycleStore: mocks.AccountLifecycleStore,
+}));
+vi.mock("../src/agent/mail-state-events.js", () => ({
+  AgentMailStateEvents: mocks.AgentMailStateEvents,
+}));
+vi.mock("../src/agent-service.js", () => ({
+  AgentService: mocks.AgentService,
+}));
+vi.mock("../src/agent/schema.js", () => ({
+  applyAgentStoreSchema: mocks.applyAgentStoreSchema,
+}));
+vi.mock("../src/agent/source-events.js", () => ({
+  AgentSourceEventOutbox: mocks.AgentSourceEventOutbox,
 }));
 vi.mock("../src/app.js", () => ({ buildApp: mocks.buildApp }));
 vi.mock("../src/config.js", () => ({ config: mocks.config }));
@@ -118,6 +145,41 @@ describe("server runtime shutdown", () => {
     expect(context.masterKey.equals(Buffer.alloc(32))).toBe(true);
     expect(suppliedKey.equals(Buffer.alloc(32, 7))).toBe(true);
     expect(buildOptions.translationAbortSignal?.aborted).toBe(true);
+  });
+
+  it("exposes the confirmation resolver only for an injected desktop capability", async () => {
+    const database = {
+      close: vi.fn(),
+      prepare: vi.fn(() => ({ all: () => [] })),
+    };
+    const fastify = {
+      close: vi.fn(async () => undefined),
+      listen: vi.fn(async () => undefined),
+      log: { error: vi.fn(), warn: vi.fn() },
+      server: { address: () => ({ address: "127.0.0.1", family: "IPv4", port: 43187 }) },
+    };
+    const capability = Symbol("desktop-main-only");
+    const desktopConfirmation = {
+      capability,
+      verifier: { verify: (input: unknown) => input ? { principalId: "desktop", surfaceId: "main" } : undefined },
+    };
+    mocks.openDatabase.mockReturnValue(database);
+    mocks.outboundAttachmentDirectory.mockReturnValue("outbound");
+    mocks.getAppSettings.mockReturnValue({ refreshIntervalSeconds: 300 });
+    mocks.buildApp.mockResolvedValue(fastify);
+
+    const withoutCapability = await startServer({ masterKey: Buffer.alloc(32, 1) });
+    expect(withoutCapability.resolveAgentConfirmation).toBeUndefined();
+    await withoutCapability.close();
+
+    const withCapability = await startServer({ masterKey: Buffer.alloc(32, 2), desktopConfirmation });
+    expect(typeof withCapability.resolveAgentConfirmation).toBe("function");
+    expect(mocks.AgentService).toHaveBeenLastCalledWith(expect.objectContaining({ desktopConfirmation }));
+    const context = mocks.buildApp.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(context).not.toHaveProperty("desktopConfirmation");
+    expect(await withCapability.resolveAgentConfirmation?.("confirmation-1", "approve")).toEqual({ ok: true });
+    expect(mocks.resolveDesktopConfirmation).toHaveBeenCalledWith("confirmation-1", "approve");
+    await withCapability.close();
   });
 
   it("stops HTTP intake and waits for mailbox sync before closing the database", async () => {

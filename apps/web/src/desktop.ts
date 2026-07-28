@@ -79,6 +79,9 @@ const updateSnapshotKeys = new Set([
 ]);
 const updateSnapshotArgumentKeys = new Set(["installStage", "cleanupComplete"]);
 const updateInstallResultKeys = new Set(["accepted", "snapshot"]);
+const agentConfirmationIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const agentConfirmationDecisions = ["approve", "reject"] as const;
+const agentConfirmationResultKeys = new Set(["confirmationId", "decision", "ok"]);
 
 export type DesktopUpdatePhase = typeof updatePhases[number];
 export type DesktopUpdateSuppression = typeof updateSuppressions[number];
@@ -106,6 +109,14 @@ export type DesktopUpdateSnapshot = {
 export type DesktopUpdateInstallResult = {
   accepted: boolean;
   snapshot?: DesktopUpdateSnapshot;
+};
+
+export type DesktopAgentConfirmationDecision = typeof agentConfirmationDecisions[number];
+
+export type DesktopAgentConfirmationResult = {
+  confirmationId: string;
+  decision: DesktopAgentConfirmationDecision;
+  ok: boolean;
 };
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -193,10 +204,28 @@ export function normalizeDesktopUpdateInstallResult(value: unknown): DesktopUpda
   return snapshot ? { accepted: value.accepted, snapshot } : { accepted: false };
 }
 
+export function normalizeDesktopAgentConfirmationResult(value: unknown): DesktopAgentConfirmationResult | undefined {
+  if (!isPlainRecord(value)
+    || !hasOnlyKeys(value, agentConfirmationResultKeys)
+    || !hasAllKeys(value, agentConfirmationResultKeys)
+    || typeof value.confirmationId !== "string"
+    || !agentConfirmationIdentifierPattern.test(value.confirmationId)
+    || !isAllowedValue(value.decision, agentConfirmationDecisions)
+    || typeof value.ok !== "boolean") {
+    return undefined;
+  }
+  return {
+    confirmationId: value.confirmationId,
+    decision: value.decision,
+    ok: value.ok,
+  };
+}
+
 export type DesktopBridge = {
   localApiRequestHeaders: () => Promise<Record<string, string>>;
   notify: (payload: NativeNotification) => Promise<{ shown: boolean }>;
   copyVerificationCode: (code: string) => Promise<{ copied: boolean }>;
+  onAgentConfirmationResult?: (listener: (result: DesktopAgentConfirmationResult) => void) => () => void;
   getUpdateStatus: () => Promise<DesktopUpdateSnapshot | undefined>;
   checkForUpdates: () => Promise<DesktopUpdateSnapshot | undefined>;
   downloadUpdate: () => Promise<DesktopUpdateSnapshot | undefined>;
@@ -210,9 +239,13 @@ export type DesktopBridge = {
   onUpdateStatus: (listener: (snapshot: DesktopUpdateSnapshot) => void) => () => void;
 };
 
+type RawDesktopBridge = Omit<DesktopBridge, "onAgentConfirmationResult"> & {
+  onAgentConfirmationResult?: (listener: (result: unknown) => void) => () => void;
+};
+
 declare global {
   interface Window {
-    namiDesktop?: DesktopBridge;
+    namiDesktop?: RawDesktopBridge;
   }
 }
 
@@ -221,6 +254,12 @@ export function desktopBridge(): DesktopBridge | undefined {
   const bridge = window.namiDesktop;
   return {
     ...bridge,
+    onAgentConfirmationResult: bridge.onAgentConfirmationResult
+      ? (listener) => bridge.onAgentConfirmationResult!((value) => {
+        const result = normalizeDesktopAgentConfirmationResult(value);
+        if (result) listener(result);
+      })
+      : undefined,
     getUpdateStatus: () => bridge.getUpdateStatus().then(normalizeDesktopUpdateSnapshot),
     checkForUpdates: () => bridge.checkForUpdates().then(requireDesktopUpdateSnapshot),
     downloadUpdate: () => bridge.downloadUpdate().then(requireDesktopUpdateSnapshot),

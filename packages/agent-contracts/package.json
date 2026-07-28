@@ -1,0 +1,31 @@
+{
+  "name": "@nami/agent-contracts",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Versioned contracts shared by Nami Mail Agent hosts and clients.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --tsconfig tsconfig.json --test test/*.test.ts"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "tsx": "^4.20.6",
+    "typescript": "^7.0.2"
+  }
+}
