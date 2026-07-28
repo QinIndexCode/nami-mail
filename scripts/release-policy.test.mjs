@@ -21,6 +21,7 @@ import {
   verifyPublicGitHubRepository,
 } from "./release-policy.mjs";
 import { resolveLocalWindowsElectronDist } from "./electron-dist.mjs";
+import { redactSmokeDiagnosticText } from "./smoke-diagnostics.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -82,26 +83,56 @@ test("Windows packaging reuses a local Electron distribution only when its execu
   assert.ok(packageSmokeIndex >= 0 && draftCreationIndex > packageSmokeIndex, "Remote draft creation must follow local package smoke.");
 
   const packageSmokeScript = await fs.readFile(path.join(projectRoot, "scripts", "smoke-package.mjs"), "utf8");
+  const desktopSmokeScript = await fs.readFile(path.join(projectRoot, "scripts", "smoke-desktop.mjs"), "utf8");
+  const desktopMainSource = await fs.readFile(path.join(projectRoot, "apps", "desktop", "src", "main.mts"), "utf8");
   const zipAssemblyLoadIndex = packageSmokeScript.indexOf("Add-Type -AssemblyName System.IO.Compression.FileSystem");
   const zipOpenIndex = packageSmokeScript.indexOf("[IO.Compression.ZipFile]::OpenRead");
   assert.ok(zipAssemblyLoadIndex >= 0 && zipOpenIndex > zipAssemblyLoadIndex, "ZIP package smoke must load the ZipFile assembly before opening update archives.");
   assert.match(
     packageSmokeScript,
-    /const packagedDesktopSmokeSupervisorTimeoutMs = 90_000;[\s\S]*?timeout: packagedDesktopSmokeSupervisorTimeoutMs,/,
+    /const packagedDesktopSmokeSupervisorTimeoutMs = 150_000;[\s\S]*?timeout: packagedDesktopSmokeSupervisorTimeoutMs,/,
     "The package smoke must not terminate the packaged desktop smoke before its own diagnostic is available.",
   );
   assert.match(
     packageSmokeScript,
-    /const installerSmokeSupervisorTimeoutMs = 360_000;[\s\S]*?timeout: installerSmokeSupervisorTimeoutMs,/,
+    /const installerSmokeSupervisorTimeoutMs = 1_080_000;[\s\S]*?timeout: installerSmokeSupervisorTimeoutMs,/,
     "The package smoke must leave the installer smoke enough time to return its own diagnostic.",
   );
 
   const installerSmokeScript = await fs.readFile(path.join(projectRoot, "scripts", "smoke-installer.mjs"), "utf8");
   assert.match(
     installerSmokeScript,
-    /const installedDesktopSmokeSupervisorTimeoutMs = 90_000;[\s\S]*?timeout: installedDesktopSmokeSupervisorTimeoutMs,/,
+    /const installedDesktopSmokeSupervisorTimeoutMs = 150_000;[\s\S]*?timeout: installedDesktopSmokeSupervisorTimeoutMs,/,
     "The installer smoke must not terminate the desktop smoke at its own diagnostic boundary.",
   );
+  assert.match(installerSmokeScript, /const powerShellProbeTimeoutMs = 15_000;/);
+  assert.equal(
+    [...installerSmokeScript.matchAll(/timeout: powerShellProbeTimeoutMs/g)].length,
+    3,
+    "Every installer smoke PowerShell registry or process probe must have its own deadline.",
+  );
+  assert.match(desktopSmokeScript, /const smokeResultTimeoutMs = 90_000;/);
+  assert.match(desktopSmokeScript, /const capturedOutputTailLimit = 4_096;/);
+  assert.match(desktopSmokeScript, /const rendererFetchTimeoutMs = 10_000;/);
+  assert.match(desktopSmokeScript, /AbortSignal\.timeout\(rendererFetchTimeoutMs\)/);
+  assert.match(desktopSmokeScript, /NAMI_MAIL_SMOKE_PROGRESS_PATH: progressPath/);
+  assert.match(desktopSmokeScript, /lastStage=\$\{progress\?\.stage \?\? "unavailable"\}/);
+  assert.match(desktopMainSource, /backgroundThrottling: !isDesktopSmoke/);
+  assert.match(desktopMainSource, /writeDesktopSmokeProgress\("settings-ui-probe"\)/);
+  assert.match(packageSmokeScript, /const diagnosticReportPath = path\.join\(projectRoot, "output", "package-smoke-diagnostic\.json"\);/);
+  assert.match(packageSmokeScript, /await writePackageSmokeDiagnostic\(error\)/);
+  assert.match(installerSmokeScript, /const diagnosticReportPath = path\.join\(projectRoot, "output", "installer-smoke-diagnostic\.json"\);/);
+  assert.match(installerSmokeScript, /await writeInstallerSmokeDiagnostic\(error\)/);
+});
+
+test("smoke diagnostics redact release and local API secrets before persistence", () => {
+  const secret = "sensitive-smoke-value";
+  const redacted = redactSmokeDiagnosticText(`stdout ${secret} stderr`, {
+    GH_TOKEN: secret,
+    NAMI_MAIL_LOCAL_API_TOKEN: secret,
+  });
+  assert.equal(redacted.includes(secret), false);
+  assert.equal(redacted, "stdout [redacted] stderr");
 });
 
 test("release repository and signing identity inputs are strict", () => {
@@ -544,6 +575,7 @@ test("release workflow isolates read-only validation from credential-minimized p
   assert.equal(workflow.jobs.release.permissions.contents, "write");
   assert.equal(workflow.jobs.release.needs, "validate");
   assert.equal(workflow.jobs.release.environment, "release");
+  assert.equal(workflow.jobs.release["timeout-minutes"], 45);
   assert.equal(workflow.concurrency.group, "release-${{ github.repository }}-${{ github.ref_name }}");
   assert.equal(workflow.concurrency["cancel-in-progress"], false);
   for (const jobName of ["validate", "release"]) {
@@ -563,6 +595,9 @@ test("release workflow isolates read-only validation from credential-minimized p
     assert.equal(setupNode.with["node-version"], "22.14.0", `${jobName} must use the supported Node.js minimum.`);
   }
   const packageStep = workflow.jobs.release.steps.find((step) => step.run === "npm run publish:github");
+  const diagnosticsStep = workflow.jobs.release.steps.find(
+    (step) => step.uses === "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+  );
   const validateCommands = workflow.jobs.validate.steps.map((step) => step.run).filter(Boolean);
   assert.deepEqual(validateCommands, [
     "npm ci",
@@ -585,12 +620,21 @@ test("release workflow isolates read-only validation from credential-minimized p
   const runtimeSmokeIndex = validateCommands.indexOf("npm run smoke:runtime");
   assert.ok(validateBuildIndex >= 0, "Validation must build the distributable runtime before smoke testing it.");
   assert.ok(runtimeSmokeIndex > validateBuildIndex, "Runtime smoke must execute against freshly built server and renderer artifacts.");
+  assert.equal(packageStep["timeout-minutes"], 30);
   assert.equal(packageStep.env.NAMI_MAIL_EXPECTED_WINDOWS_PUBLISHER, "${{ secrets.WINDOWS_CSC_PUBLISHER }}");
   assert.equal(packageStep.env.NAMI_MAIL_EXPECTED_WINDOWS_CERTIFICATE_THUMBPRINT, "${{ secrets.WINDOWS_CSC_THUMBPRINT }}");
   assert.equal(packageStep.env.NAMI_MAIL_UPDATE_ED25519_PRIVATE_KEY, "${{ secrets.NAMI_MAIL_UPDATE_ED25519_PRIVATE_KEY }}");
   assert.equal(workflow.jobs.release.env.NAMI_MAIL_RELEASE_DIRECTORY, "release-artifacts/${{ github.ref_name }}");
   assert.equal(packageStep.env.NAMI_MAIL_UPDATE_ED25519_PRIVATE_KEY, "${{ secrets.NAMI_MAIL_UPDATE_ED25519_PRIVATE_KEY }}");
   assert.equal(workflow.jobs.release.env.NAMI_MAIL_RELEASE_DIRECTORY, "release-artifacts/${{ github.ref_name }}");
+  assert.equal(diagnosticsStep.if, "failure()");
+  assert.equal(diagnosticsStep.with.name, "release-smoke-diagnostics-${{ github.ref_name }}");
+  assert.equal(
+    diagnosticsStep.with.path,
+    "output/desktop-smoke-diagnostic.json\noutput/installer-smoke-diagnostic.json\noutput/package-smoke-diagnostic.json\n",
+  );
+  assert.equal(diagnosticsStep.with["if-no-files-found"], "ignore");
+  assert.equal(diagnosticsStep.with["retention-days"], 7);
   const packageIndex = workflow.jobs.release.steps.indexOf(packageStep);
   const promotionIndex = workflow.jobs.release.steps.findIndex((step) => step.run === "node scripts/promote-github-release.mjs");
   assert.ok(promotionIndex > packageIndex, "Remote verification and promotion must run only after package and installer smoke.");
