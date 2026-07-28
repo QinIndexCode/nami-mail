@@ -21,7 +21,8 @@ import {
   verifyPublicGitHubRepository,
 } from "./release-policy.mjs";
 import { resolveLocalWindowsElectronDist } from "./electron-dist.mjs";
-import { redactSmokeDiagnosticText } from "./smoke-diagnostics.mjs";
+import { resolveInstallerSmokeBaseDirectory } from "./installer-smoke-location.mjs";
+import { redactSmokeDiagnosticText, writeSmokeDiagnostic } from "./smoke-diagnostics.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -53,6 +54,13 @@ test("release artifacts stay inside an explicitly isolated repository directory"
   assert.equal(resolveReleaseDirectory(root), path.join(root, "release"));
   assert.throws(() => resolveReleaseDirectory(root, "."), /isolated directory/);
   assert.throws(() => resolveReleaseDirectory(root, "../outside"), /inside this repository/);
+});
+
+test("installer smoke runs installed executables from an isolated workspace directory", () => {
+  assert.equal(
+    resolveInstallerSmokeBaseDirectory("D:\\Projects\\nami-mail"),
+    path.join("D:\\Projects\\nami-mail", ".nami-installer-smoke"),
+  );
 });
 
 test("Windows packaging reuses a local Electron distribution only when its executable exists", async (t) => {
@@ -106,6 +114,8 @@ test("Windows packaging reuses a local Electron distribution only when its execu
     "The installer smoke must not terminate the desktop smoke at its own diagnostic boundary.",
   );
   assert.match(installerSmokeScript, /const powerShellProbeTimeoutMs = 15_000;/);
+  assert.match(installerSmokeScript, /const installerSmokeBaseDirectory = resolveInstallerSmokeBaseDirectory\(projectRoot\);/);
+  assert.doesNotMatch(installerSmokeScript, /fs\.mkdtemp\(path\.join\(os\.tmpdir\(\), "nami-mail-installer-"\)\)/);
   assert.equal(
     [...installerSmokeScript.matchAll(/timeout: powerShellProbeTimeoutMs/g)].length,
     3,
@@ -117,15 +127,18 @@ test("Windows packaging reuses a local Electron distribution only when its execu
   assert.match(desktopSmokeScript, /AbortSignal\.timeout\(rendererFetchTimeoutMs\)/);
   assert.match(desktopSmokeScript, /NAMI_MAIL_SMOKE_PROGRESS_PATH: progressPath/);
   assert.match(desktopSmokeScript, /lastStage=\$\{progress\?\.stage \?\? "unavailable"\}/);
+  assert.match(desktopSmokeScript, /redactSmokeDiagnosticText\(stderrTail\)/);
+  assert.match(desktopSmokeScript, /redactSmokeDiagnosticText\(stdoutTail\)/);
   assert.match(desktopMainSource, /backgroundThrottling: !isDesktopSmoke/);
   assert.match(desktopMainSource, /writeDesktopSmokeProgress\("settings-ui-probe"\)/);
   assert.match(packageSmokeScript, /const diagnosticReportPath = path\.join\(projectRoot, "output", "package-smoke-diagnostic\.json"\);/);
   assert.match(packageSmokeScript, /await writePackageSmokeDiagnostic\(error\)/);
   assert.match(installerSmokeScript, /const diagnosticReportPath = path\.join\(projectRoot, "output", "installer-smoke-diagnostic\.json"\);/);
+  assert.match(installerSmokeScript, /filePath: diagnosticReportPath,[\s\S]*?stage: installerSmokeStage,/);
   assert.match(installerSmokeScript, /await writeInstallerSmokeDiagnostic\(error\)/);
 });
 
-test("smoke diagnostics redact release and local API secrets before persistence", () => {
+test("installer pre-desktop failure diagnostics stay structured and redact secrets", async (t) => {
   const secret = "sensitive-smoke-value";
   const redacted = redactSmokeDiagnosticText(`stdout ${secret} stderr`, {
     GH_TOKEN: secret,
@@ -133,6 +146,20 @@ test("smoke diagnostics redact release and local API secrets before persistence"
   });
   assert.equal(redacted.includes(secret), false);
   assert.equal(redacted, "stdout [redacted] stderr");
+
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-smoke-diagnostic-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const diagnosticPath = path.join(directory, "installer-smoke-diagnostic.json");
+  await writeSmokeDiagnostic({
+    filePath: diagnosticPath,
+    stage: "initial-install",
+    error: new Error(`NSIS install failed with ${secret}`),
+    environment: { GH_TOKEN: secret },
+  });
+  const diagnostic = JSON.parse(await fs.readFile(diagnosticPath, "utf8"));
+  assert.equal(diagnostic.stage, "initial-install");
+  assert.equal(diagnostic.error.includes(secret), false);
+  assert.match(diagnostic.error, /\[redacted\]/);
 });
 
 test("release repository and signing identity inputs are strict", () => {

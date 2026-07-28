@@ -15,21 +15,18 @@ import {
 } from "./release-policy.mjs";
 import { canonicalUpdateManifestPayload, githubZipUpdateAssetNames } from "./github-update-assets.mjs";
 import { expectedWindowsSqlitePrebuild } from "./sqlite-native.mjs";
-import { redactSmokeDiagnosticText } from "./smoke-diagnostics.mjs";
+import { writeSmokeDiagnostic } from "./smoke-diagnostics.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const diagnosticReportPath = path.join(projectRoot, "output", "package-smoke-diagnostic.json");
 let packageSmokeStage = "initializing";
 
 async function writePackageSmokeDiagnostic(error) {
-  const message = redactSmokeDiagnosticText(error instanceof Error ? error.message : String(error));
-  const diagnostic = {
-    checkedAt: new Date().toISOString(),
+  await writeSmokeDiagnostic({
+    filePath: diagnosticReportPath,
     stage: packageSmokeStage,
-    error: message.slice(0, 8_000),
-  };
-  await fs.mkdir(path.dirname(diagnosticReportPath), { recursive: true });
-  await fs.writeFile(diagnosticReportPath, `${JSON.stringify(diagnostic, null, 2)}\n`, "utf8");
+    error,
+  });
 }
 
 async function main() {
