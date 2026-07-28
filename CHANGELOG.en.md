@@ -4,6 +4,24 @@
 
 This is the English translation of the Chinese source changelog. `CHANGELOG.md` remains the authoritative version history. It follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories and Semantic Versioning.
 
+## [0.2.0] - 2026-07-28
+
+### Added
+
+- Added the experimental embedded NamiMail Agent workspace, with OpenAI-compatible or Ollama provider configuration and local lexical retrieval with citations inside an explicit account scope.
+- The Agent can read accounts, folders, messages, threads, and attachment metadata, and can create, edit, or delete drafts. Provider settings are available from both Agent and Settings.
+
+### Improved
+
+- Refined sidebar navigation: All accounts has a distinct aggregation icon, sending status has its own status icon, and system folders use icons that reflect their actual purpose.
+- Strengthened account selected, hover, and keyboard-focus states without a left-side accent strip. Account and folder regions now scroll independently when space is constrained while keeping Settings and local-encryption status reachable.
+- Tightened public Agent/RAG boundaries to state the actual status of lexical retrieval, attachment-body ingestion, and external interfaces.
+
+### Documentation
+
+- Added publishable [v0.2.0 release notes](docs/releases/v0.2.0.en.md) and maintained the paired Chinese note.
+- Changed download guidance to refer to the Windows `.exe` installer displayed on the Release page, avoiding confusion between local build filenames and remote asset display names.
+
 ## [0.1.2] - 2026-07-24
 
 ### Fixed

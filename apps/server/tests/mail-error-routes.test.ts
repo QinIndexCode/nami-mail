@@ -155,7 +155,7 @@ describe("mail transport error API responses", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true, destination: "[Gmail]/All Mail", refreshPending: true });
     await vi.waitFor(() => {
-      expect(syncAccount).toHaveBeenCalledWith(db, expect.any(Buffer), "account-1", expect.any(Number), undefined);
+      expect(syncAccount).toHaveBeenCalledWith(db, expect.any(Buffer), "account-1", expect.any(Number), undefined, undefined);
     });
   });
 

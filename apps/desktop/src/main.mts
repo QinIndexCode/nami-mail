@@ -15,9 +15,23 @@ import { nativeText, type NativeCopyKey, type NativeTranslationValues } from "./
 import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
 import type { DesktopUpdateSnapshot } from "./update-status.mjs";
 import { DesktopUpdater } from "./updater.mjs";
+import {
+  AgentHostUpdateDrainLifecycle,
+  agentHostServiceStartupFailureExitCode,
+  formatAgentHostStartupFailure,
+  resolveDesktopAgentLaunch,
+  startupErrorForDesktopAgentLaunch,
+  type VerifiedAgentHost,
+} from "./agent/desktop-host-integration.mjs";
+import {
+  agentConfirmationIpcChannel,
+  createAgentConfirmationIpcHandler,
+  type AgentConfirmationDecision,
+} from "./agent/confirmation-ipc.mjs";
 
 type RunningServer = {
   url: string;
+  resolveAgentConfirmation?: (confirmationId: string, decision: AgentConfirmationDecision) => Promise<unknown>;
   getSettings: () => {
     locale: string;
     notificationsEnabled: boolean;
@@ -29,10 +43,19 @@ type RunningServer = {
   close: () => Promise<void>;
 };
 
+type DesktopConfirmationRuntimeOptions = Readonly<{
+  capability: unknown;
+  verifier: Readonly<{
+    verify: (input: unknown) => Readonly<{ principalId: string; surfaceId: string }> | undefined;
+  }>;
+}>;
+
 type ServerRuntimeModule = {
   startServer: (options?: {
     onNewInboxMessages?: (messages: NewMailPayload[]) => void;
     masterKey?: Buffer;
+    translationCacheDir?: string;
+    desktopConfirmation?: DesktopConfirmationRuntimeOptions;
   }) => Promise<RunningServer>;
 };
 
@@ -166,6 +189,29 @@ type ClosePromptSmokeSession = {
 
 let mainWindow: BrowserWindow | undefined;
 let localServer: RunningServer | undefined;
+// This capability never crosses IPC, preload, HTTP, or persistent storage.
+const desktopConfirmationCapability = Symbol("nami-desktop-confirmation");
+const desktopConfirmationVerifier: DesktopConfirmationRuntimeOptions["verifier"] = Object.freeze({
+  verify: (input: unknown) => {
+    if (!input || typeof input !== "object") return undefined;
+    const candidate = input as {
+      capability?: unknown;
+      caller?: { kind?: unknown; interactive?: unknown };
+      confirmationId?: unknown;
+      requestId?: unknown;
+      operation?: unknown;
+    };
+    if (
+      candidate.capability !== desktopConfirmationCapability
+      || candidate.caller?.kind !== "desktop-ui"
+      || candidate.caller?.interactive !== true
+      || typeof candidate.confirmationId !== "string"
+      || typeof candidate.requestId !== "string"
+      || (candidate.operation !== "record-decision" && candidate.operation !== "consume-approval")
+    ) return undefined;
+    return { principalId: "nami-desktop-main", surfaceId: "nami-main-window" };
+  },
+});
 let tray: Tray | undefined;
 let appIcon: NativeImage | undefined;
 let isQuitting = false;
@@ -183,6 +229,11 @@ let singleInstanceSmokeResult: DesktopSingleInstanceSmokeResult | undefined;
 const appUserModelId = app.isPackaged ? "com.nami.mail" : "com.nami.mail.dev";
 const localApiAccessHeader = "x-nami-api-token";
 const localApiAccessTokenEnvironmentName = "NAMI_MAIL_LOCAL_API_TOKEN";
+const desktopAgentLaunch = resolveDesktopAgentLaunch(process.argv);
+// A Node `net` pipe cannot prove its Windows security descriptor. Keep this
+// undefined until a native SID-DACL adapter supplies a live verified host.
+let verifiedAgentHost: VerifiedAgentHost | undefined;
+const agentUpdateDrain = new AgentHostUpdateDrainLifecycle(() => verifiedAgentHost);
 
 app.setName("Nami Mail");
 if (process.platform === "win32") app.setAppUserModelId(appUserModelId);
@@ -437,29 +488,49 @@ function shutdownLocalServerAndQuit(): void {
 
 async function prepareLocalServerForUpdateInstall(): Promise<boolean> {
   if (isQuitting || !localServer) return false;
+  if (!await agentUpdateDrain.prepareForUpdateInstall()) {
+    console.error("Nami Mail could not verify and drain the active Agent host for update.");
+    return false;
+  }
   const server = localServer;
   try {
-    // Do not race this close against the normal bounded quit timeout. Starting
-    // NSIS while SQLite or an SMTP attempt is still closing can corrupt local
-    // state or turn a known delivery into an interrupted one.
-    await server.close();
+    if (!agentUpdateDrain.hasDrainedHost()) {
+      // Do not race this close against the normal bounded quit timeout. Starting
+      // NSIS while SQLite or an SMTP attempt is still closing can corrupt local
+      // state or turn a known delivery into an interrupted one.
+      await server.close();
+    }
+    // A verified Agent controller owns the same Electron runtime and has
+    // already quiesced it before releasing its pipe lease. Avoid calling
+    // Fastify.close() a second time when that controller is active.
     localServer = undefined;
     clearLocalApiAccessToken();
     destroyTray();
     isQuitting = true;
     return true;
   } catch (error) {
+    if (agentUpdateDrain.hasDrainedHost()) await agentUpdateDrain.recoverAfterInstallerFailure();
     console.error("Nami Mail could not prepare its data for update", error);
     return false;
   }
 }
 
 function recoverAfterUpdateInstallFailure(): void {
-  // The service has already closed and its in-memory key has been cleared.
-  // Relaunching is the smallest recovery that restores a fully usable app and
-  // unwraps the DPAPI key again without retaining another plaintext key copy.
-  app.relaunch();
-  app.exit(0);
+  void (async () => {
+    if (await agentUpdateDrain.recoverAfterInstallerFailure()) return;
+    // The service has already closed and its in-memory key has been cleared.
+    // Relaunching is the smallest recovery that restores a fully usable app and
+    // unwraps the DPAPI key again without retaining another plaintext key copy.
+    app.relaunch();
+    app.exit(0);
+  })();
+}
+
+function quitForUpdateInstall(): void {
+  if (!agentUpdateDrain.completeUpdateHandoff()) {
+    console.error("Nami Mail could not record the Agent host update handoff.");
+  }
+  app.quit();
 }
 
 function isHttpUrl(value: string): boolean {
@@ -1303,6 +1374,11 @@ async function boot(): Promise<void> {
       localServer = await runtime.startServer({
         masterKey: desktopMasterKey.key,
         onNewInboxMessages: notifyNewMail,
+        translationCacheDir: path.join(app.getPath("userData"), "translation-models"),
+        desktopConfirmation: {
+          capability: desktopConfirmationCapability,
+          verifier: desktopConfirmationVerifier,
+        },
       });
     } finally {
       // startServer copies the key for its own lifetime. This copy exists only
@@ -1321,7 +1397,7 @@ async function boot(): Promise<void> {
       broadcast: (snapshot) => mainWindow?.webContents.send("nami:update-status", snapshot),
       prepareForInstall: prepareLocalServerForUpdateInstall,
       recoverAfterInstallFailure: recoverAfterUpdateInstallFailure,
-      quitForInstall: () => app.quit(),
+      quitForInstall: quitForUpdateInstall,
     });
     const desktopUpdate: DesktopUpdateSnapshot = await desktopUpdater.start();
     powerMonitor.on("resume", checkForUpdatesAfterExternalTrigger);
@@ -1384,7 +1460,14 @@ async function boot(): Promise<void> {
   }
 }
 
-if (!app.requestSingleInstanceLock()) {
+if (desktopAgentLaunch.kind !== "gui") {
+  // This branch deliberately runs before the single-instance lock and before
+  // boot(), so an unsupported service invocation never opens the GUI or any
+  // encrypted mail state.
+  const error = startupErrorForDesktopAgentLaunch(desktopAgentLaunch);
+  console.error(formatAgentHostStartupFailure(error));
+  app.exit(agentHostServiceStartupFailureExitCode);
+} else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   ipcMain.on("nami:custom-notification-sound-ready", (event, ready: unknown) => {
@@ -1415,6 +1498,14 @@ if (!app.requestSingleInstanceLock()) {
       return { copied: false };
     }
   });
+  ipcMain.handle(agentConfirmationIpcChannel, createAgentConfirmationIpcHandler({
+    getMainWindow: () => mainWindow,
+    isLocalAppUrl,
+    resolve: (confirmationId, decision) => {
+      const server = localServer;
+      return server?.resolveAgentConfirmation?.(confirmationId, decision);
+    },
+  }));
   ipcMain.handle("nami:local-api-request-headers", (event) => {
     if (!isCurrentRenderer(event) || !localServer || !localApiAccessToken) return {};
     return { [localApiAccessHeader]: localApiAccessToken };

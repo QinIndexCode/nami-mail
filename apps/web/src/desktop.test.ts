@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   desktopBridge,
+  normalizeDesktopAgentConfirmationResult,
   normalizeDesktopUpdateInstallResult,
   normalizeDesktopUpdateSnapshot,
   type DesktopBridge,
@@ -87,6 +88,72 @@ describe("desktop update snapshot contract", () => {
       guardedBridge?.onUpdateStatus(() => { received += 1; });
       updateListener?.(malformedSnapshot);
       expect(received).toBe(0);
+    } finally {
+      if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
+  });
+});
+
+describe("desktop Agent confirmation bridge", () => {
+  const confirmationId = "confirmation-7a338d89-7197-472f-95ee-d6db4c974b59";
+
+  it("accepts only a complete desktop confirmation result", () => {
+    expect(normalizeDesktopAgentConfirmationResult({ confirmationId, decision: "approve", ok: true }))
+      .toEqual({ confirmationId, decision: "approve", ok: true });
+    expect(normalizeDesktopAgentConfirmationResult({ confirmationId, decision: "reject", ok: false }))
+      .toEqual({ confirmationId, decision: "reject", ok: false });
+
+    for (const malformed of [
+      undefined,
+      null,
+      { ok: false },
+      { confirmationId, decision: "approved", ok: true },
+      { confirmationId: "confirmation/invalid", decision: "approve", ok: true },
+      { confirmationId, decision: "approve", ok: true, extra: true },
+      { accepted: true },
+    ]) {
+      expect(normalizeDesktopAgentConfirmationResult(malformed)).toBeUndefined();
+    }
+  });
+
+  it("exposes a results-only subscription and filters malformed preload payloads", () => {
+    let resultListener: ((value: unknown) => void) | undefined;
+    const rawBridge: DesktopBridge = {
+      localApiRequestHeaders: async () => ({}),
+      notify: async () => ({ shown: false }),
+      copyVerificationCode: async () => ({ copied: false }),
+      onAgentConfirmationResult: (listener) => {
+        resultListener = listener as (value: unknown) => void;
+        return () => {
+          resultListener = undefined;
+        };
+      },
+      getUpdateStatus: async () => undefined,
+      checkForUpdates: async () => structuredSnapshot,
+      downloadUpdate: async () => structuredSnapshot,
+      skipUpdate: async () => structuredSnapshot,
+      snoozeUpdate: async () => structuredSnapshot,
+      installUpdate: async () => ({ accepted: false }),
+      setCustomNotificationSoundReady: () => undefined,
+      onNewMail: () => () => undefined,
+      onOpenMessage: () => () => undefined,
+      onSettingsChanged: () => () => undefined,
+      onUpdateStatus: () => () => undefined,
+    };
+    const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { namiDesktop: rawBridge } });
+
+    try {
+      const bridge = desktopBridge();
+      expect((bridge as Record<string, unknown> | undefined)?.resolveAgentConfirmation).toBeUndefined();
+      const received: unknown[] = [];
+      const unsubscribe = bridge?.onAgentConfirmationResult?.((result) => received.push(result));
+      resultListener?.({ confirmationId, decision: "approve", ok: true });
+      resultListener?.({ confirmationId, decision: "approved", ok: true });
+      expect(received).toEqual([{ confirmationId, decision: "approve", ok: true }]);
+      unsubscribe?.();
+      expect(resultListener).toBeUndefined();
     } finally {
       if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
       else Reflect.deleteProperty(globalThis, "window");

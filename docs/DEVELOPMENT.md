@@ -56,10 +56,10 @@ npm.cmd run build
 npm.cmd run smoke:runtime
 ```
 
-`npm.cmd run test` 是服务端测试入口；Web 与桌面测试需要单独执行。实际 Windows 安装器验证还需要：
+`npm.cmd run test` 会运行 Agent contracts、Agent core、服务端、Web 与桌面测试；安装包与已安装应用仍需单独验证：
 
 ```powershell
-$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/0.1.0"
+$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 npm.cmd run package:win
 npm.cmd run smoke:installer
 ```
@@ -69,7 +69,7 @@ npm.cmd run smoke:installer
 GitHub 更新发布使用版本化隔离目录，避免不同构建的资源混入同一个 Release 集合：
 
 ```powershell
-$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/0.1.0"
+$env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 npm.cmd run package:win:github
 ```
 

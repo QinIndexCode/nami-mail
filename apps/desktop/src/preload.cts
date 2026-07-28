@@ -79,11 +79,18 @@ const updateSnapshotKeys = new Set([
 ]);
 const updateSnapshotArgumentKeys = new Set(["installStage", "cleanupComplete"]);
 const updateInstallResultKeys = new Set(["accepted", "snapshot"]);
+const agentConfirmationIpcChannel = "nami:resolve-agent-confirmation";
+const agentConfirmationIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const agentConfirmationDecisions = ["approve", "reject"] as const;
+const agentConfirmationResultKeys = new Set(["ok"]);
+const agentConfirmationActionSelector = "button[data-nami-agent-confirmation-id][data-nami-agent-confirmation-decision]";
+const agentConfirmationCardSelector = "[data-nami-agent-confirmation-card]";
 
 export type DesktopUpdatePhase = typeof updatePhases[number];
 export type DesktopUpdateSuppression = typeof updateSuppressions[number];
 export type DesktopUpdateReason = typeof updateReasons[number];
 export type DesktopUpdateInstallStage = typeof updateInstallStages[number];
+export type DesktopAgentConfirmationDecision = typeof agentConfirmationDecisions[number];
 
 export type DesktopUpdateSnapshotArgs = {
   installStage?: DesktopUpdateInstallStage;
@@ -103,9 +110,29 @@ export type DesktopUpdateSnapshot = {
   args: DesktopUpdateSnapshotArgs;
 };
 
+export type DesktopAgentConfirmationRequest = {
+  confirmationId: string;
+  decision: DesktopAgentConfirmationDecision;
+};
+
+export type DesktopAgentConfirmationResult = DesktopAgentConfirmationRequest & {
+  ok: boolean;
+};
+
 type DesktopUpdateInstallResult = {
   accepted: boolean;
   snapshot?: DesktopUpdateSnapshot;
+};
+
+type ConfirmationActionElement = {
+  disabled?: unknown;
+  getAttribute: (name: string) => string | null;
+  closest: (selector: string) => unknown;
+};
+
+type ConfirmationDocument = {
+  addEventListener?: (type: "click", listener: (event: unknown) => void, options?: { capture?: boolean }) => void;
+  removeEventListener?: (type: "click", listener: (event: unknown) => void, options?: { capture?: boolean }) => void;
 };
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -191,10 +218,97 @@ function invokeUpdateSnapshot(channel: string, ...args: unknown[]): Promise<Desk
   return ipcRenderer.invoke(channel, ...args).then(normalizeDesktopUpdateSnapshot);
 }
 
+export function normalizeDesktopAgentConfirmationRequest(
+  confirmationId: unknown,
+  decision: unknown,
+): DesktopAgentConfirmationRequest | undefined {
+  if (typeof confirmationId !== "string" || !agentConfirmationIdentifierPattern.test(confirmationId)) return undefined;
+  if (typeof decision !== "string" || !(agentConfirmationDecisions as readonly string[]).includes(decision)) return undefined;
+  return { confirmationId, decision: decision as DesktopAgentConfirmationDecision };
+}
+
+function confirmationActionElement(value: unknown): ConfirmationActionElement | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Partial<ConfirmationActionElement>;
+  return typeof candidate.getAttribute === "function" && typeof candidate.closest === "function"
+    ? candidate as ConfirmationActionElement
+    : undefined;
+}
+
+function confirmationResolutionSucceeded(value: unknown): boolean {
+  return isPlainRecord(value)
+    && hasOnlyKeys(value, agentConfirmationResultKeys)
+    && Object.prototype.hasOwnProperty.call(value, "ok")
+    && value.ok === true;
+}
+
+/**
+ * Browser-generated keyboard activation also creates a trusted click, while
+ * HTMLElement.click() and dispatchEvent() do not. Do not use click.detail here.
+ */
+export function trustedDesktopAgentConfirmationRequest(event: unknown): DesktopAgentConfirmationRequest | undefined {
+  if (!event || typeof event !== "object") return undefined;
+  const click = event as { isTrusted?: unknown; target?: unknown };
+  if (click.isTrusted !== true) return undefined;
+  const target = confirmationActionElement(click.target);
+  const button = target ? confirmationActionElement(target.closest(agentConfirmationActionSelector)) : undefined;
+  if (!button || button.disabled === true) return undefined;
+  const request = normalizeDesktopAgentConfirmationRequest(
+    button.getAttribute("data-nami-agent-confirmation-id"),
+    button.getAttribute("data-nami-agent-confirmation-decision"),
+  );
+  if (!request) return undefined;
+  const card = confirmationActionElement(button.closest(agentConfirmationCardSelector));
+  return card?.getAttribute("data-nami-agent-confirmation-id") === request.confirmationId ? request : undefined;
+}
+
+/**
+ * The handler runs in preload's isolated world, before renderer click handlers.
+ * Renderer code can subscribe to the outcome but cannot invoke this operation.
+ */
+export function installTrustedDesktopAgentConfirmationClickHandler(
+  documentTarget: ConfirmationDocument | undefined,
+  invoke: (channel: string, ...args: unknown[]) => Promise<unknown>,
+  publish: (result: DesktopAgentConfirmationResult) => void,
+): () => void {
+  const inFlight = new Set<string>();
+  const listener = (event: unknown) => {
+    const request = trustedDesktopAgentConfirmationRequest(event);
+    if (!request || inFlight.has(request.confirmationId)) return;
+    inFlight.add(request.confirmationId);
+    const publishResult = (ok: boolean) => publish(Object.freeze({ ...request, ok }));
+    try {
+      void invoke(agentConfirmationIpcChannel, request.confirmationId, request.decision)
+        .then((result) => publishResult(confirmationResolutionSucceeded(result)), () => publishResult(false))
+        .finally(() => inFlight.delete(request.confirmationId));
+    } catch {
+      publishResult(false);
+      inFlight.delete(request.confirmationId);
+    }
+  };
+  documentTarget?.addEventListener?.("click", listener, { capture: true });
+  return () => documentTarget?.removeEventListener?.("click", listener, { capture: true });
+}
+
 const rendererEvents = globalThis as unknown as {
   addEventListener?: (type: "online", listener: () => void) => void;
+  document?: ConfirmationDocument;
 };
 if (contextBridge && ipcRenderer) {
+  const confirmationResultListeners = new Set<(result: DesktopAgentConfirmationResult) => void>();
+  installTrustedDesktopAgentConfirmationClickHandler(
+    rendererEvents.document,
+    (channel, ...args) => ipcRenderer.invoke(channel, ...args),
+    (result) => {
+      for (const listener of [...confirmationResultListeners]) {
+        try {
+          listener(result);
+        } catch {
+          // A renderer listener must not affect the desktop confirmation path.
+        }
+      }
+    },
+  );
   rendererEvents.addEventListener?.("online", () => {
     ipcRenderer.send("nami:update-network-online");
   });
@@ -203,6 +317,12 @@ if (contextBridge && ipcRenderer) {
     localApiRequestHeaders: () => ipcRenderer.invoke("nami:local-api-request-headers"),
     notify: (payload: NativeNotification) => ipcRenderer.invoke("nami:notify", payload),
     copyVerificationCode: (code: string) => ipcRenderer.invoke("nami:copy-verification-code", code),
+    onAgentConfirmationResult: (listener: unknown) => {
+      if (typeof listener !== "function") return () => undefined;
+      const resultListener = listener as (result: DesktopAgentConfirmationResult) => void;
+      confirmationResultListeners.add(resultListener);
+      return () => confirmationResultListeners.delete(resultListener);
+    },
     getUpdateStatus: (): Promise<DesktopUpdateSnapshot | undefined> => invokeUpdateSnapshot("nami:update-get-status"),
     checkForUpdates: (): Promise<DesktopUpdateSnapshot | undefined> => invokeUpdateSnapshot("nami:update-check"),
     downloadUpdate: (): Promise<DesktopUpdateSnapshot | undefined> => invokeUpdateSnapshot("nami:update-download"),

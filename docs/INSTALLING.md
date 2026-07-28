@@ -7,7 +7,7 @@
 ## 从可信来源安装
 
 1. 打开项目的 [GitHub Releases](https://github.com/QinIndexCode/nami-mail/releases) 页面，确认仓库地址为 `QinIndexCode/nami-mail`。
-2. 下载与目标版本同名的 `Nami Mail Setup <version>.exe`。不要下载或手动运行 `nami-mail-update-*.zip`、`.json`、`latest.yml` 或 `.blockmap`；它们是发布校验或应用自动更新的内部资源。
+2. 下载目标版本 Release 页面列出的 Windows `.exe` 安装程序。不要下载或手动运行 `nami-mail-update-*.zip`、`.json`、`latest.yml` 或 `.blockmap`；它们是发布校验或应用自动更新的内部资源。
 3. 关闭正在运行的 Nami Mail，再运行安装程序。安装过程中可以选择安装目录。
 
 早期或未签名的 Windows 安装程序可能被 SmartScreen 标为“未知发布者”。这不是文件可信的证明，也不是要求你绕过系统警告的理由。请先回到上面的官方 Release 页面核对仓库、版本和 Release Notes；来源、版本或签名状态不清楚时，停止安装并通过 [支持指南](../SUPPORT.md) 报告。

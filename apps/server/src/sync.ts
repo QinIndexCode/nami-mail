@@ -2,6 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import type { ListResponse } from "imapflow";
 import { simpleParser, type AddressObject } from "mailparser";
 import { attachmentMetadataFromParsedMail } from "./attachments.js";
+import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import type { DatabaseHandle } from "./db.js";
 import { deriveEncryptionKey } from "./crypto.js";
 import { friendlyMailError, imapClientForAccount, mailErrorCode, type AccountAccessTokenProvider } from "./mail.js";
@@ -23,6 +24,11 @@ const running = new Set<string>();
 const movingAccounts = new Set<string>();
 const scheduledSentVerifications = new Map<string, Promise<void>>();
 const sentVerificationRetryDelaysMs = [0, 2_000, 10_000] as const;
+// Probe old cached UIDs in small, rotating batches. This only verifies remote
+// absence after a folder has stayed in the same UIDVALIDITY epoch.
+const remoteDeletionProbeBatchSize = 64;
+const remoteDeletionProbeCursorLimit = 1_024;
+const remoteDeletionProbeCursors = new Map<string, number>();
 
 export type NewInboxMessage = {
   id: string;
@@ -57,6 +63,20 @@ function snippet(value: string): string {
 
 function messageKey(accountId: string, mailbox: string, uid: number): string {
   return createHash("sha256").update(`${accountId}\0${mailbox}\0${uid}`).digest("hex").slice(0, 32);
+}
+
+function remoteDeletionProbeCursorKey(accountId: string, mailbox: string, uidValidity: string): string {
+  return `${accountId}\0${mailbox}\0${uidValidity}`;
+}
+
+function advanceRemoteDeletionProbeCursor(key: string, uid: number): void {
+  remoteDeletionProbeCursors.delete(key);
+  remoteDeletionProbeCursors.set(key, uid);
+  while (remoteDeletionProbeCursors.size > remoteDeletionProbeCursorLimit) {
+    const oldestKey = remoteDeletionProbeCursors.keys().next().value;
+    if (typeof oldestKey !== "string") return;
+    remoteDeletionProbeCursors.delete(oldestKey);
+  }
 }
 
 const remoteIdLookupKeyPurpose = "message-remote-id-lookup-v1";
@@ -225,18 +245,21 @@ export async function syncAccount(
   accountId: string,
   messageLimit: number,
   accessTokenProvider?: AccountAccessTokenProvider,
+  agentEvents?: AgentMailEventSink,
 ): Promise<{ synced: number; folders: number; failedFolders: number; newInboxMessages: NewInboxMessage[] }> {
   if (running.has(accountId) || movingAccounts.has(accountId)) {
     return { synced: 0, folders: 0, failedFolders: 0, newInboxMessages: [] };
   }
   const account = accountById(db, accountId);
   if (!account) throw new Error("Account not found.");
+  const agentLease = agentEvents?.acquireLease(accountId);
   running.add(accountId);
   let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
 
   try {
     client = await imapClientForAccount(account, masterKey, accessTokenProvider);
     await client.connect();
+    const connectedClient = client;
     const folders = (await client.list())
       .filter(isSelectableFolder)
       .sort((a, b) => folderPriority(a) - folderPriority(b) || a.name.localeCompare(b.name));
@@ -285,7 +308,48 @@ export async function syncAccount(
       });
     }
 
+    type RemovedMessage = {
+      id: string;
+      mailbox: string;
+      uid: number;
+      remote_id_lookup: string | null;
+      flags_json: string;
+      all_mail_archived: number | null;
+    };
+    const activeFolderPaths = folderRows.map((folder) => folder.path);
+    const inactiveFolderClause = activeFolderPaths.length
+      ? ` AND mailbox NOT IN (${activeFolderPaths.map(() => "?").join(", ")})`
+      : "";
+    const listMessagesInRemovedFolders = db.prepare(`
+      SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
+      FROM messages
+      WHERE account_id = ?${inactiveFolderClause}
+        AND COALESCE(pending_move_destination, '') = ''
+    `);
+    const deleteMessagesInRemovedFolders = db.prepare(`
+      DELETE FROM messages
+      WHERE account_id = ?${inactiveFolderClause}
+        AND COALESCE(pending_move_destination, '') = ''
+    `);
+
     db.transaction(() => {
+      const removedMessages = listMessagesInRemovedFolders.all(
+        accountId,
+        ...activeFolderPaths,
+      ) as RemovedMessage[];
+      deleteMessagesInRemovedFolders.run(accountId, ...activeFolderPaths);
+      if (agentEvents && agentLease) {
+        for (const removed of removedMessages) {
+          agentEvents.messageDeletedWithinTransaction(agentLease, removed.id, {
+            reason: "folder-removed",
+            mailbox: removed.mailbox,
+            uid: removed.uid,
+            remoteIdLookup: removed.remote_id_lookup,
+            flagsJson: removed.flags_json,
+            allMailArchived: removed.all_mail_archived,
+          });
+        }
+      }
       db.prepare("DELETE FROM folders WHERE account_id = ?").run(accountId);
       for (const folder of folderRows) upsertFolder.run({ accountId, ...folder });
     })();
@@ -342,6 +406,11 @@ export async function syncAccount(
       DELETE FROM messages
       WHERE account_id = ? AND mailbox = ? AND remote_id_lookup = ? AND id <> ?
     `);
+    const listDestinationCopies = db.prepare(`
+      SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
+      FROM messages
+      WHERE account_id = ? AND mailbox = ? AND remote_id_lookup = ? AND id <> ?
+    `);
     const reconcilePendingMove = db.prepare(`
       UPDATE messages
       SET mailbox = ?,
@@ -385,6 +454,106 @@ export async function syncAccount(
       WHERE account_id = ? AND mailbox = ? AND COALESCE(pending_move_destination, '') = ''
     `);
     const updateFolderUidValidity = db.prepare("UPDATE folders SET uid_validity = ? WHERE account_id = ? AND path = ?");
+    type RemoteDeletionCandidate = {
+      id: string;
+      mailbox: string;
+      uid: number;
+      remote_id_lookup: string | null;
+      flags_json: string;
+      all_mail_archived: number | null;
+    };
+    const listRemoteDeletionCandidatesAfterCursor = db.prepare(`
+      SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
+      FROM messages
+      WHERE account_id = ?
+        AND mailbox = ?
+        AND uid > ?
+        AND COALESCE(pending_move_destination, '') = ''
+        AND pending_move_state IS NULL
+      ORDER BY uid ASC
+      LIMIT ?
+    `);
+    const listRemoteDeletionCandidatesFromStart = db.prepare(`
+      SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
+      FROM messages
+      WHERE account_id = ?
+        AND mailbox = ?
+        AND uid > 0
+        AND COALESCE(pending_move_destination, '') = ''
+        AND pending_move_state IS NULL
+      ORDER BY uid ASC
+      LIMIT ?
+    `);
+    const deleteRemoteDeletionCandidate = db.prepare(`
+      DELETE FROM messages
+      WHERE id = ?
+        AND account_id = ?
+        AND mailbox = ?
+        AND uid = ?
+        AND COALESCE(pending_move_destination, '') = ''
+        AND pending_move_state IS NULL
+    `);
+    const folderHasPendingMove = db.prepare(`
+      SELECT 1
+      FROM messages
+      WHERE account_id = ?
+        AND COALESCE(pending_move_destination, '') <> ''
+        AND (mailbox = ? OR pending_move_destination = ?)
+      LIMIT 1
+    `);
+    const reconcileRemoteDeletionBatch = async (folder: ListResponse, uidValidity: string): Promise<void> => {
+      const cursorKey = remoteDeletionProbeCursorKey(accountId, folder.path, uidValidity);
+      const cursor = remoteDeletionProbeCursors.get(cursorKey);
+      let candidates = listRemoteDeletionCandidatesAfterCursor.all(
+        accountId,
+        folder.path,
+        cursor ?? 0,
+        remoteDeletionProbeBatchSize,
+      ) as RemoteDeletionCandidate[];
+      if (!candidates.length && cursor !== undefined) {
+        candidates = listRemoteDeletionCandidatesFromStart.all(
+          accountId,
+          folder.path,
+          remoteDeletionProbeBatchSize,
+        ) as RemoteDeletionCandidate[];
+      }
+      if (!candidates.length) {
+        remoteDeletionProbeCursors.delete(cursorKey);
+        return;
+      }
+
+      const candidateUids = candidates.map((candidate) => candidate.uid);
+      const candidateUidSet = new Set(candidateUids);
+      const observedUids = new Set<number>();
+      // Deletion happens only after this entire FETCH iterator completes. A
+      // partial iterator or mailbox error therefore cannot turn a timeout into
+      // a local deletion decision.
+      for await (const message of connectedClient.fetch(candidateUids, { uid: true }, { uid: true })) {
+        if (message.uid && candidateUidSet.has(message.uid)) observedUids.add(message.uid);
+      }
+
+      db.transaction(() => {
+        for (const candidate of candidates) {
+          if (observedUids.has(candidate.uid)) continue;
+          const deleted = deleteRemoteDeletionCandidate.run(
+            candidate.id,
+            accountId,
+            candidate.mailbox,
+            candidate.uid,
+          );
+          if (deleted.changes !== 1 || !agentEvents || !agentLease) continue;
+          agentEvents.messageDeletedWithinTransaction(agentLease, candidate.id, {
+            reason: "remote-deletion-reconciled",
+            mailbox: candidate.mailbox,
+            uid: candidate.uid,
+            remoteIdLookup: candidate.remote_id_lookup,
+            flagsJson: candidate.flags_json,
+            allMailArchived: candidate.all_mail_archived,
+          });
+        }
+      })();
+      advanceRemoteDeletionProbeCursor(cursorKey, candidates[candidates.length - 1]!.uid);
+    };
     let synced = 0;
     let failedFolders = 0;
     let firstFolderError: unknown;
@@ -438,7 +607,27 @@ export async function syncAccount(
       // archive move. Missing labels are merely unobservable state and must
       // not block an already confirmed MOVE forever.
       if (folder.specialUse === "\\All" && allMailArchived === 0) {
-        deleteDestinationCopies.run(accountId, folder.path, remoteLookup, pending.id);
+        db.transaction(() => {
+          const duplicateDestinationRows = listDestinationCopies.all(
+            accountId,
+            folder.path,
+            remoteLookup,
+            pending.id,
+          ) as RemoteDeletionCandidate[];
+          deleteDestinationCopies.run(accountId, folder.path, remoteLookup, pending.id);
+          if (agentEvents && agentLease) {
+            for (const duplicate of duplicateDestinationRows) {
+              agentEvents.messageDeletedWithinTransaction(agentLease, duplicate.id, {
+                reason: "pending-move-destination-duplicate",
+                mailbox: duplicate.mailbox,
+                uid: duplicate.uid,
+                remoteIdLookup: duplicate.remote_id_lookup,
+                flagsJson: duplicate.flags_json,
+                allMailArchived: duplicate.all_mail_archived,
+              });
+            }
+          }
+        })();
         return "waiting";
       }
       const preservedAllMailState = pending.all_mail_archived === 1 ? 1 : null;
@@ -450,6 +639,12 @@ export async function syncAccount(
         ?? (pendingWasIntent ? 1 : null);
       const flagsJson = JSON.stringify([...(message.flags ?? [])]);
       db.transaction(() => {
+        const duplicateDestinationRows = listDestinationCopies.all(
+          accountId,
+          folder.path,
+          remoteLookup,
+          pending.id,
+        ) as RemoteDeletionCandidate[];
         deleteDestinationCopies.run(accountId, folder.path, remoteLookup, pending.id);
         const reconciled = reconcilePendingMove.run(
           folder.path,
@@ -463,6 +658,26 @@ export async function syncAccount(
           remoteLookup,
         );
         if (reconciled.changes !== 1) throw new Error("Pending message move could not be reconciled.");
+        if (agentEvents && agentLease) {
+          for (const duplicate of duplicateDestinationRows) {
+            agentEvents.messageDeletedWithinTransaction(agentLease, duplicate.id, {
+              reason: "pending-move-destination-duplicate",
+              mailbox: duplicate.mailbox,
+              uid: duplicate.uid,
+              remoteIdLookup: duplicate.remote_id_lookup,
+              flagsJson: duplicate.flags_json,
+              allMailArchived: duplicate.all_mail_archived,
+            });
+          }
+          agentEvents.messageUpsertedWithinTransaction(agentLease, pending.id, {
+            transition: "pending-move-reconciled",
+            mailbox: folder.path,
+            uid: message.uid,
+            remoteIdLookup: remoteLookup,
+            flagsJson,
+            allMailArchived: reconciledAllMailState,
+          });
+        }
       })();
       return "reconciled";
     };
@@ -474,15 +689,17 @@ export async function syncAccount(
         const mailbox = client.mailbox && typeof client.mailbox !== "boolean" ? client.mailbox : undefined;
         const currentUidValidity = uidValidityValue(mailbox?.uidValidity);
         const previousUidValidity = previousFolderUidValidities.get(folder.path);
+        const pendingMoveTouchesFolder = Boolean(folderHasPendingMove.get(accountId, folder.path, folder.path));
         const intentRows = pendingMoveIntents.all(accountId, folder.path) as Array<{
           id: string;
           uid: number;
           remote_id_lookup?: string | null;
         }>;
         const intentByUid = new Map(intentRows.map((row) => [row.uid, row]));
-        const sourceUidMembershipProven = currentUidValidity !== undefined
+        const sameUidValidity = currentUidValidity !== undefined
           && typeof previousUidValidity === "string"
           && previousUidValidity === currentUidValidity;
+        const sourceUidMembershipProven = sameUidValidity;
         const intentUids = [...new Set(intentRows.flatMap((row) =>
           Number.isSafeInteger(row.uid) && row.uid > 0 ? [row.uid] : []
         ))];
@@ -520,8 +737,32 @@ export async function syncAccount(
                 const localPendingUid = pendingMoveUid(db, accountId, folder.path, pendingIntent.uid);
                 detachPendingMoveIntentFromResetMailbox.run(localPendingUid, pendingIntent.id);
               }
+              const resetRows = db.prepare(`
+                SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
+                FROM messages
+                WHERE account_id = ? AND mailbox = ? AND COALESCE(pending_move_destination, '') = ''
+              `).all(accountId, folder.path) as Array<{
+                id: string;
+                mailbox: string;
+                uid: number;
+                remote_id_lookup: string | null;
+                flags_json: string;
+                all_mail_archived: number | null;
+              }>;
               deleteFolderMessages.run(accountId, folder.path);
               updateFolderUidValidity.run(currentUidValidity, accountId, folder.path);
+              if (agentEvents && agentLease) {
+                for (const removed of resetRows) {
+                  agentEvents.messageDeletedWithinTransaction(agentLease, removed.id, {
+                    reason: "folder-uid-validity-reset",
+                    mailbox: removed.mailbox,
+                    uid: removed.uid,
+                    remoteIdLookup: removed.remote_id_lookup,
+                    flagsJson: removed.flags_json,
+                    allMailArchived: removed.all_mail_archived,
+                  });
+                }
+              }
             })();
           } else {
             updateFolderUidValidity.run(currentUidValidity, accountId, folder.path);
@@ -559,7 +800,10 @@ export async function syncAccount(
             }
           }
         }
-        if (exists <= 0) continue;
+        if (exists <= 0) {
+          if (sameUidValidity && !pendingMoveTouchesFolder) await reconcileRemoteDeletionBatch(folder, currentUidValidity);
+          continue;
+        }
         const start = Math.max(1, exists - messageLimit + 1);
         const newUids: number[] = [];
         const attachmentMetadataRefreshUids: number[] = [];
@@ -584,14 +828,26 @@ export async function syncAccount(
             existing = findMessage.get(accountId, folder.path, message.uid) as MessageStorageRow | undefined;
           }
           if (existing) {
-            updateCachedMessage.run(
-              flagsJson,
-              remoteLookup,
-              allMailArchived,
-              accountId,
-              folder.path,
-              message.uid,
-            );
+            db.transaction(() => {
+              updateCachedMessage.run(
+                flagsJson,
+                remoteLookup,
+                allMailArchived,
+                accountId,
+                folder.path,
+                message.uid,
+              );
+              if (agentEvents && agentLease) {
+                agentEvents.messageUpsertedWithinTransaction(agentLease, existing.id, {
+                  transition: "sync-metadata-refresh",
+                  mailbox: folder.path,
+                  uid: message.uid,
+                  remoteIdLookup: remoteLookup ?? (typeof existing.remote_id_lookup === "string" ? existing.remote_id_lookup : null),
+                  allMailArchived: allMailArchived ?? (typeof existing.all_mail_archived === "number" ? existing.all_mail_archived : null),
+                  flagsJson,
+                });
+              }
+            })();
             // Rows cached before attachment metadata was introduced are hydrated
             // once when they reappear in the normal sync window.
             const payload = messagePayloadForRow(existing, masterKey);
@@ -607,7 +863,10 @@ export async function syncAccount(
         }
 
         const uidsToFetch = [...new Set([...newUids, ...attachmentMetadataRefreshUids])];
-        if (!uidsToFetch.length) continue;
+        if (!uidsToFetch.length) {
+          if (sameUidValidity && !pendingMoveTouchesFolder) await reconcileRemoteDeletionBatch(folder, currentUidValidity);
+          continue;
+        }
         const newUidSet = new Set(newUids);
         for await (const message of client.fetch(
           uidsToFetch,
@@ -655,25 +914,62 @@ export async function syncAccount(
             htmlBody: html,
             attachments,
           });
-          upsert.run({
-            id,
-            accountId,
-            mailbox: folder.path,
-            uid: message.uid,
-            remoteIdLookup: remoteIdLookup(masterKey, accountId, message.emailId),
-            allMailArchived: allMailArchivedValue(folder, message.labels),
-            ...protectedColumns,
-            sentAt: sentAt.toISOString(),
-            flagsJson: JSON.stringify(flags),
-            hasAttachments: parsed?.attachments?.length ? 1 : 0,
-            size: message.size ?? message.source?.length ?? 0,
-            createdAt: new Date().toISOString(),
-          });
+          const remoteLookup = remoteIdLookup(masterKey, accountId, message.emailId);
+          const allMailArchived = allMailArchivedValue(folder, message.labels);
+          const flagsJson = JSON.stringify(flags);
+          const sentAtIso = sentAt.toISOString();
+          const hasAttachments = parsed?.attachments?.length ? 1 : 0;
+          const size = message.size ?? message.source?.length ?? 0;
+          db.transaction(() => {
+            upsert.run({
+              id,
+              accountId,
+              mailbox: folder.path,
+              uid: message.uid,
+              remoteIdLookup: remoteLookup,
+              allMailArchived,
+              ...protectedColumns,
+              sentAt: sentAtIso,
+              flagsJson,
+              hasAttachments,
+              size,
+              createdAt: new Date().toISOString(),
+            });
+            if (agentEvents && agentLease) {
+              agentEvents.messageUpsertedWithinTransaction(agentLease, id, {
+                transition: "sync-message-upsert",
+                mailbox: folder.path,
+                uid: message.uid,
+                remoteIdLookup: remoteLookup,
+                allMailArchived,
+                messageId,
+                subject,
+                from,
+                to: recipients,
+                cc: copiedRecipients,
+                inReplyTo,
+                references,
+                sentAt: sentAtIso,
+                text,
+                html,
+                flags,
+                attachments: attachments.map((attachment) => ({
+                  partId: attachment.partId,
+                  filename: attachment.filename,
+                  contentType: attachment.contentType,
+                  size: attachment.size,
+                  related: attachment.related,
+                  disposition: attachment.disposition,
+                })),
+              });
+            }
+          })();
           synced += 1;
           if (newUidSet.has(message.uid) && (folder.specialUse === "\\Inbox" || folder.path.toUpperCase() === "INBOX") && !flags.includes("\\Seen")) {
             newInboxMessages.push({ id, accountId, subject, fromName: from.name, fromAddress: from.address });
           }
         }
+        if (sameUidValidity && !pendingMoveTouchesFolder) await reconcileRemoteDeletionBatch(folder, currentUidValidity);
       } catch (error) {
         failedFolders += 1;
         firstFolderError ??= error;
@@ -749,6 +1045,7 @@ export async function updateMessageFlags(
   messageId: string,
   patch: MessageFlagsPatch,
   accessTokenProvider?: AccountAccessTokenProvider,
+  agentEvents?: AgentMailEventSink,
 ): Promise<void> {
   const message = db
     .prepare("SELECT account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id = ?")
@@ -785,6 +1082,7 @@ export async function updateMessageFlags(
   if (!add.length && !remove.length) return;
   const account = accountById(db, message.account_id);
   if (!account) throw new Error("Account not found.");
+  const agentLease = agentEvents?.acquireLease(message.account_id);
   const client = await imapClientForAccount(account, masterKey, accessTokenProvider);
   try {
     await client.connect();
@@ -817,6 +1115,16 @@ export async function updateMessageFlags(
           WHERE account_id = ? AND path = ?
         `).run(nextFlags.has("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
       }
+      if (agentEvents && agentLease) {
+        agentEvents.messageUpsertedWithinTransaction(agentLease, messageId, {
+          mailbox: message.mailbox,
+          uid: message.uid,
+          remoteIdLookup: message.remote_id_lookup,
+          flags: [...nextFlags].sort(),
+          pendingMoveDestination: message.pending_move_destination,
+          pendingMoveState: message.pending_move_state,
+        });
+      }
     })();
   } finally {
     if (client.usable) await client.logout().catch(() => undefined);
@@ -829,8 +1137,9 @@ export async function markMessageSeen(
   messageId: string,
   seen: boolean,
   accessTokenProvider?: AccountAccessTokenProvider,
+  agentEvents?: AgentMailEventSink,
 ): Promise<void> {
-  await updateMessageFlags(db, masterKey, messageId, { seen }, accessTokenProvider);
+  await updateMessageFlags(db, masterKey, messageId, { seen }, accessTokenProvider, agentEvents);
 }
 
 export type MessageMoveTarget = "archive" | "trash";
@@ -936,6 +1245,7 @@ export async function moveMessage(
   messageId: string,
   target: MessageMoveTarget,
   accessTokenProvider?: AccountAccessTokenProvider,
+  agentEvents?: AgentMailEventSink,
 ): Promise<{ accountId: string; destination: string; refreshPending: boolean; uid?: number; uncertain?: boolean; locationUnverified?: boolean }> {
   const message = db
     .prepare("SELECT account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id = ?")
@@ -953,6 +1263,7 @@ export async function moveMessage(
   if (moveBlockedError) throw new Error(moveBlockedError);
   const account = accountById(db, message.account_id);
   if (!account) throw new Error("Account not found.");
+  const agentLease = agentEvents?.acquireLease(message.account_id);
   if (running.has(message.account_id) || movingAccounts.has(message.account_id)) {
     throw new Error(PENDING_MOVE_RECONCILIATION_ERROR);
   }
@@ -1022,6 +1333,18 @@ export async function moveMessage(
         db.transaction(() => {
           // Gmail can already have a cached \All copy. UIDPLUS proves this is
           // the same server message, so preserve the current UI-facing id.
+          const duplicateDestinationRows = db.prepare(`
+            SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
+            FROM messages
+            WHERE account_id = ? AND mailbox = ? AND uid = ? AND id <> ?
+          `).all(message.account_id, destination.path, destinationUid, messageId) as Array<{
+            id: string;
+            mailbox: string;
+            uid: number;
+            remote_id_lookup: string | null;
+            flags_json: string;
+            all_mail_archived: number | null;
+          }>;
           const removedDestinationRow = db.prepare(`
             DELETE FROM messages
             WHERE account_id = ? AND mailbox = ? AND uid = ? AND id <> ?
@@ -1039,6 +1362,26 @@ export async function moveMessage(
           `).run(destination.path, destinationUid, destination.special_use === "\\All" ? 1 : null, messageId);
           if (updated.changes !== 1) throw new Error("Move intent was not available for UIDPLUS reconciliation.");
           updateFolderCountsForMove(db, message, destination, removedDestinationRow.changes > 0);
+          if (agentEvents && agentLease) {
+            for (const duplicate of duplicateDestinationRows) {
+              agentEvents.messageDeletedWithinTransaction(agentLease, duplicate.id, {
+                reason: "move-destination-duplicate",
+                mailbox: duplicate.mailbox,
+                uid: duplicate.uid,
+                remoteIdLookup: duplicate.remote_id_lookup,
+                flagsJson: duplicate.flags_json,
+                allMailArchived: duplicate.all_mail_archived,
+              });
+            }
+            agentEvents.messageUpsertedWithinTransaction(agentLease, messageId, {
+              transition: "move-confirmed",
+              mailbox: destination.path,
+              uid: destinationUid,
+              remoteIdLookup: message.remote_id_lookup,
+              flagsJson: message.flags_json,
+              allMailArchived: destination.special_use === "\\All" ? 1 : null,
+            });
+          }
         })();
         moveSettled = true;
         return { accountId: message.account_id, destination: destination.path, refreshPending: false, uid: destinationUid };
@@ -1057,6 +1400,20 @@ export async function moveMessage(
         message.remote_id_lookup,
         messageId,
       );
+      const duplicateDestinationRows = message.remote_id_lookup
+        ? db.prepare(`
+          SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
+          FROM messages
+          WHERE account_id = ? AND mailbox = ? AND remote_id_lookup = ? AND id <> ?
+        `).all(message.account_id, destination.path, message.remote_id_lookup, messageId) as Array<{
+          id: string;
+          mailbox: string;
+          uid: number;
+          remote_id_lookup: string | null;
+          flags_json: string;
+          all_mail_archived: number | null;
+        }>
+        : [];
       const removedDestinationRows = message.remote_id_lookup
         ? db.prepare(`
           DELETE FROM messages
@@ -1083,6 +1440,29 @@ export async function moveMessage(
       );
       if (confirmed.changes !== 1) throw new Error("Move intent was not available for pending reconciliation.");
       updateFolderCountsForMove(db, message, destination, removedDestinationRows.changes > 0);
+      if (agentEvents && agentLease) {
+        for (const duplicate of duplicateDestinationRows) {
+          agentEvents.messageDeletedWithinTransaction(agentLease, duplicate.id, {
+            reason: "move-destination-duplicate",
+            mailbox: duplicate.mailbox,
+            uid: duplicate.uid,
+            remoteIdLookup: duplicate.remote_id_lookup,
+            flagsJson: duplicate.flags_json,
+            allMailArchived: duplicate.all_mail_archived,
+          });
+        }
+        agentEvents.messageUpsertedWithinTransaction(agentLease, messageId, {
+          transition: "move-confirmed-pending-reconciliation",
+          mailbox: message.mailbox,
+          uid: localPendingUid,
+          destination: destination.path,
+          destinationSpecialUse: destination.special_use,
+          remoteIdLookup: message.remote_id_lookup,
+          flagsJson: message.flags_json,
+          candidateUid,
+          allMailArchived: destination.special_use === "\\All" ? 1 : null,
+        });
+      }
     })();
     moveSettled = true;
     // Without a stable server identifier, the confirmed move is still real,
