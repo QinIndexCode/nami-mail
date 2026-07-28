@@ -4,11 +4,30 @@
 
 This is the English translation of the Chinese source changelog. `CHANGELOG.md` remains the authoritative version history. It follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories and Semantic Versioning.
 
-## [0.2.2] - 2026-07-28
+## [0.2.3] - 2026-07-28
 
 ### Added
 
-- Carried the experimental NamiMail Agent workspace from unpublished source tags into the `0.2.2` prepared release: configure an OpenAI-compatible or Ollama provider and use local lexical retrieval with citations inside an explicit account scope.
+- Carried the experimental NamiMail Agent workspace from unpublished source tags into the `0.2.3` prepared release: configure an OpenAI-compatible or Ollama provider and use local lexical retrieval with citations inside an explicit account scope.
+- Agent tools remain limited to reading accounts, folders, messages, threads, and attachment metadata, plus creating, editing, or deleting drafts. High-risk mail actions remain in the primary mail UI.
+
+### Improved
+
+- Carried forward the multi-account sidebar, themed Settings controls, and experimental user-triggered translation improvements.
+- Strengthened layered Windows package, installer, and desktop smoke diagnostics. Installer smoke now keeps temporary installed-app validation in a controlled, project-owned isolated location and removes it after a successful run, so system temporary-directory differences do not mask the real failure.
+
+### Documentation
+
+- Added paired `v0.2.3` prepared release notes and correctly marked `v0.2.2`, `v0.2.1`, and `v0.2.0` as source tags without public Release or update assets.
+- `0.2.3` does not describe local builds, CI, or generated assets as completed real online automatic-update acceptance.
+
+## [0.2.2] - 2026-07-28 (unpublished source tag)
+
+The `v0.2.2` Windows Release workflow stopped before creating a draft or public GitHub Release. It has no public Release, Windows installer, or update assets and must not be used as an installation or automatic-update source; its user-facing work and release fixes are carried forward by the prepared `0.2.3` release.
+
+### Added
+
+- Continued the experimental NamiMail Agent workspace from earlier unpublished source tags: configure an OpenAI-compatible or Ollama provider and use local lexical retrieval with citations inside an explicit account scope.
 - Agent tools remain limited to reading accounts, folders, messages, threads, and attachment metadata, plus creating, editing, or deleting drafts. High-risk mail actions remain in the primary mail UI.
 
 ### Improved
@@ -18,12 +37,12 @@ This is the English translation of the Chinese source changelog. `CHANGELOG.md` 
 
 ### Documentation
 
-- Added paired `v0.2.2` prepared release notes and correctly marked `v0.2.0` and `v0.2.1` as source tags without public Release or update assets.
-- `0.2.2` does not describe local builds, CI, or generated assets as completed real online automatic-update acceptance.
+- Retained paired `v0.2.2` notes as the historical record for an unpublished source tag.
+- This tag does not describe local builds, CI, or generated assets as completed real online automatic-update acceptance.
 
 ## [0.2.1] - 2026-07-28 (unpublished source tag)
 
-`v0.2.1` is only a source tag. It has no public GitHub Release, Windows installer, or update assets and must not be used as an installation or automatic-update source; its user-visible work is carried forward by the prepared `0.2.2` release.
+`v0.2.1` is only a source tag. It has no public GitHub Release, Windows installer, or update assets and must not be used as an installation or automatic-update source; its user-visible work continues through the unpublished `0.2.2` source tag and is carried forward by the prepared `0.2.3` release.
 
 ### Added
 
@@ -48,7 +67,7 @@ This is the English translation of the Chinese source changelog. `CHANGELOG.md` 
 
 ## [0.2.0] - 2026-07-28 (unpublished)
 
-`v0.2.0` remains only an unpublished source tag whose release validation did not complete. It has no public GitHub Release or update assets and must not be used as an installation or automatic-update source; its user-visible changes continue through the `0.2.1` source tag and are carried forward by the prepared `0.2.2` release.
+`v0.2.0` remains only an unpublished source tag whose release validation did not complete. It has no public GitHub Release or update assets and must not be used as an installation or automatic-update source; its user-visible changes continue through the `0.2.1` and `0.2.2` source tags and are carried forward by the prepared `0.2.3` release.
 
 ## [0.1.2] - 2026-07-24
 

@@ -109,9 +109,9 @@ async function describeDesktopProcess(progressPath, processHandle, outputCapture
     `exitCode=${processHandle?.exitCode ?? "running"}`,
     `signal=${processHandle?.signalCode ?? "none"}`,
   ];
-  if (launchError) details.push(`launchError=${JSON.stringify(launchError)}`);
-  if (stderrTail) details.push(`stderrTail=${JSON.stringify(stderrTail)}`);
-  if (stdoutTail) details.push(`stdoutTail=${JSON.stringify(stdoutTail)}`);
+  if (launchError) details.push(`launchError=${JSON.stringify(redactSmokeDiagnosticText(launchError))}`);
+  if (stderrTail) details.push(`stderrTail=${JSON.stringify(redactSmokeDiagnosticText(stderrTail))}`);
+  if (stdoutTail) details.push(`stdoutTail=${JSON.stringify(redactSmokeDiagnosticText(stdoutTail))}`);
   return details.join("; ");
 }
 
@@ -129,9 +129,9 @@ async function writeDesktopSmokeDiagnostic(error, progressPath, processHandle, o
       exitCode: processHandle?.exitCode ?? null,
       signal: processHandle?.signalCode ?? null,
     },
-    ...(launchError ? { launchError } : {}),
-    ...(stderrTail ? { stderrTail } : {}),
-    ...(stdoutTail ? { stdoutTail } : {}),
+    ...(launchError ? { launchError: redactSmokeDiagnosticText(launchError) } : {}),
+    ...(stderrTail ? { stderrTail: redactSmokeDiagnosticText(stderrTail) } : {}),
+    ...(stdoutTail ? { stdoutTail: redactSmokeDiagnosticText(stdoutTail) } : {}),
   };
   await fs.mkdir(path.dirname(diagnosticReportPath), { recursive: true });
   await fs.writeFile(diagnosticReportPath, `${JSON.stringify(diagnostic, null, 2)}\n`, "utf8");

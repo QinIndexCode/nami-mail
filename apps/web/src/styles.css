@@ -401,6 +401,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .credential-label em { margin-left: auto; color: var(--text-faint); font-size: 8px; font-style: normal; font-weight: 500; }
 .account-form input, .compose-row input, .compose-row .themed-select { width: 100%; padding: 11px 12px; border: 1px solid var(--line-strong); border-radius: 11px; outline: none; background: var(--panel-muted); font-size: 12px; transition: border-color .16s ease, box-shadow .16s ease; }
 .account-form input:focus, .compose-row input:focus, .compose-row .themed-select:focus-visible { border-color: var(--focus-ring); box-shadow: 0 0 0 3px var(--focus-ring-subtle); }
+.account-form input[type="number"], .translation-setting-field > input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+.account-form input[type="number"]::-webkit-inner-spin-button, .account-form input[type="number"]::-webkit-outer-spin-button, .translation-setting-field > input[type="number"]::-webkit-inner-spin-button, .translation-setting-field > input[type="number"]::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
 .account-email-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
 .account-email-row > label { min-width: 0; }
 .account-discover-button { min-width: 96px; min-height: 40px; }
