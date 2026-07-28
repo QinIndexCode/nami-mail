@@ -97,6 +97,17 @@ export type SettingsModalProps = {
   demoMode?: boolean;
 };
 
+type EscapeTarget = Pick<Element, "closest">;
+
+export function expandedThemedSelectOwnsEscape(
+  eventTarget: EscapeTarget | null,
+  activeElement: EscapeTarget | null,
+): boolean {
+  const selectControl = eventTarget?.closest(".select-control")
+    ?? activeElement?.closest(".select-control");
+  return Boolean(selectControl?.querySelector('[role="combobox"][aria-expanded="true"]'));
+}
+
 type Notice = { kind: "success" | "error"; message: string } | null;
 type PendingSettingsConfirmation =
   | "clear-background"
@@ -342,10 +353,12 @@ export default function SettingsModal({
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       const target = event.target instanceof Element ? event.target : null;
+      const activeElement = document.activeElement instanceof Element ? document.activeElement : null;
       // The select owns Escape while its listbox is expanded. This listener is
       // capture-phase so without the guard it would close the whole dialog
-      // before the combobox has a chance to close only its own menu.
-      if (target?.closest(".select-control")?.querySelector('[role="combobox"][aria-expanded="true"]')) return;
+      // before the combobox has a chance to close only its own menu. The
+      // active element fallback covers retargeted key events.
+      if (expandedThemedSelectOwnsEscape(target, activeElement)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (controlsBusy) return;

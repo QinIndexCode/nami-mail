@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { I18nProvider, translate } from "./i18n";
-import SettingsModal from "./SettingsModal";
+import SettingsModal, { expandedThemedSelectOwnsEscape } from "./SettingsModal";
 import { defaultAppSettings } from "./types";
 
 const zh = (key: string) => translate("zh-CN", key);
@@ -38,5 +38,19 @@ describe("settings model provider entry", () => {
 
     expect(markup).toContain(zh("agent.demo.actionUnavailable"));
     expect(markup).not.toContain(zh("agent.providers.configure"));
+  });
+});
+
+describe("settings Escape handling", () => {
+  it("leaves Escape to an expanded themed select when capture retargets the key event", () => {
+    const combobox = {};
+    const control = {
+      querySelector: vi.fn((selector: string) => selector === '[role="combobox"][aria-expanded="true"]' ? combobox : null),
+    } as unknown as Element;
+    const activeSelect = {
+      closest: vi.fn((selector: string) => selector === ".select-control" ? control : null),
+    } as unknown as Element;
+
+    expect(expandedThemedSelectOwnsEscape(null, activeSelect)).toBe(true);
   });
 });
