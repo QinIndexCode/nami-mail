@@ -9,7 +9,7 @@
 After the adapter ships, the reserved `version` command will be able to return non-sensitive local version data like this without reading mail data:
 
 ```json
-{"name":"NamiMail","version":"0.2.0"}
+{"name":"NamiMail","version":"0.2.1"}
 ```
 
 ## Future read-only queries

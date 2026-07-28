@@ -26,6 +26,10 @@ const expectedInstallerName = `Nami Mail Setup ${packageManifest.version}.exe`;
 const expectedInstallerOverride = process.env.NAMI_MAIL_EXPECTED_INSTALLER?.trim();
 const packageStartedAt = Number.parseInt(process.env.NAMI_MAIL_PACKAGE_STARTED_AT ?? "", 10);
 const execFileAsync = promisify(execFile);
+// The nested desktop smoke owns its 45-second diagnostic deadline. Keep this
+// supervisor budget longer so a slow cold start returns that diagnostic instead
+// of being terminated by the installer smoke at the same boundary.
+const installedDesktopSmokeSupervisorTimeoutMs = 90_000;
 
 assert.equal(typeof appId, "string", "package.json build.appId is required for installer safety checks.");
 assert.equal(typeof productName, "string", "package.json build.productName is required for installer safety checks.");
@@ -223,7 +227,7 @@ async function smokeInstalledExecutable(executable) {
         ...process.env,
         NAMI_MAIL_DESKTOP_EXECUTABLE: executable,
       },
-      timeout: 45_000,
+      timeout: installedDesktopSmokeSupervisorTimeoutMs,
       windowsHide: true,
     },
   );
