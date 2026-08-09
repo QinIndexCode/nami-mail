@@ -18,6 +18,10 @@ export const agentConfirmationActions = [
   "move-mail",
   "update-message-state",
   "update-labels",
+  "create-calendar-event",
+  "update-calendar-event",
+  "delete-calendar-event",
+  "delete-account",
   "upload-mail-content",
   "external-network",
 ] as const;

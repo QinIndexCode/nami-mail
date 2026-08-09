@@ -2,8 +2,17 @@ import { createServer, type IncomingMessage, type OutgoingHttpHeaders, type Serv
 import type { AddressInfo } from "node:net";
 import type { FastifyInstance } from "fastify";
 import { migrateAccountCredentialStorage, migrateKnownProviderUsernameCredentials } from "./account-credentials.js";
-import { AgentService, type AgentConfirmationResolution } from "./agent-service.js";
+import {
+  AgentService,
+  type AgentConfirmationResolution,
+  type ExternalAgentToolInvocation,
+} from "./agent-service.js";
+import type { AgentResponseEnvelope, BrokerJsonValue, ExternalPairingSummary } from "@nami/agent-contracts";
 import type { TrustedDesktopConfirmationVerifier } from "./agent/confirmations.js";
+import { ImmutableGuiConfirmationStore } from "./agent/confirmations.js";
+import { EncryptedAgentAuditStore } from "./agent/audit.js";
+import { EncryptedAgentMemoryStore } from "./agent/memory.js";
+import { AutoReplyEngine, registerAutoReplyEngine } from "./agent/auto-reply.js";
 import { AccountLifecycleStore } from "./agent/lifecycle.js";
 import { AgentMailStateEvents } from "./agent/mail-state-events.js";
 import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
@@ -13,11 +22,12 @@ import { buildApp } from "./app.js";
 import { config } from "./config.js";
 import { loadOrCreateMasterKey } from "./crypto.js";
 import { openDatabase, type DatabaseHandle } from "./db.js";
-import { LocalTranslationService } from "./local-translation.js";
 import { OAuthService } from "./oauth.js";
 import { cleanupExpiredOutboundAttachments, outboundAttachmentDirectory } from "./outbound-attachments.js";
 import { getAppSettings, updateAppSettings, type AppSettings, type AppSettingsPatch } from "./settings.js";
-import { syncAccount, type NewInboxMessage } from "./sync.js";
+import { submitDueScheduledSubmissions } from "./scheduled-send.js";
+import { releaseDueSnoozedMessages } from "./snooze.js";
+import { syncAccount, scheduleSentSubmissionVerification, type NewInboxMessage } from "./sync.js";
 import type { AccountRecord, RuntimeContext } from "./types.js";
 
 export type RunningServer = {
@@ -26,6 +36,15 @@ export type RunningServer = {
   port: number;
   /** Present only for the Electron main-process runtime that supplied an opaque capability. */
   resolveAgentConfirmation?: (confirmationId: string, decision: "approve" | "reject") => Promise<AgentConfirmationResolution>;
+  /**
+   * A transport-free in-process bridge for the desktop Agent Broker. It is
+   * deliberately absent from Fastify and cannot expose the renderer token.
+   */
+  invokeExternalAgentTool: (input: ExternalAgentToolInvocation) => Promise<AgentResponseEnvelope<BrokerJsonValue>>;
+  /** Current account IDs captured into a newly approved external pairing. */
+  listExternalPairingAccountIds: () => string[];
+  /** Non-secret pairing summaries made available to the renderer settings panel. */
+  listExternalPairings: () => readonly ExternalPairingSummary[] | Promise<readonly ExternalPairingSummary[]>;
   getSettings: () => AppSettings;
   updateSettings: (patch: AppSettingsPatch) => AppSettings;
   close: () => Promise<void>;
@@ -36,9 +55,6 @@ export type ServerRuntimeOptions = {
   // Electron supplies a DPAPI-unwrapped copy directly in memory. The
   // command-line runtime intentionally keeps its file-backed development key.
   masterKey?: Buffer;
-  // Electron provides a user-data subdirectory for the local NLLB-200 model.
-  // Leaving it empty keeps local translation disabled in command-line development.
-  translationCacheDir?: string;
   /**
    * Desktop-only confirmation authority. This object is passed directly from
    * Electron main and intentionally never enters Fastify's runtime context.
@@ -47,6 +63,28 @@ export type ServerRuntimeOptions = {
     capability: unknown;
     verifier: TrustedDesktopConfirmationVerifier;
   }>;
+  /**
+   * Desktop-only external confirmation bridge. Electron main injects a native
+   * dialog so paired CLI/MCP write operations at the confirm level ask the
+   * user for a visible decision. `--yes` or any CLI flag cannot bypass it.
+   */
+  externalConfirmation?: Readonly<{
+    request: (input: {
+      confirmationId: string;
+      requestId: string;
+      toolName: string;
+      callerLabel: string;
+      title: string;
+      summary: string;
+      fields: readonly { label: string; value: string }[];
+    }) => Promise<"approve" | "reject">;
+  }>;
+  /**
+   * Desktop-injected pairing summaries for the renderer's external access
+   * panel. Absent in browser-only and test hosts, whose API then reports an
+   * empty list.
+   */
+  listExternalPairings?: () => readonly ExternalPairingSummary[] | Promise<readonly ExternalPairingSummary[]>;
 };
 
 export type SyncScheduler = {
@@ -234,7 +272,9 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
   let closePromise: Promise<void> | undefined;
   let masterKey: Buffer | undefined;
   let agentService: AgentService | undefined;
+  let autoReplyEngine: AutoReplyEngine | undefined;
   const translationAbortController = new AbortController();
+  const scheduledSendAbortController = new AbortController();
 
   try {
     const database = openDatabase(config.databasePath);
@@ -257,6 +297,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       oauthService,
       agentMailEvents,
       syncMessageLimit: config.syncMessageLimit,
+      outboundAttachmentDirectory: outboundAttachmentDirectory({}),
     });
     agentService = new AgentService({
       db: database,
@@ -265,8 +306,28 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       sourceEvents: agentSourceEvents,
       mailApplication,
       ...(options.desktopConfirmation ? { desktopConfirmation: options.desktopConfirmation } : {}),
+      ...(options.externalConfirmation ? { externalConfirmation: options.externalConfirmation } : {}),
     });
     agentService.start();
+    if (options.desktopConfirmation) {
+      autoReplyEngine = new AutoReplyEngine({
+        db: database,
+        masterKey: runtimeMasterKey,
+        evaluate: (input) => agentService!.evaluateAutoReply(input),
+        mail: mailApplication,
+        audit: new EncryptedAgentAuditStore(database, runtimeMasterKey, agentLifecycle),
+        memory: new EncryptedAgentMemoryStore(database, runtimeMasterKey),
+        confirmationStore: new ImmutableGuiConfirmationStore(
+          database,
+          runtimeMasterKey,
+          agentLifecycle,
+          undefined,
+          options.desktopConfirmation.verifier,
+        ),
+        desktopConfirmation: options.desktopConfirmation,
+      });
+      registerAutoReplyEngine(autoReplyEngine);
+    }
     const outboundDirectory = outboundAttachmentDirectory({});
     try {
       cleanupExpiredOutboundAttachments(database, outboundDirectory);
@@ -286,12 +347,43 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
         )),
       );
       const newInboxMessages = results.flatMap((result) => result.status === "fulfilled" ? result.value.newInboxMessages : []);
+      // Snoozes whose time arrived return to the Inbox and join the same
+      // notification pipeline as newly synced messages.
+      try {
+        newInboxMessages.push(...releaseDueSnoozedMessages(database, runtimeMasterKey));
+      } catch (error) {
+        fastify.log.warn({ error }, "Could not release due snoozed messages");
+      }
       if (newInboxMessages.length && options.onNewInboxMessages) {
         try {
           await options.onNewInboxMessages(newInboxMessages);
         } catch (error) {
           fastify.log.warn({ error }, "New-mail notification callback failed");
         }
+      }
+      // Submit scheduled sends whose time has arrived through the outbox queue.
+      try {
+        const outcome = await submitDueScheduledSubmissions(database, runtimeMasterKey, {
+          outboundAttachmentDirectory: outboundDirectory,
+          accessTokenProvider: oauthService,
+          agentMailEvents,
+          scheduleSentVerification: (submissionId) => {
+            scheduleSentSubmissionVerification(database, runtimeMasterKey, submissionId, oauthService, {
+              abortSignal: scheduledSendAbortController.signal,
+              onDeferred: (error) => {
+                fastify.log.info({ submissionId, error }, "Scheduled-send Sent verification deferred");
+              },
+            });
+          },
+          onFailure: (submissionId, error) => {
+            fastify.log.error({ submissionId, error }, "Scheduled send failed");
+          },
+        });
+        if (outcome.submitted || outcome.failed) {
+          fastify.log.info({ ...outcome }, "Scheduled send pass completed");
+        }
+      } catch (error) {
+        fastify.log.error({ error }, "Scheduled-send pass failed");
       }
     };
 
@@ -305,11 +397,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       outboundAttachmentDirectory: outboundDirectory,
       onRefreshIntervalChanged: () => scheduler?.reschedule(),
       oauthService,
-      // A desktop cache directory enables offline NLLB-200 translation when
-      // the user has not configured an external translation endpoint.
-      ...(options.translationCacheDir
-        ? { translationService: new LocalTranslationService({ cacheDir: options.translationCacheDir }) }
-        : {}),
+      ...(options.listExternalPairings ? { listExternalPairings: options.listExternalPairings } : {}),
     };
     const fastify = await buildApp(runtimeContext, {
       localApiAccessToken: config.localApiAccessToken,
@@ -343,6 +431,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     const close = () => {
       closePromise ??= (async () => {
         translationAbortController.abort();
+        scheduledSendAbortController.abort();
         try {
           await closeMicrosoftOAuthCallbackBridge(microsoftOAuthCallbackBridge);
         } finally {
@@ -353,6 +442,8 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
               agentService?.close(),
             ]);
           } finally {
+            autoReplyEngine?.close();
+            registerAutoReplyEngine(undefined);
             database.close();
             masterKey?.fill(0);
           }
@@ -365,11 +456,19 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       app: fastify,
       url: `http://${config.host}:${port}`,
       port,
+      invokeExternalAgentTool: (input: ExternalAgentToolInvocation) => agentService!.invokeExternalTool(input),
+      listExternalPairingAccountIds: () => agentService!.listExternalPairingAccountIds(),
+      listExternalPairings: () => options.listExternalPairings?.() ?? [],
       getSettings: () => getAppSettings(database),
       updateSettings: (patch) => updateAppSettings(database, patch),
       ...(options.desktopConfirmation ? {
-        resolveAgentConfirmation: (confirmationId: string, decision: "approve" | "reject") =>
-          agentService!.resolveDesktopConfirmation(confirmationId, decision),
+        resolveAgentConfirmation: async (confirmationId: string, decision: "approve" | "reject") => {
+          // Auto-reply confirmations live outside conversation runs; resolve
+          // those first, then fall back to the conversational desktop path.
+          const engineResolution = autoReplyEngine?.resolveConfirmation(confirmationId, decision);
+          if (engineResolution && "ok" in engineResolution) return { ok: engineResolution.ok };
+          return agentService!.resolveDesktopConfirmation(confirmationId, decision);
+        },
       } : {}),
       close,
     };
@@ -378,6 +477,8 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     await closeMicrosoftOAuthCallbackBridge(microsoftOAuthCallbackBridge).catch(() => undefined);
     await scheduler?.close();
     await agentService?.close();
+    autoReplyEngine?.close();
+    registerAutoReplyEngine(undefined);
     if (app) await app.close().catch(() => undefined);
     db?.close();
     masterKey?.fill(0);

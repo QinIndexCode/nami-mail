@@ -1,7 +1,11 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, powerMonitor, safeStorage, session, shell, Tray, type NativeImage } from "electron";
 import { parse as parseDotenv } from "dotenv";
-import { randomBytes } from "node:crypto";
+import type { AgentResponseEnvelope, BrokerJsonValue, CallerContext, ExternalPairingSummary } from "@nami/agent-contracts";
+import { createHash, randomBytes } from "node:crypto";
+import { exec, spawn as nodeSpawn } from "node:child_process";
+import { writeFileSync, existsSync, createReadStream } from "node:fs";
 import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { desktopLocalConfigurationFiles } from "./local-configuration.mjs";
 import {
@@ -17,12 +21,18 @@ import type { DesktopUpdateSnapshot } from "./update-status.mjs";
 import { DesktopUpdater } from "./updater.mjs";
 import {
   AgentHostUpdateDrainLifecycle,
-  agentHostServiceStartupFailureExitCode,
-  formatAgentHostStartupFailure,
   resolveDesktopAgentLaunch,
-  startupErrorForDesktopAgentLaunch,
   type VerifiedAgentHost,
 } from "./agent/desktop-host-integration.mjs";
+import { DesktopAgentBrokerHost, probeDesktopBrokerLiveness } from "./agent/desktop-broker.mjs";
+import { BrokerRecoveryCoordinator, type BrokerRecoveryGateState } from "./agent/broker-recovery.mjs";
+import {
+  DesktopClientProfileStore,
+  clientProfilesPath,
+  readPairingRequest,
+  writePairingOutcome,
+} from "./agent/broker-state.mjs";
+import { runDesktopCli } from "./agent/cli-entry.mjs";
 import {
   agentConfirmationIpcChannel,
   createAgentConfirmationIpcHandler,
@@ -31,6 +41,13 @@ import {
 
 type RunningServer = {
   url: string;
+  invokeExternalAgentTool: (input: {
+    requestId: string;
+    caller: CallerContext;
+    toolName: string;
+    input: unknown;
+  }) => Promise<AgentResponseEnvelope<BrokerJsonValue>>;
+  listExternalPairingAccountIds: () => string[];
   resolveAgentConfirmation?: (confirmationId: string, decision: AgentConfirmationDecision) => Promise<unknown>;
   getSettings: () => {
     locale: string;
@@ -50,12 +67,25 @@ type DesktopConfirmationRuntimeOptions = Readonly<{
   }>;
 }>;
 
+type ExternalConfirmationRuntimeOptions = Readonly<{
+  request: (input: {
+    confirmationId: string;
+    requestId: string;
+    toolName: string;
+    callerLabel: string;
+    title: string;
+    summary: string;
+    fields: readonly { label: string; value: string }[];
+  }) => Promise<"approve" | "reject">;
+}>;
+
 type ServerRuntimeModule = {
   startServer: (options?: {
     onNewInboxMessages?: (messages: NewMailPayload[]) => void;
     masterKey?: Buffer;
-    translationCacheDir?: string;
     desktopConfirmation?: DesktopConfirmationRuntimeOptions;
+    externalConfirmation?: ExternalConfirmationRuntimeOptions;
+    listExternalPairings?: () => Promise<ExternalPairingSummary[]>;
   }) => Promise<RunningServer>;
 };
 
@@ -212,13 +242,45 @@ const desktopConfirmationVerifier: DesktopConfirmationRuntimeOptions["verifier"]
     return { principalId: "nami-desktop-main", surfaceId: "nami-main-window" };
   },
 });
+
+/**
+ * Native-dialog bridge for paired CLI/MCP write confirmations. The request has
+ * no renderer event stream, so Electron main shows a modal dialog listing the
+ * caller, operation, preview, and immutable fields. `--yes` or any CLI flag
+ * cannot bypass it: the host decides here and records the decision server-side.
+ */
+function createExternalConfirmationBridge(): ExternalConfirmationRuntimeOptions {
+  return {
+    request: async ({ callerLabel, toolName, title, summary, fields }) => {
+      const window = mainWindow;
+      if (!window) return "reject";
+      const detail = [
+        nativeCopy("externalConfirmCaller", { caller: callerLabel }),
+        nativeCopy("externalConfirmOperation", { tool: toolName }),
+        "",
+        summary,
+        ...fields.map((field) => `${field.label}: ${field.value}`),
+      ].join("\n");
+      const { response } = await dialog.showMessageBox(window, {
+        type: "question",
+        title: nativeCopy("externalConfirmTitle"),
+        message: title,
+        detail,
+        buttons: [nativeCopy("externalConfirmApprove"), nativeCopy("externalConfirmReject")],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      });
+      return response === 0 ? "approve" : "reject";
+    },
+  };
+}
 let tray: Tray | undefined;
 let appIcon: NativeImage | undefined;
 let isQuitting = false;
 let shutdownPromise: Promise<void> | undefined;
 let closePromptPending = false;
 let closePromptSmokeSession: ClosePromptSmokeSession | undefined;
-let rendererCustomNotificationAudioReady = false;
 let localApiAccessToken: string | undefined;
 let desktopUpdater: DesktopUpdater | undefined;
 let rendererCacheCleanup: RendererCacheCleanupResult | undefined;
@@ -229,10 +291,15 @@ let singleInstanceSmokeResult: DesktopSingleInstanceSmokeResult | undefined;
 const appUserModelId = app.isPackaged ? "com.nami.mail" : "com.nami.mail.dev";
 const localApiAccessHeader = "x-nami-api-token";
 const localApiAccessTokenEnvironmentName = "NAMI_MAIL_LOCAL_API_TOKEN";
+const desktopCliArguments = readDesktopCliArguments(process.argv);
 const desktopAgentLaunch = resolveDesktopAgentLaunch(process.argv);
-// A Node `net` pipe cannot prove its Windows security descriptor. Keep this
-// undefined until a native SID-DACL adapter supplies a live verified host.
+const initialPairingRequestIds = readAgentPairingRequestIds(process.argv);
+let desktopAgentBroker: DesktopAgentBrokerHost | undefined;
 let verifiedAgentHost: VerifiedAgentHost | undefined;
+let pairingRequestTail: Promise<void> = Promise.resolve();
+let desktopHostMode: "gui" | "service" = desktopAgentLaunch.kind === "service" ? "service" : "gui";
+let desktopAgentBrokerRecoveryGate: BrokerRecoveryGateState = "accepting";
+let desktopBootPromise: Promise<void> | undefined;
 const agentUpdateDrain = new AgentHostUpdateDrainLifecycle(() => verifiedAgentHost);
 
 app.setName("Nami Mail");
@@ -243,6 +310,172 @@ const requestedSmokeExitDelay = Number.parseInt(process.env.NAMI_MAIL_SMOKE_EXIT
 const smokeExitDelay = Number.isFinite(requestedSmokeExitDelay) && requestedSmokeExitDelay >= 1_000
   ? requestedSmokeExitDelay
   : 0;
+
+function readDesktopCliArguments(argv: readonly string[]): readonly string[] | undefined {
+  const index = argv.indexOf("--cli");
+  if (index === -1) return undefined;
+  return argv.slice(index + 1);
+}
+
+function readAgentPairingRequestIds(argv: readonly string[]): string[] {
+  const requestIds: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    const value = token === "--agent-pair"
+      ? argv[index + 1]
+      : token?.startsWith("--agent-pair=")
+        ? token.slice("--agent-pair=".length)
+        : undefined;
+    if (value && /^[A-Za-z0-9_-]{16,160}$/.test(value)) requestIds.push(value);
+    if (token === "--agent-pair") index += 1;
+  }
+  return [...new Set(requestIds)];
+}
+
+function launchNamiMail(argumentsList: readonly string[]): Promise<void> {
+  const argumentsForExecutable = app.isPackaged
+    ? [...argumentsList]
+    : [app.getAppPath(), ...argumentsList];
+  return new Promise((resolve, reject) => {
+    let child: ReturnType<typeof nodeSpawn>;
+    try {
+      child = nodeSpawn(process.execPath, argumentsForExecutable, {
+        // The CLI exits after launching; its independently managed host must survive it.
+        detached: process.platform === "win32" && argumentsList.length === 1 && argumentsList[0] === "--agent-host",
+        shell: false,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    child.once("error", reject);
+    child.unref();
+    setImmediate(resolve);
+  });
+}
+
+function agentPipeScriptPath(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "nami-agent-pipe.ps1")
+    : path.join(app.getAppPath(), "apps", "desktop", "resources", "nami-agent-pipe.ps1");
+}
+
+function agentPairingFingerprint(publicKeyPem: string): string {
+  return createHash("sha256").update(publicKeyPem, "utf8").digest("hex").slice(0, 16).toUpperCase();
+}
+
+function verifiedDesktopBrokerHost(host: DesktopAgentBrokerHost): VerifiedAgentHost {
+  return {
+    controller: {
+      getSnapshot: () => {
+        const discovery = host.getDiscovery();
+        return {
+          state: discovery ? "running" : "stopped",
+          ...(discovery ? {
+            mode: desktopHostMode,
+            endpoint: {
+              transport: "windows-named-pipe" as const,
+              path: discovery.path,
+              ownerSid: discovery.ownerSid,
+            },
+          } : {}),
+          updateDrain: {
+            state: discovery ? currentDesktopAgentBrokerRecoveryGate() : "closed" as const,
+            activeOperationCount: 0,
+          },
+        };
+      },
+      prepareForUpdate: async () => {
+        await host.drainForUpdate();
+        return true;
+      },
+      completeUpdateHandoff: () => undefined,
+      // Runtime shutdown clears its in-memory master key, so a failed update
+      // recovery relaunches the application instead of reviving stale state.
+      recoverAfterInstallerFailure: async () => false,
+    },
+    verifyActiveSidDaclPipe: () => host.verifyActiveSidDaclPipe(),
+  };
+}
+
+function currentDesktopAgentBrokerRecoveryGate(): BrokerRecoveryGateState {
+  return isQuitting ? "closed" : desktopAgentBrokerRecoveryGate;
+}
+
+function setDesktopAgentBroker(broker: DesktopAgentBrokerHost | undefined): void {
+  desktopAgentBroker = broker;
+  verifiedAgentHost = broker ? verifiedDesktopBrokerHost(broker) : undefined;
+}
+
+async function createDesktopAgentBroker(): Promise<DesktopAgentBrokerHost> {
+  const server = localServer;
+  if (!server) throw new Error("Nami Mail local service was not started.");
+  const scriptPath = agentPipeScriptPath();
+  await fs.access(scriptPath);
+  const broker = new DesktopAgentBrokerHost({
+    userDataPath: app.getPath("userData"),
+    safeStorage,
+    scriptPath,
+    invokeExternalAgentTool: (input) => server.invokeExternalAgentTool(input),
+    onDiagnostic: (message) => console.warn(message),
+    onHostShutdown: () => { void closeLocalServerForExit().finally(() => app.quit()); },
+  });
+  try {
+    await broker.start();
+    return broker;
+  } catch (error) {
+    await broker.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+const desktopAgentBrokerRecovery = new BrokerRecoveryCoordinator<DesktopAgentBrokerHost>({
+  getGateState: currentDesktopAgentBrokerRecoveryGate,
+  getCurrentBroker: () => desktopAgentBroker,
+  setCurrentBroker: setDesktopAgentBroker,
+  closeBroker: (broker) => broker.close(),
+  startBroker: createDesktopAgentBroker,
+  probeSignedBroker: async (broker) => (
+    await broker.verifyActiveSidDaclPipe()
+    && await probeDesktopBrokerLiveness(app.getPath("userData"))
+  ),
+});
+
+async function startDesktopAgentBroker(): Promise<void> {
+  const result = await desktopAgentBrokerRecovery.ensureHealthy();
+  if (result.status === "not-accepting") {
+    throw new Error(`Nami Mail Agent Broker recovery is unavailable while the desktop is ${result.state}.`);
+  }
+}
+
+async function closeDesktopAgentBroker(): Promise<void> {
+  const broker = desktopAgentBroker;
+  setDesktopAgentBroker(undefined);
+  await broker?.close();
+}
+
+async function startDesktopUpdaterIfNeeded(): Promise<DesktopUpdateSnapshot | undefined> {
+  if (desktopUpdater) return desktopUpdater.getSnapshot();
+  if (desktopHostMode !== "gui") return undefined;
+  desktopUpdater = new DesktopUpdater({
+    currentVersion: app.getVersion(),
+    isPackaged: app.isPackaged,
+    updateConfigPath: path.join(process.resourcesPath, "app-update.yml"),
+    updateTrustPath: path.join(process.resourcesPath, "nami-update-trust.json"),
+    userDataPath: app.getPath("userData"),
+    executablePath: process.execPath,
+    disabled: isDesktopSmoke,
+    broadcast: (snapshot) => mainWindow?.webContents.send("nami:update-status", snapshot),
+    prepareForInstall: prepareLocalServerForUpdateInstall,
+    recoverAfterInstallFailure: recoverAfterUpdateInstallFailure,
+    quitForInstall: quitForUpdateInstall,
+  });
+  const snapshot = await desktopUpdater.start();
+  powerMonitor.on("resume", checkForUpdatesAfterExternalTrigger);
+  return snapshot;
+}
 const smokeResultPath = process.env.NAMI_MAIL_SMOKE_RESULT_PATH?.trim()
   ? path.resolve(process.env.NAMI_MAIL_SMOKE_RESULT_PATH)
   : undefined;
@@ -252,6 +485,7 @@ const smokeProgressPath = process.env.NAMI_MAIL_SMOKE_PROGRESS_PATH?.trim()
 const isDesktopSmoke = process.env.NAMI_MAIL_SMOKE === "1" && Boolean(smokeResultPath);
 const desktopLoopbackPort = "0";
 const desktopShutdownTimeoutMs = 8_000;
+const desktopUpdateCloseTimeoutMs = 30_000;
 async function loadDesktopLocalConfiguration(): Promise<void> {
   // The installed app cannot rely on a project-root .env. Restrict the
   // user-data file to public OAuth settings and non-secret translation
@@ -462,6 +696,9 @@ function closeLocalServerForExit(): Promise<void> {
   shutdownPromise = (async () => {
     let timeout: NodeJS.Timeout | undefined;
     try {
+      await closeDesktopAgentBroker().catch((error) => {
+        console.error("Nami Mail Agent Broker shutdown failed", error);
+      });
       if (server) {
         await Promise.race([
           server.close(),
@@ -485,34 +722,50 @@ function closeLocalServerForExit(): Promise<void> {
 
 function shutdownLocalServerAndQuit(): void {
   if (isQuitting) return;
+  desktopAgentBrokerRecoveryGate = "closed";
   isQuitting = true;
   void closeLocalServerForExit().finally(() => app.quit());
 }
 
 async function prepareLocalServerForUpdateInstall(): Promise<boolean> {
   if (isQuitting || !localServer) return false;
+  desktopAgentBrokerRecoveryGate = "draining";
   if (!await agentUpdateDrain.prepareForUpdateInstall()) {
+    desktopAgentBrokerRecoveryGate = "accepting";
     console.error("Nami Mail could not verify and drain the active Agent host for update.");
     return false;
   }
   const server = localServer;
   try {
-    if (!agentUpdateDrain.hasDrainedHost()) {
-      // Do not race this close against the normal bounded quit timeout. Starting
-      // NSIS while SQLite or an SMTP attempt is still closing can corrupt local
-      // state or turn a known delivery into an interrupted one.
-      await server.close();
+    // Bound the close so a hung Fastify/SQLite shutdown cannot stall the
+    // update installer indefinitely. The close is never raced against the
+    // installer; a timeout only aborts this update attempt while the app
+    // keeps running with its data intact.
+    let closeTimeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        server.close(),
+        new Promise((_, reject) => {
+          closeTimeout = setTimeout(
+            () => reject(new Error(`Desktop update close exceeded ${desktopUpdateCloseTimeoutMs} ms.`)),
+            desktopUpdateCloseTimeoutMs,
+          );
+          closeTimeout.unref?.();
+        }),
+      ]);
+    } finally {
+      if (closeTimeout) clearTimeout(closeTimeout);
     }
-    // A verified Agent controller owns the same Electron runtime and has
-    // already quiesced it before releasing its pipe lease. Avoid calling
-    // Fastify.close() a second time when that controller is active.
+    setDesktopAgentBroker(undefined);
     localServer = undefined;
     clearLocalApiAccessToken();
     destroyTray();
     isQuitting = true;
+    desktopAgentBrokerRecoveryGate = "closed";
     return true;
   } catch (error) {
     if (agentUpdateDrain.hasDrainedHost()) await agentUpdateDrain.recoverAfterInstallerFailure();
+    desktopAgentBrokerRecoveryGate = "closed";
     console.error("Nami Mail could not prepare its data for update", error);
     return false;
   }
@@ -520,7 +773,11 @@ async function prepareLocalServerForUpdateInstall(): Promise<boolean> {
 
 function recoverAfterUpdateInstallFailure(): void {
   void (async () => {
-    if (await agentUpdateDrain.recoverAfterInstallerFailure()) return;
+    desktopAgentBrokerRecoveryGate = "closed";
+    if (await agentUpdateDrain.recoverAfterInstallerFailure()) {
+      desktopAgentBrokerRecoveryGate = "accepting";
+      return;
+    }
     // The service has already closed and its in-memory key has been cleared.
     // Relaunching is the smallest recovery that restores a fully usable app and
     // unwraps the DPAPI key again without retaining another plaintext key copy.
@@ -530,6 +787,7 @@ function recoverAfterUpdateInstallFailure(): void {
 }
 
 function quitForUpdateInstall(): void {
+  desktopAgentBrokerRecoveryGate = "closed";
   if (!agentUpdateDrain.completeUpdateHandoff()) {
     console.error("Nami Mail could not record the Agent host update handoff.");
   }
@@ -617,6 +875,115 @@ function normalizeVerificationCode(value: unknown): string | undefined {
   return typeof value === "string" && /^\d{4,8}$/.test(value) ? value : undefined;
 }
 
+// --- Main-process notification sound playback ---
+// The renderer's Web Audio API can only play when the window is focused and
+// the AudioContext has been unlocked by a user gesture. New-mail notifications
+// almost always arrive when the window is NOT focused, so the custom sound
+// never plays and Windows falls back to its default. To fix this, we generate
+// WAV files in the main process and play them via a system command, which
+// works regardless of window focus or AudioContext state.
+
+type ToneSpec = { freq: number; start: number; duration: number; volume: number };
+
+const softTones: ToneSpec[] = [
+  { freq: 659.25, start: 0.025, duration: 0.23, volume: 0.055 },
+  { freq: 783.99, start: 0.145, duration: 0.34, volume: 0.042 },
+];
+
+const brightTones: ToneSpec[] = [
+  { freq: 880, start: 0.025, duration: 0.14, volume: 0.06 },
+  { freq: 1174.66, start: 0.125, duration: 0.18, volume: 0.052 },
+  { freq: 1567.98, start: 0.245, duration: 0.28, volume: 0.04 },
+];
+
+/** Generates a 16-bit PCM mono WAV buffer for the given tone specification. */
+function generateNotificationSoundWav(sound: "soft" | "bright"): Buffer {
+  const sampleRate = 44100;
+  const tones = sound === "soft" ? softTones : brightTones;
+  const totalDuration = Math.max(...tones.map((t) => t.start + t.duration)) + 0.03;
+  const totalSamples = Math.ceil(totalDuration * sampleRate);
+  const dataSize = totalSamples * 2; // 16-bit mono
+
+  const samples = new Float32Array(totalSamples);
+  for (const tone of tones) {
+    const startSample = Math.floor(tone.start * sampleRate);
+    const durationSamples = Math.floor(tone.duration * sampleRate);
+    const fadeSamples = Math.floor(0.015 * sampleRate);
+    for (let i = 0; i < durationSamples; i++) {
+      const idx = startSample + i;
+      if (idx >= totalSamples) break;
+      const t = i / sampleRate;
+      // Exponential envelope: ramp up over 15ms, then ramp down to silence.
+      let envelope: number;
+      if (i < fadeSamples) {
+        envelope = 0.0001 * Math.pow(tone.volume / 0.0001, i / fadeSamples);
+      } else {
+        const progress = (i - fadeSamples) / (durationSamples - fadeSamples);
+        envelope = tone.volume * Math.pow(0.0001 / tone.volume, progress);
+      }
+      samples[idx] = (samples[idx] ?? 0) + Math.sin(2 * Math.PI * tone.freq * t) * envelope;
+    }
+  }
+
+  const buffer = Buffer.alloc(44 + dataSize);
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write("WAVE", 8);
+  buffer.write("fmt ", 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20); // PCM
+  buffer.writeUInt16LE(1, 22); // mono
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28); // byte rate
+  buffer.writeUInt16LE(2, 32); // block align
+  buffer.writeUInt16LE(16, 34); // bits per sample
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  for (let i = 0; i < totalSamples; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i] ?? 0));
+    buffer.writeInt16LE(Math.round(s * 32767), 44 + i * 2);
+  }
+  return buffer;
+}
+
+const soundFilePathCache: Partial<Record<"soft" | "bright", string>> = {};
+
+/** Lazily generates and caches the WAV file for the given sound. */
+function getNotificationSoundFile(sound: "soft" | "bright"): string | undefined {
+  const cached = soundFilePathCache[sound];
+  if (cached) return cached;
+  try {
+    const filePath = path.join(tmpdir(), `nami-notification-${sound}.wav`);
+    if (!existsSync(filePath)) {
+      const wav = generateNotificationSoundWav(sound);
+      writeFileSync(filePath, wav);
+    }
+    soundFilePathCache[sound] = filePath;
+    return filePath;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Plays a notification sound from the main process using a system command. */
+function playCustomNotificationSound(sound: "soft" | "bright"): void {
+  const filePath = getNotificationSoundFile(sound);
+  if (!filePath) return;
+  // Escape single quotes for shell safety.
+  const safePath = filePath.replace(/'/g, `'\\''`);
+  let command: string;
+  if (process.platform === "win32") {
+    // PowerShell SoundPlayer.PlaySync blocks until the sound finishes, but
+    // exec runs it in a child process so the main process is not blocked.
+    command = `powershell -NoProfile -NonInteractive -Command "(New-Object Media.SoundPlayer '${safePath}').PlaySync()"`;
+  } else if (process.platform === "darwin") {
+    command = `afplay '${safePath}'`;
+  } else {
+    command = `aplay '${safePath}' 2>/dev/null || paplay '${safePath}' 2>/dev/null`;
+  }
+  exec(command, () => undefined);
+}
+
 function showNativeNotification(payload: NativeNotificationPayload, onClick?: () => void): boolean {
   if (!Notification.isSupported()) return false;
   try {
@@ -630,12 +997,6 @@ function showNativeNotification(payload: NativeNotificationPayload, onClick?: ()
     console.warn("Nami Mail could not show a native notification", error);
     return false;
   }
-}
-
-function shouldUseRendererCustomSound(sound: NotificationSound): boolean {
-  return (sound === "soft" || sound === "bright")
-    && Boolean(mainWindow?.isFocused())
-    && rendererCustomNotificationAudioReady;
 }
 
 function normalizeDesktopSmokeNotificationResult(value: unknown): DesktopSmokeNotificationResult | undefined {
@@ -1215,7 +1576,11 @@ function notifyNewMail(messages: NewMailPayload[]): void {
   // The renderer still needs a new-mail event to refresh its local list when
   // alerts are disabled. shouldAlert only controls user-facing interruption.
   const shouldAlert = settings.notificationsEnabled && (!mainWindow?.isFocused() || settings.notifyWhenFocused);
-  const useRendererCustomSound = shouldAlert && shouldUseRendererCustomSound(settings.notificationSound);
+  const { notificationSound } = settings;
+  // Custom sounds (soft/bright) are now played from the main process via a
+  // generated WAV file, which works regardless of window focus or AudioContext
+  // state. The renderer no longer needs to play the custom sound.
+  const useMainProcessCustomSound = shouldAlert && (notificationSound === "soft" || notificationSound === "bright");
   mainWindow?.webContents.send("nami:new-mail", {
     id: first.id,
     subject: first.subject,
@@ -1223,9 +1588,15 @@ function notifyNewMail(messages: NewMailPayload[]): void {
     fromAddress: first.fromAddress,
     count: messages.length,
     shouldAlert,
-    playCustomSound: useRendererCustomSound,
+    playCustomSound: false,
   });
   if (!shouldAlert) return;
+
+  // Play the custom sound from the main process before showing the notification.
+  // The native notification is silenced so only the custom sound is heard.
+  if (useMainProcessCustomSound) {
+    playCustomNotificationSound(notificationSound);
+  }
 
   const locale = currentNativeLocale();
   const sender = first.fromName || first.fromAddress || nativeText(locale, "notificationUnknownSender");
@@ -1233,13 +1604,12 @@ function notifyNewMail(messages: NewMailPayload[]): void {
     ? nativeText(locale, "notificationSingleTitle", { sender })
     : nativeText(locale, "notificationMultipleTitle", { count: messages.length });
   const body = messages.length === 1 ? first.subject : nativeText(locale, "notificationMultipleBody", { sender });
-  // Soft and bright sounds are muted only after the renderer has explicitly
-  // reported a user-unlocked running AudioContext in the focused window.
-  // All other paths fall back to the Windows sound; "none" remains silent.
+  // silent: true when "none" (no sound at all) or when the custom sound was
+  // already played by the main process. Otherwise let the OS play its default.
   showNativeNotification({
     title,
     body,
-    silent: settings.notificationSound === "none" || useRendererCustomSound,
+    silent: notificationSound === "none" || useMainProcessCustomSound,
   }, () => {
     focusMainWindow();
     mainWindow?.webContents.send("nami:open-message", first.id);
@@ -1279,9 +1649,6 @@ async function createMainWindow(): Promise<void> {
     if (!smokeResultPath) return;
     desktopSmokeDiagnostics.push(`Preload ${preloadPath}: ${error.message}`);
   });
-  mainWindow.webContents.on("did-start-loading", () => {
-    rendererCustomNotificationAudioReady = false;
-  });
   mainWindow.webContents.on("console-message", (event) => {
     if (!smokeResultPath || !["warning", "error"].includes(event.level)) return;
     desktopSmokeDiagnostics.push(`Renderer ${event.level}: ${event.message}`);
@@ -1300,17 +1667,166 @@ async function createMainWindow(): Promise<void> {
   });
   mainWindow.on("close", handleMainWindowClose);
   mainWindow.on("closed", () => {
-    rendererCustomNotificationAudioReady = false;
     mainWindow = undefined;
-  });
-  mainWindow.on("blur", () => {
-    rendererCustomNotificationAudioReady = false;
   });
 
   const appUrl = new URL(localServer.url);
   appUrl.searchParams.set("desktop", "1");
   if (isDesktopSmoke) appUrl.searchParams.set("desktopSmoke", "1");
   await mainWindow.loadURL(appUrl.toString());
+}
+
+async function ensureMainWindowForAgentPairing(): Promise<BrowserWindow | undefined> {
+  if (!mainWindow) {
+    desktopHostMode = "gui";
+    await createMainWindow();
+    await startDesktopUpdaterIfNeeded();
+  }
+  focusMainWindow();
+  return mainWindow;
+}
+
+async function recordPairingFailure(requestId: string): Promise<void> {
+  await writePairingOutcome(app.getPath("userData"), { requestId, status: "failed" }).catch(() => undefined);
+}
+
+async function processAgentPairingRequest(requestId: string): Promise<void> {
+  const request = await readPairingRequest(app.getPath("userData"), requestId);
+  const broker = desktopAgentBroker;
+  const server = localServer;
+  if (!request || !broker || !server) {
+    await recordPairingFailure(requestId);
+    return;
+  }
+  if (Date.now() - Date.parse(request.requestedAt) > 5 * 60_000) {
+    await recordPairingFailure(requestId);
+    return;
+  }
+  const profileStore = new DesktopClientProfileStore(clientProfilesPath(app.getPath("userData")), safeStorage);
+  const profile = await profileStore.read(request.profile).catch(() => undefined);
+  if (!profile || profile.clientId !== request.clientId || profile.publicKeyPem !== request.clientPublicKeyPem) {
+    await recordPairingFailure(requestId);
+    return;
+  }
+  const window = await ensureMainWindowForAgentPairing();
+  if (!window) {
+    await recordPairingFailure(requestId);
+    return;
+  }
+  const fingerprint = agentPairingFingerprint(request.clientPublicKeyPem);
+  const accountIds = server.listExternalPairingAccountIds();
+  if (request.operation === "pair" && accountIds.length === 0) {
+    await dialog.showMessageBox(window, {
+      type: "info",
+      title: "NamiMail Agent",
+      message: "Connect a mail account before approving external Agent access.",
+      buttons: ["OK"],
+    });
+    await recordPairingFailure(requestId);
+    return;
+  }
+  const isRevocation = request.operation === "revoke";
+  const decision = await dialog.showMessageBox(window, {
+    type: "question",
+    title: "NamiMail Agent",
+    message: isRevocation
+      ? `Revoke external access for profile “${request.profile}”?`
+      : `Allow external read-only access for profile “${request.profile}”?`,
+    detail: isRevocation
+      ? `Profile fingerprint: ${fingerprint}\n\nThe profile will no longer be able to read mail through NamiMail.`
+      : [
+        `Profile fingerprint: ${fingerprint}`,
+        `Authorized account snapshot: ${accountIds.length} connected account${accountIds.length === 1 ? "" : "s"}.`,
+        "The external interface can only list or read bounded mail data. It cannot send, move, delete, or change mail.",
+      ].join("\n\n"),
+    buttons: [isRevocation ? "Revoke access" : "Allow read-only access", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (decision.response !== 0) {
+    await writePairingOutcome(app.getPath("userData"), { requestId, status: "rejected" });
+    return;
+  }
+  try {
+    if (isRevocation) {
+      const revoked = await broker.revokeReadOnlyPairing(request.clientId);
+      if (!revoked) throw new Error("Pairing record was not found.");
+      await profileStore.remove(request.profile);
+      const discovery = broker.getDiscovery();
+      if (!discovery) throw new Error("Agent Broker is not available.");
+      await writePairingOutcome(app.getPath("userData"), {
+        requestId,
+        status: "approved",
+        hostId: discovery.hostId,
+        hostPublicKeyPem: discovery.hostPublicKeyPem,
+      });
+      return;
+    }
+    const host = await broker.createReadOnlyPairing({
+      clientId: request.clientId,
+      clientPublicKeyPem: request.clientPublicKeyPem,
+      accountIds,
+    });
+    await profileStore.completePairing(request.profile, {
+      schemaVersion: 1,
+      requestId,
+      status: "approved",
+      completedAt: new Date().toISOString(),
+      hostId: host.hostId,
+      hostPublicKeyPem: host.hostPublicKeyPem,
+    });
+    await writePairingOutcome(app.getPath("userData"), {
+      requestId,
+      status: "approved",
+      hostId: host.hostId,
+      hostPublicKeyPem: host.hostPublicKeyPem,
+    });
+  } catch {
+    await recordPairingFailure(requestId);
+  }
+}
+
+function scheduleAgentPairingRequests(requestIds: readonly string[]): void {
+  for (const requestId of requestIds) {
+    pairingRequestTail = pairingRequestTail
+      .then(() => processAgentPairingRequest(requestId))
+      .catch(() => recordPairingFailure(requestId));
+  }
+}
+
+let pairingScopeDriftNotified = false;
+
+/**
+ * Pairings capture an account snapshot at approval time and are fail-closed:
+ * accounts added later are invisible to the client until it is paired again.
+ * The desktop surfaces that drift once per run so the user can re-pair.
+ */
+async function warnExternalPairingScopeDrift(): Promise<void> {
+  const server = localServer;
+  const broker = desktopAgentBroker;
+  if (pairingScopeDriftNotified || !server || !broker) return;
+  const [pairings, currentIds] = await Promise.all([
+    broker.describePairings(),
+    Promise.resolve(server.listExternalPairingAccountIds()),
+  ]);
+  const current = new Set(currentIds);
+  const drifted = pairings.filter((pairing) => {
+    if (pairing.revokedAt) return false;
+    if (pairing.expiresAt && Date.parse(pairing.expiresAt) <= Date.now()) return false;
+    if (pairing.accountIds.length !== current.size) return true;
+    return pairing.accountIds.some((accountId) => !current.has(accountId));
+  });
+  if (drifted.length === 0) return;
+  pairingScopeDriftNotified = true;
+  const locale = currentNativeLocale();
+  showNativeNotification({
+    title: nativeText(locale, "externalAccessDriftTitle"),
+    body: nativeText(locale, "externalAccessDriftBody", { count: drifted.length }),
+    silent: true,
+  }, () => {
+    focusMainWindow();
+  });
 }
 
 function inspectDesktopLifecycle(): DesktopLifecycleSmokeResult {
@@ -1372,6 +1888,7 @@ async function recordSingleInstanceSmokeActivation(commandLine: string[]): Promi
 }
 
 async function boot(): Promise<void> {
+  desktopAgentBrokerRecoveryGate = "accepting";
   await writeDesktopSmokeProgress("waiting-for-electron-ready");
   await app.whenReady();
   await writeDesktopSmokeProgress("electron-ready");
@@ -1394,11 +1911,12 @@ async function boot(): Promise<void> {
       localServer = await runtime.startServer({
         masterKey: desktopMasterKey.key,
         onNewInboxMessages: notifyNewMail,
-        translationCacheDir: path.join(app.getPath("userData"), "translation-models"),
         desktopConfirmation: {
           capability: desktopConfirmationCapability,
           verifier: desktopConfirmationVerifier,
         },
+        externalConfirmation: createExternalConfirmationBridge(),
+        listExternalPairings: () => (desktopAgentBroker ? desktopAgentBroker.describePairings() : Promise.resolve([])),
       });
       await writeDesktopSmokeProgress("local-service-ready");
     } finally {
@@ -1406,78 +1924,84 @@ async function boot(): Promise<void> {
       // to cross the Electron-to-runtime boundary and is no longer needed.
       desktopMasterKey.key.fill(0);
     }
-    await createMainWindow();
-    await writeDesktopSmokeProgress("window-loaded");
-    desktopUpdater = new DesktopUpdater({
-      currentVersion: app.getVersion(),
-      isPackaged: app.isPackaged,
-      updateConfigPath: path.join(process.resourcesPath, "app-update.yml"),
-      updateTrustPath: path.join(process.resourcesPath, "nami-update-trust.json"),
-      userDataPath: app.getPath("userData"),
-      executablePath: process.execPath,
-      disabled: isDesktopSmoke,
-      broadcast: (snapshot) => mainWindow?.webContents.send("nami:update-status", snapshot),
-      prepareForInstall: prepareLocalServerForUpdateInstall,
-      recoverAfterInstallFailure: recoverAfterUpdateInstallFailure,
-      quitForInstall: quitForUpdateInstall,
-    });
-    const desktopUpdate: DesktopUpdateSnapshot = await desktopUpdater.start();
-    powerMonitor.on("resume", checkForUpdatesAfterExternalTrigger);
-    if (smokeResultPath) await writeDesktopSmokeProgress("notification-probe");
-    const desktopNotificationTest = smokeResultPath ? await waitForDesktopSmokeNotification() : undefined;
-    const simulatedWebFrameVisible = !smokeResultPath
-      ? undefined
-      : !mainWindow
-        ? true
-        : await mainWindow.webContents.executeJavaScript("Boolean(document.querySelector('.window-bar'))").catch(() => true);
-    await writeDesktopSmokeProgress("wallpaper-probe");
-    const desktopWallpaper = smokeResultPath ? await inspectDesktopWallpaper() : undefined;
-    await writeDesktopSmokeProgress("settings-ui-probe");
-    const desktopSettingsUi = smokeResultPath ? await inspectDesktopSettingsUi() : undefined;
-    await writeDesktopSmokeProgress("settings-sync-probe");
-    const desktopSettingsSync = smokeResultPath ? await inspectDesktopSettingsSync() : undefined;
-    await writeDesktopSmokeProgress("close-prompt-probe");
-    const desktopClosePrompt = smokeResultPath ? await inspectDesktopClosePrompt() : undefined;
-    const desktopLifecycle = smokeResultPath ? inspectDesktopLifecycle() : undefined;
-    await writeDesktopSmokeProgress("local-api-probe");
-    const desktopLocalApiSmoke = isDesktopSmoke ? await inspectDesktopLocalApiSmoke() : undefined;
-    if (isDesktopSmoke) mainWindow?.minimize();
-    await writeDesktopSmokeProgress("writing-result");
-    await writeSmokeResult({
-      rendererUrl: mainWindow?.webContents.getURL(),
-      title: mainWindow?.getTitle(),
-      simulatedWebFrameVisible,
-      desktopWallpaper,
-      desktopSettingsUi,
-      desktopSettingsSync,
-      desktopClosePrompt,
-      desktopLifecycle,
-      desktopApiAvailable: desktopNotificationTest?.invoked ?? false,
-      desktopNotificationTest,
-      desktopLocalApiSmoke,
-      desktopCacheProtection: {
-        cleanup: rendererCacheCleanup,
-        localApiPolicyInstalled: localApiCachePolicyInstalled,
-        responseNoStoreObserved: desktopLocalApiSmoke?.cacheControl.toLowerCase().split(",").map((value) => value.trim()).includes("no-store") ?? false,
-        responseCacheControl: desktopLocalApiSmoke?.cacheControl ?? "",
-        responsePragma: desktopLocalApiSmoke?.pragma ?? "",
-        responseExpires: desktopLocalApiSmoke?.expires ?? "",
-        untouchedStorageTypes: ["cookies", "indexdb", "localstorage"],
-      },
-      desktopSingleInstance: singleInstanceSmokeResult,
-      desktopUpdate,
-      desktopDiagnostics: desktopSmokeDiagnostics,
-    });
-    await writeDesktopSmokeProgress("result-written");
+    if (desktopHostMode === "gui") {
+      // The external Agent interface is optional for the mail client. A Broker
+      // failure (for example, Windows PowerShell 5.1 unavailable) must not
+      // prevent the window or the local mail service from starting; pairing
+      // and external CLI/MCP simply stay unavailable until the Broker is
+      // healthy again.
+      try {
+        await startDesktopAgentBroker();
+      } catch (error) {
+        desktopSmokeDiagnostics.push(`Desktop Agent Broker unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else {
+      await startDesktopAgentBroker();
+    }
+    void warnExternalPairingScopeDrift().catch(() => undefined);
+    if (desktopHostMode === "gui") {
+      await createMainWindow();
+      await writeDesktopSmokeProgress("window-loaded");
+      scheduleAgentPairingRequests(initialPairingRequestIds);
+      const desktopUpdate = await startDesktopUpdaterIfNeeded();
+      if (smokeResultPath) await writeDesktopSmokeProgress("notification-probe");
+      const desktopNotificationTest = smokeResultPath ? await waitForDesktopSmokeNotification() : undefined;
+      const simulatedWebFrameVisible = !smokeResultPath
+        ? undefined
+        : !mainWindow
+          ? true
+          : await mainWindow.webContents.executeJavaScript("Boolean(document.querySelector('.window-bar'))").catch(() => true);
+      await writeDesktopSmokeProgress("wallpaper-probe");
+      const desktopWallpaper = smokeResultPath ? await inspectDesktopWallpaper() : undefined;
+      await writeDesktopSmokeProgress("settings-ui-probe");
+      const desktopSettingsUi = smokeResultPath ? await inspectDesktopSettingsUi() : undefined;
+      await writeDesktopSmokeProgress("settings-sync-probe");
+      const desktopSettingsSync = smokeResultPath ? await inspectDesktopSettingsSync() : undefined;
+      await writeDesktopSmokeProgress("close-prompt-probe");
+      const desktopClosePrompt = smokeResultPath ? await inspectDesktopClosePrompt() : undefined;
+      const desktopLifecycle = smokeResultPath ? inspectDesktopLifecycle() : undefined;
+      await writeDesktopSmokeProgress("local-api-probe");
+      const desktopLocalApiSmoke = isDesktopSmoke ? await inspectDesktopLocalApiSmoke() : undefined;
+      if (isDesktopSmoke) mainWindow?.minimize();
+      await writeDesktopSmokeProgress("writing-result");
+      await writeSmokeResult({
+        rendererUrl: mainWindow?.webContents.getURL(),
+        title: mainWindow?.getTitle(),
+        simulatedWebFrameVisible,
+        desktopWallpaper,
+        desktopSettingsUi,
+        desktopSettingsSync,
+        desktopClosePrompt,
+        desktopLifecycle,
+        desktopApiAvailable: desktopNotificationTest?.invoked ?? false,
+        desktopNotificationTest,
+        desktopLocalApiSmoke,
+        desktopCacheProtection: {
+          cleanup: rendererCacheCleanup,
+          localApiPolicyInstalled: localApiCachePolicyInstalled,
+          responseNoStoreObserved: desktopLocalApiSmoke?.cacheControl.toLowerCase().split(",").map((value) => value.trim()).includes("no-store") ?? false,
+          responseCacheControl: desktopLocalApiSmoke?.cacheControl ?? "",
+          responsePragma: desktopLocalApiSmoke?.pragma ?? "",
+          responseExpires: desktopLocalApiSmoke?.expires ?? "",
+          untouchedStorageTypes: ["cookies", "indexdb", "localstorage"],
+        },
+        desktopSingleInstance: singleInstanceSmokeResult,
+        desktopUpdate,
+        desktopDiagnostics: desktopSmokeDiagnostics,
+      });
+      await writeDesktopSmokeProgress("result-written");
+    }
     if (smokeExitDelay) {
       const timer = setTimeout(() => app.quit(), smokeExitDelay);
       timer.unref();
     }
   } catch (error) {
+    desktopAgentBrokerRecoveryGate = "closed";
     const locale = currentNativeLocale();
     console.error("Nami Mail startup failed", error);
     await writeDesktopSmokeProgress("startup-failed");
     await writeSmokeResult({ error: error instanceof Error ? error.message : "Local service startup failed." }).catch(() => undefined);
+    await closeDesktopAgentBroker().catch(() => undefined);
     await localServer?.close().catch(() => undefined);
     localServer = undefined;
     clearLocalApiAccessToken();
@@ -1489,19 +2013,33 @@ async function boot(): Promise<void> {
   }
 }
 
-if (desktopAgentLaunch.kind !== "gui") {
-  // This branch deliberately runs before the single-instance lock and before
-  // boot(), so an unsupported service invocation never opens the GUI or any
-  // encrypted mail state.
-  const error = startupErrorForDesktopAgentLaunch(desktopAgentLaunch);
-  console.error(formatAgentHostStartupFailure(error));
-  app.exit(agentHostServiceStartupFailureExitCode);
+if (desktopCliArguments !== undefined) {
+  void app.whenReady()
+    .then(() => runDesktopCli({
+      argv: desktopCliArguments,
+      version: app.getVersion(),
+      userDataPath: app.getPath("userData"),
+      safeStorage,
+      input: createReadStream("", { fd: 0 }),
+      output: process.stdout,
+      error: process.stderr,
+      launchNamiMail,
+    }))
+    .then((exitCode) => app.exit(exitCode))
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : "NamiMail CLI could not start.";
+      process.stderr.write(`HOST_UNAVAILABLE: ${message}\n`);
+      app.exit(3);
+    });
+} else if (desktopAgentLaunch.kind === "rejected") {
+  console.error(`NamiMail Agent startup failed [${desktopAgentLaunch.error.code}]: ${desktopAgentLaunch.error.message}`);
+  app.exit(1);
 } else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  ipcMain.on("nami:custom-notification-sound-ready", (event, ready: unknown) => {
-    if (!isCurrentRenderer(event) || typeof ready !== "boolean") return;
-    rendererCustomNotificationAudioReady = ready;
+  ipcMain.on("nami:quit", (event) => {
+    if (!isCurrentRenderer(event)) return;
+    app.quit();
   });
   ipcMain.on("nami:update-network-online", (event) => {
     if (!isCurrentRenderer(event)) return;
@@ -1527,6 +2065,15 @@ if (desktopAgentLaunch.kind !== "gui") {
       return { copied: false };
     }
   });
+  ipcMain.handle("nami:show-item-in-folder", (event, filePath: unknown) => {
+    if (!isCurrentRenderer(event)) return;
+    if (typeof filePath !== "string" || !filePath.trim()) return;
+    try {
+      shell.showItemInFolder(filePath);
+    } catch (error) {
+      console.warn("Nami Mail could not show item in folder", error);
+    }
+  });
   ipcMain.handle(agentConfirmationIpcChannel, createAgentConfirmationIpcHandler({
     getMainWindow: () => mainWindow,
     isLocalAppUrl,
@@ -1535,10 +2082,6 @@ if (desktopAgentLaunch.kind !== "gui") {
       return server?.resolveAgentConfirmation?.(confirmationId, decision);
     },
   }));
-  ipcMain.handle("nami:local-api-request-headers", (event) => {
-    if (!isCurrentRenderer(event) || !localServer || !localApiAccessToken) return {};
-    return { [localApiAccessHeader]: localApiAccessToken };
-  });
   ipcMain.handle("nami:update-get-status", (event) => {
     if (!isCurrentRenderer(event)) return undefined;
     return desktopUpdater?.getSnapshot();
@@ -1565,17 +2108,45 @@ if (desktopAgentLaunch.kind !== "gui") {
   });
   app.on("second-instance", (_event, commandLine) => {
     void recordSingleInstanceSmokeActivation(commandLine);
-    focusMainWindow();
+    const pairingRequests = readAgentPairingRequestIds(commandLine);
+    if (pairingRequests.length) {
+      desktopHostMode = "gui";
+      void ensureMainWindowForAgentPairing().then(() => scheduleAgentPairingRequests(pairingRequests));
+      return;
+    }
+    if (commandLine.includes("--agent-host")) {
+      void (async () => {
+        try {
+          if (!localServer) await desktopBootPromise;
+          await startDesktopAgentBroker();
+        } catch (error) {
+          console.error("Nami Mail could not restore the Agent Broker for the requested service host.", error);
+        }
+      })();
+      return;
+    }
+    desktopHostMode = "gui";
+    void (async () => {
+      if (!mainWindow && localServer) {
+        await createMainWindow();
+        await startDesktopUpdaterIfNeeded();
+      }
+      focusMainWindow();
+    })();
   });
-  app.on("window-all-closed", () => app.quit());
+  app.on("window-all-closed", () => {
+    if (desktopHostMode === "gui") app.quit();
+  });
   app.on("before-quit", (event) => {
+    desktopAgentBrokerRecoveryGate = "closed";
     if (!localServer || isQuitting) return;
     event.preventDefault();
     shutdownLocalServerAndQuit();
   });
   app.on("will-quit", () => {
+    desktopAgentBrokerRecoveryGate = "closed";
     powerMonitor.removeListener("resume", checkForUpdatesAfterExternalTrigger);
     desktopUpdater?.dispose();
   });
-  void boot();
+  desktopBootPromise = boot();
 }

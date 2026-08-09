@@ -28,7 +28,7 @@ import {
   type UpdateInstallFailure,
 } from "./update-install-result.mjs";
 import { classifyUpdateError, createUpdateSnapshot, type DesktopUpdateSnapshot } from "./update-status.mjs";
-import { loadEd25519UpdateTrust, verifyEd25519UpdateManifest, type Ed25519UpdateTrust } from "./update-trust.mjs";
+import { loadEmbeddedUpdateTrust, verifyEd25519UpdateManifest, type Ed25519UpdateTrust } from "./update-trust.mjs";
 import {
   launchZipUpdateInstaller,
   readTrustedWindowsSigner,
@@ -205,15 +205,22 @@ export class DesktopUpdater {
       if (trustedSigner) {
         this.updateTrust = { kind: "authenticode", signer: trustedSigner };
       } else {
-        const ed25519Trust = await loadEd25519UpdateTrust(this.options.updateTrustPath);
-        if (!ed25519Trust) {
+        const embeddedTrust = await loadEmbeddedUpdateTrust(this.options.updateTrustPath);
+        if (embeddedTrust?.kind === "disabled") {
+          return this.transition(
+            "unavailable",
+            "trustDisabledByBuild",
+            { percent: null },
+          );
+        }
+        if (!embeddedTrust) {
           return this.transition(
             "unavailable",
             "trustUnavailable",
             { percent: null },
           );
         }
-        this.updateTrust = { kind: "ed25519", trust: ed25519Trust };
+        this.updateTrust = { kind: "ed25519", trust: embeddedTrust };
       }
       await this.preferences.load();
       this.enabled = true;

@@ -1,6 +1,6 @@
 # RAG Retrieval
 
-[Chinese](retrieval.md) | [English](retrieval.en.md)
+[Chinese](retrieval.zh-CN.md) | [English](retrieval.en.md)
 
 ## Query boundary
 
@@ -8,13 +8,13 @@ A retrieval request needs a verified caller, account scope, and current account 
 
 ## Current retrieval
 
-The current runtime uses lexical term scoring and structured scope filters only. It verifies account scope, current generation, message restrictions, and page state before scoring active decrypted pages held in memory, then revalidates citations. Persistent pages remain encrypted and the lexical memory index can be rebuilt from pages and source events; there is no wired production embedding provider, semantic index, or vector database.
+The current runtime uses lexical term scoring and structured scope filters, and enables hybrid retrieval when the default model provider can serve embeddings. It verifies account scope, current generation, message restrictions, and page state before scoring active decrypted pages held in memory; when semantic retrieval is enabled, pages and the query are both embedded through the user-configured default provider endpoint, and lexical and semantic candidates are merged with reciprocal-rank fusion (RRF) before citations are revalidated. Persistent pages remain encrypted; both the lexical index and the semantic index are in-memory structures rebuildable from pages and source events.
 
 Suggested flow:
 
 1. Normalize query and constrain length, accounts, time/folder filters, and result count.
-2. Read active current-generation pages, calculate lexical candidates, and order them by score.
-3. Revalidate candidates by source/revision and apply result/page limits.
+2. Read active current-generation pages, calculate lexical candidates, and — when semantic retrieval is enabled — semantic candidates for the same query vector.
+3. Fuse and order candidates, revalidate by source/revision, and apply result/page limits.
 4. Verify pages remain decryptable and sources still belong to current scope.
 5. Return results with stable score explanation and citations; only selected minimum context reaches a provider.
 
@@ -22,9 +22,16 @@ Suggested flow:
 
 Each result includes account, message/page identity, source revision, chunk index, necessary excerpt, and an in-app target. A citation is not proof that a model answer is trustworthy: UI permits opening the original mail and selecting/copying text, while indicating that indexing may be stale or cleaned.
 
-## Future embedding boundary
+## Semantic retrieval and the embedding boundary
 
-Embeddings are a reserved replaceable boundary, not a current runtime capability. A future cloud embedding integration needs separate visible consent for mail-text egress and must name provider/scope; until it is implemented, reviewed, and verified, do not present semantic results or cloud embeddings as available.
+Semantic retrieval is a wired, optional capability: when the default model provider is `openai-compatible` or `ollama`, an `embeddingModel` is configured (falling back to the chat model), and cloud endpoints have explicit authorization, the RAG worker sends each retrieval page's subject, sender, and body to that provider's embedding endpoint, stores the vectors in an in-memory semantic index, and embeds the query text through the same endpoint before fusing the results with lexical candidates via RRF.
+
+Privacy boundary:
+
+- Embedded mail text goes only to the user-configured default provider endpoint; for local services such as Ollama the endpoint is restricted to loopback, so mail text never leaves the machine.
+- Cloud endpoints (such as HTTPS OpenAI-compatible services) share the same authorization boundary as chat and lexical retrieval for mail-text egress: the user must explicitly enable "allow cloud processing of mail content" (`allowCloudMailContent`) in the model configuration.
+- Vectors live in memory only: they are never persisted or stored as a second plaintext copy, are cleared when pages are removed, generations change, or the provider switches, and are rebuilt from active pages after a cold start.
+- Embedding is best-effort: a failed page embedding only excludes that page from the semantic index (lexical coverage remains); a failed query embedding or fusion degrades the whole query to pure lexical retrieval, so retrieval never breaks because the semantic path is unavailable.
 
 ## Performance and degradation
 

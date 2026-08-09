@@ -5,8 +5,11 @@ import {
   AGENT_CONTRACT_VERSION,
   AGENT_PROTOCOL_VERSION,
   BROKER_PROTOCOL_VERSION,
+  agentConfirmationActions,
+  agentPermissionScopes,
   agentResponseEnvelopeSchema,
   agentSourceEventSchema,
+  agentStreamEventSchema,
   brokerRequestEnvelopeSchema,
   brokerResponseEnvelopeSchema,
   confirmationDecisionSchema,
@@ -116,4 +119,17 @@ test("broker frames bind client, host, boot and decimal counters before signatur
     payload: { ready: true },
     signature: "response_signature",
   }).success, true);
+});
+
+test("stream events carry bounded memory suggestions", () => {
+  const base = { eventId: "event_1", requestId, sequence: 0, emittedAt: timestamp };
+  assert.equal(agentStreamEventSchema.safeParse({ ...base, type: "memory_suggestion", summary: "User prefers concise English replies" }).success, true);
+  assert.equal(agentStreamEventSchema.safeParse({ ...base, type: "memory_suggestion", summary: "" }).success, false);
+  assert.equal(agentStreamEventSchema.safeParse({ ...base, type: "memory_suggestion", summary: "x", extra: true }).success, false);
+  assert.equal(agentStreamEventSchema.safeParse({ ...base, type: "memory_suggestion" }).success, false);
+});
+
+test("account deletion is an explicit confirmation action with a manage scope", () => {
+  assert.ok(agentConfirmationActions.includes("delete-account" as (typeof agentConfirmationActions)[number]));
+  assert.ok(agentPermissionScopes.includes("manage:accounts" as (typeof agentPermissionScopes)[number]));
 });

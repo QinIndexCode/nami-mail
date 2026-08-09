@@ -7,7 +7,8 @@ import {
   type AccountEnvelopeScope,
   type EncryptedAccountEnvelope,
 } from "./store-crypto.js";
-import { AccountLifecycleStore, type AccountGenerationLease } from "./lifecycle.js";
+import type { AccountLifecycleStore} from "./lifecycle.js";
+import { type AccountGenerationLease } from "./lifecycle.js";
 import { assertAgentStoreReadable } from "./schema.js";
 
 export type ConversationRecordKind = "metadata" | "turn" | "tool-call" | "tool-result" | "citation" | "audit" | "regeneration" | "tombstone";

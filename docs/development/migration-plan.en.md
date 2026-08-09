@@ -1,6 +1,6 @@
 # Agent/RAG Migration Plan
 
-[Chinese](migration-plan.md) | [English](migration-plan.en.md)
+[Chinese](migration-plan.zh-CN.md) | [English](migration-plan.en.md)
 
 ## Scope
 

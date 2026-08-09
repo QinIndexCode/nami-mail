@@ -4,6 +4,7 @@ import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import type { DatabaseHandle } from "./db.js";
 import { friendlyMailError, imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import { moveActionBlockedError, protectedMessageColumns } from "./message-storage.js";
+import { indexMessageFts } from "./message-search.js";
 import type { ResolvedOutboundAttachment } from "./outbound-attachments.js";
 import type { AccountRecord } from "./types.js";
 
@@ -204,6 +205,13 @@ function persistAppendedDraft(
       hasAttachments: draft.attachments?.length ? 1 : 0,
       size: rawSize,
       createdAt: now,
+    });
+    // Drafts are searchable through the same FTS index as synced mail.
+    indexMessageFts(db, id, {
+      subject: draft.subject,
+      fromName: "",
+      fromAddress: account.email,
+      textBody: draft.text,
     });
     if (agentEvents && agentLease) {
       agentEvents.messageUpsertedWithinTransaction(agentLease, id, {

@@ -22,7 +22,7 @@ import {
 import { resolveLocalWindowsElectronDist } from "./electron-dist.mjs";
 
 if (process.platform !== "win32") {
-  throw new Error("Windows NSIS packaging can only run on Windows.");
+  throw new Error("Windows installer packaging can only run on Windows.");
 }
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -120,6 +120,9 @@ try {
   await run(process.execPath, [npmCli, "run", "verify:electron-sqlite"], cleanEnvironment);
 
   const packageStartedAt = Date.now();
+  // electron-builder builds the win-unpacked app directory and then wraps it
+  // into the native NSIS installer (see the `build.win.target` / `build.nsis`
+  // fields in package.json and build/installer.nsh for the lifecycle policy).
   const builderArguments = [
     electronBuilderCli,
     "--win",

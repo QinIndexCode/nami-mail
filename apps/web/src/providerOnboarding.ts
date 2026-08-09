@@ -3,6 +3,42 @@ import type { MailServerPreset, ProviderInfo } from "./types";
 
 export const CUSTOM_IMAP_PROVIDER_ID = "__custom_imap__";
 
+/**
+ * Maps provider ids to their bundled brand icon under /provider-icons/.
+ * Providers sharing a family reuse the family's icon file.
+ */
+const PROVIDER_ICON_FILES: Record<string, string> = {
+  gmail: "gmail.png",
+  microsoft: "outlook.png",
+  icloud: "icloud.png",
+  qq: "qq.png",
+  "netease-163": "netease-163.png",
+  "netease-126": "netease-126.png",
+  "netease-yeah": "netease-163.png",
+  "netease-188": "netease-163.png",
+  "netease-vip-163": "netease-163.png",
+  "netease-vip-126": "netease-163.png",
+  yahoo: "yahoo.png",
+  aol: "aol.png",
+  fastmail: "fastmail.png",
+  zoho: "zoho.png",
+  sina: "sina.png",
+  "sina-cn": "sina.png",
+  "sina-vip": "sina.png",
+  "sina-vip-cn": "sina.png",
+  sohu: "sohu.png",
+  "china-mobile-139": "china-mobile-139.png",
+  "china-telecom-189": "china-telecom-189.png",
+  aliyun: "aliyun.png",
+  yandex: "yandex.png",
+};
+
+/** Returns the bundled icon asset URL for a provider id, when one exists. */
+export function providerIconUrl(providerId: string): string | undefined {
+  const file = PROVIDER_ICON_FILES[providerId];
+  return file ? `/provider-icons/${file}` : undefined;
+}
+
 const QUICK_PROVIDER_IDS = [
   "gmail",
   "microsoft",

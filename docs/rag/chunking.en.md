@@ -1,10 +1,10 @@
 # RAG Chunking
 
-[Chinese](chunking.md) | [English](chunking.en.md)
+[Chinese](chunking.zh-CN.md) | [English](chunking.en.md)
 
 ## Goal
 
-Chunking turns cleaned mail into stable, citeable, budget-bounded retrieval pages. It is not arbitrary character slicing and does not depend on a remote tokenizer for reproducibility; current pages serve lexical retrieval and do not imply semantic embeddings.
+Chunking turns cleaned mail into stable, citeable, budget-bounded retrieval pages. It is not arbitrary character slicing and does not depend on a remote tokenizer for reproducibility; pages serve both lexical retrieval and the optional local semantic index, and semantic embeddings do not change the chunking rules.
 
 ## Current rules
 

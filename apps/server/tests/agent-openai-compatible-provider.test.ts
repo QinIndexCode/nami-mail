@@ -226,3 +226,192 @@ it("OpenAI compatible provider times out an idle SSE response body", async () =>
     vi.useRealTimers();
   }
 });
+
+it("OpenAI compatible provider extracts XML-style inline tool calls split across chunks", async () => {
+  const provider = new OpenAiCompatibleProvider({
+    id: "inline-xml",
+    kind: "openai-compatible",
+    endpoint: "https://api.example.test/v1",
+    fetchImpl: async () => sseResponse([
+      'data: {"choices":[{"delta":{"content":"Looking for it. <tool_call><function=messages.search><parameter={\\"query\\":\\"inv"}}]}',
+      'data: {"choices":[{"delta":{"content":"oice\\"}</parameter></function></tool_call>"}}]}',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+      "data: [DONE]",
+    ]),
+  });
+
+  const events = [];
+  for await (const event of provider.streamChat({
+    requestId: "123e4567-e89b-12d3-a456-426614174004",
+    providerId: "inline-xml",
+    model: "test-model",
+    messages: [{ role: "user", content: "Find an invoice" }],
+    tools: [{
+      name: "messages.search",
+      title: "Search messages",
+      description: "Search indexed mail.",
+      category: "messages",
+      executionMode: "read",
+      requiredScopes: ["mail.read"],
+      accountAccess: "required",
+      confirmationPolicy: "never",
+      availableToExternal: true,
+    }],
+    allowToolCalls: true,
+    responseFormat: "text",
+  })) events.push(event);
+
+  const deltas = events.filter((event) => event.type === "text_delta").map((event) => event.type === "text_delta" ? event.delta : "");
+  assert.deepEqual(deltas, ["Looking for it. "]);
+  const toolCall = events.find((event) => event.type === "tool_call");
+  assert.equal(toolCall?.type, "tool_call");
+  if (toolCall?.type === "tool_call") {
+    assert.equal(toolCall.call.toolName, "messages.search");
+    assert.deepEqual(toolCall.call.input, { query: "invoice" });
+  }
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "tool-calls" });
+});
+
+it("OpenAI compatible provider extracts JSON-style inline tool calls split across chunks", async () => {
+  const provider = new OpenAiCompatibleProvider({
+    id: "inline-json",
+    kind: "openai-compatible",
+    endpoint: "https://api.example.test/v1",
+    fetchImpl: async () => sseResponse([
+      'data: {"choices":[{"delta":{"content":"Let me check. {\\"action\\":\\"messages.search\\",\\"action_input\\":{\\"quer"}}]}',
+      'data: {"choices":[{"delta":{"content":"y\\":\\"invoice\\"}}"}}]}',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+      "data: [DONE]",
+    ]),
+  });
+
+  const events = [];
+  for await (const event of provider.streamChat({
+    requestId: "123e4567-e89b-12d3-a456-426614174005",
+    providerId: "inline-json",
+    model: "test-model",
+    messages: [{ role: "user", content: "Find an invoice" }],
+    tools: [{
+      name: "messages.search",
+      title: "Search messages",
+      description: "Search indexed mail.",
+      category: "messages",
+      executionMode: "read",
+      requiredScopes: ["mail.read"],
+      accountAccess: "required",
+      confirmationPolicy: "never",
+      availableToExternal: true,
+    }],
+    allowToolCalls: true,
+    responseFormat: "text",
+  })) events.push(event);
+
+  const deltas = events.filter((event) => event.type === "text_delta").map((event) => event.type === "text_delta" ? event.delta : "");
+  assert.deepEqual(deltas, ["Let me check. "]);
+  const toolCall = events.find((event) => event.type === "tool_call");
+  assert.equal(toolCall?.type, "tool_call");
+  if (toolCall?.type === "tool_call") {
+    assert.equal(toolCall.call.toolName, "messages.search");
+    assert.deepEqual(toolCall.call.input, { query: "invoice" });
+  }
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "tool-calls" });
+});
+
+it("OpenAI compatible provider embeds inputs through the /embeddings endpoint", async () => {
+  const requests: Array<{ url: string; body: string }> = [];
+  const provider = new OpenAiCompatibleProvider({
+    id: "embedding-provider",
+    kind: "openai-compatible",
+    endpoint: "https://api.example.test/v1",
+    fetchImpl: async (input, init) => {
+      requests.push({ url: String(input), body: String(init?.body ?? "") });
+      return new Response(JSON.stringify({
+        data: [
+          { embedding: [0.1, 0.2, 0.3] },
+          { embedding: [0.4, -0.5, 0.6] },
+        ],
+        usage: { prompt_tokens: 7, total_tokens: 7 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const response = await provider.embed({
+    requestId: "123e4567-e89b-12d3-a456-426614174010",
+    providerId: "embedding-provider",
+    model: "text-embedding-3-small",
+    inputs: ["Quarterly report is ready", "Schedule the review"],
+  });
+
+  assert.equal(requests.length, 1);
+  assert.match(requests[0]!.url, /api\.example\.test\/v1\/embeddings$/);
+  assert.deepEqual(JSON.parse(requests[0]!.body) as { model: string; input: string[] }, {
+    model: "text-embedding-3-small",
+    input: ["Quarterly report is ready", "Schedule the review"],
+  });
+  assert.deepEqual(response, {
+    vectors: [
+      [0.1, 0.2, 0.3],
+      [0.4, -0.5, 0.6],
+    ],
+    usage: { inputTokens: 7, totalTokens: 7 },
+  });
+});
+
+it("OpenAI compatible provider advertises embeddings capability for every served kind", async () => {
+  for (const kind of ["openai-compatible", "ollama"] as const) {
+    const provider = new OpenAiCompatibleProvider({
+      id: `cap-${kind}`,
+      kind,
+      endpoint: "http://127.0.0.1:11434/v1",
+    });
+    const capabilities = await provider.getCapabilities();
+    assert.equal(capabilities.embeddings, true);
+  }
+});
+
+it("OpenAI compatible provider maps embedding errors to stable agent errors", async () => {
+  const provider = new OpenAiCompatibleProvider({
+    id: "embedding-error",
+    kind: "openai-compatible",
+    endpoint: "https://api.example.test/v1",
+    fetchImpl: async () => new Response(JSON.stringify({ error: "model not found" }), { status: 404 }),
+  });
+  await assert.rejects(provider.embed({
+    requestId: "123e4567-e89b-12d3-a456-426614174011",
+    providerId: "embedding-error",
+    model: "missing-embedder",
+    inputs: ["text"],
+  }), (error: { code?: string; retryable?: boolean }) => error.code === "PROVIDER_ERROR" && error.retryable === false);
+});
+
+it("OpenAI compatible provider rejects an embedding response that is misaligned or non-finite", async () => {
+  // Malformed embedding payloads are mapped to a stable provider error.
+  const providerError = (error: { code?: string; retryable?: boolean }) =>
+    error.code === "PROVIDER_ERROR" && error.retryable === true;
+
+  const misaligned = new OpenAiCompatibleProvider({
+    id: "embedding-invalid",
+    kind: "openai-compatible",
+    endpoint: "https://api.example.test/v1",
+    fetchImpl: async () => new Response(JSON.stringify({ data: [{ embedding: [0.1] }] }), { status: 200 }),
+  });
+  await assert.rejects(misaligned.embed({
+    requestId: "123e4567-e89b-12d3-a456-426614174012",
+    providerId: "embedding-invalid",
+    model: "text-embedding-3-small",
+    inputs: ["one", "two"],
+  }), providerError);
+
+  const nonFinite = new OpenAiCompatibleProvider({
+    id: "embedding-nonfinite",
+    kind: "openai-compatible",
+    endpoint: "https://api.example.test/v1",
+    fetchImpl: async () => new Response(JSON.stringify({ data: [{ embedding: [Number.NaN] }] }), { status: 200 }),
+  });
+  await assert.rejects(nonFinite.embed({
+    requestId: "123e4567-e89b-12d3-a456-426614174013",
+    providerId: "embedding-nonfinite",
+    model: "text-embedding-3-small",
+    inputs: ["text"],
+  }), providerError);
+});

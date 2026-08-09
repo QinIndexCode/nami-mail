@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   smtp_secure INTEGER NOT NULL,
   smtp_transport TEXT NOT NULL DEFAULT 'tls' CHECK (smtp_transport IN ('tls', 'starttls')),
   smtp_username TEXT,
+  signature TEXT NOT NULL DEFAULT '',
   username_mode TEXT NOT NULL DEFAULT 'email',
   status TEXT NOT NULL DEFAULT 'connected',
   last_error TEXT,
@@ -71,7 +72,7 @@ CREATE TABLE IF NOT EXISTS messages (
   -- Opaque, keyed lookup of the provider's stable message identifier. It
   -- enables folder-membership reconciliation without storing that identifier.
   remote_id_lookup TEXT,
-  -- NULL means unknown. \All rows are shown as archived only after this is 1.
+  -- NULL means unknown. All rows are shown as archived only after this is 1.
   all_mail_archived INTEGER CHECK (all_mail_archived IN (0, 1) OR all_mail_archived IS NULL),
   -- An intent is written before a MOVE reaches the provider. Confirmed moves
   -- without UIDPLUS retain this encrypted cache row until destination sync can
@@ -102,6 +103,9 @@ CREATE TABLE IF NOT EXISTS messages (
   encrypted_payload TEXT,
   payload_version INTEGER NOT NULL DEFAULT 0,
   size INTEGER NOT NULL DEFAULT 0,
+  -- Local "snooze until" marker. Inbox listings hide active snoozes; a
+  -- background pass releases them when due so they return to the Inbox.
+  snoozed_until TEXT,
   created_at TEXT NOT NULL,
   UNIQUE (account_id, mailbox, uid),
   FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
@@ -161,6 +165,9 @@ CREATE TABLE IF NOT EXISTS outbound_submissions (
   confirmed_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  -- Optional future time for scheduled sends. A pending submission with a
+  -- due time is picked up by the background scheduler instead of the send route.
+  send_at TEXT,
   FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
   UNIQUE (account_id, idempotency_key),
   UNIQUE (account_id, rfc_message_id)
@@ -204,9 +211,119 @@ CREATE TABLE IF NOT EXISTS app_settings (
   locale TEXT NOT NULL DEFAULT 'zh-CN',
   translation_configuration TEXT,
   translation_configuration_version INTEGER NOT NULL DEFAULT 0,
+  agent_tool_round_limit INTEGER NOT NULL DEFAULT 15 CHECK (agent_tool_round_limit BETWEEN 1 AND 50),
+  list_density TEXT NOT NULL DEFAULT 'comfortable' CHECK (list_density IN ('comfortable', 'compact')),
+  agent_access_level TEXT NOT NULL DEFAULT 'send-confirmed' CHECK (agent_access_level IN ('read-only', 'send-confirmed', 'full-access')),
+  agent_cli_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_cli_access_level IN ('read-only', 'send-confirmed', 'full-access')),
+  agent_mcp_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_mcp_access_level IN ('read-only', 'send-confirmed', 'full-access')),
   custom_background_filename TEXT,
+  auto_reply_config TEXT,
   updated_at TEXT NOT NULL
 );
+
+-- Auto-reply decision ledger. One row per message the auto-reply pipeline has
+-- already decided (sent / ignored / pending / failed), so repeated sync passes
+-- can never re-process or re-send a message. The per-account daily cap is
+-- derived from rows whose decision = 'sent'. The thread_key column anchors conversation
+-- de-duplication: a follow-up that belongs to an already-auto-replied thread
+-- is skipped without another confirmation round.
+CREATE TABLE IF NOT EXISTS auto_reply_processed (
+  message_id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('pending', 'sent', 'ignored', 'failed')),
+  thread_key TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_auto_reply_processed_account_occurred
+  ON auto_reply_processed(account_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_auto_reply_processed_thread
+  ON auto_reply_processed(thread_key);
+
+CREATE TABLE IF NOT EXISTS filter_rules (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  -- NULL means the rule applies to every account; otherwise only that account.
+  account_id TEXT,
+  conditions_json TEXT NOT NULL,
+  actions_json TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_filter_rules_account ON filter_rules(account_id);
+
+-- Local address book. Name/email/notes are encrypted with a derived master-key
+-- envelope; deduplication happens in code because encrypted columns cannot be
+-- searched or constrained by SQLite.
+CREATE TABLE IF NOT EXISTS contacts (
+  id TEXT PRIMARY KEY,
+  email_enc TEXT NOT NULL,
+  name_enc TEXT NOT NULL,
+  notes_enc TEXT NOT NULL,
+  auto_collected INTEGER NOT NULL DEFAULT 0 CHECK (auto_collected IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_auto_collected ON contacts(auto_collected);
+
+-- Local mail template library. Name/subject/body are encrypted with a derived
+-- master-key envelope; templates are user content that stays at rest encrypted.
+CREATE TABLE IF NOT EXISTS mail_templates (
+  id TEXT PRIMARY KEY,
+  name_enc TEXT NOT NULL,
+  subject_enc TEXT NOT NULL,
+  body_enc TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Local calendar. Title/description/location are encrypted with a derived
+-- master-key envelope like the address book; timestamps stay plaintext so the
+-- date-range queries used by the month view never need to decrypt rows.
+CREATE TABLE IF NOT EXISTS calendar_events (
+  id TEXT PRIMARY KEY,
+  title_enc TEXT NOT NULL,
+  description_enc TEXT NOT NULL,
+  location_enc TEXT NOT NULL,
+  start_at TEXT NOT NULL,
+  end_at TEXT NOT NULL,
+  all_day INTEGER NOT NULL DEFAULT 0 CHECK (all_day IN (0, 1)),
+  color TEXT NOT NULL DEFAULT 'blue',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start_at);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_end ON calendar_events(end_at);
+
+-- Full-text search over the decrypted message payload. The messages table keeps
+-- the encrypted envelope; this FTS5 table holds the plaintext searchable text
+-- (subject, sender, body) so substring/token matching never needs to decrypt
+-- the whole candidate set. It is maintained from application code at payload
+-- write time, rebuilt on migration for legacy rows, and pruned by the delete
+-- trigger below (which also covers ON DELETE CASCADE from accounts).
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+  subject,
+  from_name,
+  from_address,
+  body,
+  message_id UNINDEXED,
+  tokenize = 'trigram'
+);
+
+-- Keep the search index aligned when messages disappear through any delete
+-- path, including a cascading account deletion.
+CREATE TRIGGER IF NOT EXISTS messages_fts_after_delete
+AFTER DELETE ON messages BEGIN
+  DELETE FROM messages_fts WHERE message_id = old.id;
+END;
 `;
 
 export function openDatabase(databasePath: string): DatabaseHandle {
@@ -217,6 +334,12 @@ export function openDatabase(databasePath: string): DatabaseHandle {
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
   db.exec(schema);
+  // Migration: add agent_tool_round_limit column for existing databases
+  try {
+    db.prepare("ALTER TABLE app_settings ADD COLUMN agent_tool_round_limit INTEGER NOT NULL DEFAULT 15 CHECK (agent_tool_round_limit BETWEEN 1 AND 50)").run();
+  } catch {
+    // Column already exists
+  }
   migrateDatabase(db);
   return db;
 }
@@ -234,6 +357,7 @@ function migrateDatabase(db: DatabaseHandle): void {
   addAccountColumn("imap_username", "imap_username TEXT");
   addAccountColumn("smtp_transport", "smtp_transport TEXT NOT NULL DEFAULT 'tls' CHECK (smtp_transport IN ('tls', 'starttls'))");
   addAccountColumn("smtp_username", "smtp_username TEXT");
+  addAccountColumn("signature", "signature TEXT NOT NULL DEFAULT ''");
   addAccountColumn("last_error_code", "last_error_code TEXT");
   addAccountColumn("credential_crypto_version", "credential_crypto_version INTEGER NOT NULL DEFAULT 0");
   // Old rows represented a non-TLS transport as secure=false. Nami Mail has
@@ -294,6 +418,10 @@ function migrateDatabase(db: DatabaseHandle): void {
   if (!messageColumns.some((column) => column.name === "pending_move_special_use")) {
     db.exec("ALTER TABLE messages ADD COLUMN pending_move_special_use TEXT");
   }
+  if (!messageColumns.some((column) => column.name === "snoozed_until")) {
+    db.exec("ALTER TABLE messages ADD COLUMN snoozed_until TEXT");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_messages_snoozed_until ON messages(snoozed_until) WHERE snoozed_until IS NOT NULL");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_account_mailbox_remote_id ON messages(account_id, mailbox, remote_id_lookup)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_pending_move_remote_id ON messages(account_id, pending_move_destination, remote_id_lookup)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_pending_move_candidate ON messages(account_id, pending_move_destination, pending_move_candidate_uid)");
@@ -315,6 +443,10 @@ function migrateDatabase(db: DatabaseHandle): void {
   if (!outboundSubmissionColumns.some((column) => column.name === "crypto_version")) {
     db.exec("ALTER TABLE outbound_submissions ADD COLUMN crypto_version INTEGER NOT NULL DEFAULT 0");
   }
+  if (!outboundSubmissionColumns.some((column) => column.name === "send_at")) {
+    db.exec("ALTER TABLE outbound_submissions ADD COLUMN send_at TEXT");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_outbound_submissions_due ON outbound_submissions(send_at) WHERE send_at IS NOT NULL AND status = 'pending'");
 
   const folderColumns = db.prepare("PRAGMA table_info(folders)").all() as Array<{ name: string }>;
   if (!folderColumns.some((column) => column.name === "uid_validity")) {
@@ -337,4 +469,24 @@ function migrateDatabase(db: DatabaseHandle): void {
   if (!settingsColumns.some((column) => column.name === "translation_configuration_version")) {
     db.exec("ALTER TABLE app_settings ADD COLUMN translation_configuration_version INTEGER NOT NULL DEFAULT 0");
   }
+  if (!settingsColumns.some((column) => column.name === "list_density")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN list_density TEXT NOT NULL DEFAULT 'comfortable' CHECK (list_density IN ('comfortable', 'compact'))");
+  }
+  if (!settingsColumns.some((column) => column.name === "agent_access_level")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN agent_access_level TEXT NOT NULL DEFAULT 'send-confirmed' CHECK (agent_access_level IN ('read-only', 'send-confirmed', 'full-access'))");
+  }
+  if (!settingsColumns.some((column) => column.name === "agent_cli_access_level")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN agent_cli_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_cli_access_level IN ('read-only', 'send-confirmed', 'full-access'))");
+  }
+  if (!settingsColumns.some((column) => column.name === "agent_mcp_access_level")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN agent_mcp_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_mcp_access_level IN ('read-only', 'send-confirmed', 'full-access'))");
+  }
+  if (!settingsColumns.some((column) => column.name === "auto_reply_config")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN auto_reply_config TEXT");
+  }
+  // Three-level permission model: the retired `draft-only` value maps to the
+  // conservative read-only level so an existing user is never silently granted
+  // write capabilities by the upgrade (the SQLite CHECK still permits the old
+  // value, so the UPDATE passes; new writes only ever use the three levels).
+  db.exec("UPDATE app_settings SET agent_access_level = 'read-only' WHERE agent_access_level = 'draft-only'");
 }

@@ -23,6 +23,7 @@ import {
   orderedProviderCatalog,
   providerAuthLabel,
   providerDisplayName,
+  providerIconUrl,
   providerMonogram,
   providerServerConfiguration,
   quickProviderCatalog,
@@ -39,6 +40,7 @@ import type {
   ProviderInfo,
 } from "./types";
 import { useDialogFocus } from "./useDialogFocus";
+import { useDismissTransition } from "./useDismissTransition";
 
 type StatusKind = "success" | "warning" | "error" | "idle";
 type StatusField = "email" | "password" | "manual";
@@ -333,17 +335,21 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
 
   useDialogFocus(true, dialogRef, { fallbackFocusRef });
 
+  const { closing, requestClose: requestExit } = useDismissTransition(() => {
+    onClose();
+  });
+
   const requestClose = () => {
-    if (!blockingBusy) onClose();
+    if (!blockingBusy) requestExit();
   };
 
   const scheduleClose = useCallback(() => {
     if (autoCloseTimerRef.current !== null) window.clearTimeout(autoCloseTimerRef.current);
     autoCloseTimerRef.current = window.setTimeout(() => {
       autoCloseTimerRef.current = null;
-      onClose();
+      requestExit();
     }, demoMode ? 650 : 1_000);
-  }, [demoMode, onClose]);
+  }, [demoMode, requestExit]);
 
   const showError = useCallback((message: string, field?: StatusField) => {
     setStatus({ kind: "error", message, ...(field ? { field } : {}) });
@@ -434,7 +440,12 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
   }, [accountAdded, busy, discoverProvider, discoveryRequired, emailFocused]);
 
   const updateEmail = (event: ChangeEvent<HTMLInputElement>) => {
-    if (emailComposingRef.current || (event.nativeEvent as InputEvent).isComposing) return;
+    // The browser's isComposing flag is authoritative. If it reports no active
+    // composition but the local guard is still set, a compositionend was missed
+    // (e.g. focus left the field mid-composition). Clear the stale guard so
+    // normal typing resumes instead of being silently dropped.
+    if ((event.nativeEvent as InputEvent).isComposing) return;
+    if (emailComposingRef.current) emailComposingRef.current = false;
     updateEmailValue(event.target.value);
   };
 
@@ -696,10 +707,10 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
   };
 
   return (
-    <div className="modal-backdrop account-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
+    <div className={`modal-backdrop account-modal-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
       <section
         ref={dialogRef}
-        className="modal-card account-modal"
+        className={`modal-card account-modal${closing ? " closing" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-account-title"
@@ -716,13 +727,15 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
           </button>
         </div>
 
-        <div className="provider-orbit" aria-hidden="true">
-          <div className="provider-core"><Mail size={26} strokeWidth={1.7} /></div>
-          <span className="orbit-chip chip-a">G</span>
-          <span className="orbit-chip chip-b">M</span>
-          <span className="orbit-chip chip-c">Q</span>
-          <span className="orbit-chip chip-d">163</span>
-        </div>
+        {!(showGuide || manualOpen || providerCatalogOpen) && (
+          <div className="provider-orbit" aria-hidden="true">
+            <div className="provider-core"><Mail size={26} strokeWidth={1.7} /></div>
+            <span className="orbit-chip chip-a">G</span>
+            <span className="orbit-chip chip-b">M</span>
+            <span className="orbit-chip chip-c">Q</span>
+            <span className="orbit-chip chip-d">163</span>
+          </div>
+        )}
 
         <p id="add-account-description" className="modal-intro">{t("account.description")}</p>
 
@@ -745,23 +758,28 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
               </button>
             </div>
             <div className="provider-quick-grid">
-              {quickProviders.map((provider) => (
-                <button
-                  key={provider.id}
-                  className={`provider-choice${selectedProviderId === provider.id ? " selected" : ""}`}
-                  type="button"
-                  aria-pressed={selectedProviderId === provider.id}
-                  aria-label={t("account.provider.select_aria", { provider: providerDisplayName(provider, locale, t) })}
-                  onClick={() => selectProvider(provider.id)}
-                  disabled={busy || accountAdded}
-                >
-                  <span className="provider-choice-mark" aria-hidden="true">{providerMonogram(provider)}</span>
-                  <span className="provider-choice-copy">
-                    <strong>{providerDisplayName(provider, locale, t)}</strong>
-                    <small>{provider.domains[0]}</small>
-                  </span>
-                </button>
-              ))}
+              {quickProviders.map((provider) => {
+                const iconUrl = providerIconUrl(provider.id);
+                return (
+                  <button
+                    key={provider.id}
+                    className={`provider-choice${selectedProviderId === provider.id ? " selected" : ""}`}
+                    type="button"
+                    aria-pressed={selectedProviderId === provider.id}
+                    aria-label={t("account.provider.select_aria", { provider: providerDisplayName(provider, locale, t) })}
+                    onClick={() => selectProvider(provider.id)}
+                    disabled={busy || accountAdded}
+                  >
+                    <span className="provider-choice-mark" aria-hidden="true">
+                      {iconUrl ? <img className="provider-choice-icon" src={iconUrl} alt="" loading="lazy" /> : providerMonogram(provider)}
+                    </span>
+                    <span className="provider-choice-copy">
+                      <strong>{providerDisplayName(provider, locale, t)}</strong>
+                      <small>{provider.domains[0]}</small>
+                    </span>
+                  </button>
+                );
+              })}
               <button
                 className={`provider-choice provider-choice-custom${selectedProviderId === CUSTOM_IMAP_PROVIDER_ID ? " selected" : ""}`}
                 type="button"
@@ -818,7 +836,11 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                 onChange={updateEmail}
                 onFocus={() => setEmailFocused(true)}
                 onBlur={() => {
-                  if (!emailComposingRef.current) setEmailFocused(false);
+                  // Abandon any in-flight composition when focus leaves the
+                  // field. Some IMEs never deliver compositionend after a
+                  // blur, which would otherwise block all later typing.
+                  emailComposingRef.current = false;
+                  setEmailFocused(false);
                 }}
                 onCompositionStart={beginEmailComposition}
                 onCompositionEnd={endEmailComposition}
@@ -975,6 +997,13 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                 />
               </label>
               <small id="account-credential-help" className="account-field-help">{activeOnboarding?.credentialHint ?? t("account.credential.help")}</small>
+
+              {guideProvider?.helpUrl && (
+                <a className="account-link-button credential-help-link" href={guideProvider.helpUrl} target="_blank" rel="noreferrer">
+                  {guideOnboarding?.helpLabel ?? t("account.guide.open_official")}
+                  <ExternalLink size={13} />
+                </a>
+              )}
 
               <button className="account-link-button manual-config-toggle" type="button" onClick={openManualConfig} disabled={busy} aria-expanded={manualOpen}>
                 {manualOpen ? t("account.manual.collapse") : t("account.manual.open")}

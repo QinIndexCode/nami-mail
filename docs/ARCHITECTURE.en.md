@@ -1,6 +1,6 @@
 # Architecture and Trust Boundaries
 
-[简体中文](ARCHITECTURE.md) | [English](ARCHITECTURE.en.md)
+[简体中文](ARCHITECTURE.zh-CN.md) | [English](ARCHITECTURE.en.md)
 
 This guide is for contributors and maintainers. It describes Nami Mail's current local runtime structure, process boundaries, and principal trust assumptions. It is a code guide, not a replacement for [Privacy and Local Data](PRIVACY.en.md), the [Security Policy](../SECURITY.en.md), or the [Windows Release Guide](RELEASING.en.md).
 

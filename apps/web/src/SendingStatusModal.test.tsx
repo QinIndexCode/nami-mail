@@ -14,6 +14,7 @@ const account: Account = {
   status: "connected",
   lastError: null,
   lastSyncedAt: "2026-07-22T08:00:00.000Z",
+  signature: "",
   createdAt: "2026-07-20T08:00:00.000Z",
   folders: [],
 };
@@ -25,6 +26,7 @@ const submission: OutboundSubmission = {
   subject: "这是一封用于校验发送状态提示呈现的长主题",
   recipients: ["one@example.com", "two@example.com", "three@example.com", "four@example.com"],
   deliveryStatus: "unknown_delivery",
+  sendAt: null,
   errorCode: "timeout",
   errorMessage: "服务端是否接收邮件暂时无法确认。",
   postSubmitWarning: null,
@@ -46,6 +48,7 @@ function renderStatusModal(): string {
         onRefresh={async () => undefined}
         onSyncAccount={async () => undefined}
         onCreateNewMessage={() => undefined}
+        onCancelScheduled={async () => undefined}
       />
     </I18nProvider>,
   );
@@ -99,11 +102,41 @@ describe("sending status modal presentation", () => {
           onRefresh={async () => undefined}
           onSyncAccount={async () => undefined}
           onCreateNewMessage={() => undefined}
+          onCancelScheduled={async () => undefined}
         />
       </I18nProvider>,
     );
 
     expect(markup).toContain(zh("sending.notice.unknownDelivery"));
     expect(markup).not.toContain("socket hang up");
+  });
+
+  it("shows the scheduled send time and a cancel action only for pending scheduled sends", () => {
+    const scheduledSubmission = {
+      ...submission,
+      deliveryStatus: "pending" as const,
+      sendAt: "2026-07-22T12:00:00.000Z",
+      errorCode: null,
+      errorMessage: null,
+    };
+    const markup = renderToStaticMarkup(
+      <I18nProvider>
+        <SendingStatusModal
+          accounts={[account]}
+          submissions={[scheduledSubmission, { ...submission, id: "submission-plain", deliveryStatus: "pending" as const, sendAt: null, errorCode: null, errorMessage: null }]}
+          loading={false}
+          loadError={null}
+          onClose={() => undefined}
+          onRefresh={async () => undefined}
+          onSyncAccount={async () => undefined}
+          onCreateNewMessage={() => undefined}
+          onCancelScheduled={async () => undefined}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain("计划发送：");
+    expect(markup).toContain(zh("sending.modal.cancelScheduled"));
+    expect(markup.match(/sending-status-scheduled-time/g)).toHaveLength(1);
   });
 });

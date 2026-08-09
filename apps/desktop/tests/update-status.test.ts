@@ -51,6 +51,10 @@ test("preload accepts only the structured v2 update snapshot contract", () => {
     normalizeDesktopUpdateSnapshot({ ...snapshot, reason: "installResult", args: { installStage: "cleanup", cleanupComplete: true } }),
     { ...snapshot, reason: "installResult", args: { installStage: "cleanup", cleanupComplete: true } },
   );
+  assert.deepEqual(
+    normalizeDesktopUpdateSnapshot({ ...snapshot, phase: "unavailable", reason: "trustDisabledByBuild" }),
+    { ...snapshot, phase: "unavailable", reason: "trustDisabledByBuild" },
+  );
 
   for (const malformed of [
     { ...snapshot, schemaVersion: 1 },

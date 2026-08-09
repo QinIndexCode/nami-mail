@@ -1,6 +1,6 @@
 # Agent Conversations
 
-[Chinese](conversations.md) | [English](conversations.en.md)
+[Chinese](conversations.zh-CN.md) | [English](conversations.en.md)
 
 ## Data model
 

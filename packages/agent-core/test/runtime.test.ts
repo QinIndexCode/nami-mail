@@ -8,7 +8,7 @@ const caller = {
   callerId: "desktop_1",
   kind: "desktop-ui" as const,
   entryPoint: "desktop" as const,
-  accessLevel: "full-access" as const,
+  accessLevel: "send-confirmed" as const,
   scopes: ["read:messages", "send:mail"] as const,
   accountScope: { mode: "selected" as const, accountIds: ["account_1"] },
   interactive: true,
@@ -99,6 +99,58 @@ test("high-risk tools wait for an immutable desktop confirmation and audit inten
   assert.equal(completed.status, "completed");
   assert.equal(executions, 1);
   assert.deepEqual(audits, ["intent", "succeeded"]);
+});
+
+test("full-access executes high-risk sends immediately without any confirmation", async () => {
+  let executions = 0;
+  let confirmationRequests = 0;
+  const tool: AgentTool<{ accountId: string }, { delivered: boolean }> = {
+    descriptor: {
+      name: "mail.send",
+      title: "Send mail",
+      description: "Sends the prepared mail through the selected account.",
+      category: "mail",
+      executionMode: "high-risk",
+      requiredScopes: ["send:mail"],
+      accountAccess: "required",
+      confirmationPolicy: "required",
+      confirmationAction: "send-mail",
+      availableToExternal: true,
+    },
+    inputSchema: z.object({ accountId: z.string().min(1) }).strict(),
+    outputSchema: z.object({ delivered: z.boolean() }).strict(),
+    resolveAccountIds: (input) => [input.accountId],
+    execute: async () => {
+      executions += 1;
+      return { ok: true, value: { delivered: true } };
+    },
+  };
+  const runtime = createAgentRuntime({
+    tools: createToolRegistry([tool]),
+    permissions: createPermissionEngine(),
+    payloadHasher: { digest: async () => "a".repeat(64) },
+    ids: { nextAuditEventId: () => "audit_1", nextConfirmationId: () => "confirm_1" },
+    confirmations: {
+      create: async (request) => {
+        confirmationRequests += 1;
+        return request;
+      },
+      consumeApproval: async () => ({ approved: true }),
+    },
+    audit: { append: async () => undefined },
+  });
+  const autoCaller = { ...caller, accessLevel: "full-access" as const };
+
+  const result = await runtime.invokeTool({
+    requestId: "1a1fba7f-3e8d-4db5-a2f7-9f06d01cb2d9",
+    caller: autoCaller,
+    call: call("mail.send", { accountId: "account_1" }),
+  });
+
+  assert.equal(result.status, "completed");
+  if (result.status === "completed") assert.equal(result.result.status, "succeeded");
+  assert.equal(executions, 1);
+  assert.equal(confirmationRequests, 0);
 });
 
 test("cancelled high-risk invocations never create confirmations or execute tools", async () => {
@@ -264,4 +316,102 @@ test("a host-controlled execution scope powers account-implicit tools without wi
   assert.equal(denied.status, "completed");
   if (denied.status === "completed") assert.equal(denied.result.status, "denied");
   assert.deepEqual(observedAccountIds, ["account_1"]);
+});
+
+test("tool descriptor deadlines abort work and return a retryable timeout", async () => {
+  let abortObserved = false;
+  const tool: AgentTool<Record<string, never>, { count: number }> = {
+    descriptor: {
+      name: "mail.messages.timeout",
+      title: "Timeout test",
+      description: "Exercises the runtime tool deadline.",
+      category: "messages",
+      executionMode: "read",
+      requiredScopes: ["read:messages"],
+      accountAccess: "optional",
+      confirmationPolicy: "never",
+      availableToExternal: true,
+      timeoutMs: 1_000,
+    },
+    inputSchema: z.object({}).strict(),
+    outputSchema: z.object({ count: z.number().int().nonnegative() }).strict(),
+    execute: async (context) => {
+      await new Promise<void>((resolve) => {
+        context.signal?.addEventListener("abort", () => {
+          abortObserved = true;
+          resolve();
+        }, { once: true });
+      });
+      return { ok: true, value: { count: 1 } };
+    },
+  };
+  const runtime = createAgentRuntime({
+    tools: createToolRegistry([tool]),
+    permissions: createPermissionEngine(),
+  });
+
+  const result = await runtime.invokeTool({
+    requestId: "1a1fba7f-3e8d-4db5-a2f7-9f06d01cb2d9",
+    caller,
+    call: call("mail.messages.timeout", {}),
+    executionAccountIds: ["account_1"],
+  });
+
+  assert.equal(abortObserved, true);
+  assert.equal(result.status, "completed");
+  if (result.status === "completed") {
+    assert.equal(result.result.status, "failed");
+    assert.equal(result.result.error.code, "TOOL_TIMEOUT");
+    assert.equal(result.result.error.retryable, true);
+  }
+});
+
+test("caller cancellation aborts a deadline-bound tool without reporting a timeout", async () => {
+  let abortObserved = false;
+  const controller = new AbortController();
+  const tool: AgentTool<Record<string, never>, { count: number }> = {
+    descriptor: {
+      name: "mail.messages.cancellation",
+      title: "Cancellation test",
+      description: "Exercises caller cancellation during tool execution.",
+      category: "messages",
+      executionMode: "read",
+      requiredScopes: ["read:messages"],
+      accountAccess: "optional",
+      confirmationPolicy: "never",
+      availableToExternal: true,
+      timeoutMs: 10_000,
+    },
+    inputSchema: z.object({}).strict(),
+    outputSchema: z.object({ count: z.number().int().nonnegative() }).strict(),
+    execute: async (context) => {
+      await new Promise<void>((resolve) => {
+        context.signal?.addEventListener("abort", () => {
+          abortObserved = true;
+          resolve();
+        }, { once: true });
+      });
+      return { ok: true, value: { count: 1 } };
+    },
+  };
+  const runtime = createAgentRuntime({
+    tools: createToolRegistry([tool]),
+    permissions: createPermissionEngine(),
+  });
+  const invocation = runtime.invokeTool({
+    requestId: "1a1fba7f-3e8d-4db5-a2f7-9f06d01cb2d9",
+    caller,
+    call: call("mail.messages.cancellation", {}),
+    executionAccountIds: ["account_1"],
+    signal: controller.signal,
+  });
+  controller.abort();
+
+  const result = await invocation;
+  assert.equal(abortObserved, true);
+  assert.equal(result.status, "completed");
+  if (result.status === "completed") {
+    assert.equal(result.result.status, "cancelled");
+    assert.equal(result.result.error.code, "CANCELLED");
+  }
 });

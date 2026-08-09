@@ -1,6 +1,6 @@
 # RAG Troubleshooting
 
-[Chinese](troubleshooting.md) | [English](troubleshooting.en.md)
+[Chinese](troubleshooting.zh-CN.md) | [English](troubleshooting.en.md)
 
 ## A query returns no results
 

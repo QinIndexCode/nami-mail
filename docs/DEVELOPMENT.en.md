@@ -1,6 +1,6 @@
 # Development Guide
 
-[简体中文](DEVELOPMENT.md) | [English](DEVELOPMENT.en.md)
+[简体中文](DEVELOPMENT.zh-CN.md) | [English](DEVELOPMENT.en.md)
 
 This guide is for contributors who build, test, or modify Nami Mail locally. The project primarily targets Windows desktop while retaining a local web-development workflow.
 

@@ -8,17 +8,23 @@ import { deriveEncryptionKey } from "./crypto.js";
 import { friendlyMailError, imapClientForAccount, mailErrorCode, type AccountAccessTokenProvider } from "./mail.js";
 import {
   PENDING_MOVE_RECONCILIATION_ERROR,
+  messagePayloadById,
   moveActionBlockedError,
   messagePayloadForRow,
   protectedMessageColumns,
   type MessageStorageRow,
 } from "./message-storage.js";
+import { listEnabledFilterRules, matchesFilterRuleConditions } from "./filter-rules.js";
+import { autoCollectSender } from "./contacts.js";
+import { indexMessageFts } from "./message-search.js";
 import {
   confirmSubmissionsInSent,
   markSubmissionConfirmed,
   submissionForId,
 } from "./outbox.js";
 import type { AccountRecord } from "./types.js";
+import { getAppSettings } from "./settings.js";
+import { getAutoReplyEngine } from "./agent/auto-reply.js";
 
 const running = new Set<string>();
 const movingAccounts = new Set<string>();
@@ -42,6 +48,11 @@ function accountById(db: DatabaseHandle, id: string): AccountRecord | undefined 
   return db.prepare("SELECT * FROM accounts WHERE id = ?").get(id) as AccountRecord | undefined;
 }
 
+function autoReplyActiveForAccount(db: DatabaseHandle, accountId: string): boolean {
+  const autoReply = getAppSettings(db).autoReply;
+  return autoReply.enabled && autoReply.accountIds.includes(accountId);
+}
+
 function addressValues(address: AddressObject | AddressObject[] | undefined): Array<{ name: string; address: string }> {
   if (!address) return [];
   return (Array.isArray(address) ? address : [address]).flatMap((item) =>
@@ -59,6 +70,14 @@ function messageIdValues(value: string | string[] | undefined): string[] {
 
 function snippet(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, 220);
+}
+
+function headerValue(headers: { get(key: string): unknown } | undefined, key: string): string {
+  if (!headers) return "";
+  const value = headers.get(key);
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map((entry) => typeof entry === "string" ? entry : String(entry)).join(", ");
+  return "";
 }
 
 function messageKey(accountId: string, mailbox: string, uid: number): string {
@@ -254,7 +273,14 @@ export async function syncAccount(
   if (!account) throw new Error("Account not found.");
   const agentLease = agentEvents?.acquireLease(accountId);
   running.add(accountId);
-  let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
+let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
+  // New inbox messages from a successful pass are handed to the filter-rule
+  // automation only after the sync guard below is released.
+  let pendingRuleTargets: Array<{ id: string }> = [];
+  let pendingAutoReplyTargets: string[] = [];
+  // Gmail category labels are fetched for every folder only while this
+  // account is actively participating in the auto-reply feature.
+  const autoReplyActive = autoReplyActiveForAccount(db, accountId);
 
   try {
     client = await imapClientForAccount(account, masterKey, accessTokenProvider);
@@ -812,7 +838,7 @@ export async function syncAccount(
         for await (const message of client.fetch(`${start}:*`, {
           uid: true,
           flags: true,
-          labels: isAllMailFolder(folder),
+          labels: isAllMailFolder(folder) || autoReplyActive,
         })) {
           if (!message.uid) continue;
           const flagsJson = JSON.stringify([...(message.flags ?? [])]);
@@ -877,7 +903,7 @@ export async function syncAccount(
             internalDate: true,
             size: true,
             source: true,
-            labels: isAllMailFolder(folder),
+            labels: isAllMailFolder(folder) || autoReplyActive,
           },
           { uid: true },
         )) {
@@ -913,6 +939,13 @@ export async function syncAccount(
             textBody: text,
             htmlBody: html,
             attachments,
+            headers: {
+              autoSubmitted: headerValue(parsed?.headers, "auto-submitted"),
+              listUnsubscribe: headerValue(parsed?.headers, "list-unsubscribe"),
+              precedence: headerValue(parsed?.headers, "precedence"),
+              returnPath: headerValue(parsed?.headers, "return-path"),
+              labels: message.labels ? [...message.labels].sort() : [],
+            },
           });
           const remoteLookup = remoteIdLookup(masterKey, accountId, message.emailId);
           const allMailArchived = allMailArchivedValue(folder, message.labels);
@@ -934,6 +967,14 @@ export async function syncAccount(
               hasAttachments,
               size,
               createdAt: new Date().toISOString(),
+            });
+            // The search index mirrors the decrypted payload text so a later
+            // FTS query never needs to decrypt the whole candidate set.
+            indexMessageFts(db, id, {
+              subject,
+              fromName: from.name,
+              fromAddress: from.address,
+              textBody: text,
             });
             if (agentEvents && agentLease) {
               agentEvents.messageUpsertedWithinTransaction(agentLease, id, {
@@ -965,8 +1006,20 @@ export async function syncAccount(
             }
           })();
           synced += 1;
-          if (newUidSet.has(message.uid) && (folder.specialUse === "\\Inbox" || folder.path.toUpperCase() === "INBOX") && !flags.includes("\\Seen")) {
-            newInboxMessages.push({ id, accountId, subject, fromName: from.name, fromAddress: from.address });
+          if (newUidSet.has(message.uid)) {
+            // Senders of freshly arrived mail are seeded into the local
+            // address book. This must never break a sync pass: failures are
+            // logged and the message itself stays untouched.
+            if (from.address) {
+              try {
+                autoCollectSender(db, masterKey, from.address, from.name, [account.email]);
+              } catch (error) {
+                console.warn(`Sender auto-collect skipped for account ${accountId}:`, error);
+              }
+            }
+            if ((folder.specialUse === "\\Inbox" || folder.path.toUpperCase() === "INBOX") && !flags.includes("\\Seen")) {
+              newInboxMessages.push({ id, accountId, subject, fromName: from.name, fromAddress: from.address });
+            }
           }
         }
         if (sameUidValidity && !pendingMoveTouchesFolder) await reconcileRemoteDeletionBatch(folder, currentUidValidity);
@@ -1014,6 +1067,8 @@ export async function syncAccount(
     // The provider's Sent folder is the strongest confirmation available to
     // IMAP/SMTP accounts after an interrupted or merely SMTP-accepted send.
     confirmSubmissionsInSent(db, masterKey, accountId);
+    pendingRuleTargets = newInboxMessages;
+    pendingAutoReplyTargets = newInboxMessages.map((message) => message.id);
     return { synced, folders: folders.length, failedFolders, newInboxMessages };
   } catch (error) {
     // Do not retain raw provider/socket errors. They can include opaque server
@@ -1026,7 +1081,76 @@ export async function syncAccount(
   } finally {
     running.delete(accountId);
     if (client?.usable) await client.logout().catch(() => undefined);
+    if (pendingRuleTargets.length > 0) {
+      const targets = pendingRuleTargets;
+      pendingRuleTargets = [];
+      // Filter-rule automation must never break the sync result. Failures are
+      // logged and the affected messages remain visible for manual handling.
+      void applyFilterRulesToNewMessages(db, masterKey, accountId, targets, accessTokenProvider, agentEvents)
+        .catch((error) => {
+          console.warn(`Filter rule application failed for account ${accountId}:`, error);
+        });
+    }
+    if (pendingAutoReplyTargets.length > 0) {
+      const targets = pendingAutoReplyTargets;
+      pendingAutoReplyTargets = [];
+      // Auto-reply processing is equally non-blocking: confirmation prompts
+      // live in the engine and their expiry is guarded by its own timers.
+      getAutoReplyEngine()?.notifyInboxMessages(accountId, targets)
+        .catch((error) => {
+          console.warn(`Auto-reply pipeline failed for account ${accountId}:`, error);
+        });
+    }
   }
+}
+
+/**
+ * Applies enabled filter rules to newly arrived inbox messages after a sync
+ * pass has finished. Runs after the per-account sync guard is released so the
+ * reused flag/move operations can open their own IMAP session. Each message is
+ * handled by at most the first matching rule (in rule position order); a failed
+ * action stops that rule's remaining actions but never fails the sync itself.
+ */
+export async function applyFilterRulesToNewMessages(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+  accountId: string,
+  newMessages: Array<{ id: string }>,
+  accessTokenProvider?: AccountAccessTokenProvider,
+  agentEvents?: AgentMailEventSink,
+): Promise<{ matched: number; failed: number }> {
+  const rules = listEnabledFilterRules(db, accountId);
+  if (rules.length === 0 || newMessages.length === 0) return { matched: 0, failed: 0 };
+  let matched = 0;
+  let failed = 0;
+  for (const message of newMessages) {
+    const entry = messagePayloadById(db, masterKey, message.id);
+    if (!entry) continue;
+    const rule = rules.find((candidate) => matchesFilterRuleConditions(candidate.conditions, entry.payload));
+    if (!rule) continue;
+    try {
+      for (const action of rule.actions) {
+        switch (action.kind) {
+          case "mark_seen":
+            await updateMessageFlags(db, masterKey, message.id, { seen: true }, accessTokenProvider, agentEvents);
+            break;
+          case "add_flag":
+            await updateMessageFlags(db, masterKey, message.id, { flagged: true }, accessTokenProvider, agentEvents);
+            break;
+          case "archive":
+            await moveMessage(db, masterKey, message.id, "archive", accessTokenProvider, agentEvents);
+            break;
+          case "move_to_folder":
+            await moveMessageToFolder(db, masterKey, message.id, action.folderPath, accessTokenProvider, agentEvents);
+            break;
+        }
+      }
+      matched += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { matched, failed };
 }
 
 export type MessageFlagsPatch = {
@@ -1239,6 +1363,52 @@ function cachedDestinationCandidateUid(
     : null;
 }
 
+type MoveDestination = { path: string; special_use: string | null };
+
+export type MessageMoveResult = {
+  accountId: string;
+  destination: string;
+  refreshPending: boolean;
+  uid?: number;
+  uncertain?: boolean;
+  locationUnverified?: boolean;
+};
+
+/**
+ * Moves a message to an explicit folder path of its own account. Used by
+ * filter rules so "move to folder" can address any known folder, not only
+ * the archive/trash shortcuts.
+ */
+export async function moveMessageToFolder(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+  messageId: string,
+  folderPath: string,
+  accessTokenProvider?: AccountAccessTokenProvider,
+  agentEvents?: AgentMailEventSink,
+): Promise<MessageMoveResult> {
+  const message = db
+    .prepare("SELECT account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id = ?")
+    .get(messageId) as {
+      account_id: string;
+      mailbox: string;
+      uid: number;
+      flags_json: string;
+      remote_id_lookup: string | null;
+      pending_move_destination: string | null;
+      pending_move_state: string | null;
+    } | undefined;
+  if (!message) throw new Error("Message not found.");
+  const moveBlockedError = moveActionBlockedError(message);
+  if (moveBlockedError) throw new Error(moveBlockedError);
+  if (message.mailbox === folderPath) throw new Error("邮件已经在该文件夹中。");
+  const folder = db.prepare(`
+    SELECT path, special_use FROM folders WHERE account_id = ? AND path = ?
+  `).get(message.account_id, folderPath) as MoveDestination | undefined;
+  if (!folder) throw new Error("目标文件夹不存在或不可用。");
+  return moveMessageCore(db, masterKey, messageId, folder, accessTokenProvider, agentEvents);
+}
+
 export async function moveMessage(
   db: DatabaseHandle,
   masterKey: Buffer,
@@ -1246,7 +1416,48 @@ export async function moveMessage(
   target: MessageMoveTarget,
   accessTokenProvider?: AccountAccessTokenProvider,
   agentEvents?: AgentMailEventSink,
-): Promise<{ accountId: string; destination: string; refreshPending: boolean; uid?: number; uncertain?: boolean; locationUnverified?: boolean }> {
+): Promise<MessageMoveResult> {
+  const message = db
+    .prepare("SELECT account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id = ?")
+    .get(messageId) as {
+      account_id: string;
+      mailbox: string;
+      uid: number;
+      flags_json: string;
+      remote_id_lookup: string | null;
+      pending_move_destination: string | null;
+      pending_move_state: string | null;
+    } | undefined;
+  if (!message) throw new Error("Message not found.");
+  // A move already being reconciled must block before the target folder is
+  // resolved: the provider folder may not exist (e.g. no Trash on the account)
+  // and must not shadow the reconciliation error.
+  const moveBlockedError = moveActionBlockedError(message);
+  if (moveBlockedError) throw new Error(moveBlockedError);
+  const targetDefinition = moveTargets[target];
+  const placeholders = targetDefinition.specialUses.map(() => "?").join(", ");
+  const destination = db.prepare(`
+    SELECT path, special_use FROM folders
+    WHERE account_id = ? AND special_use IN (${placeholders})
+    ORDER BY CASE special_use
+      WHEN '\\Archive' THEN 0
+      WHEN '\\Trash' THEN 0
+      ELSE 1
+    END
+    LIMIT 1
+  `).get(message.account_id, ...targetDefinition.specialUses) as MoveDestination | undefined;
+  if (!destination || destination.path === message.mailbox) throw new Error(targetDefinition.unavailableMessage);
+  return moveMessageCore(db, masterKey, messageId, destination, accessTokenProvider, agentEvents);
+}
+
+async function moveMessageCore(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+  messageId: string,
+  destination: MoveDestination,
+  accessTokenProvider?: AccountAccessTokenProvider,
+  agentEvents?: AgentMailEventSink,
+): Promise<MessageMoveResult> {
   const message = db
     .prepare("SELECT account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id = ?")
     .get(messageId) as {
@@ -1267,20 +1478,6 @@ export async function moveMessage(
   if (running.has(message.account_id) || movingAccounts.has(message.account_id)) {
     throw new Error(PENDING_MOVE_RECONCILIATION_ERROR);
   }
-
-  const targetDefinition = moveTargets[target];
-  const placeholders = targetDefinition.specialUses.map(() => "?").join(", ");
-  const destination = db.prepare(`
-    SELECT path, special_use FROM folders
-    WHERE account_id = ? AND special_use IN (${placeholders})
-    ORDER BY CASE special_use
-      WHEN '\\Archive' THEN 0
-      WHEN '\\Trash' THEN 0
-      ELSE 1
-    END
-    LIMIT 1
-  `).get(message.account_id, ...targetDefinition.specialUses) as { path: string; special_use: string | null } | undefined;
-  if (!destination || destination.path === message.mailbox) throw new Error(targetDefinition.unavailableMessage);
 
   const intentCandidateUid = cachedDestinationCandidateUid(
     db,

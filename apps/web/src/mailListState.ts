@@ -5,7 +5,7 @@ export type SidebarBadgeCounts = {
   unread: number;
 };
 
-export type MessageListView = "inbox" | "unread" | "starred" | "archived";
+export type MessageListView = "inbox" | "unread" | "starred" | "archived" | "snoozed";
 
 export type MessageListQuery = {
   accountId: string;
@@ -100,6 +100,11 @@ export function isArchivedMessage(message: Pick<Message, "accountId" | "mailbox"
     && !account?.folders.some((item) => item.specialUse === "\\Archive");
 }
 
+/** A message is in the Snoozed view only while its local snooze has not fired yet. */
+export function isSnoozedMessage(message: Pick<Message, "snoozedUntil">, now = Date.now()): boolean {
+  return Boolean(message.snoozedUntil && new Date(message.snoozedUntil).getTime() > now);
+}
+
 /** Mirrors the server's mailbox query semantics for locally retained move snapshots. */
 export function matchesServerMessageQuery(
   message: Message,
@@ -114,7 +119,12 @@ export function matchesServerMessageQuery(
     if (!isArchivedMessage(message, accounts)) return false;
   } else if (query.messageView === "starred") {
     if (!message.flagged) return false;
+  } else if (query.messageView === "snoozed") {
+    if (!isSnoozedMessage(message)) return false;
   } else if (!isInboxMessage(message, accounts)) {
+    return false;
+  } else if (query.messageView === "inbox" && isSnoozedMessage(message)) {
+    // Mirror the server: active snoozes are hidden from the unified inbox.
     return false;
   }
   if (query.messageView === "unread" && message.seen && !recentlyReadIds?.has(message.id)) return false;

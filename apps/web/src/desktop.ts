@@ -36,6 +36,7 @@ const updateReasons = [
   "platformUnsupported",
   "sourceUnconfigured",
   "trustUnavailable",
+  "trustDisabledByBuild",
   "scheduled",
   "checking",
   "upToDate",
@@ -222,9 +223,10 @@ export function normalizeDesktopAgentConfirmationResult(value: unknown): Desktop
 }
 
 export type DesktopBridge = {
-  localApiRequestHeaders: () => Promise<Record<string, string>>;
   notify: (payload: NativeNotification) => Promise<{ shown: boolean }>;
   copyVerificationCode: (code: string) => Promise<{ copied: boolean }>;
+  showItemInFolder?: (path: string) => Promise<void>;
+  quit?: () => void;
   onAgentConfirmationResult?: (listener: (result: DesktopAgentConfirmationResult) => void) => () => void;
   getUpdateStatus: () => Promise<DesktopUpdateSnapshot | undefined>;
   checkForUpdates: () => Promise<DesktopUpdateSnapshot | undefined>;

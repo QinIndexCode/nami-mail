@@ -11,9 +11,10 @@ export const demoAccounts: Account[] = [
     status: "connected",
     lastError: null,
     lastSyncedAt: new Date().toISOString(),
+    signature: "——\n林晓\nNami Studio · 设计师",
     createdAt: new Date().toISOString(),
     folders: [
-      { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 3, unseen: 2 },
+      { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 4, unseen: 3 },
       { path: "Archive", name: "归档", specialUse: "\\Archive", total: 0, unseen: 0 },
       { path: "Sent Messages", name: "已发送", specialUse: "\\Sent", total: 0, unseen: 0 },
       { path: "Drafts", name: "草稿", specialUse: "\\Drafts", total: 0, unseen: 0 },
@@ -27,9 +28,10 @@ export const demoAccounts: Account[] = [
     status: "connected",
     lastError: null,
     lastSyncedAt: new Date(Date.now() - 62_000).toISOString(),
+    signature: "",
     createdAt: new Date().toISOString(),
     folders: [
-      { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 2, unseen: 0 },
+      { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 3, unseen: 0 },
       { path: "[Gmail]/All Mail", name: "所有邮件", specialUse: "\\All", total: 0, unseen: 0 },
     ],
   },
@@ -44,6 +46,7 @@ export const demoSubmissions: OutboundSubmission[] = [
     subject: "合作提案最终确认",
     recipients: ["reviewer@example.com", "ops@example.test", "legal@example.test", "archive@example.com"],
     deliveryStatus: "unknown_delivery",
+    sendAt: null,
     errorCode: "connection_failed",
     errorMessage: "发送连接在等待最终响应时中断，服务端是否接受邮件暂时无法确认。",
     postSubmitWarning: null,
@@ -59,6 +62,7 @@ export const demoSubmissions: OutboundSubmission[] = [
     subject: "周末行程与预订信息",
     recipients: ["friend@example.com"],
     deliveryStatus: "submitting",
+    sendAt: null,
     errorCode: null,
     errorMessage: null,
     postSubmitWarning: null,
@@ -74,6 +78,7 @@ export const demoSubmissions: OutboundSubmission[] = [
     subject: "照片下载链接",
     recipients: ["studio@example.com", "editor@example.test"],
     deliveryStatus: "confirmed",
+    sendAt: null,
     errorCode: null,
     errorMessage: null,
     postSubmitWarning: null,
@@ -162,6 +167,9 @@ export const demoMessages: Message[] = [
     from: { name: "Noah", address: "noah@atelier.example" },
     to: [{ name: "Studio", address: "studio@gmail.com" }],
     cc: [],
+    messageId: "<launch-reply@atelier.example>",
+    inReplyTo: "<launch-checklist@atelier.example>",
+    references: ["<launch-checklist@atelier.example>"],
     sentAt: new Date(now - 24 * 60 * 60_000).toISOString(),
     snippet: "Everything on my side is signed off. I left one small note on the mobile transition.",
     textBody: "Everything on my side is signed off. I left one small note on the mobile transition.\n\nNo rush — tomorrow is perfect.",
@@ -195,6 +203,52 @@ export const demoMessages: Message[] = [
     attachments: [{ partId: "2", filename: "weekend-photos.zip", contentType: "application/zip", size: 8842, related: false, disposition: "attachment" }],
     size: 8842,
   },
+  {
+    id: "m6",
+    accountId: "work",
+    accountEmail: "studio@gmail.com",
+    providerName: "Gmail",
+    mailbox: "INBOX",
+    uid: 204,
+    subject: "launch checklist",
+    from: { name: "Mira Studio", address: "notes@mira.studio" },
+    to: [{ name: "Studio", address: "studio@gmail.com" }],
+    cc: [],
+    messageId: "<launch-checklist@atelier.example>",
+    sentAt: new Date(now - 30 * 60 * 60_000).toISOString(),
+    snippet: "Final checklist before we ship on Friday. Design sign-off, copy pass, and the mobile transition note.",
+    textBody: "Final checklist before we ship on Friday:\n\n- Design sign-off\n- Copy pass\n- Mobile transition note\n\nPlease confirm each item today.",
+    htmlBody: "",
+    flags: ["\\Seen"],
+    seen: true,
+    flagged: false,
+    hasAttachments: false,
+    attachments: [],
+    size: 3240,
+  },
+  {
+    id: "m7",
+    accountId: "personal",
+    accountEmail: "hello@icloud.com",
+    providerName: "iCloud Mail",
+    mailbox: "INBOX",
+    uid: 104,
+    subject: "【North Bank】登录验证码",
+    from: { name: "North Bank", address: "security@northbank.example" },
+    to: [{ name: "You", address: "hello@icloud.com" }],
+    cc: [],
+    messageId: "<demo-otp-91d0f7a2@northbank.example>",
+    sentAt: new Date(now - 5 * 60_000).toISOString(),
+    snippet: "你的 North Bank 账户登录验证码：483926，5 分钟内有效。",
+    textBody: "你的 North Bank 账户登录验证码：483926\n\n该验证码 5 分钟内有效，请勿转发给任何人。如果你没有发起登录，可以忽略这封邮件。",
+    htmlBody: "",
+    flags: [],
+    seen: false,
+    flagged: false,
+    hasAttachments: false,
+    attachments: [],
+    size: 1988,
+  },
 ];
 
 const demoTranslatedBodies: Record<string, { detectedLanguage: string; zh: string; en: string }> = {
@@ -223,6 +277,11 @@ const demoTranslatedBodies: Record<string, { detectedLanguage: string; zh: strin
     zh: "上周拍的照片我挑了二十张，原片和调色版本都放在附件里。\n\n喜欢第三组的光线。",
     en: "I sorted the photos from last week and picked twenty. The originals and color-graded versions are in the attachment.\n\nI like the light in the third set.",
   },
+  m7: {
+    detectedLanguage: "zh",
+    zh: "你的 North Bank 账户登录验证码：483926\n\n该验证码 5 分钟内有效，请勿转发给任何人。如果你没有发起登录，可以忽略这封邮件。",
+    en: "Your North Bank sign-in code: 483926\n\nThis code expires in 5 minutes. Never forward it to anyone. If you did not attempt to sign in, you can ignore this message.",
+  },
 };
 
 /** Returns deterministic demo copy so demo mode never submits mail content to a network service. */
@@ -238,4 +297,4 @@ export function demoMessageTranslation(message: Message, targetLocale: string): 
   };
 }
 
-export const demoStats: Stats = { accounts: 2, messages: 5, unread: 2 };
+export const demoStats: Stats = { accounts: 2, messages: 7, unread: 3 };

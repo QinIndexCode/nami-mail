@@ -17,6 +17,7 @@ const baseSubmission: OutboundSubmission = {
   accountId: "account-1",
   messageId: "<4d36290a-1af2-40d3-a0de-41b4218dbe1c@example.com>",
   deliveryStatus: "unknown_delivery",
+  sendAt: null,
   errorCode: "timeout",
   errorMessage: "连接超时。",
   postSubmitWarning: null,

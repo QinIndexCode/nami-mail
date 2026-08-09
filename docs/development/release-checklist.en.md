@@ -1,6 +1,6 @@
 # Agent/RAG Release Checklist
 
-[Chinese](release-checklist.md) | [English](release-checklist.en.md)
+[Chinese](release-checklist.zh-CN.md) | [English](release-checklist.en.md)
 
 This checklist is a release gate, not a future-work wish list. Do not publish an installer, GitHub Release, or update manifest claiming Agent/RAG/CLI/MCP while any blocker remains.
 
@@ -15,7 +15,9 @@ This checklist is a release gate, not a future-work wish list. Do not publish an
 
 - [ ] Windows production Broker uses a real current-user SID-DACL exclusive named pipe, verified in an installed build.
 - [ ] Missing adapter, failed pairing/signature/replay, and update drain fail closed; no TCP/HTTP/SQLite downgrade path exists.
-- [ ] CLI/MCP v1 is read-only and cannot write/send through `--yes`, arguments, or model output.
+- [ ] The three CLI/MCP permission levels read-only/send-confirmed/full-access take effect; the host clamps external levels to the configured tier and a paired client cannot raise its own level.
+- [ ] `--yes`, CLI/MCP arguments, or model tool calls cannot bypass confirmation or elevate; full-access shows an explicit warning before enabling.
+- [ ] External write tools request a visible desktop confirmation for each operation on send-confirmed and run automatically on full-access.
 - [ ] GUI high-risk confirmation is immutable, one-time, visible, and durably audited; account-generation change invalidates it.
 - [ ] Cloud mail-content egress is off by default; consent, provider configuration, and credential storage are manually validated.
 

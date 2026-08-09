@@ -1,8 +1,8 @@
 # Agent Security
 
-[Chinese](security.md) | [English](security.en.md)
+[Chinese](security.zh-CN.md) | [English](security.en.md)
 
-> **Current-build status: no external Broker.** The current Windows build does not ship a verifiable native SID-DACL named-pipe adapter, so there is no configurable or executable CLI, MCP, pairing flow, or headless AgentHost. The following material defines security boundaries that a future implementation must satisfy; the current build fails closed rather than degrading. Experimental local NLLB translation remains separate, explicit, and opt-in.
+> **Current-build status: enforced.** The 0.3.0 build ships the `namimail` CLI, MCP stdio adapter, Broker, pairing records, and the external AgentHost path behind a paired current-user SID-DACL named pipe. The security boundaries below are enforced by the shipped build; violating external entry points fail closed rather than degrading. Experimental local NLLB translation remains separate, explicit, and opt-in.
 
 ## Threat model
 
@@ -11,7 +11,7 @@ Mail bodies, HTML, attachment names, citations, provider output, CLI arguments, 
 ## Local trust boundary
 
 - Production SQLite and the DPAPI-unwrapped master key may exist only in a released Electron `AgentHost`.
-- Once the interface ships, CLI/MCP must use a paired current-user SID-DACL named pipe; Broker must bind host/boot identity, monotonic counters, signed proof, and replay checks.
+- CLI/MCP use a paired current-user SID-DACL named pipe; Broker binds host/boot identity, monotonic counters, signed proof, and replay checks.
 - When a secure pipe adapter is absent, service is refused. A default Node named pipe, loopback HTTP, or browser token is not an equivalent substitute.
 - Single-instance ownership and update drain prevent a second host or stale process from sharing database/key ownership.
 

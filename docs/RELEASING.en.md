@@ -1,6 +1,6 @@
 # Windows Release Guide
 
-[简体中文](RELEASING.md) | [English](RELEASING.en.md)
+[简体中文](RELEASING.zh-CN.md) | [English](RELEASING.en.md)
 
 This guide is for maintainers. It describes Nami Mail's Windows installer, GitHub Release, and ZIP automatic-update flow. It describes only behavior that is implemented in code. A local build, unit tests, or a draft Release cannot replace a real installation test from an earlier version to a newer version.
 
@@ -49,7 +49,7 @@ GitHub Actions provides `GITHUB_TOKEN` temporarily to the release job. Do not cr
 
 ## Local Preflight
 
-Update the [changelog](../CHANGELOG.md) first and verify that user-visible copy, licensing, and the version number are correct. Run checks relevant to the release, then the complete baseline:
+Update the [changelog](../CHANGELOG.zh-CN.md) first and verify that user-visible copy, licensing, and the version number are correct. Run checks relevant to the release, then the complete baseline:
 
 ```powershell
 npm.cmd ci
@@ -138,4 +138,4 @@ Automatic updates count as verified only with a real public Release, an installe
 4. Choose update and complete the download. Confirm the cached ZIP size and SHA-512 are verified. Choose restart and update, then confirm the installer finishes, the old process exits, the new version starts, and accounts and local settings remain.
 5. After a normal update, confirm the ZIP and temporary extraction directory under `updates/<version>/` are cleaned. If Windows file locks leave residue, confirm startup retries only that version directory and shows user-visible state instead of deleting other versions or arbitrary paths. Retain reviewable evidence separately for a network interruption, TLS failure, 404/missing asset, tampered manifest or ZIP, signing failure, sync that did not stop safely, and duplicate launch.
 
-Development mode, an ordinary local installer, and an installed build with no GitHub update configuration or trust root must show updates as unavailable. They must not be recorded as a verified update channel. After release, record verified versions and known limitations in the [README](../README.en.md), [changelog](../CHANGELOG.md), and Release Notes.
+Development mode, an ordinary local installer, and an installed build with no GitHub update configuration or trust root must show updates as unavailable. They must not be recorded as a verified update channel. After release, record verified versions and known limitations in the [README](../README.en.md), [changelog](../CHANGELOG.zh-CN.md), and Release Notes.

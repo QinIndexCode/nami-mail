@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentScopeFor, currentThreadMessageIds, sameAgentScope } from "./agentContext";
+import { agentScopeFor, sameAgentScope } from "./agentContext";
 import type { Account, Message } from "./types";
 
 const account: Account = {
@@ -10,11 +10,12 @@ const account: Account = {
   status: "connected",
   lastError: null,
   lastSyncedAt: null,
+  signature: "",
   createdAt: "2026-07-27T00:00:00.000Z",
   folders: [],
 };
 
-function message(id: string, messageId: string, references: string[] = [], inReplyTo?: string): Message {
+function message(id: string): Message {
   return {
     id,
     accountId: account.id,
@@ -26,9 +27,7 @@ function message(id: string, messageId: string, references: string[] = [], inRep
     from: { name: "Sender", address: "sender@example.test" },
     to: [],
     cc: [],
-    messageId,
-    ...(inReplyTo ? { inReplyTo } : {}),
-    references,
+    messageId: `<${id}@example.test>`,
     sentAt: "2026-07-27T00:00:00.000Z",
     snippet: "",
     textBody: "",
@@ -43,25 +42,30 @@ function message(id: string, messageId: string, references: string[] = [], inRep
 }
 
 describe("Agent mail context", () => {
-  it("builds a bounded, same-account thread context from loaded mail", () => {
-    const root = message("root", "<root@example.test>");
-    const reply = message("reply", "<reply@example.test>", ["<root@example.test>"], "<root@example.test>");
-    const unrelated = { ...message("other", "<other@example.test>"), accountId: "account-2" };
+  it("builds a bounded message scope from the current message", () => {
+    const current = message("current");
 
-    expect(currentThreadMessageIds(reply, [root, reply, unrelated])).toEqual(["reply", "root"]);
-    expect(agentScopeFor("current_thread", reply, [root, reply, unrelated], [account])).toEqual({
-      mode: "current_thread",
+    expect(agentScopeFor("current_message", current, [account])).toEqual({
+      mode: "current_message",
       accountIds: [account.id],
-      messageIds: ["reply", "root"],
+      messageIds: ["current"],
+    });
+  });
+
+  it("falls back to all accounts without a selected message", () => {
+    expect(agentScopeFor("all_accounts", undefined, [account])).toEqual({
+      mode: "all_accounts",
+      accountIds: [account.id],
+      messageIds: [],
     });
   });
 
   it("keeps scopes exact so a changed context starts a separate conversation", () => {
-    const current = message("current", "<current@example.test>");
-    const messageScope = agentScopeFor("current_message", current, [current], [account]);
-    const threadScope = agentScopeFor("current_thread", current, [current], [account]);
+    const current = message("current");
+    const messageScope = agentScopeFor("current_message", current, [account]);
+    const allScope = agentScopeFor("all_accounts", undefined, [account]);
 
     expect(sameAgentScope(messageScope, { ...messageScope })).toBe(true);
-    expect(sameAgentScope(messageScope, threadScope)).toBe(false);
+    expect(sameAgentScope(messageScope, allScope)).toBe(false);
   });
 });

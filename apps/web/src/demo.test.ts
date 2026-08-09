@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { demoAccounts, demoMessageTranslation, demoMessages, demoStats } from "./demo";
+import { findVerificationCodes } from "./verificationCode";
 import { applyMessageMove, isArchivedMessage, isInboxMessage } from "./mailListState";
 
 describe("demo mailbox data", () => {
@@ -51,5 +52,12 @@ describe("demo mailbox data", () => {
       detectedLanguage: "en",
       translatedText: expect.stringContaining("quieter navigation direction"),
     });
+  });
+
+  it("includes a demo message whose sign-in code is detected as a verification code", () => {
+    const message = demoMessages.find((item) => item.id === "m7");
+    expect(message).toBeDefined();
+    const codes = findVerificationCodes({ subject: message!.subject, body: message!.textBody });
+    expect(codes.some((candidate) => candidate.code === "483926")).toBe(true);
   });
 });

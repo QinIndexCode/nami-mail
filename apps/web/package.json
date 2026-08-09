@@ -1,6 +1,6 @@
 {
   "name": "@nami/web",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,9 +10,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@floating-ui/dom": "^1.8.0",
     "@nami/agent-contracts": "file:../../packages/agent-contracts",
     "dompurify": "^3.3.1",
+    "jszip": "^3.10.1",
     "lucide-react": "^1.24.0",
+    "mammoth": "^1.12.0",
+    "pdfjs-dist": "^6.2.108",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "10.1.0",

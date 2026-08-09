@@ -1,35 +1,29 @@
-# 文档导航
+# 文档导航 / Documentation
 
-[简体中文](README.md) | [English](README.en.md)
+<p align="center">
+  <a href="README.en.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-Nami Mail 当前发布 Windows x64 桌面版。本页按任务整理公开文档；界面语言包和文档翻译的维护规则见[本地化说明](LOCALIZATION.md)。
+本页是文档目录的导航入口，不承载完整内容。请选择语言版本索引：
+This page is the navigation entry for the documentation tree. Choose the index in your language:
 
-> **Agent 接口状态：当前不可执行。** 此构建未随附可验证的 Windows SID-DACL 命名管道原生适配器，因此不提供外部 AgentHost、Broker、`namimail` 命令、PATH shim、客户端配对界面或 MCP stdio 启动器。CLI、MCP 和 Agent 文档中的协议、Schema 与流程是未来发布的安全契约，不能在当前版本配置或运行。实验性的本地 NLLB-200 翻译保持独立，仍仅可在界面中主动、可选使用。
+| 语言 / Language | 文档索引 / Docs index |
+| --- | --- |
+| English | [README.en.md](README.en.md) |
+| 简体中文 | [README.zh-CN.md](README.zh-CN.md) |
 
-## 使用 Nami Mail
+## 文档结构 / Structure
 
-- [Windows 安装与更新指南](INSTALLING.md)：从可信来源下载、安装、更新、卸载和 SmartScreen 处理。
-- [邮箱接入指南](EMAIL-PROVIDERS.md)：OAuth、应用专用密码、手动 IMAP/SMTP 与连接排障。
-- [邮件正文翻译](TRANSLATION.md)：可选 LibreTranslate 兼容服务的配置、主动发送边界和隐私注意事项。
-- [NamiMail Agent](agent/architecture.md)：本地优先的 Agent 设计、当前不可用边界与未来安全契约。
-- [邮件 RAG](rag/architecture.md)：邮件入库、清洗、检索、删除同步与一致性说明。
-- [CLI](cli/README.md)：未来的脚本和本地 Agent 只读契约；当前构建不可执行。
-- [MCP Server](mcp/README.md)：未来的本地 MCP stdio 契约；当前构建不可配置或启动。
-- [隐私与本地数据说明](PRIVACY.md)：本地数据、加密边界和第三方连接。
-- [支持指南](../SUPPORT.md)：可公开提交的问题、脱敏要求和支持边界。
-- [安全策略](../SECURITY.md)：私下报告安全问题的唯一公开入口。
-- [Release Notes](releases/README.md)：面向用户的版本说明和已知限制。
+文档按主题组织，每个主题维护中文（`.zh-CN.md`）与英文（`.en.md`）两种版本。
+Documentation is organized by topic; each topic maintains a Chinese version (`.zh-CN.md`) and an English version (`.en.md`).
 
-## 参与开发
+| 目录 / Directory | 内容 / Contents |
+| --- | --- |
+| [cli/](cli/README.en.md) | `namimail` CLI 命令、参数、输出格式与退出码 / commands, parameters, output schema, exit codes |
+| [mcp/](mcp/README.en.md) | 外置 MCP stdio 服务接入、工具、安全边界 / external MCP stdio integration, tools, security |
+| [agent/](agent/architecture.en.md) | 邮件助理：使用、模型提供商、外部 MCP 服务器、架构 / Agent usage, providers, MCP servers, architecture |
+| [rag/](rag/architecture.en.md) | 邮件 RAG 入库、清洗、检索与删除同步 / mail RAG ingestion, retrieval, deletion sync |
+| [releases/](releases/README.en.md) | 版本发布说明 / release notes |
 
-- [贡献指南](../CONTRIBUTING.md)：本地开发、测试、Pull Request 和审查要求。
-- [社区行为准则](../CODE_OF_CONDUCT.md)：协作和报告行为问题的规则。
-- [开发说明](DEVELOPMENT.md)：运行模式、目录和验证基线。
-- [架构与信任边界](ARCHITECTURE.md)：进程、数据和更新边界。
-- [Windows 发布指南](RELEASING.md)：维护者的签名、Release 和真实更新验证步骤。
-- [Agent 开发实施计划](development/implementation-plan.md)：模块职责、分期、验收与回滚边界。
-
-## 语言与版本
-
-- [本地化说明](LOCALIZATION.md)：新增界面语言 JSON 包和文档翻译的规则。
-- [变更日志](../CHANGELOG.md)：中文权威版本历史，以及同步维护的[英文译文](../CHANGELOG.en.md)。
+> 完整文档索引与开发说明：语言版本索引中包含全部文档链接。
+> For the full list of documents and the contribution index, use the language versions above.

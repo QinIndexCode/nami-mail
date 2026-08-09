@@ -6,10 +6,14 @@ export const agentPermissionScopes = [
   "read:folders",
   "read:messages",
   "read:attachments",
+  "read:calendar",
+  "write:calendar",
   "read:rag",
   "write:drafts",
   "write:mail",
   "send:mail",
+  "manage:accounts",
+  "manage:memory",
   "manage:conversations",
   "manage:providers",
   "manage:rag",
@@ -19,7 +23,7 @@ export const agentPermissionScopes = [
 ] as const;
 
 export const agentPermissionScopeSchema = z.enum(agentPermissionScopes);
-export const agentAccessLevels = ["read-only", "draft-only", "mail-write", "send-confirmed", "full-access"] as const;
+export const agentAccessLevels = ["read-only", "send-confirmed", "full-access"] as const;
 export const agentAccessLevelSchema = z.enum(agentAccessLevels);
 export const callerKinds = ["desktop-ui", "cli", "mcp", "service", "test"] as const;
 export const callerKindSchema = z.enum(callerKinds);
@@ -52,6 +56,8 @@ export const callerContextSchema = z.object({
   canRequestConfirmation: z.boolean(),
   sessionId: agentIdentifierSchema.optional(),
   displayName: z.string().trim().min(1).max(256).optional(),
+  // Locale used to render user-facing confirmation previews and tool output.
+  locale: z.string().min(1).max(64).optional(),
 }).strict().superRefine((caller, context) => {
   if (caller.canRequestConfirmation && !caller.interactive) {
     context.addIssue({

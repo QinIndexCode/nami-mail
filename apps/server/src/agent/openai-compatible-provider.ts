@@ -2,6 +2,9 @@ import {
   createAgentError,
   type AgentError,
   type AgentToolDescriptor,
+  type EmbeddingProvider,
+  type EmbeddingRequest,
+  type EmbeddingResponse,
   type LlmProvider,
   type ProviderCapabilities,
   type ProviderChatRequest,
@@ -12,6 +15,7 @@ import {
   type ToolCall,
 } from "@nami/agent-contracts";
 import { isIP } from "node:net";
+import { detectVendorAdapter, type VendorAdapter } from "./vendor-adapters.js";
 
 const maximumSseLineBytes = 512 * 1024;
 const maximumToolArgumentsBytes = 200 * 1024;
@@ -137,15 +141,22 @@ function statusError(status: number): AgentError {
   return createAgentError({ code: "PROVIDER_ERROR", message: "The provider rejected this request.", retryable: false });
 }
 
+/** Detects an already-mapped agent error object (not an Error subclass). */
+function isAgentErrorShape(value: unknown): value is AgentError {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  return typeof entry.code === "string" && typeof entry.message === "string" && typeof entry.retryable === "boolean";
+}
+
 function toolDefinitions(tools: readonly AgentToolDescriptor[]): unknown[] {
   return tools.map((tool) => ({
     type: "function",
     function: {
       name: tool.name,
       description: tool.description,
-      // Tool schemas are validated again by the host registry. This permissive
-      // transport schema prevents an adapter from inventing a second contract.
-      parameters: { type: "object", additionalProperties: true },
+      // Send the actual JSON schema when available so the LLM knows the exact
+      // parameter shape. Fall back to a permissive schema for older callers.
+      parameters: tool.parametersSchema ?? { type: "object", additionalProperties: true },
     },
   }));
 }
@@ -163,6 +174,9 @@ function providerMessages(request: ProviderChatRequest): unknown[] {
       return {
         role: "assistant",
         content: message.content,
+        // MiMo thinking mode: reasoning_content must be retained across turns
+        // for accurate multi-turn tool calling (per model documentation).
+        ...(message.reasoningContent ? { reasoning_content: message.reasoningContent } : {}),
         tool_calls: message.toolCalls.map((call) => ({
           id: call.id,
           type: "function",
@@ -171,6 +185,13 @@ function providerMessages(request: ProviderChatRequest): unknown[] {
             arguments: JSON.stringify(call.input),
           },
         })),
+      };
+    }
+    if (message.role === "assistant" && message.reasoningContent) {
+      return {
+        role: "assistant",
+        content: message.content,
+        ...(message.reasoningContent ? { reasoning_content: message.reasoningContent } : {}),
       };
     }
     return {
@@ -248,11 +269,196 @@ function linesFrom(buffer: string, final: boolean): { lines: string[]; remaining
 }
 
 /**
+ * Detects and extracts tool calls that some models (e.g. Xiaomi MiMo) emit as
+ * inline text rather than through the OpenAI tool_calls field. Supports two
+ * common inline formats:
+ *
+ *   1. XML-style:  <tool_call><function=NAME><parameter=JSON></parameter></function></tool_call>
+ *   2. JSON-style: {"action":"NAME","action_input":{...}}
+ *
+ * The extractor buffers incoming text deltas so that tags split across stream
+ * chunks are handled correctly. Non-tool-call text is passed through unchanged.
+ */
+class InlineToolCallExtractor {
+  private buffer = "";
+  // Complete tool-call blocks removed from the text buffer while draining.
+  // extractToolCalls() parses these instead of re-scanning the text buffer,
+  // which no longer contains the blocks after drain() has emitted them.
+  private extractedBlocks: string[] = [];
+  private static readonly OPEN_TAG = "<tool_call>";
+  private static readonly CLOSE_TAG = "</tool_call>";
+  // Keep enough tail to cover split tags and JSON prefixes.
+  private static readonly SAFE_TAIL = 24;
+
+  /** Returns text that is safe to emit now and keeps potential tag fragments buffered. */
+  push(chunk: string): string {
+    this.buffer += chunk;
+    return this.drain(false);
+  }
+
+  /** Flushes the remaining buffer at stream end. */
+  flush(): string {
+    return this.drain(true);
+  }
+
+  private drain(final: boolean): string {
+    let output = "";
+    while (this.buffer) {
+      const openIdx = this.buffer.indexOf(InlineToolCallExtractor.OPEN_TAG);
+      const jsonIdx = this.detectJsonAction(this.buffer);
+
+      if (openIdx === -1 && jsonIdx === -1) {
+        // No tool-call marker found. Emit everything except a safe tail that
+        // might be the start of a split tag, unless this is the final flush.
+        if (final || this.buffer.length <= InlineToolCallExtractor.SAFE_TAIL) {
+          output += this.buffer;
+          this.buffer = "";
+        } else {
+          const cut = this.buffer.length - InlineToolCallExtractor.SAFE_TAIL;
+          output += this.buffer.slice(0, cut);
+          this.buffer = this.buffer.slice(cut);
+        }
+        break;
+      }
+
+      // Pick whichever marker appears first.
+      const useXml = openIdx !== -1 && (jsonIdx === -1 || openIdx < jsonIdx);
+      const markerIdx = useXml ? openIdx : jsonIdx;
+
+      // Emit any text before the marker.
+      if (markerIdx > 0) {
+        output += this.buffer.slice(0, markerIdx);
+        this.buffer = this.buffer.slice(markerIdx);
+      }
+
+      if (useXml) {
+        const closeIdx = this.buffer.indexOf(InlineToolCallExtractor.CLOSE_TAG);
+        if (closeIdx === -1) {
+          // Closing tag not yet received. Wait for more chunks unless final.
+          if (final) {
+            // Stream ended without closing tag; emit as plain text.
+            output += this.buffer;
+            this.buffer = "";
+          }
+          break;
+        }
+        // Extract the full block (including close tag). It is removed from
+        // the text stream and saved for extractToolCalls() to parse.
+        const end = closeIdx + InlineToolCallExtractor.CLOSE_TAG.length;
+        this.extractedBlocks.push(this.buffer.slice(0, end));
+        this.buffer = this.buffer.slice(end);
+      } else {
+        // JSON-style: try to parse a complete JSON object starting at jsonIdx.
+        const result = this.tryExtractJson(this.buffer);
+        if (!result) {
+          if (final) {
+            output += this.buffer;
+            this.buffer = "";
+          }
+          break;
+        }
+        output += result.before;
+        // The JSON tool-call payload is saved for extractToolCalls() to parse.
+        this.extractedBlocks.push(result.jsonText);
+        this.buffer = result.rest;
+      }
+    }
+    return output;
+  }
+
+  private detectJsonAction(text: string): number {
+    // Look for {"action": or {"action ": patterns near the start of a potential JSON object.
+    const match = text.search(/\{"action"\s*:/);
+    return match === -1 ? -1 : match;
+  }
+
+  private tryExtractJson(text: string): { before: string; jsonText: string; rest: string } | null {
+    const start = text.search(/\{"action"\s*:/);
+    if (start === -1) return null;
+    // Scan forward to find the matching closing brace.
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (escaped) { escaped = false; continue; }
+      if (ch === "\\") { escaped = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          return {
+            before: text.slice(0, start),
+            jsonText: text.slice(start, i + 1),
+            rest: text.slice(i + 1),
+          };
+        }
+      }
+    }
+    return null; // incomplete JSON
+  }
+
+  /** Extracts tool calls from the inline-format blocks saved by drain(). */
+  extractToolCalls(): ToolCall[] {
+    const calls: ToolCall[] = [];
+    // Each block is one complete inline tool call in one of two formats.
+    for (const block of this.extractedBlocks) {
+      if (block.startsWith(InlineToolCallExtractor.OPEN_TAG)) {
+        // XML-style: <tool_call><function=NAME><parameter=JSON</parameter></function></tool_call>
+        // The parameter value stops at the first '<' so the trailing
+        // </parameter> close tag is never consumed by the value capture.
+        const match = /<tool_call>\s*<function=([^\s>]+)>\s*<parameter=([^<]*)<\/parameter>\s*<\/function>\s*<\/tool_call>/.exec(block);
+        if (!match) continue;
+        const toolName = match[1] ?? "";
+        if (!toolName) continue;
+        const rawArgs = match[2] ?? "";
+        let input: unknown = {};
+        try { input = rawArgs ? JSON.parse(rawArgs) : {}; } catch { /* keep empty */ }
+        calls.push({
+          id: `inline-${Date.now()}-${calls.length}`,
+          toolName,
+          input,
+          requestedAt: new Date().toISOString(),
+        });
+      } else if (block.startsWith("{\"action\"")) {
+        // JSON-style: {"action":"NAME","action_input":{...}}
+        let payload: unknown;
+        try {
+          payload = JSON.parse(block);
+        } catch {
+          continue;
+        }
+        const record = asRecord(payload);
+        const toolName = typeof record?.action === "string" ? record.action : "";
+        if (!record || !toolName) continue;
+        let input: unknown = record.action_input ?? {};
+        // Some models serialize action_input as a JSON string.
+        if (typeof input === "string") {
+          try { input = JSON.parse(input); } catch { /* keep the string */ }
+        }
+        calls.push({
+          id: `inline-${Date.now()}-${calls.length}`,
+          toolName,
+          input,
+          requestedAt: new Date().toISOString(),
+        });
+      }
+    }
+    this.extractedBlocks = [];
+    return calls;
+  }
+}
+
+/**
  * Minimal OpenAI chat-completions adapter used by both hosted compatible APIs
  * and local Ollama's OpenAI endpoint. It contains no mail policy; callers
- * decide which message content may be supplied to the provider.
+ * decide which message content may be supplied to the provider. The same
+ * transport also serves the OpenAI-compatible `/embeddings` endpoint, so this
+ * class implements `EmbeddingProvider` for every kind it serves.
  */
-export class OpenAiCompatibleProvider implements LlmProvider {
+export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider {
   readonly id: string;
   readonly kind: OpenAiCompatibleProviderOptions["kind"];
   private readonly endpoint: URL;
@@ -261,12 +467,14 @@ export class OpenAiCompatibleProvider implements LlmProvider {
   private readonly maxOutputTokens: number | undefined;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof globalThis.fetch;
+  private readonly endpointString: string;
 
   constructor(options: OpenAiCompatibleProviderOptions) {
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(options.id)) throw new Error("The provider id is invalid.");
     this.id = options.id;
     this.kind = options.kind;
     this.endpoint = endpointUrl(options.endpoint);
+    this.endpointString = options.endpoint;
     this.apiKey = options.apiKey?.trim() || undefined;
     this.contextWindow = options.contextWindow ?? 32_768;
     this.maxOutputTokens = options.maxOutputTokens;
@@ -281,7 +489,10 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       streaming: true,
       toolCalling: true,
       structuredOutput: false,
-      embeddings: false,
+      // OpenAI-compatible gateways expose the /embeddings endpoint on the same
+      // origin as chat. Whether a specific model there accepts embedding input
+      // is a provider-side concern; callers must handle a failed embed call.
+      embeddings: true,
       contextWindow: this.contextWindow,
       ...(this.maxOutputTokens ? { maxOutputTokens: this.maxOutputTokens } : {}),
     };
@@ -302,23 +513,78 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     }
   }
 
+  /**
+   * OpenAI-compatible `/embeddings`. Vectors are returned in the same order as
+   * the requested inputs and must all be finite numbers, so callers can pair
+   * them back to their sources without ambiguity.
+   */
+  async embed(request: EmbeddingRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<EmbeddingResponse> {
+    let responseLease: ProviderResponseLease | undefined;
+    try {
+      responseLease = await this.request("embeddings", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: request.model, input: request.inputs }),
+      }, options.signal, options.timeoutMs);
+      const response = responseLease.response;
+      if (!response.ok) throw statusError(response.status);
+      let payload: unknown;
+      try {
+        payload = await response.json() as unknown;
+      } catch {
+        throw new Error("The provider returned an invalid embedding response.");
+      }
+      const record = asRecord(payload);
+      const data = Array.isArray(record?.data) ? record.data : [];
+      if (data.length !== request.inputs.length) {
+        throw new Error("The provider returned an unexpected embedding count.");
+      }
+      const vectors = data.map((entry) => {
+        const item = asRecord(entry);
+        const embedding = item?.embedding;
+        if (!Array.isArray(embedding) || embedding.length === 0) {
+          throw new Error("The provider returned an invalid embedding.");
+        }
+        return embedding.map((value) => {
+          if (typeof value !== "number" || !Number.isFinite(value)) {
+            throw new Error("The provider returned an invalid embedding value.");
+          }
+          return value;
+        });
+      });
+      const usage = usageFrom(record?.usage);
+      return {
+        vectors,
+        ...(usage ? { usage } : {}),
+      };
+    } catch (error) {
+      if (isAgentErrorShape(error)) throw error;
+      throw safeMessage(error, { signal: options.signal, timedOut: responseLease?.timedOut() });
+    } finally {
+      responseLease?.release();
+    }
+  }
+
   async *streamChat(request: ProviderChatRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): AsyncIterable<ProviderStreamEvent> {
     const calls = new Map<number, PendingToolCall>();
     let sawCompleted = false;
     let responseLease: ProviderResponseLease | undefined;
+    // Auto-detect vendor from endpoint and model to adapt extension field differences.
+    const adapter = detectVendorAdapter(this.endpointString, request.model);
     try {
+      const requestBody = adapter.transformRequestBody({
+        model: request.model,
+        messages: providerMessages(request),
+        stream: true,
+        stream_options: { include_usage: true },
+        ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+        ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
+        ...(request.allowToolCalls && request.tools.length ? { tools: toolDefinitions(request.tools), tool_choice: "auto" } : {}),
+      });
       responseLease = await this.request("chat/completions", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          model: request.model,
-          messages: providerMessages(request),
-          stream: true,
-          stream_options: { include_usage: true },
-          ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-          ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
-          ...(request.allowToolCalls && request.tools.length ? { tools: toolDefinitions(request.tools), tool_choice: "auto" } : {}),
-        }),
+        body: JSON.stringify(requestBody),
       }, options.signal, options.timeoutMs);
       const response = responseLease.response;
       if (!response.ok) {
@@ -337,6 +603,8 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       const decoder = new TextDecoder();
       let buffer = "";
       let finishReason: ProviderFinishReason = "stop";
+      const inlineExtractor = new InlineToolCallExtractor();
+      let hasInlineToolCalls = false;
       try {
         while (true) {
           const chunk = await awaitAbortable(reader.read(), responseLease.signal);
@@ -359,7 +627,20 @@ export class OpenAiCompatibleProvider implements LlmProvider {
             if (usage) yield { type: "usage", usage };
             const choice = Array.isArray(event.choices) ? asRecord(event.choices[0]) : undefined;
             const delta = asRecord(choice?.delta);
-            if (typeof delta?.content === "string" && delta.content) yield { type: "text_delta", delta: delta.content };
+            if (typeof delta?.content === "string" && delta.content) {
+              const safeText = inlineExtractor.push(delta.content);
+              if (safeText) yield { type: "text_delta", delta: safeText };
+            }
+            // Vendor adapter extracts reasoning content — MiMo/DeepSeek/Qwen/GLM/Kimi
+            // all use the `reasoning_content` field. The adapter handles field name
+            // differences across vendors. Guard against undefined delta (e.g. usage-only
+            // chunks where choices is empty).
+            if (delta) {
+              const reasoning = adapter.extractReasoning(delta);
+              if (reasoning) {
+                yield { type: "reasoning_delta", delta: reasoning };
+              }
+            }
             appendToolDelta(calls, delta?.tool_calls);
             if (typeof choice?.finish_reason === "string") {
               finishReason = choice.finish_reason === "tool_calls" ? "tool-calls"
@@ -373,8 +654,17 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       } finally {
         reader.releaseLock();
       }
+      // Flush any remaining buffered text (safe tail or incomplete tags).
+      const remainingText = inlineExtractor.flush();
+      if (remainingText) yield { type: "text_delta", delta: remainingText };
+      // Extract any inline tool calls that were detected in the text stream.
+      const inlineCalls = inlineExtractor.extractToolCalls();
+      for (const call of inlineCalls) {
+        hasInlineToolCalls = true;
+        yield { type: "tool_call", call };
+      }
       for (const call of completedToolCalls(calls)) yield { type: "tool_call", call };
-      yield { type: "completed", finishReason: calls.size ? "tool-calls" : finishReason };
+      yield { type: "completed", finishReason: calls.size || hasInlineToolCalls ? "tool-calls" : finishReason };
       sawCompleted = true;
     } catch (error) {
       yield {

@@ -22,6 +22,7 @@ const accounts: Account[] = [
     status: "connected",
     lastError: null,
     lastSyncedAt: null,
+    signature: "",
     createdAt: "2026-07-22T00:00:00.000Z",
     folders: [
       { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 3, unseen: 2 },

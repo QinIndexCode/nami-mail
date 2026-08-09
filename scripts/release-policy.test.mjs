@@ -56,10 +56,15 @@ test("release artifacts stay inside an explicitly isolated repository directory"
   assert.throws(() => resolveReleaseDirectory(root, "../outside"), /inside this repository/);
 });
 
-test("installer smoke runs installed executables from an isolated workspace directory", () => {
-  assert.equal(
-    resolveInstallerSmokeBaseDirectory("D:\\Projects\\nami-mail"),
-    path.join("D:\\Projects\\nami-mail", ".nami-installer-smoke"),
+test("installer smoke runs installed executables from an isolated LOCALAPPDATA directory", () => {
+  const projectRoot = "D:\\Projects\\nami-mail";
+  const base = resolveInstallerSmokeBaseDirectory(projectRoot);
+  const expectedRoot = process.env.LOCALAPPDATA?.trim() || path.resolve(projectRoot);
+  assert.equal(base, path.join(expectedRoot, "NamiMailInstallerSmoke"));
+  assert.ok(
+    base.toLowerCase() === expectedRoot.toLowerCase()
+      || base.toLowerCase().startsWith(expectedRoot.toLowerCase() + path.sep.toLowerCase()),
+    "The installer smoke base directory must live under the LOCALAPPDATA install root.",
   );
 });
 
@@ -118,7 +123,7 @@ test("Windows packaging reuses a local Electron distribution only when its execu
   assert.doesNotMatch(installerSmokeScript, /fs\.mkdtemp\(path\.join\(os\.tmpdir\(\), "nami-mail-installer-"\)\)/);
   assert.equal(
     [...installerSmokeScript.matchAll(/timeout: powerShellProbeTimeoutMs/g)].length,
-    3,
+    5,
     "Every installer smoke PowerShell registry or process probe must have its own deadline.",
   );
   assert.match(desktopSmokeScript, /const smokeResultTimeoutMs = 90_000;/);

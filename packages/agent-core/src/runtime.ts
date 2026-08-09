@@ -12,8 +12,10 @@ import {
   type ToolCall,
   type ToolResult,
 } from "@nami/agent-contracts";
-import { type PermissionDecision, PermissionEngine } from "./permissions.js";
-import { type ToolResolution, ToolRegistry } from "./tool-registry.js";
+import type { PermissionEngine } from "./permissions.js";
+import { type PermissionDecision } from "./permissions.js";
+import type { ToolRegistry } from "./tool-registry.js";
+import { type ToolResolution } from "./tool-registry.js";
 
 export interface ProviderResolver {
   resolve(providerId: string): Promise<LlmProvider | undefined>;
@@ -102,6 +104,36 @@ function failureResult(call: ToolCall, error: AgentError): AgentToolInvocationRe
   };
 }
 
+function timedOutToolResult(call: ToolCall, timeoutMs: number): ToolResult {
+  return {
+    toolCallId: call.id,
+    toolName: call.toolName,
+    status: "failed",
+    output: null,
+    error: createAgentError({
+      code: "TOOL_TIMEOUT",
+      message: `The ${call.toolName} tool did not complete within ${timeoutMs}ms.`,
+      retryable: true,
+    }),
+    completedAt: new Date().toISOString(),
+  };
+}
+
+function cancelledToolResult(call: ToolCall): ToolResult {
+  return {
+    toolCallId: call.id,
+    toolName: call.toolName,
+    status: "cancelled",
+    output: null,
+    error: createAgentError({
+      code: "CANCELLED",
+      message: "The tool invocation was cancelled.",
+      retryable: true,
+    }),
+    completedAt: new Date().toISOString(),
+  };
+}
+
 export class AgentRuntime {
   constructor(private readonly dependencies: AgentRuntimeDependencies) {}
 
@@ -152,15 +184,70 @@ export class AgentRuntime {
       }
     }
 
-    const result = await this.dependencies.tools.executeResolved(resolution, {
+    const result = await this.executeResolvedWithDeadline(request, resolution);
+    await this.appendAudit(result.status === "succeeded" ? "succeeded" : result.status === "not_supported" ? "not_supported" : result.status === "cancelled" ? "cancelled" : "failed", request, resolution, result.error ?? undefined);
+    return { status: "completed", result };
+  }
+
+  private async executeResolvedWithDeadline(
+    request: AgentToolInvocationRequest,
+    resolution: Extract<ToolResolution, { ok: true }>,
+  ): Promise<ToolResult> {
+    const timeoutMs = resolution.tool.descriptor.timeoutMs;
+    const execute = (signal: AbortSignal | undefined) => this.dependencies.tools.executeResolved(resolution, {
       requestId: request.requestId,
       caller: request.caller,
       accountIds: resolution.accountIds,
       ...(request.allowedMessageIds === undefined ? {} : { allowedMessageIds: [...request.allowedMessageIds] }),
-      signal: request.signal,
+      ...(signal === undefined ? {} : { signal }),
     });
-    await this.appendAudit(result.status === "succeeded" ? "succeeded" : result.status === "not_supported" ? "not_supported" : result.status === "cancelled" ? "cancelled" : "failed", request, resolution, result.error ?? undefined);
-    return { status: "completed", result };
+    if (timeoutMs === undefined) return execute(request.signal);
+
+    const controller = new AbortController();
+    return new Promise<ToolResult>((resolve) => {
+      let settled = false;
+      // eslint-disable-next-line prefer-const -- timeout is assigned below in the same scope.
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const parentSignal = request.signal;
+      const settle = (result: ToolResult) => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        parentSignal?.removeEventListener("abort", onParentAbort);
+        resolve(result);
+      };
+      const onParentAbort = () => {
+        controller.abort();
+        settle(cancelledToolResult(request.call));
+      };
+
+      if (parentSignal?.aborted) {
+        onParentAbort();
+        return;
+      }
+      parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+      timeout = setTimeout(() => {
+        controller.abort();
+        settle(timedOutToolResult(request.call, timeoutMs));
+      }, timeoutMs);
+
+      // A non-cooperative tool cannot keep the Broker request open after its deadline.
+      void execute(controller.signal).then(
+        (result) => settle(result),
+        () => settle({
+          toolCallId: request.call.id,
+          toolName: request.call.toolName,
+          status: "failed",
+          output: null,
+          error: createAgentError({
+            code: "TOOL_EXECUTION_FAILED",
+            message: `The ${request.call.toolName} tool could not complete.`,
+            retryable: true,
+          }),
+          completedAt: new Date().toISOString(),
+        }),
+      );
+    });
   }
 
   async checkProvider(providerId: string, signal?: AbortSignal): Promise<ProviderHealth | AgentError> {
@@ -207,6 +294,9 @@ export class AgentRuntime {
             break;
           case "text_delta":
             yield event({ type: "text_delta", delta: providerEvent.delta });
+            break;
+          case "reasoning_delta":
+            yield event({ type: "reasoning_delta", delta: providerEvent.delta });
             break;
           case "tool_call":
             // The caller must route a tool call through invokeTool so the same permission path is used.
@@ -268,7 +358,7 @@ export class AgentRuntime {
       return approval.approved ? { approved: true } : { status: "denied", error: approval.error };
     }
 
-    const preview = resolution.tool.confirmationPreview?.(resolution.input) ?? {
+    const preview = resolution.tool.confirmationPreview?.(resolution.input, request.caller.locale) ?? {
       title: `${resolution.tool.descriptor.title} requires confirmation`,
       summary: resolution.tool.descriptor.description,
       fields: [],

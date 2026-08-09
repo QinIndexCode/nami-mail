@@ -9,6 +9,12 @@ export type Ed25519UpdateTrust = {
   publicKeyBase64: string;
 };
 
+export type DisabledUpdateTrust = {
+  kind: "disabled";
+};
+
+export type EmbeddedUpdateTrust = Ed25519UpdateTrust | DisabledUpdateTrust;
+
 export type UpdateManifestSignatureInput = {
   version: string;
   archiveName: string;
@@ -59,9 +65,29 @@ export function parseEd25519UpdateTrust(value: unknown): Ed25519UpdateTrust | un
   }
 }
 
+/**
+ * Local verification builds deliberately embed a disabled trust marker instead
+ * of an unrelated release key. Preserve that intentional state so callers do
+ * not report it as a failed trust lookup or attempt an update check.
+ */
+export function parseEmbeddedUpdateTrust(value: unknown): EmbeddedUpdateTrust | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const candidate = value as { schemaVersion?: unknown; algorithm?: unknown };
+  if (candidate.schemaVersion === 1 && candidate.algorithm === "disabled") return { kind: "disabled" };
+  return parseEd25519UpdateTrust(value);
+}
+
 export async function loadEd25519UpdateTrust(filePath: string): Promise<Ed25519UpdateTrust | undefined> {
   try {
     return parseEd25519UpdateTrust(JSON.parse(await fs.readFile(filePath, "utf8")));
+  } catch {
+    return undefined;
+  }
+}
+
+export async function loadEmbeddedUpdateTrust(filePath: string): Promise<EmbeddedUpdateTrust | undefined> {
+  try {
+    return parseEmbeddedUpdateTrust(JSON.parse(await fs.readFile(filePath, "utf8")));
   } catch {
     return undefined;
   }

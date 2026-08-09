@@ -1,6 +1,6 @@
 # Permissions and Confirmations
 
-[Chinese](permissions.md) | [English](permissions.en.md)
+[Chinese](permissions.zh-CN.md) | [English](permissions.en.md)
 
 ## Default deny
 
@@ -11,16 +11,14 @@ Permission decisions live in the host, never in a model, prompt, CLI frontend, o
 | Access level | Maximum reachable capability |
 | --- | --- |
 | `read-only` | Read-only tools within authorized scope |
-| `draft-only` | Reads and draft tools |
-| `mail-write` | Non-high-risk mail writes, still scoped and policy-bound |
-| `send-confirmed` | High-risk actions may request GUI confirmation |
-| `full-access` | Still never bypasses scope, audit, or confirmation |
+| `send-confirmed` | Every write (including sending) requests a one-time confirmation in the UI each time |
+| `full-access` | Runs all operations automatically (including sending and deletion) without per-action confirmation; never bypasses scope or audit |
 
 `accountScope` is `none`, `selected`, or `all`. A selected scope must never expand through an omitted parameter, bulk list, thread reference, or RAG result.
 
 ## One-time GUI confirmation
 
-Send, forward, permanent delete, bulk writes, move/state changes when a descriptor requires it, and cloud mail-content egress require visible in-app confirmation. A confirmation record is an immutable event, not an editable boolean.
+Confirmation policy depends on the access level: `read-only` never confirms (writes are rejected); `send-confirmed` requests a visible one-time immutable confirmation in the in-app UI for every write (including sending); `full-access` requires the user to read an explicit warning and confirm before enabling, then runs automatically without per-action confirmation. A confirmation record is an immutable event, not an editable boolean.
 
 The request snapshot contains an action title, human-readable summary, key fields, accounts, tool, `requestId`, immutable payload hash, and expiry. Approval must match:
 
@@ -40,13 +38,15 @@ Audit must answer who requested which tool from which entry point, with which sc
 
 ## External callers
 
-CLI/MCP v1 is read-only. Broker pairing proves a local caller identity and scope; it does not grant write power. Even if external writes are designed later, they need separate product approval, least scope, revocable pairing, durable audit, and visible one-time confirmation. A compatibility flag will not enable them.
+Each of the three entry points configures its access level independently: the built-in Agent uses `agentAccessLevel` (`send-confirmed` by default), the external CLI uses `agentCliAccessLevel` (`read-only` by default), and the external MCP uses `agentMcpAccessLevel` (`read-only` by default). All three use the levels `read-only` / `send-confirmed` / `full-access`; they are set in the "Permissions" group of the desktop settings with three adjacent dropdowns, and CLI and MCP are two independent settings with identical content.
+
+CLI/MCP v1 supports the same three-level model. Permission decisions live in the host: the host constructs the external caller's access level and clamps it to the configured level, and a paired client cannot raise its own; a request beyond the configured level returns `PERMISSION_DENIED`. CLI `--yes`, MCP arguments, or model tool calls can neither confirm nor elevate. At `send-confirmed`, every write pops a visible one-time immutable confirmation in the desktop app; at `full-access`, the user must read an explicit warning in the UI and confirm before enabling, after which all operations (including sending and deletion) run automatically within the approved account scope while scope and audit still apply. The built-in Agent's `full-access` also requires a warning before enabling.
 
 ## Error semantics
 
 - `PERMISSION_DENIED`: access level or scope is insufficient.
 - `SCOPE_DENIED`: target account is outside caller scope.
-- `READ_ONLY`: an external entry point attempted a write.
+- `NOT_SUPPORTED`: the tool is not available to external callers (e.g. `messages.search`, `rag.*`, `agent.chat`, `agent.run`, attachment export).
 - `CONFIRMATION_REQUIRED`: the action needs a running GUI confirmation.
 - `BROKER_SECURITY_UNAVAILABLE`: secure local IPC cannot be proven and cannot degrade.
 

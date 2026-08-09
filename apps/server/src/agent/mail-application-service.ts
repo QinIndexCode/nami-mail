@@ -79,6 +79,10 @@ export type DraftMutation = {
   text: string;
   html?: string;
   attachmentTokens?: readonly string[];
+  /** RFC In-Reply-To header retained for reply threading. */
+  inReplyTo?: string;
+  /** RFC References chain retained for reply threading. */
+  references?: readonly string[];
 };
 
 export type DraftView = {
@@ -91,7 +95,8 @@ export type DraftView = {
 
 export type PreparedMailSubmission = {
   submissionId: string;
-  idempotencyKey: string;
+  /** Present on prepare; omitted after submission because the key is consumed. */
+  idempotencyKey?: string;
   accountId: string;
   status: "pending" | "submitting" | "submitted" | "confirmed" | "unknown_delivery" | "failed";
 };
@@ -120,4 +125,6 @@ export interface MailApplicationService {
   prepareSubmission(context: MailApplicationContext, input: DraftMutation & { idempotencyKey?: string }): Promise<PreparedMailSubmission>;
   /** Wrap current SMTP/outbox verification only after the immutable confirmation is consumed. */
   submitPreparedMail(context: MailApplicationContext, submissionId: string): Promise<PreparedMailSubmission>;
+  /** Permanently removes a mail account and its local state. Requires a visible confirmation. */
+  deleteAccount(context: MailApplicationContext, accountId: string): Promise<void>;
 }

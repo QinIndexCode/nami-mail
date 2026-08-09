@@ -20,6 +20,28 @@ export type StoredAttachmentMetadata = {
   disposition: "attachment" | "inline";
 };
 
+/**
+ * Offline screening headers captured at sync time. `labels` are the IMAP
+ * labels the server reported for the message (e.g. Gmail CATEGORY_*).
+ * Optional fields are absent in payloads written before this extension and
+ * read as empty defaults via `payloadHeaders`.
+ */
+export type StoredMessageHeaders = {
+  autoSubmitted: string;
+  listUnsubscribe: string;
+  precedence: string;
+  returnPath: string;
+  labels: string[];
+};
+
+export const EMPTY_MESSAGE_HEADERS: StoredMessageHeaders = {
+  autoSubmitted: "",
+  listUnsubscribe: "",
+  precedence: "",
+  returnPath: "",
+  labels: [],
+};
+
 export type MessagePayload = {
   messageId: string | null;
   subject: string;
@@ -33,7 +55,23 @@ export type MessagePayload = {
   textBody: string;
   htmlBody: string;
   attachments: StoredAttachmentMetadata[] | null;
+  headers?: StoredMessageHeaders;
 };
+
+export function payloadHeaders(payload: MessagePayload): StoredMessageHeaders {
+  const value = payload.headers;
+  if (!value || typeof value !== "object") return EMPTY_MESSAGE_HEADERS;
+  const item = value as Record<string, unknown>;
+  return {
+    autoSubmitted: typeof item.autoSubmitted === "string" ? item.autoSubmitted : "",
+    listUnsubscribe: typeof item.listUnsubscribe === "string" ? item.listUnsubscribe : "",
+    precedence: typeof item.precedence === "string" ? item.precedence : "",
+    returnPath: typeof item.returnPath === "string" ? item.returnPath : "",
+    labels: Array.isArray(item.labels)
+      ? item.labels.filter((entry): entry is string => typeof entry === "string")
+      : [],
+  };
+}
 
 export type MessageStorageRow = Record<string, unknown> & {
   id: string;
@@ -180,6 +218,7 @@ function normalizePayload(value: unknown): MessagePayload {
     textBody: typeof item.textBody === "string" ? item.textBody : "",
     htmlBody: typeof item.htmlBody === "string" ? item.htmlBody : "",
     attachments: item.attachments === null ? null : attachments(item.attachments),
+    headers: item.headers === undefined ? undefined : payloadHeaders(item as MessagePayload),
   };
 }
 
