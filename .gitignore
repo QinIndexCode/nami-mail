@@ -32,9 +32,6 @@ output/
 *.der
 tools/
 test-results/
-build/installerHeader.bmp
-build/installerSidebar.bmp
-build/uninstallerSidebar.bmp
 build/namimail.cmd
 build/namimail-path.ps1
 build/nsis-plugin/
