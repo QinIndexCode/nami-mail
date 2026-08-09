@@ -1293,7 +1293,7 @@ async function inspectDesktopSettingsUi(): Promise<DesktopSettingsUiSmokeResult>
             color: style.backgroundColor,
           };
         };
-        const settingsButton = document.querySelector('.sidebar-footer-actions .icon-button');
+        const settingsButton = document.querySelector('.icon-rail .icon-button');
         if (!(settingsButton instanceof HTMLButtonElement)) throw new Error('Settings button was not rendered.');
         settingsButton.click();
 
@@ -1450,7 +1450,7 @@ async function inspectDesktopSettingsSync(): Promise<DesktopSettingsSyncSmokeRes
           return null;
         };
         if (${openSettings ? "true" : "false"} && !document.querySelector('.settings-modal')) {
-          const settingsButton = document.querySelector('.sidebar-footer-actions .icon-button');
+          const settingsButton = document.querySelector('.icon-rail .icon-button');
           if (!(settingsButton instanceof HTMLButtonElement)) throw new Error('Settings button was not rendered.');
           settingsButton.click();
         }
