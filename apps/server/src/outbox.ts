@@ -58,6 +58,7 @@ type StoredSubmission = {
   confirmed_at: string | null;
   created_at: string;
   updated_at: string;
+  send_at?: string | null;
 };
 
 type SubmissionDetails = {
@@ -81,6 +82,7 @@ export type OutboundSubmission = {
   confirmedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  sendAt: string | null;
 };
 
 export class SubmissionConflictError extends Error {
@@ -264,6 +266,7 @@ function publicSubmission(row: StoredSubmission, masterKey: Buffer): OutboundSub
     confirmedAt: row.confirmed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    sendAt: row.send_at ?? null,
   };
 }
 
@@ -372,7 +375,7 @@ export function createIdempotencyKey(): string {
 export function prepareSubmission(
   db: DatabaseHandle,
   masterKey: Buffer,
-  input: { accountId: string; accountEmail: string; idempotencyKey?: string; request: OutboundSubmissionRequest },
+  input: { accountId: string; accountEmail: string; idempotencyKey?: string; request: OutboundSubmissionRequest; sendAt?: string },
 ): { submission: OutboundSubmission; idempotencyKey: string; created: boolean } {
   const idempotencyKey = input.idempotencyKey || createIdempotencyKey();
   const fingerprint = requestFingerprint(masterKey, input.accountId, input.request);
@@ -411,6 +414,7 @@ export function prepareSubmission(
     confirmed_at: null,
     created_at: now,
     updated_at: now,
+    send_at: input.sendAt ?? null,
   };
   row.request_json = encryptedRequest(row, masterKey, input.request);
   row.encrypted_details = encryptedDetails(row, masterKey, {
@@ -426,12 +430,12 @@ export function prepareSubmission(
         id, account_id, idempotency_key, request_fingerprint, rfc_message_id,
         request_json, status, error_code, error_message, provider_message_id,
         post_submit_warning, encrypted_details, crypto_version,
-        submitted_at, confirmed_at, created_at, updated_at
+        submitted_at, confirmed_at, created_at, updated_at, send_at
       ) VALUES (
         @id, @account_id, @idempotency_key, @request_fingerprint, @rfc_message_id,
         @request_json, @status, @error_code, @error_message, @provider_message_id,
         @post_submit_warning, @encrypted_details, @crypto_version,
-        @submitted_at, @confirmed_at, @created_at, @updated_at
+        @submitted_at, @confirmed_at, @created_at, @updated_at, @send_at
       )
     `).run(row);
     return { submission: publicSubmission(row, masterKey), idempotencyKey, created: true };
@@ -460,6 +464,23 @@ export function submissionsForAccount(db: DatabaseHandle, masterKey: Buffer, acc
     ORDER BY updated_at DESC, created_at DESC
     LIMIT ?
   `).all(accountId, limit) as StoredSubmission[]).map((row) => publicSubmission(row, masterKey));
+}
+
+/**
+ * Cancels a scheduled send before it is due. A submission that the background
+ * scheduler already picked up (status no longer `pending`) or that is already
+ * due cannot be cancelled and reports `false`.
+ */
+export function deletePendingScheduledSubmission(
+  db: DatabaseHandle,
+  id: string,
+  nowIso = new Date().toISOString(),
+): boolean {
+  const result = db.prepare(`
+    DELETE FROM outbound_submissions
+    WHERE id = ? AND status = 'pending' AND send_at IS NOT NULL AND send_at > ?
+  `).run(id, nowIso);
+  return result.changes === 1;
 }
 
 export function startSubmission(

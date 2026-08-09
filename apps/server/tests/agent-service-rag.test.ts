@@ -290,7 +290,7 @@ describe("Agent service RAG scope", () => {
     });
     const conversation = service.createConversation({
       providerId: provider.id,
-      scope: { mode: "current_thread", accountIds: ["account-1"], messageIds: ["message-1"] },
+      scope: { mode: "current_message", accountIds: ["account-1"], messageIds: ["message-1"] },
     });
     const internals = service as unknown as {
       rag: AgentRagWorker;
@@ -325,7 +325,7 @@ describe("Agent service RAG scope", () => {
       providerId: provider.id,
       mode: "agent",
       scope: conversation.scope,
-      context: { currentMessageId: "message-1", currentThreadMessageIds: ["message-1"] },
+      context: { currentMessageId: "message-1" },
     })) {
       // Exhaust the stream so the service reaches RAG retrieval and persists its final state.
     }

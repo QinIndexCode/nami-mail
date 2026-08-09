@@ -1,6 +1,6 @@
 # RAG Consistency
 
-[Chinese](consistency.md) | [English](consistency.en.md)
+[Chinese](consistency.zh-CN.md) | [English](consistency.en.md)
 
 ## Facts that must hold
 

@@ -23,6 +23,7 @@ const statusKeyByReason: Record<DesktopUpdateSnapshot["reason"], string> = {
   platformUnsupported: "update.status.platformUnsupported",
   sourceUnconfigured: "update.status.sourceUnconfigured",
   trustUnavailable: "update.status.trustUnavailable",
+  trustDisabledByBuild: "update.status.trustDisabledByBuild",
   scheduled: "update.status.scheduled",
   checking: "update.status.checking",
   upToDate: "update.status.upToDate",
@@ -82,6 +83,18 @@ describe("update snapshot presentation", () => {
       expect(new Set(statuses).size).toBe(reasons.length);
       expect(statuses.every((status) => status.trim().length > 0)).toBe(true);
     }
+  });
+
+  it("presents an intentionally disabled build as unavailable rather than a failed trust check", () => {
+    const presentation = presentUpdateSnapshot({
+      ...baseSnapshot,
+      phase: "unavailable",
+      reason: "trustDisabledByBuild",
+    }, (key, values) => translate("zh-CN", key, values));
+
+    expect(presentation.status).toBe(translate("zh-CN", "update.status.trustDisabledByBuild"));
+    expect(presentation.status).not.toBe(translate("zh-CN", "update.status.trustUnavailable"));
+    expect(presentation.isError).toBe(false);
   });
 
   it("reports cleanup outcomes as installed results rather than ordinary update failures", () => {

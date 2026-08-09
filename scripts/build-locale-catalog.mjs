@@ -41,6 +41,13 @@ const nativeCopyKeys = {
   notificationMultipleBody: "native.notification.multipleBody",
   startupFailureTitle: "native.startup.failure.title",
   startupFailureMessage: "native.startup.failure.message",
+  externalConfirmTitle: "native.externalConfirm.title",
+  externalConfirmCaller: "native.externalConfirm.caller",
+  externalConfirmOperation: "native.externalConfirm.operation",
+  externalConfirmApprove: "native.externalConfirm.approve",
+  externalConfirmReject: "native.externalConfirm.reject",
+  externalAccessDriftTitle: "native.externalAccess.drift.title",
+  externalAccessDriftBody: "native.externalAccess.drift.body",
 };
 export function canonicalLocale(value) {
   if (typeof value !== "string") return null;

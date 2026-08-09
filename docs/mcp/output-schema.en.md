@@ -1,10 +1,10 @@
 # MCP Output Schema
 
-[Chinese](output-schema.md) | [Tools](tools.en.md)
+[Chinese](output-schema.zh-CN.md) | [Tools](tools.en.md)
 
-> **Future contract, not executable today.** The current build has no MCP stdio server, Broker, or `tools/list`. The envelope below defines structured results only after a verified native Windows SID-DACL adapter ships; it cannot be obtained by a current client.
+> **Current-build status: implemented.** The 0.3.0 build ships the MCP stdio server, Broker, and `tools/list`. The envelope below is obtained by a current client.
 
-After the interface ships, the MCP outer message will follow the MCP protocol negotiated by the client and stdio server. NamiMail will preserve the same stable Agent success/failure semantics in a tool result. Clients supporting structured content should treat this object as the programmatic interface:
+The MCP outer message follows the MCP protocol negotiated by the client and stdio server. NamiMail preserves the same stable Agent success/failure semantics in a tool result. Clients supporting structured content should treat this object as the programmatic interface:
 
 ```json
 {
@@ -41,7 +41,7 @@ Error object:
 }
 ```
 
-`code` will be the machine decision field; `message` and optional `suggestion` may be localized. Optional `details` are not a stable application protocol and clients must neither require nor log them.
+`code` is the machine decision field; `message` and optional `suggestion` may be localized. Optional `details` are not a stable application protocol and clients must neither require nor log them.
 
 ## MCP outer mapping
 

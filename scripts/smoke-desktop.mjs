@@ -475,8 +475,10 @@ try {
     else {
       await writeDesktopSmokeDiagnostic(cleanupFailure, progressPath, desktopProcess, desktopOutputCapture).catch((diagnosticError) => {
         const message = diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError);
-        process.stderr.write(`Desktop smoke could not write its diagnostic: ${message}\n`);
+      process.stderr.write(`Desktop smoke could not write its diagnostic: ${message}\n`);
       });
+      // Cleanup errors only surface when the smoke itself did not already fail.
+      // eslint-disable-next-line no-unsafe-finally
       throw cleanupFailure;
     }
   }

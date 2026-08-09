@@ -15,7 +15,6 @@ function renderSettings(demoMode: boolean): string {
         demoMode={demoMode}
         onClose={() => undefined}
         onSettingsChange={() => undefined}
-        onAccountRemoved={() => undefined}
         onOpenAgentProviderSettings={() => undefined}
       />
     </I18nProvider>,
@@ -38,6 +37,19 @@ describe("settings model provider entry", () => {
 
     expect(markup).toContain(zh("agent.demo.actionUnavailable"));
     expect(markup).not.toContain(zh("agent.providers.configure"));
+  });
+
+  it("shows the external CLI/MCP access guide with copyable snippets", () => {
+    const markup = renderSettings(false);
+
+    expect(markup).toContain(zh("settings.agent.externalGuide.title"));
+    expect(markup).toContain("namimail pair");
+    expect(markup).toContain("namimail status");
+    expect(markup).toContain('&quot;command&quot;: &quot;cmd.exe&quot;');
+    expect(markup).toContain("namimail mcp start");
+    expect(markup).toContain("namimail service start");
+    expect(markup).toContain(zh("settings.agent.externalGuide.copy"));
+    expect(markup).toContain('class="external-guide-code"');
   });
 });
 

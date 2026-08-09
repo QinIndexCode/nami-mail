@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
+import { autoReplyConfigPatchSchema } from "@nami/agent-contracts";
 import { openDatabase } from "../src/db.js";
 import { getAppSettings, updateAppSettings } from "../src/settings.js";
 
@@ -65,5 +66,35 @@ describe("app settings migrations", () => {
     } finally {
       migrated.close();
     }
+  });
+
+  it("merges auto-reply patches without dropping the confirmation invariant", () => {
+    const db = openDatabase(":memory:");
+    try {
+      const initial = updateAppSettings(db, {
+        autoReply: { enabled: true, accountIds: ["account-1"], dailyLimitPerAccount: 30 },
+      });
+      expect(initial.autoReply).toMatchObject({
+        enabled: true,
+        accountIds: ["account-1"],
+        dailyLimitPerAccount: 30,
+        requireConfirmation: true,
+      });
+      const toggled = updateAppSettings(db, { autoReply: { ...initial.autoReply, enabled: false } });
+      expect(toggled.autoReply).toMatchObject({ enabled: false, requireConfirmation: true });
+      expect(getAppSettings(db).autoReply).toEqual(toggled.autoReply);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("accepts the desktop settings payload that spreads the full auto-reply config", () => {
+    const parsed = autoReplyConfigPatchSchema.safeParse({
+      enabled: false,
+      accountIds: ["account-1"],
+      dailyLimitPerAccount: 30,
+      requireConfirmation: true,
+    });
+    expect(parsed.success).toBe(true);
   });
 });

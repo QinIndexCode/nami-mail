@@ -1,64 +1,66 @@
-name: 缺陷报告
-description: 报告可复现的功能、显示或兼容性问题
+name: Bug Report / 缺陷报告
+description: Report a reproducible functional, display, or compatibility issue / 报告可复现的功能、显示或兼容性问题
 title: "[Bug]: "
 body:
   - type: markdown
     attributes:
       value: |
         感谢你的报告。请勿提交真实邮件、邮箱地址、附件、密码、OAuth code、访问令牌或本地数据库。安全问题请通过 GitHub 私密漏洞通报提交：https://github.com/QinIndexCode/nami-mail/security/advisories/new
+
+        Thank you for your report. Do not submit real mail, addresses, attachments, passwords, OAuth codes, access tokens, or local databases. For security issues, use GitHub private vulnerability reporting: https://github.com/QinIndexCode/nami-mail/security/advisories/new
   - type: input
     id: version
     attributes:
-      label: Nami Mail 版本
-      description: 例如 0.1.0；请不要粘贴完整日志路径。
-      placeholder: 0.1.0
+      label: Nami Mail 版本 / Version
+      description: e.g. 0.3.0 / 例如 0.3.0；请不要粘贴完整日志路径。
+      placeholder: 0.3.0
     validations:
       required: true
   - type: dropdown
     id: runtime
     attributes:
-      label: 运行方式
+      label: 运行方式 / Runtime
       options:
-        - Windows 安装版
-        - Windows 开发桌面版
-        - 浏览器开发模式
-        - 其他
+        - Windows 安装版 / Windows installed app
+        - Windows 开发桌面版 / Windows dev desktop
+        - 浏览器开发模式 / Browser dev mode
+        - 其他 / Other
     validations:
       required: true
   - type: input
     id: platform
     attributes:
-      label: 系统与环境
-      description: Windows 版本、CPU 架构、浏览器版本或网络环境中与问题相关的部分。
+      label: 系统与环境 / System & Environment
+      description: Windows 版本、CPU 架构、浏览器版本或网络环境中与问题相关的部分。 / Windows version, CPU architecture, browser version, or network details relevant to the issue.
       placeholder: Windows 11 23H2 x64
     validations:
       required: true
   - type: textarea
     id: steps
     attributes:
-      label: 最小复现步骤
-      description: 使用虚构邮箱和示例文本。请从启动状态开始编号描述。
+      label: 最小复现步骤 / Reproduction Steps
+      description: 使用虚构邮箱和示例文本。请从启动状态开始编号描述。 / Use fictional addresses and sample text. Start from a clean launch state.
       placeholder: |
-        1. 使用演示数据打开应用
-        2. 打开设置
+        1. 使用演示数据打开应用 / Open the app with demo data
+        2. 打开设置 / Open settings
         3. ...
     validations:
       required: true
   - type: textarea
     id: expected
     attributes:
-      label: 预期结果
+      label: 预期结果 / Expected Result
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
-      label: 实际结果
-      description: 可附脱敏截图。先移除邮件正文、地址、主题、附件名、Message-ID 和令牌。
+      label: 实际结果 / Actual Result
+      description: 可附脱敏截图。先移除邮件正文、地址、主题、附件名、Message-ID 和令牌。 / Attach redacted screenshots if needed. Remove mail body, addresses, subjects, attachment names, Message-ID, and tokens first.
     validations:
       required: true
   - type: textarea
     id: diagnostics
     attributes:
-      label: 脱敏诊断信息（可选）
-      description: 仅提供错误分类或最小日志片段；不要提供密钥、会话、OAuth 或邮箱数据。
+      label: 脱敏诊断信息（可选） / Redacted Diagnostics (optional)
+      description: 仅提供错误分类或最小日志片段；不要提供密钥、会话、OAuth 或邮箱数据。 / Only error categories or minimal log snippets; do not include keys, sessions, OAuth, or mail data.

@@ -7,10 +7,11 @@ import type { OAuthService } from "./oauth.js";
 import type { TranslationResult } from "./translation.js";
 import type { TranslationServiceError } from "./translation.js";
 import type { AppSettings } from "./settings.js";
+import type { ExternalPairingSummary } from "@nami/agent-contracts";
 
 /**
  * Structured translation service interface shared by external HTTP endpoints
- * and the local NLLB-200 implementation, keeping routes implementation-agnostic.
+ * and runtime-injected implementations, keeping routes implementation-agnostic.
  */
 export interface TranslationServiceLike {
   isConfigured(): boolean;
@@ -38,6 +39,7 @@ export type AccountRecord = {
   smtp_secure: number;
   smtp_transport: "tls" | "starttls";
   smtp_username: string | null;
+  signature: string;
   username_mode: "email" | "local";
   status: string;
   last_error: string | null;
@@ -81,9 +83,12 @@ export type RuntimeContext = {
   // IPv6 loopback callback bridge.
   microsoftOAuthCallbackUnavailable?: string;
   // The runtime owns translation endpoint configuration. The route only
-  // submits a message after the user explicitly requests it. This may be
-  // an external HTTP service or a local on-device model.
+  // submits a message after the user explicitly requests it. This is
+  // typically an external HTTP service injected by the embedding host.
   translationService?: TranslationServiceLike;
+  // Desktop-injected, non-secret summaries of active/revoked/expired
+  // CLI/MCP pairing records. Absent in browser-only and test hosts.
+  listExternalPairings?: () => readonly ExternalPairingSummary[] | Promise<readonly ExternalPairingSummary[]>;
 };
 
 export function publicAccount(row: AccountRecord) {
@@ -97,6 +102,7 @@ export function publicAccount(row: AccountRecord) {
     lastError: row.last_error,
     lastErrorCode: row.last_error_code,
     lastSyncedAt: row.last_synced_at,
+    signature: row.signature,
     createdAt: row.created_at,
   };
 }

@@ -15,26 +15,7 @@ describe("api transport errors", () => {
     });
   });
 
-  it("adds the restricted desktop capability to API requests without changing browser requests", async () => {
-    vi.stubGlobal("window", {
-      namiDesktop: {
-        localApiRequestHeaders: vi.fn().mockResolvedValue({ "x-nami-api-token": "desktop-session-token" }),
-      },
-    });
-    const fetchMock = vi.fn().mockResolvedValue(new Response("[]", {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(api.accounts()).resolves.toEqual([]);
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.headers).toBeInstanceOf(Headers);
-    expect((init.headers as Headers).get("x-nami-api-token")).toBe("desktop-session-token");
-  });
-
-  it("keeps the browser development request path free of a desktop token", async () => {
+  it("keeps renderer API requests free of a desktop token (injected by the main process)", async () => {
     vi.stubGlobal("window", {});
     const fetchMock = vi.fn().mockResolvedValue(new Response("[]", {
       status: 200,
@@ -131,6 +112,20 @@ describe("api transport errors", () => {
     const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(path).toBe("/api/messages/message%20%2F%201/translate");
     expect(init.body).toBe(JSON.stringify({ targetLocale: "en-US" }));
+  });
+
+  it("cancels a pending scheduled send by submission id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      cancelled: true,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.cancelScheduledSend("submission / 1")).resolves.toEqual({ ok: true, cancelled: true });
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/messages/send/submission%20%2F%201/cancel");
+    expect(init.method).toBe("POST");
   });
 
   it("checks translation availability without requesting mail content", async () => {

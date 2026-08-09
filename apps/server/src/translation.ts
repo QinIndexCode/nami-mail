@@ -3,6 +3,68 @@ import { mailErrorCode } from "./mail.js";
 
 export const MAX_TRANSLATION_TEXT_LENGTH = 50_000;
 export const MAX_TRANSLATION_RESPONSE_BYTES = 256_000;
+export const TRANSLATION_CHUNK_SIZE = 5_000;
+
+/**
+ * Splits text into translation chunks, preferring natural boundaries
+ * (paragraphs → sentences → fixed size) to avoid breaking semantic units.
+ * Empty chunks are never returned.
+ */
+export function splitTranslationChunks(text: string, maxChunkSize = TRANSLATION_CHUNK_SIZE): string[] {
+  if (text.length <= maxChunkSize) return [text];
+  const chunks: string[] = [];
+  // Split by paragraph boundaries, keeping the separators.
+  const paragraphs = text.split(/(\n{2,})/);
+  let current = "";
+  for (const part of paragraphs) {
+    if (!part) continue;
+    if ((current + part).length <= maxChunkSize) {
+      current += part;
+    } else {
+      if (current.trim()) chunks.push(current);
+      if (part.length > maxChunkSize) {
+        chunks.push(...splitBySentences(part, maxChunkSize));
+        current = "";
+      } else {
+        current = part;
+      }
+    }
+  }
+  if (current.trim()) chunks.push(current);
+  return chunks.length > 0 ? chunks : [text];
+}
+
+function splitBySentences(text: string, maxChunkSize: number): string[] {
+  // Split after sentence-ending punctuation (Latin + CJK), keeping it.
+  const sentences = text.split(/(?<=[.!?。！？\n])\s*/);
+  const chunks: string[] = [];
+  let current = "";
+  for (const sentence of sentences) {
+    if (!sentence) continue;
+    if ((current + sentence).length <= maxChunkSize) {
+      current += sentence;
+    } else {
+      if (current.trim()) chunks.push(current);
+      if (sentence.length > maxChunkSize) {
+        // No usable punctuation boundary — force split by size.
+        chunks.push(...splitBySize(sentence, maxChunkSize));
+        current = "";
+      } else {
+        current = sentence;
+      }
+    }
+  }
+  if (current.trim()) chunks.push(current);
+  return chunks.length > 0 ? chunks : [text];
+}
+
+function splitBySize(text: string, maxChunkSize: number): string[] {
+  const chunks: string[] = [];
+  for (let i = 0; i < text.length; i += maxChunkSize) {
+    chunks.push(text.slice(i, i + maxChunkSize));
+  }
+  return chunks;
+}
 
 export type TranslationServiceErrorCode =
   | "translation_not_configured"
@@ -16,6 +78,9 @@ export type TranslationServiceErrorCode =
   | "translation_network_unavailable"
   | "translation_connection_refused"
   | "translation_connection_failed"
+  | "translation_model_download_failed"
+  | "translation_model_cache_unavailable"
+  | "translation_model_unavailable"
   | "translation_service_authentication_failed"
   | "translation_rate_limited"
   | "translation_service_unavailable"
@@ -96,6 +161,9 @@ export function translationErrorStatus(error: TranslationServiceError): number {
     case "translation_network_unavailable":
     case "translation_connection_refused":
     case "translation_connection_failed":
+    case "translation_model_download_failed":
+    case "translation_model_cache_unavailable":
+    case "translation_model_unavailable":
     case "translation_service_authentication_failed":
     case "translation_rate_limited":
     case "translation_service_unavailable":

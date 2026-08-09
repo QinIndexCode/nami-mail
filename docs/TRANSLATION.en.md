@@ -1,6 +1,6 @@
 # Message Translation
 
-[简体中文](TRANSLATION.md) | [English](TRANSLATION.en.md)
+[简体中文](TRANSLATION.zh-CN.md) | [English](TRANSLATION.en.md)
 
 Message translation is optional. Nami Mail runs it only after you explicitly select Translate while reading a message. It does not translate or send mail content automatically while receiving or syncing mail, opening a message, changing the interface language, or refreshing in the background.
 

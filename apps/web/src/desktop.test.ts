@@ -30,6 +30,8 @@ describe("desktop update snapshot contract", () => {
     expect(normalizeDesktopUpdateSnapshot(structuredSnapshot)).toEqual(structuredSnapshot);
     expect(normalizeDesktopUpdateSnapshot({ ...structuredSnapshot, reason: "installResult", args: { installStage: "cleanup", cleanupComplete: false } }))
       .toEqual({ ...structuredSnapshot, reason: "installResult", args: { installStage: "cleanup", cleanupComplete: false } });
+    expect(normalizeDesktopUpdateSnapshot({ ...structuredSnapshot, phase: "unavailable", reason: "trustDisabledByBuild" }))
+      .toEqual({ ...structuredSnapshot, phase: "unavailable", reason: "trustDisabledByBuild" });
 
     for (const malformed of [
       { ...structuredSnapshot, schemaVersion: 1 },
@@ -55,7 +57,6 @@ describe("desktop update snapshot contract", () => {
     let updateListener: ((snapshot: DesktopUpdateSnapshot) => void) | undefined;
     const malformedSnapshot = { ...structuredSnapshot, reason: "futureReason" } as unknown as DesktopUpdateSnapshot;
     const rawBridge: DesktopBridge = {
-      localApiRequestHeaders: async () => ({}),
       notify: async () => ({ shown: false }),
       copyVerificationCode: async () => ({ copied: false }),
       getUpdateStatus: async () => malformedSnapshot,
@@ -120,7 +121,6 @@ describe("desktop Agent confirmation bridge", () => {
   it("exposes a results-only subscription and filters malformed preload payloads", () => {
     let resultListener: ((value: unknown) => void) | undefined;
     const rawBridge: DesktopBridge = {
-      localApiRequestHeaders: async () => ({}),
       notify: async () => ({ shown: false }),
       copyVerificationCode: async () => ({ copied: false }),
       onAgentConfirmationResult: (listener) => {

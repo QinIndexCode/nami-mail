@@ -7,6 +7,7 @@ import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp, MAX_BACKGROUND_UPLOAD_BYTES } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
+import { indexMessageFts } from "../src/message-search.js";
 import type { OAuthService } from "../src/oauth.js";
 
 async function createValidPng() {
@@ -603,6 +604,103 @@ describe("local API", () => {
     expect(missing.json()).toEqual({ ok: false, message: "Message not found." });
   });
 
+  it("validates batch message flag updates before touching any message", async () => {
+    const malformedPayloads = [
+      {},
+      { ids: [] },
+      { ids: ["a", "a"], patch: { seen: true } },
+      { ids: ["a"], patch: {} },
+      { ids: ["a"], patch: { seen: true, unexpected: false } },
+    ];
+    for (const payload of malformedPayloads) {
+      const response = await app.inject({ method: "PATCH", url: "/api/messages/batch/flags", payload });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ ok: false });
+    }
+  });
+
+  it("reports per-message outcomes for batch flag updates", async () => {
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/batch/flags",
+      payload: { ids: ["missing-message", "also-missing"], patch: { seen: true } },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, updated: 0, failed: 2 });
+  });
+
+  it("validates batch message moves and reports per-message outcomes", async () => {
+    const malformed = await app.inject({
+      method: "POST",
+      url: "/api/messages/batch/move",
+      payload: { ids: ["a"], target: "sent" },
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json()).toMatchObject({ ok: false });
+
+    const empty = await app.inject({
+      method: "POST",
+      url: "/api/messages/batch/move",
+      payload: { ids: [], target: "archive" },
+    });
+    expect(empty.statusCode).toBe(400);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/messages/batch/move",
+      payload: { ids: ["missing-message", "also-missing"], target: "trash" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, updated: 0, failed: 2 });
+  });
+
+  it("updates and exposes an account signature", async () => {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("account-signature", "signature@example.com", "custom", "Signature provider", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: "/api/accounts/account-signature/signature",
+      payload: { signature: "——\n测试签名" },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toEqual({ ok: true });
+
+    const accounts = await app.inject({ method: "GET", url: "/api/accounts" });
+    const target = accounts.json().find((account: { id: string }) => account.id === "account-signature");
+    expect(target).toMatchObject({ email: "signature@example.com", signature: "——\n测试签名" });
+  });
+
+  it("rejects oversized or malformed account signature updates and missing accounts", async () => {
+    const tooLong = await app.inject({
+      method: "PATCH",
+      url: "/api/accounts/account-signature/signature",
+      payload: { signature: "x".repeat(2001) },
+    });
+    expect(tooLong.statusCode).toBe(400);
+    expect(tooLong.json()).toMatchObject({ ok: false });
+
+    const extraField = await app.inject({
+      method: "PATCH",
+      url: "/api/accounts/account-signature/signature",
+      payload: { signature: "ok", unexpected: true },
+    });
+    expect(extraField.statusCode).toBe(400);
+
+    const missing = await app.inject({
+      method: "PATCH",
+      url: "/api/accounts/does-not-exist/signature",
+      payload: { signature: "ok" },
+    });
+    expect(missing.statusCode).toBe(404);
+  });
+
   it("keeps the unified inbox scoped to inbox folders while exposing explicit folders", async () => {
     db.prepare(`
       INSERT INTO accounts (
@@ -632,6 +730,17 @@ describe("local API", () => {
       JSON.stringify(["<root@example.com>", "<parent@example.com>"]),
       "message-inbox",
     );
+    // These rows are written after buildApp (whose one-time FTS migration
+    // already ran), so mirror the sync write path into the search index.
+    const ftsRows: Array<[string, string, string, string, string]> = [
+      ["message-inbox", "Inbox message", "Demo", "demo@example.com", "inbox"],
+      ["message-seen-inbox", "Seen inbox message", "Demo", "demo@example.com", "seen inbox"],
+      ["message-sent", "Sent message", "Demo", "demo@example.com", "sent"],
+      ["message-starred-sent", "Starred sent message", "Demo", "demo@example.com", "starred"],
+    ];
+    for (const [id, subject, fromName, fromAddress, textBody] of ftsRows) {
+      indexMessageFts(db, id, { subject, fromName, fromAddress, textBody });
+    }
 
     const inbox = await app.inject({ method: "GET", url: "/api/messages?accountId=account-1" });
     expect(inbox.statusCode).toBe(200);

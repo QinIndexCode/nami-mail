@@ -7,8 +7,11 @@ import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import sharp from "sharp";
 import { z } from "zod";
-import { AgentService, AgentServiceError, type AgentConversationScope, type AgentMessageInput, type AgentProviderInput } from "./agent-service.js";
+import { agentMemoryKindSchema, agentMemoryPatchSchema, autoReplyConfigPatchSchema } from "@nami/agent-contracts";
+import { AgentService, AgentServiceError, type AgentConversationScope, type AgentMcpServerInput, type AgentMessageInput, type AgentProviderInput } from "./agent-service.js";
 import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
+import { EncryptedAgentMemoryStore } from "./agent/memory.js";
+import { getAutoReplyEngine } from "./agent/auto-reply.js";
 import {
   ACCOUNT_CREDENTIAL_CRYPTO_VERSION,
   encryptAccountPassword,
@@ -19,10 +22,8 @@ import { config } from "./config.js";
 import { discardDraft, saveDraft } from "./drafts.js";
 import { friendlyMailError, mailErrorHttpStatus, safeMailError, sendMail, testAccountConnection } from "./mail.js";
 import {
-  MAX_ENCRYPTED_SEARCH_CANDIDATES,
   messagePayloadById,
   messagePayloadForRow,
-  messagePayloadMatchesQuery,
   migrateMessageStorage,
   hasPendingMove,
   hasUnverifiedMoveLocation,
@@ -31,6 +32,7 @@ import {
   PENDING_MOVE_RECONCILIATION_ERROR,
   type MessageStorageRow,
 } from "./message-storage.js";
+import { ensureMessageFtsIndex, ftsLikeEscape } from "./message-search.js";
 import {
   MAX_OUTBOUND_ATTACHMENT_COUNT,
   MAX_OUTBOUND_ATTACHMENT_BYTES,
@@ -51,6 +53,7 @@ import {
 } from "./outbound-attachments.js";
 import {
   SubmissionConflictError,
+  deletePendingScheduledSubmission,
   deliveryFailureStatus,
   markSubmissionFailed,
   markSubmissionSubmitted,
@@ -61,13 +64,15 @@ import {
   setSubmissionPostSubmitWarning,
   startSubmission,
   submissionForId,
+  submissionRequestForId,
   submissionsForAccount,
 } from "./outbox.js";
 import { detectProvider, loginUsername, providerPresets, resolveProvider, type DetectedProvider, type ProviderPreset } from "./providers.js";
 import { OAuthError, isSupportedOAuthProvider } from "./oauth.js";
 import { normalizeLocale, oauthCallbackCopy, supportedLocale } from "./localization.js";
+import { BuiltinTranslationService } from "./builtin-translation.js";
 import { TranslationConfigurationStore, type TranslationConfigurationPatch } from "./translation-configuration.js";
-import { TranslationService, TranslationServiceError, translationErrorStatus } from "./translation.js";
+import { MAX_TRANSLATION_TEXT_LENGTH, TranslationService, TranslationServiceError, splitTranslationChunks, translationErrorStatus, translationLanguageForLocale } from "./translation.js";
 import {
   moveMessage,
   scheduleSentSubmissionVerification,
@@ -75,9 +80,52 @@ import {
   updateMessageFlags,
 } from "./sync.js";
 import {
+  createFilterRule,
+  deleteFilterRule,
+  filterRuleCreateSchema,
+  filterRuleUpdateSchema,
+  listFilterRules,
+  updateFilterRule,
+} from "./filter-rules.js";
+import {
+  clearMessageSnooze,
+  listSnoozedMessages,
+  setMessageSnoozed,
+} from "./snooze.js";
+import {
+  ContactConflictError,
+  contactCreateSchema,
+  contactForId,
+  contactUpdateSchema,
+  createContact,
+  deleteContact,
+  listContacts,
+  updateContact,
+} from "./contacts.js";
+import {
+  createTemplate,
+  deleteTemplate,
+  listTemplates,
+  templateCreateSchema,
+  templateUpdateSchema,
+  updateTemplate,
+} from "./templates.js";
+import {
+  CalendarEventTimeConflictError,
+  calendarEventCreateSchema,
+  calendarEventForId,
+  calendarEventUpdateSchema,
+  createCalendarEvent,
+  deleteCalendarEvent,
+  listCalendarEvents,
+  updateCalendarEvent,
+} from "./calendar.js";
+import {
   BACKGROUND_PRESETS,
   CLOSE_BEHAVIORS,
   NOTIFICATION_SOUNDS,
+  LIST_DENSITIES,
+  AGENT_ACCESS_LEVELS,
   getAppSettings,
   updateAppSettings,
   type AppSettings,
@@ -115,6 +163,10 @@ const manualAccountSchema = z.object({
   smtpUsername: z.string().trim().min(1).max(320).optional(),
 }).strict();
 
+const accountSignaturePatchSchema = z.object({
+  signature: z.string().max(2000),
+}).strict();
+
 const messageIdHeaderSchema = z.string().trim().regex(/^<[^<>\r\n]{1,998}>$/, "邮件引用标识无效。");
 const messageReferencesSchema = z.array(messageIdHeaderSchema).max(50)
   .refine((values) => new Set(values).size === values.length, { message: "邮件引用不能重复。" })
@@ -131,6 +183,7 @@ const sendSchema = z.object({
   html: z.string().max(2_000_000).optional(),
   idempotencyKey: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/, "发送请求标识无效。").optional(),
   discardDraftId: z.string().min(1).max(128).optional(),
+  sendAt: z.string().datetime({ offset: true }).optional(),
   attachmentTokens: z.array(z.string().regex(/^out_[0-9a-f-]{36}$/)).max(10).default([])
     .refine((tokens) => new Set(tokens).size === tokens.length, { message: "附件不能重复添加。" }),
 }).strict();
@@ -175,6 +228,34 @@ const messageFlagsPatchSchema = z.object({
   { message: "至少需要更新已读或标星状态。" },
 );
 
+const batchMessageIdsSchema = z.array(z.string().min(1)).min(1).max(100)
+  .refine((ids) => new Set(ids).size === ids.length, { message: "邮件不能重复选择。" });
+
+const batchMessageFlagsPatchSchema = z.object({
+  ids: batchMessageIdsSchema,
+  patch: messageFlagsPatchSchema,
+}).strict();
+
+const batchMessageMoveSchema = z.object({
+  ids: batchMessageIdsSchema,
+  target: z.enum(["archive", "trash"]),
+}).strict();
+
+/** Runs an IMAP-touching operation across many messages, returning per-message outcome counts. */
+async function runBatchMessageOperation<T>(ids: readonly string[], operate: (id: string) => Promise<T>): Promise<{ updated: number; failed: number }> {
+  let updated = 0;
+  let failed = 0;
+  for (const id of ids) {
+    try {
+      await operate(id);
+      updated += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { updated, failed };
+}
+
 const interfaceLocaleSchema = z.string().trim().max(32)
   .refine((value) => Boolean(supportedLocale(value)), { message: "Unsupported interface language." })
   .transform((value) => supportedLocale(value)!);
@@ -203,13 +284,20 @@ const settingsPatchSchema = z.object({
   notificationSound: z.enum(NOTIFICATION_SOUNDS).optional(),
   refreshIntervalSeconds: z.union([z.literal(30), z.literal(60), z.literal(180), z.literal(300)]).optional(),
   closeBehavior: z.enum(CLOSE_BEHAVIORS).optional(),
+  agentToolRoundLimit: z.number().int().min(1).max(50).optional(),
+  listDensity: z.enum(LIST_DENSITIES).optional(),
+  agentAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
+  agentCliAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
+  agentMcpAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
+  autoReply: autoReplyConfigPatchSchema.optional(),
 }).strict();
 
 const agentProviderSchema = z.object({
   label: z.string().trim().min(1).max(128),
-  kind: z.enum(["openai-compatible", "ollama"]),
+  kind: z.enum(["openai-compatible", "ollama", "anthropic", "gemini", "openai-responses"]),
   endpoint: z.string().trim().min(1).max(2_048),
   model: z.string().trim().min(1).max(256),
+  embeddingModel: z.string().trim().max(256).optional(),
   apiKey: z.string().max(8_192).optional(),
   clearApiKey: z.boolean().optional(),
   timeoutMs: z.number().int().min(1_000).max(120_000),
@@ -217,8 +305,19 @@ const agentProviderSchema = z.object({
   makeDefault: z.boolean().optional(),
 }).strict();
 
+const agentMcpServerSchema = z.object({
+  label: z.string().trim().min(1).max(128),
+  command: z.string().trim().min(1).max(1_024),
+  args: z.array(z.string().max(1_024)).max(128).optional(),
+  env: z.record(z.string().max(256), z.string().max(8_192)).refine((value) => Object.keys(value).length <= 128, "环境变量数量超过限制。").optional(),
+  envRemove: z.array(z.string().trim().min(1).max(256)).max(128).optional(),
+  cwd: z.string().trim().max(2_048).optional(),
+  timeoutMs: z.number().int().min(5_000).max(180_000),
+  enabled: z.boolean(),
+}).strict();
+
 const agentScopeSchema = z.object({
-  mode: z.enum(["all_accounts", "selected_account", "current_message", "current_thread"]),
+  mode: z.enum(["all_accounts", "selected_account", "current_message"]),
   accountIds: z.array(z.string().trim().min(1).max(128)).max(100),
   messageIds: z.array(z.string().trim().min(1).max(128)).max(100),
 }).strict();
@@ -240,8 +339,14 @@ const agentMessageSchema = z.object({
   scope: agentScopeSchema,
   context: z.object({
     currentMessageId: z.string().trim().min(1).max(128).optional(),
-    currentThreadMessageIds: z.array(z.string().trim().min(1).max(128)).max(100).optional(),
   }).strict(),
+  quote: z.string().trim().max(1_000).optional(),
+  attachments: z.array(z.object({
+    name: z.string().trim().min(1).max(768),
+    type: z.string().trim().max(255).default("application/octet-stream"),
+    token: z.string().regex(/^out_[0-9a-f-]{36}$/).optional(),
+    accountId: z.string().trim().min(1).max(128).optional(),
+  }).strict()).max(10).optional(),
 }).strict();
 
 const agentConversationQuerySchema = z.object({
@@ -250,6 +355,25 @@ const agentConversationQuerySchema = z.object({
 
 const agentConfirmationDecisionSchema = z.object({
   decision: z.enum(["approve", "reject"]),
+}).strict();
+
+const agentMemoryQuerySchema = z.object({
+  kind: agentMemoryKindSchema.optional(),
+  accountId: z.string().trim().min(1).max(128).optional(),
+  query: z.string().trim().max(256).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+}).strict();
+
+const agentMemoryParamsSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+}).strict();
+
+const agentMemoryCreateSchema = z.object({
+  kind: agentMemoryKindSchema.optional(),
+  accountId: z.string().trim().min(1).max(128).optional(),
+  summary: z.string().trim().min(1).max(500),
+  detail: z.string().trim().max(4_000).optional(),
+  occurredAt: z.string().trim().min(1).max(64).optional(),
 }).strict();
 
 // Allow contemporary 4K/8K wallpapers without retaining their original size.
@@ -270,6 +394,37 @@ class BackgroundUploadError extends Error {
   constructor(message: string, readonly statusCode = 400) {
     super(message);
   }
+}
+
+/**
+ * Strips HTML tags and decodes entities to produce plain text suitable for
+ * translation. Used as a fallback when a message has no textBody.
+ */
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+    .replace(/<(\/?)(p|div|br|h[1-6]|li|tr|hr)\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Returns the best available plain-text body for translation. */
+function translatableTextFromPayload(payload: { textBody?: string; htmlBody?: string }): string | null {
+  const text = payload.textBody?.trim();
+  if (text) return text;
+  const html = payload.htmlBody?.trim();
+  if (html) return htmlToPlainText(html);
+  return null;
 }
 
 function messageRow(row: MessageStorageRow, masterKey: Buffer) {
@@ -310,6 +465,7 @@ function messageRow(row: MessageStorageRow, masterKey: Buffer) {
     hasAttachments: Boolean(row.has_attachments),
     attachments: payload.attachments ?? [],
     size: row.size,
+    snoozedUntil: row.snoozed_until,
   };
 }
 
@@ -625,6 +781,12 @@ function publicSettings(context: RuntimeContext, settings: AppSettings) {
     notificationSound: settings.notificationSound,
     refreshIntervalSeconds: settings.refreshIntervalSeconds,
     closeBehavior: settings.closeBehavior,
+    agentToolRoundLimit: settings.agentToolRoundLimit,
+    listDensity: settings.listDensity,
+    agentAccessLevel: settings.agentAccessLevel,
+    agentCliAccessLevel: settings.agentCliAccessLevel,
+    agentMcpAccessLevel: settings.agentMcpAccessLevel,
+    autoReply: settings.autoReply,
     customBackgroundUrl: hasCustomBackground ? `/api/settings/background-image?v=${encodeURIComponent(settings.updatedAt)}` : null,
     updatedAt: settings.updatedAt,
   };
@@ -801,6 +963,7 @@ function hasMatchingLocalApiAccessToken(value: string | string[] | undefined, ex
 
 export async function buildApp(context: RuntimeContext, options: BuildAppOptions = {}): Promise<FastifyInstance> {
   migrateMessageStorage(context.db, context.masterKey);
+  ensureMessageFtsIndex(context.db, context.masterKey);
   migrateOutboundAttachments(context.db, outboundAttachmentDirectory(context), context.masterKey);
   migrateOutboundSubmissionStorage(context.db, context.masterKey);
   const ownedAgentMailApplication = !context.agentService && context.agentLifecycle && context.agentSourceEvents
@@ -810,6 +973,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       oauthService: context.oauthService,
       agentMailEvents: context.agentMailEvents,
       syncMessageLimit: config.syncMessageLimit,
+      outboundAttachmentDirectory: outboundAttachmentDirectory(context),
     })
     : undefined;
   const ownedAgentService = !context.agentService && context.agentLifecycle && context.agentSourceEvents
@@ -823,6 +987,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     : undefined;
   const agentService = context.agentService ?? ownedAgentService;
   agentService?.start();
+  const memoryStore = new EncryptedAgentMemoryStore(context.db, context.masterKey);
   const app = Fastify({
     logger: { level: config.logLevel },
     bodyLimit: 3 * 1024 * 1024,
@@ -834,6 +999,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   });
   const translationConfigurationManaged = !context.translationService;
   let translationService = context.translationService ?? translationConfigurationStore.createService();
+  const builtinTranslationService = new BuiltinTranslationService();
   const translationAbortController = new AbortController();
   const abortTranslationsForShutdown = () => translationAbortController.abort();
   const externalTranslationAbortSignal = options.translationAbortSignal;
@@ -977,10 +1143,69 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
+  app.get("/api/agent/mcp-servers", async (_request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      return agentService.mcpServerList();
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.post("/api/agent/mcp-servers", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const parsed = agentMcpServerSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      return reply.code(201).send(agentService.createMcpServer(parsed.data as AgentMcpServerInput));
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/agent/mcp-servers/:id", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const parsed = agentMcpServerSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      return agentService.updateMcpServer(request.params.id, parsed.data as AgentMcpServerInput);
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/agent/mcp-servers/:id/check", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      return await agentService.checkMcpServer(request.params.id);
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/agent/mcp-servers/:id", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      agentService.deleteMcpServer(request.params.id);
+      return { ok: true as const };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
   app.get("/api/agent/bootstrap", async (_request, reply) => {
     if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
     try {
       return agentService.bootstrap();
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.get("/api/agent/rag/verify", async (_request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      return agentService.verifyRag();
     } catch (error) {
       return agentFailure(reply, error);
     }
@@ -1054,7 +1279,8 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     reply.raw.setHeader("cache-control", "no-store, no-cache");
     reply.raw.setHeader("connection", "keep-alive");
     try {
-      for await (const event of agentService.streamMessage(request.params.id, parsed.data as AgentMessageInput, streamAbortController.signal)) {
+      const locale = getAppSettings(context.db).locale;
+      for await (const event of agentService.streamMessage(request.params.id, parsed.data as AgentMessageInput, streamAbortController.signal, locale)) {
         if (reply.raw.destroyed) {
           abortStream();
           break;
@@ -1065,7 +1291,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       if (!reply.raw.destroyed) {
         const body = error instanceof AgentServiceError
           ? { type: "error", error: { code: error.code, message: error.message, retryable: error.retryable } }
-          : { type: "error", error: { code: "agent_internal", message: "Agent 本地服务未能完成请求。", retryable: true } };
+          : { type: "error", error: { code: "agent_internal", message: "Agent local service failed to complete the request.", retryable: true } };
         reply.raw.write(`data: ${JSON.stringify(body)}\n\n`);
         reply.raw.write(`data: ${JSON.stringify({ type: "completed", reason: "error" })}\n\n`);
       }
@@ -1093,6 +1319,97 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       code: "not_supported",
       message: "当前版本尚未启用可执行的 Agent 高风险操作确认。",
     });
+  });
+
+  app.get("/api/agent/memory", async (request, reply) => {
+    const parsed = agentMemoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      return { items: memoryStore.list({
+        kind: parsed.data.kind,
+        accountId: parsed.data.accountId,
+        query: parsed.data.query,
+        limit: parsed.data.limit,
+      }) };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.delete("/api/agent/memory", async (_request, reply) => {
+    try {
+      return { cleared: memoryStore.clear() };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.post("/api/agent/memory", async (request, reply) => {
+    const parsed = agentMemoryCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      const item = memoryStore.create(parsed.data);
+      return reply.code(201).send({ item });
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/agent/memory/:id", async (request, reply) => {
+    const params = agentMemoryParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(params.error) });
+    const parsed = agentMemoryPatchSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      const item = memoryStore.update(params.data.id, parsed.data);
+      return { item };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/agent/memory/:id", async (request, reply) => {
+    const params = agentMemoryParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(params.error) });
+    try {
+      memoryStore.delete(params.data.id);
+      return { ok: true as const };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("was not found")) {
+        return reply.code(404).send({ ok: false, code: "not_found", message: "记忆条目不存在。" });
+      }
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.get("/api/agent/auto-reply/pending", async (_request, reply) => {
+    const engine = getAutoReplyEngine();
+    if (!engine) return reply.code(503).send({ ok: false, code: "auto_reply_unavailable", message: "自动回复引擎当前不可用。" });
+    try {
+      return { items: engine.listPending() };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.get("/api/agent/pairings", async (_request, reply) => {
+    // The desktop host owns the Broker; a browser-only or test runtime reports
+    // an empty list with the same shape so the panel degrades gracefully.
+    const pairings = (await context.listExternalPairings?.()) ?? [];
+    const now = Date.now();
+    return {
+      pairings: [...pairings].map((pairing) => {
+        const expired = pairing.expiresAt !== undefined && !pairing.revokedAt && Date.parse(pairing.expiresAt) <= now;
+        return {
+          clientId: pairing.clientId,
+          createdAt: pairing.createdAt,
+          ...(pairing.expiresAt ? { expiresAt: pairing.expiresAt } : {}),
+          ...(pairing.revokedAt ? { revokedAt: pairing.revokedAt } : {}),
+          accountIds: [...pairing.accountIds],
+          status: pairing.revokedAt ? "revoked" : expired ? "expired" : "active",
+        };
+      }),
+    };
   });
 
   app.get("/api/providers", async () =>
@@ -1289,6 +1606,147 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       return reply.code(503).send({ ok: false, code: "oauth_not_configured", message: "安全登录尚未配置。" });
     }
     return { ok: true, attemptId: attemptId.data, ...context.oauthService.getAttempt(attemptId.data) };
+  });
+
+  app.get("/api/filter-rules", async (request, reply) => {
+    const parsed = z.object({ accountId: z.string().trim().min(1).max(128).optional() }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    return { ok: true, rules: listFilterRules(context.db, parsed.data.accountId) };
+  });
+
+  app.post("/api/filter-rules", async (request, reply) => {
+    const parsed = filterRuleCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    if (parsed.data.accountId) {
+      const account = context.db.prepare("SELECT 1 FROM accounts WHERE id = ?").get(parsed.data.accountId);
+      if (!account) return reply.code(404).send({ ok: false, message: "规则绑定的邮箱不存在。" });
+    }
+    return { ok: true, rule: createFilterRule(context.db, parsed.data) };
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/filter-rules/:id", async (request, reply) => {
+    const parsed = filterRuleUpdateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    if (parsed.data.accountId) {
+      const account = context.db.prepare("SELECT 1 FROM accounts WHERE id = ?").get(parsed.data.accountId);
+      if (!account) return reply.code(404).send({ ok: false, message: "规则绑定的邮箱不存在。" });
+    }
+    const rule = updateFilterRule(context.db, request.params.id, parsed.data);
+    if (!rule) return reply.code(404).send({ ok: false, message: "规则不存在。" });
+    return { ok: true, rule };
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/filter-rules/:id", async (request, reply) => {
+    if (!deleteFilterRule(context.db, request.params.id)) {
+      return reply.code(404).send({ ok: false, message: "规则不存在。" });
+    }
+    return { ok: true };
+  });
+
+  app.get("/api/contacts", async (request, reply) => {
+    const parsed = z.object({ q: z.string().trim().max(320).optional(), limit: z.coerce.number().int().min(1).max(1000).optional() }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    return { ok: true, items: listContacts(context.db, context.masterKey, parsed.data.q, parsed.data.limit) };
+  });
+
+  app.post("/api/contacts", async (request, reply) => {
+    const parsed = contactCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    try {
+      return { ok: true, contact: createContact(context.db, context.masterKey, parsed.data) };
+    } catch (error) {
+      if (error instanceof ContactConflictError) {
+        return reply.code(409).send({ ok: false, code: "contact_exists", message: "该邮箱已在地址簿中。" });
+      }
+      throw error;
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/contacts/:id", async (request, reply) => {
+    const parsed = contactUpdateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    try {
+      const contact = updateContact(context.db, context.masterKey, request.params.id, parsed.data);
+      if (!contact) return reply.code(404).send({ ok: false, message: "联系人不存在。" });
+      return { ok: true, contact };
+    } catch (error) {
+      if (error instanceof ContactConflictError) {
+        return reply.code(409).send({ ok: false, code: "contact_exists", message: "该邮箱已在地址簿中。" });
+      }
+      throw error;
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/contacts/:id", async (request, reply) => {
+    if (!deleteContact(context.db, request.params.id)) {
+      return reply.code(404).send({ ok: false, message: "联系人不存在。" });
+    }
+    return { ok: true };
+  });
+
+  app.get("/api/templates", async (request, reply) => {
+    const parsed = z.object({ q: z.string().trim().max(200).optional(), limit: z.coerce.number().int().min(1).max(1000).optional() }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    return { ok: true, items: listTemplates(context.db, context.masterKey, parsed.data.q, parsed.data.limit) };
+  });
+
+  app.post("/api/templates", async (request, reply) => {
+    const parsed = templateCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    return { ok: true, template: createTemplate(context.db, context.masterKey, parsed.data) };
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/templates/:id", async (request, reply) => {
+    const parsed = templateUpdateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    const template = updateTemplate(context.db, context.masterKey, request.params.id, parsed.data);
+    if (!template) return reply.code(404).send({ ok: false, message: "模板不存在。" });
+    return { ok: true, template };
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/templates/:id", async (request, reply) => {
+    if (!deleteTemplate(context.db, request.params.id)) {
+      return reply.code(404).send({ ok: false, message: "模板不存在。" });
+    }
+    return { ok: true };
+  });
+
+  app.get("/api/calendar/events", async (request, reply) => {
+    const parsed = z.object({
+      after: z.string().datetime({ offset: true }).optional(),
+      before: z.string().datetime({ offset: true }).optional(),
+      limit: z.coerce.number().int().min(1).max(5000).optional(),
+    }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    return { ok: true, items: listCalendarEvents(context.db, context.masterKey, { after: parsed.data.after, before: parsed.data.before }, parsed.data.limit) };
+  });
+
+  app.post("/api/calendar/events", async (request, reply) => {
+    const parsed = calendarEventCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    return { ok: true, event: createCalendarEvent(context.db, context.masterKey, parsed.data) };
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/calendar/events/:id", async (request, reply) => {
+    const parsed = calendarEventUpdateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    try {
+      const event = updateCalendarEvent(context.db, context.masterKey, request.params.id, parsed.data);
+      if (!event) return reply.code(404).send({ ok: false, message: "事件不存在。" });
+      return { ok: true, event };
+    } catch (error) {
+      if (error instanceof CalendarEventTimeConflictError) {
+        return reply.code(400).send({ ok: false, message: "事件结束时间不能早于开始时间。" });
+      }
+      throw error;
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/calendar/events/:id", async (request, reply) => {
+    if (!deleteCalendarEvent(context.db, request.params.id)) {
+      return reply.code(404).send({ ok: false, message: "事件不存在。" });
+    }
+    return { ok: true };
   });
 
   app.post("/api/accounts/discover", async (request, reply) => {
@@ -1523,6 +1981,16 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     return { ok: true };
   });
 
+  app.patch<{ Params: { id: string } }>("/api/accounts/:id/signature", async (request, reply) => {
+    const parsed = accountSignaturePatchSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    const result = context.db
+      .prepare("UPDATE accounts SET signature = ? WHERE id = ?")
+      .run(parsed.data.signature, request.params.id);
+    if (!result.changes) return reply.code(404).send({ ok: false, message: "邮箱不存在。" });
+    return { ok: true };
+  });
+
   app.get<{ Querystring: { accountId?: string; limit?: string } }>("/api/submissions", async (request, reply) => {
     const parsed = submissionsQuerySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
@@ -1557,7 +2025,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
-  app.get<{ Querystring: { accountId?: string; folder?: string; q?: string; page?: string; pageSize?: string; starred?: string; unread?: string; archived?: string } }>(
+  app.get<{ Querystring: { accountId?: string; folder?: string; q?: string; page?: string; pageSize?: string; starred?: string; unread?: string; archived?: string; snoozed?: string } }>(
     "/api/messages",
     async (request, reply) => {
       const page = Math.max(1, Number.parseInt(request.query.page ?? "1", 10) || 1);
@@ -1576,8 +2044,16 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       } else if (request.query.starred === "1") {
         // Starred is a cross-folder view, unlike the normal unified inbox.
         filters.push("m.flags_json LIKE '%\\\\Flagged%'");
+      } else if (request.query.snoozed === "1") {
+        // The Snoozed view lists messages whose snooze has not fired yet.
+        const nowIso = new Date().toISOString();
+        filters.push("m.snoozed_until IS NOT NULL AND m.snoozed_until > ?");
+        params.push(nowIso);
       } else {
         filters.push(inboxMessageFilter);
+        // Snoozed messages are hidden from the unified inbox until due.
+        filters.push("(m.snoozed_until IS NULL OR m.snoozed_until <= ?)");
+        params.push(new Date().toISOString());
       }
       if (request.query.unread === "1") {
         filters.push("m.flags_json NOT LIKE '%\\\\Seen%'");
@@ -1585,31 +2061,36 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
       const query = request.query.q?.trim();
       if (query) {
-        const candidateCount = Number(
-          (context.db.prepare(`SELECT COUNT(*) AS count FROM messages m ${where}`).get(...params) as { count: number }).count,
+        // FTS5 substring/token search over the decrypted-payload index. The
+        // trigram tokenizer accelerates LIKE patterns of three or more
+        // characters and still answers shorter patterns (including two-character
+        // CJK terms) by scanning plaintext index terms, so matching never needs
+        // to decrypt the whole candidate set and the old candidate-count cap
+        // (search_scope_too_large) no longer applies at any data scale.
+        const pattern = `%${ftsLikeEscape(query)}%`;
+        const ftsMatch = `(fts.subject LIKE ? ESCAPE '\\'
+          OR fts.from_name LIKE ? ESCAPE '\\'
+          OR fts.from_address LIKE ? ESCAPE '\\'
+          OR fts.body LIKE ? ESCAPE '\\')`;
+        const ftsParams = [pattern, pattern, pattern, pattern];
+        const join = `
+          FROM messages_fts fts
+          JOIN messages m ON m.id = fts.message_id
+          JOIN accounts a ON a.id = m.account_id`;
+        const ftsWhere = filters.length ? `${ftsMatch} AND (${filters.join(" AND ")})` : ftsMatch;
+        const total = Number(
+          (context.db.prepare(`SELECT COUNT(*) AS count ${join} WHERE ${ftsWhere}`).get(...ftsParams, ...params) as { count: number }).count,
         );
-        if (candidateCount > MAX_ENCRYPTED_SEARCH_CANDIDATES) {
-          return reply.code(422).send({
-            ok: false,
-            code: "search_scope_too_large",
-            message: "搜索范围过大，请先选择一个邮箱或文件夹后再搜索。",
-          });
-        }
-        const candidates = context.db.prepare(`
-          SELECT m.*, a.email AS account_email, a.provider_name
-          FROM messages m JOIN accounts a ON a.id = m.account_id
-          ${where}
-          ORDER BY COALESCE(m.sent_at, m.created_at) DESC
-        `).all(...params) as MessageStorageRow[];
-        const matches = candidates.filter((row) =>
-          messagePayloadMatchesQuery(messagePayloadForRow(row, context.masterKey), query));
-        const offset = (page - 1) * pageSize;
-        return {
-          items: matches.slice(offset, offset + pageSize).map((row) => messageRow(row, context.masterKey)),
-          total: matches.length,
-          page,
-          pageSize,
-        };
+        const rows = context.db
+          .prepare(`
+            SELECT m.*, a.email AS account_email, a.provider_name
+            ${join}
+            WHERE ${ftsWhere}
+            ORDER BY COALESCE(m.sent_at, m.created_at) DESC
+            LIMIT ? OFFSET ?
+          `)
+          .all(...ftsParams, ...params, pageSize, (page - 1) * pageSize) as MessageStorageRow[];
+        return { items: rows.map((row) => messageRow(row, context.masterKey)), total, page, pageSize };
       }
       const total = Number(
         (context.db.prepare(`SELECT COUNT(*) AS count FROM messages m ${where}`).get(...params) as { count: number }).count,
@@ -1639,10 +2120,15 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   });
 
   // This exposes capability only. It deliberately never returns endpoint,
-  // provider, or credential details to the reader UI.
+  // provider, credential, model-cache, or file-path details to the reader UI.
   app.get("/api/translation/status", async () => {
     if (!translationConfigurationManaged) return { enabled: translationService.isConfigured() };
     const summary = translationConfigurationStore.summary();
+    // When no external service is configured the built-in free translator
+    // (Google Translate + MyMemory fallback) is always available.
+    if (!summary.enabled && !summary.configurationError) {
+      return { enabled: true, mode: "builtin" as const };
+    }
     return {
       enabled: summary.enabled,
       ...(summary.configurationError ? { configurationError: summary.configurationError } : {}),
@@ -1732,6 +2218,8 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       });
     }
 
+    const llmProviders = agentService?.providerList().items.filter((p) => p.configured) ?? [];
+
     try {
       const stored = messagePayloadById(context.db, context.masterKey, request.params.id);
       if (!stored) {
@@ -1739,19 +2227,97 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
           ok: false,
           code: "translation_content_unavailable",
           message: "The selected message is no longer available.",
+          ...(llmProviders.length > 0 ? { llmAvailable: true } : {}),
         });
       }
 
-      // `textBody` is the parser-produced plain-text mail body. Do not send
-      // headers, addresses, attachments, snippets, or raw HTML to a provider.
-      const result = await translationService.translate(stored.payload.textBody, parsed.data.targetLocale, translationAbortController.signal);
-      return { ok: true, targetLocale: parsed.data.targetLocale, ...result };
+      // Prefer the parser-produced plain-text body; fall back to stripping
+      // HTML when the message has no textBody. Never send headers, addresses,
+      // attachments, snippets, or raw HTML to a translation provider.
+      const translatableText = translatableTextFromPayload(stored.payload);
+      if (!translatableText) {
+        return reply.code(422).send({
+          ok: false,
+          code: "translation_content_unavailable",
+          message: "The message does not contain translatable text.",
+          ...(llmProviders.length > 0 ? { llmAvailable: true } : {}),
+        });
+      }
+      // Use the configured translation service when available; otherwise fall
+      // back to the built-in free translator (Google Translate + MyMemory).
+      // The built-in service is only used for user-managed configuration, not
+      // for environment-injected services that are expected to be configured.
+      const useBuiltin = translationConfigurationManaged
+        && !translationService.isConfigured();
+      const effectiveService = useBuiltin ? builtinTranslationService : translationService;
+      const chunks = splitTranslationChunks(translatableText);
+      // Single-chunk translations keep the original JSON response for backward
+      // compatibility. Multi-chunk translations stream partial results via SSE
+      // so the reader sees incremental progress instead of waiting for the
+      // whole message to finish.
+      if (chunks.length <= 1) {
+        const result = await effectiveService.translate(translatableText, parsed.data.targetLocale, translationAbortController.signal);
+        return { ok: true, targetLocale: parsed.data.targetLocale, ...result };
+      }
+
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      });
+      // Combine the shutdown signal with client disconnect so cancelling the
+      // request stops remaining chunks instead of wasting API calls.
+      const requestAbortController = new AbortController();
+      const abortForClientDisconnect = () => requestAbortController.abort();
+      request.raw.once("aborted", abortForClientDisconnect);
+      reply.raw.once("close", abortForClientDisconnect);
+      const abortForShutdown = () => requestAbortController.abort();
+      if (translationAbortController.signal.aborted) abortForShutdown();
+      else translationAbortController.signal.addEventListener("abort", abortForShutdown, { once: true });
+      const send = (data: Record<string, unknown>) => {
+        reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+      try {
+        const parts: string[] = [];
+        let detectedLanguage: string | undefined;
+        for (const [index, chunk] of chunks.entries()) {
+          if (requestAbortController.signal.aborted) break;
+          const chunkResult = await effectiveService.translate(chunk, parsed.data.targetLocale, requestAbortController.signal);
+          parts.push(chunkResult.translatedText);
+          if (!detectedLanguage && chunkResult.detectedLanguage) {
+            detectedLanguage = chunkResult.detectedLanguage;
+          }
+          send({ type: "chunk", partial: parts.join("\n"), chunkIndex: index, totalChunks: chunks.length });
+        }
+        if (!requestAbortController.signal.aborted) {
+          send({ type: "complete", translatedText: parts.join("\n"), ...(detectedLanguage ? { detectedLanguage } : {}) });
+        }
+      } catch (error) {
+        if (requestAbortController.signal.aborted) {
+          // Client cancelled — no error event, just end the stream.
+        } else if (!(error instanceof TranslationServiceError)) {
+          app.log.warn({ messageId: request.params.id }, "Selected message translation failed");
+          const code = "translation_failed";
+          const message = "The selected message could not be translated.";
+          try { send({ type: "error", message, code }); } catch { /* client may have disconnected */ }
+        } else {
+          try { send({ type: "error", message: error.message, code: error.code }); } catch { /* client may have disconnected */ }
+        }
+      } finally {
+        request.raw.removeListener("aborted", abortForClientDisconnect);
+        reply.raw.removeListener("close", abortForClientDisconnect);
+        translationAbortController.signal.removeEventListener("abort", abortForShutdown);
+        try { reply.raw.end(); } catch { /* response already closed */ }
+      }
+      return reply;
     } catch (error) {
       if (error instanceof TranslationServiceError) {
         return reply.code(translationErrorStatus(error)).send({
           ok: false,
           code: error.code,
           message: error.message,
+          ...(llmProviders.length > 0 ? { llmAvailable: true } : {}),
         });
       }
       // Keep message data and provider details out of logs and HTTP errors.
@@ -1760,7 +2326,113 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         ok: false,
         code: "translation_failed",
         message: "The selected message could not be translated.",
+        ...(llmProviders.length > 0 ? { llmAvailable: true } : {}),
       });
+    }
+  });
+
+  // LLM-powered translation fallback. Uses a configured Agent provider to
+  // translate the message when the external free service is unavailable.
+  app.post<{ Params: { id: string } }>("/api/messages/:id/translate-llm", async (request, reply) => {
+    if (!agentService) {
+      return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    }
+    const bodySchema = z.object({
+      targetLocale: z.string().trim().min(2).max(16),
+      providerId: z.string().trim().min(1).max(128),
+      model: z.string().trim().min(1).max(256).optional(),
+    });
+    const parsed = bodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ ok: false, code: "translation_invalid_target", message: "The translation request is invalid." });
+    }
+
+    try {
+      // Validate the locale structure but pass the full locale through so the
+      // LLM prompt can distinguish variants like zh-CN vs zh-TW.
+      translationLanguageForLocale(parsed.data.targetLocale);
+      const stored = messagePayloadById(context.db, context.masterKey, request.params.id);
+      if (!stored) {
+        return reply.code(404).send({ ok: false, code: "translation_content_unavailable", message: "The selected message is no longer available." });
+      }
+      if (!stored.payload.textBody?.trim() && !stored.payload.htmlBody?.trim()) {
+        return reply.code(422).send({ ok: false, code: "translation_content_unavailable", message: "The message does not contain translatable text." });
+      }
+      const translatableText = translatableTextFromPayload(stored.payload);
+      if (!translatableText) {
+        return reply.code(422).send({ ok: false, code: "translation_content_unavailable", message: "The message does not contain translatable text." });
+      }
+      if (translatableText.length > MAX_TRANSLATION_TEXT_LENGTH) {
+        return reply.code(413).send({ ok: false, code: "translation_request_too_large", message: "The message is too large to translate." });
+      }
+      // Combine the shutdown signal with client disconnect so cancelling the
+      // request aborts the in-flight LLM call instead of wasting provider quota.
+      const requestAbortController = new AbortController();
+      const abortForClientDisconnect = () => requestAbortController.abort();
+      request.raw.once("aborted", abortForClientDisconnect);
+      reply.raw.once("close", abortForClientDisconnect);
+      const abortForShutdown = () => requestAbortController.abort();
+      if (translationAbortController.signal.aborted) abortForShutdown();
+      else translationAbortController.signal.addEventListener("abort", abortForShutdown, { once: true });
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      });
+      const send = (data: Record<string, unknown>) => {
+        reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+      try {
+        // Stream every LLM token through SSE so the reader sees the
+        // translation appear incrementally instead of waiting for the whole
+        // model response to finish.
+        let partial = "";
+        const result = await agentService.translateWithProvider(
+          parsed.data.providerId,
+          translatableText,
+          parsed.data.targetLocale,
+          {
+            ...(parsed.data.model ? { model: parsed.data.model } : {}),
+            signal: requestAbortController.signal,
+            onDelta: (delta) => {
+              partial += delta;
+              if (partial.trim()) {
+                try { send({ type: "chunk", partial }); } catch { /* client may have disconnected */ }
+              }
+            },
+          },
+        );
+        if (!requestAbortController.signal.aborted) {
+          send({ type: "complete", translatedText: result.translatedText });
+        }
+      } catch (error) {
+        if (requestAbortController.signal.aborted) {
+          // Client cancelled — no error event, just end the stream.
+        } else if (error instanceof TranslationServiceError) {
+          try { send({ type: "error", message: error.message, code: error.code }); } catch { /* client may have disconnected */ }
+        } else if (error instanceof AgentServiceError) {
+          try { send({ type: "error", message: error.message, code: error.code }); } catch { /* client may have disconnected */ }
+        } else {
+          app.log.warn({ messageId: request.params.id }, "LLM translation failed");
+          try { send({ type: "error", message: "The selected message could not be translated.", code: "translation_failed" }); } catch { /* client may have disconnected */ }
+        }
+      } finally {
+        request.raw.removeListener("aborted", abortForClientDisconnect);
+        reply.raw.removeListener("close", abortForClientDisconnect);
+        translationAbortController.signal.removeEventListener("abort", abortForShutdown);
+        try { reply.raw.end(); } catch { /* response already closed */ }
+      }
+      return reply;
+    } catch (error) {
+      if (error instanceof TranslationServiceError) {
+        return reply.code(translationErrorStatus(error)).send({ ok: false, code: error.code, message: error.message });
+      }
+      if (error instanceof AgentServiceError) {
+        return reply.code(error.statusCode).send({ ok: false, code: error.code, message: error.message });
+      }
+      app.log.warn({ messageId: request.params.id }, "LLM translation failed");
+      return reply.code(500).send({ ok: false, code: "translation_failed", message: "The selected message could not be translated." });
     }
   });
 
@@ -1894,6 +2566,58 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
+  app.patch("/api/messages/batch/flags", async (request, reply) => {
+    const parsed = batchMessageFlagsPatchSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    const { updated, failed } = await runBatchMessageOperation(parsed.data.ids, (id) => updateMessageFlags(
+      context.db,
+      context.masterKey,
+      id,
+      parsed.data.patch,
+      context.oauthService,
+      context.agentMailEvents,
+    ));
+    return { ok: true, updated, failed };
+  });
+
+  app.post("/api/messages/batch/move", async (request, reply) => {
+    const parsed = batchMessageMoveSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    let updated = 0;
+    let failed = 0;
+    const pendingAccounts = new Set<string>();
+    for (const id of parsed.data.ids) {
+      try {
+        const { accountId, refreshPending } = await moveMessage(
+          context.db,
+          context.masterKey,
+          id,
+          parsed.data.target,
+          context.oauthService,
+          context.agentMailEvents,
+        );
+        updated += 1;
+        if (refreshPending) pendingAccounts.add(accountId);
+      } catch {
+        failed += 1;
+      }
+    }
+    for (const accountId of pendingAccounts) {
+      // Some providers cannot confirm a batch MOVE outcome synchronously.
+      // Reconcile each affected account in the background so the renderer
+      // receives the verified destination instead of a stale local snapshot.
+      void syncAccount(
+        context.db,
+        context.masterKey,
+        accountId,
+        config.syncMessageLimit,
+        context.oauthService,
+        context.agentMailEvents,
+      ).catch(() => request.log.warn({ accountId }, "Batch move cache refresh is pending"));
+    }
+    return { ok: true, updated, failed };
+  });
+
   app.patch<{ Params: { id: string } }>("/api/messages/:id", async (request, reply) => {
     const parsed = messageFlagsPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
@@ -1947,6 +2671,36 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
+  app.post<{ Params: { id: string } }>("/api/messages/:id/snooze", async (request, reply) => {
+    const parsed = z.object({
+      until: z.string().datetime({ offset: true }).refine((value) => new Date(value).getTime() > Date.now(), {
+        message: "稍后处理时间必须在未来。",
+      }),
+    }).strict().safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    const existing = context.db.prepare("SELECT 1 FROM messages WHERE id = ?").get(request.params.id);
+    if (!existing) return reply.code(404).send({ ok: false, message: "邮件不存在。" });
+    try {
+      setMessageSnoozed(context.db, request.params.id, parsed.data.until);
+      return { ok: true, snoozedUntil: parsed.data.until };
+    } catch (error) {
+      const failure = mailFailure(error);
+      return reply.code(failure.statusCode).send(mailFailureBody(failure, error instanceof Error ? error.message : "无法稍后处理这封邮件。"));
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/messages/:id/snooze", async (request, reply) => {
+    const existing = context.db.prepare("SELECT 1 FROM messages WHERE id = ?").get(request.params.id);
+    if (!existing) return reply.code(404).send({ ok: false, message: "邮件不存在。" });
+    try {
+      clearMessageSnooze(context.db, request.params.id);
+      return { ok: true };
+    } catch (error) {
+      const failure = mailFailure(error);
+      return reply.code(failure.statusCode).send(mailFailureBody(failure, error instanceof Error ? error.message : "无法取消稍后处理。"));
+    }
+  });
+
   app.post("/api/messages/send", async (request, reply) => {
     const parsed = sendSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
@@ -1957,6 +2711,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       accountId: _accountId,
       idempotencyKey,
       discardDraftId,
+      sendAt,
       attachmentTokens,
       ...message
     } = parsed.data;
@@ -1972,8 +2727,23 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         accountEmail: account.email,
         idempotencyKey,
         request: submissionRequest,
+        sendAt,
       });
       submissionId = prepared.submission.id;
+
+      if (sendAt) {
+        // A future send time parks the durable submission in `pending`; the
+        // background scheduler submits it when due. The interactive route
+        // never touches SMTP for a scheduled send.
+        return reply.code(202).send({
+          ok: true,
+          messageId: prepared.submission.messageId,
+          deliveryStatus: "pending",
+          sendAt,
+          scheduled: true,
+          submission: prepared.submission,
+        });
+      }
 
       if (!prepared.created && ["submitting", "submitted", "confirmed", "unknown_delivery"].includes(prepared.submission.deliveryStatus)) {
         if (prepared.submission.deliveryStatus === "submitted" || prepared.submission.deliveryStatus === "unknown_delivery") {
@@ -2093,6 +2863,31 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
+  app.post<{ Params: { id: string } }>("/api/messages/send/:id/cancel", async (request, reply) => {
+    const submission = submissionForId(context.db, context.masterKey, request.params.id);
+    if (!submission) return reply.code(404).send({ ok: false, message: "发送任务不存在。" });
+    const requestPayload = submissionRequestForId(context.db, context.masterKey, request.params.id);
+    const cancelled = deletePendingScheduledSubmission(context.db, request.params.id);
+    if (!cancelled) {
+      return reply.code(409).send({ ok: false, message: "该邮件已到发送时间或正在发送，无法取消。" });
+    }
+    if (requestPayload?.attachmentTokens.length) {
+      try {
+        discardPendingOutboundAttachments(
+          context.db,
+          outboundAttachmentDirectory(context),
+          submission.accountId,
+          requestPayload.attachmentTokens,
+        );
+      } catch (error) {
+        // The durable submission is already gone. Orphaned files are cleaned
+        // up by the next startup pass; do not fail the cancellation for it.
+        request.log.warn({ submissionId: request.params.id }, "Could not release cancelled scheduled send attachments");
+      }
+    }
+    return { ok: true, cancelled: true };
+  });
+
   app.post("/api/messages/drafts", async (request, reply) => {
     const parsed = draftSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
@@ -2132,13 +2927,16 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
 
   app.get("/api/stats", async () => {
     const accounts = (context.db.prepare("SELECT COUNT(*) AS count FROM accounts").get() as { count: number }).count;
+    // Snoozed messages are hidden from the unified inbox, so the sidebar
+    // counts must exclude active snoozes too.
+    const nowIso = new Date().toISOString();
     const messages = (
-      context.db.prepare(`SELECT COUNT(*) AS count FROM messages m WHERE ${inboxMessageFilter}`).get() as { count: number }
+      context.db.prepare(`SELECT COUNT(*) AS count FROM messages m WHERE ${inboxMessageFilter} AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?)`).get(nowIso) as { count: number }
     ).count;
     const unread = (
       context.db
-        .prepare(`SELECT COUNT(*) AS count FROM messages m WHERE ${inboxMessageFilter} AND flags_json NOT LIKE '%\\\\Seen%'`)
-        .get() as { count: number }
+        .prepare(`SELECT COUNT(*) AS count FROM messages m WHERE ${inboxMessageFilter} AND flags_json NOT LIKE '%\\\\Seen%' AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?)`)
+        .get(nowIso) as { count: number }
     ).count;
     return { accounts, messages, unread };
   });

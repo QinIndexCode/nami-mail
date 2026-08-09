@@ -118,6 +118,110 @@ async function renderAppIcon(mark, size) {
     .toBuffer();
 }
 
+// NSIS assisted-installer bitmaps. The wizard paints the sidebar on the left
+// of the welcome/directory pages and the header strip at the top of every
+// page; electron-builder picks these files up by their default names
+// (build/installerSidebar.bmp, build/installerHeader.bmp).
+// NSIS wizard bitmaps must be uncompressed BMPs. sharp cannot write BMP, so
+// encode a 24-bit bottom-up BMP directly from raw RGB (NSIS accepts 24/32-bit).
+function encodeBmp24(rgb, width, height) {
+  const rowSize = Math.ceil((24 * width) / 32) * 4;
+  const pixelDataSize = rowSize * height;
+  const fileSize = 54 + pixelDataSize;
+  const out = Buffer.alloc(fileSize);
+  out.write("BM", 0, "ascii");
+  out.writeUInt32LE(fileSize, 2);
+  out.writeUInt32LE(54, 10);
+  out.writeUInt32LE(40, 14);
+  out.writeInt32LE(width, 18);
+  out.writeInt32LE(height, 22);
+  out.writeUInt16LE(1, 26);
+  out.writeUInt16LE(24, 28);
+  out.writeUInt32LE(0, 30); // BI_RGB
+  out.writeUInt32LE(pixelDataSize, 34);
+  let offset = 54;
+  for (let y = height - 1; y >= 0; y--) {
+    const rowStart = y * width * 3;
+    for (let x = 0; x < width; x++) {
+      const src = rowStart + x * 3;
+      out[offset++] = rgb[src + 2]; // B
+      out[offset++] = rgb[src + 1]; // G
+      out[offset++] = rgb[src];     // R
+    }
+    offset += rowSize - width * 3;
+  }
+  return out;
+}
+
+async function renderInstallerSidebar(mark) {
+  const width = 164;
+  const height = 314;
+  const markSize = 52;
+  const resizedMark = await sharp(mark)
+    .resize(markSize, markSize, { fit: "inside", kernel: sharp.kernel.lanczos3 })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+  const markMetadata = await sharp(resizedMark).metadata();
+  assert.ok(markMetadata.width && markMetadata.height);
+  const overlay = Buffer.from(
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="${width}" height="${height}" fill="#1b1b1f"/>
+      <text x="82" y="226" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#f5f5f6" text-anchor="middle" letter-spacing="0.5">Nami Mail</text>
+      <text x="82" y="245" font-family="Segoe UI, Arial, sans-serif" font-size="9" fill="#9898a0" text-anchor="middle">Local-first mail client</text>
+    </svg>`,
+  );
+  const rgb = await sharp({
+    create: { width, height, channels: 4, background: { r: 27, g: 27, b: 31, alpha: 1 } },
+  })
+    .composite([
+      { input: overlay, left: 0, top: 0 },
+      {
+        input: resizedMark,
+        left: Math.round((width - markMetadata.width) / 2),
+        top: Math.round((height - markMetadata.height) / 2) - 24,
+      },
+    ])
+    .removeAlpha()
+    .toColourspace("srgb")
+    .raw()
+    .toBuffer();
+  return encodeBmp24(rgb, width, height);
+}
+
+async function renderInstallerHeader(mark) {
+  const width = 150;
+  const height = 57;
+  const markSize = 24;
+  const resizedMark = await sharp(mark)
+    .resize(markSize, markSize, { fit: "inside", kernel: sharp.kernel.lanczos3 })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+  const markMetadata = await sharp(resizedMark).metadata();
+  assert.ok(markMetadata.width && markMetadata.height);
+  const overlay = Buffer.from(
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="${width}" height="${height}" fill="#1b1b1f"/>
+      <text x="42" y="35" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#f5f5f6">Nami Mail</text>
+    </svg>`,
+  );
+  const rgb = await sharp({
+    create: { width, height, channels: 4, background: { r: 27, g: 27, b: 31, alpha: 1 } },
+  })
+    .composite([
+      { input: overlay, left: 0, top: 0 },
+      {
+        input: resizedMark,
+        left: 12,
+        top: Math.round((height - markMetadata.height) / 2),
+      },
+    ])
+    .removeAlpha()
+    .toColourspace("srgb")
+    .raw()
+    .toBuffer();
+  return encodeBmp24(rgb, width, height);
+}
+
 function encodeIco(frames) {
   const headerSize = 6;
   const directoryEntrySize = 16;
@@ -171,10 +275,13 @@ const [lightThemeMark, darkThemeMark] = await Promise.all([
     offset: -500,
   }),
 ]);
-const [lightWebMark, darkWebMark, fullSizeIcon] = await Promise.all([
+const [lightWebMark, darkWebMark, fullSizeIcon, installerSidebar, installerHeader, uninstallerSidebar] = await Promise.all([
   renderMark(lightThemeMark, 256, 18),
   renderMark(darkThemeMark, 256, 18),
   renderAppIcon(darkThemeMark, 1024),
+  renderInstallerSidebar(darkThemeMark),
+  renderInstallerHeader(darkThemeMark),
+  renderInstallerSidebar(darkThemeMark),
 ]);
 const iconFrames = await Promise.all(iconSizes.map(async (size) => ({
   size,
@@ -207,6 +314,9 @@ const outputs = [
   [path.join(projectRoot, "apps", "web", "public", "favicon.ico"), ico],
   [path.join(webBrandDirectory, "mark-light.png"), lightWebMark],
   [path.join(webBrandDirectory, "mark-dark.png"), darkWebMark],
+  [path.join(projectRoot, "build", "installerSidebar.bmp"), installerSidebar],
+  [path.join(projectRoot, "build", "installerHeader.bmp"), installerHeader],
+  [path.join(projectRoot, "build", "uninstallerSidebar.bmp"), uninstallerSidebar],
 ];
 const changed = [];
 for (const [filePath, contents] of outputs) {

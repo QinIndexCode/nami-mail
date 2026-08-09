@@ -1,6 +1,6 @@
 # Agent Tools
 
-[Chinese](tools.md) | [English](tools.en.md)
+[Chinese](tools.zh-CN.md) | [English](tools.en.md)
 
 ## One registry
 

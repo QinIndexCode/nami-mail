@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Scrubber 预览</title>
+<style>
+  :root {
+    color-scheme: light;
+    --canvas: #ececef;
+    --panel: #ffffff;
+    --panel-muted: #f7f7f8;
+    --hover: rgba(18,18,20,0.045);
+    --selected: rgba(18,18,20,0.075);
+    --text: #151517;
+    --text-soft: #5f5f66;
+    --text-faint: #727279;
+    --line: rgba(18,18,20,0.09);
+    --line-strong: rgba(18,18,20,0.14);
+    --button: #171719;
+    --button-text: #ffffff;
+    --shadow-sm: 0 6px 16px rgba(23,23,27,0.10), 0 1px 3px rgba(23,23,27,0.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --canvas: #050506;
+      --panel: #171719;
+      --panel-muted: #19191b;
+      --hover: rgba(255,255,255,0.055);
+      --selected: rgba(255,255,255,0.095);
+      --text: #f5f5f6;
+      --text-soft: #b8b8be;
+      --text-faint: #9898a0;
+      --line: rgba(255,255,255,0.09);
+      --line-strong: rgba(255,255,255,0.15);
+      --button: #f1f1f2;
+      --button-text: #111113;
+      --shadow-sm: 0 6px 16px rgba(0,0,0,0.45), 0 1px 3px rgba(0,0,0,0.25);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 22% 0%, rgba(255,255,255,0.7), transparent 32%), var(--canvas);
+    color: var(--text);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .frame { width: min(860px, calc(100vw - 32px)); height: min(680px, calc(100vh - 48px)); border: 1px solid var(--line-strong); border-radius: 16px; background: var(--panel); box-shadow: 0 28px 80px rgba(23,23,27,0.15), 0 2px 10px rgba(23,23,27,0.06); display: flex; flex-direction: column; overflow: hidden; }
+  .frame-head { padding: 12px 18px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+  .frame-head strong { font-size: 13px; }
+  .frame-head span { color: var(--text-faint); font-size: 11px; }
+  .frame-head .counts { display: flex; align-items: center; gap: 5px; margin-left: auto; }
+  .frame-head button { padding: 4px 9px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel-muted); color: var(--text-soft); cursor: pointer; font-size: 10px; }
+  .frame-head button.on { background: var(--button); color: var(--button-text); border-color: var(--button); }
+  .frame-head em { color: var(--text-faint); font-size: 10px; font-style: normal; font-family: "DM Mono", monospace; white-space: nowrap; }
+  .wrap { position: relative; flex: 1; min-height: 0; }
+  .transcript { position: absolute; inset: 0; overflow-y: auto; padding: 22px clamp(18px, 4.5vw, 48px); scrollbar-width: none; }
+  .transcript::-webkit-scrollbar { display: none; }
+  .msg { max-width: 760px; margin: 0 auto 20px; }
+  .msg-meta { display: flex; align-items: center; gap: 7px; min-height: 20px; margin-bottom: 5px; color: var(--text-faint); font-size: 10px; }
+  .msg.assistant .msg-meta { justify-content: flex-start; }
+  .msg.user .msg-meta { justify-content: flex-end; }
+  .msg-role { padding: 2px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-muted); color: var(--text-soft); font-size: 10px; font-weight: 700; }
+  .msg-bubble { color: var(--text); font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.user .msg-bubble { max-width: min(100%, 580px); margin-left: auto; padding: 10px 14px; border: 1px solid rgba(21,21,23,0.24); border-radius: 12px 12px 4px 12px; background: rgba(21,21,23,0.06); }
+  .msg.assistant .msg-bubble { max-width: min(100%, 620px); }
+  @media (prefers-color-scheme: dark) {
+    .msg.user .msg-bubble { border-color: rgba(245,245,246,0.24); background: rgba(245,245,246,0.08); }
+  }
+  .msg-attach { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .msg-attach span { padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--panel-muted); color: var(--text-soft); font-size: 11px; }
+  .msg-quote { margin-bottom: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-muted); color: var(--text-soft); font-size: 12px; }
+
+  /* Scrubber — mirrors AgentWorkspace styles */
+  .scrubber { position: absolute; z-index: 6; top: 8px; left: 6px; bottom: 8px; width: 18px; cursor: pointer; }
+  .scrubber-bar { position: absolute; left: 0; display: block; height: 2px; border-radius: 999px; background: var(--line-strong); transition: width .14s ease, background-color .14s ease; pointer-events: none; }
+  .scrubber-bar.hovered { background: var(--text-soft); }
+  .scrubber-preview { position: absolute; z-index: 7; left: calc(100% + 8px); max-width: 280px; transform: translateY(-50%); }
+  .scrubber-preview-bubble { display: block; max-width: 280px; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--text-soft); box-shadow: var(--shadow-sm); font-size: 10px; line-height: 1.5; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="frame-head">
+      <strong>Agent 对话预览</strong>
+      <span>左侧轨道 = 每条用户消息一根短横</span>
+      <div class="counts">
+        <button type="button" data-count="8">少量 8</button>
+        <button type="button" data-count="70" class="on">大量 70</button>
+      </div>
+      <em>hover 轨道看山峰+预览，点击跳转</em>
+    </div>
+    <div class="wrap">
+      <div class="transcript" id="transcript"></div>
+      <div class="scrubber" id="scrubber"></div>
+    </div>
+  </div>
+<script>
+(function () {
+  "use strict";
+  // Same constants as AgentWorkspace.
+  var GAP = 12, EDGE_ZONE = 28, MAX_SPEED = 16, MIN_SPEED = 2, BLUR_MAX = 1.5;
+
+  // Edge-zone scroll speed eases toward the edge, with a small floor so the
+  // motion stays perceptible once the zone is entered.
+  function speedFor(distanceToEdge) {
+    var factor = Math.pow(1 - Math.min(1, distanceToEdge / EDGE_ZONE), 2);
+    return Math.max(MIN_SPEED, MAX_SPEED * factor);
+  }
+
+  // Bars blur near the top/bottom edge of the track to dissolve into the
+  // boundary instead of being clipped hard.
+  function barBlur(top, trackH) {
+    var d = Math.min(top, trackH - top);
+    if (d >= EDGE_ZONE) return 0;
+    return Math.max(0, 1 - d / EDGE_ZONE) * BLUR_MAX;
+  }
+
+  var userMessages = [
+    "帮我看看收件箱里今天有什么重要的邮件？",
+    "把标为红色的那封邮件内容整理一下，然后草拟一封回复",
+    "请把上一封邮件的发件人添加到联系人",
+    "帮我写一封请假邮件给张经理，说明下周一需要请假一天，理由写家里有事需要处理",
+    "这封邮件的正文太长了，帮我提取核心要点",
+    "搜索一下上周五关于项目进度的邮件",
+    "用英文回复客户的询价邮件，语气要专业友好，同时附上我们最新的产品目录",
+    "帮我把最近三天的未读邮件全部标记为已读",
+    "起草一封邮件给所有团队成员，通知下周三下午三点召开季度总结会议，会议室 A301",
+    "帮我查一下 2026 年 1 月份的财务报告邮件是否已经发送给财务部",
+    "这封来自供应商的邮件提到付款延迟，帮我回复确认新的付款日期并致歉",
+    "整理今天的邮件，按重要程度排序，列出需要立即处理的 5 件事",
+    "帮我把上周所有带附件的邮件列出来，附件类型和大小都要标明",
+    "草拟一封感谢信给赞助商，感谢他们对本次技术大会的支持，并附上活动照片链接",
+    "请检查一下草稿箱，把其中已经完成的草稿邮件删除",
+    "把张总的邮件转发给李总，并添加一段说明，提到我们已经开始处理他关心的交付进度问题",
+    "帮我设置一个规则：来自新闻订阅的邮件自动归档到「新闻」文件夹",
+    "最近有没有收到关于服务器维护的通知邮件？帮我找出来并总结要点",
+    "草拟一封中文邮件给客户，告知他们的订单已发货，预计三天内到达，随附物流单号",
+    "帮我把这封邮件的正文翻译成英文，然后保存为草稿，收件人保持不变",
+    "查一下 5 月份提交的年假申请是否已获批准，相关邮件在哪里",
+    "帮我统计一下这个月收到多少封带 PDF 附件的邮件",
+    "草拟一封道歉邮件给王经理，解释昨天的会议材料发送延迟的原因，并附上更新后的版本",
+    "帮我把收件箱中所有来自 HR 的邮件转发给同事小陈，让他跟进招聘进度",
+    "我想给全体成员发一封祝贺邮件，庆祝我们完成本季度的销售目标，目标金额 350 万",
+    "整理一下最近和 A 公司往来的所有邮件，按照时间顺序生成一份摘要报告",
+    "帮我回复客户关于发票号码错误的邮件，先道歉再提供正确的发票",
+    "把上周的周报邮件内容精简后重新发送给老板，语气要简洁有力",
+    "帮我查一下是否有同事分享过新的设计规范文档，找到链接发给我",
+    "起草一封英文邮件给海外合作伙伴，确认下季度合作意向，并邀请他们参加我们 9 月的产品发布会",
+    "帮我把所有带「紧急」标记的邮件统一归档，然后汇总成一个清单",
+    "查找所有与「双十一促销方案」相关的邮件，按相关性排序",
+    "帮我写一封邮件给供应商，要求更新报价单，强调我们只接受人民币结算",
+    "把昨天深夜收到的那封邮件内容复述一遍给我，我还没来得及看",
+    "帮我整理出差相关的邮件，包括机票、酒店和行程安排，汇总成一份清单",
+    "草拟一封感谢回信给客户，感谢他们对新产品的反馈，并说明改进计划",
+    "帮我检查一下有没有错过的重要邮件，把需要回复的列出来",
+    "把这封长邮件的正文拆分成主题、要点、行动项三个部分重新整理",
+    "帮我发送一封邮件给项目组，更新项目进度，说明当前已完成的 70% 和剩余里程碑",
+    "查一下去年这个时候我发送过什么邮件，帮我回顾一下",
+    "帮我拟一封英文邮件给银行客户经理，确认新的收款账号并请求更新系统中的绑定信息，注意保密条款",
+    "把邮件列表里所有已读但未回复的邮件找出来，我需要今天处理完",
+    "帮我写一封简短的确认邮件给物流公司，确认明天上午十点上门取件的安排",
+    "整理本周所有工作邮件，按项目分好类，生成一个目录",
+    "帮我回复老板的邮件，同意下周一去上海出差，并询问是否需要预订酒店和往返车票"
+  ];
+  var userAttachments = [
+    null, null, null, null, ["产品目录-2026.pdf"], null, null, null, null, ["2026-01-财务报告.xlsx"],
+    null, null, null, ["赞助方案.pdf"], null, null, null, null, null, null,
+    null, null, ["会议材料-更新版.pptx"], null, null, null, null, null, null, null,
+    null, null, null, null, ["出差行程表.xlsx"], null, null, null, null, null,
+    null, null, null, null, null
+  ];
+  var assistantReplies = [
+    "好的，我帮你查看今天的收件箱。根据列表，有 3 封标红的邮件值得优先处理：1）客户合同续约；2）服务器维护通知；3）季度财务对账。需要我逐封展开内容吗？",
+    "已整理完成。这封红色邮件来自产品部，主要内容是新品发布计划调整，附件包含新的时间线。草拟的回复已保存到草稿箱，发送前请确认。",
+    "已添加发件人至联系人列表。该联系人已归入「重要」分组。",
+    "请假邮件草稿已生成：主题《请假申请 - 下周一》，正文说明了请假一天及家庭原因，语气得体。需要我直接发送吗？",
+    "这封邮件的核心要点有 3 点：1）项目验收推迟到 6 月 15 日；2）预算审批通过；3）需在下周前提交最终测试报告。",
+    "找到 3 封相关邮件：4 月 12 日项目启动、4 月 26 日中期汇报、5 月 8 日预算调整。需要我展开哪一封？",
+    "英文回复草稿已完成，语气专业友好，已附上最新产品目录 PDF。草稿保存在草稿箱，请审阅后发送。",
+    "已将最近三天的未读邮件（共 7 封）全部标记为已读。",
+    "会议通知草稿已生成：主题《季度总结会议通知》，正文包含时间（下周三 15:00）、地点（会议室 A301）及参会人员范围。",
+    "找到 2 封相关邮件：1 月 8 日发送的《2026 年 1 月财务报告》已确认发送给财务部，回执显示对方已于 1 月 10 日收到。",
+    "已代你回复供应商：确认收到付款延迟说明，同意将付款日期调整至 3 月 20 日，并为延迟带来的不便致歉。邮件已发送。",
+    "今日邮件已按重要程度排序。需立即处理：1）客户合同续约（标红）；2）法务合规提醒；3）服务器维护窗口确认；4）季度对账；5）供应商报价更新。",
+    "上周共收到 6 封带附件的邮件：3 个 PDF、2 个 Excel、1 个 PPT。明细如下：4 月 12 日《产品目录》（2.3MB）、4 月 15 日《财务周报》（1.1MB）……",
+    "感谢信草稿已生成，正文感谢赞助商对本次技术大会的支持，并附上活动照片链接（图库地址）。建议发送前补充贵方 LOGO 使用授权说明。",
+    "已检查草稿箱，共 12 封草稿。其中 4 封已完成且长时间未处理，已删除；其余 8 封保留。需要我列出保留清单吗？",
+    "邮件已转发给李总，并添加了说明：已开始处理交付进度问题，预计本周五提交详细计划。转发邮件保存至已发送。",
+    "规则已创建：标题含「新闻订阅」或发件域为 *.newsletter.example 的邮件自动归档到「新闻」文件夹。已应用至历史邮件（共 14 封）。",
+    "找到服务器维护通知：5 月 22 日 23:00 - 次日 05:00 进行例行维护，期间邮件服务可能短暂中断。要点已整理，需要我提醒你设置维护窗口吗？",
+    "中文发货通知草稿已生成：主题《您的订单已发货》，正文告知订单已发出、预计三天内到达，并附物流单号。确认无误即可发送。",
+    "已完成英文翻译并保存为草稿，收件人保持不变。原文 1,240 字，译文约 1,100 词，语气与原文一致。",
+    "年假申请相关邮件找到 2 封：5 月 6 日提交申请，5 月 10 日 HR 回复已批准（批准日期：7 月 15 日 - 7 月 19 日）。",
+    "本月共收到 9 封带 PDF 附件的邮件：5 封来自供应商、2 封来自财务部、2 封来自客户。明细清单已生成。",
+    "道歉邮件草稿已生成：向王经理解释会议材料延迟是因为本地软件升级导致生成失败，已附上更新版材料。建议发送前确认语气是否合适。",
+    "已将来自 HR 的 5 封邮件转发给小陈，内容涉及招聘进度、候选人面试安排等，并附了简要说明。",
+    "祝贺邮件草稿已生成：主题《庆祝完成季度销售目标》，正文祝贺团队完成 350 万目标，肯定大家努力并展望下季度。需要发送给全体成员吗？",
+    "已按时间顺序整理与 A 公司的往来邮件（共 12 封），生成了摘要报告：涵盖合同谈判、价格调整、交付确认三个阶段，结论为合作关系良好。",
+    "已回复客户：先为发票号码错误致歉，再提供正确发票（重新发送并归档）。邮件已发送，客户已读回执。",
+    "周报已精简：从 800 字压缩至 260 字，突出完成事项、风险点和下周计划。重新发送给老板，发送时间为今天 09:30。",
+    "找到同事分享的设计规范文档：《视觉设计规范 v2.0》，链接已生成，共 3 个相关来源。需要我打开吗？",
+    "英文合作确认邮件草稿已生成：确认下季度合作意向，并邀请对方参加 9 月产品发布会（附邀请函）。请审阅后发送。",
+    "已归档 6 封带「紧急」标记的邮件，并生成汇总清单：涉及交付延期、合同截止、服务器维护等事项。",
+    "与「双十一促销方案」相关的邮件找到 8 封，按相关性排序：方案初稿、预算审批、物料清单、渠道分发……",
+    "报价单更新邮件草稿已生成：明确要求人民币结算，并附上产品明细。供应商联系人保持不变。",
+    "昨晚 23:47 收到一封来自运维的邮件，内容是紧急修复完成通知。正文要点：凌晨故障已恢复，数据无损，今日 9 点后可正常使用。",
+    "出差相关邮件共 6 封：机票（往返）、酒店（含确认号）、行程安排表。已汇总成清单，含全部预订编号。",
+    "客户反馈感谢信草稿已生成：感谢对新产品的反馈，说明改进计划（下一版本将优化性能和界面），并邀请对方参与内测。",
+    "已检查未回复的重要邮件：客户合同续约（今日截止）、法务合规确认（明日截止）、季度对账（本周内）。需要我逐封起草回复吗？",
+    "已按「主题 / 要点 / 行动项」重新整理该长邮件：主题为供应链调整方案；要点 4 条；行动项 3 项（更新库存、通知渠道、确认新供应商）。",
+    "项目进度更新邮件已发送：正文说明项目已完成 70%，剩余里程碑为测试与上线，预计 6 月 30 日交付。已发送给项目组全体。",
+    "去年 8 月你共发送 32 封邮件：7 封涉及项目合作、5 封周报、9 封客户沟通、11 封内部协调。需要我导出明细吗？",
+    "英文邮件草稿已生成：向银行客户经理确认新收款账号，请求更新系统绑定信息，正文已注明保密条款。草稿已保存。",
+    "已筛选出 14 封已读但未回复的邮件：3 封来自客户、4 封来自供应商、2 封来自同事、5 封来自订阅通知。清单已生成。",
+    "已向物流公司发送确认邮件：明天上午 10:00 上门取件，地址与联系人已核实。对方已读回执。",
+    "本周工作邮件共 23 封，已按项目分类：A 项目 9 封、B 项目 7 封、日常协调 5 封、法务 2 封。目录已生成。",
+    "已回复老板：同意下周一前往上海出差，并询问是否需要预订酒店和往返车票，等待确认。"
+  ];
+
+  var transcript = document.getElementById("transcript");
+  var scrubber = document.getElementById("scrubber");
+  var userEls = [];   // DOM element per user message
+  var positions = []; // content coordinate per user message
+
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function messagesUpTo(count) {
+    var out = [];
+    for (var i = 0; i < count; i += 1) out.push(userMessages[i % userMessages.length]);
+    return out;
+  }
+
+  function render(count) {
+    var frag = document.createDocumentFragment();
+    messagesUpTo(count).forEach(function (text, index) {
+      // user message
+      var u = el("div", "msg user");
+      var meta = el("div", "msg-meta");
+      meta.appendChild(el("time", null, "08:" + String(9 + index % 50).padStart(2, "0")));
+      u.appendChild(meta);
+      var bubble = el("div", "msg-bubble", text);
+      u.appendChild(bubble);
+      var attachments = userAttachments[index % userAttachments.length];
+      if (attachments) {
+        var attach = el("div", "msg-attach");
+        attachments.forEach(function (name) { attach.appendChild(el("span", null, "\uD83D\uDCCE " + name)); });
+        u.appendChild(attach);
+      }
+      if (index % 7 === 3) {
+        var quote = el("div", "msg-quote", "\u201C收到，我这边明天给你答复。\u201D");
+        u.insertBefore(quote, bubble);
+      }
+      userEls[index] = u;
+      frag.appendChild(u);
+      // assistant reply
+      var a = el("div", "msg assistant");
+      var aMeta = el("div", "msg-meta");
+      aMeta.appendChild(el("span", "msg-role", "助理"));
+      aMeta.appendChild(el("time", null, "08:" + String(10 + index % 50).padStart(2, "0")));
+      a.appendChild(aMeta);
+      a.appendChild(el("div", "msg-bubble", assistantReplies[index % assistantReplies.length]));
+      frag.appendChild(a);
+    });
+    transcript.appendChild(frag);
+  }
+
+  function measure() {
+    var top = transcript.getBoundingClientRect().top;
+    positions = userEls.map(function (node) {
+      return node.getBoundingClientRect().top - top + transcript.scrollTop;
+    });
+  }
+
+  var bars = [];
+  var hoveredIndex = null;
+  var scrolling = false;
+  var dirRef = 1, speedRef = 0;
+  // Viewport offset (px) of the bar group inside the track. null until first
+  // measurement; edge-zone auto-scroll moves this offset so the BARS scroll,
+  // never the transcript content.
+  var viewport = null;
+
+  function barWidth(index) {
+    if (hoveredIndex === null) return 3;
+    return Math.max(9, 26 - Math.abs(index - hoveredIndex) * 6);
+  }
+
+  function buildBars() {
+    scrubber.textContent = "";
+    bars = userEls.map(function (_, index) {
+      var bar = el("span", "scrubber-bar");
+      bar.style.height = "2px";
+      bar.style.left = "0";
+      scrubber.appendChild(bar);
+      return bar;
+    });
+  }
+
+  function initViewport(trackH) {
+    var totalHeight = (userEls.length - 1) * GAP;
+    // Centre the group when it fits; bottom-anchor (newest visible) when it
+    // overflows the track.
+    viewport = Math.min((trackH - totalHeight) / 2, trackH - totalHeight);
+    return totalHeight;
+  }
+
+  function layoutBars() {
+    var trackH = scrubber.clientHeight;
+    if (viewport === null) initViewport(trackH);
+    bars.forEach(function (bar, index) {
+      var top = viewport + index * GAP;
+      bar.style.top = top + "px";
+      bar.style.width = barWidth(index) + "px";
+      var blur = barBlur(top, trackH);
+      bar.style.filter = blur > 0 ? "blur(" + blur + "px)" : "";
+      bar.classList.toggle("hovered", hoveredIndex === index);
+    });
+  }
+
+  var preview = null;
+  function showPreview(index, text) {
+    if (!preview) {
+      preview = el("div", "scrubber-preview");
+      preview.appendChild(el("span", "scrubber-preview-bubble"));
+      scrubber.appendChild(preview);
+    }
+    var trackH = scrubber.clientHeight;
+    if (viewport === null) initViewport(trackH);
+    var raw = viewport + index * GAP;
+    var clamped = Math.max(14, Math.min(raw, trackH - 14));
+    preview.style.top = clamped + "px";
+    preview.firstChild.textContent = (text || "").slice(0, 120) + (text && text.length > 120 ? "\u2026" : "");
+  }
+  function hidePreview() {
+    if (preview) { preview.remove(); preview = null; }
+  }
+
+  function truncate(text, max) {
+    if (text.length <= max) return text;
+    return text.slice(0, max) + "\u2026";
+  }
+
+  scrubber.addEventListener("mousemove", function (e) {
+    var track = scrubber.getBoundingClientRect();
+    var y = e.clientY - track.top;
+    var count = userEls.length;
+    var totalHeight = (count - 1) * GAP;
+    if (viewport === null) initViewport(track.height);
+    var nearest = 0, nearestDistance = Infinity;
+    for (var i = 0; i < count; i++) {
+      var d = Math.abs(viewport + i * GAP - y);
+      if (d < nearestDistance) { nearestDistance = d; nearest = i; }
+    }
+    hoveredIndex = nearest;
+    showPreview(nearest, userMessages[nearest]);
+    layoutBars();
+    if (totalHeight > track.height) {
+      if (y <= EDGE_ZONE) {
+        dirRef = 1; speedRef = speedFor(y);
+        if (!scrolling) { scrolling = true; requestAnimationFrame(tick); }
+        return;
+      }
+      if (y >= track.height - EDGE_ZONE) {
+        dirRef = -1; speedRef = speedFor(track.height - y);
+        if (!scrolling) { scrolling = true; requestAnimationFrame(tick); }
+        return;
+      }
+    }
+    scrolling = false;
+  });
+  scrubber.addEventListener("mouseleave", function () {
+    hoveredIndex = null;
+    scrolling = false;
+    hidePreview();
+    layoutBars();
+  });
+  scrubber.addEventListener("click", function () {
+    if (hoveredIndex === null) return;
+    var position = positions[hoveredIndex];
+    if (position === undefined) return;
+    transcript.scrollTo({ top: Math.max(0, position - 16), behavior: "smooth" });
+  });
+
+  function tick() {
+    if (!scrolling || viewport === null) return;
+    var trackH = scrubber.clientHeight;
+    var maxOffset = (userEls.length - 1) * GAP - trackH;
+    var next = Math.min(0, Math.max(-maxOffset, viewport + dirRef * speedRef));
+    if (next === viewport) {
+      // Reached a bound: stop instead of looping forever.
+      scrolling = false;
+      layoutBars();
+      return;
+    }
+    viewport = next;
+    layoutBars();
+    requestAnimationFrame(tick);
+  }
+
+  var currentCount = 70;
+  function setCount(count) {
+    currentCount = count;
+    hoveredIndex = null;
+    scrolling = false;
+    viewport = null;
+    hidePreview();
+    transcript.textContent = "";
+    userEls = [];
+    render(count);
+    buildBars();
+    measure();
+    layoutBars();
+    document.querySelectorAll("[data-count]").forEach(function (btn) {
+      btn.classList.toggle("on", Number(btn.getAttribute("data-count")) === count);
+    });
+  }
+  document.querySelectorAll("[data-count]").forEach(function (btn) {
+    btn.addEventListener("click", function () { setCount(Number(btn.getAttribute("data-count"))); });
+  });
+  window.addEventListener("resize", function () { measure(); viewport = null; layoutBars(); });
+  setCount(currentCount);
+})();
+</script>
+</body>
+</html>

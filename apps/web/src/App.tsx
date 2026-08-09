@@ -1,13 +1,18 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
+﻿import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
+import { computePosition, flip, offset, shift } from "@floating-ui/dom";
 import DOMPurify from "dompurify";
 import {
   Archive,
   ArrowLeft,
+  AtSign,
+  CalendarClock,
   Check,
   ChevronDown,
   CircleAlert,
+  Clock,
   Copy,
   Download,
+  Eye,
   FileArchive,
   FileImage,
   FileSpreadsheet,
@@ -36,23 +41,27 @@ import {
   Sparkles,
   Star,
   Sun,
+  Users,
   Trash2,
   X,
 } from "lucide-react";
-import AccountConnectionModal from "./AddAccountModal";
-import { api } from "./api";
-import { presentAttachment, type AttachmentKind } from "./attachmentPresentation";
-import { summarizeComposeAttachments } from "./attachmentWorkflow";
+import { ApiError, api } from "./api";
+import { canPreviewAttachment } from "./attachmentPreview";
+import { presentAttachment } from "./attachmentPresentation";
+import { AttachmentFileIcon, FolderNavigationIcon, formatFileSize, isoFromDatetimeLocal, IconButton, type ComposeDraft, type ToastKind } from "./mailUi";
 import { desktopBridge, type DesktopUpdateSnapshot } from "./desktop";
 import { demoAccounts, demoMessageTranslation, demoMessages, demoProviders, demoStats, demoSubmissions } from "./demo";
 import { accountHealthIssue, mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
-import { buildForwardDraft, buildReplyDraft } from "./mailActions";
+import { buildForwardDraft, buildReplyDraft, buildReplyQuote } from "./mailActions";
+import { ComposeModal } from "./ComposeModal";
+import { groupMessagesByThread } from "./threads";
 import { mailBackgroundColor, mailReaderSurface, mailSurfaceForBackground, shouldResetMailForeground, type MailSurface } from "./mailHtmlTheme";
 import {
   applyMessageMove,
   applyMessageSeenChange,
   isArchivedMessage,
   isInboxMessage,
+  isSnoozedMessage,
   matchesServerMessageQuery,
   mergePendingArchiveMoves,
   mergeUnreadViewSnapshot,
@@ -62,38 +71,45 @@ import {
   type MessageListQuery,
   type PendingArchiveMove,
 } from "./mailListState";
-import SettingsModal from "./SettingsModal";
-import SendingStatusModal from "./SendingStatusModal";
-import StartupUpdatePrompt from "./StartupUpdatePrompt";
-import { pollSubmittingSubmission, sortSubmissions } from "./sendingStatus";
+import { sortSubmissions } from "./sendingStatus";
 import { providerDisplayName } from "./providerOnboarding";
 import { canPlayCustomNotificationSound, playNotificationSound, primeNotificationSound } from "./sounds";
 import { saveLocalePreference } from "./localePreference";
 import { createSettingsLoadCoordinator } from "./settingsLoadCoordinator";
 import ThemedSelect from "./ThemedSelect";
 import TranslationPanel, { type TranslationAvailability, type TranslationContent, type TranslationPanelState } from "./TranslationPanel";
-import { translationErrorMessage } from "./translationPresentation";
-import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type MessageAttachment, type OutboundAttachment, type OutboundSubmission, type ProviderInfo, type Stats } from "./types";
+import { extractMailVisualStyle, llmTranslationErrorMessage, translationErrorMessage } from "./translationPresentation";
+import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Contact, type MailTemplate, type Message, type MessageAttachment, type OutboundAttachment, type OutboundSubmission, type ProviderInfo, type Stats } from "./types";
 import { useDialogFocus } from "./useDialogFocus";
 import { findVerificationCodes } from "./verificationCode";
 import { resolveLocale, type Translate, useI18n } from "./i18n";
+import type { AgentBootstrap } from "./agentTypes";
 
 const AgentWorkspace = lazy(() => import("./AgentWorkspace"));
+const AccountConnectionModal = lazy(() => import("./AddAccountModal"));
+const AttachmentPreviewModal = lazy(() => import("./AttachmentPreviewModal"));
+const SettingsModal = lazy(() => import("./SettingsModal"));
+const AccountsDialog = lazy(() => import("./AccountsDialog"));
+const CalendarDialog = lazy(() => import("./CalendarDialog"));
+const ManagementDialogs = lazy(async () => {
+  const module = await import("./ManagementDialogs");
+  return { default: module.ContactsDialog };
+});
+const TemplatesDialog = lazy(async () => {
+  const module = await import("./ManagementDialogs");
+  return { default: module.TemplatesDialog };
+});
+const SendingStatusModal = lazy(() => import("./SendingStatusModal"));
+const StartupUpdatePrompt = lazy(() => import("./StartupUpdatePrompt"));
+const TranslationTermsDialog = lazy(() => import("./TranslationTermsDialog"));
 
 type MailView = MessageListQuery["messageView"];
-type ToastKind = "success" | "error" | "info" | "warning";
-type ToastNotice = { kind: ToastKind; message: string } | null;
+type ToastAction = { label: string; run: () => void };
+type ToastNotice = { kind: ToastKind; message: string; action?: ToastAction } | null;
 type TranslationSession = {
   messageId: string;
   targetLocale: string;
   state: TranslationPanelState;
-};
-type PendingAttachmentUpload = {
-  id: string;
-  file: File;
-  phase: "uploading" | "error";
-  retryable: boolean;
-  error?: string;
 };
 type AttachmentDownloadState = {
   phase: "downloading" | "ready" | "error";
@@ -124,6 +140,10 @@ export function submissionStatusNeedsRefresh(status: OutboundSubmission["deliver
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 const isDesktop = new URLSearchParams(window.location.search).get("desktop") === "1";
 const isDesktopSmoke = new URLSearchParams(window.location.search).get("desktopSmoke") === "1";
+
+// Mirrors MAX_TRANSLATION_TEXT_LENGTH in the local server so the reader rejects
+// oversized messages before any mail content is sent to a translation provider.
+const MAX_LLM_TRANSLATION_TEXT_LENGTH = 50_000;
 
 function formatMessageTime(value: string, locale: string): string {
   const date = new Date(value);
@@ -180,6 +200,7 @@ function buildMessageQuery({
   if (messageView === "starred") query.set("starred", "1");
   if (messageView === "unread") query.set("unread", "1");
   if (messageView === "archived") query.set("archived", "1");
+  if (messageView === "snoozed") query.set("snoozed", "1");
   if (search.trim()) query.set("q", search.trim());
   return query.toString();
 }
@@ -203,6 +224,7 @@ function demoMessageTotal(messages: readonly Message[], accounts: readonly Accou
     if (messageView === "unread" && message.seen) return false;
     if (messageView === "starred" && !message.flagged) return false;
     if (messageView === "archived" && !isArchivedMessage(message, accounts)) return false;
+    if (messageView === "snoozed" && !isSnoozedMessage(message)) return false;
     if (!normalizedQuery) return true;
     return `${message.subject} ${message.from.name} ${message.from.address} ${message.snippet}`.toLowerCase().includes(normalizedQuery);
   }).length;
@@ -216,39 +238,6 @@ function demoMoveDestination(accounts: readonly Account[], accountId: string, ta
     if (folder) return folder.path;
   }
   return "";
-}
-
-function formatFileSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-}
-
-function AttachmentFileIcon({ kind }: { kind: AttachmentKind }) {
-  const icon = kind === "archive"
-    ? <FileArchive size={19} />
-    : kind === "image"
-      ? <FileImage size={19} />
-      : kind === "spreadsheet"
-        ? <FileSpreadsheet size={19} />
-        : <FileText size={19} />;
-  return <span className={`attachment-file-icon kind-${kind}`} aria-hidden="true">{icon}</span>;
-}
-
-function FolderNavigationIcon({ specialUse }: { specialUse: string | null }) {
-  const icon = specialUse === "\\Inbox"
-    ? <Inbox size={15} />
-    : specialUse === "\\Archive" || specialUse === "\\All"
-      ? <Archive size={15} />
-      : specialUse === "\\Sent"
-        ? <Send size={15} />
-        : specialUse === "\\Drafts"
-          ? <FileText size={15} />
-          : specialUse === "\\Trash"
-            ? <Trash2 size={15} />
-            : <Folder size={15} />;
-  return <span aria-hidden="true">{icon}</span>;
 }
 
 function initials(name: string, address: string): string {
@@ -276,26 +265,6 @@ function backgroundUrl(settings: AppSettings): string | null {
 
 function reportCustomNotificationSoundAvailability(): void {
   desktopBridge()?.setCustomNotificationSoundReady(canPlayCustomNotificationSound());
-}
-
-type ComposeDraft = {
-  accountId?: string;
-  to?: string;
-  cc?: string;
-  subject?: string;
-  text?: string;
-  inReplyTo?: string;
-  references?: string[];
-  sourceDraftId?: string;
-  attachments?: OutboundAttachment[];
-};
-
-function IconButton({ label, children, onClick, className = "", disabled = false, expanded, buttonRef }: { label: string; children: React.ReactNode; onClick?: () => void; className?: string; disabled?: boolean; expanded?: boolean; buttonRef?: RefObject<HTMLButtonElement | null> }) {
-  return (
-    <button ref={buttonRef} className={`icon-button ${className}`} type="button" aria-label={label} aria-expanded={expanded} data-tooltip={label} onClick={onClick} disabled={disabled}>
-      {children}
-    </button>
-  );
 }
 
 function sanitizeMailHtml(html: string, darkMode: boolean): string {
@@ -377,6 +346,22 @@ function textFromSanitizedMailHtml(html: string): string {
   return template.content.textContent ?? "";
 }
 
+/**
+ * Composes the reply body: the sender's signature, a blank line, then the
+ * quoted original message. The empty leading block keeps the reply cursor at
+ * the top while the signature and quote sit beneath it.
+ */
+function replyBody(message: Message, accounts: readonly Account[], locale: string, t: Translate, safeHtml: string): string {
+  const signature = accounts.find((account) => account.id === message.accountId)?.signature ?? "";
+  const body = message.textBody || textFromSanitizedMailHtml(safeHtml) || message.snippet;
+  const sender = message.from.name ? `${message.from.name} <${message.from.address}>` : message.from.address;
+  const quote = buildReplyQuote(body, t("compose.replyQuote", {
+    date: formatFullDate(message.sentAt, locale),
+    sender,
+  }));
+  return signature.trim() ? `${signature.trim()}\n\n${quote}` : `\n\n${quote}`;
+}
+
 async function copyVerificationCodeToClipboard(code: string): Promise<boolean> {
   const bridge = desktopBridge();
   if (bridge?.copyVerificationCode) {
@@ -417,428 +402,6 @@ async function copyVerificationCodeToClipboard(code: string): Promise<boolean> {
   }
 }
 
-function createLocalId(prefix: string): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return `${prefix}_${crypto.randomUUID()}`;
-  }
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
-}
-
-function createSubmissionIdempotencyKey(): string {
-  return createLocalId("sub");
-}
-
-function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftDiscarded, onSubmissionChanged, fallbackFocusRef }: { accounts: Account[]; draft: ComposeDraft; onClose: () => void; onSent: (message: string, kind?: ToastKind) => void; onDraftSaved: (accountId: string) => void; onDraftDiscarded: (messageId: string) => void; onSubmissionChanged: () => void; fallbackFocusRef?: RefObject<HTMLElement | null> }) {
-  const { t } = useI18n();
-  const [accountId, setAccountId] = useState(draft.accountId ?? accounts[0]?.id ?? "");
-  const [to, setTo] = useState(draft.to ?? "");
-  const [cc, setCc] = useState(draft.cc ?? "");
-  const [subject, setSubject] = useState(draft.subject ?? "");
-  const [text, setText] = useState(draft.text ?? "");
-  const [attachments, setAttachments] = useState<OutboundAttachment[]>(draft.attachments ?? []);
-  const [pendingUploads, setPendingUploads] = useState<PendingAttachmentUpload[]>([]);
-  const [recentAttachmentTokens, setRecentAttachmentTokens] = useState<Set<string>>(() => new Set());
-  const [busy, setBusy] = useState(false);
-  const [discarding, setDiscarding] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<"discard" | "delete" | null>(null);
-  const [error, setError] = useState("");
-  const [deliveryNotice, setDeliveryNotice] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const composeDialogRef = useRef<HTMLElement>(null);
-  const discardConfirmDialogRef = useRef<HTMLElement>(null);
-  const submissionAttemptRef = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null);
-  const uploadInFlightRef = useRef(false);
-  const initialDraftRef = useRef({
-    accountId: draft.accountId ?? accounts[0]?.id ?? "",
-    to: draft.to ?? "",
-    cc: draft.cc ?? "",
-    subject: draft.subject ?? "",
-    text: draft.text ?? "",
-    attachmentTokens: (draft.attachments ?? []).map((attachment) => attachment.token).join("\u001f"),
-  });
-
-  const recipients = () => to.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean);
-  const copiedRecipients = () => cc.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean);
-  const initialDraft = initialDraftRef.current;
-  const uploading = pendingUploads.some((upload) => upload.phase === "uploading");
-  const hasPendingUploads = pendingUploads.length > 0;
-  const hasUploadErrors = pendingUploads.some((upload) => upload.phase === "error");
-  const attachmentSummary = summarizeComposeAttachments(attachments, pendingUploads);
-  const attachmentStatus = [
-    attachmentSummary.uploadingCount > 0 ? t("compose.attachment.uploadingCount", { count: attachmentSummary.uploadingCount }) : "",
-    attachmentSummary.failedCount > 0 ? t("compose.attachment.failedCount", { count: attachmentSummary.failedCount }) : "",
-  ].filter(Boolean).join(t("common.dotSeparator"));
-  const hasUnsavedChanges = accountId !== initialDraft.accountId
-    || to !== initialDraft.to
-    || cc !== initialDraft.cc
-    || subject !== initialDraft.subject
-    || text !== initialDraft.text
-    || attachments.map((attachment) => attachment.token).join("\u001f") !== initialDraft.attachmentTokens
-    || hasPendingUploads;
-
-  const requestClose = useCallback(() => {
-    if (busy || uploading || discarding) return;
-    if (hasUnsavedChanges) {
-      setConfirmAction("discard");
-      return;
-    }
-    onClose();
-  }, [busy, discarding, hasUnsavedChanges, onClose, uploading]);
-
-  useDialogFocus(true, composeDialogRef, { fallbackFocusRef, suspended: Boolean(confirmAction) });
-  useDialogFocus(Boolean(confirmAction), discardConfirmDialogRef);
-
-  const discardAndClose = async () => {
-    if (busy || uploading || discarding) return;
-    setDiscarding(true);
-    setError("");
-    try {
-      if (!isDemo && accountId && attachments.length) {
-        await api.discardOutboundAttachments(accountId, attachments.map((attachment) => attachment.token));
-      }
-      onClose();
-    } catch (reason) {
-      setError(mailErrorMessage(reason, t("compose.error.cleanupAttachments"), t));
-      setConfirmAction(null);
-    } finally {
-      setDiscarding(false);
-    }
-  };
-
-  const deleteSavedDraft = async () => {
-    if (!draft.sourceDraftId || busy || uploading || discarding) return;
-    setDiscarding(true);
-    setError("");
-    try {
-      if (!isDemo) await api.discardDraft(draft.sourceDraftId);
-      onDraftDiscarded(draft.sourceDraftId);
-      onClose();
-    } catch (reason) {
-      setError(mailErrorMessage(reason, t("compose.error.deleteDraft"), t));
-      setConfirmAction(null);
-    } finally {
-      setDiscarding(false);
-    }
-  };
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      if (confirmAction) {
-        setConfirmAction(null);
-        return;
-      }
-      requestClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [confirmAction, requestClose]);
-
-  const chooseFiles = () => fileInputRef.current?.click();
-
-  const uploadAttachment = async (targetAccountId: string, uploadId: string, file: File) => {
-    try {
-      const attachment = isDemo
-        ? {
-          token: createLocalId("demo-attachment"),
-          filename: file.name,
-          contentType: file.type || "application/octet-stream",
-          size: file.size,
-        }
-        : await api.uploadOutboundAttachment(targetAccountId, file);
-      setAttachments((current) => [...current, attachment]);
-      setRecentAttachmentTokens((current) => new Set(current).add(attachment.token));
-      setPendingUploads((current) => current.filter((upload) => upload.id !== uploadId));
-    } catch (reason) {
-      const detail = mailErrorMessage(reason, t("compose.error.uploadAttachment"), t);
-      setPendingUploads((current) => current.map((upload) => upload.id === uploadId
-        ? { ...upload, phase: "error", retryable: true, error: detail }
-        : upload));
-    }
-  };
-
-  const addFiles = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.currentTarget.files ?? []);
-    event.currentTarget.value = "";
-    if (!files.length || busy || uploading || uploadInFlightRef.current) return;
-    if (!accountId) {
-      setError(t("compose.error.selectSender"));
-      return;
-    }
-    const validFiles = files.filter((file) => file.size > 0 && file.size <= 10 * 1024 * 1024);
-    if (attachmentSummary.reservedCount + validFiles.length > 10) {
-      setError(t("compose.error.maxAttachments"));
-      return;
-    }
-    const totalSize = attachmentSummary.reservedBytes + validFiles.reduce((sum, file) => sum + file.size, 0);
-    if (totalSize > 25 * 1024 * 1024) {
-      setError(t("compose.error.maxAttachmentSize"));
-      return;
-    }
-
-    const nextUploads: PendingAttachmentUpload[] = files.map((file) => {
-      const error = file.size <= 0
-        ? t("compose.error.emptyAttachment")
-        : file.size > 10 * 1024 * 1024
-          ? t("compose.error.maxSingleAttachmentSize")
-          : undefined;
-      return { id: createLocalId("upload"), file, phase: error ? "error" : "uploading", retryable: !error, error };
-    });
-    setPendingUploads((current) => [...current, ...nextUploads]);
-    setError("");
-    uploadInFlightRef.current = true;
-    try {
-      for (const upload of nextUploads) {
-        if (upload.phase === "uploading") await uploadAttachment(accountId, upload.id, upload.file);
-      }
-    } finally {
-      uploadInFlightRef.current = false;
-    }
-  };
-
-  const retryPendingUpload = async (upload: PendingAttachmentUpload) => {
-    if (!accountId || !upload.retryable || busy || uploading || discarding || uploadInFlightRef.current) return;
-    uploadInFlightRef.current = true;
-    setError("");
-    setPendingUploads((current) => current.map((item) => item.id === upload.id
-      ? { ...item, phase: "uploading", error: undefined }
-      : item));
-    try {
-      await uploadAttachment(accountId, upload.id, upload.file);
-    } finally {
-      uploadInFlightRef.current = false;
-    }
-  };
-
-  const removePendingUpload = (uploadId: string) => {
-    if (busy || uploading || discarding) return;
-    setPendingUploads((current) => current.filter((upload) => upload.id !== uploadId));
-  };
-
-  const removeAttachment = async (attachment: OutboundAttachment) => {
-    if (busy || uploading || discarding) return;
-    setError("");
-    try {
-      if (!isDemo && accountId) await api.discardOutboundAttachments(accountId, [attachment.token]);
-      setAttachments((current) => current.filter((item) => item.token !== attachment.token));
-      setRecentAttachmentTokens((current) => {
-        const next = new Set(current);
-        next.delete(attachment.token);
-        return next;
-      });
-    } catch (reason) {
-      setError(mailErrorMessage(reason, t("compose.error.removeAttachment"), t));
-    }
-  };
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (busy || uploading || discarding) return;
-    if (hasPendingUploads) {
-      setError(t("compose.error.pendingAttachments"));
-      return;
-    }
-    const recipientValues = recipients();
-    const ccValues = copiedRecipients();
-    if (!accountId) {
-      setError(t("compose.error.selectSender"));
-      return;
-    }
-    if (!recipientValues.length) {
-      setError(t("compose.error.recipientRequired"));
-      return;
-    }
-    if ([...recipientValues, ...ccValues].some((recipient) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient))) {
-      setError(t("compose.error.recipientInvalid"));
-      return;
-    }
-    if (!text.trim() && !attachments.length) {
-      setError(t("compose.error.messageRequired"));
-      return;
-    }
-    setBusy(true);
-    setError("");
-    setDeliveryNotice("");
-    try {
-      if (!isDemo) {
-        const sendRequest = {
-          accountId,
-          to: recipientValues,
-          cc: ccValues.length ? ccValues : undefined,
-          subject,
-          text,
-          inReplyTo: draft.inReplyTo,
-          references: draft.references,
-          discardDraftId: draft.sourceDraftId,
-          attachmentTokens: attachments.map((attachment) => attachment.token),
-        };
-        const fingerprint = JSON.stringify(sendRequest);
-        if (submissionAttemptRef.current?.fingerprint !== fingerprint) {
-          submissionAttemptRef.current = { fingerprint, idempotencyKey: createSubmissionIdempotencyKey() };
-        }
-        const result = await api.send({
-          ...sendRequest,
-          idempotencyKey: submissionAttemptRef.current.idempotencyKey,
-        });
-        onSubmissionChanged();
-        let submission = result.submission;
-        if (submission.deliveryStatus === "submitting") {
-          try {
-            submission = await pollSubmittingSubmission(
-              submission,
-              async (id) => (await api.submission(id)).submission,
-            );
-          } catch {
-            // The durable record remains `submitting`. Keep the compose window
-            // open so a transient local API failure cannot discard the draft.
-          }
-          onSubmissionChanged();
-          if (submission.deliveryStatus === "submitting") {
-            setDeliveryNotice(t("compose.delivery.waitingNotice"));
-            onSent(t("compose.delivery.waitingToast"), "info");
-            return;
-          }
-          if (submission.deliveryStatus === "failed") {
-            setError(mailErrorMessage(
-              { code: submission.errorCode ?? undefined, message: submission.errorMessage ?? "" },
-              t("compose.error.sendRejected"),
-              t,
-            ));
-            return;
-          }
-        }
-        if (submission.deliveryStatus === "unknown_delivery") {
-          onSent(
-            t("compose.delivery.unknown"),
-            "warning",
-          );
-        } else {
-          if (draft.sourceDraftId && !result.draftDiscardWarning) onDraftDiscarded(draft.sourceDraftId);
-          const deliveryMessage = submission.deliveryStatus === "confirmed"
-            ? t("compose.delivery.confirmed")
-            : t("compose.delivery.submitted");
-          onSent(result.draftDiscardWarning ? t("compose.delivery.previousDraftRemains", { message: deliveryMessage }) : deliveryMessage);
-        }
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 650));
-        onSent(t("compose.delivery.demoSent"));
-      }
-      onClose();
-    } catch (reason) {
-      setError(mailErrorMessage(reason, t("compose.error.send"), t));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const saveDraft = async () => {
-    if (!accountId || busy || uploading || discarding) return;
-    if (hasPendingUploads) {
-      setError(t("compose.error.pendingAttachments"));
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      if (!isDemo) {
-        const result = await api.saveDraft({
-          accountId,
-          to: recipients(),
-          cc: copiedRecipients(),
-          subject,
-          text,
-          inReplyTo: draft.inReplyTo,
-          references: draft.references,
-          replaceDraftId: draft.sourceDraftId,
-          attachmentTokens: attachments.map((attachment) => attachment.token),
-        });
-        if (!result.serverConfirmed) {
-          setError(t("compose.error.draftUnconfirmed"));
-          return;
-        }
-        if (draft.sourceDraftId && !result.replaceWarning) onDraftDiscarded(draft.sourceDraftId);
-        const warnings = [
-          result.replaceWarning ? t("compose.save.replaceWarning") : "",
-          result.attachmentWarning ? t("compose.save.attachmentWarning") : "",
-        ].filter(Boolean);
-        onSent(warnings.length ? t("compose.save.confirmedWithWarnings", { warnings: warnings.join(t("common.listSeparator")) }) : t("compose.save.confirmed"));
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 380));
-        onSent(t("compose.save.demo"));
-      }
-      onDraftSaved(accountId);
-      onClose();
-    } catch (reason) {
-      setError(mailErrorMessage(reason, t("compose.error.saveDraft"), t));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="modal-backdrop compose-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.target !== event.currentTarget) return;
-      if (confirmAction) setConfirmAction(null);
-      else requestClose();
-    }}>
-      <section ref={composeDialogRef} className="compose-card" role="dialog" aria-modal="true" aria-labelledby="compose-title" tabIndex={-1}>
-        <header className="compose-header">
-          <div><span className="eyebrow">{draft.sourceDraftId ? t("compose.draft") : t("compose.new")}</span><h2 id="compose-title">{draft.sourceDraftId ? t("compose.editDraft") : t("compose.new")}</h2></div>
-          <div className="compose-header-actions">{draft.sourceDraftId && <IconButton label={t("compose.deleteDraft")} onClick={() => setConfirmAction("delete")} disabled={busy || uploading || discarding}><Trash2 size={18} /></IconButton>}<IconButton label={t("common.close")} onClick={requestClose} disabled={busy || uploading || discarding}><X size={18} /></IconButton></div>
-        </header>
-        <form noValidate onSubmit={submit}>
-          <label className="compose-row" htmlFor="compose-account"><span>{t("compose.sender")}</span><ThemedSelect id="compose-account" value={accountId} onValueChange={(value) => {
-            if ((attachments.length || pendingUploads.length) && value !== accountId) {
-              setError(t("compose.error.senderLocked"));
-              return;
-            }
-            setAccountId(value);
-          }} disabled={busy || uploading || discarding}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}</ThemedSelect></label>
-          <label className="compose-row" htmlFor="compose-to"><span>{t("compose.to")}</span><input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => setTo(event.target.value)} placeholder="email@example.com" disabled={busy || discarding} /></label>
-          <label className="compose-row" htmlFor="compose-cc"><span>{t("compose.cc")}</span><input id="compose-cc" type="text" value={cc} onChange={(event) => setCc(event.target.value)} placeholder={t("compose.ccPlaceholder")} disabled={busy || discarding} /></label>
-          <label className="compose-row" htmlFor="compose-subject"><span>{t("compose.subject")}</span><input id="compose-subject" type="text" value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={t("compose.subjectPlaceholder")} disabled={busy || discarding} /></label>
-          <label className="visually-hidden" htmlFor="compose-body">{t("compose.body")}</label>
-          <textarea id="compose-body" className="compose-body" value={text} onChange={(event) => setText(event.target.value)} placeholder={t("compose.bodyPlaceholder")} disabled={busy || discarding} />
-          <section className="compose-attachments" aria-label={t("compose.attachment.aria", { count: attachmentSummary.attachedCount, status: attachmentStatus })}>
-            <div className="compose-attachments-heading"><span><Paperclip size={16} />{t("compose.attachments")}</span><small aria-live="polite">{attachmentSummary.attachedCount} / 10{t("common.dotSeparator")}{formatFileSize(attachmentSummary.attachedBytes)}{attachmentStatus ? `${t("common.dotSeparator")}${attachmentStatus}` : ""}</small><button className="compose-attachment-add" type="button" onClick={chooseFiles} disabled={busy || uploading || discarding || !accountId}>{uploading ? <LoaderCircle className="spin" size={15} /> : <Paperclip size={15} />}{uploading ? t("compose.attachment.uploading") : t("compose.attachment.add")}</button></div>
-            <input ref={fileInputRef} className="visually-hidden" type="file" tabIndex={-1} multiple onChange={(event) => void addFiles(event)} />
-            {(attachments.length > 0 || pendingUploads.length > 0) && <div className="compose-attachment-list">{attachments.map((attachment) => {
-              const presentation = presentAttachment(attachment.filename, attachment.contentType, t);
-              const recentlyAdded = recentAttachmentTokens.has(attachment.token);
-              return <div className={`compose-attachment-item${recentlyAdded ? " is-success" : ""}`} key={attachment.token}><AttachmentFileIcon kind={presentation.kind} /><span><strong className="truncated-tooltip" data-tooltip={attachment.filename}><span>{attachment.filename}</span></strong><small aria-live={recentlyAdded ? "polite" : undefined}>{recentlyAdded ? `${t("compose.attachment.added")}${t("common.dotSeparator")}` : ""}{presentation.label}{t("common.dotSeparator")}{formatFileSize(attachment.size)}</small></span><IconButton label={t("compose.attachment.remove", { filename: attachment.filename })} onClick={() => void removeAttachment(attachment)} disabled={busy || uploading || discarding}><X size={16} /></IconButton></div>;
-            })}{pendingUploads.map((upload) => {
-              const presentation = presentAttachment(upload.file.name, upload.file.type || "application/octet-stream", t);
-              const isUploading = upload.phase === "uploading";
-              const isRetryable = !isUploading && upload.retryable;
-              return <div className={`compose-attachment-item is-${upload.phase}${isRetryable ? " has-retry" : ""}`} key={upload.id}><AttachmentFileIcon kind={presentation.kind} /><span><strong className="truncated-tooltip" data-tooltip={upload.file.name}><span>{upload.file.name}</span></strong><small className="truncated-tooltip" aria-live="polite" data-tooltip={upload.error}><span>{isUploading ? t("compose.attachment.uploadingEllipsis") : upload.error}</span></small></span>{isUploading ? <span className="attachment-transfer-state" role="status" aria-label={t("compose.attachment.uploadingFile", { filename: upload.file.name })}><LoaderCircle className="spin" size={16} /></span> : <span className="attachment-upload-actions">{isRetryable && <IconButton label={t("compose.attachment.retry", { filename: upload.file.name })} onClick={() => void retryPendingUpload(upload)} disabled={busy || uploading || discarding}><RefreshCw size={16} /></IconButton>}<IconButton label={t("compose.attachment.remove", { filename: upload.file.name })} onClick={() => removePendingUpload(upload.id)} disabled={busy || uploading || discarding}><X size={16} /></IconButton></span>}</div>;
-            })}</div>}
-            {hasPendingUploads && <p className={`compose-attachment-hint${hasUploadErrors ? " error" : ""}`} role={hasUploadErrors ? "alert" : "status"}>{hasUploadErrors ? t("compose.attachment.failedHint") : t("compose.attachment.uploadingHint")}</p>}
-          </section>
-          {deliveryNotice && <div className="form-status warning" role="status"><LoaderCircle className="spin" size={17} />{deliveryNotice}</div>}
-          {error && <div id="compose-error" className="form-status error" role="alert"><X size={17} />{error}</div>}
-          <footer className="compose-footer">
-            <button className="secondary-button" type="button" disabled={busy || uploading || discarding || hasPendingUploads || !accountId} onClick={() => void saveDraft()}>{busy ? <LoaderCircle className="spin" size={17} /> : <FileText size={17} />}{t("compose.saveDraft")}</button>
-            <button className="primary-button" type="submit" disabled={busy || uploading || discarding || hasPendingUploads || !accountId}>{busy ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}{busy ? t("compose.sending") : t("compose.send")}</button>
-          </footer>
-        </form>
-        {confirmAction && (
-          <div className="compose-confirm-backdrop" role="presentation" onMouseDown={(event) => {
-            event.stopPropagation();
-            if (event.target === event.currentTarget) setConfirmAction(null);
-          }}>
-            <section ref={discardConfirmDialogRef} className="compose-confirm" role="alertdialog" aria-modal="true" aria-labelledby="discard-compose-title" aria-describedby="discard-compose-copy" tabIndex={-1}>
-              <h3 id="discard-compose-title">{confirmAction === "delete" ? t("compose.confirm.deleteTitle") : t("compose.confirm.discardTitle")}</h3>
-              <p id="discard-compose-copy">{confirmAction === "delete" ? t("compose.confirm.deleteDescription") : t("compose.confirm.discardDescription")}</p>
-              <div><button className="secondary-button" type="button" onClick={() => setConfirmAction(null)} disabled={discarding}>{confirmAction === "delete" ? t("compose.confirm.keepDraft") : t("compose.confirm.continueEditing")}</button><button className="danger-button" type="button" onClick={() => void (confirmAction === "delete" ? deleteSavedDraft() : discardAndClose())} disabled={discarding}>{discarding ? t("compose.processing") : confirmAction === "delete" ? t("compose.deleteDraft") : t("compose.confirm.discardAction")}</button></div>
-            </section>
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
 export default function App() {
   const { locale, setLocale, t } = useI18n();
   const [systemTheme, setSystemTheme] = useState<"light" | "dark">(currentSystemTheme);
@@ -855,11 +418,32 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [translationSession, setTranslationSession] = useState<TranslationSession | null>(null);
   const [translationAvailability, setTranslationAvailability] = useState<TranslationAvailability>(isDemo ? "available" : "checking");
+  const [translationTermsAccepted, setTranslationTermsAccepted] = useState<boolean>(() => {
+    try {
+      if (localStorage.getItem("nami-mail:translation-terms-accepted") === "1") return true;
+    } catch { /* localStorage may be unavailable */ }
+    // localStorage is origin-scoped and the desktop app uses an ephemeral port
+    // (PORT=0), so every restart gets a different origin. Fall back to a cookie
+    // which in Chromium is shared across ports on the same domain (127.0.0.1).
+    try {
+      if (document.cookie.split(";").some((c) => c.trim().startsWith("nami-mail-translation-terms=1"))) return true;
+    } catch { /* cookie may be unavailable */ }
+    return false;
+  });
+  const [translationTermsOpen, setTranslationTermsOpen] = useState(() => {
+    if (translationTermsAccepted) return false;
+    // Skip terms dialog in desktop smoke test mode
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("desktopSmoke") === "1") return false;
+    return true;
+  });
+  const translationTermsPendingRef = useRef<"free" | "llm" | null>(null);
   const [view, setView] = useState<MailView>("inbox");
   const [selectedAccount, setSelectedAccount] = useState("all");
   const [selectedFolder, setSelectedFolder] = useState("");
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
+  const [filterAttachments, setFilterAttachments] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -867,6 +451,10 @@ export default function App() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeDraft, setComposeDraft] = useState<ComposeDraft>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [contactsOpen, setContactsOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [accountsOpen, setAccountsOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentProviderSettingsRequestId, setAgentProviderSettingsRequestId] = useState(0);
   const [sendingStatusOpen, setSendingStatusOpen] = useState(false);
@@ -875,20 +463,33 @@ export default function App() {
   const [submissionLoadError, setSubmissionLoadError] = useState<string | null>(null);
   const [messageAction, setMessageAction] = useState<"archive" | "trash" | null>(null);
   const [messageFlagging, setMessageFlagging] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
   const [attachmentDownloads, setAttachmentDownloads] = useState<Record<string, AttachmentDownloadState>>({});
+  const [attachmentPreview, setAttachmentPreview] = useState<{ message: Message; attachment: MessageAttachment } | null>(null);
   const [recipientDetailsOpen, setRecipientDetailsOpen] = useState(false);
   const [readerMoreOpen, setReaderMoreOpen] = useState(false);
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [snoozeCustomUntil, setSnoozeCustomUntil] = useState("");
+  const [snoozeBusy, setSnoozeBusy] = useState(false);
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [toast, setToast] = useState<ToastNotice>(null);
   const [fatalError, setFatalError] = useState<MailErrorPresentation | null>(null);
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateSnapshot | null>(null);
   const [updatePromptOpen, setUpdatePromptOpen] = useState(false);
+  const [preloadedAgentBootstrap, setPreloadedAgentBootstrap] = useState<AgentBootstrap | null>(null);
+  const splashAnimationDoneRef = useRef(false);
+  const splashDataDoneRef = useRef(false);
+  const splashAgentDoneRef = useRef(false);
+  const splashDismissedRef = useRef(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const agentLaunchButtonRef = useRef<HTMLButtonElement>(null);
   const readerTitleRef = useRef<HTMLHeadingElement>(null);
   const readerMoreRef = useRef<HTMLDivElement>(null);
+  const snoozeRef = useRef<HTMLDivElement>(null);
   const messageButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const messagesRef = useRef<Message[]>([]);
   const pendingArchiveMovesRef = useRef<PendingArchiveMove[]>([]);
@@ -898,9 +499,10 @@ export default function App() {
   const lastOpenedMessageIdRef = useRef<string | null>(null);
   const translationRequestIdRef = useRef(0);
   const translationAvailabilityRequestIdRef = useRef(0);
+  const translationAbortRef = useRef<AbortController | null>(null);
+  const llmTranslationAbortRef = useRef<AbortController | null>(null);
   const settingsLoadCoordinatorRef = useRef(createSettingsLoadCoordinator());
   const demoLoadedRef = useRef(false);
-  const selectionInitializedRef = useRef(false);
   const loadRequestRef = useRef(0);
   const submissionLoadRequestRef = useRef(0);
   const loadingMoreRef = useRef(false);
@@ -922,8 +524,8 @@ export default function App() {
   const submissionOutstandingCount = submissionAttentionCount + submissionActiveCount;
   const sidebarCounts = useMemo(() => sidebarBadgeCounts(stats), [stats]);
   useDialogFocus(mobileSidebar, sidebarRef);
-  const showToast = useCallback((message: string, kind: ToastKind = "success") => {
-    setToast({ kind, message });
+  const showToast = useCallback((message: string, kind: ToastKind = "success", action?: ToastAction) => {
+    setToast({ kind, message, action });
   }, []);
   const applySettings = useCallback((nextSettings: AppSettings) => {
     const normalizedSettings = { ...nextSettings, locale: resolveLocale(nextSettings.locale) };
@@ -937,6 +539,17 @@ export default function App() {
     unreadViewRecentlyReadIdsRef.current = next;
     setUnreadViewRecentlyReadIds(next);
   }, []);
+  const cancelScheduledSubmission = useCallback(async (submissionId: string) => {
+    if (isDemo) {
+      setSubmissions((current) => current.filter((item) => item.id !== submissionId));
+      showToast(t("sending.cancelled.success"));
+      return;
+    }
+    const result = await api.cancelScheduledSend(submissionId);
+    if (!result.cancelled) throw new ApiError(t("sending.error.cancel"), "scheduled_send_not_cancellable");
+    setSubmissions((current) => current.filter((item) => item.id !== submissionId));
+    showToast(t("sending.cancelled.success"));
+  }, [showToast, t]);
   const updateUnreadViewRecentlyRead = useCallback((message: Pick<Message, "id" | "seen">, nextSeen: boolean) => {
     const next = nextUnreadViewRecentlyReadIds(
       unreadViewRecentlyReadIdsRef.current,
@@ -1005,9 +618,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    const root = document.documentElement;
+    // Suppress transition animations during the theme switch so the new
+    // color scheme applies instantly instead of animating every element
+    // at once (which causes a visible repaint storm / UI jank).
+    root.classList.add("theme-transitioning");
+    root.dataset.theme = theme;
+    root.dataset.density = settings.listDensity;
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#09090a" : "#f2f2f4");
-  }, [theme]);
+    // Force a synchronous reflow so the browser applies the new theme
+    // while transitions are still disabled.
+    root.offsetHeight; // eslint-disable-line @typescript-eslint/no-unused-expressions
+    // Re-enable transitions on the next frame.
+    requestAnimationFrame(() => {
+      root.classList.remove("theme-transitioning");
+    });
+  }, [theme, settings.listDensity]);
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
@@ -1045,14 +671,11 @@ export default function App() {
         );
         if (!demoLoadedRef.current) {
           demoLoadedRef.current = true;
-          const shouldInitializeSelection = !selectionInitializedRef.current;
-          selectionInitializedRef.current = true;
           setAccounts(demoAccounts);
           setProviders(demoProviders);
           setMessages(demoMessages);
           setMessagePage(1);
           setStats(demoStats);
-          if (shouldInitializeSelection && !isCompactMailLayout()) setSelectedId(demoMessages[0]?.id ?? null);
         }
         setMessageTotal(demoTotal);
         setMessagePage(1);
@@ -1068,8 +691,6 @@ export default function App() {
           api.stats(),
         ]);
         if (requestId !== loadRequestRef.current) return;
-        const shouldInitializeSelection = !selectionInitializedRef.current;
-        selectionInitializedRef.current = true;
         const pendingMerge = mergePendingArchiveMoves(
           messagePage.items,
           pendingArchiveMovesRef.current,
@@ -1091,7 +712,7 @@ export default function App() {
         setStats(nextStats);
         setSelectedId((current) => {
           if (current && nextMessages.some((item) => item.id === current)) return current;
-          return shouldInitializeSelection && !isCompactMailLayout() ? nextMessages[0]?.id ?? null : null;
+          return null;
         });
         await refreshSubmissions(nextAccounts, { silent: true });
       }
@@ -1102,7 +723,17 @@ export default function App() {
         setSubmissionLoadError(mailErrorToastMessage(error, t("sending.error.load"), t));
       }
     } finally {
-      if (requestId === loadRequestRef.current) setLoading(false);
+      if (requestId === loadRequestRef.current) {
+        setLoading(false);
+        if (!splashDataDoneRef.current) {
+          splashDataDoneRef.current = true;
+          if (splashAnimationDoneRef.current && splashAgentDoneRef.current && !splashDismissedRef.current) {
+            splashDismissedRef.current = true;
+            const el = document.getElementById("nami-splash");
+            if (el) { el.classList.add("done"); setTimeout(() => el.remove(), 600); }
+          }
+        }
+      }
     }
   }, [selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, replacePendingArchiveMoves, t, view]);
 
@@ -1129,6 +760,50 @@ export default function App() {
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { void loadSettings(); }, [loadSettings]);
+
+  // Splash screen coordination: dismiss when the animation timeline completes
+  // (~2s) AND both the mail data load and agent bootstrap preload finish.
+  const dismissSplash = useCallback(() => {
+    if (splashDismissedRef.current) return;
+    if (!splashAnimationDoneRef.current || !splashDataDoneRef.current || !splashAgentDoneRef.current) return;
+    splashDismissedRef.current = true;
+    const el = document.getElementById("nami-splash");
+    if (el) {
+      el.classList.add("done");
+      setTimeout(() => el.remove(), 600);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      splashAnimationDoneRef.current = true;
+      // If data or agent is still loading, show the loading bar
+      if (!splashDataDoneRef.current || !splashAgentDoneRef.current) {
+        const loader = document.querySelector(".nami-splash-loader");
+        if (loader) loader.classList.add("visible");
+      }
+      dismissSplash();
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [dismissSplash]);
+
+  // Preload agent conversations during splash so the assistant panel is ready
+  // instantly when the user opens it. Only keep recent summaries to bound memory.
+  useEffect(() => {
+    if (isDemo) {
+      splashAgentDoneRef.current = true;
+      dismissSplash();
+      return;
+    }
+    void api.agentBootstrap().then((value) => {
+      // Cap stored conversations to the 50 most recent to bound memory.
+      const capped: AgentBootstrap = { ...value, conversations: value.conversations.slice(0, 50) };
+      setPreloadedAgentBootstrap(capped);
+    }).catch(() => undefined).finally(() => {
+      splashAgentDoneRef.current = true;
+      dismissSplash();
+    });
+  }, [isDemo, dismissSplash]);
   useEffect(() => {
     const bridge = desktopBridge();
     if (!bridge || isDemo) return undefined;
@@ -1165,7 +840,7 @@ export default function App() {
   useEffect(() => {
     if (isDemo || !pendingMoveVerificationKey) return undefined;
     const pendingIds = pendingMoveVerificationKey.split("|").filter(Boolean);
-    let cancelled = false;
+    const cancelled = false;
     let timer = 0;
     let attempt = 0;
 
@@ -1213,16 +888,103 @@ export default function App() {
   }, [accountIdsKey, refreshSubmissions, submissionStatusRefreshIdsKey]);
   useEffect(() => {
     if (!toast) return;
-    const timer = window.setTimeout(() => setToast(null), toast.kind === "warning" ? 9000 : toast.kind === "error" ? 6000 : 3200);
+    const timer = window.setTimeout(() => setToast(null), toast.action ? 6000 : toast.kind === "warning" ? 9000 : toast.kind === "error" ? 6000 : 3200);
     return () => window.clearTimeout(timer);
   }, [toast]);
+  // Floating-UI tooltips: a single reused bubble positioned by
+  // @floating-ui/dom. flip() turns the bubble over when there is no room on
+  // the preferred side and shift() nudges it along the axis, with the app
+  // frame as the collision boundary 鈥?so bubbles stay fully inside the
+  // application surface, not just the browser viewport. JavaScript only wires
+  // hover events, sets the label and hides the bubble on leave; all collision
+  // math is delegated to the library. Tooltips are deliberately hover-only:
+  // showing them on focus would leave a bubble visible whenever a dialog
+  // opens (its first control is often the close button).
+  useEffect(() => {
+    const tooltip = document.createElement("div");
+    tooltip.className = "nami-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    document.body.appendChild(tooltip);
+    const frame = document.querySelector(".app-frame") ?? undefined;
+    let positionRequest = 0;
+    const show = (host: HTMLElement) => {
+      const request = ++positionRequest;
+      tooltip.textContent = host.getAttribute("data-tooltip") ?? "";
+      tooltip.classList.add("visible");
+      void computePosition(host, tooltip, {
+        strategy: "fixed",
+        placement: "top",
+        middleware: [
+          offset(8),
+          flip({ boundary: frame, padding: 6 }),
+          shift({ boundary: frame, padding: 6 }),
+        ],
+      }).then(({ x, y }) => {
+        if (request !== positionRequest) return; // a newer hover superseded us
+        tooltip.style.left = `${x}px`;
+        tooltip.style.top = `${y}px`;
+      });
+    };
+    const hide = () => {
+      positionRequest += 1;
+      tooltip.classList.remove("visible");
+    };
+    const over = (event: Event) => {
+      const target = event.target as HTMLElement | null;
+      // Use closest() to find the tooltip host, since the mouse may enter
+      // a child element (SVG icon, span) inside the button.
+      const host = target?.closest?.("[data-tooltip]") as HTMLElement | null;
+      if (host) show(host);
+    };
+    const out = (event: Event) => {
+      const target = event.target as HTMLElement | null;
+      const host = target?.closest?.("[data-tooltip]") as HTMLElement | null;
+      if (!host) return;
+      // Only hide when the mouse actually leaves the tooltip host, not when
+      // moving between child elements (icon 鈫?background).
+      const related = (event as MouseEvent).relatedTarget as HTMLElement | null;
+      if (related && host.contains(related)) return;
+      hide();
+    };
+    // Clicking a tooltip host often removes it from the DOM (e.g. the reader
+    // back button), and no mouseout fires for a removed element 鈥?the bubble
+    // would linger. Hiding on any pointer press is a cheap, reliable escape.
+    const press = () => {
+      if (tooltip.classList.contains("visible")) hide();
+    };
+    document.addEventListener("mouseover", over, true);
+    document.addEventListener("mouseout", out, true);
+    document.addEventListener("pointerdown", press, true);
+    return () => {
+      document.removeEventListener("mouseover", over, true);
+      document.removeEventListener("mouseout", out, true);
+      document.removeEventListener("pointerdown", press, true);
+      tooltip.remove();
+    };
+  }, []);
 
-  const filteredMessages = useMemo(() => messages.filter((message) => matchesServerMessageQuery(
-    message,
-    accounts,
-    { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view },
-    unreadViewRecentlyReadIds,
-  )), [accounts, messages, query, selectedAccount, selectedFolder, unreadViewRecentlyReadIds, view]);
+  const filteredMessages = useMemo(() => {
+    const base = messages.filter((message) => matchesServerMessageQuery(
+      message,
+      accounts,
+      { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view },
+      unreadViewRecentlyReadIds,
+    ) && (!filterAttachments || message.hasAttachments));
+    const sorted = [...base];
+    sorted.sort((a, b) => sortOrder === "newest"
+      ? new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime()
+      : new Date(a.sentAt).getTime() - new Date(b.sentAt).getTime());
+    return sorted;
+  }, [accounts, filterAttachments, messages, query, selectedAccount, selectedFolder, sortOrder, unreadViewRecentlyReadIds, view]);
+
+  const threadGroups = useMemo(() => groupMessagesByThread(filteredMessages), [filteredMessages]);
+  const threadById = useMemo(() => {
+    const map = new Map<string, Message[]>();
+    for (const group of threadGroups) {
+      for (const message of group.messages) map.set(message.id, group.messages);
+    }
+    return map;
+  }, [threadGroups]);
 
   const loadedServerMessageCount = useMemo(() => {
     if (isDemo) return filteredMessages.length;
@@ -1303,6 +1065,7 @@ export default function App() {
   };
 
   const selected = filteredMessages.find((message) => message.id === selectedId) ?? null;
+  const selectedThread = selected ? threadById.get(selected.id) ?? null : null;
   const selectedIsArchived = selected ? isArchivedMessage(selected, accounts) : false;
   const selectedMovePending = selected ? selected.movePending === true || pendingArchiveMoves.some((move) => move.id === selected.id) : false;
   const selectedMoveLocationUnverified = selected?.moveLocationUnverified === true;
@@ -1317,6 +1080,15 @@ export default function App() {
     && translationSession.targetLocale === locale
     ? translationSession.state
     : { phase: "idle" };
+  // Whether at least one LLM provider is configured AND authorized for mail
+  // content, enabling AI translation. Cloud providers require the explicit
+  // "allowCloudMailContent" consent; local providers (e.g. Ollama) always qualify.
+  const llmTranslationAvailable = useMemo(
+    () => !isDemo && Boolean(preloadedAgentBootstrap?.providers.some(
+      (provider) => provider.configured && (!provider.cloud || provider.cloudContentConsent),
+    )),
+    [isDemo, preloadedAgentBootstrap],
+  );
   const refreshTranslationAvailability = useCallback(async () => {
     const requestId = ++translationAvailabilityRequestIdRef.current;
     if (isDemo) {
@@ -1366,6 +1138,12 @@ export default function App() {
     () => selected?.htmlBody ? sanitizeMailHtml(selected.htmlBody, theme === "dark") : "",
     [selected?.htmlBody, theme],
   );
+  // Inherit the message's branded backdrop so a translated result keeps the
+  // provider-authored look instead of falling back to a plain app panel.
+  const translationMailStyle = useMemo(
+    () => selected?.htmlBody ? extractMailVisualStyle(selected.htmlBody) : undefined,
+    [selected?.htmlBody],
+  );
   const verificationCodes = useMemo(() => {
     if (!selected) return [];
     const htmlText = textFromSanitizedMailHtml(safeHtml);
@@ -1388,35 +1166,163 @@ export default function App() {
   }, [refreshTranslationAvailability]);
   const translateSelectedMessage = useCallback(async () => {
     if (!selected || translationState.phase === "loading") return;
+    if (!translationTermsAccepted) {
+      translationTermsPendingRef.current = "free";
+      setTranslationTermsOpen(true);
+      return;
+    }
     const messageId = selected.id;
     const targetLocale = locale;
     const previous = retainedTranslationContent(translationState);
     const requestId = ++translationRequestIdRef.current;
+    translationAbortRef.current?.abort();
+    const controller = new AbortController();
+    translationAbortRef.current = controller;
     setTranslationSession({ messageId, targetLocale, state: { phase: "loading", ...(previous ? { previous } : {}) } });
     try {
-      const result = isDemo
-        ? demoMessageTranslation(selected, targetLocale)
-        : await api.translateMessage(messageId, targetLocale);
+      if (isDemo) {
+        const result = demoMessageTranslation(selected, targetLocale);
+        if (requestId !== translationRequestIdRef.current) return;
+        setTranslationSession({
+          messageId,
+          targetLocale,
+          state: {
+            phase: "ready",
+            translatedText: result.translatedText,
+            ...(result.detectedLanguage ? { detectedLanguage: result.detectedLanguage } : {}),
+            visible: true,
+          },
+        });
+      } else {
+        const result = await api.translateMessageStream(
+          messageId,
+          targetLocale,
+          (partial) => {
+            if (requestId !== translationRequestIdRef.current) return;
+            setTranslationSession({
+              messageId,
+              targetLocale,
+              state: { phase: "ready", translatedText: partial, visible: true, streaming: true },
+            });
+          },
+          controller.signal,
+        );
+        if (requestId !== translationRequestIdRef.current) return;
+        setTranslationSession({
+          messageId,
+          targetLocale,
+          state: {
+            phase: "ready",
+            translatedText: result.translatedText,
+            ...(result.detectedLanguage ? { detectedLanguage: result.detectedLanguage } : {}),
+            visible: true,
+          },
+        });
+      }
+    } catch (error) {
       if (requestId !== translationRequestIdRef.current) return;
+      // User cancelled the streaming translation 鈥?keep any partial result
+      // already shown instead of surfacing an error.
+      if (controller.signal.aborted) {
+        setTranslationSession((current) => {
+          if (!current || current.messageId !== messageId || current.targetLocale !== targetLocale) return current;
+          if (current.state.phase === "ready" && current.state.streaming) {
+            return { ...current, state: { ...current.state, streaming: false } };
+          }
+          return previous
+            ? { messageId, targetLocale, state: { phase: "ready", ...previous, visible: true } }
+            : null;
+        });
+        return;
+      }
+      const llmAvailable = error instanceof ApiError && error.llmAvailable;
       setTranslationSession({
         messageId,
         targetLocale,
-        state: {
-          phase: "ready",
-          translatedText: result.translatedText,
-          ...(result.detectedLanguage ? { detectedLanguage: result.detectedLanguage } : {}),
-          visible: true,
+        state: { phase: "error", message: translationErrorMessage(error, t), ...(previous ? { previous } : {}), ...(llmAvailable ? { llmAvailable } : {}) },
+      });
+    }
+  }, [locale, selected, t, translationState.phase, translationTermsAccepted]);
+  const translateSelectedMessageWithLlm = useCallback(async () => {
+    if (!selected || translationState.phase === "loading") return;
+    if (!translationTermsAccepted) {
+      translationTermsPendingRef.current = "llm";
+      setTranslationTermsOpen(true);
+      return;
+    }
+    const messageId = selected.id;
+    const targetLocale = locale;
+    const previous = retainedTranslationContent(translationState);
+    // Mirror the server-side size guard so oversized messages fail fast
+    // without ever sending their body to an LLM provider.
+    const bodyText = selected.textBody.trim();
+    const translatableLength = bodyText
+      ? bodyText.length
+      : selected.htmlBody.trim()
+        ? selected.htmlBody.trim().replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").length
+        : 0;
+    if (translatableLength > MAX_LLM_TRANSLATION_TEXT_LENGTH) {
+      setTranslationSession({ messageId, targetLocale, state: { phase: "error", message: t("translation.error.requestTooLarge"), ...(previous ? { previous } : {}) } });
+      return;
+    }
+    const requestId = ++translationRequestIdRef.current;
+    llmTranslationAbortRef.current?.abort();
+    const controller = new AbortController();
+    llmTranslationAbortRef.current = controller;
+    setTranslationSession({ messageId, targetLocale, state: { phase: "loading", ...(previous ? { previous } : {}) } });
+    try {
+      const providers = isDemo ? { items: [], defaultProviderId: null } : await api.agentProviders();
+      const configured = providers.items.filter((p) => p.configured);
+      const provider = configured.find((p) => p.id === providers.defaultProviderId) ?? configured[0];
+      if (!provider) {
+        if (requestId !== translationRequestIdRef.current) return;
+        setTranslationSession({ messageId, targetLocale, state: { phase: "error", message: t("translation.llmNoProvider"), ...(previous ? { previous } : {}) } });
+        return;
+      }
+      const result = await api.translateMessageWithLlmStream(
+        messageId,
+        targetLocale,
+        provider.id,
+        undefined,
+        (partial) => {
+          if (requestId !== translationRequestIdRef.current) return;
+          setTranslationSession({
+            messageId,
+            targetLocale,
+            state: { phase: "ready", translatedText: partial, visible: true, streaming: true },
+          });
         },
+        controller.signal,
+      );
+      if (requestId !== translationRequestIdRef.current) return;
+      setTranslationSession({
+        messageId, targetLocale,
+        state: { phase: "ready", translatedText: result.translatedText, visible: true },
       });
     } catch (error) {
       if (requestId !== translationRequestIdRef.current) return;
+      // User cancelled the LLM translation 鈥?restore any previous result
+      // instead of surfacing an error.
+      if (controller.signal.aborted) {
+        setTranslationSession((current) => {
+          if (!current || current.messageId !== messageId || current.targetLocale !== targetLocale) return current;
+          if (current.state.phase === "ready" && current.state.streaming) {
+            return { ...current, state: { ...current.state, streaming: false } };
+          }
+          return previous
+            ? { messageId, targetLocale, state: { phase: "ready", ...previous, visible: true } }
+            : null;
+        });
+        return;
+      }
       setTranslationSession({
-        messageId,
-        targetLocale,
-        state: { phase: "error", message: translationErrorMessage(error, t), ...(previous ? { previous } : {}) },
+        messageId, targetLocale,
+        state: { phase: "error", message: llmTranslationErrorMessage(error, t), ...(previous ? { previous } : {}) },
       });
+    } finally {
+      if (llmTranslationAbortRef.current === controller) llmTranslationAbortRef.current = null;
     }
-  }, [locale, selected, t, translationState.phase]);
+  }, [locale, selected, t, translationState.phase, translationTermsAccepted]);
   const showSelectedTranslation = useCallback(() => {
     setTranslationSession((current) => {
       if (!selected || !current || current.messageId !== selected.id || current.targetLocale !== locale || current.state.phase !== "ready") {
@@ -1433,6 +1339,33 @@ export default function App() {
       return { ...current, state: { ...current.state, visible: false } };
     });
   }, [locale, selected]);
+  const cancelTranslation = useCallback(() => {
+    translationAbortRef.current?.abort();
+    translationAbortRef.current = null;
+    llmTranslationAbortRef.current?.abort();
+    llmTranslationAbortRef.current = null;
+  }, []);
+  const acceptTranslationTerms = useCallback(() => {
+    try { localStorage.setItem("nami-mail:translation-terms-accepted", "1"); } catch { /* localStorage may be unavailable */ }
+    // Also set a cookie so the acceptance survives port changes across restarts
+    // (Chromium shares cookies across ports on the same domain).
+    try { document.cookie = "nami-mail-translation-terms=1; max-age=31536000; path=/; SameSite=Lax"; } catch { /* cookie may be unavailable */ }
+    setTranslationTermsAccepted(true);
+    setTranslationTermsOpen(false);
+    const pending = translationTermsPendingRef.current;
+    translationTermsPendingRef.current = null;
+    if (pending === "free") void translateSelectedMessage();
+    else if (pending === "llm") void translateSelectedMessageWithLlm();
+  }, [translateSelectedMessage, translateSelectedMessageWithLlm]);
+  const declineTranslationTerms = useCallback(() => {
+    setTranslationTermsOpen(false);
+    const pending = translationTermsPendingRef.current;
+    translationTermsPendingRef.current = null;
+    if (!pending) {
+      if (window.namiDesktop?.quit) window.namiDesktop.quit();
+      else window.close();
+    }
+  }, []);
   const copyDetectedVerificationCode = useCallback(async (code: string) => {
     const copied = await copyVerificationCodeToClipboard(code);
     showToast(copied ? t("mail.verification.copied", { code }) : t("mail.verification.copyFailed"), copied ? "success" : "error");
@@ -1550,8 +1483,9 @@ export default function App() {
       subject: reply.subject,
       inReplyTo: reply.inReplyTo,
       references: reply.references,
+      text: replyBody(selected, accounts, locale, t, safeHtml),
     });
-  }, [accounts, openCompose, selected]);
+  }, [accounts, locale, openCompose, safeHtml, selected, t]);
 
   const openReplyAll = useCallback(() => {
     if (!selected) return;
@@ -1563,8 +1497,9 @@ export default function App() {
       subject: reply.subject,
       inReplyTo: reply.inReplyTo,
       references: reply.references,
+      text: replyBody(selected, accounts, locale, t, safeHtml),
     });
-  }, [accounts, openCompose, selected]);
+  }, [accounts, locale, openCompose, safeHtml, selected, t]);
 
   const openForward = useCallback(() => {
     if (!selected) return;
@@ -1572,14 +1507,15 @@ export default function App() {
       selected,
       selected.textBody || textFromSanitizedMailHtml(safeHtml) || selected.snippet,
     );
+    const signature = accounts.find((account) => account.id === selected.accountId)?.signature ?? "";
     openCompose({
       accountId: selected.accountId,
       to: forward.to.join(", "),
       cc: forward.cc.join(", "),
       subject: forward.subject,
-      text: forward.text,
+      text: signature.trim() ? `${forward.text}\n\n${signature.trim()}` : forward.text,
     });
-  }, [openCompose, safeHtml, selected]);
+  }, [accounts, openCompose, safeHtml, selected]);
 
   const moveSelectedMessage = async (target: "archive" | "trash") => {
     if (!selected || messageAction || messageFlagging || selectedRemoteActionsBlocked || (target === "archive" && selectedIsArchived)) return;
@@ -1700,6 +1636,164 @@ export default function App() {
     }
   };
 
+  const applyBatchSeenChange = useCallback((ids: readonly string[], seen: boolean) => {
+    setMessages((items) => {
+      let next = items;
+      for (const id of ids) next = applyMessageSeenChange(accounts, next, stats, id, seen).messages;
+      messagesRef.current = next;
+      return next;
+    });
+    setAccounts((items) => {
+      let next = items;
+      for (const id of ids) next = applyMessageSeenChange(next, messages, stats, id, seen).accounts;
+      return next;
+    });
+    setStats((current) => {
+      let next = current;
+      for (const id of ids) next = applyMessageSeenChange(accounts, messages, current, id, seen).stats;
+      return next;
+    });
+    if (viewRef.current === "unread") {
+      const changedCount = ids.filter((id) => {
+        const current = messages.find((item) => item.id === id);
+        return Boolean(current && current.seen !== seen);
+      }).length;
+      if (changedCount) setMessageTotal((total) => Math.max(0, total + (seen ? -changedCount : changedCount)));
+    }
+  }, [accounts, messages, stats]);
+
+  const applyBatchFlaggedChange = useCallback((ids: readonly string[], flagged: boolean) => {
+    setMessages((items) => {
+      const selected = new Set(ids);
+      const next = items.map((item) => {
+        if (!selected.has(item.id) || item.flagged === flagged) return item;
+        const flags = new Set(item.flags);
+        if (flagged) flags.add("\\Flagged");
+        else flags.delete("\\Flagged");
+        return { ...item, flagged, flags: [...flags] };
+      });
+      messagesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const toggleSelectionMode = useCallback(() => {
+    setSelectionMode((current) => {
+      const next = !current;
+      if (!next) setSelectedMessageIds(new Set());
+      return next;
+    });
+  }, []);
+
+  const toggleMessageSelected = useCallback((id: string) => {
+    setSelectedMessageIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const selectAllVisibleMessages = useCallback(() => {
+    setSelectedMessageIds(new Set(filteredMessages.map((message) => message.id)));
+  }, [filteredMessages]);
+
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedMessageIds(new Set());
+  }, []);
+
+  const batchUpdateFlags = async (patch: { seen?: boolean; flagged?: boolean }, successKey: string) => {
+    const ids = [...selectedMessageIds];
+    if (!ids.length || batchBusy || !Object.keys(patch).length) return;
+    setBatchBusy(true);
+    if (patch.seen !== undefined) applyBatchSeenChange(ids, patch.seen);
+    if (patch.flagged !== undefined) applyBatchFlaggedChange(ids, patch.flagged);
+    try {
+      if (!isDemo) {
+        const result = await api.batchUpdateMessageFlags(ids, patch);
+        if (result.failed) {
+          showToast(t("mail.selection.partialFailure", { done: result.updated, failed: result.failed }), "error");
+          void load({ silent: true });
+          return;
+        }
+      }
+      showToast(t(successKey, { count: ids.length }));
+    } catch (error) {
+      // The server owns the authoritative flags; reload to restore truth.
+      void load({ silent: true });
+      showToast(mailErrorToastMessage(error, t("mail.error.batchUpdate"), t), "error");
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
+  const batchMoveMessages = async (target: "archive" | "trash") => {
+    const ids = [...selectedMessageIds];
+    if (!ids.length || batchBusy) return;
+    setBatchBusy(true);
+    try {
+      if (isDemo) {
+        setMessages((items) => {
+          let next = items;
+          for (const id of ids) {
+            const current = next.find((item) => item.id === id);
+            if (!current) continue;
+            const destination = demoMoveDestination(accounts, current.accountId, target);
+            next = applyMessageMove(accounts, next, stats, id, destination).messages;
+          }
+          messagesRef.current = next;
+          return next;
+        });
+        setAccounts((items) => {
+          let next = items;
+          for (const id of ids) {
+            const current = messages.find((item) => item.id === id);
+            if (!current) continue;
+            const destination = demoMoveDestination(accounts, current.accountId, target);
+            next = applyMessageMove(next, [current], stats, id, destination).accounts;
+          }
+          return next;
+        });
+        setStats((current) => {
+          let next = current;
+          for (const id of ids) {
+            const msg = messages.find((item) => item.id === id);
+            if (!msg) continue;
+            const destination = demoMoveDestination(accounts, msg.accountId, target);
+            next = applyMessageMove(accounts, [msg], next, id, destination).stats;
+          }
+          return next;
+        });
+      } else {
+        const result = await api.batchMoveMessages(ids, target);
+        if (result.updated === 0) {
+          showToast(t("mail.error.move"), "error");
+          return;
+        }
+        setMessages((items) => {
+          const moved = new Set(ids);
+          const next = items.filter((item) => !moved.has(item.id));
+          messagesRef.current = next;
+          return next;
+        });
+        const inViewCount = ids.filter((id) => filteredMessages.some((item) => item.id === id)).length;
+        if (inViewCount) setMessageTotal((total) => Math.max(0, total - inViewCount));
+        void load({ silent: true });
+        if (result.failed) {
+          showToast(t("mail.selection.partialFailure", { done: result.updated, failed: result.failed }), "error");
+          return;
+        }
+      }
+      showToast(t(target === "archive" ? "mail.selection.archived" : "mail.selection.trashed", { count: ids.length }));
+    } catch (error) {
+      showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
+    } finally {
+      setBatchBusy(false);
+      exitSelectionMode();
+    }
+  };
+
   const toggleSelectedStar = async () => {
     if (!selected || messageFlagging || selectedRemoteActionsBlocked) return;
     const nextFlagged = !selected.flagged;
@@ -1742,6 +1836,170 @@ export default function App() {
       setMessageFlagging(false);
     }
   };
+
+  const quickToggleStar = async (message: Message) => {
+    if (messageFlagging || selectedRemoteActionsBlocked) return;
+    const nextFlagged = !message.flagged;
+    setMessageFlagging(true);
+    try {
+      if (!isDemo) await api.updateMessageFlags(message.id, { flagged: nextFlagged });
+      setMessages((items) => items.map((item) => {
+        if (item.id !== message.id) return item;
+        const flags = new Set(item.flags);
+        if (nextFlagged) flags.add("\\Flagged");
+        else flags.delete("\\Flagged");
+        return { ...item, flagged: nextFlagged, flags: [...flags] };
+      }));
+      showToast(nextFlagged ? t("mail.action.starred") : t("mail.action.unstarred"));
+    } catch (error) {
+      void load({ silent: true });
+      showToast(mailErrorToastMessage(error, t("mail.error.updateStar"), t), "error");
+    } finally {
+      setMessageFlagging(false);
+    }
+  };
+
+  const quickMoveMessage = async (message: Message, target: "archive" | "trash") => {
+    if (batchBusy || messageAction !== null || messageFlagging) return;
+    setMessageAction(target);
+    try {
+      if (isDemo) {
+        const destination = demoMoveDestination(accounts, message.accountId, target);
+        setMessages((items) => {
+          const next = applyMessageMove(accounts, items, stats, message.id, destination).messages;
+          messagesRef.current = next;
+          return next;
+        });
+        setAccounts((items) => {
+          const current = messages.find((item) => item.id === message.id);
+          if (!current) return items;
+          const destination2 = demoMoveDestination(items, current.accountId, target);
+          return applyMessageMove(items, [current], stats, message.id, destination2).accounts;
+        });
+        setStats((current) => {
+          const msg = messages.find((item) => item.id === message.id);
+          if (!msg) return current;
+          const destination3 = demoMoveDestination(accounts, msg.accountId, target);
+          return applyMessageMove(accounts, [msg], current, message.id, destination3).stats;
+        });
+      } else {
+        const result = await api.moveMessage(message.id, target);
+        if (!result.ok) {
+          showToast(t("mail.error.move"), "error");
+          return;
+        }
+        setMessages((items) => {
+          const next = items.filter((item) => item.id !== message.id);
+          messagesRef.current = next;
+          return next;
+        });
+        const inViewCount = filteredMessages.some((item) => item.id === message.id) ? 1 : 0;
+        if (inViewCount) setMessageTotal((total) => Math.max(0, total - inViewCount));
+        void load({ silent: true });
+      }
+      showToast(target === "archive" ? t("mail.action.archived") : t("mail.action.trashed"));
+    } catch (error) {
+      void load({ silent: true });
+      showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
+    } finally {
+      setMessageAction(null);
+    }
+  };
+
+  const snoozeOptions = useMemo(() => [
+    { key: "inOneHour", label: t("mail.snooze.inOneHour"), compute: () => new Date(Date.now() + 60 * 60_000) },
+    { key: "tonight", label: t("mail.snooze.tonight"), compute: () => {
+      const date = new Date();
+      date.setHours(23, 0, 0, 0);
+      if (date.getTime() <= Date.now()) date.setDate(date.getDate() + 1);
+      return date;
+    } },
+    { key: "tomorrowMorning", label: t("mail.snooze.tomorrowMorning"), compute: () => {
+      const date = new Date();
+      date.setDate(date.getDate() + 1);
+      date.setHours(9, 0, 0, 0);
+      return date;
+    } },
+    { key: "nextWeek", label: t("mail.snooze.nextWeek"), compute: () => {
+      const date = new Date();
+      date.setDate(date.getDate() + 7);
+      date.setHours(9, 0, 0, 0);
+      return date;
+    } },
+  ], [t]);
+
+  useEffect(() => {
+    if (!snoozeOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (snoozeRef.current?.contains(event.target as Node)) return;
+      setSnoozeOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSnoozeOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOnOutsidePointer);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnOutsidePointer);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [snoozeOpen]);
+
+  const applyLocalSnooze = useCallback((messageId: string, until: string | null, previousUntil: string | null) => {
+    const wasSnoozed = Boolean(previousUntil && new Date(previousUntil).getTime() > Date.now());
+    const willBeSnoozed = Boolean(until && new Date(until).getTime() > Date.now());
+    const current = messagesRef.current.find((item) => item.id === messageId);
+    if (!current) return;
+    setMessages((items) => {
+      const next = items.map((item) => item.id === messageId ? { ...item, snoozedUntil: until } : item);
+      messagesRef.current = next;
+      return next;
+    });
+    if (wasSnoozed === willBeSnoozed || !isInboxMessage(current, accounts)) return;
+    // Leaving the inbox for a snooze, or returning from one, adjusts the
+    // unified inbox counts exactly like an archive move.
+    const isSnoozing = !wasSnoozed && willBeSnoozed;
+    const unseenDelta = current.seen ? 0 : isSnoozing ? -1 : 1;
+    setStats((currentStats) => ({
+      ...currentStats,
+      messages: Math.max(0, currentStats.messages + (isSnoozing ? -1 : 1)),
+      unread: Math.max(0, currentStats.unread + unseenDelta),
+    }));
+  }, [accounts]);
+
+  const setSelectedSnoozed = async (untilIso: string) => {
+    if (!selected || snoozeBusy || selectedRemoteActionsBlocked) return;
+    setSnoozeBusy(true);
+    setSnoozeOpen(false);
+    setSnoozeCustomUntil("");
+    try {
+      if (!isDemo) await api.snoozeMessage(selected.id, untilIso);
+      applyLocalSnooze(selected.id, untilIso, selected.snoozedUntil ?? null);
+      showToast(t("mail.snooze.scheduled"));
+    } catch (error) {
+      showToast(mailErrorToastMessage(error, t("mail.error.snooze"), t), "error");
+    } finally {
+      setSnoozeBusy(false);
+    }
+  };
+
+  const clearSelectedSnooze = async () => {
+    if (!selected || snoozeBusy) return;
+    setSnoozeBusy(true);
+    setSnoozeOpen(false);
+    try {
+      if (!isDemo) await api.clearMessageSnooze(selected.id);
+      applyLocalSnooze(selected.id, null, selected.snoozedUntil ?? null);
+      if (viewRef.current === "snoozed") setSelectedId(null);
+      showToast(t("mail.snooze.cleared"));
+    } catch (error) {
+      showToast(mailErrorToastMessage(error, t("mail.error.snooze"), t), "error");
+    } finally {
+      setSnoozeBusy(false);
+    }
+  };
+
+  const selectedIsSnoozed = selected ? isSnoozedMessage(selected) : false;
 
   const downloadAttachment = async (message: Message, attachment: MessageAttachment) => {
     if (pendingArchiveMovesRef.current.some((move) => move.id === message.id) || message.movePending) {
@@ -1786,6 +2044,22 @@ export default function App() {
     }
   };
 
+  const openAttachmentPreview = (message: Message, attachment: MessageAttachment) => {
+    if (pendingArchiveMovesRef.current.some((move) => move.id === message.id) || message.movePending) {
+      showToast(t("mail.action.moveRefreshing"), "info");
+      return;
+    }
+    if (message.moveLocationUnverified) {
+      showToast(t("mail.action.locationUnverified"), "info");
+      return;
+    }
+    if (isDemo) {
+      showToast(t("mail.attachment.previewDemoUnavailable"), "info");
+      return;
+    }
+    setAttachmentPreview({ message, attachment });
+  };
+
   const removeAccountFromView = useCallback((accountId: string) => {
     const account = accounts.find((item) => item.id === accountId);
     const removesSelectedAccount = selectedAccount === accountId;
@@ -1823,6 +2097,10 @@ export default function App() {
       setRecipientDetailsOpen(false);
     }
   }, [accounts, load, messages, selectedAccount, selectedFolder, selectedId]);
+
+  const updateAccountSignatureInState = useCallback((accountId: string, signature: string) => {
+    setAccounts((items) => items.map((account) => account.id === accountId ? { ...account, signature } : account));
+  }, []);
 
   const toggleTheme = () => {
     const nextTheme = theme === "light" ? "dark" : "light";
@@ -1968,13 +2246,17 @@ export default function App() {
         || Boolean(target instanceof HTMLElement && target.isContentEditable);
       if (event.key === "Escape") {
         if (settingsOpen) setSettingsOpen(false);
+        else if (calendarOpen) setCalendarOpen(false);
+        else if (contactsOpen) setContactsOpen(false);
+        else if (templatesOpen) setTemplatesOpen(false);
+        else if (accountsOpen) setAccountsOpen(false);
         else if (composeOpen) return;
         else if (addOpen) setAddOpen(false);
         else if (mobileSidebar) setMobileSidebar(false);
         else if (selectedId) closeReader(true);
         return;
       }
-      if (settingsOpen || sendingStatusOpen || composeOpen || addOpen || mobileSidebar) return;
+      if (settingsOpen || calendarOpen || contactsOpen || templatesOpen || accountsOpen || sendingStatusOpen || composeOpen || addOpen || mobileSidebar) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         searchInputRef.current?.focus();
@@ -2011,7 +2293,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [accounts.length, addOpen, closeReader, composeOpen, filteredMessages, mobileSidebar, openCompose, openForward, openMessage, openReply, openReplyAll, selected, selectedId, sendingStatusOpen, settingsOpen, updatePromptOpen]);
+  }, [accounts.length, addOpen, closeReader, composeOpen, filteredMessages, mobileSidebar, openCompose, openForward, openMessage, openReply, openReplyAll, selected, selectedId, contactsOpen, templatesOpen, accountsOpen, sendingStatusOpen, settingsOpen, updatePromptOpen]);
 
   const sync = async () => {
     if (!accounts.length || syncing) return;
@@ -2107,7 +2389,7 @@ export default function App() {
         </div>
       )}
 
-      <main className={`mail-shell${selected ? " has-open-message" : ""}`}>
+      <main className={`mail-shell${selected ? " has-open-message" : ""}${agentOpen ? " has-agent-open" : ""}`}>
         <aside
           ref={sidebarRef}
           className={`sidebar ${mobileSidebar ? "open" : ""}`}
@@ -2127,14 +2409,14 @@ export default function App() {
 
           <button className="compose-button" type="button" onClick={() => { setMobileSidebar(false); if (accounts.length) openCompose(); else setAddOpen(true); }}><PenLine size={18} />{t("mail.compose")}</button>
 
-          <nav className="nav-section" aria-label={t("navigation.mailViews")}>
+          <nav className={`nav-section${selectedAccount === "all" ? "" : " collapsed"}`} aria-label={t("navigation.mailViews")}>
             <button aria-pressed={view === "inbox" && !selectedFolder} className={view === "inbox" && !selectedFolder ? "active" : ""} onClick={() => chooseView("inbox")}><Inbox size={18} /><span>{t("mail.unifiedInbox")}</span><em className="sidebar-count" data-tooltip={t("mail.inboxCountTooltip")}>{sidebarCounts.inbox || ""}</em></button>
             <button aria-pressed={view === "unread"} className={view === "unread" ? "active" : ""} onClick={() => chooseView("unread")}><Mail size={18} /><span>{t("mail.unread")}</span><em className="sidebar-count" data-tooltip={t("mail.unreadCountTooltip")}>{sidebarCounts.unread || ""}</em></button>
             <button aria-pressed={view === "starred"} className={view === "starred" ? "active" : ""} onClick={() => chooseView("starred")}><Star size={18} /><span>{t("mail.starred")}</span></button>
             <button aria-pressed={view === "archived"} className={view === "archived" ? "active" : ""} onClick={() => chooseView("archived")}><Archive size={18} /><span>{t("mail.action.archive")}</span></button>
+            <button aria-pressed={view === "snoozed"} className={view === "snoozed" ? "active" : ""} onClick={() => chooseView("snoozed")}><Clock size={18} /><span>{t("mail.snoozed")}</span></button>
             <button className={selectedFolder === draftsFolder?.path ? "active" : ""} disabled={!draftsFolder} onClick={() => draftsFolder && chooseFolder(draftsFolder.path)}><FileText size={18} /><span>{t("mail.drafts")}</span></button>
             <button className={selectedFolder === sentFolder?.path ? "active" : ""} disabled={!sentFolder} onClick={() => sentFolder && chooseFolder(sentFolder.path)}><Send size={18} /><span>{t("mail.sent")}</span></button>
-            <button className={`sending-status-nav${submissionAttentionCount ? " attention" : ""}`} aria-label={t("sending.sidebarAria", { status: sendingStatusDescription })} aria-haspopup="dialog" data-tooltip={sendingStatusDescription} onClick={() => { setMobileSidebar(false); setSendingStatusOpen(true); void refreshSubmissions(accounts, { silent: true }); }}>{submissionAttentionCount ? <CircleAlert size={18} /> : <ListChecks size={18} />}<span>{t("sending.title")}</span><em aria-hidden="true">{submissionOutstandingCount || ""}</em></button>
           </nav>
 
           <div className="accounts-heading"><span>{t("mail.accounts")}</span><IconButton label={t("account.add")} onClick={() => { setMobileSidebar(false); setAddOpen(true); }}><Plus size={16} /></IconButton></div>
@@ -2145,7 +2427,7 @@ export default function App() {
               const providerName = localizedProviderName(account);
               const freshness = formatSyncFreshness(account.lastSyncedAt, t);
               return (
-                <button key={account.id} aria-pressed={selectedAccount === account.id} className={selectedAccount === account.id ? "active" : ""} data-tooltip={issue ? t("mail.accountIssueTooltip", { title: issue.title, guidance: issue.guidance }) : t("mail.accountFreshness", { provider: providerName, freshness })} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}>
+                <button key={account.id} aria-pressed={selectedAccount === account.id} className={selectedAccount === account.id ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}>
                   <span className={`account-avatar tone-${accountTone(account.email)}`}>{account.email[0]?.toUpperCase()}</span>
                   <span className="account-copy"><strong>{account.email.split("@")[0]}</strong><small>{issue?.title ?? t("mail.accountFreshness", { provider: providerName, freshness })}</small></span>
                   <span className={`status-dot ${issue ? "error" : account.status}`} aria-hidden="true" />
@@ -2165,31 +2447,60 @@ export default function App() {
 
           <div className="sidebar-footer">
             <div><ShieldCheck size={16} /><span><strong>{t("app.localEncryption")}</strong><small>{t("app.credentialsLocal")}</small></span></div>
-            <div className="sidebar-footer-actions"><IconButton label={t("settings.title")} onClick={() => { setMobileSidebar(false); setSettingsOpen(true); }}><Settings size={17} /></IconButton><span className="version">v{__NAMI_APP_VERSION__}</span></div>
+            <div className="sidebar-footer-actions"><span className="version">v{__NAMI_APP_VERSION__}</span></div>
           </div>
         </aside>
 
+        <div className="mail-workspace">
         <section className="message-column">
           <header className="column-header">
             <IconButton label={t("navigation.openMenu")} className="mobile-only" buttonRef={mobileMenuButtonRef} onClick={() => setMobileSidebar(true)}><Menu size={19} /></IconButton>
-            <div><span className="eyebrow">{selectedAccount === "all" ? t("mail.unifiedMailbox") : selectedAccountRecord ? localizedProviderName(selectedAccountRecord).toUpperCase() : ""}</span><h1>{view === "unread" ? t("mail.unread") : view === "starred" ? t("mail.starred") : view === "archived" ? t("mail.action.archive") : selectedFolderRecord?.name || t("mail.inbox")}</h1></div>
-            <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? openCompose() : setAddOpen(true)}><PenLine size={17} /></IconButton><button ref={agentLaunchButtonRef} className="agent-launch-button" type="button" onClick={() => setAgentOpen(true)} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><Sparkles size={16} /></span><span>{t("agent.launch")}</span></button>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton></div>
+            <div><span className="eyebrow">{selectedAccount === "all" ? t("mail.unifiedMailbox") : selectedAccountRecord ? localizedProviderName(selectedAccountRecord).toUpperCase() : ""}</span><h1>{view === "unread" ? t("mail.unread") : view === "starred" ? t("mail.starred") : view === "archived" ? t("mail.action.archive") : view === "snoozed" ? t("mail.snoozed") : selectedFolderRecord?.name || t("mail.inbox")}</h1></div>
+            <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={selectionMode ? t("mail.selection.done") : t("mail.selection.select")} className={selectionMode ? "selection-toggle active" : "selection-toggle"} onClick={toggleSelectionMode} disabled={!accounts.length}><ListChecks size={17} /></IconButton><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? openCompose() : setAddOpen(true)}><PenLine size={17} /></IconButton>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton><button ref={agentLaunchButtonRef} className="agent-launch-button" type="button" onClick={() => setAgentOpen(true)} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><img decoding="sync" className="nami-brand-logo nami-brand-logo-light" src="/nami-logo-light.png" alt="" /><img decoding="sync" className="nami-brand-logo nami-brand-logo-dark" src="/nami-logo-dark.png" alt="" /></span><span>{t("agent.launch")}</span></button></div>
           </header>
-
-          <div className="search-wrap"><Search size={17} /><label className="visually-hidden" htmlFor="mail-search">{t("mail.search")}</label><input id="mail-search" ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("mail.searchPlaceholder")} />{query && <IconButton label={t("mail.clearSearch")} className="search-clear" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}><X size={15} /></IconButton>}</div>
 
           {accountsNeedingAttention.length > 0 && (
             <div className="account-health-banner" role="status">
               <CircleAlert size={17} />
               <span><strong>{t("mail.accountAttention", { count: accountsNeedingAttention.length })}</strong><small>{primaryAccountNeedingAttention && primaryAccountIssue ? t("mail.accountProblem", { email: primaryAccountNeedingAttention.email, title: primaryAccountIssue.title }) : t("mail.otherAccountsAvailable")}</small></span>
-              <button type="button" onClick={() => setSettingsOpen(true)}>{t("mail.viewReason")}</button>
+              <button type="button" onClick={() => setAccountsOpen(true)}>{t("mail.viewReason")}</button>
             </div>
           )}
 
-          <div className="list-toolbar"><span className="sort-label">{t("mail.newestFirst")}</span><span className={recentlyReadVisibleCount ? "unread-retention-note" : ""} aria-live={recentlyReadVisibleCount ? "polite" : undefined}>{listToolbarStatus}</span></div>
+          {selectionMode ? (
+            <div className="list-toolbar selection-toolbar">
+              <button className="selection-select-all" type="button" onClick={selectAllVisibleMessages} disabled={batchBusy || !filteredMessages.length}>{t("mail.selection.selectAll")}</button>
+              <span className="selection-count">{t("mail.selection.count", { count: selectedMessageIds.size })}</span>
+              <div className="selection-actions">
+                <IconButton label={t("mail.action.markRead")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: true }, "mail.selection.markedRead")} disabled={batchBusy || !selectedMessageIds.size}><MailOpen size={15} /></IconButton>
+                <IconButton label={t("mail.action.markUnread")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: false }, "mail.selection.markedUnread")} disabled={batchBusy || !selectedMessageIds.size}><Mail size={15} /></IconButton>
+                <IconButton label={t("mail.action.star")} className="selection-action" onClick={() => void batchUpdateFlags({ flagged: true }, "mail.selection.starred")} disabled={batchBusy || !selectedMessageIds.size}><Star size={15} /></IconButton>
+                <IconButton label={t("mail.action.unstar")} className="selection-action" onClick={() => void batchUpdateFlags({ flagged: false }, "mail.selection.unstarred")} disabled={batchBusy || !selectedMessageIds.size}><Star size={15} fill="none" /></IconButton>
+                <span className="toolbar-divider" aria-hidden="true" />
+                <IconButton label={t("mail.action.archive")} className="selection-action" onClick={() => void batchMoveMessages("archive")} disabled={batchBusy || !selectedMessageIds.size}><Archive size={15} /></IconButton>
+                <IconButton label={t("mail.action.moveToTrash")} className="selection-action selection-action-danger" onClick={() => void batchMoveMessages("trash")} disabled={batchBusy || !selectedMessageIds.size}><Trash2 size={15} /></IconButton>
+              </div>
+              <button className="selection-done" type="button" onClick={exitSelectionMode} disabled={batchBusy}>{t("mail.selection.done")}</button>
+            </div>
+          ) : (
+            <div className="list-toolbar">
+              <div className="search-wrap"><Search size={17} /><label className="visually-hidden" htmlFor="mail-search">{t("mail.search")}</label><input id="mail-search" ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("mail.searchPlaceholder")} />{query && <IconButton label={t("mail.clearSearch")} className="search-clear" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}><X size={15} /></IconButton>}</div>
+              <div className="list-toolbar-controls">
+                <ThemedSelect id="list-sort" value={sortOrder} onValueChange={(value) => setSortOrder(value as "newest" | "oldest")} className="toolbar-select" aria-label={t("mail.sort.label")} containerClassName="toolbar-select-control">
+                  <option value="newest">{t("mail.sort.newest")}</option>
+                  <option value="oldest">{t("mail.sort.oldest")}</option>
+                </ThemedSelect>
+                <ThemedSelect id="list-filter" value={filterAttachments ? "attachments" : "all"} onValueChange={(value) => setFilterAttachments(value === "attachments")} className="toolbar-select" aria-label={t("mail.filter.label")} containerClassName="toolbar-select-control">
+                  <option value="all">{t("mail.filter.all")}</option>
+                  <option value="attachments">{t("mail.filter.attachments")}</option>
+                </ThemedSelect>
+              </div>
+              <span className={recentlyReadVisibleCount ? "unread-retention-note" : ""} aria-live={recentlyReadVisibleCount ? "polite" : undefined}>{listToolbarStatus}</span>
+            </div>
+          )}
 
           <div className="message-list">
-            {loading && <div className="center-state"><LoaderCircle className="spin" size={24} /><p>{t("mail.loading")}</p></div>}
+            {loading && <div className="message-skeleton-list" role="status" aria-label={t("mail.loading")}><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div></div>}
             {!loading && fatalError && <div className="center-state error-state"><X size={24} /><h3>{fatalError.title}</h3><p>{fatalError.message} {fatalError.guidance}</p><button className="secondary-button" onClick={() => void load()}>{t("mail.reconnect")}</button></div>}
             {!loading && !fatalError && !accounts.length && (
               <div className="center-state empty-state"><div className="empty-orb"><Mail size={28} /></div><h3>{t("mail.empty.firstAccountTitle")}</h3><p>{t("mail.empty.firstAccountDescription")}</p><button className="primary-button" onClick={() => setAddOpen(true)}><Plus size={17} />{t("account.add")}</button></div>
@@ -2202,19 +2513,28 @@ export default function App() {
                 {emptyMessageList.canClearSearch && <button className="secondary-button" type="button" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}>{t("mail.clearSearch")}</button>}
               </div>
             )}
-            {filteredMessages.map((message) => (
-              <button key={message.id} ref={(node) => { if (node) messageButtonRefs.current.set(message.id, node); else messageButtonRefs.current.delete(message.id); }} className={`message-item ${selectedId === message.id ? "selected" : ""} ${message.seen ? "" : "unread"} ${view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id) ? "recently-read-in-unread" : ""}`} onClick={() => void openMessage(message)}>
-                <span className="visually-hidden">{t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
+            {filteredMessages.map((message) => {
+              const threadSize = threadById.get(message.id)?.length ?? 1;
+              return (
+              <button key={message.id} ref={(node) => { if (node) messageButtonRefs.current.set(message.id, node); else messageButtonRefs.current.delete(message.id); }} className={`message-item ${selectedId === message.id ? "selected" : ""} ${message.seen ? "" : "unread"} ${selectionMode ? "selection-mode" : ""} ${selectionMode && selectedMessageIds.has(message.id) ? "multi-selected" : ""} ${view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id) ? "recently-read-in-unread" : ""}`} onClick={() => { if (selectionMode) toggleMessageSelected(message.id); else void openMessage(message); }}>
+                <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
+                {selectionMode && <span className={`selection-checkbox ${selectedMessageIds.has(message.id) ? "checked" : ""}`} aria-hidden="true" />}
                 <span className={`sender-avatar tone-${accountTone(message.from.address)}`}>{initials(message.from.name, message.from.address)}</span>
                 <span className="message-copy">
                   <span className="message-meta"><strong>{message.from.name || message.from.address}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
                   <span className="message-subject">{message.subject}</span>
                   <span className="message-snippet">{message.snippet}</span>
-                  <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
+                  <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
                 </span>
                 {!message.seen && <span className="unread-dot" />}
+                <span className="row-quick-actions" onClick={(event) => event.stopPropagation()}>
+                  <span role="button" tabIndex={-1} aria-label={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} data-tooltip={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} className="row-quick-action" onClick={() => void quickToggleStar(message)}><Star size={14} fill={message.flagged ? "currentColor" : "none"} /></span>
+                  <span role="button" tabIndex={-1} aria-label={t("mail.action.archive")} data-tooltip={t("mail.action.archive")} className="row-quick-action" onClick={() => void quickMoveMessage(message, "archive")}><Archive size={14} /></span>
+                  <span role="button" tabIndex={-1} aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => void quickMoveMessage(message, "trash")}><Trash2 size={14} /></span>
+                </span>
               </button>
-            ))}
+              );
+            })}
             {!loading && !fatalError && filteredMessages.length > 0 && loadedServerMessageCount < currentMessageTotal && query === debouncedQuery && (
               <div className="list-footer">
                 <button className="secondary-button" type="button" onClick={() => void loadMore()} disabled={loading || loadingMore}>
@@ -2239,6 +2559,29 @@ export default function App() {
                   <IconButton label={selectedMoveActionLabel ?? (selected.flagged ? t("mail.action.unstar") : t("mail.action.star"))} className={selected.flagged ? "active-star" : ""} onClick={() => void toggleSelectedStar()} disabled={messageFlagging || selectedRemoteActionsBlocked}><Star size={18} fill={selected.flagged ? "currentColor" : "none"} /></IconButton>
                   <IconButton label={selectedMoveActionLabel ?? t("mail.action.archive")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("archive")} disabled={messageAction !== null || messageFlagging || selectedRemoteActionsBlocked || selectedIsArchived}><Archive size={18} /></IconButton>
                   <IconButton label={selectedMoveActionLabel ?? t("mail.action.moveToTrash")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("trash")} disabled={messageAction !== null || messageFlagging || selectedRemoteActionsBlocked}><Trash2 size={18} /></IconButton>
+                  <div className="reader-snooze" ref={snoozeRef}>
+                    <IconButton label={selectedIsSnoozed ? t("mail.snooze.reschedule") : t("mail.snooze.title")} className={`reader-action-secondary${selectedIsSnoozed ? " snoozed" : ""}`} onClick={() => { setSnoozeOpen((value) => !value); setSnoozeCustomUntil(""); }} expanded={snoozeOpen} disabled={messageFlagging || selectedRemoteActionsBlocked}><Clock size={18} /></IconButton>
+                    {snoozeOpen && (
+                      <div className="snooze-menu" role="menu" aria-label={t("mail.snooze.title")}>
+                        {selectedIsSnoozed && selected.snoozedUntil && (
+                          <>
+                            <div className="snooze-current" role="status"><Clock size={14} />{t("mail.snooze.current", { until: formatFullDate(selected.snoozedUntil, locale) })}</div>
+                            <button type="button" role="menuitem" onClick={() => void clearSelectedSnooze()} disabled={snoozeBusy}><X size={15} />{t("mail.snooze.clear")}</button>
+                          </>
+                        )}
+                        {snoozeOptions.map((option) => (
+                          <button key={option.key} type="button" role="menuitem" onClick={() => void setSelectedSnoozed(option.compute().toISOString())} disabled={snoozeBusy}><Clock size={15} />{option.label}</button>
+                        ))}
+                        <div className="snooze-custom">
+                          <label htmlFor="snooze-custom-input">{t("mail.snooze.customLabel")}</label>
+                          <span className="snooze-custom-controls">
+                            <input id="snooze-custom-input" type="datetime-local" value={snoozeCustomUntil} onChange={(event) => setSnoozeCustomUntil(event.target.value)} />
+                            <button type="button" onClick={() => { const iso = isoFromDatetimeLocal(snoozeCustomUntil); if (iso) void setSelectedSnoozed(iso); }} disabled={snoozeBusy || !snoozeCustomUntil}>{t("common.ok")}</button>
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   <div className="reader-more" ref={readerMoreRef}>
                     <IconButton label={t("mail.action.more")} className="reader-more-toggle" onClick={() => setReaderMoreOpen((value) => !value)} expanded={readerMoreOpen}><MoreHorizontal size={19} /></IconButton>
                     {readerMoreOpen && (
@@ -2250,8 +2593,23 @@ export default function App() {
                       </div>
                     )}
                   </div>
+                  <button className="agent-launch-button" type="button" onClick={() => setAgentOpen(true)} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><img decoding="sync" className="nami-brand-logo nami-brand-logo-light" src="/nami-logo-light.png" alt="" /><img decoding="sync" className="nami-brand-logo nami-brand-logo-dark" src="/nami-logo-dark.png" alt="" /></span><span>{t("agent.launch")}</span></button>
                 </div>
               </header>
+                {selectedThread && selectedThread.length > 1 && (
+                  <section className="thread-strip" aria-label={t("mail.thread.label")}>
+                    <span className="thread-strip-caption">{t("mail.thread.label")}</span>
+                    <div className="thread-strip-messages">
+                      {selectedThread.map((threadMessage) => (
+                        <button key={threadMessage.id} type="button" className={`thread-strip-item ${threadMessage.id === selected.id ? "active" : ""}`} onClick={() => void openMessage(threadMessage)}>
+                          <span className={`sender-avatar small tone-${accountTone(threadMessage.from.address)}`}>{initials(threadMessage.from.name, threadMessage.from.address)}</span>
+                          <span className="thread-strip-copy"><strong>{threadMessage.from.name || threadMessage.from.address}</strong><time>{formatMessageTime(threadMessage.sentAt, locale)}</time></span>
+                          {!threadMessage.seen && <span className="unread-dot" aria-hidden="true" />}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                )}
                 {selectedMoveLocationUnverified && <section className="move-location-notice" role="status"><CircleAlert size={18} /><div><strong>{t("mail.moveLocationUnverified.title")}</strong><p>{t("mail.moveLocationUnverified.description")}</p></div></section>}
                 <article className="mail-reader">
                 <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people"><span className={`sender-avatar large tone-${accountTone(selected.from.address)}`}>{initials(selected.from.name, selected.from.address)}</span><div className="mail-people-copy"><strong>{selected.from.name || selected.from.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={selected.from.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div><time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
@@ -2272,10 +2630,14 @@ export default function App() {
                 <TranslationPanel
                   availability={translationAvailability}
                   state={translationState}
+                  llmAvailable={llmTranslationAvailable}
+                  mailStyle={translationMailStyle}
                   onCheckAvailability={() => void refreshTranslationAvailability()}
                   onTranslate={() => void translateSelectedMessage()}
+                  onTranslateWithLlm={() => void translateSelectedMessageWithLlm()}
                   onShow={showSelectedTranslation}
                   onHide={hideSelectedTranslation}
+                  onCancel={cancelTranslation}
                 />
                 <div className="mail-content">
                   {selected.htmlBody ? <div className="mail-html" dangerouslySetInnerHTML={{ __html: safeHtml }} /> : <div className="mail-text">{selected.textBody || selected.snippet}</div>}
@@ -2299,7 +2661,12 @@ export default function App() {
                         <div className={`attachment-card${download?.phase ? ` is-${download.phase}` : ""}`} key={attachment.partId}>
                           <AttachmentFileIcon kind={presentation.kind} />
                           <span><strong className="truncated-tooltip" data-tooltip={attachment.filename}><span>{attachment.filename}</span></strong><small className="truncated-tooltip" aria-live="polite" data-tooltip={download?.detail}><span>{downloadDetail}</span></small></span>
-                          <IconButton label={selectedMoveActionLabel ?? (download?.phase === "error" ? t("mail.attachment.retryDownload", { filename: attachment.filename }) : t("mail.attachment.download", { filename: attachment.filename }))} disabled={isDownloading || selectedRemoteActionsBlocked} onClick={() => void downloadAttachment(selected, attachment)}>{isDownloading ? <LoaderCircle className="spin" size={16} /> : download?.phase === "error" ? <RefreshCw size={16} /> : <Download size={16} />}</IconButton>
+                          <div className="attachment-actions">
+                            {canPreviewAttachment(attachment.filename, attachment.contentType) && (
+                              <IconButton label={t("mail.attachment.preview", { filename: attachment.filename })} disabled={selectedRemoteActionsBlocked} onClick={() => openAttachmentPreview(selected, attachment)}><Eye size={16} /></IconButton>
+                            )}
+                            <IconButton label={selectedMoveActionLabel ?? (download?.phase === "error" ? t("mail.attachment.retryDownload", { filename: attachment.filename }) : t("mail.attachment.download", { filename: attachment.filename }))} disabled={isDownloading || selectedRemoteActionsBlocked} onClick={() => void downloadAttachment(selected, attachment)}>{isDownloading ? <LoaderCircle className="spin" size={16} /> : download?.phase === "error" ? <RefreshCw size={16} /> : <Download size={16} />}</IconButton>
+                          </div>
                         </div>
                       );
                     })}
@@ -2312,7 +2679,17 @@ export default function App() {
             <div className="reader-empty"><div className="reader-orb"><Mail size={32} /></div><h2>{t("mail.reader.emptyTitle")}</h2><p>{t("mail.reader.emptyDescription")}</p></div>
           )}
         </section>
-        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} providerSettingsRequestId={agentProviderSettingsRequestId} onClose={() => setAgentOpen(false)} onOpenMessage={(messageId) => {
+        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} providerSettingsRequestId={agentProviderSettingsRequestId} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onClose={() => {
+          setAgentOpen(false);
+          // Refresh agent bootstrap so the translation panel picks up any
+          // provider configuration changes made inside the assistant workspace.
+          if (!isDemo) {
+            void api.agentBootstrap().then((value) => {
+              const capped: AgentBootstrap = { ...value, conversations: value.conversations.slice(0, 50) };
+              setPreloadedAgentBootstrap(capped);
+            }).catch(() => undefined);
+          }
+        }} onOpenMessage={(messageId) => {
           setAgentOpen(false);
           const message = messagesRef.current.find((item) => item.id === messageId);
           if (message) {
@@ -2321,20 +2698,36 @@ export default function App() {
           }
           void api.message(messageId).then((fetched) => openMessage(fetched)).catch((error: unknown) => showToast(mailErrorToastMessage(error, t("mail.error.openNew"), t), "error"));
         }} /></Suspense>}
+        </div>
+        <aside className="icon-rail" aria-label={t("navigation.management")}>
+          <IconButton label={t("settings.title")} onClick={() => { setMobileSidebar(false); setSettingsOpen(true); }}><Settings size={18} /></IconButton>
+          <IconButton label={t("sending.title")} className={submissionAttentionCount ? "attention" : ""} onClick={() => { setMobileSidebar(false); setSendingStatusOpen(true); void refreshSubmissions(accounts, { silent: true }); }}><ListChecks size={18} />{submissionOutstandingCount > 0 && <span className="rail-badge" aria-hidden="true">{submissionOutstandingCount}</span>}</IconButton>
+          <span className="icon-rail-divider" aria-hidden="true" />
+          <IconButton label={t("calendar.title")} onClick={() => { setMobileSidebar(false); setCalendarOpen(true); }}><CalendarClock size={18} /></IconButton>
+          <IconButton label={t("settings.contacts.title")} onClick={() => { setMobileSidebar(false); setContactsOpen(true); }}><Users size={18} /></IconButton>
+          <IconButton label={t("settings.templates.title")} onClick={() => { setMobileSidebar(false); setTemplatesOpen(true); }}><FileText size={18} /></IconButton>
+          <IconButton label={t("settings.account.title")} onClick={() => { setMobileSidebar(false); setAccountsOpen(true); }}><AtSign size={18} /></IconButton>
+        </aside>
       </main>
 
-      {addOpen && <AccountConnectionModal providers={providers} onClose={() => setAddOpen(false)} onAdded={load} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} />}
-      {composeOpen && <ComposeModal accounts={accounts} draft={composeDraft} onClose={() => setComposeOpen(false)} onSent={(message, kind) => showToast(message, kind)} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} />}
-      {settingsOpen && <SettingsModal settings={settings} accounts={accounts} onClose={() => setSettingsOpen(false)} onSettingsChange={applySettings} onAccountRemoved={removeAccountFromView} onAccountSync={retryAccountSync} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} onOpenAgentProviderSettings={() => { setSettingsOpen(false); setAgentProviderSettingsRequestId((requestId) => requestId + 1); setAgentOpen(true); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} />}
-      {sendingStatusOpen && <SendingStatusModal accounts={accounts} submissions={submissions} loading={submissionLoading} loadError={submissionLoadError} onClose={() => setSendingStatusOpen(false)} onRefresh={() => refreshSubmissions(accounts)} onSyncAccount={async (accountId) => { await retryAccountSync(accountId); }} onCreateNewMessage={(draft) => { setSendingStatusOpen(false); openCompose(draft); }} fallbackFocusRef={mobileMenuButtonRef} />}
-      <StartupUpdatePrompt
+      {addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} onClose={() => setAddOpen(false)} onAdded={load} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
+      {composeOpen && <ComposeModal accounts={accounts} draft={composeDraft} onClose={() => setComposeOpen(false)} onSent={(message, kind, undoDraft) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), run: () => { window.setTimeout(() => { setComposeDraft(undoDraft); setComposeOpen(true); }, 0); } }); else showToast(message, kind); }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} />}
+      {settingsOpen && <Suspense fallback={null}><SettingsModal settings={settings} accounts={accounts} onClose={() => setSettingsOpen(false)} onSettingsChange={applySettings} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} onOpenAgentProviderSettings={() => { setSettingsOpen(false); setAgentProviderSettingsRequestId((requestId) => requestId + 1); setAgentOpen(true); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
+      {contactsOpen && <Suspense fallback={null}><ManagementDialogs demoMode={isDemo} onClose={() => setContactsOpen(false)} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {templatesOpen && <Suspense fallback={null}><TemplatesDialog demoMode={isDemo} onClose={() => setTemplatesOpen(false)} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {calendarOpen && <Suspense fallback={null}><CalendarDialog demoMode={isDemo} onClose={() => setCalendarOpen(false)} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {accountsOpen && <Suspense fallback={null}><AccountsDialog accounts={accounts} demoMode={isDemo} onClose={() => setAccountsOpen(false)} onAccountRemoved={removeAccountFromView} onAccountSignatureChanged={updateAccountSignatureInState} onAccountSync={retryAccountSync} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {sendingStatusOpen && <Suspense fallback={null}><SendingStatusModal accounts={accounts} submissions={submissions} loading={submissionLoading} loadError={submissionLoadError} onClose={() => setSendingStatusOpen(false)} onRefresh={() => refreshSubmissions(accounts)} onSyncAccount={async (accountId) => { await retryAccountSync(accountId); }} onCreateNewMessage={(draft) => { setSendingStatusOpen(false); openCompose(draft); }} onCancelScheduled={cancelScheduledSubmission} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {attachmentPreview && <Suspense fallback={null}><AttachmentPreviewModal messageId={attachmentPreview.message.id} attachment={attachmentPreview.attachment} onClose={() => setAttachmentPreview(null)} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      <Suspense fallback={null}><TranslationTermsDialog open={translationTermsOpen} onAccept={acceptTranslationTerms} onDecline={declineTranslationTerms} /></Suspense>
+      <Suspense fallback={null}><StartupUpdatePrompt
         snapshot={desktopUpdateStatus}
         onSnapshot={setDesktopUpdateStatus}
-        defer={addOpen || composeOpen || settingsOpen || sendingStatusOpen || mobileSidebar || syncing}
+        defer={addOpen || composeOpen || settingsOpen || contactsOpen || templatesOpen || calendarOpen || accountsOpen || sendingStatusOpen || mobileSidebar || syncing}
         onVisibilityChange={setUpdatePromptOpen}
-      />
+      /></Suspense>
       {mobileSidebar && <button className="mobile-scrim" aria-label={t("navigation.closeMenu")} onClick={() => setMobileSidebar(false)} />}
-      {toast && <div className={`toast ${toast.kind}`} role={toast.kind === "error" || toast.kind === "warning" ? "alert" : "status"} aria-atomic="true"><span className="toast-icon" aria-hidden="true">{toast.kind === "error" || toast.kind === "warning" ? <CircleAlert size={17} /> : toast.kind === "info" ? <Sparkles size={17} /> : <Check size={17} />}</span><span className="toast-message">{toast.message}</span><button className="toast-dismiss" type="button" aria-label={t("common.closeNotification")} data-tooltip={t("common.closeNotification")} onClick={() => setToast(null)}><X size={16} /></button></div>}
+      {toast && <div className={`toast ${toast.kind}`} role={toast.kind === "error" || toast.kind === "warning" ? "alert" : "status"} aria-atomic="true"><span className="toast-icon" aria-hidden="true">{toast.kind === "error" || toast.kind === "warning" ? <CircleAlert size={17} /> : toast.kind === "info" ? <Sparkles size={17} /> : <Check size={17} />}</span><span className="toast-message">{toast.message}</span>{toast.action && <button className="toast-action" type="button" onClick={() => { setToast(null); toast.action?.run(); }}>{toast.action.label}</button>}<button className="toast-dismiss" type="button" aria-label={t("common.closeNotification")} data-tooltip={t("common.closeNotification")} onClick={() => setToast(null)}><X size={16} /></button></div>}
       </div>
     </div>
   );

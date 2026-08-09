@@ -1,8 +1,8 @@
 # MCP Security And Permissions
 
-[Chinese](security.md) | [CLI permissions](../cli/permissions.en.md)
+[Chinese](security.zh-CN.md) | [CLI permissions](../cli/permissions.en.md)
 
-> **Future contract, not executable today.** The current build has no MCP stdio adapter, Broker, pairing record, or external AgentHost. The trust-boundary, signature, and permission rules below apply only after a verified native Windows SID-DACL adapter ships; the current build rejects external entry and does not degrade.
+> **Current-build status: enforced.** The 0.3.0 build ships the MCP stdio adapter, Broker, pairing records, and external AgentHost. The trust-boundary, signature, and permission rules below are live; external entry that violates them fails closed.
 
 ## Trust boundary
 
@@ -10,7 +10,7 @@
 MCP client private key -> stdio adapter -> paired Broker -> SID-DACL named pipe -> AgentHost -> Tool Registry / Permission Engine
 ```
 
-Only a released `AgentHost` may open the mail database and hold the unwrapped master key. An MCP adapter must not inherit the GUI Fastify token or trust a client-supplied account ID, scope, caller type, or confirmation decision.
+Only the `AgentHost` may open the mail database and hold the unwrapped master key. An MCP adapter must not inherit the GUI Fastify token or trust a client-supplied account ID, scope, caller type, or confirmation decision.
 
 ## Pairing and replay protection
 
@@ -22,14 +22,27 @@ Only a released `AgentHost` may open the mail database and hold the unwrapped ma
 
 ## Permission model
 
-A released external MCP caller will be fixed at `read-only`. The Broker constructs, rather than accepts from the client, entry point `mcp`, client identity, scopes, account scope, interaction capability, and request ID. Permission Engine defaults to deny:
+The three entry points are configured independently in the "Permissions" group of the desktop app settings, with three adjacent dropdowns; CLI and MCP are two independent settings with identical options:
 
-| Operation type | MCP v1 |
-| --- | --- |
-| Read account, folder, message, attachment metadata, or RAG query | Available only with the matching `read:*` scope and account scope. |
-| Draft, move, mark, archive, delete, rebuild | Denied. |
-| Send, reply, forward, bulk write, upload mail content, external network | Denied. Only visible GUI can create a one-time immutable confirmation. |
-| `--yes`, MCP arguments, or a model tool call | Never serves as confirmation or elevation. |
+- Built-in Agent: `agentAccessLevel`, default `send-confirmed`.
+- External CLI: `agentCliAccessLevel`, default `read-only`.
+- External MCP: `agentMcpAccessLevel` (the "External MCP permissions" dropdown), default `read-only`.
+
+The levels are `read-only` / `send-confirmed` / `full-access`:
+
+- `read-only`: can only read account, folder, message, thread, and attachment metadata.
+- `send-confirmed`: every write operation (draft create/update/delete, move, flag, send, reply) raises a visible confirmation in the Nami Mail desktop app.
+- `full-access`: the user must read a warning and explicitly accept it in the UI before enabling this level. Once enabled, all operations (including send and delete) run automatically within approved account scope, without per-operation confirmation. Account scope and audit still apply.
+
+The Broker constructs, rather than accepts from the client, entry point `mcp`, client identity, scopes, account scope, interaction capability, and request ID. The host constructs the external caller's access level and clamps it to the configured level: a paired client cannot raise its own level, and a request above the configured level returns `PERMISSION_DENIED`. Interaction capability (`interactive` / `canRequestConfirmation`) is `true` for external callers only at `send-confirmed`. Permission Engine defaults to deny:
+
+| Level | Available operations | Confirmation policy |
+| --- | --- | --- |
+| `read-only` | The eight read-only tools only (account, folder, message digest, single and batch message read, thread, attachment metadata). | None. |
+| `send-confirmed` | Read tools plus the seven write tools (draft create/update/delete, move, flag, send, reply). | Every write operation requires a one-time immutable confirmation raised in the Nami Mail desktop app (the tool returns a confirmation flow; the client cannot approve on its own). |
+| `full-access` | Read tools plus the seven write tools. | Write tools execute automatically (send, delete, and all others), without per-operation confirmation. |
+
+`--yes`, MCP arguments, or a model tool call never serve as confirmation or elevation. Current error codes: `PERMISSION_DENIED` (level or scope not satisfied, including requests above the configured level), `SCOPE_DENIED` (account outside scope), `CONFIRMATION_REQUIRED` (a visible desktop confirmation is required), `NOT_SUPPORTED` (tool not available to external callers), `TOOL_INPUT_INVALID` / `INVALID_ARGUMENT` (input mismatch), `BROKER_REPLAY_DETECTED` / `BROKER_COUNTER_INVALID` / `BROKER_SECURITY_UNAVAILABLE`, `HOST_UNAVAILABLE`, `UPDATE_IN_PROGRESS`, `PAIRING_REQUIRED` / `PAIRING_REVOKED`. The `READ_ONLY` error code is no longer used.
 
 ## Privacy, prompt injection, and logging
 
@@ -41,4 +54,4 @@ A released external MCP caller will be fixed at `read-only`. The Broker construc
 
 ## Updates and lifecycle
 
-After the interface ships, an update drain gate rejects new Broker work, waits for active calls, closes Runtime, and then releases the exclusive lease. It never uses a TTL to reopen automatically. An MCP client handles `UPDATE_IN_PROGRESS`, reconnects after the update, and discovers tools again.
+An update drain gate rejects new Broker work, waits for active calls, closes Runtime, and then releases the exclusive lease. It never uses a TTL to reopen automatically. An MCP client handles `UPDATE_IN_PROGRESS`, reconnects after the update, and discovers tools again.

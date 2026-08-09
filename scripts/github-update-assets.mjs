@@ -127,7 +127,7 @@ export async function createGitHubZipUpdateAssets({ projectRoot, releaseDirector
   const archivePath = path.join(releaseDirectory, archiveName);
   const manifestPath = path.join(releaseDirectory, manifestName);
   const installer = await fs.stat(installerPath);
-  assert.ok(installer.isFile() && installer.size > 1_000_000, "The ZIP update must wrap the fresh NSIS installer.");
+  assert.ok(installer.isFile() && installer.size > 1_000_000, "The ZIP update must wrap the fresh Windows installer.");
   await fs.rm(archivePath, { force: true });
   await fs.rm(manifestPath, { force: true });
   await createZip(installerPath, archivePath);

@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
 import {
   Bell,
+  BookOpen,
   Bot,
   Check,
   CircleHelp,
   Clock3,
+  Copy,
   Download,
   Eye,
   EyeOff,
@@ -13,7 +15,7 @@ import {
   Laptop,
   Languages,
   LoaderCircle,
-  Mail,
+  MessageSquareReply,
   Minimize2,
   Moon,
   Palette,
@@ -29,12 +31,16 @@ import {
   VolumeX,
   Wrench,
   X,
+  Zap,
 } from "lucide-react";
 import { api, type TranslationConfiguration } from "./api";
+import type { ExternalPairingSummary } from "./agentTypes";
 import { desktopBridge, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
-import { accountHealthIssue, mailErrorMessage } from "./errorPresentation";
+import { mailErrorMessage } from "./errorPresentation";
+import FilterRulesSection from "./FilterRulesSection";
+import AgentMemoryDialog from "./AgentMemoryDialog";
+import AutoReplyPendingDialog from "./AutoReplyPendingDialog";
 import { translate, useI18n } from "./i18n";
-import { providerDisplayName } from "./providerOnboarding";
 import { canPlayCustomNotificationSound, playNotificationSound, primeNotificationSound } from "./sounds";
 import ThemedSelect from "./ThemedSelect";
 import {
@@ -44,13 +50,16 @@ import {
 } from "./translationPresentation";
 import { presentUpdateSnapshot } from "./updatePresentation";
 import { useDialogFocus } from "./useDialogFocus";
+import { useDismissTransition } from "./useDismissTransition";
 import type {
   Account,
+  AgentAccessLevel,
   AppSettings,
   AppSettingsPatch,
   AppTheme,
   BackgroundPreset,
   CloseBehavior,
+  ListDensity,
   NotificationSound,
 } from "./types";
 import { defaultAppSettings } from "./types";
@@ -79,10 +88,6 @@ export type SettingsModalProps = {
   onClose: () => void;
   /** Receives the fully persisted settings result, not a partial patch. */
   onSettingsChange: (next: AppSettings) => void | Promise<void>;
-  /** Called after the account has been removed, or directly in demo mode. */
-  onAccountRemoved: (accountId: string) => void | Promise<void>;
-  /** Retries a single account and lets the host refresh its health state. */
-  onAccountSync?: (accountId: string) => Promise<{ synced: number; folders: number; failedFolders: number }>;
   /** Lets the host own native desktop notification testing when desired. */
   onTestNotification?: (settings: AppSettings) => void | Promise<void>;
   /** Lets the host share its notification-audio policy with this modal. */
@@ -116,7 +121,8 @@ type PendingSettingsConfirmation =
   | "remove-translation-configuration"
   | "remove-translation-api-key"
   | "discard-translation-changes"
-  | "discard-translation-changes-and-open-agent";
+  | "discard-translation-changes-and-open-agent"
+  | "enable-full-access";
 
 const restoreDefaultsPatch: AppSettingsPatch = {
   theme: defaultAppSettings.theme,
@@ -128,6 +134,8 @@ const restoreDefaultsPatch: AppSettingsPatch = {
   notificationSound: defaultAppSettings.notificationSound,
   refreshIntervalSeconds: defaultAppSettings.refreshIntervalSeconds,
   closeBehavior: defaultAppSettings.closeBehavior,
+  agentToolRoundLimit: defaultAppSettings.agentToolRoundLimit,
+  listDensity: defaultAppSettings.listDensity,
 };
 
 const maxBackgroundUploadBytes = 50 * 1024 * 1024;
@@ -139,6 +147,15 @@ const themeOptions: Array<TranslatedOption<AppTheme>> = [
   { value: "system", labelKey: "settings.theme.system.label", detailKey: "settings.theme.system.detail" },
   { value: "light", labelKey: "settings.theme.light.label", detailKey: "settings.theme.light.detail" },
   { value: "dark", labelKey: "settings.theme.dark.label", detailKey: "settings.theme.dark.detail" },
+];
+const listDensityOptions: Array<TranslatedOption<ListDensity>> = [
+  { value: "comfortable", labelKey: "settings.density.comfortable.label", detailKey: "settings.density.comfortable.detail" },
+  { value: "compact", labelKey: "settings.density.compact.label", detailKey: "settings.density.compact.detail" },
+];
+const agentAccessLevelOptions: Array<TranslatedOption<AgentAccessLevel>> = [
+  { value: "read-only", labelKey: "settings.agent.accessLevel.readOnly", detailKey: "settings.agent.accessLevel.readOnly.detail" },
+  { value: "send-confirmed", labelKey: "settings.agent.accessLevel.sendConfirmed", detailKey: "settings.agent.accessLevel.sendConfirmed.detail" },
+  { value: "full-access", labelKey: "settings.agent.accessLevel.fullAccess", detailKey: "settings.agent.accessLevel.fullAccess.detail" },
 ];
 
 const soundOptions: Array<TranslatedOption<NotificationSound>> = [
@@ -153,6 +170,53 @@ const closeBehaviorOptions: Array<TranslatedOption<CloseBehavior>> = [
   { value: "tray", labelKey: "settings.closeBehavior.tray.label", detailKey: "settings.closeBehavior.tray.detail" },
   { value: "quit", labelKey: "settings.closeBehavior.quit.label", detailKey: "settings.closeBehavior.quit.detail" },
 ];
+
+const externalCliGuideCode = "namimail pair\nnamimail status";
+const externalMcpGuideCode = [
+  "{",
+  '  "mcpServers": {',
+  '    "namimail": {',
+  '      "command": "cmd.exe",',
+  '      "args": ["/d", "/s", "/c", "namimail mcp start"]',
+  "    }",
+  "  }",
+  "}",
+].join("\n");
+const externalServiceGuideCode = "namimail service start\nnamimail service stop";
+const externalDocsUrl = "https://github.com/QinIndexCode/nami-mail";
+
+function ExternalGuideBlock(props: {
+  id: string;
+  label: string;
+  hint: string;
+  code: string;
+  copiedId: string | null;
+  onCopy: (text: string, id: string) => void;
+}) {
+  const { t } = useI18n();
+  const copied = props.copiedId === props.id;
+  return (
+    <div className="external-guide-block">
+      <div className="external-guide-block-head">
+        <span>
+          <strong>{props.label}</strong>
+          <small>{props.hint}</small>
+        </span>
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={copied}
+          aria-label={copied ? t("settings.agent.externalGuide.copied") : `${t("settings.agent.externalGuide.copy")} ${props.label}`}
+          onClick={() => props.onCopy(props.code, props.id)}
+        >
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+          {copied ? t("settings.agent.externalGuide.copied") : t("settings.agent.externalGuide.copy")}
+        </button>
+      </div>
+      <pre className="external-guide-code"><code>{props.code}</code></pre>
+    </div>
+  );
+}
 
 function errorMessage(error: unknown, fallback: string, t: ReturnType<typeof useI18n>["t"]): string {
   return mailErrorMessage(error, fallback, t);
@@ -169,6 +233,38 @@ function backgroundContentTypeForFile(file: File): string | undefined {
 
 function revokeDemoObjectUrl(url: string | null | undefined): void {
   if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
+}
+
+/**
+ * Copies guide snippets to the clipboard with a short-lived fallback for
+ * local sessions where clipboard permissions are unavailable.
+ */
+async function copyGuideTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the short-lived selection fallback below.
+  }
+  const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.setAttribute("aria-hidden", "true");
+  textarea.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none;";
+  document.body.appendChild(textarea);
+  try {
+    textarea.focus({ preventScroll: true });
+    textarea.select();
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    textarea.remove();
+    activeElement?.focus({ preventScroll: true });
+  }
 }
 
 function Switch({
@@ -211,6 +307,35 @@ function ThemeIcon({ value }: { value: AppTheme }) {
   return <Laptop size={17} />;
 }
 
+function NumberStepper({ value, min, max, onChange, disabled, decreaseLabel = "Decrease", increaseLabel = "Increase" }: {
+  value: number;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+  disabled?: boolean;
+  decreaseLabel?: string;
+  increaseLabel?: string;
+}) {
+  const clamp = (v: number) => Math.max(min, Math.min(max, v));
+  return (
+    <div className="number-stepper">
+      <button type="button" onClick={() => onChange(clamp(value - 1))} disabled={disabled || value <= min} aria-label={decreaseLabel}>−</button>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        disabled={disabled}
+        onChange={(e) => {
+          const n = parseInt(e.target.value, 10);
+          if (!Number.isNaN(n)) onChange(clamp(n));
+        }}
+      />
+      <button type="button" onClick={() => onChange(clamp(value + 1))} disabled={disabled || value >= max} aria-label={increaseLabel}>+</button>
+    </div>
+  );
+}
+
 function CloseBehaviorIcon({ value }: { value: CloseBehavior }) {
   if (value === "tray") return <Minimize2 size={17} />;
   if (value === "quit") return <Power size={17} />;
@@ -222,8 +347,6 @@ export default function SettingsModal({
   accounts,
   onClose,
   onSettingsChange,
-  onAccountRemoved,
-  onAccountSync,
   onTestNotification,
   onTestSound,
   onTranslationConfigurationChanged,
@@ -231,13 +354,14 @@ export default function SettingsModal({
   fallbackFocusRef,
   demoMode = false,
 }: SettingsModalProps) {
-  const { locale, locales, setLocale, t } = useI18n();
+  const { locale, locales, setLocale, t, formatDate } = useI18n();
   const [currentSettings, setCurrentSettings] = useState(settings);
   const [notice, setNotice] = useState<Notice>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [intensityDraft, setIntensityDraft] = useState(settings.backgroundIntensity);
-  const [pendingAccountRemoval, setPendingAccountRemoval] = useState<string | null>(null);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingSettingsConfirmation | null>(null);
+  /** Holds the pending access-level patch while the full-access warning is open. */
+  const [pendingFullAccess, setPendingFullAccess] = useState<{ patch: AppSettingsPatch; successMessage: string } | null>(null);
   const [backgroundUploadError, setBackgroundUploadError] = useState<string | null>(null);
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateSnapshot | null>(null);
   const [updateActionBusy, setUpdateActionBusy] = useState<"check" | "download" | "skip" | "snooze" | "install" | null>(null);
@@ -250,12 +374,17 @@ export default function SettingsModal({
   const [translationApiKey, setTranslationApiKey] = useState("");
   const [translationApiKeyVisible, setTranslationApiKeyVisible] = useState(false);
   const [translationTimeoutMs, setTranslationTimeoutMs] = useState(25_000);
+  const [autoReplyDialogOpen, setAutoReplyDialogOpen] = useState(false);
+  const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
+  const [externalGuideCopied, setExternalGuideCopied] = useState<string | null>(null);
+  const [externalPairings, setExternalPairings] = useState<ExternalPairingSummary[] | null>(null);
+  const [externalPairingsError, setExternalPairingsError] = useState<unknown>(null);
+  const [externalPairingsReload, setExternalPairingsReload] = useState(0);
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadButton = useRef<HTMLButtonElement>(null);
   const settingsDialog = useRef<HTMLElement>(null);
   const confirmationDialog = useRef<HTMLElement>(null);
   const backgroundAlert = useRef<HTMLElement>(null);
-  const pendingRemovalAccount = accounts.find((account) => account.id === pendingAccountRemoval) ?? null;
   const activeLocale = currentSettings.locale || locale;
   const controlsBusy = Boolean(busyAction || updateActionBusy === "install");
   const updatePresentation = updateStatus ? presentUpdateSnapshot(updateStatus, t) : null;
@@ -271,18 +400,26 @@ export default function SettingsModal({
     setBackgroundUploadError(null);
   };
 
+  const { closing, requestClose: requestExit } = useDismissTransition(() => {
+    onClose();
+  });
+  const { closing: confirmClosing, requestClose: requestConfirmClose, reset: resetConfirmClosing } = useDismissTransition(() => setPendingConfirmation(null));
+  const { closing: alertClosing, requestClose: requestAlertClose, reset: resetAlertClosing } = useDismissTransition(dismissBackgroundUploadError);
+
   const requestClose = () => {
     if (controlsBusy) return;
     if (hasUnsavedTranslationDraft) {
+      resetConfirmClosing();
       setPendingConfirmation("discard-translation-changes");
       return;
     }
-    onClose();
+    requestExit();
   };
 
   const requestAgentProviderSettings = () => {
     if (controlsBusy || demoMode) return;
     if (hasUnsavedTranslationDraft) {
+      resetConfirmClosing();
       setPendingConfirmation("discard-translation-changes-and-open-agent");
       return;
     }
@@ -296,6 +433,27 @@ export default function SettingsModal({
   useEffect(() => {
     setIntensityDraft(currentSettings.backgroundIntensity);
   }, [currentSettings.backgroundIntensity]);
+
+  useEffect(() => {
+    if (demoMode) {
+      setExternalPairings([]);
+      setExternalPairingsError(null);
+      return undefined;
+    }
+    let active = true;
+    setExternalPairingsError(null);
+    api.agentPairings().then(({ pairings }) => {
+      if (active) setExternalPairings(pairings);
+    }).catch((error: unknown) => {
+      if (active) {
+        setExternalPairings(null);
+        setExternalPairingsError(error);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [demoMode, externalPairingsReload]);
 
   useEffect(() => {
     if (demoMode) {
@@ -363,25 +521,21 @@ export default function SettingsModal({
       event.stopImmediatePropagation();
       if (controlsBusy) return;
       if (backgroundUploadError) {
-        dismissBackgroundUploadError();
+        requestAlertClose();
         return;
       }
       if (pendingConfirmation) {
-        setPendingConfirmation(null);
-        return;
-      }
-      if (pendingRemovalAccount) {
-        setPendingAccountRemoval(null);
+        requestConfirmClose();
         return;
       }
       requestClose();
     };
     window.addEventListener("keydown", closeOnEscape, true);
     return () => window.removeEventListener("keydown", closeOnEscape, true);
-  }, [backgroundUploadError, controlsBusy, pendingConfirmation, pendingRemovalAccount, requestClose]);
+  }, [backgroundUploadError, controlsBusy, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose]);
 
-  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || pendingRemovalAccount || backgroundUploadError) });
-  useDialogFocus(Boolean(pendingConfirmation || pendingRemovalAccount), confirmationDialog, { fallbackFocusRef: settingsDialog });
+  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || memoryDialogOpen) });
+  useDialogFocus(Boolean(pendingConfirmation), confirmationDialog, { fallbackFocusRef: settingsDialog });
   useDialogFocus(Boolean(backgroundUploadError), backgroundAlert, { restoreFocusRef: uploadButton });
 
   const publishSettings = async (next: AppSettings): Promise<AppSettings> => {
@@ -390,6 +544,78 @@ export default function SettingsModal({
     return next;
   };
 
+  /**
+   * Optimistic settings update: applies the patch to local state immediately
+   * (so the UI reacts instantly), then syncs to the server in the background.
+   * If the server request fails, the previous settings are restored.
+   *
+   * This avoids the "pessimistic lock" pattern where `busyAction` disables all
+   * controls while waiting for the API response, which caused visible UI lag
+   * on theme switches and other reversible settings.
+   */
+  const applyOptimisticSettings = async (
+    patch: AppSettingsPatch,
+    successMessage: string,
+    preserveSuccessLocale = false,
+  ): Promise<AppSettings | undefined> => {
+    const previousSettings = currentSettings;
+    const optimisticNext: AppSettings = {
+      ...currentSettings,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    // Apply immediately — UI reacts before the API round-trip.
+    setCurrentSettings(optimisticNext);
+    try {
+      await onSettingsChange(optimisticNext);
+    } catch {
+      // If the host rejects the change, roll back.
+      setCurrentSettings(previousSettings);
+      return undefined;
+    }
+    try {
+      const serverNext = demoMode
+        ? optimisticNext
+        : await api.updateSettings(patch);
+      // If the server returned a different result (e.g. normalised values),
+      // reconcile local state without flickering.
+      if (serverNext !== optimisticNext) {
+        setCurrentSettings(serverNext);
+        await onSettingsChange(serverNext);
+      }
+      setNotice({
+        kind: "success",
+        message: demoMode && !preserveSuccessLocale ? t("settings.demo.resetAfterSession", { message: successMessage }) : successMessage,
+      });
+      return serverNext;
+    } catch (error) {
+      // Roll back on failure.
+      setCurrentSettings(previousSettings);
+      await onSettingsChange(previousSettings);
+      setNotice({ kind: "error", message: errorMessage(error, t("settings.error.save"), t) });
+      return undefined;
+    }
+  };
+
+  /**
+   * Applies an access-level change. Switching to full-access first shows a
+   * warning dialog; only after the user confirms is the patch applied.
+   */
+  const requestAccessLevelChange = (patch: AppSettingsPatch, value: AgentAccessLevel, successMessage: string) => {
+    if (value === "full-access") {
+      setPendingFullAccess({ patch, successMessage });
+      resetConfirmClosing();
+      setPendingConfirmation("enable-full-access");
+      return;
+    }
+    void applyOptimisticSettings(patch, successMessage);
+  };
+
+  /**
+   * Pessimistic save: disables controls and waits for the API response.
+   * Reserved for operations that require server validation (e.g. background
+   * upload, account removal) or are not safely reversible.
+   */
   const saveSettings = async (
     patch: AppSettingsPatch,
     action: string,
@@ -423,16 +649,16 @@ export default function SettingsModal({
     const successMessage = demoMode
       ? translate(nextLocale, "settings.demo.resetAfterSession", { message: updatedMessage })
       : updatedMessage;
-    void saveSettings({ locale: nextLocale }, "locale", successMessage, true);
+    void applyOptimisticSettings({ locale: nextLocale }, successMessage, true);
   };
 
   const choosePreset = (preset: Exclude<BackgroundPreset, "custom">) => {
-    void saveSettings({ backgroundPreset: preset }, `background-${preset}`, t("settings.background.updated"));
+    void applyOptimisticSettings({ backgroundPreset: preset }, t("settings.background.updated"));
   };
 
   const commitIntensity = () => {
     if (intensityDraft === currentSettings.backgroundIntensity || busyAction) return;
-    void saveSettings({ backgroundIntensity: intensityDraft }, "background-intensity", t("settings.background.intensityUpdated"));
+    void applyOptimisticSettings({ backgroundIntensity: intensityDraft }, t("settings.background.intensityUpdated"));
   };
 
   const uploadBackground = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -441,10 +667,12 @@ export default function SettingsModal({
     if (!file || busyAction) return;
     const contentType = backgroundContentTypeForFile(file);
     if (!contentType) {
+      resetAlertClosing();
       setBackgroundUploadError(t("settings.background.unsupportedFile", { filename: file.name }));
       return;
     }
     if (file.size > maxBackgroundUploadBytes) {
+      resetAlertClosing();
       setBackgroundUploadError(t("settings.background.fileTooLarge", { filename: file.name }));
       return;
     }
@@ -474,6 +702,7 @@ export default function SettingsModal({
       });
     } catch (error) {
       if (demoObjectUrl && !saved) revokeDemoObjectUrl(demoObjectUrl);
+      resetAlertClosing();
       setBackgroundUploadError(errorMessage(error, t("settings.error.saveCustomBackground"), t));
     } finally {
       setBusyAction(null);
@@ -482,7 +711,7 @@ export default function SettingsModal({
 
   const chooseCustomBackground = () => {
     if (currentSettings.customBackgroundUrl) {
-      void saveSettings({ backgroundPreset: "custom" }, "background-custom", t("settings.background.customSelected"));
+      void applyOptimisticSettings({ backgroundPreset: "custom" }, t("settings.background.customSelected"));
       return;
     }
     uploadInput.current?.click();
@@ -745,49 +974,6 @@ export default function SettingsModal({
     }
   };
 
-  const removeAccount = async (accountId: string) => {
-    if (busyAction) return;
-    setBusyAction(`account-remove-${accountId}`);
-    setNotice(null);
-    try {
-      if (!demoMode) await api.removeAccount(accountId);
-      await onAccountRemoved(accountId);
-      setPendingAccountRemoval(null);
-      setNotice({
-        kind: "success",
-        message: demoMode ? t("settings.account.removedFromDemo") : t("settings.account.removed"),
-      });
-    } catch (error) {
-      setNotice({ kind: "error", message: errorMessage(error, t("settings.error.removeAccount"), t) });
-      setPendingAccountRemoval(null);
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const retryAccount = async (account: Account) => {
-    if (busyAction) return;
-    setBusyAction(`account-sync-${account.id}`);
-    setNotice(null);
-    try {
-      const result = onAccountSync
-        ? await onAccountSync(account.id)
-        : demoMode
-          ? { synced: 0, folders: 0, failedFolders: 0 }
-          : await api.sync(account.id);
-      const summary = result.failedFolders
-        ? t("settings.account.syncPartial", { email: account.email, failedFolders: result.failedFolders })
-        : result.synced
-          ? t("settings.account.syncCompletedWithMessages", { email: account.email, synced: result.synced })
-          : t("settings.account.syncCompleted", { email: account.email });
-      setNotice({ kind: result.failedFolders ? "error" : "success", message: summary });
-    } catch (error) {
-      setNotice({ kind: "error", message: t("settings.account.syncFailed", { email: account.email, message: mailErrorMessage(error, undefined, t) }) });
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
   const restoreDefaults = async () => {
     if (busyAction) return;
     setBusyAction("restore-defaults");
@@ -819,6 +1005,15 @@ export default function SettingsModal({
   };
 
   const hasCustomBackground = Boolean(currentSettings.customBackgroundUrl);
+  const copyExternalGuide = (text: string, id: string) => {
+    void copyGuideTextToClipboard(text).then((copied) => {
+      if (!copied) return;
+      setExternalGuideCopied(id);
+      window.setTimeout(() => {
+        setExternalGuideCopied((current) => current === id ? null : current);
+      }, 1_800);
+    });
+  };
   const translationConfigurationNeedsReplacementKey = Boolean(
     translationConfiguration?.source === "environment"
     && translationConfiguration.apiKeyConfigured
@@ -835,53 +1030,48 @@ export default function SettingsModal({
   const dismissConfirmation = () => {
     if (controlsBusy) return;
     setPendingConfirmation(null);
-    setPendingAccountRemoval(null);
   };
-  const confirmationTitle = pendingRemovalAccount
-    ? t("settings.confirmation.removeAccountTitle", { email: pendingRemovalAccount.email })
-    : pendingConfirmation === "clear-background"
-      ? t("settings.confirmation.clearBackgroundTitle")
-      : pendingConfirmation === "install-update"
-        ? t("settings.confirmation.installUpdateTitle")
-        : pendingConfirmation === "remove-translation-configuration"
-          ? t("settings.confirmation.removeTranslationServiceTitle")
-          : pendingConfirmation === "remove-translation-api-key"
-            ? t("settings.confirmation.removeTranslationApiKeyTitle")
-            : pendingTranslationDiscard
-              ? t("settings.confirmation.discardTranslationChangesTitle")
-              : t("settings.confirmation.restoreDefaultsTitle");
-  const confirmationDescription = pendingRemovalAccount
-    ? t("settings.confirmation.removeAccountDescription")
-    : pendingConfirmation === "clear-background"
-      ? t("settings.confirmation.clearBackgroundDescription")
-      : pendingConfirmation === "install-update"
-        ? t("settings.confirmation.installUpdateDescription")
-        : pendingConfirmation === "remove-translation-configuration"
-          ? t("settings.confirmation.removeTranslationServiceDescription")
-          : pendingConfirmation === "remove-translation-api-key"
-            ? t("settings.confirmation.removeTranslationApiKeyDescription")
-            : pendingTranslationDiscard
-              ? t("settings.confirmation.discardTranslationChangesDescription")
-              : t("settings.confirmation.restoreDefaultsDescription");
-  const confirmationAction = pendingRemovalAccount
-    ? t("settings.confirmation.removeAccountAction")
-    : pendingConfirmation === "clear-background"
-      ? t("settings.confirmation.clearBackgroundAction")
-      : pendingConfirmation === "install-update"
-        ? t("settings.update.restartAndUpdate")
-        : pendingConfirmation === "remove-translation-configuration"
-          ? t("settings.confirmation.removeTranslationServiceAction")
-          : pendingConfirmation === "remove-translation-api-key"
-            ? t("settings.confirmation.removeTranslationApiKeyAction")
+  const confirmationTitle = pendingConfirmation === "clear-background"
+    ? t("settings.confirmation.clearBackgroundTitle")
+    : pendingConfirmation === "install-update"
+      ? t("settings.confirmation.installUpdateTitle")
+      : pendingConfirmation === "remove-translation-configuration"
+        ? t("settings.confirmation.removeTranslationServiceTitle")
+        : pendingConfirmation === "remove-translation-api-key"
+          ? t("settings.confirmation.removeTranslationApiKeyTitle")
+          : pendingTranslationDiscard
+            ? t("settings.confirmation.discardTranslationChangesTitle")
+            : t("settings.confirmation.restoreDefaultsTitle");
+  const confirmationDescription = pendingConfirmation === "clear-background"
+    ? t("settings.confirmation.clearBackgroundDescription")
+    : pendingConfirmation === "install-update"
+      ? t("settings.confirmation.installUpdateDescription")
+      : pendingConfirmation === "remove-translation-configuration"
+        ? t("settings.confirmation.removeTranslationServiceDescription")
+        : pendingConfirmation === "remove-translation-api-key"
+          ? t("settings.confirmation.removeTranslationApiKeyDescription")
+          : pendingTranslationDiscard
+            ? t("settings.confirmation.discardTranslationChangesDescription")
+            : t("settings.confirmation.restoreDefaultsDescription");
+  const confirmationAction = pendingConfirmation === "clear-background"
+    ? t("settings.confirmation.clearBackgroundAction")
+    : pendingConfirmation === "install-update"
+      ? t("settings.update.restartAndUpdate")
+      : pendingConfirmation === "remove-translation-configuration"
+        ? t("settings.confirmation.removeTranslationServiceAction")
+        : pendingConfirmation === "remove-translation-api-key"
+          ? t("settings.confirmation.removeTranslationApiKeyAction")
+          : pendingConfirmation === "enable-full-access"
+            ? t("settings.agent.fullAccessWarningAction")
             : pendingConfirmation === "discard-translation-changes-and-open-agent"
-              ? t("settings.confirmation.discardTranslationChangesAndOpenAgentAction")
-              : pendingConfirmation === "discard-translation-changes"
-              ? t("settings.confirmation.discardTranslationChangesAction")
-              : t("settings.confirmation.restoreDefaultsAction");
+            ? t("settings.confirmation.discardTranslationChangesAndOpenAgentAction")
+            : pendingConfirmation === "discard-translation-changes"
+            ? t("settings.confirmation.discardTranslationChangesAction")
+            : t("settings.confirmation.restoreDefaultsAction");
 
   return (
-    <div className="modal-backdrop settings-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
-      <section ref={settingsDialog} className="modal-card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1}>
+    <div className={`modal-backdrop settings-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
+      <section ref={settingsDialog} className={`modal-card settings-modal${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1}>
         <header className="modal-heading settings-heading">
           <div>
             <span className="eyebrow">{t("settings.eyebrow")}</span>
@@ -927,7 +1117,7 @@ export default function SettingsModal({
                 type="button"
                 aria-pressed={currentSettings.theme === option.value}
                 disabled={controlsBusy}
-                onClick={() => void saveSettings({ theme: option.value }, `theme-${option.value}`, t("settings.theme.updated"))}
+                onClick={() => void applyOptimisticSettings({ theme: option.value }, t("settings.theme.updated"))}
               >
                 <ThemeIcon value={option.value} />
                 <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
@@ -935,6 +1125,21 @@ export default function SettingsModal({
               </button>
             ))}
           </div>
+
+          <label className="setting-select-row" htmlFor="list-density">
+            <span><strong>{t("settings.density.title")}</strong><small>{t("settings.density.description")}</small></span>
+            <ThemedSelect
+              id="list-density"
+              value={currentSettings.listDensity}
+              aria-label={t("settings.density.title")}
+              disabled={controlsBusy}
+              onValueChange={(value) => void applyOptimisticSettings({ listDensity: value as ListDensity }, t("settings.density.updated"))}
+            >
+              {listDensityOptions.map((option) => (
+                <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
+              ))}
+            </ThemedSelect>
+          </label>
 
           <div className="setting-subheading"><span>{t("settings.background.title")}</span><small>{t("settings.background.offlineHint")}</small></div>
           <div className="background-preset-grid" role="group" aria-label={t("settings.background.presetGroupLabel")}>
@@ -1005,7 +1210,7 @@ export default function SettingsModal({
                 {hasCustomBackground ? t("settings.background.replaceImage") : t("settings.background.uploadImage")}
               </button>
               {hasCustomBackground && (
-                <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => setPendingConfirmation("clear-background")}>
+                <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("clear-background"); }}>
                   {busyAction === "background-remove" ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}
                   {t("settings.background.clear")}
                 </button>
@@ -1025,14 +1230,14 @@ export default function SettingsModal({
             disabled={controlsBusy}
             label={t("settings.notifications.desktop.label")}
             description={t("settings.notifications.desktop.description")}
-            onChange={() => void saveSettings({ notificationsEnabled: !currentSettings.notificationsEnabled }, "notifications", currentSettings.notificationsEnabled ? t("settings.notifications.desktop.disabled") : t("settings.notifications.desktop.enabled"))}
+            onChange={() => void applyOptimisticSettings({ notificationsEnabled: !currentSettings.notificationsEnabled }, currentSettings.notificationsEnabled ? t("settings.notifications.desktop.disabled") : t("settings.notifications.desktop.enabled"))}
           />
           <Switch
             checked={currentSettings.notifyWhenFocused}
             disabled={controlsBusy || !currentSettings.notificationsEnabled}
             label={t("settings.notifications.focused.label")}
             description={t("settings.notifications.focused.description")}
-            onChange={() => void saveSettings({ notifyWhenFocused: !currentSettings.notifyWhenFocused }, "notify-focused", currentSettings.notifyWhenFocused ? t("settings.notifications.focused.disabled") : t("settings.notifications.focused.enabled"))}
+            onChange={() => void applyOptimisticSettings({ notifyWhenFocused: !currentSettings.notifyWhenFocused }, currentSettings.notifyWhenFocused ? t("settings.notifications.focused.disabled") : t("settings.notifications.focused.enabled"))}
           />
 
           <div className={`setting-subheading${currentSettings.notificationsEnabled ? "" : " muted"}`}><span>{t("settings.sound.title")}</span><small>{currentSettings.notificationsEnabled ? t("settings.sound.description") : t("settings.sound.enableNotificationsFirst")}</small></div>
@@ -1044,7 +1249,7 @@ export default function SettingsModal({
                 type="button"
                 aria-pressed={currentSettings.notificationSound === option.value}
                 disabled={controlsBusy || !currentSettings.notificationsEnabled}
-                onClick={() => void saveSettings({ notificationSound: option.value }, `sound-${option.value}`, t("settings.sound.updated"))}
+                onClick={() => void applyOptimisticSettings({ notificationSound: option.value }, t("settings.sound.updated"))}
               >
                 {option.value === "none" ? <VolumeX size={16} /> : <Volume2 size={16} />}
                 <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
@@ -1077,7 +1282,7 @@ export default function SettingsModal({
                   data-close-behavior={option.value}
                   aria-pressed={currentSettings.closeBehavior === option.value}
                   disabled={controlsBusy}
-                  onClick={() => void saveSettings({ closeBehavior: option.value }, `close-${option.value}`, t("settings.closeBehavior.updated"))}
+                  onClick={() => void applyOptimisticSettings({ closeBehavior: option.value }, t("settings.closeBehavior.updated"))}
                 >
                   <CloseBehaviorIcon value={option.value} />
                   <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
@@ -1097,7 +1302,7 @@ export default function SettingsModal({
                 <div className="settings-inline-actions">
                   {updateStatus.phase === "ready" && updateStatus.suppression === "none" ? (
                     <>
-                      <button className="primary-button" type="button" disabled={updateControlsBusy} onClick={() => setPendingConfirmation("install-update")}>
+                      <button className="primary-button" type="button" disabled={updateControlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("install-update"); }}>
                         <RotateCcw size={15} />{t("settings.update.restartAndUpdate")}
                       </button>
                       <button className="secondary-button" type="button" disabled={updateControlsBusy} onClick={skipUpdate}>
@@ -1162,7 +1367,7 @@ export default function SettingsModal({
               value={currentSettings.refreshIntervalSeconds}
               aria-label={t("settings.sync.refresh.label")}
               disabled={controlsBusy}
-              onValueChange={(value) => void saveSettings({ refreshIntervalSeconds: Number(value) as AppSettings["refreshIntervalSeconds"] }, "refresh-interval", t("settings.sync.refresh.updated"))}
+              onValueChange={(value) => void applyOptimisticSettings({ refreshIntervalSeconds: Number(value) as AppSettings["refreshIntervalSeconds"] }, t("settings.sync.refresh.updated"))}
             >
               <option value={30}>{t("settings.sync.refresh.thirtySeconds")}</option>
               <option value={60}>{t("settings.sync.refresh.oneMinute")}</option>
@@ -1172,6 +1377,8 @@ export default function SettingsModal({
           </label>
         </section>
 
+        <FilterRulesSection accounts={accounts} demoMode={demoMode} />
+
         <section className="settings-section" aria-labelledby="agent-settings">
           <div className="settings-section-title">
             <Bot size={16} />
@@ -1180,16 +1387,235 @@ export default function SettingsModal({
           {demoMode ? (
             <p className="settings-empty" role="status">{t("agent.demo.actionUnavailable")}</p>
           ) : (
-            <div className="setting-row agent-provider-settings-row">
-              <div>
-                <strong>{t("agent.providers.title")}</strong>
-                <span>{t("agent.providers.emptyDescription")}</span>
+            <>
+              <div className="setting-row agent-provider-settings-row">
+                <div>
+                  <strong>{t("agent.providers.title")}</strong>
+                  <span>{t("agent.providers.emptyDescription")}</span>
+                </div>
+                <button className="secondary-button" type="button" disabled={controlsBusy} onClick={requestAgentProviderSettings}>
+                  <Wrench size={15} />{t("agent.providers.configure")}
+                </button>
               </div>
-              <button className="secondary-button" type="button" disabled={controlsBusy} onClick={requestAgentProviderSettings}>
-                <Wrench size={15} />{t("agent.providers.configure")}
-              </button>
-            </div>
+              <div className="setting-row">
+                <div>
+                  <strong>{t("settings.agent.toolRoundLimit")}</strong>
+                  <span>{t("settings.agent.toolRoundLimitDesc")}</span>
+                </div>
+                <NumberStepper
+                  value={currentSettings.agentToolRoundLimit}
+                  min={1}
+                  max={50}
+                  disabled={controlsBusy}
+                  decreaseLabel={t("settings.agent.toolRoundLimitDecrease")}
+                  increaseLabel={t("settings.agent.toolRoundLimitIncrease")}
+                  onChange={(value) => void applyOptimisticSettings({ agentToolRoundLimit: value }, t("settings.agent.toolRoundLimitUpdated"))}
+                />
+              </div>
+              {isDesktopRuntime && (
+                <>
+                  <div className="setting-subheading"><span>{t("settings.agent.autoReplyGroup")}</span><small>{t("settings.agent.autoReplyGroupDesc")}</small></div>
+                  <Switch
+                    checked={currentSettings.autoReply.enabled}
+                    disabled={controlsBusy}
+                    label={t("settings.agent.autoReplyEnabled")}
+                    description={t("settings.agent.autoReplyEnabledDesc")}
+                    onChange={() => void applyOptimisticSettings(
+                      { autoReply: { ...currentSettings.autoReply, enabled: !currentSettings.autoReply.enabled } },
+                      currentSettings.autoReply.enabled ? t("settings.agent.autoReplyDisabled") : t("settings.agent.autoReplyEnabledSaved"),
+                    )}
+                  />
+                  {currentSettings.autoReply.enabled && (
+                    <>
+                      <div className="setting-row setting-column-row">
+                        <div>
+                          <strong>{t("settings.agent.autoReplyAccounts")}</strong>
+                          <span>{t("settings.agent.autoReplyAccountsDesc")}</span>
+                        </div>
+                        <div className="auto-reply-account-list" role="group" aria-label={t("settings.agent.autoReplyAccounts")}>
+                          {accounts.length === 0 && <p className="settings-empty">{t("settings.agent.autoReplyNoAccounts")}</p>}
+                          {accounts.map((account) => {
+                            const checked = currentSettings.autoReply.accountIds.includes(account.id);
+                            return (
+                              <label className="accounts-row-check" key={account.id}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  disabled={controlsBusy}
+                                  onChange={() => {
+                                    const accountIds = checked
+                                      ? currentSettings.autoReply.accountIds.filter((id) => id !== account.id)
+                                      : [...currentSettings.autoReply.accountIds, account.id];
+                                    void applyOptimisticSettings({ autoReply: { ...currentSettings.autoReply, accountIds } }, t("settings.agent.autoReplyUpdated"));
+                                  }}
+                                  aria-label={t("settings.agent.autoReplyAccountAriaLabel", { email: account.email })}
+                                />
+                                {account.email}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="setting-row">
+                        <div>
+                          <strong>{t("settings.agent.autoReplyDailyLimit")}</strong>
+                          <span>{t("settings.agent.autoReplyDailyLimitDesc")}</span>
+                        </div>
+                        <NumberStepper
+                          value={currentSettings.autoReply.dailyLimitPerAccount}
+                          min={0}
+                          max={500}
+                          disabled={controlsBusy}
+                          decreaseLabel={t("settings.agent.autoReplyDailyLimitDecrease")}
+                          increaseLabel={t("settings.agent.autoReplyDailyLimitIncrease")}
+                          onChange={(value) => void applyOptimisticSettings(
+                            { autoReply: { ...currentSettings.autoReply, dailyLimitPerAccount: value } },
+                            t("settings.agent.autoReplyUpdated"),
+                          )}
+                        />
+                      </div>
+                    </>
+                  )}
+                  <div className="setting-row agent-tools-row">
+                    <div>
+                      <strong>{t("settings.agent.autoReplyReview")}</strong>
+                      <span>{t("settings.agent.autoReplyReviewDesc")}</span>
+                    </div>
+                    <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setAutoReplyDialogOpen(true)}>
+                      <MessageSquareReply size={15} />{t("settings.agent.autoReplyReviewAction")}
+                    </button>
+                  </div>
+                  <div className="setting-row agent-tools-row">
+                    <div>
+                      <strong>{t("settings.agent.memory")}</strong>
+                      <span>{t("settings.agent.memoryDesc")}</span>
+                    </div>
+                    <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setMemoryDialogOpen(true)}>
+                      <BookOpen size={15} />{t("settings.agent.memoryAction")}
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
           )}
+          <div className="setting-subheading"><span>{t("settings.agent.accessLevelGroup")}</span><small>{t("settings.agent.accessLevelGroupDesc")}</small></div>
+          <label className="setting-select-row" htmlFor="agent-access-level">
+            <span><strong>{t("settings.agent.builtinAccessLevel")}</strong><small>{t("settings.agent.builtinAccessLevelDesc")}</small></span>
+            <ThemedSelect
+              id="agent-access-level"
+              value={currentSettings.agentAccessLevel}
+              aria-label={t("settings.agent.builtinAccessLevel")}
+              disabled={controlsBusy}
+              onValueChange={(value) => requestAccessLevelChange({ agentAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, t("settings.agent.accessLevelUpdated"))}
+            >
+              {agentAccessLevelOptions.map((option) => (
+                <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
+              ))}
+            </ThemedSelect>
+          </label>
+          <label className="setting-select-row" htmlFor="agent-cli-access-level">
+            <span><strong>{t("settings.agent.cliAccessLevel")}</strong><small>{t("settings.agent.cliAccessLevelDesc")}</small></span>
+            <ThemedSelect
+              id="agent-cli-access-level"
+              value={currentSettings.agentCliAccessLevel}
+              aria-label={t("settings.agent.cliAccessLevel")}
+              disabled={controlsBusy}
+              onValueChange={(value) => requestAccessLevelChange({ agentCliAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, t("settings.agent.accessLevelUpdated"))}
+            >
+              {agentAccessLevelOptions.map((option) => (
+                <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
+              ))}
+            </ThemedSelect>
+          </label>
+          <label className="setting-select-row" htmlFor="agent-mcp-access-level">
+            <span><strong>{t("settings.agent.mcpAccessLevel")}</strong><small>{t("settings.agent.mcpAccessLevelDesc")}</small></span>
+            <ThemedSelect
+              id="agent-mcp-access-level"
+              value={currentSettings.agentMcpAccessLevel}
+              aria-label={t("settings.agent.mcpAccessLevel")}
+              disabled={controlsBusy}
+              onValueChange={(value) => requestAccessLevelChange({ agentMcpAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, t("settings.agent.accessLevelUpdated"))}
+            >
+              {agentAccessLevelOptions.map((option) => (
+                <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
+              ))}
+            </ThemedSelect>
+          </label>
+          <div className="setting-subheading"><span>{t("settings.agent.externalGuide.title")}</span><small>{t("settings.agent.externalGuide.desc")}</small></div>
+          <div className="external-guide">
+            <p className="external-guide-note">{t("settings.agent.externalGuide.steps.intro")}</p>
+            <ol className="external-guide-steps">
+              <li>{t("settings.agent.externalGuide.steps.1")}</li>
+              <li>{t("settings.agent.externalGuide.steps.2")} <code>namimail service start</code></li>
+              <li>{t("settings.agent.externalGuide.steps.3")}</li>
+              <li>{t("settings.agent.externalGuide.steps.4")}</li>
+            </ol>
+            <ExternalGuideBlock
+              id="cli"
+              label={t("settings.agent.externalGuide.cli.label")}
+              hint={t("settings.agent.externalGuide.cli.hint", { cmd: "namimail accounts list" })}
+              code={externalCliGuideCode}
+              copiedId={externalGuideCopied}
+              onCopy={copyExternalGuide}
+            />
+            <ExternalGuideBlock
+              id="mcp"
+              label={t("settings.agent.externalGuide.mcp.label")}
+              hint={t("settings.agent.externalGuide.mcp.hint")}
+              code={externalMcpGuideCode}
+              copiedId={externalGuideCopied}
+              onCopy={copyExternalGuide}
+            />
+            <ExternalGuideBlock
+              id="service"
+              label={t("settings.agent.externalGuide.service.label")}
+              hint={t("settings.agent.externalGuide.service.hint")}
+              code={externalServiceGuideCode}
+              copiedId={externalGuideCopied}
+              onCopy={copyExternalGuide}
+            />
+            <p className="external-guide-docs">{t("settings.agent.externalGuide.docs")}<a href={externalDocsUrl} target="_blank" rel="noopener noreferrer">github.com/QinIndexCode/nami-mail</a></p>
+          </div>
+          <div className="setting-subheading">
+            <span>{t("settings.agent.externalPairings.title")}</span>
+            <small>{t("settings.agent.externalPairings.desc")}</small>
+          </div>
+          <div className="external-pairings">
+            {externalPairingsError ? (
+              <p className="external-pairings-empty">{t("settings.agent.externalPairings.loadError")}</p>
+            ) : externalPairings === null ? (
+              <p className="external-pairings-empty" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("common.loading")}</p>
+            ) : externalPairings.length === 0 ? (
+              <p className="external-pairings-empty">{t("settings.agent.externalPairings.empty", { cmd: "namimail pair" })}</p>
+            ) : (
+              <ul className="external-pairings-list">
+                {externalPairings.map((pairing) => {
+                  const currentIds = new Set(accounts.map((account) => account.id));
+                  const drifted = pairing.status === "active"
+                    && (pairing.accountIds.length !== currentIds.size || pairing.accountIds.some((id) => !currentIds.has(id)));
+                  return (
+                    <li key={pairing.clientId} className={`external-pairing-row external-pairing-${pairing.status}`}>
+                      <span className="external-pairing-id" title={pairing.clientId}>{pairing.clientId.slice(0, 20)}</span>
+                      <span className="external-pairing-meta">
+                        {t("settings.agent.externalPairings.created", { date: formatDate(pairing.createdAt) })}
+                        {pairing.expiresAt ? ` · ${t("settings.agent.externalPairings.expires", { date: formatDate(pairing.expiresAt) })}` : ""}
+                        {` · ${t("settings.agent.externalPairings.accountCount", { count: pairing.accountIds.length })}`}
+                      </span>
+                      <span className="external-pairing-status">{t(`settings.agent.externalPairings.status.${pairing.status}`)}</span>
+                      {drifted ? <span className="external-pairing-drift">{t("settings.agent.externalPairings.drift")}</span> : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+          <button
+            className="secondary-button external-pairings-refresh"
+            type="button"
+            onClick={() => setExternalPairingsReload((value) => value + 1)}
+          >
+            {t("settings.agent.externalPairings.refresh")}
+          </button>
         </section>
 
         <section className="settings-section" aria-labelledby="translation-settings">
@@ -1271,12 +1697,12 @@ export default function SettingsModal({
                   {busyAction === "translation-configuration" ? t("settings.translation.saving") : t("settings.translation.save")}
                 </button>
                 {translationConfiguration.source === "local" && translationConfiguration.apiKeyConfigured && (
-                  <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => setPendingConfirmation("remove-translation-api-key")}>
+                  <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("remove-translation-api-key"); }}>
                     <KeyRound size={15} />{t("settings.translation.removeKey")}
                   </button>
                 )}
                 {translationConfiguration.source === "local" && (
-                  <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => setPendingConfirmation("remove-translation-configuration")}>
+                  <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("remove-translation-configuration"); }}>
                     <Trash2 size={15} />{t("settings.translation.removeService")}
                   </button>
                 )}
@@ -1292,82 +1718,40 @@ export default function SettingsModal({
           )}
         </section>
 
-        <section className="settings-section settings-accounts" aria-labelledby="account-settings">
-          <div className="settings-section-title">
-            <Mail size={16} />
-            <div><span>{t("settings.account.title")}</span><p id="account-settings">{demoMode ? t("settings.account.demoDescription") : t("settings.account.description")}</p></div>
-          </div>
-          {accounts.length === 0 ? (
-            <p className="settings-empty">{t("settings.account.empty")}</p>
-          ) : (
-            <div className="settings-account-list">
-              {accounts.map((account) => {
-                const issue = accountHealthIssue(account, t);
-                const retrying = busyAction === `account-sync-${account.id}`;
-                const providerName = providerDisplayName({ id: account.provider, name: account.providerName }, locale, t);
-                return (
-                  <div className="settings-account" key={account.id}>
-                    <div className="settings-account-copy">
-                      <span className={`status-dot ${issue ? "error" : account.status}`} aria-hidden="true" />
-                      <span>
-                        <strong>{account.email}</strong>
-                        <small className={`${issue ? "account-error " : ""}truncated-tooltip`} data-tooltip={issue ? `${issue.message} ${issue.guidance}` : providerName}><span>{issue ? `${providerName} · ${issue.title}` : providerName}</span></small>
-                        {issue && <small className="account-error-guidance">{issue.guidance}</small>}
-                      </span>
-                    </div>
-                    <div className="settings-account-actions">
-                      {issue?.retryable && (
-                        <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => void retryAccount(account)}>
-                          {retrying ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}{t("settings.account.resync")}
-                        </button>
-                      )}
-                      <button className="icon-button danger-icon-button" type="button" aria-label={t("settings.account.removeAriaLabel", { email: account.email })} data-tooltip={t("settings.account.removeTooltip")} disabled={controlsBusy} onClick={() => setPendingAccountRemoval(account.id)}>
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
         <footer className="settings-footer">
-          <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setPendingConfirmation("restore-defaults")}>
+          <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("restore-defaults"); }}>
             {busyAction === "restore-defaults" ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />}{t("settings.defaults.restore")}
           </button>
           <button className="primary-button" type="button" disabled={controlsBusy} onClick={requestClose}>{t("settings.done")}</button>
         </footer>
       </section>
-      {(pendingConfirmation || pendingRemovalAccount) && (
-        <div className="modal-backdrop confirmation-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && dismissConfirmation()}>
-          <section ref={confirmationDialog} className="confirmation-card" role="alertdialog" aria-modal="true" aria-labelledby="settings-confirmation-title" aria-describedby="settings-confirmation-description" tabIndex={-1}>
+      {pendingConfirmation && (
+        <div className={`modal-backdrop confirmation-backdrop${confirmClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestConfirmClose()}>
+          <section ref={confirmationDialog} className={`confirmation-card${confirmClosing ? " closing" : ""}`} role="alertdialog" aria-modal="true" aria-labelledby="settings-confirmation-title" aria-describedby="settings-confirmation-description" tabIndex={-1}>
             <span className="eyebrow">{t("settings.confirmation.eyebrow")}</span>
             <h3 id="settings-confirmation-title">{confirmationTitle}</h3>
             <p id="settings-confirmation-description">{confirmationDescription}</p>
             <div className="confirmation-actions">
-              <button className="secondary-button" type="button" data-dialog-initial-focus disabled={controlsBusy} onClick={dismissConfirmation}>{t("common.cancel")}</button>
+              <button className="secondary-button" type="button" data-dialog-initial-focus disabled={controlsBusy} onClick={requestConfirmClose}>{t("common.cancel")}</button>
               <button
                 className={pendingConfirmation === "install-update" ? "primary-button" : "secondary-button danger-button"}
                 type="button"
                 disabled={controlsBusy}
                 onClick={() => {
-                  if (pendingRemovalAccount) {
-                    void removeAccount(pendingRemovalAccount.id);
-                    return;
-                  }
                   const action = pendingConfirmation;
                   setPendingConfirmation(null);
+                  setPendingFullAccess(null);
                   if (action === "clear-background") void clearCustomBackground();
                   else if (action === "install-update") void installUpdate();
                   else if (action === "remove-translation-configuration") void removeTranslationConfiguration();
                   else if (action === "remove-translation-api-key") void removeTranslationApiKey();
                   else if (action === "discard-translation-changes-and-open-agent") onOpenAgentProviderSettings();
                   else if (action === "discard-translation-changes") onClose();
+                  else if (action === "enable-full-access" && pendingFullAccess) void applyOptimisticSettings(pendingFullAccess.patch, pendingFullAccess.successMessage);
                   else void restoreDefaults();
                 }}
               >
-                {pendingRemovalAccount && busyAction === `account-remove-${pendingRemovalAccount.id}` ? <LoaderCircle className="spin" size={14} /> : pendingRemovalAccount ? <Trash2 size={14} /> : pendingConfirmation === "install-update" ? <RotateCcw size={14} /> : pendingConfirmation === "remove-translation-configuration" ? <Trash2 size={14} /> : pendingConfirmation === "remove-translation-api-key" ? <KeyRound size={14} /> : pendingTranslationDiscard ? <X size={14} /> : null}
+                {pendingConfirmation === "install-update" ? <RotateCcw size={14} /> : pendingConfirmation === "remove-translation-configuration" ? <Trash2 size={14} /> : pendingConfirmation === "remove-translation-api-key" ? <KeyRound size={14} /> : pendingConfirmation === "enable-full-access" ? <Zap size={14} /> : pendingTranslationDiscard ? <X size={14} /> : null}
                 {confirmationAction}
               </button>
             </div>
@@ -1375,16 +1759,30 @@ export default function SettingsModal({
         </div>
       )}
       {backgroundUploadError && (
-        <div className="modal-backdrop settings-alert-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && dismissBackgroundUploadError()}>
-          <section ref={backgroundAlert} className="settings-alert-card" role="alertdialog" aria-modal="true" aria-labelledby="background-upload-error-title" aria-describedby="background-upload-error-description" tabIndex={-1}>
+        <div className={`modal-backdrop settings-alert-backdrop${alertClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestAlertClose()}>
+          <section ref={backgroundAlert} className={`settings-alert-card${alertClosing ? " closing" : ""}`} role="alertdialog" aria-modal="true" aria-labelledby="background-upload-error-title" aria-describedby="background-upload-error-description" tabIndex={-1}>
             <span className="eyebrow">{t("settings.background.alertEyebrow")}</span>
             <h3 id="background-upload-error-title">{t("settings.background.alertTitle")}</h3>
             <p id="background-upload-error-description">{backgroundUploadError}</p>
             <div className="settings-alert-actions">
-              <button className="primary-button" type="button" onClick={dismissBackgroundUploadError}>{t("settings.background.alertDismiss")}</button>
+              <button className="primary-button" type="button" onClick={requestAlertClose}>{t("settings.background.alertDismiss")}</button>
             </div>
           </section>
         </div>
+      )}
+      {autoReplyDialogOpen && (
+        <AutoReplyPendingDialog
+          accounts={accounts}
+          onClose={() => setAutoReplyDialogOpen(false)}
+          fallbackFocusRef={settingsDialog}
+        />
+      )}
+      {memoryDialogOpen && (
+        <AgentMemoryDialog
+          accounts={accounts}
+          onClose={() => setMemoryDialogOpen(false)}
+          fallbackFocusRef={settingsDialog}
+        />
       )}
     </div>
   );

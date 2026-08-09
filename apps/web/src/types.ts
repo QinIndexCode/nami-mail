@@ -16,6 +16,7 @@ export type Account = {
   /** Stable server-side classification for lastError, when a sync failed. */
   lastErrorCode?: string | null;
   lastSyncedAt: string | null;
+  signature: string;
   createdAt: string;
   folders: Folder[];
 };
@@ -49,6 +50,8 @@ export type OutboundSubmission = {
   subject?: string | null;
   recipients?: string[];
   deliveryStatus: OutboundSubmissionStatus;
+  /** ISO time a scheduled send should leave the local queue, when this is a scheduled send. */
+  sendAt: string | null;
   errorCode: string | null;
   errorMessage: string | null;
   postSubmitWarning: string | null;
@@ -91,6 +94,8 @@ export type Message = {
   hasAttachments: boolean;
   attachments: MessageAttachment[];
   size: number;
+  /** Local "snoozed until" marker. While set, the message is hidden from the unified inbox. */
+  snoozedUntil?: string | null;
 };
 
 export type ProviderInfo = {
@@ -191,12 +196,126 @@ export type OAuthAttemptStatus = {
   message?: string;
 };
 
+export type FilterRuleCondition =
+  | { kind: "from"; value: string }
+  | { kind: "to"; value: string }
+  | { kind: "subject"; value: string }
+  | { kind: "has_attachments"; value: boolean };
+
+export type FilterRuleAction =
+  | { kind: "mark_seen" }
+  | { kind: "add_flag" }
+  | { kind: "archive" }
+  | { kind: "move_to_folder"; folderPath: string };
+
+export type FilterRule = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** null applies the rule to every account; otherwise only that account. */
+  accountId: string | null;
+  conditions: FilterRuleCondition[];
+  actions: FilterRuleAction[];
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FilterRuleInput = {
+  name: string;
+  accountId?: string | null;
+  enabled?: boolean;
+  conditions: FilterRuleCondition[];
+  actions: FilterRuleAction[];
+};
+
+export type FilterRuleUpdate = Partial<FilterRuleInput>;
+
+/** A local address book entry. Fields are encrypted at rest by the local service. */
+export type Contact = {
+  id: string;
+  email: string;
+  name: string;
+  notes: string;
+  /** True when the row was seeded automatically from an incoming message sender. */
+  autoCollected: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ContactInput = {
+  email: string;
+  name?: string;
+  notes?: string;
+};
+
+export type ContactUpdate = Partial<ContactInput>;
+
+/** A local mail template. Name/subject/body are encrypted at rest by the local service. */
+export type MailTemplate = {
+  id: string;
+  name: string;
+  subject: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MailTemplateInput = {
+  name: string;
+  subject?: string;
+  body: string;
+};
+
+export type MailTemplateUpdate = Partial<MailTemplateInput>;
+
+export const calendarEventColors = ["blue", "green", "amber", "red", "purple", "teal"] as const;
+export type CalendarEventColor = typeof calendarEventColors[number];
+
+/** A local calendar event. Timestamps are UTC ISO strings. */
+export type CalendarEvent = {
+  id: string;
+  title: string;
+  description: string;
+  location: string;
+  startAt: string;
+  endAt: string;
+  allDay: boolean;
+  color: CalendarEventColor;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CalendarEventInput = {
+  title: string;
+  description?: string;
+  location?: string;
+  startAt: string;
+  endAt: string;
+  allDay?: boolean;
+  color?: CalendarEventColor;
+};
+
+export type CalendarEventUpdate = Partial<CalendarEventInput>;
+
 export type Stats = { accounts: number; messages: number; unread: number };
 
 export type AppTheme = "system" | "light" | "dark";
 export type BackgroundPreset = "none" | "paper" | "mist" | "coast" | "dawn" | "night" | "custom";
 export type NotificationSound = "system" | "soft" | "bright" | "none";
 export type CloseBehavior = "ask" | "tray" | "quit";
+export type ListDensity = "comfortable" | "compact";
+export type AgentAccessLevel = "read-only" | "send-confirmed" | "full-access";
+
+export type AutoReplyConfig = {
+  enabled: boolean;
+  /** Mailbox scope selected by the user; empty means nothing is monitored. */
+  accountIds: string[];
+  /** Auto-replies are always drafted for user confirmation before sending. */
+  requireConfirmation: true;
+  /** Per-account daily cap on confirmed auto-replies. */
+  dailyLimitPerAccount: number;
+};
 
 export type AppSettings = {
   theme: AppTheme;
@@ -208,13 +327,19 @@ export type AppSettings = {
   notificationSound: NotificationSound;
   refreshIntervalSeconds: 30 | 60 | 180 | 300;
   closeBehavior: CloseBehavior;
+  agentToolRoundLimit: number;
+  listDensity: ListDensity;
+  agentAccessLevel: AgentAccessLevel;
+  agentCliAccessLevel: AgentAccessLevel;
+  agentMcpAccessLevel: AgentAccessLevel;
+  autoReply: AutoReplyConfig;
   customBackgroundUrl: string | null;
   updatedAt: string;
 };
 
 export type AppSettingsPatch = Partial<Pick<
   AppSettings,
-  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "closeBehavior"
+  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "closeBehavior" | "agentToolRoundLimit" | "listDensity" | "agentAccessLevel" | "agentCliAccessLevel" | "agentMcpAccessLevel" | "autoReply"
 >>;
 
 export const defaultAppSettings: AppSettings = {
@@ -227,6 +352,17 @@ export const defaultAppSettings: AppSettings = {
   notificationSound: "soft",
   refreshIntervalSeconds: 60,
   closeBehavior: "ask",
+  agentToolRoundLimit: 15,
+  listDensity: "comfortable",
+  agentAccessLevel: "send-confirmed",
+  agentCliAccessLevel: "read-only",
+  agentMcpAccessLevel: "read-only",
+  autoReply: {
+    enabled: false,
+    accountIds: [],
+    requireConfirmation: true,
+    dailyLimitPerAccount: 30,
+  },
   customBackgroundUrl: null,
   updatedAt: "",
 };

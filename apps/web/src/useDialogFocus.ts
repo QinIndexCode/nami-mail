@@ -79,9 +79,22 @@ export function useDialogFocus(
       }
     };
 
+    // Guards against two focus traps (e.g. the Agent workspace and an
+    // application dialog) fighting over the focus synchronously. Each trap
+    // pulls focus back via .focus(), which synchronously dispatches focusin;
+    // without this guard the pair would recurse until the stack overflows.
+    // Standing down on the second nested call lets the other trap win and
+    // the loop converges.
+    let focusLoopGuard = 0;
     const preventFocusEscape = (event: FocusEvent) => {
       if (suspendedRef.current || dialog.contains(event.target as Node)) return;
-      focusInitialControl();
+      if (focusLoopGuard > 1) return;
+      focusLoopGuard += 1;
+      try {
+        focusInitialControl();
+      } finally {
+        focusLoopGuard -= 1;
+      }
     };
 
     document.addEventListener("keydown", keepFocusInDialog, true);

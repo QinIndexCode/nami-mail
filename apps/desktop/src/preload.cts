@@ -36,6 +36,7 @@ const updateReasons = [
   "platformUnsupported",
   "sourceUnconfigured",
   "trustUnavailable",
+  "trustDisabledByBuild",
   "scheduled",
   "checking",
   "upToDate",
@@ -314,9 +315,9 @@ if (contextBridge && ipcRenderer) {
   });
 
   contextBridge.exposeInMainWorld("namiDesktop", {
-    localApiRequestHeaders: () => ipcRenderer.invoke("nami:local-api-request-headers"),
     notify: (payload: NativeNotification) => ipcRenderer.invoke("nami:notify", payload),
     copyVerificationCode: (code: string) => ipcRenderer.invoke("nami:copy-verification-code", code),
+    showItemInFolder: (path: string) => ipcRenderer.invoke("nami:show-item-in-folder", path),
     onAgentConfirmationResult: (listener: unknown) => {
       if (typeof listener !== "function") return () => undefined;
       const resultListener = listener as (result: DesktopAgentConfirmationResult) => void;
@@ -330,6 +331,7 @@ if (contextBridge && ipcRenderer) {
     snoozeUpdate: (durationMinutes: number): Promise<DesktopUpdateSnapshot | undefined> => invokeUpdateSnapshot("nami:update-snooze", durationMinutes),
     installUpdate: (): Promise<DesktopUpdateInstallResult> => ipcRenderer.invoke("nami:update-install").then(normalizeDesktopUpdateInstallResult),
     setCustomNotificationSoundReady: (ready: boolean) => ipcRenderer.send("nami:custom-notification-sound-ready", ready),
+    quit: () => ipcRenderer.send("nami:quit"),
     onNewMail: (listener: (payload: NewMailPayload) => void) => {
       const wrapped = (_event: Electron.IpcRendererEvent, payload: NewMailPayload) => listener(payload);
       ipcRenderer.on("nami:new-mail", wrapped);

@@ -10,6 +10,7 @@ export const agentToolCategories = [
   "messages",
   "threads",
   "attachments",
+  "calendar",
   "rag",
   "drafts",
   "mail",
@@ -34,6 +35,7 @@ export const agentToolDescriptorSchema = z.object({
   name: toolNameSchema,
   title: z.string().trim().min(1).max(128),
   description: z.string().trim().min(1).max(1_000),
+  parametersSchema: z.record(z.string(), z.unknown()).optional(),
   category: agentToolCategorySchema,
   executionMode: agentToolExecutionModeSchema,
   requiredScopes: z.array(agentPermissionScopeSchema).max(32).refine(
@@ -43,6 +45,12 @@ export const agentToolDescriptorSchema = z.object({
   accountAccess: accountAccessModeSchema,
   confirmationPolicy: confirmationPolicySchema,
   confirmationAction: agentConfirmationActionSchema.optional(),
+  /**
+   * Irreversible operations (e.g. permanently deleting a mail account) still
+   * require a visible confirmation even under full-access. The permission
+   * engine treats this as an exception to the full-access no-prompt rule.
+   */
+  irreversible: z.boolean().optional(),
   availableToExternal: z.boolean(),
   timeoutMs: z.number().int().min(1_000).max(300_000).optional(),
 }).strict().superRefine((tool, context) => {
@@ -59,6 +67,13 @@ export const agentToolDescriptorSchema = z.object({
       code: "custom",
       path: ["confirmationAction"],
       message: "A confirmation action requires a confirmation policy.",
+    });
+  }
+  if (tool.irreversible && tool.executionMode !== "high-risk") {
+    context.addIssue({
+      code: "custom",
+      path: ["irreversible"],
+      message: "Irreversible tools must be high-risk.",
     });
   }
 });

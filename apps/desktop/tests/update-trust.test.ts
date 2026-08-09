@@ -3,6 +3,7 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import test from "node:test";
 import {
   canonicalUpdateManifestPayload,
+  parseEmbeddedUpdateTrust,
   parseEd25519UpdateTrust,
   verifyEd25519UpdateManifest,
 } from "../src/update-trust.mts";
@@ -37,4 +38,10 @@ test("verifies an Ed25519 manifest signature bound to every release identity fie
 test("rejects malformed or non-Ed25519 embedded release keys", () => {
   assert.equal(parseEd25519UpdateTrust({ schemaVersion: 1, algorithm: "ed25519", publicKey: "not-base64" }), undefined);
   assert.equal(parseEd25519UpdateTrust({ schemaVersion: 1, algorithm: "disabled" }), undefined);
+});
+
+test("recognizes an intentionally disabled embedded update trust marker", () => {
+  assert.deepEqual(parseEmbeddedUpdateTrust({ schemaVersion: 1, algorithm: "disabled" }), { kind: "disabled" });
+  assert.equal(parseEmbeddedUpdateTrust({ schemaVersion: 1, algorithm: "disabled", publicKey: "unexpected" })?.kind, "disabled");
+  assert.equal(parseEmbeddedUpdateTrust({ schemaVersion: 2, algorithm: "disabled" }), undefined);
 });

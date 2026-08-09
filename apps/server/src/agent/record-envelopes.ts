@@ -1,4 +1,5 @@
-import { AccountLifecycleStore, type AccountGenerationLease } from "./lifecycle.js";
+import type { AccountLifecycleStore} from "./lifecycle.js";
+import { type AccountGenerationLease } from "./lifecycle.js";
 import {
   canonicalAgentJson,
   decryptMultiAccountAgentRecord,

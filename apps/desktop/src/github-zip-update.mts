@@ -10,6 +10,8 @@ const githubOwnerPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const githubRepositoryPattern = /^[A-Za-z0-9_.-]+$/;
 const sha512Base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const manifestMaximumBytes = 16 * 1024;
+const githubReleaseRequestTimeoutMs = 15_000;
+const githubArchiveDownloadTimeoutMs = 5 * 60_000;
 
 export type GitHubUpdateSource = {
   owner: string;
@@ -68,6 +70,29 @@ type UpdateManifest = {
 };
 
 type FetchImplementation = typeof globalThis.fetch;
+
+/**
+ * Bounds every GitHub update network request so a hung connection cannot
+ * stall the periodic update check or the download for an indefinite period.
+ * Timeouts surface as a distinct error code instead of a generic network
+ * failure, and the signal also interrupts an in-flight body stream.
+ */
+async function fetchGithubUpdate(
+  fetchImpl: FetchImplementation,
+  url: string,
+  init: { headers: Record<string, string>; redirect: "error" | "follow" },
+  timeoutMs: number,
+  purpose: string,
+): Promise<Response> {
+  try {
+    return await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new GitHubZipUpdateError("UPDATE_REQUEST_TIMED_OUT", `GitHub ${purpose} timed out after ${timeoutMs} ms.`);
+    }
+    throw error;
+  }
+}
 
 function isStableVersion(value: string): boolean {
   return stableVersionPattern.test(value);
@@ -275,7 +300,7 @@ export async function discoverGitHubZipUpdate(options: {
   if (typeof fetchImpl !== "function") throw new GitHubZipUpdateError("UPDATE_FETCH_UNAVAILABLE", "The desktop runtime does not provide a network fetch implementation.");
   if (!isStableVersion(options.currentVersion)) throw new GitHubZipUpdateError("UPDATE_VERSION_INVALID", "The installed app version is not a stable x.y.z release version.");
 
-  const releaseResponse = await fetchImpl(githubApiUrl(options.source), { headers: githubHeaders(), redirect: "error" });
+  const releaseResponse = await fetchGithubUpdate(fetchImpl, githubApiUrl(options.source), { headers: githubHeaders(), redirect: "error" }, githubReleaseRequestTimeoutMs, "release lookup");
   if (!releaseResponse.ok) throw await githubResponseError(releaseResponse, "GITHUB_RELEASE_REQUEST_FAILED");
   const release = parseRelease(await releaseResponse.json());
   if (release.draft || release.prerelease || !release.tag_name.startsWith("v")) {
@@ -291,10 +316,10 @@ export async function discoverGitHubZipUpdate(options: {
     throw new GitHubZipUpdateError("UPDATE_ASSET_MISSING", "GitHub Release is missing the required Nami Mail ZIP update assets.");
   }
 
-  const manifestResponse = await fetchImpl(githubReleaseAssetUrl(options.source, release.tag_name, manifestName), {
+  const manifestResponse = await fetchGithubUpdate(fetchImpl, githubReleaseAssetUrl(options.source, release.tag_name, manifestName), {
     headers: { Accept: "application/json", "User-Agent": "Nami-Mail-desktop-updater" },
     redirect: "follow",
-  });
+  }, githubReleaseRequestTimeoutMs, "update manifest");
   if (!manifestResponse.ok) throw await githubResponseError(manifestResponse, "UPDATE_MANIFEST_REQUEST_FAILED");
   const manifestText = await readResponseText(manifestResponse);
   let manifestRaw: unknown;
@@ -393,10 +418,10 @@ export async function downloadGitHubZipUpdate(options: {
   await fs.rm(temporaryPath, { force: true });
 
   try {
-    const response = await fetchImpl(options.update.archiveUrl, {
+    const response = await fetchGithubUpdate(fetchImpl, options.update.archiveUrl, {
       headers: { Accept: "application/octet-stream", "User-Agent": "Nami-Mail-desktop-updater" },
       redirect: "follow",
-    });
+    }, githubArchiveDownloadTimeoutMs, "update archive");
     if (!response.ok) throw await githubResponseError(response, "UPDATE_DOWNLOAD_FAILED");
     if (!response.body) throw new GitHubZipUpdateError("UPDATE_DOWNLOAD_FAILED", "GitHub returned an empty ZIP update response.");
     const contentLengthHeader = response.headers.get("content-length");

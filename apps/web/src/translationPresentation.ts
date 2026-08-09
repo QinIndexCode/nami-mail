@@ -1,5 +1,91 @@
 import { ApiError, type TranslationConfiguration } from "./api";
 import type { Translate } from "./i18n";
+import { colorLuminance, mailBackgroundColor } from "./mailHtmlTheme";
+
+/** Visual characteristics of the original message body, extracted from the
+ *  provider-authored HTML so the translated result can keep the mail's branded
+ *  backdrop instead of falling back to a plain app panel. */
+export type MailVisualStyle = {
+  background: string;
+  color?: string;
+  fontFamily?: string;
+  fontSize?: string;
+};
+
+const TAG_PATTERN = /<([a-zA-Z][\w-]*)((?:\s+[^<>]*?)?)\s*\/?>/g;
+
+function attributeOf(attrs: string, name: string): string | null {
+  const pattern = new RegExp(`${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, "i");
+  const match = attrs.match(pattern);
+  return match ? (match[2] ?? match[3] ?? "").trim() : null;
+}
+
+function inlineStyleOf(attrs: string, property: string): string | null {
+  const style = attributeOf(attrs, "style");
+  if (!style) return null;
+  for (const declaration of style.split(";")) {
+    const [name, ...rest] = declaration.trim().split(":");
+    if (name?.trim().toLowerCase() === property) return rest.join(":").trim() || null;
+  }
+  return null;
+}
+
+function firstInlineValue(html: string, property: string): string | null {
+  for (const match of html.matchAll(TAG_PATTERN)) {
+    const value = inlineStyleOf(match[2] ?? "", property);
+    if (value) return value;
+  }
+  return null;
+}
+
+function declaredBackgroundOf(attrs: string, tag: string): string | null {
+  // Legacy HTML mail frames the message with bgcolor / background attributes
+  // on body, tables, and cells, so those count as backdrop declarations too.
+  const legacy = ["body", "html", "table", "td", "div"].includes(tag)
+    ? attributeOf(attrs, "bgcolor") ?? attributeOf(attrs, "background")
+    : null;
+  return mailBackgroundColor(
+    inlineStyleOf(attrs, "background-color"),
+    inlineStyleOf(attrs, "background"),
+    legacy,
+  );
+}
+
+/**
+ * Finds the outermost element that declares an opaque backdrop (the mail
+ * provider's branded canvas) and returns its visual characteristics. Falls
+ * back to a readable foreground when the backdrop is dark but no text color
+ * was declared. Returns undefined for plain messages without a backdrop.
+ */
+export function extractMailVisualStyle(html: string): MailVisualStyle | undefined {
+  if (!html || !html.includes("<")) return undefined;
+  const tags: Array<{ tag: string; attrs: string; offset: number }> = [];
+  for (const match of html.matchAll(TAG_PATTERN)) {
+    const tag = match[1]!.toLowerCase();
+    if (tag === "style" || tag === "script") continue;
+    tags.push({ tag, attrs: match[2] ?? "", offset: match.index ?? 0 });
+  }
+  const surfaceIndex = tags.findIndex(({ tag, attrs }) => {
+    const background = declaredBackgroundOf(attrs, tag);
+    return background !== null && colorLuminance(background) !== null;
+  });
+  if (surfaceIndex < 0) return undefined;
+  const surface = tags[surfaceIndex]!;
+  const background = declaredBackgroundOf(surface.attrs, surface.tag)!;
+
+  const luminance = colorLuminance(background);
+  const surfaceColor = inlineStyleOf(surface.attrs, "color") ?? attributeOf(surface.attrs, "color");
+  const color = surfaceColor ?? (luminance !== null && luminance < 0.35 ? "#f5f5f6" : undefined);
+
+  const remaining = html.slice(surface.offset);
+  const style: MailVisualStyle = { background };
+  if (color) style.color = color;
+  const fontFamily = firstInlineValue(remaining, "font-family");
+  if (fontFamily) style.fontFamily = fontFamily;
+  const fontSize = firstInlineValue(remaining, "font-size");
+  if (fontSize) style.fontSize = fontSize;
+  return style;
+}
 
 function translationErrorCode(error: unknown): string | undefined {
   if (error instanceof ApiError) return error.code;
@@ -34,6 +120,12 @@ export function translationErrorMessage(error: unknown, t: Translate): string {
       return t("translation.error.connectionRefused");
     case "translation_connection_failed":
       return t("translation.error.connectionFailed");
+    case "translation_model_download_failed":
+      return t("translation.error.modelDownloadFailed");
+    case "translation_model_cache_unavailable":
+      return t("translation.error.modelCacheUnavailable");
+    case "translation_model_unavailable":
+      return t("translation.error.modelUnavailable");
     case "translation_service_authentication_failed":
       return t("translation.error.serviceAuthentication");
     case "translation_rate_limited":
@@ -51,6 +143,33 @@ export function translationErrorMessage(error: unknown, t: Translate): string {
     default:
       return t("translation.error.failed");
   }
+}
+
+// Error codes that originate from request validation or message state and are
+// therefore shared between the free translation path and the LLM fallback.
+const sharedTranslationErrorCodes = new Set([
+  "translation_invalid_target",
+  "translation_content_unavailable",
+  "local_service_unavailable",
+]);
+
+/**
+ * Maps LLM translation failures to user-facing copy. Reuses the shared
+ * validation/state messages when applicable, otherwise surfaces a dedicated
+ * AI-translation message so the user can distinguish the failure source.
+ */
+export function llmTranslationErrorMessage(error: unknown, t: Translate): string {
+  const code = translationErrorCode(error);
+  if (code && sharedTranslationErrorCodes.has(code)) {
+    return translationErrorMessage(error, t);
+  }
+  if (code === "CLOUD_CONTENT_CONSENT_REQUIRED") {
+    return t("translation.llmCloudConsent");
+  }
+  if (code === "translation_request_too_large") {
+    return t("translation.error.requestTooLarge");
+  }
+  return t("translation.llmError");
 }
 
 /** Keeps configuration failures actionable without exposing local API details. */

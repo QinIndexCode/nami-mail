@@ -17,6 +17,7 @@ export type DesktopUpdateReason =
   | "platformUnsupported"
   | "sourceUnconfigured"
   | "trustUnavailable"
+  | "trustDisabledByBuild"
   | "scheduled"
   | "checking"
   | "upToDate"

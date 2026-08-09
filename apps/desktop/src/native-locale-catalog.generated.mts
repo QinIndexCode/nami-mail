@@ -22,7 +22,14 @@ export const nativeLocaleCatalog = {
     "notificationMultipleTitle": "Nami Mail · {count} new messages",
     "notificationMultipleBody": "Messages from {sender} and others have synced to Inbox",
     "startupFailureTitle": "Nami Mail could not start",
-    "startupFailureMessage": "The local mail service could not start."
+    "startupFailureMessage": "The local mail service could not start.",
+    "externalConfirmTitle": "NamiMail Agent external operation confirmation",
+    "externalConfirmCaller": "Request from {caller}",
+    "externalConfirmOperation": "Operation: {tool}",
+    "externalConfirmApprove": "Approve",
+    "externalConfirmReject": "Reject",
+    "externalAccessDriftTitle": "External Agent access scope changed",
+    "externalAccessDriftBody": "{count} paired client(s) need to be approved again. Open Settings → External access and re-pair them."
   },
   "zh-CN": {
     "trayTooltip": "Nami Mail",
@@ -44,7 +51,14 @@ export const nativeLocaleCatalog = {
     "notificationMultipleTitle": "Nami Mail · {count} 封新邮件",
     "notificationMultipleBody": "{sender} 等邮件已同步到收件箱",
     "startupFailureTitle": "Nami Mail 无法启动",
-    "startupFailureMessage": "本地服务启动失败。"
+    "startupFailureMessage": "本地服务启动失败。",
+    "externalConfirmTitle": "NamiMail Agent 外部操作确认",
+    "externalConfirmCaller": "来自 {caller} 的请求",
+    "externalConfirmOperation": "操作：{tool}",
+    "externalConfirmApprove": "允许",
+    "externalConfirmReject": "拒绝",
+    "externalAccessDriftTitle": "外部接入的授权范围已变化",
+    "externalAccessDriftBody": "{count} 个已配对客户端需要重新授权，请在设置 → 外部接入中重新配对。"
   }
 } as const;
 

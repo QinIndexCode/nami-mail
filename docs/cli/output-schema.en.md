@@ -1,10 +1,10 @@
 # CLI Output Schema
 
-[Chinese](output-schema.md) | [Exit codes](exit-codes.en.md)
+[Chinese](output-schema.zh-CN.md) | [Exit codes](exit-codes.en.md)
 
-> **Future contract, not executable today.** The current build has no external CLI, Broker, or JSON command output. The envelope below defines the machine interface after a verified native Windows SID-DACL adapter ships; it is not a callable response.
+> **Current-build status: implemented.** The 0.3.0 build ships the external CLI with a Broker-connected JSON output. The envelope below is a callable response, not a future design.
 
-After the interface ships, `--output json` will be the scripting interface. Each invocation will write one stable envelope to standard output, for both success and failure:
+`--output json` is the scripting interface. Each invocation writes one stable envelope to standard output, for both success and failure:
 
 ```json
 {
@@ -15,7 +15,7 @@ After the interface ships, `--output json` will be the scripting interface. Each
   "error": null,
   "meta": {
     "durationMs": 18,
-    "version": "0.2.3"
+    "version": "0.3.0"
   }
 }
 ```
@@ -37,13 +37,13 @@ After the interface ships, `--output json` will be the scripting interface. Each
   "code": "HOST_UNAVAILABLE",
   "message": "NamiMail Agent host is not available.",
   "retryable": true,
-  "suggestion": "The external Agent interface is unavailable in this build."
+  "suggestion": "Open NamiMail or run namimail service start."
 }
 ```
 
-`code` will be the programmatic decision field. `message` and optional `suggestion` are user-facing and may be localized. `retryable` only says an immediate retry could be meaningful; it does not guarantee success. Implementations may include an optional `details` object, but callers must not require it or write it to logs.
+`code` is the programmatic decision field. `message` and optional `suggestion` are user-facing and may be localized. `retryable` only says an immediate retry could be meaningful; it does not guarantee success. Implementations may include an optional `details` object, but callers must not require it or write it to logs.
 
-Common codes include `INVALID_ARGUMENT`, `HOST_UNAVAILABLE`, `UPDATE_IN_PROGRESS`, `PAIRING_REQUIRED`, `PAIRING_REVOKED`, `BROKER_AUTHENTICATION_FAILED`, `BROKER_REPLAY_DETECTED`, `PERMISSION_DENIED`, `SCOPE_DENIED`, `RAG_NOT_READY`, `PROVIDER_UNAVAILABLE`, and `PROVIDER_TIMEOUT`. See [Troubleshooting](troubleshooting.en.md) for recovery guidance.
+Common codes include `INVALID_ARGUMENT`, `TOOL_INPUT_INVALID`, `HOST_UNAVAILABLE`, `HOST_LEASE_UNAVAILABLE`, `UPDATE_IN_PROGRESS`, `PAIRING_REQUIRED`, `PAIRING_REVOKED`, `BROKER_AUTHENTICATION_FAILED`, `BROKER_REPLAY_DETECTED`, `BROKER_COUNTER_INVALID`, `PERMISSION_DENIED`, `SCOPE_DENIED`, `CLI_RUNTIME_FORBIDDEN`, `BROKER_SECURITY_UNAVAILABLE`, and `PROVIDER_TIMEOUT`. See [Troubleshooting](troubleshooting.en.md) for recovery guidance.
 
 ## Other formats
 
