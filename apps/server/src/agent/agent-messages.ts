@@ -69,6 +69,10 @@ export const agentMessageCatalog = {
     "zh-CN": "MCP 服务器 {label} 连接失败，本次未使用其工具。",
     "en-US": "MCP server {label} could not be reached; its tools are not available this run.",
   },
+  "status.model_retry": {
+    "zh-CN": "网络波动，正在自动重试模型请求（{attempt}/{max}）…",
+    "en-US": "Network hiccup; retrying the model request ({attempt}/{max})…",
+  },
 
   "permission.system_prompt_intro": {
     "zh-CN": "以下是你当前生效的权限档位。用户可能在任意时刻在界面上切换档位；每一轮本提示词都会按最新档位重新生成。回答与权限相关的问题时，只依据本节内容，不要仅凭工具列表推断。",

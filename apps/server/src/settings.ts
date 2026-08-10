@@ -18,6 +18,9 @@ export type AgentAccessLevel = (typeof AGENT_ACCESS_LEVELS)[number];
 const DEFAULT_AUTO_REPLY: AutoReplyConfig = {
   enabled: false,
   accountIds: [],
+  mode: "llm",
+  template: { text: "", skipConfirmation: false },
+  scope: { contactsOnly: false, threadOnce: true, rules: [] },
   requireConfirmation: true,
   dailyLimitPerAccount: 30,
 };

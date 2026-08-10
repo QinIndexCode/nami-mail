@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   Bot,
   CalendarDays,
@@ -64,7 +64,7 @@ import { agentScopeFor, sameAgentScope } from "./agentContext";
 import { isSupportedFile, processFile, type ProcessedFile } from "./fileProcessor";
 import ThemedSelect from "./ThemedSelect";
 import type { Account, AgentAccessLevel, Message } from "./types";
-import { useI18n } from "./i18n";
+import { useI18n, type Translate } from "./i18n";
 import { useDialogFocus } from "./useDialogFocus";
 import { useDismissTransition } from "./useDismissTransition";
 
@@ -189,6 +189,28 @@ function writeRevokedIds(conversationId: string, ids: Set<string>): void {
   } catch {
     // Storage unavailable — revocation stays in-memory for this session.
   }
+}
+
+/** The panel reopens onto the conversation that was open when it closed. */
+const LAST_ACTIVE_CONVERSATION_KEY = "nami.agent.lastConversation";
+
+function readLastActiveConversationId(): string | null {
+  try {
+    const raw = window.localStorage.getItem(LAST_ACTIVE_CONVERSATION_KEY);
+    return raw && raw.length > 0 ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A conversation whose newest turn has no assistant reply yet (the last
+ * message is the user's) may still be finishing on the server after the
+ * panel closed — closing the panel does not cancel the run.
+ */
+export function lastMessageIsUnanswered(conversation: AgentConversation): boolean {
+  const last = conversation.messages[conversation.messages.length - 1];
+  return Boolean(last && last.role === "user");
 }
 
 function applyRevokedMarks(conversation: AgentConversation): AgentConversation {
@@ -594,38 +616,49 @@ function AgentToolCard({ activity }: { activity: AgentToolActivity }) {
 }
 
 // Tool activities stay collapsed into a quiet one-line summary — even while
-// running — so a turn's tool calls never dominate the conversation. Only a
-// FINAL failure expands the list, making the error visible; anything else can
-// be expanded by the user on demand.
-function AgentToolList({ activities }: { activities: AgentToolActivity[] }) {
+// running — so a turn's tool calls never dominate the conversation. A FINAL
+// failure — the newest activity failed — in the LATEST turn expands the list
+// to make the error visible (earlier failures followed by successful tools do
+// not pin it open); once the user starts a new turn (superseded), the old
+// warning folds back into its summary automatically. The user can always fold
+// the list back down; the failed count keeps the error visible on the summary
+// row, and a fresh failure pops it open again. The summary row stays in place
+// as an accordion header so the fold is a smooth height transition.
+export const AgentToolList = memo(function AgentToolListInner({ activities, superseded = false }: { activities: AgentToolActivity[]; superseded?: boolean }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
-  const hasFinalError = activities.some((activity) => activity.state === "failed");
+  // Dismissal is keyed to the latest activity so a NEW failure (a later
+  // activity becomes the latest) pops the list open again.
+  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
+  const latest = activities[activities.length - 1];
+  const autoExpanded = latest?.state === "failed" && !superseded && dismissedKey !== latest.id;
+  const open = expanded || autoExpanded;
+  const failedCount = activities.filter((activity) => activity.state === "failed").length;
   const runningCount = activities.filter((activity) => activity.state === "running" || activity.state === "awaiting_confirmation").length;
-  const collapsible = !hasFinalError;
-
-  if (!collapsible || expanded) {
-    return (
-      <div className="agent-tool-list">
-        {activities.map((activity) => <AgentToolCard key={activity.id} activity={activity} />)}
-        {collapsible && expanded && (
-          <button type="button" className="agent-tool-toggle" onClick={() => setExpanded(false)}>{t("agent.tool.collapse")}</button>
-        )}
-      </div>
-    );
-  }
+  // Only a DONE failure can be dismissed; a running tool that fails later must
+  // still pop the list open again.
+  const collapse = () => {
+    setExpanded(false);
+    if (latest?.state === "failed") setDismissedKey(latest.id);
+  };
 
   return (
-    <div className="agent-tool-list">
-      <button type="button" className="agent-tool-summary" onClick={() => setExpanded(true)}>
+    <div className={`agent-tool-list${open ? " open" : ""}`}>
+      <button type="button" className="agent-tool-summary" aria-expanded={open} onClick={() => (open ? collapse() : setExpanded(true))}>
         <Wrench size={13} />
         <span>{t("agent.tool.summary", { count: activities.length })}</span>
-        {runningCount > 0 && <em className="agent-tool-summary-running">{t("agent.tool.runningCount", { count: runningCount })}</em>}
-        <ChevronDown size={13} />
+        <span className="agent-tool-summary-chips">{failedCount > 0 && <em className="agent-tool-summary-failed">{t("agent.tool.failedCount", { count: failedCount })}</em>}{runningCount > 0 && <em className="agent-tool-summary-running">{t("agent.tool.runningCount", { count: runningCount })}</em>}</span>
+        <ChevronDown size={13} className="agent-tool-summary-chevron" />
       </button>
+      <div className="agent-tool-collapse" aria-hidden={!open}>
+        <div className="agent-tool-collapse-inner">
+          {activities.map((activity) => <AgentToolCard key={activity.id} activity={activity} />)}
+          <button type="button" className="agent-tool-toggle" onClick={collapse}>{t("agent.tool.collapse")}</button>
+        </div>
+      </div>
     </div>
   );
-}
+});
 
 function AgentConfirmationCard({
   confirmation,
@@ -711,7 +744,92 @@ function AgentRecallButton({
   );
 }
 
+const AgentScrubberBar = memo(function AgentScrubberBarInner({
+  hovered,
+  top,
+  width,
+  blur,
+}: {
+  hovered: boolean;
+  top: number;
+  width: number;
+  blur: number;
+}) {
+  return (
+    <span
+      className={`agent-scrubber-bar${hovered ? " hovered" : ""}`}
+      style={{
+        top: `${top}px`,
+        width: `${width}px`,
+        filter: blur > 0 ? `blur(${blur}px)` : undefined,
+      }}
+    />
+  );
+});
+
 const ollamaEndpointSuggestion = "http://127.0.0.1:11434/v1";
+
+type AgentMessageRowProps = {
+  message: AgentMessage;
+  /** Whether a newer user turn follows this message (supersedes its warnings). */
+  superseded: boolean;
+  /** Live provider status text (e.g. "retrying") shown in the thinking line. */
+  statusMessage?: string | null;
+  locale: string;
+  t: Translate;
+  onOpenAttachment: (path?: string) => void;
+  onCopy: (content: string) => void;
+  onRevoke: (messageId: string) => void;
+  onRestore: (messageId: string) => void;
+  onRetry: () => void;
+  onUserMessageRef: (messageId: string, node: HTMLElement | null) => void;
+};
+
+/**
+ * One transcript message. Isolated with React.memo so a streaming update —
+ * which only mutates the single in-flight message object — re-renders that row
+ * alone instead of re-parsing every historic message's markdown. Callbacks and
+ * the i18n helpers must keep stable identities for the memo to hold.
+ */
+export const AgentMessageRow = memo(function AgentMessageRowInner({
+  message,
+  superseded,
+  statusMessage,
+  locale,
+  t,
+  onOpenAttachment,
+  onCopy,
+  onRevoke,
+  onRestore,
+  onRetry,
+  onUserMessageRef,
+}: AgentMessageRowProps) {
+  const userMessageRef = useCallback((node: HTMLElement | null) => {
+    onUserMessageRef(message.id, node);
+  }, [message.id, onUserMessageRef]);
+  return (
+    <article
+      className={`agent-message ${message.role} ${message.state === "streaming" ? "streaming" : ""}`}
+      ref={message.role === "user" ? userMessageRef : undefined}
+    >
+      {message.revoked ? (
+        <div className="agent-message-revoked">
+          <span className="agent-message-revoked-badge">{t("agent.message.revoked")}</span>
+          <button type="button" className="agent-corner-button resend" onClick={() => onRestore(message.id)} data-tooltip={message.role === "user" ? t("agent.message.resend") : t("agent.message.restore")} aria-label={message.role === "user" ? t("agent.message.resend") : t("agent.message.restore")}><PencilLine size={12} /></button>
+        </div>
+      ) : (
+        <>
+          {message.quote && <div className="agent-message-quote"><span className="agent-quote-mark" aria-hidden="true">"</span><span className="agent-quote-text">{truncateForPreview(message.quote)}</span><span className="agent-quote-mark" aria-hidden="true">"</span></div>}
+          {message.content ? <AgentMarkdown content={message.content} /> : message.state === "streaming" && <div className="agent-thinking"><LoaderCircle className="spin" size={16} />{statusMessage || t("agent.message.thinking")}</div>}
+          {message.attachments && message.attachments.length > 0 && <div className="agent-message-attachments">{message.attachments.map((attachment, index) => <button key={`${attachment.name}-${index}`} type="button" className="agent-message-attachment" onClick={() => onOpenAttachment(attachment.path)} data-tooltip={attachment.path ?? attachment.name}><FileText size={15} /><span>{attachment.name}</span></button>)}</div>}
+          {message.toolActivities.length > 0 && <AgentToolList activities={message.toolActivities} superseded={superseded} />}
+          {message.error && <div className="agent-message-error"><CircleAlert size={15} /><span>{message.error.message}{message.error.suggestion ? ` ${message.error.suggestion}` : ""}</span>{message.error.retryable && <button type="button" onClick={onRetry}>{t("agent.message.retry")}</button>}</div>}
+        </>
+      )}
+      <div className="agent-message-meta">{message.role === "system" && <span className="agent-message-role">{t("agent.message.system")}</span>}<time>{shortDate(message.createdAt, locale)}</time><span className="agent-message-actions">{message.content && <button type="button" className="agent-corner-button" onClick={() => void onCopy(message.content)} aria-label={t("agent.message.copy")} data-tooltip={t("agent.message.copy")}><Copy size={12} /></button>}{message.role === "user" && <AgentRecallButton disabled={!message.content || message.state === "streaming"} onRevoke={() => onRevoke(message.id)} label={t("agent.message.revoke")} confirmLabel={t("agent.message.revokeConfirm")} />}</span></div>
+    </article>
+  );
+});
 
 type ProviderKindMetadata = {
   endpointSuggestion: string;
@@ -1489,6 +1607,8 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   const [providerId, setProviderId] = useState("");
   const [scopeMode, setScopeMode] = useState<AgentScopeMode>(currentMessage ? "current_message" : "all_accounts");
   const [streaming, setStreaming] = useState(false);
+  /** Live provider status text shown in the in-flight assistant's thinking line. */
+  const [streamStatus, setStreamStatus] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   /** Holds a full-access request that still needs the user's explicit warning acknowledgment. */
   const [pendingAccessLevel, setPendingAccessLevel] = useState<AgentAccessLevel | null>(null);
@@ -1571,6 +1691,23 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   const providerSettingsTriggerRef = useRef<HTMLButtonElement>(null);
   const workspaceRef = useRef<HTMLElement>(null);
   const accessConfirmRef = useRef<HTMLElement>(null);
+  // Latest transcript mirror for stable callbacks passed to memoized message
+  // rows. Reading through a ref keeps the row props referentially stable so an
+  // unrelated re-render (scroll, scrubber hover, other rows streaming) never
+  // invalidates a row that has not changed.
+  const activeMessagesRef = useRef<AgentMessage[] | undefined>(undefined);
+  useEffect(() => {
+    activeMessagesRef.current = active?.messages;
+  }, [active?.messages]);
+  const registerUserMessageEl = useCallback((messageId: string, node: HTMLElement | null) => {
+    if (node) userMessageElsRef.current.set(messageId, node);
+    else userMessageElsRef.current.delete(messageId);
+  }, []);
+  const retryLastUserTurn = useCallback(() => {
+    const target = activeMessagesRef.current?.slice().reverse().find((item) => item.role === "user");
+    setComposer(target?.content ?? "");
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  }, []);
 
   useDialogFocus(true, workspaceRef, { restoreFocusRef, suspended: providerSettingsOpen || mcpServerSettingsOpen || Boolean(pendingAccessLevel) });
   useDialogFocus(Boolean(pendingAccessLevel), accessConfirmRef, { restoreFocusRef: workspaceRef });
@@ -1651,10 +1788,15 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
         const currentProvider = value.providers.find((provider) => provider.id === current && provider.configured);
         return currentProvider?.id ?? configuredProviderId(value.providers, value.defaultProviderId);
       });
-      // Show the UI immediately — load the first conversation in the background.
-      if (value.conversations[0]) {
+      // Show the UI immediately — load the last active conversation (or the
+      // newest one) in the background.
+      const lastActiveId = readLastActiveConversationId();
+      const initialTarget = value.conversations.some((item) => item.id === lastActiveId)
+        ? lastActiveId!
+        : value.conversations[0]?.id;
+      if (initialTarget) {
         try {
-          const conversation = await api.agentConversation(value.conversations[0].id);
+          const conversation = await api.agentConversation(initialTarget);
           setActive(applyRevokedMarks(purgeStaleErrors(conversation)));
           setProviderId((current) => value.providers.some((provider) => provider.id === conversation.providerId && provider.configured)
             ? conversation.providerId
@@ -1735,6 +1877,16 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
     () => active?.messages.filter((message) => message.role === "user") ?? [],
     [active?.messages],
   );
+  // Index of the newest user turn. Rows before it are superseded: the user has
+  // moved on, so their failure warnings fold up instead of staying expanded.
+  const lastUserMessageIndex = useMemo(() => {
+    const messages = active?.messages;
+    if (!messages) return -1;
+    for (let index = messages.length - 1; index >= 0; index--) {
+      if (messages[index]!.role === "user") return index;
+    }
+    return -1;
+  }, [active?.messages]);
   const userMessageIdsKey = userMessages.map((message) => message.id).join("|");
   useEffect(() => {
     const el = transcriptRef.current;
@@ -1955,6 +2107,58 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   }, []);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+  // Remember which conversation the panel was on so reopening lands on it
+  // (closing the panel does not cancel a running turn; the user returns to
+  // that conversation to see the completed reply).
+  useEffect(() => {
+    if (!active?.id) return;
+    try {
+      window.localStorage.setItem(LAST_ACTIVE_CONVERSATION_KEY, active.id);
+    } catch {
+      // Storage unavailable — the fallback to the newest conversation applies.
+    }
+  }, [active?.id]);
+  // A conversation whose newest turn has no assistant reply yet may still be
+  // finishing on the server (closing the panel does not cancel the run). Poll
+  // for the completed reply and fold it into the transcript. The polling
+  // stops as soon as the local transcript moves on (new send, conversation
+  // switch) or the attempt budget runs out.
+  useEffect(() => {
+    if (demoMode || streaming || !active || !lastMessageIsUnanswered(active)) return;
+    const targetId = active.id;
+    const pendingUserMessageId = active.messages[active.messages.length - 1].id;
+    let stopped = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      if (stopped) return;
+      attempts += 1;
+      try {
+        const fresh = await api.agentConversation(targetId);
+        if (stopped) return;
+        const freshLast = fresh.messages[fresh.messages.length - 1];
+        if (freshLast && freshLast.role === "assistant") {
+          const next = applyRevokedMarks(purgeStaleErrors(fresh));
+          setActive((current) => current && current.id === targetId
+            && current.messages[current.messages.length - 1]?.id === pendingUserMessageId
+            ? next
+            : current);
+          void refreshConversations(conversationSearch);
+          return;
+        }
+      } catch {
+        // Transient failure — keep polling until the attempt budget runs out.
+      }
+      if (attempts < 240) {
+        timer = setTimeout(() => void tick(), 2_000);
+      }
+    };
+    void tick();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [active, applyRevokedMarks, conversationSearch, demoMode, purgeStaleErrors, refreshConversations, streaming]);
   // The message-scoped modes (selected_account / current_message) derive their
   // accountIds and messageIds from the currently selected message.
   // When that message is cleared, fall back to all_accounts so the composer
@@ -2110,8 +2314,27 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
     setAttachedFiles([]);
     setQuoteContext(null);
     setStreaming(true);
+    setStreamStatus(null);
     setLoadError(null);
-    setActive((current) => current && current.id === conversation!.id ? { ...current, providerId: selectedProvider.id, scope, messages: [...current.messages, userMessage, assistantMessage] } : current);
+    setConfirmationErrors({});
+    setActive((current) => current && current.id === conversation!.id
+      ? {
+        ...current,
+        providerId: selectedProvider.id,
+        scope,
+        messages: [
+          // The user has moved on: fold up the previous turn's failure
+          // warnings immediately instead of waiting for this turn to succeed.
+          // Empty failed messages are dropped; partial answers keep their
+          // content with the error badge cleared.
+          ...current.messages
+            .filter((item) => !(item.error && item.content === ""))
+            .map((item) => (item.error ? { ...item, error: undefined } : item)),
+          userMessage,
+          assistantMessage,
+        ],
+      }
+      : current);
     const controller = new AbortController();
     abortRef.current = controller;
     try {
@@ -2127,6 +2350,11 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
         ...(attachments.length > 0 ? { attachments } : {}),
       }, (event) => {
         mutateAssistant(assistantMessage.id, event);
+        if (event.type === "status" && event.message) {
+          setStreamStatus(event.message);
+        } else if (event.type === "completed") {
+          setStreamStatus(null);
+        }
         if (event.type === "memory_suggestion") {
           setPendingMemorySuggestions((suggestions) => (suggestions.includes(event.summary) ? suggestions : [...suggestions, event.summary]));
         }
@@ -2297,7 +2525,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
     });
   }, []);
   const restoreMessage = useCallback((messageId: string) => {
-    const restoreTarget = active?.messages.find((message) => message.id === messageId);
+    const restoreTarget = activeMessagesRef.current?.find((message) => message.id === messageId);
     setActive((current) => {
       if (!current) return current;
       const revokedIds = readRevokedIds(current.id);
@@ -2309,7 +2537,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
       setComposer((instruction) => instruction || restoreTarget.content);
       window.requestAnimationFrame(() => composerRef.current?.focus());
     }
-  }, [active]);
+  }, []);
 
   return (
     <section ref={workspaceRef} className="agent-workspace" role="dialog" aria-modal="true" aria-label={t("agent.workspace.aria")} tabIndex={-1}>
@@ -2372,31 +2600,21 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
         <div className="agent-transcript" ref={transcriptRef} aria-live="polite" onContextMenu={handleTranscriptContextMenu}>
           {loadError && <div className="agent-error-panel" role="status"><CircleAlert size={18} /><span><strong>{t("agent.error.title")}</strong><small>{loadError}</small></span><button className="secondary-button" type="button" onClick={() => void loadBootstrap()}>{t("common.retry")}</button></div>}
           {!loading && !active && <div className="agent-empty-state"><span className="agent-wordmark" aria-hidden="true">{"NamiMailAgent".split("").map((char, index) => <span key={index} style={{ animationDelay: `${index * 0.05}s` }}>{char}</span>)}</span>{hasConfiguredProvider ? <div className="agent-suggestion-cards"><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.today"))}><CalendarDays size={17} /><span>{t("agent.suggestion.today")}</span></button><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.actionItems"))}><ClipboardList size={17} /><span>{t("agent.suggestion.actionItems")}</span></button><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.reply"))}><Reply size={17} /><span>{t("agent.suggestion.reply")}</span></button></div> : <button className="agent-configure-provider-button" type="button" onClick={() => setProviderSettingsOpen(true)}><Wrench size={16} />{t("agent.providers.configure")}</button>}</div>}
-          {active?.messages.map((message) => (
-            <article
+          {active?.messages.map((message, index) => (
+            <AgentMessageRow
               key={message.id}
-              className={`agent-message ${message.role} ${message.state === "streaming" ? "streaming" : ""}`}
-              ref={message.role === "user" ? (node) => {
-                if (node) userMessageElsRef.current.set(message.id, node);
-                else userMessageElsRef.current.delete(message.id);
-              } : undefined}
-            >
-              {message.revoked ? (
-                <div className="agent-message-revoked">
-                  <span className="agent-message-revoked-badge">{t("agent.message.revoked")}</span>
-                  <button type="button" className="agent-corner-button resend" onClick={() => restoreMessage(message.id)} data-tooltip={message.role === "user" ? t("agent.message.resend") : t("agent.message.restore")} aria-label={message.role === "user" ? t("agent.message.resend") : t("agent.message.restore")}><PencilLine size={12} /></button>
-                </div>
-              ) : (
-                <>
-                  {message.quote && <div className="agent-message-quote"><span className="agent-quote-mark" aria-hidden="true">"</span><span className="agent-quote-text">{truncateForPreview(message.quote)}</span><span className="agent-quote-mark" aria-hidden="true">"</span></div>}
-                  {message.content ? <AgentMarkdown content={message.content} /> : message.state === "streaming" && <div className="agent-thinking"><LoaderCircle className="spin" size={16} />{t("agent.message.thinking")}</div>}
-                  {message.attachments && message.attachments.length > 0 && <div className="agent-message-attachments">{message.attachments.map((attachment, index) => <button key={`${attachment.name}-${index}`} type="button" className="agent-message-attachment" onClick={() => openAttachmentFolder(attachment.path)} data-tooltip={attachment.path ?? attachment.name}><FileText size={15} /><span>{attachment.name}</span></button>)}</div>}
-                  {message.toolActivities.length > 0 && <AgentToolList activities={message.toolActivities} />}
-                  {message.error && <div className="agent-message-error"><CircleAlert size={15} /><span>{message.error.message}{message.error.suggestion ? ` ${message.error.suggestion}` : ""}</span>{message.error.retryable && <button type="button" onClick={() => { setComposer([...active?.messages ?? []].reverse().find((item) => item.role === "user")?.content ?? ""); window.requestAnimationFrame(() => composerRef.current?.focus()); }}>{t("agent.message.retry")}</button>}</div>}
-                </>
-              )}
-              <div className="agent-message-meta">{message.role === "system" && <span className="agent-message-role">{t("agent.message.system")}</span>}<time>{shortDate(message.createdAt, locale)}</time><span className="agent-message-actions">{message.content && <button type="button" className="agent-corner-button" onClick={() => void copyText(message.content)} aria-label={t("agent.message.copy")} data-tooltip={t("agent.message.copy")}><Copy size={12} /></button>}{message.role === "user" && <AgentRecallButton disabled={!message.content || message.state === "streaming"} onRevoke={() => revokeMessage(message.id)} label={t("agent.message.revoke")} confirmLabel={t("agent.message.revokeConfirm")} />}</span></div>
-            </article>
+              message={message}
+              superseded={index < lastUserMessageIndex}
+              statusMessage={streamStatus}
+              locale={locale}
+              t={t}
+              onOpenAttachment={openAttachmentFolder}
+              onCopy={copyText}
+              onRevoke={revokeMessage}
+              onRestore={restoreMessage}
+              onRetry={retryLastUserTurn}
+              onUserMessageRef={registerUserMessageEl}
+            />
           ))}
           <div ref={messagesEndRef} />
           {contextMenu && (
@@ -2423,14 +2641,12 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
               const barTop = scrubberViewport + index * SCRUBBER_BAR_GAP;
               const blur = scrubberTrackHeight > 0 ? scrubberBarBlur(barTop, scrubberTrackHeight) : 0;
               return (
-                <span
+                <AgentScrubberBar
                   key={message.id}
-                  className={`agent-scrubber-bar${hoveredUserIndex === index ? " hovered" : ""}`}
-                  style={{
-                    top: `${barTop}px`,
-                    width: `${scrubberBarWidth(index, hoveredUserIndex)}px`,
-                    filter: blur > 0 ? `blur(${blur}px)` : undefined,
-                  }}
+                  hovered={hoveredUserIndex === index}
+                  top={barTop}
+                  width={scrubberBarWidth(index, hoveredUserIndex)}
+                  blur={blur}
                 />
               );
             })}

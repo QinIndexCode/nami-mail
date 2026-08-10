@@ -1,11 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AutoReplyEngine, type AutoReplyEvaluationResult, type AutoReplyPendingSummary } from "../src/agent/auto-reply.js";
+import { AutoReplyEngine, type AutoReplyEvaluationResult, type AutoReplyPendingSummary, type AutoReplyUiEvent } from "../src/agent/auto-reply.js";
 import { EncryptedAgentAuditStore } from "../src/agent/audit.js";
 import { ImmutableGuiConfirmationStore } from "../src/agent/confirmations.js";
 import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
 import type { MailApplicationService } from "../src/agent/mail-application-service.js";
 import { EncryptedAgentMemoryStore } from "../src/agent/memory.js";
+import { EncryptedAutoReplyDecisionStore } from "../src/agent/auto-reply-decisions.js";
 import { applyAgentStoreSchema } from "../src/agent/schema.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { encryptMessagePayload } from "../src/message-storage.js";
@@ -127,6 +128,7 @@ describe("Agent auto-reply engine", () => {
     lifecycle.acquireLease("account-1");
     const audit = new EncryptedAgentAuditStore(db, masterKey, lifecycle);
     const memory = new EncryptedAgentMemoryStore(db, masterKey, () => FIXED_NOW);
+    const decisions = new EncryptedAutoReplyDecisionStore(db, masterKey, () => FIXED_NOW);
     const desktopCapability = Object.freeze({ capability: "desktop-main-only" });
     const confirmations = new ImmutableGuiConfirmationStore(db, masterKey, lifecycle, () => FIXED_NOW, {
       verify: ({ capability, caller }) =>
@@ -146,11 +148,48 @@ describe("Agent auto-reply engine", () => {
       mail,
       audit,
       memory,
+      decisions,
       confirmationStore: confirmations,
       desktopConfirmation: { capability: desktopCapability },
       clock: () => FIXED_NOW,
     });
     return { engine, mail, memory, db: db as DatabaseHandle };
+  }
+
+  function makeEventEngine(onEvent: (event: AutoReplyUiEvent) => void) {
+    db = openDatabase(":memory:");
+    masterKey = randomBytes(32);
+    insertAccount(db);
+    applyAgentStoreSchema(db, FIXED_NOW);
+    const lifecycle = new AccountLifecycleStore(db, masterKey, () => FIXED_NOW);
+    lifecycle.acquireLease("account-1");
+    const audit = new EncryptedAgentAuditStore(db, masterKey, lifecycle);
+    const memory = new EncryptedAgentMemoryStore(db, masterKey, () => FIXED_NOW);
+    const desktopCapability = Object.freeze({ capability: "desktop-main-only" });
+    const confirmations = new ImmutableGuiConfirmationStore(db, masterKey, lifecycle, () => FIXED_NOW, {
+      verify: ({ capability, caller }) =>
+        capability === desktopCapability && caller.kind === "desktop-ui" && caller.interactive === true
+          ? { principalId: "desktop-main-user", surfaceId: "main-window" }
+          : undefined,
+    });
+    const mail = {
+      prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1" })),
+      submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1" })),
+    } as unknown as MailApplicationService;
+    updateAppSettings(db, { autoReply: { enabled: true, accountIds: ["account-1"], dailyLimitPerAccount: 30 } });
+    const engine = new AutoReplyEngine({
+      db,
+      masterKey,
+      evaluate: async () => ({ replyValue: "high" as const, sensitive: false, replyText: "收到，谢谢！" }),
+      mail,
+      audit,
+      memory,
+      confirmationStore: confirmations,
+      desktopConfirmation: { capability: desktopCapability },
+      clock: () => FIXED_NOW,
+      onEvent,
+    });
+    return { engine, mail, db: db as DatabaseHandle };
   }
 
   it("screens, evaluates, and sends a drafted reply only after user approval", async () => {
@@ -310,5 +349,71 @@ describe("Agent auto-reply engine", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("emits a pending event once the confirmation is durably created", async () => {
+    const events: AutoReplyUiEvent[] = [];
+    const { engine, db: handle } = makeEventEngine((event) => events.push(event));
+    insertMessage(handle, masterKey!, { id: "message-1", subject: "Project review", fromName: "Ada", fromAddress: "ada@example.test" });
+
+    const notify = engine.notifyInboxMessages("account-1", ["message-1"]);
+    const pendingEvents = async () => events.filter((event) => event.kind === "pending");
+    while ((await pendingEvents()).length < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    void notify;
+
+    const [event] = await pendingEvents();
+    expect(event).toMatchObject({
+      kind: "pending",
+      accountId: "account-1",
+      messageId: "message-1",
+      subject: "Project review",
+      fromName: "Ada",
+      fromAddress: "ada@example.test",
+      sensitive: false,
+      replyPreview: "收到，谢谢！",
+    });
+    expect(Date.parse(event!.expiresAt) - Date.parse(event!.createdAt)).toBe(5 * 60 * 1_000);
+    expect(events.filter((item) => item.kind === "sent")).toHaveLength(0);
+  });
+
+  it("emits a sent event with no pending leftovers after approval", async () => {
+    const events: AutoReplyUiEvent[] = [];
+    const { engine, mail, db: handle } = makeEventEngine((event) => events.push(event));
+    insertMessage(handle, masterKey!, { id: "message-1", subject: "Project review", fromName: "Ada", fromAddress: "ada@example.test" });
+
+    const notify = engine.notifyInboxMessages("account-1", ["message-1"]);
+    while (engine.listPending().length < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    const pending = engine.listPending()[0]!;
+    expect(engine.resolveConfirmation(pending.confirmationId, "approve")).toEqual({ ok: true });
+    await notify;
+
+    const sentEvents = events.filter((event) => event.kind === "sent");
+    expect(sentEvents).toHaveLength(1);
+    expect(sentEvents[0]).toMatchObject({
+      kind: "sent",
+      messageId: "message-1",
+      subject: "Project review",
+      toName: "Ada",
+      toAddress: "ada@example.test",
+      replyPreview: "收到，谢谢！",
+    });
+    expect(events.filter((event) => event.kind === "pending")).toHaveLength(1);
+    expect(mail.submitPreparedMail).toHaveBeenCalledTimes(1);
+  });
+
+  it("never emits a sent event for a rejected reply", async () => {
+    const events: AutoReplyUiEvent[] = [];
+    const { engine, mail, db: handle } = makeEventEngine((event) => events.push(event));
+    insertMessage(handle, masterKey!, { id: "message-1" });
+
+    const notify = engine.notifyInboxMessages("account-1", ["message-1"]);
+    while (engine.listPending().length < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    const pending = engine.listPending()[0]!;
+    expect(engine.resolveConfirmation(pending.confirmationId, "reject")).toEqual({ ok: true });
+    await notify;
+
+    expect(events.filter((event) => event.kind === "sent")).toHaveLength(0);
+    expect(events.filter((event) => event.kind === "pending")).toHaveLength(1);
+    expect(mail.prepareSubmission).not.toHaveBeenCalled();
   });
 });

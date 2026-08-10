@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createAgentError } from "@nami/agent-contracts";
 import type { AgentTool } from "@nami/agent-core";
 import type { EncryptedAgentMemoryStore } from "./memory.js";
+import { autoReplyDecisionReasons, type EncryptedAutoReplyDecisionStore } from "./auto-reply-decisions.js";
 
 /**
  * Long-term memory tools exposed to the Agent conversation. Memory records are
@@ -103,7 +104,15 @@ export function createMemoryTools(store: EncryptedAgentMemoryStore): AgentTool[]
           });
           return {
             ok: true,
-            value: { items: records.map((record) => ({ ...record, detail: record.detail ?? "" })) },
+            value: {
+              items: records.map((record) => ({
+                id: record.id,
+                kind: record.kind,
+                summary: record.summary,
+                detail: record.detail ?? "",
+                createdAt: record.createdAt,
+              })),
+            },
           };
         } catch (error) {
           return { ok: false, error: memoryFailure(error) };
@@ -195,6 +204,83 @@ export function createMemoryTools(store: EncryptedAgentMemoryStore): AgentTool[]
           return { ok: true, value: { deleted: true } };
         } catch {
           return { ok: false, error: createAgentError({ code: "NOT_FOUND", message: "The memory note is no longer available." }) };
+        }
+      },
+    },
+  ];
+}
+
+const autoReplyDeclinedSearchInputSchema = z.object({
+  query: z.string().trim().max(200).optional(),
+  reason: z.enum(autoReplyDecisionReasons).optional(),
+  fromAddress: z.string().trim().max(320).optional(),
+  subject: z.string().trim().max(320).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+}).strict();
+
+const autoReplyDeclinedSearchOutputSchema = z.object({
+  items: z.array(z.object({
+    id: z.string(),
+    accountId: z.string(),
+    reason: z.enum(autoReplyDecisionReasons),
+    fromAddress: z.string(),
+    fromName: z.string(),
+    subject: z.string(),
+    detail: z.string(),
+    occurredAt: z.string(),
+  }).strict()),
+}).strict();
+
+type AutoReplyDeclinedSearchInput = z.infer<typeof autoReplyDeclinedSearchInputSchema>;
+
+/**
+ * Auto-reply decline/failure audit tool. Read-only and confirmation-free: it
+ * only reveals why the Agent did not reply to an inbound message.
+ */
+export function createAutoReplyDecisionTools(store: EncryptedAutoReplyDecisionStore): AgentTool[] {
+  return [
+    {
+      descriptor: {
+        name: "auto-reply.declined.search",
+        title: "Search declined auto-replies",
+        description: "Searches the audit list of inbound messages the Agent did not auto-reply to (screened out, out of scope, low value, rejected confirmations, send failures). Input: { query?: string, reason?: 'screening'|'scope'|'low-value'|'sensitive'|'user-rejected'|'daily-cap'|'llm-failed'|'send-failed'|'no-template'|'expired', fromAddress?: string, subject?: string, limit?: number }. Use when the user asks why no auto-reply was sent to someone, or wants to review skipped messages. Returns the most recent decisions first.",
+        category: "system",
+        executionMode: "read",
+        requiredScopes: ["manage:memory"],
+        accountAccess: "none",
+        confirmationPolicy: "never",
+        availableToExternal: false,
+        timeoutMs: 10_000,
+      },
+      inputSchema: autoReplyDeclinedSearchInputSchema,
+      outputSchema: autoReplyDeclinedSearchOutputSchema,
+      execute: async (context, input: AutoReplyDeclinedSearchInput) => {
+        if (context.signal?.aborted) return { ok: false, error: memoryFailure(undefined) };
+        try {
+          const records = store.list({
+            ...(input.query ? { query: input.query } : {}),
+            ...(input.reason ? { reason: input.reason } : {}),
+            ...(input.fromAddress ? { fromAddress: input.fromAddress } : {}),
+            ...(input.subject ? { subject: input.subject } : {}),
+            ...(input.limit !== undefined ? { limit: input.limit } : {}),
+          });
+          return {
+            ok: true,
+            value: {
+              items: records.map((record) => ({
+                id: record.id,
+                accountId: record.accountId,
+                reason: record.reason,
+                fromAddress: record.fromAddress,
+                fromName: record.fromName,
+                subject: record.subject,
+                detail: record.detail,
+                occurredAt: record.occurredAt,
+              })),
+            },
+          };
+        } catch (error) {
+          return { ok: false, error: memoryFailure(error) };
         }
       },
     },

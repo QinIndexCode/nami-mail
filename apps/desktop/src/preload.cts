@@ -337,6 +337,11 @@ if (contextBridge && ipcRenderer) {
       ipcRenderer.on("nami:new-mail", wrapped);
       return () => ipcRenderer.removeListener("nami:new-mail", wrapped);
     },
+    onAutoReply: (listener: (event: unknown) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, event: unknown) => listener(event);
+      ipcRenderer.on("nami:auto-reply", wrapped);
+      return () => ipcRenderer.removeListener("nami:auto-reply", wrapped);
+    },
     onOpenMessage: (listener: (id: string) => void) => {
       const wrapped = (_event: Electron.IpcRendererEvent, id: string) => listener(id);
       ipcRenderer.on("nami:open-message", wrapped);

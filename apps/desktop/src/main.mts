@@ -82,6 +82,7 @@ type ExternalConfirmationRuntimeOptions = Readonly<{
 type ServerRuntimeModule = {
   startServer: (options?: {
     onNewInboxMessages?: (messages: NewMailPayload[]) => void;
+    onAutoReplyEvent?: (event: DesktopAutoReplyEvent) => void;
     masterKey?: Buffer;
     desktopConfirmation?: DesktopConfirmationRuntimeOptions;
     externalConfirmation?: ExternalConfirmationRuntimeOptions;
@@ -96,6 +97,31 @@ type NewMailPayload = {
   fromName: string;
   fromAddress: string;
 };
+
+type DesktopAutoReplyEvent =
+  | {
+    kind: "pending";
+    confirmationId: string;
+    requestId: string;
+    accountId: string;
+    messageId: string;
+    subject: string;
+    fromName: string;
+    fromAddress: string;
+    sensitive: boolean;
+    createdAt: string;
+    expiresAt: string;
+    replyPreview: string;
+  }
+  | {
+    kind: "sent";
+    messageId: string;
+    accountId: string;
+    subject: string;
+    toName: string;
+    toAddress: string;
+    replyPreview: string;
+  };
 
 type NativeNotificationPayload = {
   title: string;
@@ -1616,6 +1642,11 @@ function notifyNewMail(messages: NewMailPayload[]): void {
   });
 }
 
+function notifyAutoReplyEvent(event: DesktopAutoReplyEvent): void {
+  // The renderer drives the popup; there is no native notification here.
+  mainWindow?.webContents.send("nami:auto-reply", event);
+}
+
 async function createMainWindow(): Promise<void> {
   if (!localServer) throw new Error("Nami Mail local service was not started.");
 
@@ -1911,6 +1942,7 @@ async function boot(): Promise<void> {
       localServer = await runtime.startServer({
         masterKey: desktopMasterKey.key,
         onNewInboxMessages: notifyNewMail,
+        onAutoReplyEvent: notifyAutoReplyEvent,
         desktopConfirmation: {
           capability: desktopConfirmationCapability,
           verifier: desktopConfirmationVerifier,

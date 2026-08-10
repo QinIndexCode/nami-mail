@@ -38,7 +38,8 @@ import { AccountLifecycleError, type AccountGenerationLease, type AccountTask } 
 import { createCalendarTools } from "./agent/calendar-tools.js";
 import { createMailTools } from "./agent/mail-tools.js";
 import { EncryptedAgentMemoryStore, buildMemoryContextLines } from "./agent/memory.js";
-import { createMemoryTools } from "./agent/memory-tools.js";
+import { createMemoryTools, createAutoReplyDecisionTools } from "./agent/memory-tools.js";
+import { EncryptedAutoReplyDecisionStore } from "./agent/auto-reply-decisions.js";
 import { extractMemorySuggestions, filterMemorySuggestionChunk, stripMemorySuggestions } from "./agent/memory-suggestions.js";
 import type { MailApplicationService } from "./agent/mail-application-service.js";
 import { resolveOutboundAttachmentNames } from "./outbound-attachments.js";
@@ -316,6 +317,14 @@ export type AgentServiceOptions = {
    * same database so the Agent can persist user notes from the conversation.
    */
   memoryStore?: EncryptedAgentMemoryStore;
+  /**
+   * Backoff delay in milliseconds before each automatic model retry. The
+   * number of entries is the maximum retry count. Only requests that clearly
+   * never reached the provider are re-sent — timeouts and any response that
+   * already produced content are never retried (they may still be processing,
+   * and replaying them would generate a duplicate result).
+   */
+  modelRetryBackoffMs?: readonly number[];
 };
 
 export type AgentConfirmationResolution = Readonly<{ ok: true }> | Readonly<{ ok: false }>;
@@ -549,6 +558,29 @@ function titleForMessage(value: string): string {
 // safety net so any tool (or future tool) can never push an unbounded payload
 // into the provider conversation context.
 const maximumToolResultCharacters = 64 * 1024;
+
+// Model request retry policy: entries are the backoff delay before each
+// re-attempt, and the number of entries is the maximum number of retries.
+// Only definitely-lost requests are retried (see streamMessage's turn loop).
+export const defaultModelRetryBackoffMs = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
+
+function delayWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 function toolResultMessage(ok: boolean, value: unknown): string {
   const serialized = canonicalAgentJson(ok ? { ok: true, data: value } : { ok: false, error: value });
@@ -795,6 +827,7 @@ export class AgentService {
   private readonly audit: EncryptedAgentAuditStore;
   private readonly rag: AgentRagWorker;
   private readonly memory: EncryptedAgentMemoryStore;
+  private readonly decisionAudit: EncryptedAutoReplyDecisionStore;
   private readonly tools: ToolRegistry;
   private readonly runtime: AgentRuntime;
   private readonly activeRuns = new Map<string, AbortController>();
@@ -816,6 +849,7 @@ export class AgentService {
     this.conversations = new EncryptedConversationStore(options.db, options.lifecycle);
     this.audit = new EncryptedAgentAuditStore(options.db, options.masterKey, options.lifecycle);
     this.memory = options.memoryStore ?? new EncryptedAgentMemoryStore(options.db, options.masterKey);
+    this.decisionAudit = new EncryptedAutoReplyDecisionStore(options.db, options.masterKey);
     this.rag = new AgentRagWorker({
       db: options.db,
       masterKey: options.masterKey,
@@ -833,6 +867,7 @@ export class AgentService {
         : []),
       ...createCalendarTools(options.db, options.masterKey),
       ...createMemoryTools(this.memory),
+      ...createAutoReplyDecisionTools(this.decisionAudit),
     ]);
     this.confirmationStore = options.desktopConfirmation
       ? new ImmutableGuiConfirmationStore(
@@ -1862,40 +1897,74 @@ export class AgentService {
         let turnReasoning = "";
         let turnCompleted: AgentCompletionReason = "stop";
         let markerCarry = "";
-        for await (const event of this.runtime.streamChat({ requestId, caller, chat, signal: controller.signal })) {
-          this.assertRunCurrent(lifecycleTasks, controller.signal);
-          if (event.type === "text_delta") {
-            turnContent += event.delta;
-            assistantContent += event.delta;
-            const filtered = filterMemorySuggestionChunk(event.delta, markerCarry);
-            markerCarry = filtered.carry;
-            if (filtered.text) yield { type: "text_delta", delta: filtered.text };
-            continue;
+        // Provider reliability: retry only when the request clearly never
+        // reached the model. Any response that started generating, timed out
+        // (the request may still be processing), or reports a non-retryable
+        // error fails immediately instead of risking a duplicate result.
+        const modelRetryBackoffMs = this.options.modelRetryBackoffMs ?? defaultModelRetryBackoffMs;
+        for (let providerAttempt = 0; ; providerAttempt += 1) {
+          let sawModelOutput = false;
+          let attemptError: AgentMessageError | undefined;
+          if (providerAttempt > 0) {
+            yield { type: "status", message: t("status.model_retry", { attempt: providerAttempt, max: modelRetryBackoffMs.length }) };
+            await delayWithSignal(modelRetryBackoffMs[providerAttempt - 1] ?? 1_000, controller.signal);
+            if (controller.signal.aborted) throw new AgentServiceError("CANCELLED", "Agent 生成已停止。", 409, true);
           }
-          if (event.type === "reasoning_delta") {
-            // MiMo thinking mode: collect reasoning_content to retain in the
-            // next request's assistant message for multi-turn tool accuracy.
-            turnReasoning += event.delta;
-            continue;
+          for await (const event of this.runtime.streamChat({ requestId, caller, chat, signal: controller.signal })) {
+            this.assertRunCurrent(lifecycleTasks, controller.signal);
+            if (event.type === "text_delta") {
+              // Any model output means the request was delivered and consumed;
+              // a failed attempt that produced output must never be re-sent.
+              sawModelOutput = true;
+              turnContent += event.delta;
+              assistantContent += event.delta;
+              const filtered = filterMemorySuggestionChunk(event.delta, markerCarry);
+              markerCarry = filtered.carry;
+              if (filtered.text) yield { type: "text_delta", delta: filtered.text };
+              continue;
+            }
+            if (event.type === "reasoning_delta") {
+              // MiMo thinking mode: collect reasoning_content to retain in the
+              // next request's assistant message for multi-turn tool accuracy.
+              sawModelOutput = true;
+              turnReasoning += event.delta;
+              continue;
+            }
+            if (event.type === "tool_call") {
+              sawModelOutput = true;
+              toolCalls.push(event.call);
+              continue;
+            }
+            if (event.type === "status") {
+              yield { type: "status", ...(event.message ? { message: event.message } : {}) };
+              continue;
+            }
+            if (event.type === "error") {
+              // Defer the verdict until the attempt completes: a definitely
+              // lost request is re-sent below; anything else surfaces as a
+              // single unchanged error event.
+              attemptError = stableUserFacingError(event.error);
+              continue;
+            }
+            if (event.type === "completed") turnCompleted = event.reason;
           }
-          if (event.type === "tool_call") {
-            toolCalls.push(event.call);
-            continue;
+          if (attemptError) {
+            if (attemptError.retryable === true
+              && attemptError.code !== "PROVIDER_TIMEOUT"
+              && !sawModelOutput
+              && !controller.signal.aborted
+              && providerAttempt < modelRetryBackoffMs.length
+            ) {
+              continue;
+            }
+            assistantError = attemptError;
+            break;
           }
-          if (event.type === "status") {
-            yield { type: "status", ...(event.message ? { message: event.message } : {}) };
-            continue;
-          }
-          if (event.type === "error") {
-            const error = stableUserFacingError(event.error);
-            assistantError = error;
-            yield { type: "error", error };
-            continue;
-          }
-          if (event.type === "completed") turnCompleted = event.reason;
+          break;
         }
         if (assistantError) {
           terminal = "error";
+          yield { type: "error", error: assistantError };
           yield { type: "completed", reason: terminal };
           break;
         }
@@ -2482,8 +2551,12 @@ export class AgentService {
   ): ProviderChatMessage[] {
     const t = (key: AgentMessageKey, params?: Record<string, string | number>) => agentT(locale, key, params);
     // The most recent memory notes ride along as read-only system context so
-    // facts the user stored earlier are usable in every turn.
-    const memorySummaries = buildMemoryContextLines(this.memory, { limit: 5 });
+    // facts the user stored earlier are usable in every turn. Auto-reply
+    // echoes are excluded: they are device-side bookkeeping, not user facts.
+    const memorySummaries = buildMemoryContextLines(this.memory, {
+      limit: 5,
+      excludeKinds: ["auto-reply-sent", "auto-reply-ignored"],
+    });
     const permissionLevelKeys: Record<AgentAccessLevel, AgentMessageKey> = {
       "read-only": "permission.level.read_only",
       "send-confirmed": "permission.level.send_confirmed",

@@ -12,6 +12,7 @@ import { AgentService, AgentServiceError, type AgentConversationScope, type Agen
 import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
 import { EncryptedAgentMemoryStore } from "./agent/memory.js";
 import { getAutoReplyEngine } from "./agent/auto-reply.js";
+import { autoReplyDecisionReasons, type AutoReplyDecisionReason } from "./agent/auto-reply-decisions.js";
 import {
   ACCOUNT_CREDENTIAL_CRYPTO_VERSION,
   encryptAccountPassword,
@@ -33,6 +34,8 @@ import {
   type MessageStorageRow,
 } from "./message-storage.js";
 import { ensureMessageFtsIndex, ftsLikeEscape } from "./message-search.js";
+import { createBatchJob, getBatchJobSnapshot, undoBatchJob } from "./batch-jobs.js";
+import { archivedMessageFilter, effectiveMailboxExpression, inboxMessageFilter } from "./message-filters.js";
 import {
   MAX_OUTBOUND_ATTACHMENT_COUNT,
   MAX_OUTBOUND_ATTACHMENT_BYTES,
@@ -78,6 +81,7 @@ import {
   scheduleSentSubmissionVerification,
   syncAccount,
   updateMessageFlags,
+  updateMessageFlagsBatch,
 } from "./sync.js";
 import {
   createFilterRule,
@@ -240,6 +244,29 @@ const batchMessageMoveSchema = z.object({
   ids: batchMessageIdsSchema,
   target: z.enum(["archive", "trash"]),
 }).strict();
+
+const batchJobQuerySchema = z.object({
+  accountId: z.string().min(1).optional(),
+  folder: z.string().min(1).optional(),
+  q: z.string().max(500).optional(),
+  starred: z.boolean().optional(),
+  unread: z.boolean().optional(),
+  archived: z.boolean().optional(),
+  snoozed: z.boolean().optional(),
+}).strict();
+
+const batchJobCreateSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("flags"),
+    patch: messageFlagsPatchSchema,
+    query: batchJobQuerySchema,
+  }).strict(),
+  z.object({
+    kind: z.literal("move"),
+    target: z.enum(["archive", "trash"]),
+    query: batchJobQuerySchema,
+  }).strict(),
+]);
 
 /** Runs an IMAP-touching operation across many messages, returning per-message outcome counts. */
 async function runBatchMessageOperation<T>(ids: readonly string[], operate: (id: string) => Promise<T>): Promise<{ updated: number; failed: number }> {
@@ -843,49 +870,6 @@ async function normalizeBackgroundImage(bytes: Buffer, contentType: BackgroundIn
   throw new BackgroundUploadError("这张图片优化后仍超过 8 MB，请选择分辨率更低的图片。", 413);
 }
 
-const effectiveMailboxExpression = "CASE WHEN m.pending_move_state = 'intent' THEN m.mailbox ELSE COALESCE(NULLIF(m.pending_move_destination, ''), m.mailbox) END";
-
-const inboxMessageFilter = `(
-  UPPER(${effectiveMailboxExpression}) = 'INBOX'
-  OR EXISTS (
-    SELECT 1 FROM folders f
-    WHERE f.account_id = m.account_id
-      AND f.path = ${effectiveMailboxExpression}
-      AND f.special_use = '\\Inbox'
-  )
-)`;
-
-const archivedMessageFilter = `(
-  (
-    m.pending_move_destination IS NOT NULL
-    AND COALESCE(m.pending_move_state, 'confirmed') = 'confirmed'
-    AND (
-      m.pending_move_special_use = '\\Archive'
-      OR (m.pending_move_special_use = '\\All' AND m.all_mail_archived = 1)
-    )
-  )
-  OR EXISTS (
-    SELECT 1 FROM folders f
-    WHERE f.account_id = m.account_id
-      AND f.path = ${effectiveMailboxExpression}
-      AND f.special_use = '\\Archive'
-  )
-  OR (
-    m.all_mail_archived = 1
-    AND EXISTS (
-      SELECT 1 FROM folders f
-      WHERE f.account_id = m.account_id
-        AND f.path = ${effectiveMailboxExpression}
-        AND f.special_use = '\\All'
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM folders archive_folder
-      WHERE archive_folder.account_id = m.account_id
-        AND archive_folder.special_use = '\\Archive'
-    )
-  )
-)`;
-
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'none'",
@@ -1267,12 +1251,18 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
     const parsed = agentMessageSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
-    const streamAbortController = new AbortController();
-    const abortStream = () => streamAbortController.abort();
+    // Closing the connection (moving away from the assistant panel) is not a
+    // cancel: the run keeps going in the background and the completed turn is
+    // persisted, so the answer is present when the panel reopens. Explicit
+    // cancels and account lifecycle changes abort the run through the
+    // service's own controller; here a closed socket only stops event
+    // delivery while the generator keeps draining.
+    let deliveryStopped = false;
+    const stopDelivery = () => { deliveryStopped = true; };
+    request.raw.once("aborted", stopDelivery);
+    reply.raw.once("close", stopDelivery);
     const responseSocket = reply.raw.socket;
-    request.raw.once("aborted", abortStream);
-    reply.raw.once("close", abortStream);
-    responseSocket?.once("close", abortStream);
+    responseSocket?.once("close", stopDelivery);
     reply.hijack();
     reply.raw.statusCode = 200;
     reply.raw.setHeader("content-type", "text/event-stream; charset=utf-8");
@@ -1280,15 +1270,16 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     reply.raw.setHeader("connection", "keep-alive");
     try {
       const locale = getAppSettings(context.db).locale;
-      for await (const event of agentService.streamMessage(request.params.id, parsed.data as AgentMessageInput, streamAbortController.signal, locale)) {
-        if (reply.raw.destroyed) {
-          abortStream();
-          break;
+      for await (const event of agentService.streamMessage(request.params.id, parsed.data as AgentMessageInput, undefined, locale)) {
+        if (deliveryStopped || reply.raw.destroyed) continue;
+        try {
+          reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+        } catch {
+          deliveryStopped = true;
         }
-        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
       }
     } catch (error) {
-      if (!reply.raw.destroyed) {
+      if (!deliveryStopped && !reply.raw.destroyed) {
         const body = error instanceof AgentServiceError
           ? { type: "error", error: { code: error.code, message: error.message, retryable: error.retryable } }
           : { type: "error", error: { code: "agent_internal", message: "Agent local service failed to complete the request.", retryable: true } };
@@ -1296,9 +1287,9 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         reply.raw.write(`data: ${JSON.stringify({ type: "completed", reason: "error" })}\n\n`);
       }
     } finally {
-      request.raw.removeListener("aborted", abortStream);
-      reply.raw.removeListener("close", abortStream);
-      responseSocket?.removeListener("close", abortStream);
+      request.raw.removeListener("aborted", stopDelivery);
+      reply.raw.removeListener("close", stopDelivery);
+      responseSocket?.removeListener("close", stopDelivery);
       if (!reply.raw.destroyed) reply.raw.end();
     }
   });
@@ -1387,6 +1378,45 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     if (!engine) return reply.code(503).send({ ok: false, code: "auto_reply_unavailable", message: "自动回复引擎当前不可用。" });
     try {
       return { items: engine.listPending() };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.get("/api/agent/auto-reply/decisions", async (request, reply) => {
+    const engine = getAutoReplyEngine();
+    if (!engine) return reply.code(503).send({ ok: false, code: "auto_reply_unavailable", message: "自动回复引擎当前不可用。" });
+    const query = request.query as Record<string, string | undefined>;
+    const reason = query.reason ?? undefined;
+    if (reason && !autoReplyDecisionReasons.includes(reason as AutoReplyDecisionReason)) {
+      return reply.code(400).send({ ok: false, message: "无效的自动回复决策类型。" });
+    }
+    const limit = query.limit === undefined ? 100 : Number.parseInt(query.limit, 10);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      return reply.code(400).send({ ok: false, message: "limit 必须是 1-500 之间的整数。" });
+    }
+    try {
+      return {
+        items: engine.listDecisions({
+          ...(reason ? { reason: reason as AutoReplyDecisionReason } : {}),
+          ...(query.query ? { query: query.query } : {}),
+          ...(query.fromAddress ? { fromAddress: query.fromAddress } : {}),
+          ...(query.subject ? { subject: query.subject } : {}),
+          limit,
+        }),
+      };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/agent/auto-reply/decisions/:id", async (request, reply) => {
+    const engine = getAutoReplyEngine();
+    if (!engine) return reply.code(503).send({ ok: false, code: "auto_reply_unavailable", message: "自动回复引擎当前不可用。" });
+    try {
+      const deleted = engine.deleteDecision(request.params.id);
+      if (!deleted) return reply.code(404).send({ ok: false, message: "该记录不存在或已被删除。" });
+      return { ok: true };
     } catch (error) {
       return agentFailure(reply, error);
     }
@@ -2569,53 +2599,99 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   app.patch("/api/messages/batch/flags", async (request, reply) => {
     const parsed = batchMessageFlagsPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
-    const { updated, failed } = await runBatchMessageOperation(parsed.data.ids, (id) => updateMessageFlags(
-      context.db,
-      context.masterKey,
-      id,
-      parsed.data.patch,
-      context.oauthService,
-      context.agentMailEvents,
-    ));
-    return { ok: true, updated, failed };
+    try {
+      const result = await updateMessageFlagsBatch(
+        context.db,
+        context.masterKey,
+        parsed.data.ids,
+        parsed.data.patch,
+        context.oauthService,
+        context.agentMailEvents,
+      );
+      return { ok: true, ...result };
+    } catch (error) {
+      request.log.error({ error }, "Batch flag update failed");
+      return reply.code(500).send({ ok: false, message: "批量更新标志失败。" });
+    }
   });
 
   app.post("/api/messages/batch/move", async (request, reply) => {
     const parsed = batchMessageMoveSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
-    let updated = 0;
-    let failed = 0;
-    const pendingAccounts = new Set<string>();
-    for (const id of parsed.data.ids) {
-      try {
-        const { accountId, refreshPending } = await moveMessage(
+    try {
+      let updated = 0;
+      let failed = 0;
+      const pendingAccounts = new Set<string>();
+      for (const id of parsed.data.ids) {
+        try {
+          const { accountId, refreshPending } = await moveMessage(
+            context.db,
+            context.masterKey,
+            id,
+            parsed.data.target,
+            context.oauthService,
+            context.agentMailEvents,
+          );
+          updated += 1;
+          if (refreshPending) pendingAccounts.add(accountId);
+        } catch {
+          failed += 1;
+        }
+      }
+      for (const accountId of pendingAccounts) {
+        // Some providers cannot confirm a batch MOVE outcome synchronously.
+        // Reconcile each affected account in the background so the renderer
+        // receives the verified destination instead of a stale local snapshot.
+        void syncAccount(
           context.db,
           context.masterKey,
-          id,
-          parsed.data.target,
+          accountId,
+          config.syncMessageLimit,
           context.oauthService,
           context.agentMailEvents,
-        );
-        updated += 1;
-        if (refreshPending) pendingAccounts.add(accountId);
-      } catch {
-        failed += 1;
+        ).catch(() => request.log.warn({ accountId }, "Batch move cache refresh is pending"));
       }
+      return { ok: true, updated, failed };
+    } catch (error) {
+      request.log.error({ error }, "Batch move failed");
+      return reply.code(500).send({ ok: false, message: "批量移动失败。" });
     }
-    for (const accountId of pendingAccounts) {
-      // Some providers cannot confirm a batch MOVE outcome synchronously.
-      // Reconcile each affected account in the background so the renderer
-      // receives the verified destination instead of a stale local snapshot.
-      void syncAccount(
-        context.db,
-        context.masterKey,
-        accountId,
-        config.syncMessageLimit,
-        context.oauthService,
-        context.agentMailEvents,
-      ).catch(() => request.log.warn({ accountId }, "Batch move cache refresh is pending"));
+  });
+
+  app.post("/api/batch-jobs", async (request, reply) => {
+    const parsed = batchJobCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    const job = createBatchJob(parsed.data, {
+      db: context.db,
+      masterKey: context.masterKey,
+      oauthService: context.oauthService,
+      agentMailEvents: context.agentMailEvents,
+    });
+    // The job runs in the background; the renderer polls GET for progress.
+    return { ok: true, jobId: job.id };
+  });
+
+  app.get<{ Params: { id: string } }>("/api/batch-jobs/:id", async (request, reply) => {
+    const job = getBatchJobSnapshot(request.params.id);
+    if (!job) {
+      request.log.warn({ jobId: request.params.id }, "Batch job not found (server restarted?)");
+      return reply.code(404).send({ ok: false, message: "批量任务不存在。" });
     }
-    return { ok: true, updated, failed };
+    return { ok: true, job };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/batch-jobs/:id/undo", async (request, reply) => {
+    const outcome = undoBatchJob(request.params.id, {
+      db: context.db,
+      masterKey: context.masterKey,
+      oauthService: context.oauthService,
+      agentMailEvents: context.agentMailEvents,
+    });
+    if (!outcome.ok) {
+      const status = outcome.reason === "not_found" ? 404 : 409;
+      return reply.code(status).send({ ok: false, jobId: request.params.id, reason: outcome.reason, message: "无法撤销该批量任务。" });
+    }
+    return { ok: true, jobId: outcome.jobId };
   });
 
   app.patch<{ Params: { id: string } }>("/api/messages/:id", async (request, reply) => {

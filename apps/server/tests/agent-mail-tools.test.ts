@@ -469,6 +469,39 @@ describe("Agent mail tools", () => {
     });
   });
 
+  it("deduplicates repeated message ids in a batch read so each message is fetched once", async () => {
+    const fake = fakeMailApplication();
+    fake.getMessage.mockImplementation(async (_context: unknown, messageId: string) =>
+      messageId === "message-1" ? mailDetail("message-1") : undefined,
+    );
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const batchTool = registry.get("messages.batch_get");
+    expect(batchTool).toBeDefined();
+
+    const outcome = await batchTool!.execute(context(["account-1"], ["message-1", "message-2"]), {
+      messageIds: ["message-1", "message-1", "message-2", "message-2"],
+    });
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: {
+        messages: [{ id: "message-1", accountId: "account-1" }],
+        notFound: ["message-2"],
+      },
+    });
+    expect(fake.getMessage).toHaveBeenCalledTimes(2);
+    expect(fake.getMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ accountIds: ["account-1"], allowedMessageIds: ["message-1", "message-2"] }),
+      "message-1",
+    );
+    expect(fake.getMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ accountIds: ["account-1"], allowedMessageIds: ["message-1", "message-2"] }),
+      "message-2",
+    );
+  });
+
   it("rejects a batch read when any requested message is outside the exact scope before calling the facade", async () => {
     const fake = fakeMailApplication();
     const registry = createToolRegistry(createMailTools(fake.service));
@@ -619,6 +652,28 @@ describe("Agent mail tools", () => {
 
     expect(outcome).toMatchObject({ ok: false, error: { code: "SCOPE_DENIED" } });
     expect(fake.moveMessage).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the underlying mail-service reason when a move cannot complete", async () => {
+    const fake = fakeMailApplication();
+    fake.moveMessage.mockRejectedValueOnce(new Error("这个邮箱没有提供可用的归档文件夹。"));
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const moveTool = registry.get("messages.move");
+    expect(moveTool).toBeDefined();
+
+    const outcome = await moveTool!.execute(context(["account-1"], ["message-1"]), {
+      messageId: "message-1",
+      target: "archive",
+    });
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      error: {
+        code: "TOOL_EXECUTION_FAILED",
+        retryable: true,
+        suggestion: "这个邮箱没有提供可用的归档文件夹。",
+      },
+    });
   });
 
   it("sets the read or starred flag on a scoped message after confirmation", async () => {

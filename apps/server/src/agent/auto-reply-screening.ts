@@ -169,3 +169,133 @@ const IGNORE_REASON_TEXT: Record<AutoReplyIgnoreReason, string> = {
 export function screeningIgnoreReasonText(reason: AutoReplyIgnoreReason): string {
   return IGNORE_REASON_TEXT[reason] ?? reason;
 }
+
+// ── User scope ────────────────────────────────────────────────────────────
+
+export const autoReplyScopeReasons = [
+  "outside-date-range",
+  "not-contact",
+  "ignore-rule",
+  "not-in-whitelist",
+] as const;
+
+export type AutoReplyScopeReason = (typeof autoReplyScopeReasons)[number];
+
+export type AutoReplyScopeInput = {
+  /** Sender address (bare, without display name). */
+  fromAddress: string;
+  /** Sender domain, lowercased. */
+  fromDomain: string;
+  subject: string;
+  /** Current date in YYYY-MM-DD form (UTC, consistent with the daily cap). */
+  today: string;
+  /** Lowercased addresses present in the local address book. */
+  contacts: ReadonlySet<string>;
+};
+
+export type AutoReplyScopeRule = {
+  id: string;
+  field: "from" | "domain" | "subject";
+  op: "contains" | "not-contains" | "equals";
+  value: string;
+  action: "reply" | "ignore";
+  enabled: boolean;
+};
+
+export type AutoReplyScopeResult =
+  | { keep: true }
+  | { keep: false; reason: AutoReplyScopeReason; ruleId?: string };
+
+export function senderDomain(fromAddress: string): string {
+  const trimmed = fromAddress.trim();
+  let address = trimmed;
+  const angleStart = trimmed.lastIndexOf("<");
+  const angleEnd = trimmed.lastIndexOf(">");
+  if (angleStart >= 0 && angleEnd > angleStart) {
+    address = trimmed.slice(angleStart + 1, angleEnd);
+  }
+  const at = address.lastIndexOf("@");
+  if (at < 0) return "";
+  return address.slice(at + 1).toLowerCase();
+}
+
+function ruleMatches(rule: AutoReplyScopeRule, input: AutoReplyScopeInput): boolean {
+  const raw = rule.field === "from"
+    ? input.fromAddress.trim().toLowerCase()
+    : rule.field === "domain"
+      ? input.fromDomain
+      : input.subject.replace(/\s+/g, " ").trim();
+  const needle = rule.value.trim().toLowerCase();
+  const haystack = raw.toLowerCase();
+  switch (rule.op) {
+    case "contains":
+      return haystack.includes(needle);
+    case "not-contains":
+      return !haystack.includes(needle);
+    case "equals":
+      return haystack === needle;
+  }
+}
+
+/**
+ * Applies the user-configured eligibility scope. Order matters:
+ * 1. date window, 2. contacts-only, 3. "ignore" rules (first match wins),
+ * 4. implicit whitelist: if any "reply" rule exists, a non-matching message
+ * is declined. Enabled "ignore" rules short-circuit even a whitelist match.
+ */
+export function applyAutoReplyScope(
+  input: AutoReplyScopeInput,
+  scope: {
+    contactsOnly?: boolean;
+    startDate?: string | null;
+    endDate?: string | null;
+    rules?: readonly AutoReplyScopeRule[];
+  },
+): AutoReplyScopeResult {
+  if (scope.startDate && input.today < scope.startDate) {
+    return { keep: false, reason: "outside-date-range" };
+  }
+  if (scope.endDate && input.today > scope.endDate) {
+    return { keep: false, reason: "outside-date-range" };
+  }
+  if (scope.contactsOnly && !input.contacts.has(input.fromAddress.trim().toLowerCase())) {
+    return { keep: false, reason: "not-contact" };
+  }
+  const rules = scope.rules ?? [];
+  const replyRules = rules.filter((rule) => rule.enabled && rule.action === "reply");
+  const ignoreRules = rules.filter((rule) => rule.enabled && rule.action === "ignore");
+  for (const rule of ignoreRules) {
+    if (ruleMatches(rule, input)) return { keep: false, reason: "ignore-rule", ruleId: rule.id };
+  }
+  if (replyRules.length > 0 && !replyRules.some((rule) => ruleMatches(rule, input))) {
+    return { keep: false, reason: "not-in-whitelist" };
+  }
+  return { keep: true };
+}
+
+const TEMPLATE_PLACEHOLDERS: Record<string, (vars: AutoReplyTemplateVars) => string> = {
+  "{{senderName}}": (vars) => vars.senderName,
+  "{{senderAddress}}": (vars) => vars.senderAddress,
+  "{{senderDomain}}": (vars) => vars.senderDomain,
+  "{{subject}}": (vars) => vars.subject,
+};
+
+export type AutoReplyTemplateVars = {
+  senderName: string;
+  senderAddress: string;
+  senderDomain: string;
+  subject: string;
+};
+
+/**
+ * Substitutes {{placeholders}} in a user-authored reply template. Unknown
+ * placeholders are left untouched so typos surface in the review dialog
+ * instead of silently vanishing from the sent mail.
+ */
+export function renderAutoReplyTemplate(template: string, vars: AutoReplyTemplateVars): string {
+  let rendered = template;
+  for (const [placeholder, resolve] of Object.entries(TEMPLATE_PLACEHOLDERS)) {
+    rendered = rendered.split(placeholder).join(resolve(vars));
+  }
+  return rendered.trim();
+}

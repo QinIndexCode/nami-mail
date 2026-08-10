@@ -15,7 +15,7 @@ import type {
   AutoReplyPendingSummary,
   ExternalPairingSummary,
 } from "./agentTypes";
-import type { Account, AccountDiscoveryResult, AppSettings, AppSettingsPatch, CalendarEvent, CalendarEventInput, CalendarEventUpdate, Contact, ContactInput, ContactUpdate, FilterRule, FilterRuleInput, FilterRuleUpdate, MailTemplate, MailTemplateInput, MailTemplateUpdate, ManualAccountConfig, Message, OAuthAttempt, OAuthAttemptStatus, OAuthProvider, OutboundAttachment, OutboundSubmission, ProviderInfo, Stats } from "./types";
+import type { Account, AccountDiscoveryResult, AppSettings, AppSettingsPatch, AutoReplyDecisionRecord, CalendarEvent, CalendarEventInput, CalendarEventUpdate, Contact, ContactInput, ContactUpdate, FilterRule, FilterRuleInput, FilterRuleUpdate, MailTemplate, MailTemplateInput, MailTemplateUpdate, ManualAccountConfig, Message, OAuthAttempt, OAuthAttemptStatus, OAuthProvider, OutboundAttachment, OutboundSubmission, ProviderInfo, Stats } from "./types";
 
 export type MessagePage = { items: Message[]; total: number; page: number; pageSize: number };
 export type AccountAddResult = {
@@ -52,6 +52,34 @@ export type BatchMessageOperationResult = {
   ok: boolean;
   updated: number;
   failed: number;
+};
+
+export type BatchJobQuery = {
+  accountId?: string;
+  folder?: string;
+  q?: string;
+  starred?: boolean;
+  unread?: boolean;
+  archived?: boolean;
+  snoozed?: boolean;
+};
+
+export type BatchJobCreatePayload =
+  | { kind: "flags"; patch: { seen?: boolean; flagged?: boolean }; query: BatchJobQuery }
+  | { kind: "move"; target: "archive" | "trash"; query: BatchJobQuery };
+
+export type BatchJobSnapshot = {
+  id: string;
+  kind: "flags" | "move" | "undo";
+  status: "running" | "completed" | "failed";
+  total: number;
+  done: number;
+  updated: number;
+  failed: number;
+  createdAt: number;
+  error?: string;
+  undone?: boolean;
+  undoWindowMs?: number;
 };
 
 export type MessageTranslationResult = {
@@ -273,6 +301,19 @@ export const api = {
   agentMemoryDelete: (id: string) => request<{ ok: true }>(`/api/agent/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
   agentMemoryClear: () => request<{ cleared: number }>("/api/agent/memory", { method: "DELETE" }),
   autoReplyPending: () => request<{ items: AutoReplyPendingSummary[] }>("/api/agent/auto-reply/pending"),
+  autoReplyDecisions: (params: {
+    reason?: string; query?: string; fromAddress?: string; subject?: string; limit?: number;
+  } = {}) => {
+    const search = new URLSearchParams();
+    if (params.reason) search.set("reason", params.reason);
+    if (params.query) search.set("query", params.query);
+    if (params.fromAddress) search.set("fromAddress", params.fromAddress);
+    if (params.subject) search.set("subject", params.subject);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    const query = search.toString();
+    return request<{ items: AutoReplyDecisionRecord[] }>(`/api/agent/auto-reply/decisions${query ? `?${query}` : ""}`);
+  },
+  autoReplyDecisionDelete: (id: string) => request<{ ok: true }>(`/api/agent/auto-reply/decisions/${encodeURIComponent(id)}`, { method: "DELETE" }),
   messages: (query = "") =>
     request<MessagePage>(`/api/messages${query ? `?${query}` : ""}`),
   message: (id: string) => request<Message>(`/api/messages/${encodeURIComponent(id)}`),
@@ -430,6 +471,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ids, target }),
     }),
+  batchJobCreate: (payload: BatchJobCreatePayload) =>
+    request<{ ok: boolean; jobId: string }>("/api/batch-jobs", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  batchJobStatus: (jobId: string) =>
+    request<{ ok: boolean; job: BatchJobSnapshot }>(`/api/batch-jobs/${encodeURIComponent(jobId)}`),
+  batchJobUndo: (jobId: string) =>
+    request<{ ok: boolean; jobId?: string; reason?: "not_found" | "not_completed" | "already_undone" | "expired" }>(
+      `/api/batch-jobs/${encodeURIComponent(jobId)}/undo`,
+      { method: "POST", body: "{}" },
+    ),
   discardDraft: (id: string) =>
     request<{ ok: boolean }>(`/api/messages/${encodeURIComponent(id)}/draft`, { method: "DELETE" }),
   submissions: (accountId: string, limit?: number) => {
