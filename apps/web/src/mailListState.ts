@@ -32,6 +32,10 @@ type SeenChange = {
   stats: Stats;
 };
 
+export type BatchSeenChange = SeenChange & {
+  changedCount: number;
+};
+
 type MessageMove = SeenChange;
 
 function nonNegative(value: number): number {
@@ -216,6 +220,67 @@ export function applyMessageSeenChange(
     : stats;
 
   return { accounts: nextAccounts, messages: nextMessages, stats: nextStats };
+}
+
+/**
+ * Applies an optimistic read-state change to many messages in a single pass.
+ * Each message, its folder count, and the unread total are rebuilt exactly
+ * once, so batch operations stay O(messages + ids) instead of running the
+ * per-message update (which rescans the full list) once per selected id.
+ */
+export function applyBatchSeenChange(
+  accounts: Account[],
+  messages: Message[],
+  stats: Stats,
+  messageIds: readonly string[],
+  nextSeen: boolean,
+): BatchSeenChange {
+  const selected = new Set(messageIds);
+  if (selected.size === 0) return { accounts, messages, stats, changedCount: 0 };
+
+  const unseenDelta = nextSeen ? -1 : 1;
+  let changedCount = 0;
+  const seenDeltas = new Map<string, number>();
+  let statsUnreadDelta = 0;
+  const nextMessages = messages.map((message) => {
+    if (!selected.has(message.id) || message.seen === nextSeen) return message;
+    changedCount += 1;
+    const key = `${message.accountId}\u0000${message.mailbox}`;
+    seenDeltas.set(key, (seenDeltas.get(key) ?? 0) + unseenDelta);
+    if (isInboxMessage(message, accounts)) statsUnreadDelta += unseenDelta;
+    return withSeenFlag(message, nextSeen);
+  });
+  if (changedCount === 0) return { accounts, messages, stats, changedCount: 0 };
+
+  const deltasByAccount = new Map<string, { folderPath: string; delta: number }[]>();
+  for (const [key, delta] of seenDeltas) {
+    const separator = key.indexOf("\u0000");
+    const accountId = key.slice(0, separator);
+    const entries = deltasByAccount.get(accountId) ?? [];
+    entries.push({ folderPath: key.slice(separator + 1), delta });
+    deltasByAccount.set(accountId, entries);
+  }
+  const nextAccounts = accounts.map((account) => {
+    const entries = deltasByAccount.get(account.id);
+    if (!entries) return account;
+    let changed = false;
+    const folders = account.folders.map((folder) => {
+      let folderDelta = 0;
+      for (const entry of entries) {
+        if (entry.folderPath === folder.path) folderDelta += entry.delta;
+      }
+      if (folderDelta === 0) return folder;
+      changed = true;
+      return { ...folder, unseen: Math.min(folder.total, nonNegative(folder.unseen + folderDelta)) };
+    });
+    return changed ? { ...account, folders } : account;
+  });
+
+  const nextStats = statsUnreadDelta === 0
+    ? stats
+    : { ...stats, unread: nonNegative(stats.unread + statsUnreadDelta) };
+
+  return { accounts: nextAccounts, messages: nextMessages, stats: nextStats, changedCount };
 }
 
 /** Updates a moved message when the server confirms its destination and mapped UID. */

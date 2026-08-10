@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyBatchSeenChange,
   applyMessageMove,
   applyMessageSeenChange,
   isArchivedMessage,
@@ -116,6 +117,63 @@ describe("mail list state", () => {
     expect(applyMessageSeenChange(accounts, [unreadMessage], stats, unreadMessage.id, true).stats.unread).toBe(1);
     expect(isVisibleInUnreadView(readMessage, new Set())).toBe(false);
     expect(nextUnreadViewRecentlyReadIds(recentlyRead, readMessage, false, true)).not.toContain(unreadMessage.id);
+  });
+
+  it("applies a batch seen change once across messages, folder counts, and stats", () => {
+    const second = { ...unreadMessage, id: "message-2", uid: 2, mailbox: "Archive", sentAt: "2026-07-22T01:00:00.000Z" };
+    const otherInbox = { ...unreadMessage, id: "message-3", uid: 3, sentAt: "2026-07-22T02:00:00.000Z" };
+    const items = [unreadMessage, second, otherInbox];
+
+    const next = applyBatchSeenChange(accounts, items, stats, ["message-1", "message-2", "message-3"], true);
+
+    expect(next.changedCount).toBe(3);
+    expect(next.messages.every((message) => message.seen)).toBe(true);
+    expect(next.messages.map((message) => message.flags)).toEqual([["\\Seen"], ["\\Seen"], ["\\Seen"]]);
+    // Two inbox messages were unread; the Archive message does not touch stats.
+    expect(next.stats).toEqual({ accounts: 1, messages: 3, unread: 0 });
+    expect(next.accounts[0]!.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ total: 3, unseen: 0 });
+    expect(next.accounts[0]!.folders.find((folder) => folder.path === "Archive")).toMatchObject({ total: 4, unseen: 0 });
+  });
+
+  it("treats already-read selections as no-ops and counts only real transitions", () => {
+    const read = { ...unreadMessage, id: "message-1", seen: true, flags: ["\\Seen"] };
+    const unread = { ...unreadMessage, id: "message-2", uid: 2 };
+    const next = applyBatchSeenChange(accounts, [read, unread], stats, ["message-1", "message-2"], true);
+
+    expect(next.changedCount).toBe(1);
+    expect(next.messages[0]).toBe(read);
+    expect(next.messages[1]).toMatchObject({ seen: true });
+    expect(next.stats.unread).toBe(1);
+  });
+
+  it("leaves state untouched for an empty or fully-already-applied batch", () => {
+    const first = applyBatchSeenChange(accounts, [unreadMessage], stats, [], true);
+    expect(first).toEqual({ accounts, messages: [unreadMessage], stats, changedCount: 0 });
+
+    const alreadyRead = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
+    const second = applyBatchSeenChange(accounts, [alreadyRead], stats, ["message-1"], true);
+    expect(second.messages[0]).toBe(alreadyRead);
+    expect(second.stats).toBe(stats);
+    expect(second.changedCount).toBe(0);
+  });
+
+  it("restores unread state in a batch and updates the unified total in the other direction", () => {
+    const readMessage = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
+    const next = applyBatchSeenChange(accounts, [readMessage], stats, ["message-1"], false);
+
+    expect(next.messages[0]).toMatchObject({ seen: false, flags: [] });
+    expect(next.stats.unread).toBe(3);
+    expect(next.accounts[0]!.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ unseen: 3 });
+  });
+
+  it("matches the per-message behaviour for a single-item batch", () => {
+    const single = applyBatchSeenChange(accounts, [unreadMessage], stats, ["message-1"], true);
+    const perMessage = applyMessageSeenChange(accounts, [unreadMessage], stats, "message-1", true);
+
+    expect(single.messages).toEqual(perMessage.messages);
+    expect(single.accounts).toEqual(perMessage.accounts);
+    expect(single.stats).toEqual(perMessage.stats);
+    expect(single.changedCount).toBe(1);
   });
 
   it("retains the just-read row through a background unread reload without inflating its server total", () => {
