@@ -12,7 +12,8 @@ import type { TrustedDesktopConfirmationVerifier } from "./agent/confirmations.j
 import { ImmutableGuiConfirmationStore } from "./agent/confirmations.js";
 import { EncryptedAgentAuditStore } from "./agent/audit.js";
 import { EncryptedAgentMemoryStore } from "./agent/memory.js";
-import { AutoReplyEngine, registerAutoReplyEngine } from "./agent/auto-reply.js";
+import { EncryptedAutoReplyDecisionStore } from "./agent/auto-reply-decisions.js";
+import { AutoReplyEngine, registerAutoReplyEngine, type AutoReplyUiEvent } from "./agent/auto-reply.js";
 import { AccountLifecycleStore } from "./agent/lifecycle.js";
 import { AgentMailStateEvents } from "./agent/mail-state-events.js";
 import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
@@ -52,6 +53,8 @@ export type RunningServer = {
 
 export type ServerRuntimeOptions = {
   onNewInboxMessages?: (messages: NewInboxMessage[]) => void | Promise<void>;
+  /** Fired for auto-reply drafts created and replies actually sent (desktop popup). */
+  onAutoReplyEvent?: (event: AutoReplyUiEvent) => void;
   // Electron supplies a DPAPI-unwrapped copy directly in memory. The
   // command-line runtime intentionally keeps its file-backed development key.
   masterKey?: Buffer;
@@ -317,6 +320,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
         mail: mailApplication,
         audit: new EncryptedAgentAuditStore(database, runtimeMasterKey, agentLifecycle),
         memory: new EncryptedAgentMemoryStore(database, runtimeMasterKey),
+        decisions: new EncryptedAutoReplyDecisionStore(database, runtimeMasterKey),
         confirmationStore: new ImmutableGuiConfirmationStore(
           database,
           runtimeMasterKey,
@@ -325,6 +329,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
           options.desktopConfirmation.verifier,
         ),
         desktopConfirmation: options.desktopConfirmation,
+        onEvent: options.onAutoReplyEvent,
       });
       registerAutoReplyEngine(autoReplyEngine);
     }

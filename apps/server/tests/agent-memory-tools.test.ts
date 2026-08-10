@@ -81,6 +81,18 @@ describe("memory tools", () => {
     expect(items[0]!.summary).toBe("User manages invoices for Acme");
   });
 
+  it("lists records that carry extra store fields without breaking the declared output schema", async () => {
+    const { registry, context, store } = fixture();
+    store.create({ kind: "note", accountId: "acct-1", summary: "Invoice contact", occurredAt: "2026-08-01T00:00:00.000Z" });
+    const all = await registry.get("memory.list")!.execute(context, {});
+    expect(all.ok).toBe(true);
+    const items = (all as { value: { items: Array<Record<string, unknown>> } }).value.items;
+    expect(items).toHaveLength(1);
+    expect(Object.keys(items[0]!).sort()).toEqual(["createdAt", "detail", "id", "kind", "summary"]);
+    expect(items[0]).toMatchObject({ kind: "note", summary: "Invoice contact" });
+    expect(registry.get("memory.list")!.outputSchema.safeParse((all as { value: unknown }).value).success).toBe(true);
+  });
+
   it("updates the summary, the detail, or both on an existing note", async () => {
     const { registry, context, store } = fixture();
     const record = store.create({ kind: "note", summary: "User prefers English replies", detail: "Old context" });

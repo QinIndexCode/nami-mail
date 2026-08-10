@@ -1,4 +1,5 @@
-﻿import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { computePosition, flip, offset, shift } from "@floating-ui/dom";
 import DOMPurify from "dompurify";
 import {
@@ -45,11 +46,11 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { ApiError, api } from "./api";
+import { ApiError, api, type BatchJobCreatePayload, type BatchJobQuery, type BatchJobSnapshot } from "./api";
 import { canPreviewAttachment } from "./attachmentPreview";
 import { presentAttachment } from "./attachmentPresentation";
 import { AttachmentFileIcon, FolderNavigationIcon, formatFileSize, isoFromDatetimeLocal, IconButton, type ComposeDraft, type ToastKind } from "./mailUi";
-import { desktopBridge, type DesktopUpdateSnapshot } from "./desktop";
+import { desktopBridge, type DesktopAutoReplyNotice, type DesktopUpdateSnapshot } from "./desktop";
 import { demoAccounts, demoMessageTranslation, demoMessages, demoProviders, demoStats, demoSubmissions } from "./demo";
 import { accountHealthIssue, mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
 import { buildForwardDraft, buildReplyDraft, buildReplyQuote } from "./mailActions";
@@ -57,6 +58,7 @@ import { ComposeModal } from "./ComposeModal";
 import { groupMessagesByThread } from "./threads";
 import { mailBackgroundColor, mailReaderSurface, mailSurfaceForBackground, shouldResetMailForeground, type MailSurface } from "./mailHtmlTheme";
 import {
+  applyBatchSeenChange as applyBatchSeenChangeState,
   applyMessageMove,
   applyMessageSeenChange,
   isArchivedMessage,
@@ -84,6 +86,7 @@ import { useDialogFocus } from "./useDialogFocus";
 import { findVerificationCodes } from "./verificationCode";
 import { resolveLocale, type Translate, useI18n } from "./i18n";
 import type { AgentBootstrap } from "./agentTypes";
+import { AutoReplyToastStack, autoReplyNoticeKey } from "./AutoReplyToastStack";
 
 const AgentWorkspace = lazy(() => import("./AgentWorkspace"));
 const AccountConnectionModal = lazy(() => import("./AddAccountModal"));
@@ -465,6 +468,8 @@ export default function App() {
   const [messageFlagging, setMessageFlagging] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [selectAllPaged, setSelectAllPaged] = useState(false);
+  const [batchJob, setBatchJob] = useState<BatchJobSnapshot | null>(null);
   const [batchBusy, setBatchBusy] = useState(false);
   const [attachmentDownloads, setAttachmentDownloads] = useState<Record<string, AttachmentDownloadState>>({});
   const [attachmentPreview, setAttachmentPreview] = useState<{ message: Message; attachment: MessageAttachment } | null>(null);
@@ -475,6 +480,7 @@ export default function App() {
   const [snoozeBusy, setSnoozeBusy] = useState(false);
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [toast, setToast] = useState<ToastNotice>(null);
+  const [autoReplyNotices, setAutoReplyNotices] = useState<DesktopAutoReplyNotice[]>([]);
   const [fatalError, setFatalError] = useState<MailErrorPresentation | null>(null);
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateSnapshot | null>(null);
   const [updatePromptOpen, setUpdatePromptOpen] = useState(false);
@@ -506,6 +512,12 @@ export default function App() {
   const loadRequestRef = useRef(0);
   const submissionLoadRequestRef = useRef(0);
   const loadingMoreRef = useRef(false);
+  const messageListRef = useRef<HTMLDivElement>(null);
+  // Scroll anchor for background refreshes: which row the user is reading, and
+  // how far into that row the viewport top sits. Applied after the merged list
+  // lands (or dropped when nothing is pinned).
+  const scrollAnchorRef = useRef<{ id: string; offset: number; topCaptured: number } | null>(null);
+  const batchJobStartedAtRef = useRef(0);
   const theme = resolveTheme(settings.theme, systemTheme);
   const activeBackgroundUrl = backgroundUrl(settings);
   const accountIdsKey = accounts.map((account) => account.id).sort().join("|");
@@ -660,6 +672,10 @@ export default function App() {
     messageView?: MailView;
   } = {}) => {
     const requestId = ++loadRequestRef.current;
+    // A full reload re-renders a fresh view; any predicate-wide selection was
+    // scoped to the previous one.
+    setSelectAllPaged(false);
+    setBatchJob(null);
     try {
       if (!silent) setLoading(true);
       setFatalError(null);
@@ -736,6 +752,90 @@ export default function App() {
       }
     }
   }, [selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, replacePendingArchiveMoves, t, view]);
+
+  /**
+   * Silent periodic refresh that preserves pagination progress: only the first
+   * page, accounts/providers and stats are fetched, then merged into the already
+   * loaded list in place (fresh heads prepended, known ids updated to server
+   * truth, older loaded rows untouched). A full authoritative reload still runs
+   * on view/account/query changes and after destructive operations.
+   */
+  // Remembers the row currently under the viewport top so a background merge
+  // that prepends new mail (or re-sorts) can pin the reading position instead
+  // of letting the list jump. Unset when the viewport is at the very top —
+  // there new arrivals should simply show at the top of the list.
+  const captureScrollAnchor = useCallback(() => {
+    const viewport = messageListRef.current;
+    if (!viewport) {
+      scrollAnchorRef.current = null;
+      return;
+    }
+    const top = viewport.scrollTop;
+    if (top <= 0) {
+      scrollAnchorRef.current = null;
+      return;
+    }
+    let anchor: { id: string; offset: number; topCaptured: number } | null = null;
+    for (const [id, node] of messageButtonRefs.current) {
+      if (!node.isConnected) continue;
+      const rect = node.getBoundingClientRect();
+      const contentTop = rect.top - viewport.getBoundingClientRect().top + top;
+      if (contentTop <= top && contentTop + rect.height > top) {
+        anchor = { id, offset: top - contentTop, topCaptured: top };
+        break;
+      }
+    }
+    scrollAnchorRef.current = anchor;
+  }, []);
+
+  const silentRefresh = useCallback(async () => {
+    if (isDemo) return;
+    captureScrollAnchor();
+    const requestId = ++loadRequestRef.current;
+    try {
+      const messageQuery = buildMessageQuery({ accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view });
+      const [nextAccounts, nextProviders, firstPage, nextStats] = await Promise.all([
+        api.accounts(),
+        api.providers(),
+        api.messages(messageQuery),
+        api.stats(),
+      ]);
+      if (requestId !== loadRequestRef.current) return;
+      const pendingMerge = mergePendingArchiveMoves(
+        firstPage.items,
+        pendingArchiveMovesRef.current,
+        nextAccounts,
+        { accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view },
+      );
+      const current = messagesRef.current;
+      const currentIds = new Set(current.map((item) => item.id));
+      const freshById = new Map(pendingMerge.items.map((item) => [item.id, item]));
+      const additions = pendingMerge.items.filter((item) => !currentIds.has(item.id));
+      const merged = [
+        ...additions,
+        ...current.map((item) => freshById.get(item.id) ?? item),
+      ];
+      const nextMessages = mergeUnreadViewSnapshot(
+        merged,
+        current,
+        unreadViewRecentlyReadIdsRef.current,
+        view === "unread",
+      );
+      const settled = view === "unread" || firstPage.total >= nextMessages.length
+        ? nextMessages
+        : nextMessages.slice(0, Math.max(0, firstPage.total));
+      setAccounts(nextAccounts);
+      setProviders(nextProviders);
+      messagesRef.current = settled;
+      setMessages(settled);
+      setMessageTotal(Math.max(firstPage.total, pendingMerge.items.length, settled.length));
+      setStats(nextStats);
+      setSelectedId((value) => value && settled.some((item) => item.id === value) ? value : null);
+      await refreshSubmissions(nextAccounts, { silent: true });
+    } catch {
+      // Silent refresh must never disturb the current list; the next tick retries.
+    }
+  }, [captureScrollAnchor, debouncedQuery, refreshSubmissions, selectedAccount, selectedFolder, view]);
 
   const loadSettings = useCallback(async () => {
     if (isDemo) return;
@@ -834,9 +934,9 @@ export default function App() {
   }, [query]);
   useEffect(() => {
     if (isDemo) return;
-    const timer = window.setInterval(() => void load({ silent: true }), settings.refreshIntervalSeconds * 1000);
+    const timer = window.setInterval(() => void silentRefresh(), settings.refreshIntervalSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [load, settings.refreshIntervalSeconds]);
+  }, [silentRefresh, settings.refreshIntervalSeconds]);
   useEffect(() => {
     if (isDemo || !pendingMoveVerificationKey) return undefined;
     const pendingIds = pendingMoveVerificationKey.split("|").filter(Boolean);
@@ -894,7 +994,7 @@ export default function App() {
   // Floating-UI tooltips: a single reused bubble positioned by
   // @floating-ui/dom. flip() turns the bubble over when there is no room on
   // the preferred side and shift() nudges it along the axis, with the app
-  // frame as the collision boundary 鈥?so bubbles stay fully inside the
+  // frame as the collision boundary �?so bubbles stay fully inside the
   // application surface, not just the browser viewport. JavaScript only wires
   // hover events, sets the label and hides the bubble on leave; all collision
   // math is delegated to the library. Tooltips are deliberately hover-only:
@@ -941,13 +1041,13 @@ export default function App() {
       const host = target?.closest?.("[data-tooltip]") as HTMLElement | null;
       if (!host) return;
       // Only hide when the mouse actually leaves the tooltip host, not when
-      // moving between child elements (icon 鈫?background).
+      // moving between child elements (icon �?background).
       const related = (event as MouseEvent).relatedTarget as HTMLElement | null;
       if (related && host.contains(related)) return;
       hide();
     };
     // Clicking a tooltip host often removes it from the DOM (e.g. the reader
-    // back button), and no mouseout fires for a removed element 鈥?the bubble
+    // back button), and no mouseout fires for a removed element �?the bubble
     // would linger. Hiding on any pointer press is a cheap, reliable escape.
     const press = () => {
       if (tooltip.classList.contains("visible")) hide();
@@ -985,6 +1085,33 @@ export default function App() {
     }
     return map;
   }, [threadGroups]);
+
+  // Virtualize the message list so only the visible window (plus overscan) is
+  // mounted. Rows are measured lazily (their height varies with snippet line
+  // count and density); estimateSize only seeds the initial layout.
+  const rowVirtualizer = useVirtualizer({
+    count: filteredMessages.length,
+    getScrollElement: () => messageListRef.current,
+    estimateSize: () => (settings.listDensity === "compact" ? 62 : 112),
+    getItemKey: (index) => filteredMessages[index]?.id ?? index,
+    overscan: 8,
+  });
+
+  // Pins the reading position once a background merge has been applied; runs
+  // before the browser paints, so the correction is never visible. Skipped
+  // when the user scrolled during the fetch (they took over) or when the
+  // anchor row disappeared from the list.
+  useLayoutEffect(() => {
+    const anchor = scrollAnchorRef.current;
+    scrollAnchorRef.current = null;
+    if (!anchor) return;
+    const viewport = messageListRef.current;
+    const node = messageButtonRefs.current.get(anchor.id);
+    if (!viewport || !node || !node.isConnected || Math.abs(viewport.scrollTop - anchor.topCaptured) > 24) return;
+    const viewportRect = viewport.getBoundingClientRect();
+    const rect = node.getBoundingClientRect();
+    viewport.scrollTop = rect.top - viewportRect.top + viewport.scrollTop - anchor.offset;
+  }, [filteredMessages]);
 
   const loadedServerMessageCount = useMemo(() => {
     if (isDemo) return filteredMessages.length;
@@ -1063,6 +1190,25 @@ export default function App() {
       setLoadingMore(false);
     }
   };
+
+  // Gmail-style infinite scroll: load the next page when the user approaches
+  // the bottom of the loaded window (and after every append so a short list
+  // keeps filling itself). loadMoreRef keeps the listener free of stale
+  // closures.
+  const loadMoreRef = useRef<() => void>(() => undefined);
+  loadMoreRef.current = loadMore;
+
+  useEffect(() => {
+    const el = messageListRef.current;
+    if (!el) return;
+    const maybeLoadMore = () => {
+      if (loading || loadingMoreRef.current) return;
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 800) void loadMoreRef.current();
+    };
+    el.addEventListener("scroll", maybeLoadMore, { passive: true });
+    maybeLoadMore();
+    return () => el.removeEventListener("scroll", maybeLoadMore);
+  }, [currentMessageTotal, filteredMessages.length, loadedServerMessageCount, loading]);
 
   const selected = filteredMessages.find((message) => message.id === selectedId) ?? null;
   const selectedThread = selected ? threadById.get(selected.id) ?? null : null;
@@ -1221,7 +1367,7 @@ export default function App() {
       }
     } catch (error) {
       if (requestId !== translationRequestIdRef.current) return;
-      // User cancelled the streaming translation 鈥?keep any partial result
+      // User cancelled the streaming translation �?keep any partial result
       // already shown instead of surfacing an error.
       if (controller.signal.aborted) {
         setTranslationSession((current) => {
@@ -1301,7 +1447,7 @@ export default function App() {
       });
     } catch (error) {
       if (requestId !== translationRequestIdRef.current) return;
-      // User cancelled the LLM translation 鈥?restore any previous result
+      // User cancelled the LLM translation �?restore any previous result
       // instead of surfacing an error.
       if (controller.signal.aborted) {
         setTranslationSession((current) => {
@@ -1637,28 +1783,13 @@ export default function App() {
   };
 
   const applyBatchSeenChange = useCallback((ids: readonly string[], seen: boolean) => {
-    setMessages((items) => {
-      let next = items;
-      for (const id of ids) next = applyMessageSeenChange(accounts, next, stats, id, seen).messages;
-      messagesRef.current = next;
-      return next;
-    });
-    setAccounts((items) => {
-      let next = items;
-      for (const id of ids) next = applyMessageSeenChange(next, messages, stats, id, seen).accounts;
-      return next;
-    });
-    setStats((current) => {
-      let next = current;
-      for (const id of ids) next = applyMessageSeenChange(accounts, messages, current, id, seen).stats;
-      return next;
-    });
-    if (viewRef.current === "unread") {
-      const changedCount = ids.filter((id) => {
-        const current = messages.find((item) => item.id === id);
-        return Boolean(current && current.seen !== seen);
-      }).length;
-      if (changedCount) setMessageTotal((total) => Math.max(0, total + (seen ? -changedCount : changedCount)));
+    const result = applyBatchSeenChangeState(accounts, messages, stats, ids, seen);
+    messagesRef.current = result.messages;
+    setMessages(result.messages);
+    setAccounts(result.accounts);
+    setStats(result.stats);
+    if (viewRef.current === "unread" && result.changedCount) {
+      setMessageTotal((total) => Math.max(0, total + (seen ? -result.changedCount : result.changedCount)));
     }
   }, [accounts, messages, stats]);
 
@@ -1686,6 +1817,8 @@ export default function App() {
   }, []);
 
   const toggleMessageSelected = useCallback((id: string) => {
+    // Any manual toggle exits a predicate-wide selection back to explicit ids.
+    setSelectAllPaged(false);
     setSelectedMessageIds((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
@@ -1696,24 +1829,137 @@ export default function App() {
 
   const selectAllVisibleMessages = useCallback(() => {
     setSelectedMessageIds(new Set(filteredMessages.map((message) => message.id)));
-  }, [filteredMessages]);
+    // Gmail-style two-step select-all: once every loaded row is selected and
+    // more matches exist on the server, the next click upgrades to the whole
+    // matching view (handled server-side as a batch job).
+    if (!isDemo && loadedServerMessageCount < currentMessageTotal) setSelectAllPaged(true);
+  }, [currentMessageTotal, filteredMessages, isDemo, loadedServerMessageCount]);
 
   const exitSelectionMode = useCallback(() => {
     setSelectionMode(false);
     setSelectedMessageIds(new Set());
+    setSelectAllPaged(false);
+    setBatchJob(null);
   }, []);
+
+  // The current view expressed as a server-side filter scope for predicate
+  // batch operations. Mirrors buildMessageQuery so the job touches exactly
+  // what the list shows.
+  const selectionJobQuery = useMemo<BatchJobQuery | null>(() => {
+    if (!selectAllPaged || isDemo) return null;
+    return {
+      accountId: selectedAccount === "all" ? undefined : selectedAccount,
+      folder: selectedFolder || undefined,
+      q: debouncedQuery || undefined,
+      unread: view === "unread" ? true : undefined,
+      archived: view === "archived" ? true : undefined,
+      starred: view === "starred" ? true : undefined,
+      snoozed: view === "snoozed" ? true : undefined,
+    };
+  }, [debouncedQuery, isDemo, selectAllPaged, selectedAccount, selectedFolder, view]);
+
+  // Polls a server-side batch job until it settles, then shows the real
+  // outcome with an undo action. The toolbar stays interactive throughout;
+  // only the poll loop and the final reconciliation reload run in the
+  // background. Guards against a vanished job (server restart) and runaway
+  // polling.
+  const pollBatchJob = useCallback((jobId: string, opts: {
+    successKey: string;
+    exitOnSuccess: boolean;
+  }) => {
+    const startedAt = batchJobStartedAtRef.current;
+    const next = async (): Promise<void> => {
+      if (Date.now() - startedAt > 10 * 60_000) {
+        setBatchJob(null);
+        showToast(t("mail.selection.jobError"), "error");
+        return;
+      }
+      try {
+        const { job } = await api.batchJobStatus(jobId);
+        if (job.status === "running") {
+          setBatchJob(job);
+          window.setTimeout(() => void next(), 600);
+          return;
+        }
+        if (job.status === "failed") {
+          setBatchJob(null);
+          showToast(job.error ?? t("mail.selection.jobError"), "error");
+          void load({ silent: true });
+          return;
+        }
+        setBatchJob(null);
+        const undoAction: ToastAction = {
+          label: t("mail.selection.undo"),
+          run: () => {
+            showToast(t("mail.selection.undoStarted"), "info");
+            void api.batchJobUndo(jobId).then(() => void load({ silent: true })).catch(() => {
+              showToast(t("mail.selection.jobError"), "error");
+            });
+          },
+        };
+        if (job.updated > 0 && opts.exitOnSuccess) exitSelectionMode();
+        if (job.failed) {
+          showToast(
+            t("mail.selection.partialFailure", { done: job.updated, failed: job.failed }),
+            "error",
+            job.updated > 0 ? undoAction : undefined,
+          );
+        } else {
+          showToast(t(opts.successKey, { count: job.total }), "success", job.total > 0 ? undoAction : undefined);
+        }
+        void load({ silent: true });
+      } catch {
+        setBatchJob(null);
+        showToast(t("mail.selection.jobError"), "error");
+      }
+    };
+    void next();
+  }, [exitSelectionMode, load, showToast, t]);
+
+  const startBatchJob = useCallback((payload: BatchJobCreatePayload, opts: {
+    successKey: string;
+    exitOnSuccess: boolean;
+  }) => {
+    setBatchBusy(true);
+    void api.batchJobCreate(payload).then(({ jobId }) => {
+      batchJobStartedAtRef.current = Date.now();
+      setBatchJob({ id: jobId, kind: payload.kind, status: "running", total: 0, done: 0, updated: 0, failed: 0, createdAt: Date.now() });
+      // The job runs server-side; release the toolbar (progress comes from
+      // the poll loop) so the list stays interactive.
+      setBatchBusy(false);
+      pollBatchJob(jobId, opts);
+    }).catch((error: unknown) => {
+      setBatchBusy(false);
+      showToast(mailErrorToastMessage(error, t(payload.kind === "flags" ? "mail.error.batchUpdate" : "mail.error.move"), t), "error");
+    });
+  }, [pollBatchJob, showToast, t]);
 
   const batchUpdateFlags = async (patch: { seen?: boolean; flagged?: boolean }, successKey: string) => {
     const ids = [...selectedMessageIds];
-    if (!ids.length || batchBusy || !Object.keys(patch).length) return;
+    if ((!ids.length && !selectAllPaged) || batchBusy || !Object.keys(patch).length) return;
+    // Predicate scope: server resolves every matching id behind a job.
+    if (selectionJobQuery) {
+      startBatchJob({ kind: "flags", patch, query: selectionJobQuery }, { successKey, exitOnSuccess: false });
+      return;
+    }
     setBatchBusy(true);
     if (patch.seen !== undefined) applyBatchSeenChange(ids, patch.seen);
     if (patch.flagged !== undefined) applyBatchFlaggedChange(ids, patch.flagged);
     try {
       if (!isDemo) {
-        const result = await api.batchUpdateMessageFlags(ids, patch);
-        if (result.failed) {
-          showToast(t("mail.selection.partialFailure", { done: result.updated, failed: result.failed }), "error");
+        // The server caps a single batch at some message count; split large
+        // selections so the whole selection is still applied.
+        const CHUNK_SIZE = 100;
+        let updated = 0;
+        let failed = 0;
+        for (let offset = 0; offset < ids.length; offset += CHUNK_SIZE) {
+          const chunk = ids.slice(offset, offset + CHUNK_SIZE);
+          const result = await api.batchUpdateMessageFlags(chunk, patch);
+          updated += result.updated;
+          failed += result.failed;
+        }
+        if (failed) {
+          showToast(t("mail.selection.partialFailure", { done: updated, failed }), "error");
           void load({ silent: true });
           return;
         }
@@ -1730,7 +1976,12 @@ export default function App() {
 
   const batchMoveMessages = async (target: "archive" | "trash") => {
     const ids = [...selectedMessageIds];
-    if (!ids.length || batchBusy) return;
+    if ((!ids.length && !selectAllPaged) || batchBusy) return;
+    // Predicate scope: server moves every matching id behind a job.
+    if (selectionJobQuery) {
+      startBatchJob({ kind: "move", target, query: selectionJobQuery }, { successKey: target === "archive" ? "mail.selection.archived" : "mail.selection.trashed", exitOnSuccess: true });
+      return;
+    }
     setBatchBusy(true);
     try {
       if (isDemo) {
@@ -1766,9 +2017,20 @@ export default function App() {
           return next;
         });
       } else {
-        const result = await api.batchMoveMessages(ids, target);
-        if (result.updated === 0) {
-          showToast(t("mail.error.move"), "error");
+        // The server caps a single batch at 100 ids; split large selections
+        // into chunks exactly like batchUpdateFlags so moves never fail with
+        // a 400 for size alone.
+        const CHUNK_SIZE = 100;
+        let updated = 0;
+        let failed = 0;
+        for (let offset = 0; offset < ids.length; offset += CHUNK_SIZE) {
+          const chunk = ids.slice(offset, offset + CHUNK_SIZE);
+          const result = await api.batchMoveMessages(chunk, target);
+          updated += result.updated;
+          failed += result.failed;
+        }
+        if (updated === 0 && failed > 0) {
+          showToast(t("mail.selection.partialFailure", { done: 0, failed }), "error");
           return;
         }
         setMessages((items) => {
@@ -1780,17 +2042,19 @@ export default function App() {
         const inViewCount = ids.filter((id) => filteredMessages.some((item) => item.id === id)).length;
         if (inViewCount) setMessageTotal((total) => Math.max(0, total - inViewCount));
         void load({ silent: true });
-        if (result.failed) {
-          showToast(t("mail.selection.partialFailure", { done: result.updated, failed: result.failed }), "error");
+        if (failed) {
+          showToast(t("mail.selection.partialFailure", { done: updated, failed }), "error");
           return;
         }
       }
       showToast(t(target === "archive" ? "mail.selection.archived" : "mail.selection.trashed", { count: ids.length }));
+      // Match batchUpdateFlags UX: selection survives failures so the user can
+      // retry; it is exited only after a fully successful move.
+      exitSelectionMode();
     } catch (error) {
       showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
     } finally {
       setBatchBusy(false);
-      exitSelectionMode();
     }
   };
 
@@ -2185,7 +2449,7 @@ export default function App() {
     const bridge = desktopBridge();
     if (!bridge || isDemo) return undefined;
     const unsubscribeNewMail = bridge.onNewMail((notice) => {
-      void load({ silent: true });
+      void silentRefresh();
       if (!notice.shouldAlert) return;
       if (notice.playCustomSound && !playNotificationSound(settings.notificationSound)) {
         bridge.setCustomNotificationSoundReady(false);
@@ -2203,11 +2467,26 @@ export default function App() {
     const unsubscribeOpenMessage = bridge.onOpenMessage((messageId) => {
       void openNotifiedMessage(messageId);
     });
+    const unsubscribeAutoReply = bridge.onAutoReply?.((notice) => {
+      setAutoReplyNotices((items) => {
+        const key = autoReplyNoticeKey(notice);
+        if (items.some((item) => autoReplyNoticeKey(item) === key)) return items;
+        return [...items.slice(-4), notice];
+      });
+    });
+    const unsubscribeConfirmationResult = bridge.onAgentConfirmationResult?.((result) => {
+      if (!result.ok) return;
+      // The draft was approved or rejected elsewhere (pending dialog, popup
+      // cancel); a stale "awaiting approval" popup must not linger.
+      setAutoReplyNotices((items) => items.filter((item) => !(item.kind === "pending" && item.confirmationId === result.confirmationId)));
+    });
     return () => {
       unsubscribeNewMail();
       unsubscribeOpenMessage();
+      unsubscribeAutoReply?.();
+      unsubscribeConfirmationResult?.();
     };
-  }, [load, openNotifiedMessage, settings.notificationSound, showToast, t]);
+  }, [openNotifiedMessage, settings.notificationSound, showToast, silentRefresh, t]);
 
   useEffect(() => {
     if (!isDesktopSmoke) return;
@@ -2469,8 +2748,8 @@ export default function App() {
 
           {selectionMode ? (
             <div className="list-toolbar selection-toolbar">
-              <button className="selection-select-all" type="button" onClick={selectAllVisibleMessages} disabled={batchBusy || !filteredMessages.length}>{t("mail.selection.selectAll")}</button>
-              <span className="selection-count">{t("mail.selection.count", { count: selectedMessageIds.size })}</span>
+              <button className="selection-select-all" type="button" onClick={selectAllVisibleMessages} disabled={batchBusy || !filteredMessages.length}>{selectAllPaged ? t("mail.selection.selectAllMatching", { count: currentMessageTotal }) : t("mail.selection.selectAll")}</button>
+              <span className="selection-count">{batchJob ? t("mail.selection.batchProcessing", { done: batchJob.done, total: batchJob.total || currentMessageTotal }) : t("mail.selection.count", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}</span>
               <div className="selection-actions">
                 <IconButton label={t("mail.action.markRead")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: true }, "mail.selection.markedRead")} disabled={batchBusy || !selectedMessageIds.size}><MailOpen size={15} /></IconButton>
                 <IconButton label={t("mail.action.markUnread")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: false }, "mail.selection.markedUnread")} disabled={batchBusy || !selectedMessageIds.size}><Mail size={15} /></IconButton>
@@ -2513,33 +2792,38 @@ export default function App() {
                 {emptyMessageList.canClearSearch && <button className="secondary-button" type="button" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}>{t("mail.clearSearch")}</button>}
               </div>
             )}
-            {filteredMessages.map((message) => {
-              const threadSize = threadById.get(message.id)?.length ?? 1;
-              return (
-              <button key={message.id} ref={(node) => { if (node) messageButtonRefs.current.set(message.id, node); else messageButtonRefs.current.delete(message.id); }} className={`message-item ${selectedId === message.id ? "selected" : ""} ${message.seen ? "" : "unread"} ${selectionMode ? "selection-mode" : ""} ${selectionMode && selectedMessageIds.has(message.id) ? "multi-selected" : ""} ${view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id) ? "recently-read-in-unread" : ""}`} onClick={() => { if (selectionMode) toggleMessageSelected(message.id); else void openMessage(message); }}>
-                <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
-                {selectionMode && <span className={`selection-checkbox ${selectedMessageIds.has(message.id) ? "checked" : ""}`} aria-hidden="true" />}
-                <span className={`sender-avatar tone-${accountTone(message.from.address)}`}>{initials(message.from.name, message.from.address)}</span>
-                <span className="message-copy">
-                  <span className="message-meta"><strong>{message.from.name || message.from.address}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
-                  <span className="message-subject">{message.subject}</span>
-                  <span className="message-snippet">{message.snippet}</span>
-                  <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
-                </span>
-                {!message.seen && <span className="unread-dot" />}
-                <span className="row-quick-actions" onClick={(event) => event.stopPropagation()}>
-                  <span role="button" tabIndex={-1} aria-label={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} data-tooltip={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} className="row-quick-action" onClick={() => void quickToggleStar(message)}><Star size={14} fill={message.flagged ? "currentColor" : "none"} /></span>
-                  <span role="button" tabIndex={-1} aria-label={t("mail.action.archive")} data-tooltip={t("mail.action.archive")} className="row-quick-action" onClick={() => void quickMoveMessage(message, "archive")}><Archive size={14} /></span>
-                  <span role="button" tabIndex={-1} aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => void quickMoveMessage(message, "trash")}><Trash2 size={14} /></span>
-                </span>
-              </button>
-              );
-            })}
-            {!loading && !fatalError && filteredMessages.length > 0 && loadedServerMessageCount < currentMessageTotal && query === debouncedQuery && (
-              <div className="list-footer">
-                <button className="secondary-button" type="button" onClick={() => void loadMore()} disabled={loading || loadingMore}>
-                  {loadingMore ? <LoaderCircle className="spin" size={15} /> : null}{loadingMore ? t("common.loading") : t("mail.loadMore")} <span>{loadedServerMessageCount} / {currentMessageTotal}</span>
-                </button>
+            {!loading && accounts.length > 0 && filteredMessages.length > 0 && (
+              <div className="message-list-viewport" style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
+                {rowVirtualizer.getVirtualItems().map((virtualItem) => {
+                  const message = filteredMessages[virtualItem.index];
+                  const threadSize = threadById.get(message.id)?.length ?? 1;
+                  return (
+                  <div
+                    key={virtualItem.key}
+                    data-index={virtualItem.index}
+                    className="message-list-row"
+                    style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualItem.start}px)` }}
+                  >
+                    <button ref={(node) => { rowVirtualizer.measureElement(node); if (node) messageButtonRefs.current.set(message.id, node); else messageButtonRefs.current.delete(message.id); }} className={`message-item ${selectedId === message.id ? "selected" : ""} ${message.seen ? "" : "unread"} ${selectionMode ? "selection-mode" : ""} ${selectionMode && selectedMessageIds.has(message.id) ? "multi-selected" : ""} ${view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id) ? "recently-read-in-unread" : ""}`} onClick={() => { if (selectionMode) toggleMessageSelected(message.id); else void openMessage(message); }}>
+                      <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
+                      {selectionMode && <span className={`selection-checkbox ${selectedMessageIds.has(message.id) ? "checked" : ""}`} aria-hidden="true" />}
+                      <span className={`sender-avatar tone-${accountTone(message.from.address)}`}>{initials(message.from.name, message.from.address)}</span>
+                      <span className="message-copy">
+                        <span className="message-meta"><strong>{message.from.name || message.from.address}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
+                        <span className="message-subject">{message.subject}</span>
+                        <span className="message-snippet">{message.snippet}</span>
+                        <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
+                      </span>
+                      {!message.seen && <span className="unread-dot" />}
+                      <span className="row-quick-actions" onClick={(event) => event.stopPropagation()}>
+                        <span role="button" tabIndex={-1} aria-label={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} data-tooltip={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} className="row-quick-action" onClick={() => void quickToggleStar(message)}><Star size={14} fill={message.flagged ? "currentColor" : "none"} /></span>
+                        <span role="button" tabIndex={-1} aria-label={t("mail.action.archive")} data-tooltip={t("mail.action.archive")} className="row-quick-action" onClick={() => void quickMoveMessage(message, "archive")}><Archive size={14} /></span>
+                        <span role="button" tabIndex={-1} aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => void quickMoveMessage(message, "trash")}><Trash2 size={14} /></span>
+                      </span>
+                    </button>
+                  </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -2728,6 +3012,7 @@ export default function App() {
       /></Suspense>
       {mobileSidebar && <button className="mobile-scrim" aria-label={t("navigation.closeMenu")} onClick={() => setMobileSidebar(false)} />}
       {toast && <div className={`toast ${toast.kind}`} role={toast.kind === "error" || toast.kind === "warning" ? "alert" : "status"} aria-atomic="true"><span className="toast-icon" aria-hidden="true">{toast.kind === "error" || toast.kind === "warning" ? <CircleAlert size={17} /> : toast.kind === "info" ? <Sparkles size={17} /> : <Check size={17} />}</span><span className="toast-message">{toast.message}</span>{toast.action && <button className="toast-action" type="button" onClick={() => { setToast(null); toast.action?.run(); }}>{toast.action.label}</button>}<button className="toast-dismiss" type="button" aria-label={t("common.closeNotification")} data-tooltip={t("common.closeNotification")} onClick={() => setToast(null)}><X size={16} /></button></div>}
+      {autoReplyNotices.length > 0 && <AutoReplyToastStack notices={autoReplyNotices} onDismiss={(notice) => setAutoReplyNotices((items) => items.filter((item) => autoReplyNoticeKey(item) !== autoReplyNoticeKey(notice)))} />}
       </div>
     </div>
   );

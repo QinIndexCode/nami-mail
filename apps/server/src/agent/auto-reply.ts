@@ -10,19 +10,20 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import type { AgentAuditEvent, CallerContext, ConfirmationDecision, ConfirmationRequest } from "@nami/agent-contracts";
+import type { AgentAuditEvent, AutoReplyConfig, CallerContext, ConfirmationDecision, ConfirmationRequest } from "@nami/agent-contracts";
 import type { DatabaseHandle } from "../db.js";
 import { messagePayloadById, payloadHeaders } from "../message-storage.js";
 import { getAppSettings } from "../settings.js";
+import { contactFromRow, type ContactRow } from "../contacts.js";
 import type { EncryptedAgentAuditStore } from "./audit.js";
 import { buildMemoryContextLines, type EncryptedAgentMemoryStore } from "./memory.js";
 import type { ImmutableGuiConfirmationStore } from "./confirmations.js";
 import { canonicalAgentJson } from "./store-crypto.js";
 import type { MailApplicationContext, MailApplicationService } from "./mail-application-service.js";
-import { autoReplyThreadKey, scanSensitiveKeywords, screenAutoReply, screeningIgnoreReasonText } from "./auto-reply-screening.js";
+import { autoReplyThreadKey, applyAutoReplyScope, renderAutoReplyTemplate, scanSensitiveKeywords, screenAutoReply, screeningIgnoreReasonText, senderDomain, type AutoReplyScopeReason } from "./auto-reply-screening.js";
+import { type AutoReplyDecisionListOptions, type AutoReplyDecisionReason, type AutoReplyDecisionRecord, type EncryptedAutoReplyDecisionStore } from "./auto-reply-decisions.js";
 
 const CONFIRMATION_TTL_MS = 5 * 60 * 1_000;
-const THREAD_DEDUP_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const MESSAGES_PER_PASS = 40;
 
 export type AutoReplyEvaluationInput = {
@@ -49,12 +50,46 @@ export type AutoReplyEngineOptions = {
   mail: MailApplicationService;
   audit: EncryptedAgentAuditStore;
   memory: EncryptedAgentMemoryStore;
+  /** Audit of declined/failed replies surfaced in the desktop review dialog. */
+  decisions?: EncryptedAutoReplyDecisionStore;
   confirmationStore?: ImmutableGuiConfirmationStore;
   desktopConfirmation?: Readonly<{ capability: unknown }>;
   clock?: () => string;
+  /** Fired for every user-facing auto-reply event (drafts awaiting approval, sent replies). */
+  onEvent?: (event: AutoReplyUiEvent) => void;
 };
 
 export type AutoReplyResolution = { ok: true } | { decision: "not-found" | "expired" | "failed" };
+
+/**
+ * Push events surfaced to the desktop renderer, mirroring the new-mail
+ * notification pipeline. `pending` fires once a confirmation request has been
+ * durably created; `sent` fires after a prepared reply is actually submitted.
+ */
+export type AutoReplyUiEvent =
+  | {
+    kind: "pending";
+    confirmationId: string;
+    requestId: string;
+    accountId: string;
+    messageId: string;
+    subject: string;
+    fromName: string;
+    fromAddress: string;
+    sensitive: boolean;
+    createdAt: string;
+    expiresAt: string;
+    replyPreview: string;
+  }
+  | {
+    kind: "sent";
+    messageId: string;
+    accountId: string;
+    subject: string;
+    toName: string;
+    toAddress: string;
+    replyPreview: string;
+  };
 
 export type AutoReplyPendingSummary = {
   confirmationId: string;
@@ -146,7 +181,7 @@ export class AutoReplyEngine {
       if (this.pending.has(messageId)) continue;
       if (processed >= MESSAGES_PER_PASS) break;
       processed += 1;
-      await this.processMessage(accountId, messageId, config.dailyLimitPerAccount);
+      await this.processMessage(accountId, messageId, config);
     }
   }
 
@@ -200,6 +235,26 @@ export class AutoReplyEngine {
     }));
   }
 
+  listDecisions(options?: AutoReplyDecisionListOptions): AutoReplyDecisionRecord[] {
+    if (!this.options.decisions) return [];
+    try {
+      return this.options.decisions.list(options);
+    } catch (error) {
+      console.warn("Auto-reply decision list failed:", error);
+      return [];
+    }
+  }
+
+  deleteDecision(recordId: string): boolean {
+    if (!this.options.decisions) return false;
+    try {
+      return this.options.decisions.delete(recordId);
+    } catch (error) {
+      console.warn(`Auto-reply decision delete failed for ${recordId}:`, error);
+      return false;
+    }
+  }
+
   close(): void {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
@@ -214,10 +269,11 @@ export class AutoReplyEngine {
 
   // ── internal ─────────────────────────────────────────────────────────────
 
-  private async processMessage(accountId: string, messageId: string, dailyLimit: number): Promise<void> {
-    if (this.sentToday(accountId) >= dailyLimit) {
+  private async processMessage(accountId: string, messageId: string, config: AutoReplyConfig): Promise<void> {
+    if (this.sentToday(accountId) >= config.dailyLimitPerAccount) {
       this.recordLedger(messageId, accountId, "ignored", "message-only");
       this.rememberIgnored(accountId, messageId, "每日自动回复上限已达，本轮不再发送。");
+      this.recordDecision(accountId, messageId, "message-only", "daily-cap", { subject: undefined });
       return;
     }
     const stored = messagePayloadById(this.options.db, this.options.masterKey, messageId);
@@ -249,45 +305,112 @@ export class AutoReplyEngine {
     if (!screening.keep) {
       this.recordLedger(messageId, accountId, "ignored", "message-only");
       this.rememberIgnored(accountId, messageId, `跳过 ${payload.fromAddress || payload.fromName} 的「${payload.subject}」：${screeningIgnoreReasonText(screening.reason)}`);
+      this.recordDecision(accountId, messageId, "message-only", "screening", {
+        fromAddress: payload.fromAddress,
+        fromName: payload.fromName,
+        subject: payload.subject,
+        detail: screeningIgnoreReasonText(screening.reason),
+      });
       return;
     }
     const threadKey = screening.threadKey ?? `subject:${payload.subject}`;
-    if (this.recentThreadSent(threadKey)) {
+    const scopeResult = applyAutoReplyScope(
+      {
+        fromAddress: payload.fromAddress,
+        fromDomain: senderDomain(payload.fromAddress),
+        subject: payload.subject,
+        today: this.clock().slice(0, 10),
+        contacts: config.scope.contactsOnly ? this.contactAddresses() : new Set<string>(),
+      },
+      config.scope,
+    );
+    if (!scopeResult.keep) {
+      this.recordLedger(messageId, accountId, "ignored", threadKey);
+      this.rememberIgnored(accountId, messageId, `跳过 ${payload.fromAddress || payload.fromName} 的「${payload.subject}」：不在回复范围内（${scopeReasonText(scopeResult.reason)}）`);
+      this.recordDecision(accountId, messageId, threadKey, "scope", {
+        fromAddress: payload.fromAddress,
+        fromName: payload.fromName,
+        subject: payload.subject,
+        detail: scopeReasonText(scopeResult.reason),
+      });
+      return;
+    }
+    if (config.scope.threadOnce && this.threadAlreadyReplied(threadKey)) {
       this.recordLedger(messageId, accountId, "ignored", threadKey);
       return;
     }
     const hints = scanSensitiveKeywords(payload.subject, payload.fromAddress, payload.textBody.slice(0, 2_000));
-    let memoryContext = "";
-    try {
-      memoryContext = buildMemoryContextLines(this.options.memory, { query: payload.subject, limit: 6 }).join("\n");
-    } catch {
-      // Recall is best-effort.
-    }
-    let evaluation: AutoReplyEvaluationResult;
-    try {
-      evaluation = await this.options.evaluate({
-        accountEmail: account.email || "",
-        fromName: payload.fromName,
-        fromAddress: payload.fromAddress,
+    const fromDomain = senderDomain(payload.fromAddress);
+    let replyText: string | undefined;
+    let sensitive = hints.length > 0;
+    if (config.mode === "template") {
+      const rendered = renderAutoReplyTemplate(config.template.text, {
+        senderName: payload.fromName,
+        senderAddress: payload.fromAddress,
+        senderDomain: fromDomain,
         subject: payload.subject,
-        textBody: payload.textBody.slice(0, 1_000),
-        snippet: payload.snippet.slice(0, 400),
-        sensitiveKeywords: hints,
-        memoryContext,
       });
-    } catch (error) {
-      console.warn(`Auto-reply evaluation failed for ${messageId}:`, error);
-      this.recordLedger(messageId, accountId, "failed", threadKey);
-      this.rememberIgnored(accountId, messageId, "自动回复评估失败，已跳过。");
-      return;
+      if (!rendered) {
+        this.recordLedger(messageId, accountId, "ignored", threadKey);
+        this.rememberIgnored(accountId, messageId, `模板回复为空，未回复 ${payload.fromAddress || payload.fromName} 的「${payload.subject}」。`);
+        this.recordDecision(accountId, messageId, threadKey, "no-template", {
+          fromAddress: payload.fromAddress,
+          fromName: payload.fromName,
+          subject: payload.subject,
+        });
+        return;
+      }
+      replyText = rendered;
+    } else {
+      let memoryContext = "";
+      try {
+        memoryContext = buildMemoryContextLines(this.options.memory, {
+          query: payload.subject,
+          limit: 6,
+          excludeKinds: ["auto-reply-sent", "auto-reply-ignored"],
+        }).join("\n");
+      } catch {
+        // Recall is best-effort.
+      }
+      let evaluation: AutoReplyEvaluationResult;
+      try {
+        evaluation = await this.options.evaluate({
+          accountEmail: account.email || "",
+          fromName: payload.fromName,
+          fromAddress: payload.fromAddress,
+          subject: payload.subject,
+          textBody: payload.textBody.slice(0, 1_000),
+          snippet: payload.snippet.slice(0, 400),
+          sensitiveKeywords: hints,
+          memoryContext,
+        });
+      } catch (error) {
+        console.warn(`Auto-reply evaluation failed for ${messageId}:`, error);
+        this.recordLedger(messageId, accountId, "failed", threadKey);
+        this.rememberIgnored(accountId, messageId, "自动回复评估失败，已跳过。");
+        this.recordDecision(accountId, messageId, threadKey, "llm-failed", {
+          fromAddress: payload.fromAddress,
+          fromName: payload.fromName,
+          subject: payload.subject,
+        });
+        return;
+      }
+      const trimmed = evaluation.replyText?.trim();
+      if (evaluation.replyValue !== "high" || !trimmed) {
+        this.recordLedger(messageId, accountId, "ignored", threadKey);
+        this.rememberIgnored(accountId, messageId, `来信价值较低，Agent 判断无需回复：${payload.subject}`);
+        this.recordDecision(accountId, messageId, threadKey, "low-value", {
+          fromAddress: payload.fromAddress,
+          fromName: payload.fromName,
+          subject: payload.subject,
+        });
+        return;
+      }
+      replyText = trimmed;
+      sensitive = evaluation.sensitive === true;
     }
-    const replyText = evaluation.replyText?.trim();
-    if (evaluation.replyValue !== "high" || !replyText) {
-      this.recordLedger(messageId, accountId, "ignored", threadKey);
-      this.rememberIgnored(accountId, messageId, `来信价值较低，Agent 判断无需回复：${payload.subject}`);
-      return;
-    }
-    await this.requestConfirmation(accountId, messageId, payload, replyText, evaluation.sensitive === true, threadKey);
+    const skipConfirmation = config.mode === "template" && config.template.skipConfirmation;
+    await this.requestConfirmation(accountId, messageId, payload, replyText, sensitive, threadKey, skipConfirmation);
   }
 
   private async requestConfirmation(
@@ -297,17 +420,20 @@ export class AutoReplyEngine {
     replyText: string,
     sensitive: boolean,
     threadKey: string,
+    skipConfirmation: boolean,
   ): Promise<void> {
     if (!this.options.confirmationStore || !this.options.desktopConfirmation) {
       this.recordLedger(messageId, accountId, "failed", threadKey);
       this.rememberIgnored(accountId, messageId, "桌面确认通道不可用，未发送自动回复。");
+      this.recordDecision(accountId, messageId, threadKey, "send-failed", {
+        fromAddress: payload.fromAddress,
+        fromName: payload.fromName,
+        subject: payload.subject,
+        detail: "桌面确认通道不可用",
+      });
       return;
     }
     const confirmation = this.buildRequest(accountId, messageId, payload, replyText, sensitive);
-    let resolveOutcome!: (outcome: "approved" | "rejected" | "expired" | "cancelled") => void;
-    const outcomePromise = new Promise<"approved" | "rejected" | "expired" | "cancelled">((resolve) => {
-      resolveOutcome = resolve;
-    });
     const pending: EnginePending = {
       messageId,
       accountId,
@@ -320,9 +446,18 @@ export class AutoReplyEngine {
       references: payload.references,
       sensitive,
       threadKey,
-      settle: resolveOutcome,
+      settle: () => undefined,
     };
-    this.pending.set(confirmation.id, pending);
+    if (skipConfirmation) {
+      await this.sendReply(pending, threadKey);
+      return;
+    }
+    let resolveOutcome!: (outcome: "approved" | "rejected" | "expired" | "cancelled") => void;
+    const outcomePromise = new Promise<"approved" | "rejected" | "expired" | "cancelled">((resolve) => {
+      resolveOutcome = resolve;
+    });
+    const pendingWithSettle: EnginePending = { ...pending, settle: resolveOutcome };
+    this.pending.set(confirmation.id, pendingWithSettle);
     const remaining = Math.max(0, Date.parse(confirmation.expiresAt) - Date.now());
     this.timers.set(confirmation.id, setTimeout(() => this.expirePending(confirmation.id), remaining));
     try {
@@ -334,7 +469,31 @@ export class AutoReplyEngine {
       this.pending.delete(confirmation.id);
       this.recordLedger(messageId, accountId, "failed", threadKey);
       this.rememberIgnored(accountId, messageId, "自动回复确认创建失败，已跳过。");
+      this.recordDecision(accountId, messageId, threadKey, "send-failed", {
+        fromAddress: payload.fromAddress,
+        fromName: payload.fromName,
+        subject: payload.subject,
+        detail: "确认请求创建失败",
+      });
       return;
+    }
+    try {
+      this.options.onEvent?.({
+        kind: "pending",
+        confirmationId: confirmation.id,
+        requestId: confirmation.requestId,
+        accountId,
+        messageId,
+        subject: payload.subject,
+        fromName: payload.fromName,
+        fromAddress: payload.fromAddress,
+        sensitive,
+        createdAt: confirmation.createdAt,
+        expiresAt: confirmation.expiresAt,
+        replyPreview: replyText.slice(0, 200),
+      });
+    } catch (error) {
+      console.warn(`Auto-reply pending event failed for ${confirmation.id}:`, error);
     }
     const outcome = await outcomePromise;
     this.pending.delete(confirmation.id);
@@ -342,10 +501,22 @@ export class AutoReplyEngine {
     if (timer) clearTimeout(timer);
     this.timers.delete(confirmation.id);
     if (outcome === "approved") {
-      await this.sendReply(pending, threadKey);
+      await this.sendReply(pendingWithSettle, threadKey);
     } else if (outcome === "rejected") {
       this.recordLedger(messageId, accountId, "ignored", threadKey);
       this.rememberIgnored(accountId, messageId, `用户拒绝了自动回复：${payload.subject}`);
+      this.recordDecision(accountId, messageId, threadKey, "user-rejected", {
+        fromAddress: payload.fromAddress,
+        fromName: payload.fromName,
+        subject: payload.subject,
+      });
+    } else if (outcome === "expired") {
+      this.recordLedger(messageId, accountId, "ignored", threadKey);
+      this.recordDecision(accountId, messageId, threadKey, "expired", {
+        fromAddress: payload.fromAddress,
+        fromName: payload.fromName,
+        subject: payload.subject,
+      });
     } else {
       this.recordLedger(messageId, accountId, "ignored", threadKey);
     }
@@ -372,11 +543,29 @@ export class AutoReplyEngine {
       this.recordLedger(pending.messageId, pending.accountId, "sent", threadKey);
       this.audit(pending.accountId, pending.confirmation.requestId, "auto-reply.send", pending.replyText.slice(0, 120), "succeeded", pending.confirmation.id);
       this.rememberSent(pending.accountId, pending.messageId, pending.toName || pending.toAddress, pending.subject, pending.replyText);
+      try {
+        this.options.onEvent?.({
+          kind: "sent",
+          messageId: pending.messageId,
+          accountId: pending.accountId,
+          subject: pending.subject,
+          toName: pending.toName,
+          toAddress: pending.toAddress,
+          replyPreview: pending.replyText.slice(0, 200),
+        });
+      } catch (error) {
+        console.warn(`Auto-reply sent event failed for ${pending.messageId}:`, error);
+      }
     } catch (error) {
       console.warn(`Auto-reply send failed for ${pending.messageId}:`, error);
       this.recordLedger(pending.messageId, pending.accountId, "failed", threadKey);
       this.audit(pending.accountId, pending.confirmation.requestId, "auto-reply.send", "发送失败", "failed", pending.confirmation.id);
       this.rememberIgnored(pending.accountId, pending.messageId, `自动回复发送失败：${pending.subject}`);
+      this.recordDecision(pending.accountId, pending.messageId, threadKey, "send-failed", {
+        fromAddress: pending.toAddress,
+        fromName: pending.toName,
+        subject: pending.subject,
+      });
     }
   }
 
@@ -477,14 +666,70 @@ export class AutoReplyEngine {
     return row.count;
   }
 
-  private recentThreadSent(threadKey: string): boolean {
-    const cutoff = new Date(Date.now() - THREAD_DEDUP_WINDOW_MS).toISOString();
-    const row = this.options.db.prepare(`
+  /**
+   * Thread-once dedup: a thread with a previously sent reply (any time) or an
+   * explicit user rejection is never auto-answered again. Controlled by the
+   * `scope.threadOnce` flag; when disabled the pipeline replies to every
+   * eligible message regardless of thread history.
+   */
+  private threadAlreadyReplied(threadKey: string): boolean {
+    const sent = this.options.db.prepare(`
       SELECT 1 FROM auto_reply_processed
-      WHERE thread_key = ? AND decision = 'sent' AND occurred_at >= ?
+      WHERE thread_key = ? AND decision = 'sent'
       LIMIT 1
-    `).get(threadKey, cutoff) as { "1": unknown } | undefined;
-    return Boolean(row);
+    `).get(threadKey) as { "1": unknown } | undefined;
+    if (sent) return true;
+    if (!this.options.decisions) return false;
+    try {
+      return this.options.decisions.hasThreadRejected(threadKey);
+    } catch (error) {
+      console.warn("Auto-reply thread rejection check failed:", error);
+      return false;
+    }
+  }
+
+  private contactAddresses(): Set<string> {
+    const addresses = new Set<string>();
+    try {
+      const rows = this.options.db.prepare(
+        "SELECT id, email_enc, name_enc, notes_enc, auto_collected, created_at, updated_at FROM contacts",
+      ).all() as ContactRow[];
+      for (const row of rows) {
+        try {
+          const email = contactFromRow(row, this.options.masterKey).email.trim().toLowerCase();
+          if (email) addresses.add(email);
+        } catch {
+          // Unreadable contact rows are skipped; the scope still applies to the rest.
+        }
+      }
+    } catch (error) {
+      console.warn("Auto-reply contact lookup failed:", error);
+    }
+    return addresses;
+  }
+
+  private recordDecision(
+    accountId: string,
+    messageId: string,
+    threadKey: string,
+    reason: AutoReplyDecisionReason,
+    input: { fromAddress?: string; fromName?: string; subject?: string; detail?: string },
+  ): void {
+    if (!this.options.decisions) return;
+    try {
+      this.options.decisions.create({
+        messageId,
+        accountId,
+        threadKey,
+        reason,
+        fromAddress: input.fromAddress,
+        fromName: input.fromName,
+        subject: input.subject,
+        detail: input.detail,
+      });
+    } catch (error) {
+      console.warn(`Auto-reply decision record failed for ${messageId}:`, error);
+    }
   }
 
   private recordLedger(messageId: string, accountId: string, decision: "pending" | "sent" | "ignored" | "failed", threadKey: string): void {
@@ -566,4 +811,15 @@ export function replySubject(subject: string): string {
   const trimmed = subject.trim();
   if (/^re\s*:/i.test(trimmed)) return trimmed;
   return trimmed.length > 0 ? `Re: ${trimmed}` : "(无主题)";
+}
+
+const SCOPE_REASON_TEXT: Record<AutoReplyScopeReason, string> = {
+  "outside-date-range": "不在回复日期范围内",
+  "not-contact": "发件人不在联系人中",
+  "ignore-rule": "命中忽略规则",
+  "not-in-whitelist": "不在回复白名单中",
+};
+
+function scopeReasonText(reason: AutoReplyScopeReason): string {
+  return SCOPE_REASON_TEXT[reason] ?? reason;
 }

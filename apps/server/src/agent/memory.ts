@@ -28,6 +28,8 @@ export type AgentMemoryCreateInput = {
 
 export type AgentMemoryListOptions = {
   kind?: AgentMemoryKind;
+  /** Kinds to hide from this consumer (e.g. the Agent chat excluding auto-reply echoes). */
+  excludeKinds?: readonly AgentMemoryKind[];
   accountId?: string;
   query?: string;
   limit?: number;
@@ -153,6 +155,7 @@ export class EncryptedAgentMemoryStore {
         continue;
       }
       if (options.kind && record.kind !== options.kind) continue;
+      if (options.excludeKinds && options.excludeKinds.includes(record.kind)) continue;
       if (options.accountId && record.accountId !== options.accountId) continue;
       if (options.query) {
         const needle = options.query.trim().toLowerCase();

@@ -16,6 +16,7 @@ import {
   Languages,
   LoaderCircle,
   MessageSquareReply,
+  MessageSquareX,
   Minimize2,
   Moon,
   Palette,
@@ -40,6 +41,8 @@ import { mailErrorMessage } from "./errorPresentation";
 import FilterRulesSection from "./FilterRulesSection";
 import AgentMemoryDialog from "./AgentMemoryDialog";
 import AutoReplyPendingDialog from "./AutoReplyPendingDialog";
+import AutoReplyScopeEditor from "./AutoReplyScopeEditor";
+import AutoReplyDecisionsDialog from "./AutoReplyDecisionsDialog";
 import { translate, useI18n } from "./i18n";
 import { canPlayCustomNotificationSound, playNotificationSound, primeNotificationSound } from "./sounds";
 import ThemedSelect from "./ThemedSelect";
@@ -375,6 +378,7 @@ export default function SettingsModal({
   const [translationApiKeyVisible, setTranslationApiKeyVisible] = useState(false);
   const [translationTimeoutMs, setTranslationTimeoutMs] = useState(25_000);
   const [autoReplyDialogOpen, setAutoReplyDialogOpen] = useState(false);
+  const [autoReplyDecisionsOpen, setAutoReplyDecisionsOpen] = useState(false);
   const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
   const [externalGuideCopied, setExternalGuideCopied] = useState<string | null>(null);
   const [externalPairings, setExternalPairings] = useState<ExternalPairingSummary[] | null>(null);
@@ -534,7 +538,7 @@ export default function SettingsModal({
     return () => window.removeEventListener("keydown", closeOnEscape, true);
   }, [backgroundUploadError, controlsBusy, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose]);
 
-  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || memoryDialogOpen) });
+  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || autoReplyDecisionsOpen || memoryDialogOpen) });
   useDialogFocus(Boolean(pendingConfirmation), confirmationDialog, { fallbackFocusRef: settingsDialog });
   useDialogFocus(Boolean(backgroundUploadError), backgroundAlert, { restoreFocusRef: uploadButton });
 
@@ -1456,6 +1460,78 @@ export default function SettingsModal({
                           })}
                         </div>
                       </div>
+                      <div className="setting-row setting-column-row">
+                        <div>
+                          <strong>{t("settings.agent.autoReplyMode")}</strong>
+                          <span>{t("settings.agent.autoReplyModeDesc")}</span>
+                        </div>
+                        <div className="auto-reply-mode-toggle" role="group" aria-label={t("settings.agent.autoReplyMode")}>
+                          <button
+                            className={`secondary-button${currentSettings.autoReply.mode === "llm" ? " active" : ""}`}
+                            type="button"
+                            disabled={controlsBusy}
+                            onClick={() => void applyOptimisticSettings(
+                              { autoReply: { ...currentSettings.autoReply, mode: "llm" } },
+                              t("settings.agent.autoReplyUpdated"),
+                            )}
+                          >
+                            {t("settings.agent.autoReplyModeLlm")}
+                          </button>
+                          <button
+                            className={`secondary-button${currentSettings.autoReply.mode === "template" ? " active" : ""}`}
+                            type="button"
+                            disabled={controlsBusy}
+                            onClick={() => void applyOptimisticSettings(
+                              { autoReply: { ...currentSettings.autoReply, mode: "template" } },
+                              t("settings.agent.autoReplyUpdated"),
+                            )}
+                          >
+                            {t("settings.agent.autoReplyModeTemplate")}
+                          </button>
+                        </div>
+                      </div>
+                      {currentSettings.autoReply.mode === "template" && (
+                        <>
+                          <div className="setting-row setting-column-row">
+                            <div>
+                              <strong>{t("settings.agent.autoReplyTemplate")}</strong>
+                              <span>{t("settings.agent.autoReplyTemplateDesc")}</span>
+                            </div>
+                            <textarea
+                              className="auto-reply-template-input"
+                              value={currentSettings.autoReply.template.text}
+                              rows={5}
+                              maxLength={2000}
+                              disabled={controlsBusy}
+                              placeholder={t("settings.agent.autoReplyTemplatePlaceholder")}
+                              aria-label={t("settings.agent.autoReplyTemplate")}
+                              onChange={(event) => void applyOptimisticSettings(
+                                { autoReply: { ...currentSettings.autoReply, template: { ...currentSettings.autoReply.template, text: event.target.value } } },
+                                t("settings.agent.autoReplyUpdated"),
+                              )}
+                            />
+                            <p className="auto-reply-template-hint">{t("settings.agent.autoReplyTemplateHint")}</p>
+                          </div>
+                          <Switch
+                            checked={currentSettings.autoReply.template.skipConfirmation}
+                            disabled={controlsBusy}
+                            label={t("settings.agent.autoReplySkipConfirmation")}
+                            description={t("settings.agent.autoReplySkipConfirmationDesc")}
+                            onChange={() => void applyOptimisticSettings(
+                              { autoReply: { ...currentSettings.autoReply, template: { ...currentSettings.autoReply.template, skipConfirmation: !currentSettings.autoReply.template.skipConfirmation } } },
+                              t("settings.agent.autoReplyUpdated"),
+                            )}
+                          />
+                        </>
+                      )}
+                      <AutoReplyScopeEditor
+                        scope={currentSettings.autoReply.scope}
+                        disabled={controlsBusy}
+                        onChange={(scope) => void applyOptimisticSettings(
+                          { autoReply: { ...currentSettings.autoReply, scope } },
+                          t("settings.agent.autoReplyUpdated"),
+                        )}
+                      />
                       <div className="setting-row">
                         <div>
                           <strong>{t("settings.agent.autoReplyDailyLimit")}</strong>
@@ -1483,6 +1559,15 @@ export default function SettingsModal({
                     </div>
                     <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setAutoReplyDialogOpen(true)}>
                       <MessageSquareReply size={15} />{t("settings.agent.autoReplyReviewAction")}
+                    </button>
+                  </div>
+                  <div className="setting-row agent-tools-row">
+                    <div>
+                      <strong>{t("settings.agent.autoReplyReviewDeclined")}</strong>
+                      <span>{t("settings.agent.autoReplyReviewDeclinedDesc")}</span>
+                    </div>
+                    <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setAutoReplyDecisionsOpen(true)}>
+                      <MessageSquareX size={15} />{t("settings.agent.autoReplyReviewDeclinedAction")}
                     </button>
                   </div>
                   <div className="setting-row agent-tools-row">
@@ -1774,6 +1859,13 @@ export default function SettingsModal({
         <AutoReplyPendingDialog
           accounts={accounts}
           onClose={() => setAutoReplyDialogOpen(false)}
+          fallbackFocusRef={settingsDialog}
+        />
+      )}
+      {autoReplyDecisionsOpen && (
+        <AutoReplyDecisionsDialog
+          accounts={accounts}
+          onClose={() => setAutoReplyDecisionsOpen(false)}
           fallbackFocusRef={settingsDialog}
         />
       )}

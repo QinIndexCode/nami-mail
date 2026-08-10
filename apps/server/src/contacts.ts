@@ -51,7 +51,7 @@ export const contactUpdateSchema = z.object({
 }).strict()
   .refine((patch) => Object.keys(patch).length > 0, { message: "至少需要更新一个字段。" });
 
-type ContactRow = {
+export type ContactRow = {
   id: string;
   email_enc: string;
   name_enc: string;

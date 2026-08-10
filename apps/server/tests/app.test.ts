@@ -4,11 +4,35 @@ import os from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp, MAX_BACKGROUND_UPLOAD_BYTES } from "../src/app.js";
+import { AgentService } from "../src/agent-service.js";
+import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
+import { applyAgentStoreSchema } from "../src/agent/schema.js";
+import { AgentSourceEventOutbox } from "../src/agent/source-events.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { indexMessageFts } from "../src/message-search.js";
 import type { OAuthService } from "../src/oauth.js";
+
+const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
+
+vi.mock("../src/mail.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  return { ...actual, imapClientForAccount };
+});
+
+function readyMailClient() {
+  const lock = { release: vi.fn() };
+  return {
+    usable: true,
+    connect: vi.fn(async () => undefined),
+    getMailboxLock: vi.fn(async () => lock),
+    messageFlagsAdd: vi.fn(async () => undefined),
+    messageFlagsRemove: vi.fn(async () => undefined),
+    messageMove: vi.fn(async () => ({ uidMap: new Map<number, number>() })),
+    logout: vi.fn(async () => undefined),
+  };
+}
 
 async function createValidPng() {
   return sharp({
@@ -82,16 +106,22 @@ describe("local API", () => {
     expect(malformed.statusCode).toBe(400);
   });
 
-  it("aborts an active Agent stream when the client closes its response", async () => {
-    let observeAbort!: () => void;
-    const streamAborted = new Promise<void>((resolve) => { observeAbort = resolve; });
+it("keeps an Agent stream running after the client closes its response", async () => {
+    let markComplete!: () => void;
+    const streamCompleted = new Promise<void>((resolve) => { markComplete = resolve; });
     const agentService = {
       start: () => undefined,
       close: async () => undefined,
       async *streamMessage(_conversationId: string, _input: unknown, signal?: AbortSignal) {
-        signal?.addEventListener("abort", observeAbort, { once: true });
+        // Outlives the client: yield once, wait longer than the client stays
+        // connected, then finish. If the route cancelled the run on close,
+        // this generator would never reach the final events.
+        signal?.addEventListener("abort", () => undefined);
         yield { type: "status", message: "Streaming" };
-        await new Promise<void>((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+        await new Promise<void>((resolve) => setTimeout(resolve, 150));
+        yield { type: "text_delta", delta: "still working" };
+        yield { type: "completed", reason: "stop" };
+        markComplete();
       },
     };
     const streamingApp = await buildApp({
@@ -129,11 +159,106 @@ describe("local API", () => {
         }));
       });
       await Promise.race([
-        streamAborted,
-        new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("Response close did not abort the Agent stream.")), 1_000)),
+        streamCompleted,
+        new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("Closing the response stopped the Agent stream.")), 1_000)),
       ]);
     } finally {
       await streamingApp.close();
+    }
+  });
+
+  it("persists the completed Agent turn when the client closes mid-stream", async () => {
+    const serviceMasterKey = Buffer.alloc(32, 7);
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, 'custom', 'Demo', 'encrypted', 'imap.example.test', 993, 1,
+        'smtp.example.test', 465, 1, 'email', 'connected', ?)
+    `).run("agent-disconnect", "disconnect@example.test", now);
+    applyAgentStoreSchema(db, "2026-08-10T00:00:00.000Z");
+    const lifecycle = new AccountLifecycleStore(db, serviceMasterKey);
+    const sourceEvents = new AgentSourceEventOutbox(db, serviceMasterKey, lifecycle);
+    const agentService = new AgentService({ db, masterKey: serviceMasterKey, lifecycle, sourceEvents });
+    try {
+      const provider = agentService.createProvider({
+        label: "Local test provider",
+        kind: "ollama",
+        endpoint: "http://127.0.0.1:11434/v1",
+        model: "test-model",
+        timeoutMs: 30_000,
+        allowCloudMailContent: false,
+        makeDefault: true,
+      });
+      const conversation = agentService.createConversation({
+        providerId: provider.id,
+        scope: { mode: "selected_account", accountIds: ["agent-disconnect"], messageIds: [] },
+      });
+      const internals = agentService as unknown as {
+        rag: { search: (...arguments_: unknown[]) => Promise<unknown[]> };
+        runtime: { streamChat: (input: unknown) => AsyncIterable<unknown> };
+      };
+      vi.spyOn(internals.rag, "search").mockResolvedValue([]);
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+        yield { type: "text_delta", delta: "First half. " };
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        yield { type: "text_delta", delta: "Second half." };
+        yield { type: "completed", reason: "stop" };
+      });
+
+      const streamingApp = await buildApp({ db, masterKey: serviceMasterKey, backgroundDirectory, agentService });
+      await streamingApp.listen({ host: "127.0.0.1", port: 0 });
+      const address = streamingApp.server.address();
+      if (!address || typeof address === "string") throw new Error("Expected a TCP listener.");
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const client = httpRequest({
+            hostname: "127.0.0.1",
+            port: address.port,
+            method: "POST",
+            path: `/api/agent/conversations/${conversation.id}/messages`,
+            headers: { "content-type": "application/json" },
+          }, (response) => {
+            response.once("data", () => {
+              // The user moved away from the assistant panel mid-generation.
+              client.destroy();
+              resolve();
+            });
+          });
+          client.on("error", () => undefined);
+          client.once("error", reject);
+          client.end(JSON.stringify({
+            content: "Keep going",
+            providerId: provider.id,
+            mode: "agent",
+            scope: conversation.scope,
+            context: {},
+          }));
+        });
+
+        const deadline = Date.now() + 10_000;
+        let lastMessage: { role: string; content: string } | undefined;
+        let roles: string[] = [];
+        while (Date.now() < deadline) {
+          const response = await streamingApp.inject({ method: "GET", url: `/api/agent/conversations/${conversation.id}` });
+          const conversationSnapshot = response.json();
+          roles = conversationSnapshot.messages.map((message: { role: string }) => message.role);
+          lastMessage = conversationSnapshot.messages[conversationSnapshot.messages.length - 1];
+          if (roles[roles.length - 1] === "assistant") break;
+          await new Promise<void>((resolve) => setTimeout(resolve, 150));
+        }
+
+        expect(roles).toEqual(["user", "assistant"]);
+        expect(lastMessage).toMatchObject({ role: "assistant", content: "First half. Second half." });
+      } finally {
+        await streamingApp.close();
+      }
+    } finally {
+      agentService.close();
+      vi.restoreAllMocks();
     }
   });
 
@@ -626,7 +751,7 @@ describe("local API", () => {
       payload: { ids: ["missing-message", "also-missing"], patch: { seen: true } },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ ok: true, updated: 0, failed: 2 });
+    expect(response.json()).toEqual({ ok: true, updated: 0, failed: 2, changedIds: [] });
   });
 
   it("validates batch message moves and reports per-message outcomes", async () => {
@@ -652,6 +777,164 @@ describe("local API", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true, updated: 0, failed: 2 });
+  });
+
+  function seedJobAccount(accountId: string, archiveFolder = false) {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(accountId, `${accountId}@example.com`, "custom", "Job provider", "encrypted", "127.0.0.1", 1, 1, "127.0.0.1", 1, 1, "email", "connected", now);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(accountId, "INBOX", "INBOX", "\\Inbox", 0, 0);
+    if (archiveFolder) {
+      db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(accountId, "Archive", "Archive", "\\Archive", 0, 0);
+    }
+    const insertMessage = db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    return { now, insertMessage };
+  }
+
+  async function waitForJob(jobId: string, tries = 120) {
+    for (let attempt = 0; attempt < tries; attempt += 1) {
+      const response = await app.inject({ method: "GET", url: `/api/batch-jobs/${jobId}` });
+      expect(response.statusCode).toBe(200);
+      const job = response.json().job;
+      if (job.status !== "running") return job;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`batch job ${jobId} did not finish`);
+  }
+
+  it("resolves a predicate flag job server-side with real outcome counts", async () => {
+    imapClientForAccount.mockReturnValue(readyMailClient());
+    const { now, insertMessage } = seedJobAccount("job-flags");
+    insertMessage.run("job-inbox-1", "job-flags", "INBOX", 11, "Unread one", "Demo", "demo@example.com", "[]", now, "u1", "u1", "", "[]", 0, 10, now);
+    insertMessage.run("job-inbox-2", "job-flags", "INBOX", 12, "Unread two", "Demo", "demo@example.com", "[]", now, "u2", "u2", "", "[]", 0, 10, now);
+    insertMessage.run("job-read", "job-flags", "INBOX", 13, "Already read", "Demo", "demo@example.com", "[]", now, "r", "r", "", '["\\\\Seen"]', 0, 10, now);
+    indexMessageFts(db, "job-inbox-1", { subject: "Unread one", fromName: "Demo", fromAddress: "demo@example.com", textBody: "u1" });
+    indexMessageFts(db, "job-inbox-2", { subject: "Unread two", fromName: "Demo", fromAddress: "demo@example.com", textBody: "u2" });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/batch-jobs",
+      payload: { kind: "flags", patch: { seen: true }, query: { accountId: "job-flags", unread: true, q: "Unread" } },
+    });
+    expect(created.statusCode).toBe(200);
+    const { jobId } = created.json();
+
+    const job = await waitForJob(jobId);
+    // The predicate is resolved server-side to exactly the two unread
+    // messages, the remote STORE succeeds, and both are persisted + reported.
+    expect(job).toEqual({
+      id: jobId,
+      kind: "flags",
+      status: "completed",
+      total: 2,
+      done: 2,
+      updated: 2,
+      failed: 0,
+      createdAt: expect.any(Number),
+      changedIds: ["job-inbox-1", "job-inbox-2"],
+      undoWindowMs: expect.any(Number),
+    });
+    const inboxFlagged = (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("job-inbox-1") as { flags_json: string }).flags_json;
+    expect(JSON.parse(inboxFlagged)).toContain("\\Seen");
+    const untouched = (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("job-read") as { flags_json: string }).flags_json;
+    expect(JSON.parse(untouched)).toEqual(["\\Seen"]);
+  });
+
+  it("counts every message as failed when the provider is unreachable", async () => {
+    imapClientForAccount.mockReturnValue(undefined as never);
+    const { now, insertMessage } = seedJobAccount("job-dead");
+    insertMessage.run("job-dead-1", "job-dead", "INBOX", 21, "Stuck", "Demo", "demo@example.com", "[]", now, "s", "s", "", "[]", 0, 10, now);
+    insertMessage.run("job-dead-2", "job-dead", "INBOX", 22, "Stuck too", "Demo", "demo@example.com", "[]", now, "s2", "s2", "", "[]", 0, 10, now);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/batch-jobs",
+      payload: { kind: "flags", patch: { seen: true }, query: { accountId: "job-dead" } },
+    });
+    const { jobId } = created.json();
+
+    const job = await waitForJob(jobId);
+    // Nothing reached the server, so nothing may be persisted or counted as
+    // "updated" — every message must surface as failed instead.
+    expect(job).toMatchObject({ status: "completed", total: 2, done: 2, updated: 0, failed: 2 });
+    const stale = (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("job-dead-1") as { flags_json: string }).flags_json;
+    expect(JSON.parse(stale)).toEqual([]);
+  });
+
+  it("rejects malformed job payloads and unknown job ids", async () => {
+    for (const payload of [
+      { kind: "flags", patch: { seen: true }, query: { accountId: "x", unknown: true } },
+      { kind: "move", target: "sent", query: {} },
+      { kind: "flags", patch: {}, query: {} },
+      { kind: "nope", query: {} },
+    ]) {
+      const response = await app.inject({ method: "POST", url: "/api/batch-jobs", payload });
+      expect(response.statusCode).toBe(400);
+    }
+    const missing = await app.inject({ method: "GET", url: "/api/batch-jobs/does-not-exist" });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it("supports exactly one undo per job and refuses double undo", async () => {
+    imapClientForAccount.mockReturnValue(readyMailClient());
+    const { now, insertMessage } = seedJobAccount("job-undo");
+    insertMessage.run("job-undo-1", "job-undo", "INBOX", 31, "Unread", "Demo", "demo@example.com", "[]", now, "u", "u", "", "[]", 0, 10, now);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/batch-jobs",
+      payload: { kind: "flags", patch: { seen: true }, query: { accountId: "job-undo" } },
+    });
+    const { jobId } = created.json();
+    await waitForJob(jobId);
+
+    const firstUndo = await app.inject({ method: "POST", url: `/api/batch-jobs/${jobId}/undo`, payload: {} });
+    expect(firstUndo.statusCode).toBe(200);
+    expect(firstUndo.json()).toMatchObject({ ok: true });
+    const undoJobId = firstUndo.json().jobId;
+    await waitForJob(undoJobId);
+    const reverted = (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("job-undo-1") as { flags_json: string }).flags_json;
+    expect(JSON.parse(reverted)).toEqual([]);
+
+    const secondUndo = await app.inject({ method: "POST", url: `/api/batch-jobs/${jobId}/undo`, payload: {} });
+    expect(secondUndo.statusCode).toBe(409);
+    expect(secondUndo.json()).toMatchObject({ ok: false, reason: "already_undone" });
+  });
+
+  it("moves every message matching a view predicate behind one job", async () => {
+    const mailClient = readyMailClient();
+    mailClient.messageMove.mockImplementation(async () => ({ uidMap: new Map([[41, 101]]) }));
+    imapClientForAccount.mockReturnValue(mailClient);
+    const { now, insertMessage } = seedJobAccount("job-move", true);
+    insertMessage.run("job-move-1", "job-move", "INBOX", 41, "Move me", "Demo", "demo@example.com", "[]", now, "m", "m", "", "[]", 0, 10, now);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/batch-jobs",
+      payload: { kind: "move", target: "archive", query: { accountId: "job-move", unread: true } },
+    });
+    expect(created.statusCode).toBe(200);
+    const { jobId } = created.json();
+
+    const job = await waitForJob(jobId);
+    // The predicate is resolved server-side and the UIDPLUS-confirmed move is
+    // persisted locally and counted as updated.
+    expect(job).toMatchObject({ status: "completed", total: 1, done: 1, updated: 1, failed: 0 });
+    expect(job.changedIds).toEqual([]);
+    const moved = db.prepare("SELECT mailbox, uid FROM messages WHERE id = ?").get("job-move-1") as { mailbox: string; uid: number };
+    expect(moved).toEqual({ mailbox: "Archive", uid: 101 });
   });
 
   it("updates and exposes an account signature", async () => {

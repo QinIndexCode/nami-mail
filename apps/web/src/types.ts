@@ -307,14 +307,62 @@ export type CloseBehavior = "ask" | "tray" | "quit";
 export type ListDensity = "comfortable" | "compact";
 export type AgentAccessLevel = "read-only" | "send-confirmed" | "full-access";
 
+export type AutoReplyMode = "llm" | "template";
+
+export type AutoReplyScopeField = "from" | "domain" | "subject";
+export type AutoReplyScopeOperator = "contains" | "not-contains" | "equals";
+export type AutoReplyScopeAction = "reply" | "ignore";
+
+export type AutoReplyScopeRule = {
+  id: string;
+  field: AutoReplyScopeField;
+  op: AutoReplyScopeOperator;
+  value: string;
+  action: AutoReplyScopeAction;
+  enabled: boolean;
+};
+
+export type AutoReplyScope = {
+  contactsOnly: boolean;
+  startDate: string | null;
+  endDate: string | null;
+  threadOnce: boolean;
+  rules: AutoReplyScopeRule[];
+};
+
+export type AutoReplyTemplate = {
+  text: string;
+  skipConfirmation: boolean;
+};
+
 export type AutoReplyConfig = {
   enabled: boolean;
   /** Mailbox scope selected by the user; empty means nothing is monitored. */
   accountIds: string[];
-  /** Auto-replies are always drafted for user confirmation before sending. */
-  requireConfirmation: true;
+  /** llm = Agent drafts each reply; template = fixed template with placeholder substitution. */
+  mode: AutoReplyMode;
+  template: AutoReplyTemplate;
+  scope: AutoReplyScope;
+  /** LLM-mode auto-replies are always drafted for user confirmation before sending. */
+  requireConfirmation: boolean;
   /** Per-account daily cap on confirmed auto-replies. */
   dailyLimitPerAccount: number;
+};
+
+/** Mirrors the server-side decline reasons surfaced by the auto-reply review dialog. */
+export type AutoReplyDecisionReason =
+  | "screening" | "scope" | "low-value" | "sensitive" | "user-rejected"
+  | "daily-cap" | "llm-failed" | "send-failed" | "no-template" | "expired";
+
+export type AutoReplyDecisionRecord = {
+  id: string;
+  accountId: string;
+  reason: AutoReplyDecisionReason;
+  fromAddress: string;
+  fromName: string;
+  subject: string;
+  detail: string;
+  occurredAt: string;
 };
 
 export type AppSettings = {
@@ -360,6 +408,9 @@ export const defaultAppSettings: AppSettings = {
   autoReply: {
     enabled: false,
     accountIds: [],
+    mode: "llm",
+    template: { text: "", skipConfirmation: false },
+    scope: { contactsOnly: false, startDate: null, endDate: null, threadOnce: true, rules: [] },
     requireConfirmation: true,
     dailyLimitPerAccount: 30,
   },

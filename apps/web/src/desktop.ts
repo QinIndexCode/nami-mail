@@ -10,6 +10,31 @@ export type DesktopMailNotice = {
   playCustomSound: boolean;
 };
 
+export type DesktopAutoReplyNotice =
+  | {
+    kind: "pending";
+    confirmationId: string;
+    requestId: string;
+    accountId: string;
+    messageId: string;
+    subject: string;
+    fromName: string;
+    fromAddress: string;
+    sensitive: boolean;
+    createdAt: string;
+    expiresAt: string;
+    replyPreview: string;
+  }
+  | {
+    kind: "sent";
+    messageId: string;
+    accountId: string;
+    subject: string;
+    toName: string;
+    toAddress: string;
+    replyPreview: string;
+  };
+
 type NativeNotification = {
   title: string;
   body: string;
@@ -83,6 +108,29 @@ const updateInstallResultKeys = new Set(["accepted", "snapshot"]);
 const agentConfirmationIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const agentConfirmationDecisions = ["approve", "reject"] as const;
 const agentConfirmationResultKeys = new Set(["confirmationId", "decision", "ok"]);
+const autoReplyPendingKeys = new Set([
+  "kind",
+  "confirmationId",
+  "requestId",
+  "accountId",
+  "messageId",
+  "subject",
+  "fromName",
+  "fromAddress",
+  "sensitive",
+  "createdAt",
+  "expiresAt",
+  "replyPreview",
+]);
+const autoReplySentKeys = new Set([
+  "kind",
+  "messageId",
+  "accountId",
+  "subject",
+  "toName",
+  "toAddress",
+  "replyPreview",
+]);
 
 export type DesktopUpdatePhase = typeof updatePhases[number];
 export type DesktopUpdateSuppression = typeof updateSuppressions[number];
@@ -222,6 +270,64 @@ export function normalizeDesktopAgentConfirmationResult(value: unknown): Desktop
   };
 }
 
+export function normalizeDesktopAutoReplyNotice(value: unknown): DesktopAutoReplyNotice | undefined {
+  if (!isPlainRecord(value) || !isNonBlankString(value.kind)) return undefined;
+  if (value.kind === "pending") {
+    if (!hasOnlyKeys(value, autoReplyPendingKeys)
+      || !hasAllKeys(value, autoReplyPendingKeys)
+      || typeof value.confirmationId !== "string"
+      || !agentConfirmationIdentifierPattern.test(value.confirmationId)
+      || !isNonBlankString(value.requestId)
+      || !isNonBlankString(value.accountId)
+      || !isNonBlankString(value.messageId)
+      || typeof value.subject !== "string"
+      || typeof value.fromName !== "string"
+      || !isNonBlankString(value.fromAddress)
+      || typeof value.sensitive !== "boolean"
+      || !isNonBlankString(value.createdAt)
+      || !isNonBlankString(value.expiresAt)
+      || typeof value.replyPreview !== "string") {
+      return undefined;
+    }
+    return {
+      kind: "pending",
+      confirmationId: value.confirmationId,
+      requestId: value.requestId,
+      accountId: value.accountId,
+      messageId: value.messageId,
+      subject: value.subject,
+      fromName: value.fromName,
+      fromAddress: value.fromAddress,
+      sensitive: value.sensitive,
+      createdAt: value.createdAt,
+      expiresAt: value.expiresAt,
+      replyPreview: value.replyPreview,
+    };
+  }
+  if (value.kind === "sent") {
+    if (!hasOnlyKeys(value, autoReplySentKeys)
+      || !hasAllKeys(value, autoReplySentKeys)
+      || !isNonBlankString(value.messageId)
+      || !isNonBlankString(value.accountId)
+      || typeof value.subject !== "string"
+      || typeof value.toName !== "string"
+      || !isNonBlankString(value.toAddress)
+      || typeof value.replyPreview !== "string") {
+      return undefined;
+    }
+    return {
+      kind: "sent",
+      messageId: value.messageId,
+      accountId: value.accountId,
+      subject: value.subject,
+      toName: value.toName,
+      toAddress: value.toAddress,
+      replyPreview: value.replyPreview,
+    };
+  }
+  return undefined;
+}
+
 export type DesktopBridge = {
   notify: (payload: NativeNotification) => Promise<{ shown: boolean }>;
   copyVerificationCode: (code: string) => Promise<{ copied: boolean }>;
@@ -236,13 +342,15 @@ export type DesktopBridge = {
   installUpdate: () => Promise<DesktopUpdateInstallResult>;
   setCustomNotificationSoundReady: (ready: boolean) => void;
   onNewMail: (listener: (payload: DesktopMailNotice) => void) => () => void;
+  onAutoReply?: (listener: (notice: DesktopAutoReplyNotice) => void) => () => void;
   onOpenMessage: (listener: (id: string) => void) => () => void;
   onSettingsChanged: (listener: () => void) => () => void;
   onUpdateStatus: (listener: (snapshot: DesktopUpdateSnapshot) => void) => () => void;
 };
 
-type RawDesktopBridge = Omit<DesktopBridge, "onAgentConfirmationResult"> & {
+type RawDesktopBridge = Omit<DesktopBridge, "onAgentConfirmationResult" | "onAutoReply"> & {
   onAgentConfirmationResult?: (listener: (result: unknown) => void) => () => void;
+  onAutoReply?: (listener: (event: unknown) => void) => () => void;
 };
 
 declare global {
@@ -260,6 +368,12 @@ export function desktopBridge(): DesktopBridge | undefined {
       ? (listener) => bridge.onAgentConfirmationResult!((value) => {
         const result = normalizeDesktopAgentConfirmationResult(value);
         if (result) listener(result);
+      })
+      : undefined,
+    onAutoReply: bridge.onAutoReply
+      ? (listener) => bridge.onAutoReply!((value) => {
+        const notice = normalizeDesktopAutoReplyNotice(value);
+        if (notice) listener(notice);
       })
       : undefined,
     getUpdateStatus: () => bridge.getUpdateStatus().then(normalizeDesktopUpdateSnapshot),

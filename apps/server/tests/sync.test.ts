@@ -22,6 +22,7 @@ import {
   moveMessage,
   syncAccount,
   updateMessageFlags,
+  updateMessageFlagsBatch,
   verifySubmissionInSentMailbox,
 } from "../src/sync.js";
 
@@ -119,6 +120,101 @@ describe("IMAP message flag updates", () => {
     const folder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX") as { unseen: number };
     expect(JSON.parse(message.flags_json)).toEqual(["\\Seen", "$Custom"]);
     expect(folder.unseen).toBe(0);
+  });
+
+  it("applies a batch flag update with one connection and one STORE per flag group", async () => {
+    const now = new Date().toISOString();
+    for (const [id, uid, flags] of [
+      ["message-2", 43, ["\\Seen"]],
+      ["message-3", 44, ["\\Seen", "$Custom"]],
+    ] as const) {
+      db.prepare(`
+        INSERT INTO messages (
+          id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+          sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, "account-1", "INBOX", uid, "Subject", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([...flags]), 0, 0, now);
+    }
+
+    const result = await updateMessageFlagsBatch(
+      db, Buffer.alloc(32, 7), ["message-1", "message-2", "message-3"], { seen: true, flagged: true },
+    );
+
+    expect(result).toEqual({ updated: 3, failed: 0, changedIds: ["message-1", "message-2", "message-3"] });
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    expect(client.getMailboxLock).toHaveBeenCalledTimes(1);
+    // \\Seen already present on all three; only \\Flagged needs a STORE, in one call with all UIDs.
+    expect(client.messageFlagsAdd).toHaveBeenCalledTimes(1);
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith([42, 43, 44], ["\\Flagged"], { uid: true });
+    expect(client.messageFlagsRemove).toHaveBeenCalledTimes(0);
+    expect(lock.release).toHaveBeenCalledTimes(1);
+    expect(client.logout).toHaveBeenCalledTimes(1);
+    for (const id of ["message-1", "message-2", "message-3"]) {
+      const row = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get(id) as { flags_json: string };
+      expect(JSON.parse(row.flags_json)).toEqual(expect.arrayContaining(["\\Seen", "\\Flagged"]));
+    }
+    const folder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX") as { unseen: number };
+    expect(folder.unseen).toBe(0);
+  });
+
+  it("reports missing and pending-move messages as failed without touching IMAP", async () => {
+    const now = new Date().toISOString();
+    await updateMessageFlags(db, Buffer.alloc(32, 7), "message-1", { seen: false });
+    let current = db.prepare("SELECT * FROM messages WHERE id = ?").get("message-1") as { flags_json: string };
+
+    const result = await updateMessageFlagsBatch(
+      db, Buffer.alloc(32, 7), ["message-1", "message-missing"], { seen: true },
+    );
+
+    expect(result).toEqual({ updated: 1, failed: 1, changedIds: ["message-1"] });
+    expect(client.messageFlagsAdd).toHaveBeenCalledTimes(1);
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith([42], ["\\Seen"], { uid: true });
+    const row = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("message-1") as { flags_json: string };
+    expect(JSON.parse(row.flags_json)).toContain("\\Seen");
+  });
+
+  it("does not persist any local changes when the remote batch STORE fails", async () => {
+    client.messageFlagsAdd.mockRejectedValueOnce(new Error("IMAP rejected batch flag update"));
+
+    const result = await updateMessageFlagsBatch(
+      db, Buffer.alloc(32, 7), ["message-1"], { flagged: true },
+    );
+
+    expect(result).toEqual({ updated: 0, failed: 1, changedIds: [] });
+    const row = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("message-1") as { flags_json: string };
+    expect(JSON.parse(row.flags_json)).toEqual(["\\Seen", "$Custom"]);
+    expect(client.logout).toHaveBeenCalledTimes(1);
+  });
+
+  it("groups messages across mailboxes into separate STORE commands on a shared connection", async () => {
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 1, 0);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("message-4", "account-1", "Archive", 99, "Archived", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+
+    const result = await updateMessageFlagsBatch(
+      db, Buffer.alloc(32, 7), ["message-1", "message-4"], { seen: true },
+    );
+
+    expect(result).toEqual({ updated: 2, failed: 0, changedIds: ["message-4"] });
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    expect(client.getMailboxLock).toHaveBeenCalledTimes(2);
+    expect(client.getMailboxLock).toHaveBeenNthCalledWith(1, "INBOX");
+    expect(client.getMailboxLock).toHaveBeenNthCalledWith(2, "Archive");
+    // Only the Archive message actually needs a STORE; the INBOX message was
+    // already seen, so its mailbox contributes no STORE command.
+    expect(client.messageFlagsAdd).toHaveBeenCalledTimes(1);
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith([99], ["\\Seen"], { uid: true });
+    expect(client.messageFlagsRemove).toHaveBeenCalledTimes(0);
+    const inboxFolder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX") as { unseen: number };
+    const archiveFolder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Archive") as { unseen: number };
+    expect(inboxFolder.unseen).toBe(0);
+    expect(archiveFolder.unseen).toBe(0);
   });
 
   it("preserves the encrypted source cache row when UIDPLUS maps an archive move into Gmail All Mail", async () => {

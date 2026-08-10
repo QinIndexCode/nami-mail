@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components, type UrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -63,7 +64,7 @@ const markdownComponents: Components = {
  * autolink literals. Remote images remain opt-in links to avoid background
  * requests from model-provided content.
  */
-export function AgentMarkdown({ content }: { content: string }) {
+export const AgentMarkdown = memo(function AgentMarkdownInner({ content }: { content: string }) {
   return (
     <div className="agent-message-content">
       <ReactMarkdown
@@ -76,4 +77,4 @@ export function AgentMarkdown({ content }: { content: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});

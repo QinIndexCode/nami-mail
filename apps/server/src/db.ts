@@ -242,6 +242,31 @@ CREATE INDEX IF NOT EXISTS idx_auto_reply_processed_account_occurred
 CREATE INDEX IF NOT EXISTS idx_auto_reply_processed_thread
   ON auto_reply_processed(thread_key);
 
+-- Audit of auto-reply declines and failures. Sender/subject/detail are
+-- encrypted with a derived master-key envelope; reason/thread_key/occurred_at
+-- stay plaintext so the review dialog can filter without decrypting rows.
+CREATE TABLE IF NOT EXISTS auto_reply_decisions (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  thread_key TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK (reason IN (
+    'screening', 'scope', 'low-value', 'sensitive', 'user-rejected',
+    'daily-cap', 'llm-failed', 'send-failed', 'no-template', 'expired'
+  )),
+  encrypted_payload TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_auto_reply_decisions_account_occurred
+  ON auto_reply_decisions(account_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_auto_reply_decisions_thread
+  ON auto_reply_decisions(thread_key);
+CREATE INDEX IF NOT EXISTS idx_auto_reply_decisions_reason_occurred
+  ON auto_reply_decisions(reason, occurred_at);
+
 CREATE TABLE IF NOT EXISTS filter_rules (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

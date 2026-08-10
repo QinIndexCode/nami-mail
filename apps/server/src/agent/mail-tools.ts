@@ -231,6 +231,7 @@ function mailFailure(error: unknown, signal?: AbortSignal): AgentError {
     code: "TOOL_EXECUTION_FAILED",
     message: "The mail operation could not complete.",
     retryable: true,
+    ...(error instanceof Error ? { suggestion: error.message.slice(0, 200) } : {}),
   });
 }
 
@@ -525,9 +526,12 @@ function messagesBatchGetTool(mailApplication: MailApplicationService): AgentToo
     execute: async (context, input) => {
       const denied = requireScope<BatchMessagesOutput>(context);
       if (denied) return denied;
+      // De-duplicate requested ids up front (order preserved): reading the same
+      // message twice wastes a DB hit and would leak duplicates into the result.
+      const messageIds = [...new Set(input.messageIds)];
       const results: z.infer<typeof messageDetailOutputSchema>[] = [];
       const notFound: string[] = [];
-      for (const messageId of input.messageIds) {
+      for (const messageId of messageIds) {
         const messageDenied = requireMessage<BatchMessagesOutput>(context, messageId);
         if (messageDenied) return messageDenied;
         const result = await fromMailApplication(context, () => mailApplication.getMessage(scopedContext(context), messageId));
