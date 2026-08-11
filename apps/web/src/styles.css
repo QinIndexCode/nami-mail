@@ -1903,7 +1903,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .agent-context-strip:has(.agent-privacy-notice), .agent-context-strip:has(.agent-current-context) { min-height: 48px; height: auto; padding: 8px 18px; border-bottom: 1px solid var(--line); background: var(--panel-muted); }
 .agent-mode-switch, .agent-scope-switch { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-solid); }
 .agent-mode-switch, .agent-scope-switch { position: relative; }
-.agent-mode-switch .agent-mode-thumb, .agent-scope-switch .agent-scope-thumb { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 2 - 2px); border-radius: 5px; background: var(--selected); transition: left .22s cubic-bezier(.2, .8, .2, 1); }
+.agent-mode-switch .agent-mode-thumb, .agent-scope-switch .agent-scope-thumb { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 2 - 2px); border-radius: 999px; background: var(--selected); transition: left .22s cubic-bezier(.2, .8, .2, 1); }
 .agent-mode-switch[data-mode="chat"] .agent-mode-thumb { left: calc((100% - 6px) / 2 + 5px); }
 .agent-scope-switch .agent-scope-thumb { width: calc((100% - 8px) / 3 - 2px); }
 .agent-scope-switch[data-scope="selected_account"] .agent-scope-thumb { left: calc((100% - 8px) / 3 + 5px); }
