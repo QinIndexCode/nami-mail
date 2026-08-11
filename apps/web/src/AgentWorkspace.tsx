@@ -17,7 +17,6 @@ import {
   LoaderCircle,
   MessageCircle,
   MessageCirclePlus,
-  MessageSquarePlus,
   MoreHorizontal,
   PanelLeftClose,
   Pencil,
@@ -2555,7 +2554,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
         <div className="agent-sidebar-search"><Search size={15} /><label className="visually-hidden" htmlFor="agent-conversation-search">{t("agent.conversation.search")}</label><input id="agent-conversation-search" value={conversationSearch} onChange={(event) => setConversationSearch(event.target.value)} placeholder={t("agent.conversation.searchPlaceholder")} /></div>
         <div className="agent-conversation-list">
           {loading && <div className="agent-sidebar-state"><LoaderCircle className="spin" size={18} />{t("agent.loading")}</div>}
-          {!loading && !filteredConversations.length && <div className="agent-sidebar-state"><MessageSquarePlus size={18} />{t("agent.conversation.empty")}</div>}
+          {!loading && !filteredConversations.length && <div className="agent-sidebar-state"><MessageCircle size={18} />{t("agent.conversation.empty")}</div>}
           {filteredConversations.map((conversation) => (
             <div key={conversation.id} className={`agent-conversation-row ${active?.id === conversation.id ? "active" : ""}`}>
               <button type="button" onClick={() => { setMobileConversationsOpen(false); void selectConversation(conversation.id); }} disabled={streaming}><span><strong>{conversation.title}</strong><small>{conversation.preview || t("agent.conversation.emptyPreview")}</small></span><time>{shortDate(conversation.updatedAt, locale)}</time></button>
