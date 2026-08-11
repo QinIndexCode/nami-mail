@@ -146,11 +146,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .nav-section button span, .folder-list button span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .nav-section em, .folder-list em { min-width: 18px; color: var(--text-faint); font-size: 10px; font-style: normal; text-align: right; }
 .accounts-heading { display: flex; align-items: center; justify-content: space-between; margin: 22px 5px 7px 9px; color: var(--text-faint); font-family: "DM Mono", monospace; font-size: 10px; letter-spacing: 0; text-transform: uppercase; }
-.account-list { display: flex; flex: 0 1 auto; flex-direction: column; min-height: 0; gap: 2px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 1px 0; }
-.account-list > button { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 48px; padding: 7px 8px; border: 0; border-radius: 10px; background: transparent; color: var(--text-soft); cursor: pointer; text-align: left; transition: background .16s ease, color .16s ease, box-shadow .16s ease; }
+.account-list { display: flex; flex: 0 1 auto; flex-direction: column; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 1px 0; }
+.account-list > button { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 48px; max-height: 62px; margin-top: 2px; overflow: hidden; padding: 7px 8px; border: 0; border-radius: 10px; background: transparent; color: var(--text-soft); cursor: pointer; text-align: left; transition: background .16s ease, color .16s ease, box-shadow .16s ease, min-height .32s ease, max-height .32s ease, margin .32s ease, padding .32s ease, opacity .32s ease, visibility 0s; }
 .account-list > button:hover { background: var(--hover); color: var(--text); }
 .account-list > button.active { background: var(--selected); color: var(--text); font-weight: 600; }
 .account-list > button:focus-visible { outline: none; background: var(--selected); color: var(--text); box-shadow: 0 0 0 3px var(--focus-ring-subtle); }
+/* Unselected account rows fold away so the folder list gets the room;
+   the collapse animates height/margin/padding and hides last (.32s
+   visibility delay) while the selected row stays put. */
+.account-list > button.hidden { min-height: 0; max-height: 0; margin-top: 0; padding-top: 0; padding-bottom: 0; opacity: 0; visibility: hidden; pointer-events: none; transition: min-height .32s ease, max-height .32s ease, margin .32s ease, padding .32s ease, opacity .32s ease, visibility 0s linear .32s; }
 .account-avatar, .sender-avatar { flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--selected); color: var(--text); font-size: 10px; font-weight: 700; }
 .account-avatar { width: 29px; height: 29px; }
 .account-avatar.all { background: var(--text); color: var(--panel-solid); }
@@ -167,7 +171,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .account-copy small { overflow: hidden; margin-top: 2px; color: var(--text-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 14%, transparent); }
 .status-dot.error { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent); }
-.folder-list { overflow-x: hidden; overflow-y: auto; min-height: 0; max-height: min(36vh, 300px); margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--line); }
+.folder-list { overflow-x: hidden; overflow-y: hidden; min-height: 0; max-height: 0; margin-top: 0; padding-top: 0; border-top: 1px solid var(--line); border-top-width: 0; opacity: 0; visibility: hidden; pointer-events: none; transition: max-height .32s ease, opacity .32s ease, margin-top .32s ease, padding-top .32s ease, border-top-width .32s ease, visibility 0s linear .32s; }
+.folder-list.show { overflow-y: auto; max-height: min(36vh, 300px); margin-top: 16px; padding-top: 13px; border-top-width: 1px; opacity: 1; visibility: visible; pointer-events: auto; transition: max-height .32s ease, opacity .32s ease, margin-top .32s ease, padding-top .32s ease, border-top-width .32s ease; }
 .folder-title { display: block; margin: 0 9px 6px; color: var(--text-faint); font-family: "DM Mono", monospace; font-size: 10px; letter-spacing: 0; text-transform: uppercase; }
 .sidebar-footer { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding: 12px 7px 0; border-top: 1px solid var(--line); }
 .sidebar-footer > div { display: flex; align-items: center; gap: 8px; color: var(--text-soft); }
