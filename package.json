@@ -76,9 +76,9 @@
     "@electron/asar": "^4.2.1",
     "@electron/rebuild": "^4.2.0",
     "concurrently": "^10.0.4",
-    "electron": "^43.2.0",
+    "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
-    "js-yaml": "^5.2.2"
+    "js-yaml": "^5.2.3"
   },
   "overrides": {
     "@huggingface/transformers": {
