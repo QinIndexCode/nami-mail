@@ -24,7 +24,7 @@ import {
   Plus,
   Reply,
   Search,
-  Slash,
+  SquareSlash,
   ArrowUp,
   ChevronDown,
   Server,
@@ -2787,7 +2787,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
             <div className="agent-composer-bar">
               <div className="agent-composer-bar-left" ref={permissionRef}>
                 <button className="agent-composer-attach" type="button" onClick={() => fileInputRef.current?.click()} disabled={streaming} aria-label={t("agent.composer.attachFile")} data-tooltip={t("agent.composer.attachFile")}><Plus size={16} /></button>
-                {mode === "agent" && <button className="agent-composer-attach agent-composer-slash" type="button" onClick={() => { if (composer.trim()) return; setComposer("/"); setSlashDismissed(false); window.requestAnimationFrame(() => { const el = composerRef.current; if (el) { el.focus(); el.setSelectionRange(1, 1); } }); }} disabled={streaming || composer.trim().length > 0} aria-label={t("agent.commands.open")} data-tooltip={t("agent.commands.open")}><Slash size={16} /></button>}
+                {mode === "agent" && <button className="agent-composer-attach agent-composer-slash" type="button" onClick={() => { if (composer.trim()) return; setComposer("/"); setSlashDismissed(false); window.requestAnimationFrame(() => { const el = composerRef.current; if (el) { el.focus(); el.setSelectionRange(1, 1); } }); }} disabled={streaming || composer.trim().length > 0} aria-label={t("agent.commands.open")} data-tooltip={t("agent.commands.open")}><SquareSlash size={16} /></button>}
                 {/* Permission control is mail-operation scoped, so it only
                     matters in the mail-assistant mode; plain chat hides it. */}
                 {hasConfiguredProvider && mode === "agent" && (
