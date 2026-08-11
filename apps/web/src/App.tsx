@@ -1781,7 +1781,11 @@ export default function App() {
   }, [accounts, openCompose, safeHtml, selected]);
 
   const moveSelectedMessage = async (target: "archive" | "trash") => {
-    if (!selected || messageAction || messageFlagging || selectedRemoteActionsBlocked || (target === "archive" && selectedIsArchived)) return;
+    if (!selected || selectedRemoteActionsBlocked || (target === "archive" && selectedIsArchived)) return;
+    // A second write while the account has an operation in flight is queued
+    // server-side (the request waits for the account write slot); surface
+    // that instead of silently dropping the click.
+    if (messageAction || messageFlagging || batchBusy) showToast(t("mail.action.queued"), "info");
     // A response started before this confirmed MOVE still describes the
     // source mailbox. Keep it from replacing the local destination state.
     if (!isDemo) loadRequestRef.current += 1;
@@ -2100,7 +2104,8 @@ export default function App() {
 
   const batchUpdateFlags = async (patch: { seen?: boolean; flagged?: boolean }, successKey: string) => {
     const ids = [...selectedMessageIds];
-    if ((!ids.length && !selectAllPaged) || batchBusy || !Object.keys(patch).length) return;
+    if ((!ids.length && !selectAllPaged) || !Object.keys(patch).length) return;
+    if (batchBusy) showToast(t("mail.action.queued"), "info");
     // Predicate scope: server resolves every matching id behind a job.
     if (selectionJobQuery) {
       startBatchJob({ kind: "flags", patch, query: selectionJobQuery }, { successKey, exitOnSuccess: false });
@@ -2140,7 +2145,8 @@ export default function App() {
 
   const batchMoveMessages = async (target: "archive" | "trash") => {
     const ids = [...selectedMessageIds];
-    if ((!ids.length && !selectAllPaged) || batchBusy) return;
+    if (!ids.length && !selectAllPaged) return;
+    if (batchBusy) showToast(t("mail.action.queued"), "info");
     // Predicate scope: server moves every matching id behind a job.
     if (selectionJobQuery) {
       startBatchJob({ kind: "move", target, query: selectionJobQuery }, { successKey: target === "archive" ? "mail.selection.archived" : "mail.selection.trashed", exitOnSuccess: true });
@@ -2276,7 +2282,8 @@ export default function App() {
   };
 
   const toggleSelectedStar = async () => {
-    if (!selected || messageFlagging || selectedRemoteActionsBlocked) return;
+    if (!selected || selectedRemoteActionsBlocked) return;
+    if (messageFlagging || messageAction) showToast(t("mail.action.queued"), "info");
     const nextFlagged = !selected.flagged;
     setMessageFlagging(true);
     try {
@@ -2298,7 +2305,7 @@ export default function App() {
   };
 
   const toggleSelectedSeen = async () => {
-    if (!selected || messageFlagging || selectedRemoteActionsBlocked || seenMutationIdsRef.current.has(selected.id)) return;
+    if (!selected || selectedRemoteActionsBlocked || seenMutationIdsRef.current.has(selected.id)) return;
     const nextSeen = !selected.seen;
     seenMutationIdsRef.current.add(selected.id);
     setMessageFlagging(true);
@@ -2319,7 +2326,8 @@ export default function App() {
   };
 
   const quickToggleStar = async (message: Message) => {
-    if (messageFlagging || selectedRemoteActionsBlocked) return;
+    if (selectedRemoteActionsBlocked) return;
+    if (messageFlagging || messageAction) showToast(t("mail.action.queued"), "info");
     const nextFlagged = !message.flagged;
     setMessageFlagging(true);
     try {
@@ -2341,7 +2349,9 @@ export default function App() {
   };
 
   const quickMoveMessage = async (message: Message, target: "archive" | "trash") => {
-    if (batchBusy || messageAction !== null || messageFlagging) return;
+    // The server queues a second write behind the in-flight one; surface that
+    // instead of silently dropping the click.
+    if (batchBusy || messageAction !== null || messageFlagging) showToast(t("mail.action.queued"), "info");
     // Keep an in-flight reload from resurrecting the row from pre-move state
     // while the optimistic apply is live.
     if (!isDemo) loadRequestRef.current += 1;
@@ -2491,7 +2501,7 @@ export default function App() {
   }, [accounts]);
 
   const setSelectedSnoozed = async (untilIso: string) => {
-    if (!selected || snoozeBusy || selectedRemoteActionsBlocked) return;
+    if (!selected || selectedRemoteActionsBlocked) return;
     const previousUntil = selected.snoozedUntil ?? null;
     setSnoozeBusy(true);
     setSnoozeOpen(false);
@@ -2511,7 +2521,7 @@ export default function App() {
   };
 
   const clearSelectedSnooze = async () => {
-    if (!selected || snoozeBusy) return;
+    if (!selected) return;
     const previousUntil = selected.snoozedUntil ?? null;
     setSnoozeBusy(true);
     setSnoozeOpen(false);
@@ -2755,6 +2765,58 @@ export default function App() {
       unsubscribeConfirmationResult?.();
     };
   }, [openNotifiedMessage, settings.notificationSound, showToast, silentRefresh, t]);
+
+  // Plain web sessions have no desktop bridge to push auto-reply events, so
+  // poll the pending list and surface newly drafted replies as toasts. The
+  // bridge-owned effect above handles the desktop runtime exclusively.
+  useEffect(() => {
+    if (isDemo || desktopBridge()) return undefined;
+    let known = new Set<string>();
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const { items } = await api.autoReplyPending();
+        if (disposed) return;
+        const nextKnown = new Set(items.map((item) => item.confirmationId));
+        const additions = items
+          .filter((item) => !known.has(item.confirmationId))
+          .map((item): DesktopAutoReplyNotice => ({
+            kind: "pending",
+            confirmationId: item.confirmationId,
+            requestId: item.requestId,
+            accountId: item.accountId,
+            messageId: item.messageId,
+            subject: item.subject,
+            fromName: item.fromName,
+            fromAddress: item.fromAddress,
+            sensitive: item.sensitive,
+            createdAt: item.createdAt,
+            expiresAt: item.expiresAt,
+            replyPreview: item.preview.summary,
+          }));
+        known = nextKnown;
+        if (additions.length > 0) {
+          setAutoReplyNotices((current) => {
+            const merged = [...current];
+            for (const notice of additions) {
+              if (!merged.some((item) => autoReplyNoticeKey(item) === autoReplyNoticeKey(notice))) merged.push(notice);
+            }
+            return merged.slice(-5);
+          });
+        }
+        // Drafts that were resolved or expired elsewhere must not linger.
+        setAutoReplyNotices((current) => current.filter((item) => item.kind === "sent" || nextKnown.has(item.confirmationId)));
+      } catch {
+        // Polling failures are silent; the review dialog surfaces errors.
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 20_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [isDemo]);
 
   useEffect(() => {
     if (!isDesktopSmoke) return;
@@ -3017,16 +3079,16 @@ export default function App() {
 
           {selectionMode ? (
             <div className="list-toolbar selection-toolbar">
-              <button className="selection-select-all" type="button" onClick={selectAllVisibleMessages} disabled={batchBusy || !filteredMessages.length}>{selectAllPaged ? t("mail.selection.selectAllMatching", { count: currentMessageTotal }) : t("mail.selection.selectAll")}</button>
+              <button className="selection-select-all" type="button" onClick={selectAllVisibleMessages} disabled={!filteredMessages.length}>{selectAllPaged ? t("mail.selection.selectAllMatching", { count: currentMessageTotal }) : t("mail.selection.selectAll")}</button>
               <span className="selection-count">{batchJob ? t("mail.selection.batchProcessing", { done: batchJob.done, total: batchJob.total || currentMessageTotal }) : batchBusy ? t("mail.selection.busy") : t("mail.selection.count", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}</span>
               <div className="selection-actions">
-                <IconButton label={t("mail.action.markRead")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: true }, "mail.selection.markedRead")} disabled={batchBusy || !selectedMessageIds.size}><MailOpen size={15} /></IconButton>
-                <IconButton label={t("mail.action.markUnread")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: false }, "mail.selection.markedUnread")} disabled={batchBusy || !selectedMessageIds.size}><Mail size={15} /></IconButton>
-                <IconButton label={t("mail.action.star")} className="selection-action" onClick={() => void batchUpdateFlags({ flagged: true }, "mail.selection.starred")} disabled={batchBusy || !selectedMessageIds.size}><Star size={15} /></IconButton>
-                <IconButton label={t("mail.action.unstar")} className="selection-action" onClick={() => void batchUpdateFlags({ flagged: false }, "mail.selection.unstarred")} disabled={batchBusy || !selectedMessageIds.size}><Star size={15} fill="none" /></IconButton>
+                <IconButton label={t("mail.action.markRead")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: true }, "mail.selection.markedRead")} disabled={!selectedMessageIds.size}><MailOpen size={15} /></IconButton>
+                <IconButton label={t("mail.action.markUnread")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: false }, "mail.selection.markedUnread")} disabled={!selectedMessageIds.size}><Mail size={15} /></IconButton>
+                <IconButton label={t("mail.action.star")} className="selection-action" onClick={() => void batchUpdateFlags({ flagged: true }, "mail.selection.starred")} disabled={!selectedMessageIds.size}><Star size={15} /></IconButton>
+                <IconButton label={t("mail.action.unstar")} className="selection-action" onClick={() => void batchUpdateFlags({ flagged: false }, "mail.selection.unstarred")} disabled={!selectedMessageIds.size}><Star size={15} fill="none" /></IconButton>
                 <span className="toolbar-divider" aria-hidden="true" />
-                <IconButton label={t("mail.action.archive")} className="selection-action" onClick={() => void batchMoveMessages("archive")} disabled={batchBusy || !selectedMessageIds.size}><Archive size={15} /></IconButton>
-                <IconButton label={t("mail.action.moveToTrash")} className="selection-action selection-action-danger" onClick={() => void batchMoveMessages("trash")} disabled={batchBusy || !selectedMessageIds.size}><Trash2 size={15} /></IconButton>
+                <IconButton label={t("mail.action.archive")} className="selection-action" onClick={() => void batchMoveMessages("archive")} disabled={!selectedMessageIds.size}><Archive size={15} /></IconButton>
+                <IconButton label={t("mail.action.moveToTrash")} className="selection-action selection-action-danger" onClick={() => void batchMoveMessages("trash")} disabled={!selectedMessageIds.size}><Trash2 size={15} /></IconButton>
               </div>
               <button className="selection-done" type="button" onClick={exitSelectionMode} disabled={batchBusy}>{t("mail.selection.done")}</button>
             </div>
@@ -3083,28 +3145,28 @@ export default function App() {
                   <IconButton label={t("mail.action.replyAll")} className="reader-action-secondary" onClick={openReplyAll}><ReplyAll size={18} /></IconButton>
                   <IconButton label={t("mail.action.forward")} className="reader-action-secondary" onClick={openForward}><Forward size={18} /></IconButton>
                   <span className="toolbar-divider" aria-hidden="true" />
-                  <IconButton label={selectedMoveActionLabel ?? (selected.seen ? t("mail.action.markUnread") : t("mail.action.markRead"))} onClick={() => void toggleSelectedSeen()} disabled={messageFlagging || selectedRemoteActionsBlocked}>{selected.seen ? <Mail size={18} /> : <MailOpen size={18} />}</IconButton>
-                  <IconButton label={selectedMoveActionLabel ?? (selected.flagged ? t("mail.action.unstar") : t("mail.action.star"))} className={selected.flagged ? "active-star" : ""} onClick={() => void toggleSelectedStar()} disabled={messageFlagging || selectedRemoteActionsBlocked}><Star size={18} fill={selected.flagged ? "currentColor" : "none"} /></IconButton>
-                  <IconButton label={selectedMoveActionLabel ?? t("mail.action.archive")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("archive")} disabled={messageAction !== null || messageFlagging || selectedRemoteActionsBlocked || selectedIsArchived}><Archive size={18} /></IconButton>
-                  <IconButton label={selectedMoveActionLabel ?? t("mail.action.moveToTrash")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("trash")} disabled={messageAction !== null || messageFlagging || selectedRemoteActionsBlocked}><Trash2 size={18} /></IconButton>
+                  <IconButton label={selectedMoveActionLabel ?? (selected.seen ? t("mail.action.markUnread") : t("mail.action.markRead"))} onClick={() => void toggleSelectedSeen()} disabled={selectedRemoteActionsBlocked}>{selected.seen ? <Mail size={18} /> : <MailOpen size={18} />}</IconButton>
+                  <IconButton label={selectedMoveActionLabel ?? (selected.flagged ? t("mail.action.unstar") : t("mail.action.star"))} className={selected.flagged ? "active-star" : ""} onClick={() => void toggleSelectedStar()} disabled={selectedRemoteActionsBlocked}><Star size={18} fill={selected.flagged ? "currentColor" : "none"} /></IconButton>
+                  <IconButton label={selectedMoveActionLabel ?? t("mail.action.archive")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("archive")} disabled={selectedRemoteActionsBlocked || selectedIsArchived}><Archive size={18} /></IconButton>
+                  <IconButton label={selectedMoveActionLabel ?? t("mail.action.moveToTrash")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("trash")} disabled={selectedRemoteActionsBlocked}><Trash2 size={18} /></IconButton>
                   <div className="reader-snooze" ref={snoozeRef}>
-                    <IconButton label={selectedIsSnoozed ? t("mail.snooze.reschedule") : t("mail.snooze.title")} className={`reader-action-secondary${selectedIsSnoozed ? " snoozed" : ""}`} onClick={() => { setSnoozeOpen((value) => !value); setSnoozeCustomUntil(""); }} expanded={snoozeOpen} disabled={messageFlagging || selectedRemoteActionsBlocked}><Clock size={18} /></IconButton>
+                    <IconButton label={selectedIsSnoozed ? t("mail.snooze.reschedule") : t("mail.snooze.title")} className={`reader-action-secondary${selectedIsSnoozed ? " snoozed" : ""}`} onClick={() => { setSnoozeOpen((value) => !value); setSnoozeCustomUntil(""); }} expanded={snoozeOpen} disabled={selectedRemoteActionsBlocked}><Clock size={18} /></IconButton>
                     {snoozeOpen && (
                       <div className="snooze-menu" role="menu" aria-label={t("mail.snooze.title")}>
                         {selectedIsSnoozed && selected.snoozedUntil && (
                           <>
                             <div className="snooze-current" role="status"><Clock size={14} />{t("mail.snooze.current", { until: formatFullDate(selected.snoozedUntil, locale) })}</div>
-                            <button type="button" role="menuitem" onClick={() => void clearSelectedSnooze()} disabled={snoozeBusy}><X size={15} />{t("mail.snooze.clear")}</button>
+                            <button type="button" role="menuitem" onClick={() => void clearSelectedSnooze()}><X size={15} />{t("mail.snooze.clear")}</button>
                           </>
                         )}
                         {snoozeOptions.map((option) => (
-                          <button key={option.key} type="button" role="menuitem" onClick={() => void setSelectedSnoozed(option.compute().toISOString())} disabled={snoozeBusy}><Clock size={15} />{option.label}</button>
+                          <button key={option.key} type="button" role="menuitem" onClick={() => void setSelectedSnoozed(option.compute().toISOString())}><Clock size={15} />{option.label}</button>
                         ))}
                         <div className="snooze-custom">
                           <label htmlFor="snooze-custom-input">{t("mail.snooze.customLabel")}</label>
                           <span className="snooze-custom-controls">
                             <input id="snooze-custom-input" type="datetime-local" value={snoozeCustomUntil} onChange={(event) => setSnoozeCustomUntil(event.target.value)} />
-                            <button type="button" onClick={() => { const iso = isoFromDatetimeLocal(snoozeCustomUntil); if (iso) void setSelectedSnoozed(iso); }} disabled={snoozeBusy || !snoozeCustomUntil}>{t("common.ok")}</button>
+                            <button type="button" onClick={() => { const iso = isoFromDatetimeLocal(snoozeCustomUntil); if (iso) void setSelectedSnoozed(iso); }} disabled={!snoozeCustomUntil}>{t("common.ok")}</button>
                           </span>
                         </div>
                       </div>
@@ -3116,8 +3178,8 @@ export default function App() {
                       <div className="reader-more-menu" role="menu" aria-label={t("mail.action.more")}>
                         <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openReplyAll(); }}><ReplyAll size={16} />{t("mail.action.replyAll")}</button>
                         <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openForward(); }}><Forward size={16} />{t("mail.action.forward")}</button>
-                        <button type="button" role="menuitem" disabled={messageAction !== null || messageFlagging || selectedRemoteActionsBlocked || selectedIsArchived} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />{t("mail.action.archive")}</button>
-                        <button type="button" role="menuitem" className="reader-more-danger" disabled={messageAction !== null || messageFlagging || selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("trash"); }}><Trash2 size={16} />{t("mail.action.moveToTrash")}</button>
+                        <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked || selectedIsArchived} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />{t("mail.action.archive")}</button>
+                        <button type="button" role="menuitem" className="reader-more-danger" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("trash"); }}><Trash2 size={16} />{t("mail.action.moveToTrash")}</button>
                       </div>
                     )}
                   </div>

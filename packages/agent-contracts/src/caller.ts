@@ -25,9 +25,9 @@ export const agentPermissionScopes = [
 export const agentPermissionScopeSchema = z.enum(agentPermissionScopes);
 export const agentAccessLevels = ["read-only", "send-confirmed", "full-access"] as const;
 export const agentAccessLevelSchema = z.enum(agentAccessLevels);
-export const callerKinds = ["desktop-ui", "cli", "mcp", "service", "test"] as const;
+export const callerKinds = ["desktop-ui", "web-ui", "cli", "mcp", "service", "test"] as const;
 export const callerKindSchema = z.enum(callerKinds);
-export const agentEntryPoints = ["desktop", "cli", "mcp", "service", "test"] as const;
+export const agentEntryPoints = ["desktop", "web", "cli", "mcp", "service", "test"] as const;
 export const agentEntryPointSchema = z.enum(agentEntryPoints);
 
 export const accountScopeSchema = z.discriminatedUnion("mode", [

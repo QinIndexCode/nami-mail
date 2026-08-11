@@ -37,7 +37,7 @@
     "navigation.management": "管理",
     "navigation.openMenu": "打开菜单",
     "calendar.title": "日历",
-    "calendar.description": "管理本地日历事件，数据加密保存在此设备。",
+    "calendar.description": "描述",
     "calendar.demoDescription": "演示日历事件仅在当前会话中存在。",
     "calendar.today": "今天",
     "calendar.previousMonth": "上个月",
@@ -54,7 +54,6 @@
     "calendar.end": "结束",
     "calendar.location": "地点",
     "calendar.locationPlaceholder": "会议地点（可选）",
-    "calendar.description": "描述",
     "calendar.descriptionPlaceholder": "事件详情（可选）",
     "calendar.color": "颜色",
     "calendar.color.blue": "蓝色",
@@ -1482,6 +1481,7 @@
     "agent.providers.title": "模型提供商",
     "agent.providers.description": "配置邮件助理使用的模型。密钥仅会写入本地加密存储，不会再次显示。",
     "agent.providers.close": "关闭模型设置",
+    "settings.nav.title": "目录",
     "agent.providers.available": "已添加的模型",
     "agent.providers.new": "添加模型",
     "agent.providers.loading": "正在读取模型配置…",
@@ -1770,6 +1770,12 @@
     "autoReply.notice.pendingTitle": "有一封自动回复待你确认",
     "autoReply.notice.sentEyebrow": "自动回复",
     "autoReply.notice.sentTitle": "自动回复已发送",
-    "autoReply.notice.cancel": "取消"
+    "autoReply.notice.cancel": "取消",
+    "mail.action.queued": "操作已加入队列，将在前面的操作完成后自动执行。",
+    "settings.agent.autoReplyTools": "自动回复与记忆",
+    "settings.agent.autoReplyToolsDesc": "查看待确认的回复、未回复的来信，或管理 Agent 记忆。",
+    "settings.agent.autoReplyToolsPending": "待确认",
+    "settings.agent.autoReplyToolsDeclined": "未回复",
+    "settings.agent.autoReplyToolsMemory": "记忆"
   }
 }

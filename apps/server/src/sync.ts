@@ -29,6 +29,48 @@ import { getAutoReplyEngine } from "./agent/auto-reply.js";
 
 const running = new Set<string>();
 const movingAccounts = new Set<string>();
+// Per-account FIFO write lock chains. A second write operation on the same
+// account (another move, a flag update) waits in line instead of failing with
+// a busy error, so a burst of deletes or moves is processed in order rather
+// than rejected. A full sync pass (`running`) intentionally stays an
+// immediate failure: queued writes must never block a sync cycle.
+const accountWriteChains = new Map<string, Promise<void>>();
+
+/**
+ * Acquires write slots for every account in a deterministic order (sorted, so
+ * concurrent multi-account batches can never deadlock). The returned release
+ * functions must be called in reverse order.
+ */
+export async function acquireAccountWriteSlots(accountIds: readonly string[]): Promise<Array<() => void>> {
+  const sorted = [...new Set(accountIds)].sort();
+  const releases: Array<() => void> = [];
+  try {
+    for (const accountId of sorted) {
+      const prev = accountWriteChains.get(accountId) ?? Promise.resolve();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      accountWriteChains.set(accountId, prev.then(() => gate));
+      await prev;
+      releases.push(release);
+    }
+    return releases;
+  } catch (error) {
+    for (const release of releases.reverse()) release();
+    throw error;
+  }
+}
+
+/** Runs `fn` while holding write slots for every named account. */
+export async function withAccountWriteLocks<T>(accountIds: readonly string[], fn: () => Promise<T>): Promise<T> {
+  const releases = await acquireAccountWriteSlots(accountIds);
+  try {
+    return await fn();
+  } finally {
+    for (const release of releases.reverse()) release();
+  }
+}
 const scheduledSentVerifications = new Map<string, Promise<void>>();
 const sentVerificationRetryDelaysMs = [0, 2_000, 10_000] as const;
 // Probe old cached UIDs in small, rotating batches. This only verifies remote
@@ -1188,74 +1230,81 @@ export async function updateMessageFlags(
   if (!message) throw new Error("Message not found.");
   const moveBlockedError = moveActionBlockedError(message);
   if (moveBlockedError) throw new Error(moveBlockedError);
-  const currentFlags = new Set<string>(JSON.parse(message.flags_json));
-  const nextFlags = new Set(currentFlags);
-  const add: string[] = [];
-  const remove: string[] = [];
-  for (const [field, flag] of Object.entries(messageFlagNames) as Array<[keyof MessageFlagsPatch, string]>) {
-    const value = patch[field];
-    if (value === undefined || currentFlags.has(flag) === value) continue;
-    if (value) {
-      nextFlags.add(flag);
-      add.push(flag);
-    } else {
-      nextFlags.delete(flag);
-      remove.push(flag);
+  // The account-level write slot queues a flag update behind any move in
+  // flight on the same account. Without it, starring a message while its
+  // delete is still dispatching fails with a "pending move" error instead of
+  // simply waiting its turn. This also serializes filter-rule and agent flag
+  // writes against user moves.
+  await withAccountWriteLocks([message.account_id], async () => {
+    const currentFlags = new Set<string>(JSON.parse(message.flags_json));
+    const nextFlags = new Set(currentFlags);
+    const add: string[] = [];
+    const remove: string[] = [];
+    for (const [field, flag] of Object.entries(messageFlagNames) as Array<[keyof MessageFlagsPatch, string]>) {
+      const value = patch[field];
+      if (value === undefined || currentFlags.has(flag) === value) continue;
+      if (value) {
+        nextFlags.add(flag);
+        add.push(flag);
+      } else {
+        nextFlags.delete(flag);
+        remove.push(flag);
+      }
     }
-  }
-  // The requested state is already reflected in the last server-confirmed
-  // cache. Avoid a redundant STORE command and, importantly, a second count
-  // adjustment for an idempotent read/open action.
-  if (!add.length && !remove.length) return;
-  const account = accountById(db, message.account_id);
-  if (!account) throw new Error("Account not found.");
-  const agentLease = agentEvents?.acquireLease(message.account_id);
-  const client = await imapClientForAccount(account, masterKey, accessTokenProvider);
-  try {
-    await client.connect();
-    const lock = await client.getMailboxLock(message.mailbox);
+    // The requested state is already reflected in the last server-confirmed
+    // cache. Avoid a redundant STORE command and, importantly, a second count
+    // adjustment for an idempotent read/open action.
+    if (!add.length && !remove.length) return;
+    const account = accountById(db, message.account_id);
+    if (!account) throw new Error("Account not found.");
+    const agentLease = agentEvents?.acquireLease(message.account_id);
+    const client = await imapClientForAccount(account, masterKey, accessTokenProvider);
     try {
-      if (add.length) {
-        const added = await client.messageFlagsAdd(message.uid, add, { uid: true });
-        if (added === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
+      await client.connect();
+      const lock = await client.getMailboxLock(message.mailbox);
+      try {
+        if (add.length) {
+          const added = await client.messageFlagsAdd(message.uid, add, { uid: true });
+          if (added === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
+        }
+        if (remove.length) {
+          const removed = await client.messageFlagsRemove(message.uid, remove, { uid: true });
+          if (removed === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
+        }
+      } finally {
+        lock.release();
       }
-      if (remove.length) {
-        const removed = await client.messageFlagsRemove(message.uid, remove, { uid: true });
-        if (removed === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
-      }
+      const seenChanged = currentFlags.has("\\Seen") !== nextFlags.has("\\Seen");
+      db.transaction(() => {
+        db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run(JSON.stringify([...nextFlags]), messageId);
+        if (seenChanged) {
+          // Keep the cached sidebar badge aligned with the successful remote
+          // STORE. The folder refresh remains authoritative, but it must not
+          // briefly restore an already-read message to the unread total.
+          db.prepare(`
+            UPDATE folders
+            SET unseen = CASE
+              WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
+              ELSE unseen + 1
+            END
+            WHERE account_id = ? AND path = ?
+          `).run(nextFlags.has("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
+        }
+        if (agentEvents && agentLease) {
+          agentEvents.messageUpsertedWithinTransaction(agentLease, messageId, {
+            mailbox: message.mailbox,
+            uid: message.uid,
+            remoteIdLookup: message.remote_id_lookup,
+            flags: [...nextFlags].sort(),
+            pendingMoveDestination: message.pending_move_destination,
+            pendingMoveState: message.pending_move_state,
+          });
+        }
+      })();
     } finally {
-      lock.release();
+      if (client.usable) await client.logout().catch(() => undefined);
     }
-    const seenChanged = currentFlags.has("\\Seen") !== nextFlags.has("\\Seen");
-    db.transaction(() => {
-      db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run(JSON.stringify([...nextFlags]), messageId);
-      if (seenChanged) {
-        // Keep the cached sidebar badge aligned with the successful remote
-        // STORE. The folder refresh remains authoritative, but it must not
-        // briefly restore an already-read message to the unread total.
-        db.prepare(`
-          UPDATE folders
-          SET unseen = CASE
-            WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
-            ELSE unseen + 1
-          END
-          WHERE account_id = ? AND path = ?
-        `).run(nextFlags.has("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
-      }
-      if (agentEvents && agentLease) {
-        agentEvents.messageUpsertedWithinTransaction(agentLease, messageId, {
-          mailbox: message.mailbox,
-          uid: message.uid,
-          remoteIdLookup: message.remote_id_lookup,
-          flags: [...nextFlags].sort(),
-          pendingMoveDestination: message.pending_move_destination,
-          pendingMoveState: message.pending_move_state,
-        });
-      }
-    })();
-  } finally {
-    if (client.usable) await client.logout().catch(() => undefined);
-  }
+  });
 }
 
 /**
@@ -1678,7 +1727,13 @@ export async function moveMessage(
     // the message from the current view instead of failing the action.
     return { accountId: message.account_id, destination: destination.path, refreshPending: false };
   }
-  return moveMessageCore(db, masterKey, messageId, destination, accessTokenProvider, agentEvents, options);
+  // The account-level write slot serializes concurrent user operations: a
+  // move issued while another move is in flight waits its turn instead of
+  // failing with a busy error. Reentrant callers (batch fallbacks, undo)
+  // acquire the slot once at their own level, so this nesting never recurses.
+  return withAccountWriteLocks([message.account_id], () =>
+    moveMessageCore(db, masterKey, messageId, destination, accessTokenProvider, agentEvents, options),
+  );
 }
 
 type MoveMessageFields = {
@@ -2348,7 +2403,12 @@ export async function batchMoveMessages(
           await client.connect();
           clientsByAccount.set(accountId, client);
         }
-        const groupOutcome = await moveMessagesInOneCommand(db, masterKey, group, destination, accessTokenProvider, agentEvents, client);
+        // The account-level write slot serializes this group behind any move
+        // already in flight on the same account instead of failing the whole
+        // group with a busy error.
+        const groupOutcome = await withAccountWriteLocks([accountId], () =>
+          moveMessagesInOneCommand(db, masterKey, group, destination, accessTokenProvider, agentEvents, client),
+        );
         outcome.updated += groupOutcome.updated;
         outcome.failed += groupOutcome.failures.length;
         outcome.failures.push(...groupOutcome.failures);

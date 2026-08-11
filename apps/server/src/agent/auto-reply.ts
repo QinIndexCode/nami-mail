@@ -54,6 +54,8 @@ export type AutoReplyEngineOptions = {
   decisions?: EncryptedAutoReplyDecisionStore;
   confirmationStore?: ImmutableGuiConfirmationStore;
   desktopConfirmation?: Readonly<{ capability: unknown }>;
+  /** Local web surface confirmation authority; mutually exclusive with desktopConfirmation. */
+  webConfirmation?: Readonly<{ capability: unknown }>;
   clock?: () => string;
   /** Fired for every user-facing auto-reply event (drafts awaiting approval, sent replies). */
   onEvent?: (event: AutoReplyUiEvent) => void;
@@ -144,11 +146,11 @@ const autoReplyCaller: CallerContext = {
 
 /**
  * Decision-side caller used when recording auto-reply confirmations. The
- * engine only exists when a verified desktop confirmation capability is
- * wired in (see runtime.ts), and resolutions reach it solely through the
- * desktop IPC bridge after the main process verified a visible window, so
- * recording as the desktop surface mirrors the conversational path where
- * `pending.caller` is the original desktop-ui caller.
+ * engine only exists when a verified confirmation authority is wired in (see
+ * runtime.ts): the desktop surface (Electron IPC, capability verified in the
+ * main process against a visible window) records as `desktop-ui`, while the
+ * local web surface (HTTP endpoint, capability verified by the runtime web
+ * verifier) records as `web-ui`. Each authority only accepts its own caller.
  */
 const autoReplyDesktopCaller: CallerContext = {
   callerId: "nami-desktop-main",
@@ -160,6 +162,18 @@ const autoReplyDesktopCaller: CallerContext = {
   interactive: true,
   canRequestConfirmation: true,
   displayName: "Nami Desktop",
+};
+
+const autoReplyWebCaller: CallerContext = {
+  callerId: "nami-web-ui",
+  kind: "web-ui",
+  entryPoint: "web",
+  accessLevel: "full-access",
+  scopes: ["read:accounts", "read:folders", "read:messages", "read:attachments", "write:drafts", "write:mail", "send:mail"],
+  accountScope: { mode: "all" },
+  interactive: true,
+  canRequestConfirmation: true,
+  displayName: "Nami Web",
 };
 
 export class AutoReplyEngine {
@@ -185,9 +199,15 @@ export class AutoReplyEngine {
     }
   }
 
-  resolveConfirmation(confirmationId: string, decision: "approve" | "reject"): AutoReplyResolution {
+  resolveConfirmation(
+    confirmationId: string,
+    decision: "approve" | "reject",
+    source: "desktop" | "web" = "desktop",
+  ): AutoReplyResolution {
+    const authority = source === "web" ? this.options.webConfirmation : this.options.desktopConfirmation;
+    const caller = source === "web" ? autoReplyWebCaller : autoReplyDesktopCaller;
     const pending = this.pending.get(confirmationId);
-    if (!pending || !this.options.confirmationStore || !this.options.desktopConfirmation) {
+    if (!pending || !this.options.confirmationStore || !authority) {
       return { decision: "not-found" };
     }
     if (Date.now() >= Date.parse(pending.confirmation.expiresAt)) {
@@ -210,7 +230,7 @@ export class AutoReplyEngine {
         decidedAt: nowIso,
       };
     try {
-      this.options.confirmationStore.recordDecision(receipt, autoReplyDesktopCaller, this.options.desktopConfirmation.capability);
+      this.options.confirmationStore.recordDecision(receipt, caller, authority.capability);
     } catch (error) {
       console.warn(`Auto-reply confirmation record failed for ${confirmationId}:`, error);
       return { decision: "failed" };
@@ -422,14 +442,14 @@ export class AutoReplyEngine {
     threadKey: string,
     skipConfirmation: boolean,
   ): Promise<void> {
-    if (!this.options.confirmationStore || !this.options.desktopConfirmation) {
+    if (!this.options.confirmationStore || (!this.options.desktopConfirmation && !this.options.webConfirmation)) {
       this.recordLedger(messageId, accountId, "failed", threadKey);
-      this.rememberIgnored(accountId, messageId, "桌面确认通道不可用，未发送自动回复。");
+      this.rememberIgnored(accountId, messageId, "确认通道不可用，未发送自动回复。");
       this.recordDecision(accountId, messageId, threadKey, "send-failed", {
         fromAddress: payload.fromAddress,
         fromName: payload.fromName,
         subject: payload.subject,
-        detail: "桌面确认通道不可用",
+        detail: "确认通道不可用",
       });
       return;
     }
@@ -576,7 +596,8 @@ export class AutoReplyEngine {
   }
 
   private recordExpired(pending: EnginePending, nowIso: string): void {
-    if (!this.options.confirmationStore || !this.options.desktopConfirmation) {
+    const authority = this.options.desktopConfirmation ?? this.options.webConfirmation;
+    if (!this.options.confirmationStore || !authority) {
       this.settle(pending, "expired");
       return;
     }
@@ -587,7 +608,7 @@ export class AutoReplyEngine {
       decidedAt: nowIso,
     };
     try {
-      this.options.confirmationStore.recordDecision(receipt, autoReplyDesktopCaller, this.options.desktopConfirmation.capability);
+      this.options.confirmationStore.recordDecision(receipt, autoReplyDesktopCaller, authority.capability);
     } catch (error) {
       console.warn(`Auto-reply confirmation expiry could not be recorded for ${pending.confirmation.id}:`, error);
     } finally {

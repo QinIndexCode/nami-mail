@@ -33,6 +33,7 @@ import {
   Wrench,
   X,
   Zap,
+  type LucideIcon,
 } from "lucide-react";
 import { api, type TranslationConfiguration } from "./api";
 import type { ExternalPairingSummary } from "./agentTypes";
@@ -384,6 +385,34 @@ export default function SettingsModal({
   const [externalGuideCopied, setExternalGuideCopied] = useState<string | null>(null);
   const [externalPairings, setExternalPairings] = useState<ExternalPairingSummary[] | null>(null);
   const [externalPairingsError, setExternalPairingsError] = useState<unknown>(null);
+  const [activeNavKey, setActiveNavKey] = useState<string | null>(null);
+
+  // Sidebar nav: keep the highlighted entry in sync with the section that is
+  // currently below the sticky header while the dialog scrolls.
+  useEffect(() => {
+    const modal = settingsDialog.current;
+    if (!modal) return;
+    const sections = Array.from(modal.querySelectorAll<HTMLElement>("[data-settings-nav]"));
+    if (sections.length === 0) return;
+    const onScroll = () => {
+      const marker = modal.getBoundingClientRect().top + 82;
+      let active: string | null = null;
+      for (const section of sections) {
+        if (section.getBoundingClientRect().top <= marker + 1) active = section.dataset.settingsNav ?? null;
+        else break;
+      }
+      // At the very bottom the last section may be too tall to align under
+      // the sticky header; treat it as active so the highlight always lands
+      // on a real section.
+      if (modal.scrollTop + modal.clientHeight >= modal.scrollHeight - 2) {
+        active = sections[sections.length - 1]?.dataset.settingsNav ?? null;
+      }
+      setActiveNavKey(active);
+    };
+    onScroll();
+    modal.addEventListener("scroll", onScroll, { passive: true });
+    return () => modal.removeEventListener("scroll", onScroll);
+  }, []);
   const [externalPairingsReload, setExternalPairingsReload] = useState(0);
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadButton = useRef<HTMLButtonElement>(null);
@@ -1073,6 +1102,28 @@ export default function SettingsModal({
             : pendingConfirmation === "discard-translation-changes"
             ? t("settings.confirmation.discardTranslationChangesAction")
             : t("settings.confirmation.restoreDefaultsAction");
+  const navItems: { key: string; icon: LucideIcon; label: string }[] = [
+    { key: "language", icon: Languages, label: t("language.title") },
+    { key: "appearance", icon: Palette, label: t("settings.appearance.title") },
+    { key: "notifications", icon: Bell, label: t("settings.notifications.title") },
+    ...(isDesktopRuntime ? [{ key: "desktop", icon: Laptop, label: t("settings.desktop.title") }] : []),
+    { key: "sync", icon: RefreshCw, label: t("settings.sync.title") },
+    { key: "agent", icon: Bot, label: t("agent.launch") },
+    { key: "translation", icon: KeyRound, label: t("settings.translation.title") },
+  ];
+  const scrollToSection = (key: string) => {
+    const modal = settingsDialog.current;
+    if (!modal) return;
+    const section = modal.querySelector<HTMLElement>(`[data-settings-nav="${key}"]`);
+    if (!section) return;
+    // Scroll only the dialog itself. scrollIntoView would walk the whole
+    // scroll chain and nudge the outer app frame (overflow: hidden containers
+    // are programmatically scrollable), shifting the background view.
+    modal.scrollTo({
+      top: section.getBoundingClientRect().top - modal.getBoundingClientRect().top + modal.scrollTop - 82,
+      behavior: "smooth",
+    });
+  };
 
   return (
     <div className={`modal-backdrop settings-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
@@ -1087,729 +1138,733 @@ export default function SettingsModal({
           </button>
         </header>
 
-        {notice && <div className={`form-status ${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}>{notice.kind === "success" ? <Check size={17} /> : <X size={17} />}{notice.message}</div>}
-
-        <section className="settings-section" aria-labelledby="language-settings">
-          <div className="settings-section-title">
-            <Languages size={16} />
-            <div><span>{t("language.title")}</span><p id="language-settings">{t("language.description")}</p></div>
-          </div>
-          <label className="setting-select-row" htmlFor="interface-language">
-            <span><strong>{t("language.label")}</strong><small>{t("settings.language.applyImmediately")}</small></span>
-            <ThemedSelect
-              id="interface-language"
-              value={activeLocale}
-              aria-label={t("language.label")}
-              disabled={controlsBusy}
-              onValueChange={changeLocale}
-            >
-              {locales.map((option) => <option key={option.locale} value={option.locale}>{option.nativeName}</option>)}
-            </ThemedSelect>
-          </label>
-        </section>
-
-        <section className="settings-section" aria-labelledby="appearance-settings">
-          <div className="settings-section-title">
-            <Palette size={16} />
-            <div><span>{t("settings.appearance.title")}</span><p id="appearance-settings">{t("settings.appearance.description")}</p></div>
-          </div>
-
-          <div className="settings-option-grid theme-option-grid" role="group" aria-label={t("settings.theme.groupLabel")}>
-            {themeOptions.map((option) => (
+        <div className="settings-layout">
+          <nav className="settings-nav" aria-label={t("settings.nav.title")}>
+            <p className="settings-nav-title">{t("settings.nav.title")}</p>
+            {navItems.map((item) => (
               <button
-                key={option.value}
-                className={`settings-option${currentSettings.theme === option.value ? " active" : ""}`}
+                key={item.key}
                 type="button"
-                aria-pressed={currentSettings.theme === option.value}
-                disabled={controlsBusy}
-                onClick={() => void applyOptimisticSettings({ theme: option.value }, t("settings.theme.updated"))}
+                className={`settings-nav-item${activeNavKey === item.key ? " active" : ""}`}
+                aria-current={activeNavKey === item.key ? "true" : undefined}
+                onClick={() => scrollToSection(item.key)}
               >
-                <ThemeIcon value={option.value} />
-                <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
-                {currentSettings.theme === option.value && <Check className="option-check" size={15} />}
+                <item.icon size={14} />{item.label}
               </button>
             ))}
-          </div>
+          </nav>
+          <div className="settings-body">
+            {notice && <div className={`form-status ${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}>{notice.kind === "success" ? <Check size={17} /> : <X size={17} />}{notice.message}</div>}
 
-          <label className="setting-select-row" htmlFor="list-density">
-            <span><strong>{t("settings.density.title")}</strong><small>{t("settings.density.description")}</small></span>
-            <ThemedSelect
-              id="list-density"
-              value={currentSettings.listDensity}
-              aria-label={t("settings.density.title")}
-              disabled={controlsBusy}
-              onValueChange={(value) => void applyOptimisticSettings({ listDensity: value as ListDensity }, t("settings.density.updated"))}
-            >
-              {listDensityOptions.map((option) => (
-                <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
-              ))}
-            </ThemedSelect>
-          </label>
-
-          <div className="setting-subheading"><span>{t("settings.background.title")}</span><small>{t("settings.background.offlineHint")}</small></div>
-          <div className="background-preset-grid" role="group" aria-label={t("settings.background.presetGroupLabel")}>
-            {backgroundPresetOptions.map((preset) => {
-              const active = currentSettings.backgroundPreset === preset.id;
-              return (
-                <button
-                  key={preset.id}
-                  className={`background-preset${active ? " active" : ""}`}
-                  type="button"
-                  aria-pressed={active}
+            <section className="settings-section" data-settings-nav="language" aria-labelledby="language-settings">
+              <div className="settings-section-title">
+                <Languages size={16} />
+                <div><span>{t("language.title")}</span><p id="language-settings">{t("language.description")}</p></div>
+              </div>
+              <label className="setting-select-row" htmlFor="interface-language">
+                <span><strong>{t("language.label")}</strong><small>{t("settings.language.applyImmediately")}</small></span>
+                <ThemedSelect
+                  id="interface-language"
+                  value={activeLocale}
+                  aria-label={t("language.label")}
                   disabled={controlsBusy}
-                  onClick={() => choosePreset(preset.id)}
+                  onValueChange={changeLocale}
+                >
+                  {locales.map((option) => <option key={option.locale} value={option.locale}>{option.nativeName}</option>)}
+                </ThemedSelect>
+              </label>
+            </section>
+
+            <section className="settings-section" data-settings-nav="appearance" aria-labelledby="appearance-settings">
+              <div className="settings-section-title">
+                <Palette size={16} />
+                <div><span>{t("settings.appearance.title")}</span><p id="appearance-settings">{t("settings.appearance.description")}</p></div>
+              </div>
+
+              <div className="settings-option-grid theme-option-grid" role="group" aria-label={t("settings.theme.groupLabel")}>
+                {themeOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    className={`settings-option${currentSettings.theme === option.value ? " active" : ""}`}
+                    type="button"
+                    aria-pressed={currentSettings.theme === option.value}
+                    disabled={controlsBusy}
+                    onClick={() => void applyOptimisticSettings({ theme: option.value }, t("settings.theme.updated"))}
+                  >
+                    <ThemeIcon value={option.value} />
+                    <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
+                    {currentSettings.theme === option.value && <Check className="option-check" size={15} />}
+                  </button>
+                ))}
+              </div>
+
+              <label className="setting-select-row" htmlFor="list-density">
+                <span><strong>{t("settings.density.title")}</strong><small>{t("settings.density.description")}</small></span>
+                <ThemedSelect
+                  id="list-density"
+                  value={currentSettings.listDensity}
+                  aria-label={t("settings.density.title")}
+                  disabled={controlsBusy}
+                  onValueChange={(value) => void applyOptimisticSettings({ listDensity: value as ListDensity }, t("settings.density.updated"))}
+                >
+                  {listDensityOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
+                  ))}
+                </ThemedSelect>
+              </label>
+
+              <div className="setting-subheading"><span>{t("settings.background.title")}</span><small>{t("settings.background.offlineHint")}</small></div>
+              <div className="background-preset-grid" role="group" aria-label={t("settings.background.presetGroupLabel")}>
+                {backgroundPresetOptions.map((preset) => {
+                  const active = currentSettings.backgroundPreset === preset.id;
+                  return (
+                    <button
+                      key={preset.id}
+                      className={`background-preset${active ? " active" : ""}`}
+                      type="button"
+                      aria-pressed={active}
+                      disabled={controlsBusy}
+                      onClick={() => choosePreset(preset.id)}
+                    >
+                      <span
+                        className={`background-preview background-${preset.id}`}
+                        aria-hidden="true"
+                      >
+                        {preset.image && <span className="background-preview-image" style={{ backgroundImage: `url(${preset.image})`, opacity: currentSettings.backgroundIntensity / 100 }} />}
+                      </span>
+                      <span><strong>{t(preset.labelKey)}</strong><small>{t(preset.descriptionKey)}</small></span>
+                      {active && <Check className="option-check" size={14} />}
+                    </button>
+                  );
+                })}
+                <button
+                  className={`background-preset custom-background-preset${currentSettings.backgroundPreset === "custom" ? " active" : ""}`}
+                  type="button"
+                  aria-pressed={currentSettings.backgroundPreset === "custom"}
+                  disabled={controlsBusy}
+                  onClick={chooseCustomBackground}
                 >
                   <span
-                    className={`background-preview background-${preset.id}`}
+                    className="background-preview background-custom"
                     aria-hidden="true"
                   >
-                    {preset.image && <span className="background-preview-image" style={{ backgroundImage: `url(${preset.image})`, opacity: currentSettings.backgroundIntensity / 100 }} />}
+                    {hasCustomBackground && <span className="background-preview-image" style={{ backgroundImage: `url(${currentSettings.customBackgroundUrl})`, opacity: currentSettings.backgroundIntensity / 100 }} />}
+                    {!hasCustomBackground && <ImagePlus size={18} />}
                   </span>
-                  <span><strong>{t(preset.labelKey)}</strong><small>{t(preset.descriptionKey)}</small></span>
-                  {active && <Check className="option-check" size={14} />}
+                  <span><strong>{t("settings.background.custom.label")}</strong><small>{hasCustomBackground ? (demoMode ? t("settings.background.custom.demoOnly") : t("settings.background.custom.savedOnDevice")) : t("settings.background.custom.localImage")}</small></span>
+                  {currentSettings.backgroundPreset === "custom" && <Check className="option-check" size={14} />}
                 </button>
-              );
-            })}
-            <button
-              className={`background-preset custom-background-preset${currentSettings.backgroundPreset === "custom" ? " active" : ""}`}
-              type="button"
-              aria-pressed={currentSettings.backgroundPreset === "custom"}
-              disabled={controlsBusy}
-              onClick={chooseCustomBackground}
-            >
-              <span
-                className="background-preview background-custom"
-                aria-hidden="true"
-              >
-                {hasCustomBackground && <span className="background-preview-image" style={{ backgroundImage: `url(${currentSettings.customBackgroundUrl})`, opacity: currentSettings.backgroundIntensity / 100 }} />}
-                {!hasCustomBackground && <ImagePlus size={18} />}
-              </span>
-              <span><strong>{t("settings.background.custom.label")}</strong><small>{hasCustomBackground ? (demoMode ? t("settings.background.custom.demoOnly") : t("settings.background.custom.savedOnDevice")) : t("settings.background.custom.localImage")}</small></span>
-              {currentSettings.backgroundPreset === "custom" && <Check className="option-check" size={14} />}
-            </button>
-          </div>
-          <input ref={uploadInput} hidden type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void uploadBackground(event)} />
+              </div>
+              <input ref={uploadInput} hidden type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void uploadBackground(event)} />
 
-          <div className="background-controls">
-            <label className="setting-range" htmlFor="background-intensity">
-              <span><strong>{t("settings.background.intensity")}</strong><small>{intensityDraft}%</small></span>
-              <input
-                id="background-intensity"
-                type="range"
-                min="0"
-                max="80"
-                step="1"
-                value={intensityDraft}
-                disabled={controlsBusy}
-                onChange={(event) => setIntensityDraft(Number(event.target.value))}
-                onBlur={commitIntensity}
-                onPointerUp={commitIntensity}
-                onKeyUp={(event) => {
-                  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) commitIntensity();
-                }}
-              />
-            </label>
-            <div className="background-actions">
-              <button ref={uploadButton} className="secondary-button" type="button" disabled={controlsBusy} onClick={() => uploadInput.current?.click()}>
-                {busyAction === "background-upload" ? <LoaderCircle className="spin" size={15} /> : <Upload size={15} />}
-                {hasCustomBackground ? t("settings.background.replaceImage") : t("settings.background.uploadImage")}
-              </button>
-              {hasCustomBackground && (
-                <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("clear-background"); }}>
-                  {busyAction === "background-remove" ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}
-                  {t("settings.background.clear")}
-                </button>
-              )}
-            </div>
-          </div>
-          <p className="background-upload-hint">{t("settings.background.uploadHint")}</p>
-        </section>
-
-        <section className="settings-section" aria-labelledby="notification-settings">
-          <div className="settings-section-title">
-            <Bell size={16} />
-            <div><span>{t("settings.notifications.title")}</span><p id="notification-settings">{t("settings.notifications.description")}</p></div>
-          </div>
-          <Switch
-            checked={currentSettings.notificationsEnabled}
-            disabled={controlsBusy}
-            label={t("settings.notifications.desktop.label")}
-            description={t("settings.notifications.desktop.description")}
-            onChange={() => void applyOptimisticSettings({ notificationsEnabled: !currentSettings.notificationsEnabled }, currentSettings.notificationsEnabled ? t("settings.notifications.desktop.disabled") : t("settings.notifications.desktop.enabled"))}
-          />
-          <Switch
-            checked={currentSettings.notifyWhenFocused}
-            disabled={controlsBusy || !currentSettings.notificationsEnabled}
-            label={t("settings.notifications.focused.label")}
-            description={t("settings.notifications.focused.description")}
-            onChange={() => void applyOptimisticSettings({ notifyWhenFocused: !currentSettings.notifyWhenFocused }, currentSettings.notifyWhenFocused ? t("settings.notifications.focused.disabled") : t("settings.notifications.focused.enabled"))}
-          />
-
-          <div className={`setting-subheading${currentSettings.notificationsEnabled ? "" : " muted"}`}><span>{t("settings.sound.title")}</span><small>{currentSettings.notificationsEnabled ? t("settings.sound.description") : t("settings.sound.enableNotificationsFirst")}</small></div>
-          <div className="settings-option-grid sound-option-grid" role="group" aria-label={t("settings.sound.groupLabel")}>
-            {soundOptions.map((option) => (
-              <button
-                key={option.value}
-                className={`settings-option sound-option${currentSettings.notificationSound === option.value ? " active" : ""}`}
-                type="button"
-                aria-pressed={currentSettings.notificationSound === option.value}
-                disabled={controlsBusy || !currentSettings.notificationsEnabled}
-                onClick={() => void applyOptimisticSettings({ notificationSound: option.value }, t("settings.sound.updated"))}
-              >
-                {option.value === "none" ? <VolumeX size={16} /> : <Volume2 size={16} />}
-                <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
-                {currentSettings.notificationSound === option.value && <Check className="option-check" size={15} />}
-              </button>
-            ))}
-          </div>
-          <div className="settings-inline-actions">
-            <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => void testNotification()}>
-              {busyAction === "notification-test" ? <LoaderCircle className="spin" size={15} /> : <Bell size={15} />}{t("settings.notifications.test")}
-            </button>
-            <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => void testSound()}>
-              {busyAction === "sound-test" ? <LoaderCircle className="spin" size={15} /> : <Volume2 size={15} />}{t("settings.sound.test")}
-            </button>
-          </div>
-        </section>
-
-        {isDesktopRuntime && (
-          <section className="settings-section" aria-labelledby="desktop-settings">
-            <div className="settings-section-title">
-              <Laptop size={16} />
-              <div><span>{t("settings.desktop.title")}</span><p id="desktop-settings">{t("settings.desktop.description")}</p></div>
-            </div>
-            <div className="settings-option-grid close-behavior-grid" role="group" aria-label={t("settings.closeBehavior.groupLabel")}>
-              {closeBehaviorOptions.map((option) => (
-                <button
-                  key={option.value}
-                  className={`settings-option${currentSettings.closeBehavior === option.value ? " active" : ""}`}
-                  type="button"
-                  data-close-behavior={option.value}
-                  aria-pressed={currentSettings.closeBehavior === option.value}
-                  disabled={controlsBusy}
-                  onClick={() => void applyOptimisticSettings({ closeBehavior: option.value }, t("settings.closeBehavior.updated"))}
-                >
-                  <CloseBehaviorIcon value={option.value} />
-                  <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
-                  {currentSettings.closeBehavior === option.value && <Check className="option-check" size={15} />}
-                </button>
-              ))}
-            </div>
-            {updateStatus && updatePresentation && (
-              <div className="setting-row update-setting-row">
-                <div>
-                  <strong>{updateStatus.targetVersion ? t("settings.update.targetVersion", { version: updateStatus.targetVersion }) : t("settings.update.currentVersion", { version: updateStatus.currentVersion })}</strong>
-                  <span className={updatePresentation.isError ? "account-error" : ""} aria-live="polite">{updatePresentation.status}</span>
-                  {updateStatus.percent !== null && ["available", "downloading", "ready"].includes(updateStatus.phase) && (
-                    <progress aria-label={t("settings.update.downloadProgress")} max={100} value={updateStatus.percent} />
+              <div className="background-controls">
+                <label className="setting-range" htmlFor="background-intensity">
+                  <span><strong>{t("settings.background.intensity")}</strong><small>{intensityDraft}%</small></span>
+                  <input
+                    id="background-intensity"
+                    type="range"
+                    min="0"
+                    max="80"
+                    step="1"
+                    value={intensityDraft}
+                    disabled={controlsBusy}
+                    onChange={(event) => setIntensityDraft(Number(event.target.value))}
+                    onBlur={commitIntensity}
+                    onPointerUp={commitIntensity}
+                    onKeyUp={(event) => {
+                      if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) commitIntensity();
+                    }}
+                  />
+                </label>
+                <div className="background-actions">
+                  <button ref={uploadButton} className="secondary-button" type="button" disabled={controlsBusy} onClick={() => uploadInput.current?.click()}>
+                    {busyAction === "background-upload" ? <LoaderCircle className="spin" size={15} /> : <Upload size={15} />}
+                    {hasCustomBackground ? t("settings.background.replaceImage") : t("settings.background.uploadImage")}
+                  </button>
+                  {hasCustomBackground && (
+                    <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("clear-background"); }}>
+                      {busyAction === "background-remove" ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}
+                      {t("settings.background.clear")}
+                    </button>
                   )}
                 </div>
-                <div className="settings-inline-actions">
-                  {updateStatus.phase === "ready" && updateStatus.suppression === "none" ? (
-                    <>
-                      <button className="primary-button" type="button" disabled={updateControlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("install-update"); }}>
-                        <RotateCcw size={15} />{t("settings.update.restartAndUpdate")}
-                      </button>
-                      <button className="secondary-button" type="button" disabled={updateControlsBusy} onClick={skipUpdate}>
-                        {updateActionBusy === "skip" ? <LoaderCircle className="spin" size={15} /> : <SkipForward size={15} />}{t("settings.update.skipVersion")}
-                      </button>
-                    </>
-                  ) : updateStatus.phase === "available" && updateStatus.suppression === "none" ? (
-                    <>
-                      <button className="primary-button" type="button" disabled={updateControlsBusy} onClick={downloadUpdate}>
-                        {updateActionBusy === "download" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}{t("settings.update.updateVersion")}
-                      </button>
-                      <button className="secondary-button" type="button" disabled={updateControlsBusy} onClick={skipUpdate}>
-                        {updateActionBusy === "skip" ? <LoaderCircle className="spin" size={15} /> : <SkipForward size={15} />}{t("settings.update.skipVersion")}
-                      </button>
-                    </>
-                  ) : updateStatus.phase !== "unavailable" ? (
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      disabled={updateControlsBusy || ["checking", "downloading"].includes(updateStatus.phase)}
-                      onClick={checkForUpdates}
-                    >
-                      {updateActionBusy === "check" || updateStatus.phase === "checking" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}
-                      {t("settings.update.check")}
-                    </button>
-                  ) : null}
-                </div>
-                {["available", "ready"].includes(updateStatus.phase) && updateStatus.suppression === "none" && (
-                  <div className="update-snooze-controls" role="group" aria-label={t("settings.update.snoozeGroupLabel")}>
-                    <span><Clock3 size={14} aria-hidden="true" />{t("settings.update.snooze")}</span>
-                    <ThemedSelect
-                      id="settings-update-snooze"
-                      value={updateSnoozeMinutes}
-                      aria-label={t("settings.update.snoozeSelectLabel")}
-                      disabled={updateControlsBusy}
-                      onValueChange={(value) => setUpdateSnoozeMinutes(Number(value))}
-                    >
-                      <option value={60}>{t("settings.update.snooze.oneHour")}</option>
-                      <option value={1440}>{t("settings.update.snooze.oneDay")}</option>
-                      <option value={10080}>{t("settings.update.snooze.oneWeek")}</option>
-                      <option value={43200}>{t("settings.update.snooze.thirtyDays")}</option>
-                    </ThemedSelect>
-                    <button className="secondary-button" type="button" disabled={updateControlsBusy} onClick={snoozeUpdate}>
-                      {updateActionBusy === "snooze" ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}{t("settings.update.remindMe")}
-                    </button>
-                  </div>
-                )}
               </div>
-            )}
-          </section>
-        )}
+              <p className="background-upload-hint">{t("settings.background.uploadHint")}</p>
+            </section>
 
-        <section className="settings-section" aria-labelledby="sync-settings">
-          <div className="settings-section-title">
-            <RefreshCw size={16} />
-            <div><span>{t("settings.sync.title")}</span><p id="sync-settings">{t("settings.sync.description")}</p></div>
-          </div>
-          <label className="setting-select-row" htmlFor="refresh-interval">
-            <span><strong>{t("settings.sync.refresh.label")}</strong><small>{t("settings.sync.refresh.description")}</small></span>
-            <ThemedSelect
-              id="refresh-interval"
-              value={currentSettings.refreshIntervalSeconds}
-              aria-label={t("settings.sync.refresh.label")}
-              disabled={controlsBusy}
-              onValueChange={(value) => void applyOptimisticSettings({ refreshIntervalSeconds: Number(value) as AppSettings["refreshIntervalSeconds"] }, t("settings.sync.refresh.updated"))}
-            >
-              <option value={30}>{t("settings.sync.refresh.thirtySeconds")}</option>
-              <option value={60}>{t("settings.sync.refresh.oneMinute")}</option>
-              <option value={180}>{t("settings.sync.refresh.threeMinutes")}</option>
-              <option value={300}>{t("settings.sync.refresh.fiveMinutes")}</option>
-            </ThemedSelect>
-          </label>
-          <Switch
-            checked={currentSettings.realtimePushEnabled}
-            disabled={controlsBusy}
-            label={t("settings.sync.realtime.label")}
-            description={t("settings.sync.realtime.description")}
-            onChange={() => void applyOptimisticSettings({ realtimePushEnabled: !currentSettings.realtimePushEnabled }, currentSettings.realtimePushEnabled ? t("settings.sync.realtime.disabled") : t("settings.sync.realtime.enabled"))}
-          />
-        </section>
+            <section className="settings-section" data-settings-nav="notifications" aria-labelledby="notification-settings">
+              <div className="settings-section-title">
+                <Bell size={16} />
+                <div><span>{t("settings.notifications.title")}</span><p id="notification-settings">{t("settings.notifications.description")}</p></div>
+              </div>
+              <Switch
+                checked={currentSettings.notificationsEnabled}
+                disabled={controlsBusy}
+                label={t("settings.notifications.desktop.label")}
+                description={t("settings.notifications.desktop.description")}
+                onChange={() => void applyOptimisticSettings({ notificationsEnabled: !currentSettings.notificationsEnabled }, currentSettings.notificationsEnabled ? t("settings.notifications.desktop.disabled") : t("settings.notifications.desktop.enabled"))}
+              />
+              <Switch
+                checked={currentSettings.notifyWhenFocused}
+                disabled={controlsBusy || !currentSettings.notificationsEnabled}
+                label={t("settings.notifications.focused.label")}
+                description={t("settings.notifications.focused.description")}
+                onChange={() => void applyOptimisticSettings({ notifyWhenFocused: !currentSettings.notifyWhenFocused }, currentSettings.notifyWhenFocused ? t("settings.notifications.focused.disabled") : t("settings.notifications.focused.enabled"))}
+              />
 
-        <FilterRulesSection accounts={accounts} demoMode={demoMode} />
-
-        <section className="settings-section" aria-labelledby="agent-settings">
-          <div className="settings-section-title">
-            <Bot size={16} />
-            <div><span>{t("agent.launch")}</span><p id="agent-settings">{demoMode ? t("agent.demo.description") : t("agent.providers.description")}</p></div>
-          </div>
-          {demoMode ? (
-            <p className="settings-empty" role="status">{t("agent.demo.actionUnavailable")}</p>
-          ) : (
-            <>
-              <div className="setting-row agent-provider-settings-row">
-                <div>
-                  <strong>{t("agent.providers.title")}</strong>
-                  <span>{t("agent.providers.emptyDescription")}</span>
-                </div>
-                <button className="secondary-button" type="button" disabled={controlsBusy} onClick={requestAgentProviderSettings}>
-                  <Wrench size={15} />{t("agent.providers.configure")}
+              <div className={`setting-subheading${currentSettings.notificationsEnabled ? "" : " muted"}`}><span>{t("settings.sound.title")}</span><small>{currentSettings.notificationsEnabled ? t("settings.sound.description") : t("settings.sound.enableNotificationsFirst")}</small></div>
+              <div className="settings-option-grid sound-option-grid" role="group" aria-label={t("settings.sound.groupLabel")}>
+                {soundOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    className={`settings-option sound-option${currentSettings.notificationSound === option.value ? " active" : ""}`}
+                    type="button"
+                    aria-pressed={currentSettings.notificationSound === option.value}
+                    disabled={controlsBusy || !currentSettings.notificationsEnabled}
+                    onClick={() => void applyOptimisticSettings({ notificationSound: option.value }, t("settings.sound.updated"))}
+                  >
+                    {option.value === "none" ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                    <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
+                    {currentSettings.notificationSound === option.value && <Check className="option-check" size={15} />}
+                  </button>
+                ))}
+              </div>
+              <div className="settings-inline-actions">
+                <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => void testNotification()}>
+                  {busyAction === "notification-test" ? <LoaderCircle className="spin" size={15} /> : <Bell size={15} />}{t("settings.notifications.test")}
+                </button>
+                <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => void testSound()}>
+                  {busyAction === "sound-test" ? <LoaderCircle className="spin" size={15} /> : <Volume2 size={15} />}{t("settings.sound.test")}
                 </button>
               </div>
-              <div className="setting-row">
-                <div>
-                  <strong>{t("settings.agent.toolRoundLimit")}</strong>
-                  <span>{t("settings.agent.toolRoundLimitDesc")}</span>
+            </section>
+
+            {isDesktopRuntime && (
+              <section className="settings-section" data-settings-nav="desktop" aria-labelledby="desktop-settings">
+                <div className="settings-section-title">
+                  <Laptop size={16} />
+                  <div><span>{t("settings.desktop.title")}</span><p id="desktop-settings">{t("settings.desktop.description")}</p></div>
                 </div>
-                <NumberStepper
-                  value={currentSettings.agentToolRoundLimit}
-                  min={1}
-                  max={50}
-                  disabled={controlsBusy}
-                  decreaseLabel={t("settings.agent.toolRoundLimitDecrease")}
-                  increaseLabel={t("settings.agent.toolRoundLimitIncrease")}
-                  onChange={(value) => void applyOptimisticSettings({ agentToolRoundLimit: value }, t("settings.agent.toolRoundLimitUpdated"))}
-                />
+                <div className="settings-option-grid close-behavior-grid" role="group" aria-label={t("settings.closeBehavior.groupLabel")}>
+                  {closeBehaviorOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      className={`settings-option${currentSettings.closeBehavior === option.value ? " active" : ""}`}
+                      type="button"
+                      data-close-behavior={option.value}
+                      aria-pressed={currentSettings.closeBehavior === option.value}
+                      disabled={controlsBusy}
+                      onClick={() => void applyOptimisticSettings({ closeBehavior: option.value }, t("settings.closeBehavior.updated"))}
+                    >
+                      <CloseBehaviorIcon value={option.value} />
+                      <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
+                      {currentSettings.closeBehavior === option.value && <Check className="option-check" size={15} />}
+                    </button>
+                  ))}
+                </div>
+                {updateStatus && updatePresentation && (
+                  <div className="setting-row update-setting-row">
+                    <div>
+                      <strong>{updateStatus.targetVersion ? t("settings.update.targetVersion", { version: updateStatus.targetVersion }) : t("settings.update.currentVersion", { version: updateStatus.currentVersion })}</strong>
+                      <span className={updatePresentation.isError ? "account-error" : ""} aria-live="polite">{updatePresentation.status}</span>
+                      {updateStatus.percent !== null && ["available", "downloading", "ready"].includes(updateStatus.phase) && (
+                        <progress aria-label={t("settings.update.downloadProgress")} max={100} value={updateStatus.percent} />
+                      )}
+                    </div>
+                    <div className="settings-inline-actions">
+                      {updateStatus.phase === "ready" && updateStatus.suppression === "none" ? (
+                        <>
+                          <button className="primary-button" type="button" disabled={updateControlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("install-update"); }}>
+                            <RotateCcw size={15} />{t("settings.update.restartAndUpdate")}
+                          </button>
+                          <button className="secondary-button" type="button" disabled={updateControlsBusy} onClick={skipUpdate}>
+                            {updateActionBusy === "skip" ? <LoaderCircle className="spin" size={15} /> : <SkipForward size={15} />}{t("settings.update.skipVersion")}
+                          </button>
+                        </>
+                      ) : updateStatus.phase === "available" && updateStatus.suppression === "none" ? (
+                        <>
+                          <button className="primary-button" type="button" disabled={updateControlsBusy} onClick={downloadUpdate}>
+                            {updateActionBusy === "download" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}{t("settings.update.updateVersion")}
+                          </button>
+                          <button className="secondary-button" type="button" disabled={updateControlsBusy} onClick={skipUpdate}>
+                            {updateActionBusy === "skip" ? <LoaderCircle className="spin" size={15} /> : <SkipForward size={15} />}{t("settings.update.skipVersion")}
+                          </button>
+                        </>
+                      ) : updateStatus.phase !== "unavailable" ? (
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          disabled={updateControlsBusy || ["checking", "downloading"].includes(updateStatus.phase)}
+                          onClick={checkForUpdates}
+                        >
+                          {updateActionBusy === "check" || updateStatus.phase === "checking" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}
+                          {t("settings.update.check")}
+                        </button>
+                      ) : null}
+                    </div>
+                    {["available", "ready"].includes(updateStatus.phase) && updateStatus.suppression === "none" && (
+                      <div className="update-snooze-controls" role="group" aria-label={t("settings.update.snoozeGroupLabel")}>
+                        <span><Clock3 size={14} aria-hidden="true" />{t("settings.update.snooze")}</span>
+                        <ThemedSelect
+                          id="settings-update-snooze"
+                          value={updateSnoozeMinutes}
+                          aria-label={t("settings.update.snoozeSelectLabel")}
+                          disabled={updateControlsBusy}
+                          onValueChange={(value) => setUpdateSnoozeMinutes(Number(value))}
+                        >
+                          <option value={60}>{t("settings.update.snooze.oneHour")}</option>
+                          <option value={1440}>{t("settings.update.snooze.oneDay")}</option>
+                          <option value={10080}>{t("settings.update.snooze.oneWeek")}</option>
+                          <option value={43200}>{t("settings.update.snooze.thirtyDays")}</option>
+                        </ThemedSelect>
+                        <button className="secondary-button" type="button" disabled={updateControlsBusy} onClick={snoozeUpdate}>
+                          {updateActionBusy === "snooze" ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}{t("settings.update.remindMe")}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
+
+            <section className="settings-section" data-settings-nav="sync" aria-labelledby="sync-settings">
+              <div className="settings-section-title">
+                <RefreshCw size={16} />
+                <div><span>{t("settings.sync.title")}</span><p id="sync-settings">{t("settings.sync.description")}</p></div>
               </div>
-              {isDesktopRuntime && (
+              <label className="setting-select-row" htmlFor="refresh-interval">
+                <span><strong>{t("settings.sync.refresh.label")}</strong><small>{t("settings.sync.refresh.description")}</small></span>
+                <ThemedSelect
+                  id="refresh-interval"
+                  value={currentSettings.refreshIntervalSeconds}
+                  aria-label={t("settings.sync.refresh.label")}
+                  disabled={controlsBusy}
+                  onValueChange={(value) => void applyOptimisticSettings({ refreshIntervalSeconds: Number(value) as AppSettings["refreshIntervalSeconds"] }, t("settings.sync.refresh.updated"))}
+                >
+                  <option value={30}>{t("settings.sync.refresh.thirtySeconds")}</option>
+                  <option value={60}>{t("settings.sync.refresh.oneMinute")}</option>
+                  <option value={180}>{t("settings.sync.refresh.threeMinutes")}</option>
+                  <option value={300}>{t("settings.sync.refresh.fiveMinutes")}</option>
+                </ThemedSelect>
+              </label>
+              <Switch
+                checked={currentSettings.realtimePushEnabled}
+                disabled={controlsBusy}
+                label={t("settings.sync.realtime.label")}
+                description={t("settings.sync.realtime.description")}
+                onChange={() => void applyOptimisticSettings({ realtimePushEnabled: !currentSettings.realtimePushEnabled }, currentSettings.realtimePushEnabled ? t("settings.sync.realtime.disabled") : t("settings.sync.realtime.enabled"))}
+              />
+            </section>
+
+            <FilterRulesSection accounts={accounts} demoMode={demoMode} />
+
+            <section className="settings-section" data-settings-nav="agent" aria-labelledby="agent-settings">
+              <div className="settings-section-title">
+                <Bot size={16} />
+                <div><span>{t("agent.launch")}</span><p id="agent-settings">{demoMode ? t("agent.demo.description") : t("agent.providers.description")}</p></div>
+              </div>
+              {demoMode ? (
+                <p className="settings-empty" role="status">{t("agent.demo.actionUnavailable")}</p>
+              ) : (
                 <>
+                  <div className="setting-row agent-provider-settings-row">
+                    <div>
+                      <strong>{t("agent.providers.title")}</strong>
+                      <span>{t("agent.providers.emptyDescription")}</span>
+                    </div>
+                    <button className="secondary-button" type="button" disabled={controlsBusy} onClick={requestAgentProviderSettings}>
+                      <Wrench size={15} />{t("agent.providers.configure")}
+                    </button>
+                  </div>
+                  <div className="setting-row">
+                    <div>
+                      <strong>{t("settings.agent.toolRoundLimit")}</strong>
+                      <span>{t("settings.agent.toolRoundLimitDesc")}</span>
+                    </div>
+                    <NumberStepper
+                      value={currentSettings.agentToolRoundLimit}
+                      min={1}
+                      max={50}
+                      disabled={controlsBusy}
+                      decreaseLabel={t("settings.agent.toolRoundLimitDecrease")}
+                      increaseLabel={t("settings.agent.toolRoundLimitIncrease")}
+                      onChange={(value) => void applyOptimisticSettings({ agentToolRoundLimit: value }, t("settings.agent.toolRoundLimitUpdated"))}
+                    />
+                  </div>
                   <div className="setting-subheading"><span>{t("settings.agent.autoReplyGroup")}</span><small>{t("settings.agent.autoReplyGroupDesc")}</small></div>
                   <Switch
                     checked={currentSettings.autoReply.enabled}
                     disabled={controlsBusy}
-                    label={t("settings.agent.autoReplyEnabled")}
-                    description={t("settings.agent.autoReplyEnabledDesc")}
-                    onChange={() => void applyOptimisticSettings(
-                      { autoReply: { ...currentSettings.autoReply, enabled: !currentSettings.autoReply.enabled } },
-                      currentSettings.autoReply.enabled ? t("settings.agent.autoReplyDisabled") : t("settings.agent.autoReplyEnabledSaved"),
-                    )}
-                  />
-                  {currentSettings.autoReply.enabled && (
-                    <>
-                      <div className="setting-row setting-column-row">
-                        <div>
-                          <strong>{t("settings.agent.autoReplyAccounts")}</strong>
-                          <span>{t("settings.agent.autoReplyAccountsDesc")}</span>
-                        </div>
-                        <div className="auto-reply-account-list" role="group" aria-label={t("settings.agent.autoReplyAccounts")}>
-                          {accounts.length === 0 && <p className="settings-empty">{t("settings.agent.autoReplyNoAccounts")}</p>}
-                          {accounts.map((account) => {
-                            const checked = currentSettings.autoReply.accountIds.includes(account.id);
-                            return (
-                              <label className="accounts-row-check" key={account.id}>
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  disabled={controlsBusy}
-                                  onChange={() => {
-                                    const accountIds = checked
-                                      ? currentSettings.autoReply.accountIds.filter((id) => id !== account.id)
-                                      : [...currentSettings.autoReply.accountIds, account.id];
-                                    void applyOptimisticSettings({ autoReply: { ...currentSettings.autoReply, accountIds } }, t("settings.agent.autoReplyUpdated"));
-                                  }}
-                                  aria-label={t("settings.agent.autoReplyAccountAriaLabel", { email: account.email })}
-                                />
-                                {account.email}
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      <div className="setting-row setting-column-row">
-                        <div>
-                          <strong>{t("settings.agent.autoReplyMode")}</strong>
-                          <span>{t("settings.agent.autoReplyModeDesc")}</span>
-                        </div>
-                        <div className="auto-reply-mode-toggle" role="group" aria-label={t("settings.agent.autoReplyMode")}>
-                          <button
-                            className={`secondary-button${currentSettings.autoReply.mode === "llm" ? " active" : ""}`}
-                            type="button"
-                            disabled={controlsBusy}
-                            onClick={() => void applyOptimisticSettings(
-                              { autoReply: { ...currentSettings.autoReply, mode: "llm" } },
-                              t("settings.agent.autoReplyUpdated"),
-                            )}
-                          >
-                            {t("settings.agent.autoReplyModeLlm")}
-                          </button>
-                          <button
-                            className={`secondary-button${currentSettings.autoReply.mode === "template" ? " active" : ""}`}
-                            type="button"
-                            disabled={controlsBusy}
-                            onClick={() => void applyOptimisticSettings(
-                              { autoReply: { ...currentSettings.autoReply, mode: "template" } },
-                              t("settings.agent.autoReplyUpdated"),
-                            )}
-                          >
-                            {t("settings.agent.autoReplyModeTemplate")}
-                          </button>
-                        </div>
-                      </div>
-                      {currentSettings.autoReply.mode === "template" && (
+                        label={t("settings.agent.autoReplyEnabled")}
+                        description={t("settings.agent.autoReplyEnabledDesc")}
+                        onChange={() => void applyOptimisticSettings(
+                          { autoReply: { ...currentSettings.autoReply, enabled: !currentSettings.autoReply.enabled } },
+                          currentSettings.autoReply.enabled ? t("settings.agent.autoReplyDisabled") : t("settings.agent.autoReplyEnabledSaved"),
+                        )}
+                      />
+                      {currentSettings.autoReply.enabled && (
                         <>
                           <div className="setting-row setting-column-row">
                             <div>
-                              <strong>{t("settings.agent.autoReplyTemplate")}</strong>
-                              <span>{t("settings.agent.autoReplyTemplateDesc")}</span>
+                              <strong>{t("settings.agent.autoReplyAccounts")}</strong>
+                              <span>{t("settings.agent.autoReplyAccountsDesc")}</span>
                             </div>
-                            <textarea
-                              className="auto-reply-template-input"
-                              value={currentSettings.autoReply.template.text}
-                              rows={5}
-                              maxLength={2000}
-                              disabled={controlsBusy}
-                              placeholder={t("settings.agent.autoReplyTemplatePlaceholder")}
-                              aria-label={t("settings.agent.autoReplyTemplate")}
-                              onChange={(event) => void applyOptimisticSettings(
-                                { autoReply: { ...currentSettings.autoReply, template: { ...currentSettings.autoReply.template, text: event.target.value } } },
-                                t("settings.agent.autoReplyUpdated"),
-                              )}
-                            />
-                            <p className="auto-reply-template-hint">{t("settings.agent.autoReplyTemplateHint")}</p>
+                            <div className="auto-reply-account-list" role="group" aria-label={t("settings.agent.autoReplyAccounts")}>
+                              {accounts.length === 0 && <p className="settings-empty">{t("settings.agent.autoReplyNoAccounts")}</p>}
+                              {accounts.map((account) => {
+                                const checked = currentSettings.autoReply.accountIds.includes(account.id);
+                                return (
+                                  <label className="accounts-row-check" key={account.id}>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      disabled={controlsBusy}
+                                      onChange={() => {
+                                        const accountIds = checked
+                                          ? currentSettings.autoReply.accountIds.filter((id) => id !== account.id)
+                                          : [...currentSettings.autoReply.accountIds, account.id];
+                                        void applyOptimisticSettings({ autoReply: { ...currentSettings.autoReply, accountIds } }, t("settings.agent.autoReplyUpdated"));
+                                      }}
+                                      aria-label={t("settings.agent.autoReplyAccountAriaLabel", { email: account.email })}
+                                    />
+                                    {account.email}
+                                  </label>
+                                );
+                              })}
+                            </div>
                           </div>
-                          <Switch
-                            checked={currentSettings.autoReply.template.skipConfirmation}
+                          <div className="setting-row setting-column-row">
+                            <div>
+                              <strong>{t("settings.agent.autoReplyMode")}</strong>
+                              <span>{t("settings.agent.autoReplyModeDesc")}</span>
+                            </div>
+                            <div className="auto-reply-mode-toggle" role="group" aria-label={t("settings.agent.autoReplyMode")}>
+                              <button
+                                className={`secondary-button${currentSettings.autoReply.mode === "llm" ? " active" : ""}`}
+                                type="button"
+                                disabled={controlsBusy}
+                                onClick={() => void applyOptimisticSettings(
+                                  { autoReply: { ...currentSettings.autoReply, mode: "llm" } },
+                                  t("settings.agent.autoReplyUpdated"),
+                                )}
+                              >
+                                {t("settings.agent.autoReplyModeLlm")}
+                              </button>
+                              <button
+                                className={`secondary-button${currentSettings.autoReply.mode === "template" ? " active" : ""}`}
+                                type="button"
+                                disabled={controlsBusy}
+                                onClick={() => void applyOptimisticSettings(
+                                  { autoReply: { ...currentSettings.autoReply, mode: "template" } },
+                                  t("settings.agent.autoReplyUpdated"),
+                                )}
+                              >
+                                {t("settings.agent.autoReplyModeTemplate")}
+                              </button>
+                            </div>
+                          </div>
+                          {currentSettings.autoReply.mode === "template" && (
+                            <>
+                              <div className="setting-row setting-column-row">
+                                <div>
+                                  <strong>{t("settings.agent.autoReplyTemplate")}</strong>
+                                  <span>{t("settings.agent.autoReplyTemplateDesc")}</span>
+                                </div>
+                                <textarea
+                                  className="auto-reply-template-input"
+                                  value={currentSettings.autoReply.template.text}
+                                  rows={5}
+                                  maxLength={2000}
+                                  disabled={controlsBusy}
+                                  placeholder={t("settings.agent.autoReplyTemplatePlaceholder")}
+                                  aria-label={t("settings.agent.autoReplyTemplate")}
+                                  onChange={(event) => void applyOptimisticSettings(
+                                    { autoReply: { ...currentSettings.autoReply, template: { ...currentSettings.autoReply.template, text: event.target.value } } },
+                                    t("settings.agent.autoReplyUpdated"),
+                                  )}
+                                />
+                                <p className="auto-reply-template-hint">{t("settings.agent.autoReplyTemplateHint")}</p>
+                              </div>
+                              <Switch
+                                checked={currentSettings.autoReply.template.skipConfirmation}
+                                disabled={controlsBusy}
+                                label={t("settings.agent.autoReplySkipConfirmation")}
+                                description={t("settings.agent.autoReplySkipConfirmationDesc")}
+                                onChange={() => void applyOptimisticSettings(
+                                  { autoReply: { ...currentSettings.autoReply, template: { ...currentSettings.autoReply.template, skipConfirmation: !currentSettings.autoReply.template.skipConfirmation } } },
+                                  t("settings.agent.autoReplyUpdated"),
+                                )}
+                              />
+                            </>
+                          )}
+                          <AutoReplyScopeEditor
+                            scope={currentSettings.autoReply.scope}
                             disabled={controlsBusy}
-                            label={t("settings.agent.autoReplySkipConfirmation")}
-                            description={t("settings.agent.autoReplySkipConfirmationDesc")}
-                            onChange={() => void applyOptimisticSettings(
-                              { autoReply: { ...currentSettings.autoReply, template: { ...currentSettings.autoReply.template, skipConfirmation: !currentSettings.autoReply.template.skipConfirmation } } },
+                            onChange={(scope) => void applyOptimisticSettings(
+                              { autoReply: { ...currentSettings.autoReply, scope } },
                               t("settings.agent.autoReplyUpdated"),
                             )}
                           />
+                          <div className="setting-row">
+                            <div>
+                              <strong>{t("settings.agent.autoReplyDailyLimit")}</strong>
+                              <span>{t("settings.agent.autoReplyDailyLimitDesc")}</span>
+                            </div>
+                            <NumberStepper
+                              value={currentSettings.autoReply.dailyLimitPerAccount}
+                              min={0}
+                              max={500}
+                              disabled={controlsBusy}
+                              decreaseLabel={t("settings.agent.autoReplyDailyLimitDecrease")}
+                              increaseLabel={t("settings.agent.autoReplyDailyLimitIncrease")}
+                              onChange={(value) => void applyOptimisticSettings(
+                                { autoReply: { ...currentSettings.autoReply, dailyLimitPerAccount: value } },
+                                t("settings.agent.autoReplyUpdated"),
+                              )}
+                            />
+                          </div>
                         </>
                       )}
-                      <AutoReplyScopeEditor
-                        scope={currentSettings.autoReply.scope}
-                        disabled={controlsBusy}
-                        onChange={(scope) => void applyOptimisticSettings(
-                          { autoReply: { ...currentSettings.autoReply, scope } },
-                          t("settings.agent.autoReplyUpdated"),
-                        )}
-                      />
-                      <div className="setting-row">
+                      <div className="setting-row agent-tools-row">
                         <div>
-                          <strong>{t("settings.agent.autoReplyDailyLimit")}</strong>
-                          <span>{t("settings.agent.autoReplyDailyLimitDesc")}</span>
+                          <strong>{t("settings.agent.autoReplyTools")}</strong>
+                          <span>{t("settings.agent.autoReplyToolsDesc")}</span>
                         </div>
-                        <NumberStepper
-                          value={currentSettings.autoReply.dailyLimitPerAccount}
-                          min={0}
-                          max={500}
-                          disabled={controlsBusy}
-                          decreaseLabel={t("settings.agent.autoReplyDailyLimitDecrease")}
-                          increaseLabel={t("settings.agent.autoReplyDailyLimitIncrease")}
-                          onChange={(value) => void applyOptimisticSettings(
-                            { autoReply: { ...currentSettings.autoReply, dailyLimitPerAccount: value } },
-                            t("settings.agent.autoReplyUpdated"),
-                          )}
-                        />
+                        <div className="agent-tools-actions">
+                          <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setAutoReplyDialogOpen(true)}>
+                            <MessageSquareReply size={15} />{t("settings.agent.autoReplyToolsPending")}
+                          </button>
+                          <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setAutoReplyDecisionsOpen(true)}>
+                            <MessageSquareX size={15} />{t("settings.agent.autoReplyToolsDeclined")}
+                          </button>
+                          <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setMemoryDialogOpen(true)}>
+                            <BookOpen size={15} />{t("settings.agent.autoReplyToolsMemory")}
+                          </button>
+                        </div>
                       </div>
-                    </>
-                  )}
-                  <div className="setting-row agent-tools-row">
-                    <div>
-                      <strong>{t("settings.agent.autoReplyReview")}</strong>
-                      <span>{t("settings.agent.autoReplyReviewDesc")}</span>
-                    </div>
-                    <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setAutoReplyDialogOpen(true)}>
-                      <MessageSquareReply size={15} />{t("settings.agent.autoReplyReviewAction")}
-                    </button>
-                  </div>
-                  <div className="setting-row agent-tools-row">
-                    <div>
-                      <strong>{t("settings.agent.autoReplyReviewDeclined")}</strong>
-                      <span>{t("settings.agent.autoReplyReviewDeclinedDesc")}</span>
-                    </div>
-                    <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setAutoReplyDecisionsOpen(true)}>
-                      <MessageSquareX size={15} />{t("settings.agent.autoReplyReviewDeclinedAction")}
-                    </button>
-                  </div>
-                  <div className="setting-row agent-tools-row">
-                    <div>
-                      <strong>{t("settings.agent.memory")}</strong>
-                      <span>{t("settings.agent.memoryDesc")}</span>
-                    </div>
-                    <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setMemoryDialogOpen(true)}>
-                      <BookOpen size={15} />{t("settings.agent.memoryAction")}
-                    </button>
-                  </div>
                 </>
               )}
-            </>
-          )}
-          <div className="setting-subheading"><span>{t("settings.agent.accessLevelGroup")}</span><small>{t("settings.agent.accessLevelGroupDesc")}</small></div>
-          <label className="setting-select-row" htmlFor="agent-access-level">
-            <span><strong>{t("settings.agent.builtinAccessLevel")}</strong><small>{t("settings.agent.builtinAccessLevelDesc")}</small></span>
-            <ThemedSelect
-              id="agent-access-level"
-              value={currentSettings.agentAccessLevel}
-              aria-label={t("settings.agent.builtinAccessLevel")}
-              disabled={controlsBusy}
-              onValueChange={(value) => requestAccessLevelChange({ agentAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, t("settings.agent.accessLevelUpdated"))}
-            >
-              {agentAccessLevelOptions.map((option) => (
-                <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
-              ))}
-            </ThemedSelect>
-          </label>
-          <label className="setting-select-row" htmlFor="agent-cli-access-level">
-            <span><strong>{t("settings.agent.cliAccessLevel")}</strong><small>{t("settings.agent.cliAccessLevelDesc")}</small></span>
-            <ThemedSelect
-              id="agent-cli-access-level"
-              value={currentSettings.agentCliAccessLevel}
-              aria-label={t("settings.agent.cliAccessLevel")}
-              disabled={controlsBusy}
-              onValueChange={(value) => requestAccessLevelChange({ agentCliAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, t("settings.agent.accessLevelUpdated"))}
-            >
-              {agentAccessLevelOptions.map((option) => (
-                <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
-              ))}
-            </ThemedSelect>
-          </label>
-          <label className="setting-select-row" htmlFor="agent-mcp-access-level">
-            <span><strong>{t("settings.agent.mcpAccessLevel")}</strong><small>{t("settings.agent.mcpAccessLevelDesc")}</small></span>
-            <ThemedSelect
-              id="agent-mcp-access-level"
-              value={currentSettings.agentMcpAccessLevel}
-              aria-label={t("settings.agent.mcpAccessLevel")}
-              disabled={controlsBusy}
-              onValueChange={(value) => requestAccessLevelChange({ agentMcpAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, t("settings.agent.accessLevelUpdated"))}
-            >
-              {agentAccessLevelOptions.map((option) => (
-                <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
-              ))}
-            </ThemedSelect>
-          </label>
-          <div className="setting-subheading"><span>{t("settings.agent.externalGuide.title")}</span><small>{t("settings.agent.externalGuide.desc")}</small></div>
-          <div className="external-guide">
-            <p className="external-guide-note">{t("settings.agent.externalGuide.steps.intro")}</p>
-            <ol className="external-guide-steps">
-              <li>{t("settings.agent.externalGuide.steps.1")}</li>
-              <li>{t("settings.agent.externalGuide.steps.2")} <code>namimail service start</code></li>
-              <li>{t("settings.agent.externalGuide.steps.3")}</li>
-              <li>{t("settings.agent.externalGuide.steps.4")}</li>
-            </ol>
-            <ExternalGuideBlock
-              id="cli"
-              label={t("settings.agent.externalGuide.cli.label")}
-              hint={t("settings.agent.externalGuide.cli.hint", { cmd: "namimail accounts list" })}
-              code={externalCliGuideCode}
-              copiedId={externalGuideCopied}
-              onCopy={copyExternalGuide}
-            />
-            <ExternalGuideBlock
-              id="mcp"
-              label={t("settings.agent.externalGuide.mcp.label")}
-              hint={t("settings.agent.externalGuide.mcp.hint")}
-              code={externalMcpGuideCode}
-              copiedId={externalGuideCopied}
-              onCopy={copyExternalGuide}
-            />
-            <ExternalGuideBlock
-              id="service"
-              label={t("settings.agent.externalGuide.service.label")}
-              hint={t("settings.agent.externalGuide.service.hint")}
-              code={externalServiceGuideCode}
-              copiedId={externalGuideCopied}
-              onCopy={copyExternalGuide}
-            />
-            <p className="external-guide-docs">{t("settings.agent.externalGuide.docs")}<a href={externalDocsUrl} target="_blank" rel="noopener noreferrer">github.com/QinIndexCode/nami-mail</a></p>
-          </div>
-          <div className="setting-subheading">
-            <span>{t("settings.agent.externalPairings.title")}</span>
-            <small>{t("settings.agent.externalPairings.desc")}</small>
-          </div>
-          <div className="external-pairings">
-            {externalPairingsError ? (
-              <p className="external-pairings-empty">{t("settings.agent.externalPairings.loadError")}</p>
-            ) : externalPairings === null ? (
-              <p className="external-pairings-empty" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("common.loading")}</p>
-            ) : externalPairings.length === 0 ? (
-              <p className="external-pairings-empty">{t("settings.agent.externalPairings.empty", { cmd: "namimail pair" })}</p>
-            ) : (
-              <ul className="external-pairings-list">
-                {externalPairings.map((pairing) => {
-                  const currentIds = new Set(accounts.map((account) => account.id));
-                  const drifted = pairing.status === "active"
-                    && (pairing.accountIds.length !== currentIds.size || pairing.accountIds.some((id) => !currentIds.has(id)));
-                  return (
-                    <li key={pairing.clientId} className={`external-pairing-row external-pairing-${pairing.status}`}>
-                      <span className="external-pairing-id" title={pairing.clientId}>{pairing.clientId.slice(0, 20)}</span>
-                      <span className="external-pairing-meta">
-                        {t("settings.agent.externalPairings.created", { date: formatDate(pairing.createdAt) })}
-                        {pairing.expiresAt ? ` · ${t("settings.agent.externalPairings.expires", { date: formatDate(pairing.expiresAt) })}` : ""}
-                        {` · ${t("settings.agent.externalPairings.accountCount", { count: pairing.accountIds.length })}`}
-                      </span>
-                      <span className="external-pairing-status">{t(`settings.agent.externalPairings.status.${pairing.status}`)}</span>
-                      {drifted ? <span className="external-pairing-drift">{t("settings.agent.externalPairings.drift")}</span> : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-          <button
-            className="secondary-button external-pairings-refresh"
-            type="button"
-            onClick={() => setExternalPairingsReload((value) => value + 1)}
-          >
-            {t("settings.agent.externalPairings.refresh")}
-          </button>
-        </section>
-
-        <section className="settings-section" aria-labelledby="translation-settings">
-          <div className="settings-section-title">
-            <KeyRound size={16} />
-            <div><span>{t("settings.translation.title")}</span><p id="translation-settings">{demoMode ? t("settings.translation.demoDescription") : t("settings.translation.description")}</p></div>
-          </div>
-          {demoMode ? null : translationConfigurationLoading ? (
-            <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("common.loading")}</p>
-          ) : translationConfiguration ? (
-            <form className="translation-settings-form" onSubmit={(event) => {
-              event.preventDefault();
-              void saveTranslationConfiguration();
-            }}>
-              <label className="translation-setting-field" htmlFor="translation-service-endpoint">
-                <span><strong>{t("settings.translation.endpoint")}</strong><small>{t("settings.translation.endpointHint")}</small></span>
-                <input
-                  id="translation-service-endpoint"
-                  type="url"
-                  value={translationEndpoint}
-                  placeholder={t("settings.translation.endpointPlaceholder")}
-                  autoComplete="url"
-                  spellCheck={false}
-                  required
+              <div className="setting-subheading"><span>{t("settings.agent.accessLevelGroup")}</span><small>{t("settings.agent.accessLevelGroupDesc")}</small></div>
+              <label className="setting-select-row" htmlFor="agent-access-level">
+                <span><strong>{t("settings.agent.builtinAccessLevel")}</strong><small>{t("settings.agent.builtinAccessLevelDesc")}</small></span>
+                <ThemedSelect
+                  id="agent-access-level"
+                  value={currentSettings.agentAccessLevel}
+                  aria-label={t("settings.agent.builtinAccessLevel")}
                   disabled={controlsBusy}
-                  onChange={(event) => setTranslationEndpoint(event.target.value)}
-                />
+                  onValueChange={(value) => requestAccessLevelChange({ agentAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, t("settings.agent.accessLevelUpdated"))}
+                >
+                  {agentAccessLevelOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
+                  ))}
+                </ThemedSelect>
               </label>
-              <label className="translation-setting-field" htmlFor="translation-service-key">
-                <span>
-                  <strong>{t("settings.translation.apiKey")}</strong>
-                  <small>{translationApiKeyHint}</small>
-                </span>
-                <span className="translation-secret-input">
-                  <input
-                    id="translation-service-key"
-                    type={translationApiKeyVisible ? "text" : "password"}
-                    value={translationApiKey}
-                    placeholder={t("settings.translation.apiKeyPlaceholder")}
-                    autoComplete="new-password"
-                    spellCheck={false}
-                    disabled={controlsBusy}
-                    onChange={(event) => setTranslationApiKey(event.target.value)}
-                  />
-                  <button
-                    className="icon-button translation-key-visibility"
-                    type="button"
-                    aria-label={translationApiKeyVisible ? t("settings.translation.hideApiKey") : t("settings.translation.showApiKey")}
-                    aria-pressed={translationApiKeyVisible}
-                    data-tooltip={translationApiKeyVisible ? t("settings.translation.hideApiKey") : t("settings.translation.showApiKey")}
-                    disabled={controlsBusy || !translationApiKey}
-                    onClick={() => setTranslationApiKeyVisible((value) => !value)}
-                  >
-                    {translationApiKeyVisible ? <EyeOff size={15} /> : <Eye size={15} />}
-                  </button>
-                </span>
-              </label>
-              <label className="translation-setting-field translation-timeout-field" htmlFor="translation-service-timeout">
-                <span><strong>{t("settings.translation.timeout")}</strong><small>{t("settings.translation.timeoutHint")}</small></span>
-                <input
-                  id="translation-service-timeout"
-                  type="number"
-                  min="1000"
-                  max="60000"
-                  step="1000"
-                  value={translationTimeoutMs}
+              <label className="setting-select-row" htmlFor="agent-cli-access-level">
+                <span><strong>{t("settings.agent.cliAccessLevel")}</strong><small>{t("settings.agent.cliAccessLevelDesc")}</small></span>
+                <ThemedSelect
+                  id="agent-cli-access-level"
+                  value={currentSettings.agentCliAccessLevel}
+                  aria-label={t("settings.agent.cliAccessLevel")}
                   disabled={controlsBusy}
-                  onChange={(event) => setTranslationTimeoutMs(Number(event.target.value))}
-                />
+                  onValueChange={(value) => requestAccessLevelChange({ agentCliAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, t("settings.agent.accessLevelUpdated"))}
+                >
+                  {agentAccessLevelOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
+                  ))}
+                </ThemedSelect>
               </label>
-              <div className="translation-configuration-meta" role="status" aria-live="polite">
-                <span className={`status-dot ${translationConfiguration.enabled && !translationConfiguration.configurationError ? "connected" : "error"}`} aria-hidden="true" />
-                <span>{translationConfigurationStatusMessage(translationConfiguration, t)}</span>
-                {translationConfiguration.apiKeyConfigured && !translationConfiguration.configurationError && <small>{t("settings.translation.keySaved")}</small>}
+              <label className="setting-select-row" htmlFor="agent-mcp-access-level">
+                <span><strong>{t("settings.agent.mcpAccessLevel")}</strong><small>{t("settings.agent.mcpAccessLevelDesc")}</small></span>
+                <ThemedSelect
+                  id="agent-mcp-access-level"
+                  value={currentSettings.agentMcpAccessLevel}
+                  aria-label={t("settings.agent.mcpAccessLevel")}
+                  disabled={controlsBusy}
+                  onValueChange={(value) => requestAccessLevelChange({ agentMcpAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, t("settings.agent.accessLevelUpdated"))}
+                >
+                  {agentAccessLevelOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
+                  ))}
+                </ThemedSelect>
+              </label>
+              <div className="setting-subheading"><span>{t("settings.agent.externalGuide.title")}</span><small>{t("settings.agent.externalGuide.desc")}</small></div>
+              <div className="external-guide">
+                <p className="external-guide-note">{t("settings.agent.externalGuide.steps.intro")}</p>
+                <ol className="external-guide-steps">
+                  <li>{t("settings.agent.externalGuide.steps.1")}</li>
+                  <li>{t("settings.agent.externalGuide.steps.2")} <code>namimail service start</code></li>
+                  <li>{t("settings.agent.externalGuide.steps.3")}</li>
+                  <li>{t("settings.agent.externalGuide.steps.4")}</li>
+                </ol>
+                <ExternalGuideBlock
+                  id="cli"
+                  label={t("settings.agent.externalGuide.cli.label")}
+                  hint={t("settings.agent.externalGuide.cli.hint", { cmd: "namimail accounts list" })}
+                  code={externalCliGuideCode}
+                  copiedId={externalGuideCopied}
+                  onCopy={copyExternalGuide}
+                />
+                <ExternalGuideBlock
+                  id="mcp"
+                  label={t("settings.agent.externalGuide.mcp.label")}
+                  hint={t("settings.agent.externalGuide.mcp.hint")}
+                  code={externalMcpGuideCode}
+                  copiedId={externalGuideCopied}
+                  onCopy={copyExternalGuide}
+                />
+                <ExternalGuideBlock
+                  id="service"
+                  label={t("settings.agent.externalGuide.service.label")}
+                  hint={t("settings.agent.externalGuide.service.hint")}
+                  code={externalServiceGuideCode}
+                  copiedId={externalGuideCopied}
+                  onCopy={copyExternalGuide}
+                />
+                <p className="external-guide-docs">{t("settings.agent.externalGuide.docs")}<a href={externalDocsUrl} target="_blank" rel="noopener noreferrer">github.com/QinIndexCode/nami-mail</a></p>
               </div>
-              <div className="settings-inline-actions">
-                <button className="primary-button" type="submit" disabled={controlsBusy || translationConfigurationNeedsReplacementKey}>
-                  {busyAction === "translation-configuration" ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}
-                  {busyAction === "translation-configuration" ? t("settings.translation.saving") : t("settings.translation.save")}
-                </button>
-                {translationConfiguration.source === "local" && translationConfiguration.apiKeyConfigured && (
-                  <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("remove-translation-api-key"); }}>
-                    <KeyRound size={15} />{t("settings.translation.removeKey")}
-                  </button>
-                )}
-                {translationConfiguration.source === "local" && (
-                  <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("remove-translation-configuration"); }}>
-                    <Trash2 size={15} />{t("settings.translation.removeService")}
-                  </button>
+              <div className="setting-subheading">
+                <span>{t("settings.agent.externalPairings.title")}</span>
+                <small>{t("settings.agent.externalPairings.desc")}</small>
+              </div>
+              <div className="external-pairings">
+                {externalPairingsError ? (
+                  <p className="external-pairings-empty">{t("settings.agent.externalPairings.loadError")}</p>
+                ) : externalPairings === null ? (
+                  <p className="external-pairings-empty" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("common.loading")}</p>
+                ) : externalPairings.length === 0 ? (
+                  <p className="external-pairings-empty">{t("settings.agent.externalPairings.empty", { cmd: "namimail pair" })}</p>
+                ) : (
+                  <ul className="external-pairings-list">
+                    {externalPairings.map((pairing) => {
+                      const currentIds = new Set(accounts.map((account) => account.id));
+                      const drifted = pairing.status === "active"
+                        && (pairing.accountIds.length !== currentIds.size || pairing.accountIds.some((id) => !currentIds.has(id)));
+                      return (
+                        <li key={pairing.clientId} className={`external-pairing-row external-pairing-${pairing.status}`}>
+                          <span className="external-pairing-id" title={pairing.clientId}>{pairing.clientId.slice(0, 20)}</span>
+                          <span className="external-pairing-meta">
+                            {t("settings.agent.externalPairings.created", { date: formatDate(pairing.createdAt) })}
+                            {pairing.expiresAt ? ` · ${t("settings.agent.externalPairings.expires", { date: formatDate(pairing.expiresAt) })}` : ""}
+                            {` · ${t("settings.agent.externalPairings.accountCount", { count: pairing.accountIds.length })}`}
+                          </span>
+                          <span className="external-pairing-status">{t(`settings.agent.externalPairings.status.${pairing.status}`)}</span>
+                          {drifted ? <span className="external-pairing-drift">{t("settings.agent.externalPairings.drift")}</span> : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
                 )}
               </div>
-            </form>
-          ) : (
-            <div className="settings-empty translation-configuration-load-error" role="alert">
-              <span>{translationConfigurationErrorMessage(translationConfigurationError, t, "settings.translation.loadFailed")}</span>
-              <button className="secondary-button" type="button" disabled={controlsBusy || translationConfigurationLoading} onClick={retryTranslationConfigurationLoad}>
-                <RefreshCw size={15} aria-hidden="true" />{t("common.retry")}
+              <button
+                className="secondary-button external-pairings-refresh"
+                type="button"
+                onClick={() => setExternalPairingsReload((value) => value + 1)}
+              >
+                {t("settings.agent.externalPairings.refresh")}
               </button>
-            </div>
-          )}
-        </section>
+            </section>
+
+            <section className="settings-section" data-settings-nav="translation" aria-labelledby="translation-settings">
+              <div className="settings-section-title">
+                <KeyRound size={16} />
+                <div><span>{t("settings.translation.title")}</span><p id="translation-settings">{demoMode ? t("settings.translation.demoDescription") : t("settings.translation.description")}</p></div>
+              </div>
+              {demoMode ? null : translationConfigurationLoading ? (
+                <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("common.loading")}</p>
+              ) : translationConfiguration ? (
+                <form className="translation-settings-form" onSubmit={(event) => {
+                  event.preventDefault();
+                  void saveTranslationConfiguration();
+                }}>
+                  <label className="translation-setting-field" htmlFor="translation-service-endpoint">
+                    <span><strong>{t("settings.translation.endpoint")}</strong><small>{t("settings.translation.endpointHint")}</small></span>
+                    <input
+                      id="translation-service-endpoint"
+                      type="url"
+                      value={translationEndpoint}
+                      placeholder={t("settings.translation.endpointPlaceholder")}
+                      autoComplete="url"
+                      spellCheck={false}
+                      required
+                      disabled={controlsBusy}
+                      onChange={(event) => setTranslationEndpoint(event.target.value)}
+                    />
+                  </label>
+                  <label className="translation-setting-field" htmlFor="translation-service-key">
+                    <span>
+                      <strong>{t("settings.translation.apiKey")}</strong>
+                      <small>{translationApiKeyHint}</small>
+                    </span>
+                    <span className="translation-secret-input">
+                      <input
+                        id="translation-service-key"
+                        type={translationApiKeyVisible ? "text" : "password"}
+                        value={translationApiKey}
+                        placeholder={t("settings.translation.apiKeyPlaceholder")}
+                        autoComplete="new-password"
+                        spellCheck={false}
+                        disabled={controlsBusy}
+                        onChange={(event) => setTranslationApiKey(event.target.value)}
+                      />
+                      <button
+                        className="icon-button translation-key-visibility"
+                        type="button"
+                        aria-label={translationApiKeyVisible ? t("settings.translation.hideApiKey") : t("settings.translation.showApiKey")}
+                        aria-pressed={translationApiKeyVisible}
+                        data-tooltip={translationApiKeyVisible ? t("settings.translation.hideApiKey") : t("settings.translation.showApiKey")}
+                        disabled={controlsBusy || !translationApiKey}
+                        onClick={() => setTranslationApiKeyVisible((value) => !value)}
+                      >
+                        {translationApiKeyVisible ? <EyeOff size={15} /> : <Eye size={15} />}
+                      </button>
+                    </span>
+                  </label>
+                  <label className="translation-setting-field translation-timeout-field" htmlFor="translation-service-timeout">
+                    <span><strong>{t("settings.translation.timeout")}</strong><small>{t("settings.translation.timeoutHint")}</small></span>
+                    <input
+                      id="translation-service-timeout"
+                      type="number"
+                      min="1000"
+                      max="60000"
+                      step="1000"
+                      value={translationTimeoutMs}
+                      disabled={controlsBusy}
+                      onChange={(event) => setTranslationTimeoutMs(Number(event.target.value))}
+                    />
+                  </label>
+                  <div className="translation-configuration-meta" role="status" aria-live="polite">
+                    <span className={`status-dot ${translationConfiguration.enabled && !translationConfiguration.configurationError ? "connected" : "error"}`} aria-hidden="true" />
+                    <span>{translationConfigurationStatusMessage(translationConfiguration, t)}</span>
+                    {translationConfiguration.apiKeyConfigured && !translationConfiguration.configurationError && <small>{t("settings.translation.keySaved")}</small>}
+                  </div>
+                  <div className="settings-inline-actions">
+                    <button className="primary-button" type="submit" disabled={controlsBusy || translationConfigurationNeedsReplacementKey}>
+                      {busyAction === "translation-configuration" ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}
+                      {busyAction === "translation-configuration" ? t("settings.translation.saving") : t("settings.translation.save")}
+                    </button>
+                    {translationConfiguration.source === "local" && translationConfiguration.apiKeyConfigured && (
+                      <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("remove-translation-api-key"); }}>
+                        <KeyRound size={15} />{t("settings.translation.removeKey")}
+                      </button>
+                    )}
+                    {translationConfiguration.source === "local" && (
+                      <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("remove-translation-configuration"); }}>
+                        <Trash2 size={15} />{t("settings.translation.removeService")}
+                      </button>
+                    )}
+                  </div>
+                </form>
+              ) : (
+                <div className="settings-empty translation-configuration-load-error" role="alert">
+                  <span>{translationConfigurationErrorMessage(translationConfigurationError, t, "settings.translation.loadFailed")}</span>
+                  <button className="secondary-button" type="button" disabled={controlsBusy || translationConfigurationLoading} onClick={retryTranslationConfigurationLoad}>
+                    <RefreshCw size={15} aria-hidden="true" />{t("common.retry")}
+                  </button>
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
 
         <footer className="settings-footer">
           <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("restore-defaults"); }}>

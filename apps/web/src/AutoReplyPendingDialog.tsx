@@ -28,12 +28,14 @@ export function autoReplySenderLabel(fromName: string, fromAddress: string): str
 export function AutoReplyPendingCard({
   item,
   accountEmail: account,
-  desktopAvailable,
+  canResolve,
+  onResolve,
   style,
 }: {
   item: AutoReplyPendingSummary;
   accountEmail?: string;
-  desktopAvailable: boolean;
+  canResolve: boolean;
+  onResolve: (confirmationId: string, decision: "approve" | "reject") => void;
   style?: React.CSSProperties;
 }) {
   const { t, formatDate } = useI18n();
@@ -60,18 +62,20 @@ export function AutoReplyPendingCard({
           <button
             className="secondary-button"
             type="button"
-            disabled={!desktopAvailable}
+            disabled={!canResolve}
             data-nami-agent-confirmation-id={item.confirmationId}
             data-nami-agent-confirmation-decision="reject"
+            onClick={() => onResolve(item.confirmationId, "reject")}
           >
             {t("agent.confirmation.reject")}
           </button>
           <button
             className="primary-button"
             type="button"
-            disabled={!desktopAvailable}
+            disabled={!canResolve}
             data-nami-agent-confirmation-id={item.confirmationId}
             data-nami-agent-confirmation-decision="approve"
+            onClick={() => onResolve(item.confirmationId, "approve")}
           >
             <CheckCheck size={15} />{t("autoReply.pending.approve")}
           </button>
@@ -84,8 +88,9 @@ export function AutoReplyPendingCard({
 /**
  * Reviews auto-replies the Agent drafted for incoming mail. Approve/Reject
  * buttons reuse the desktop confirmation attributes so the Electron preload
- * resolves each decision natively; the dialog refreshes on the published
- * result so approved replies disappear as the engine sends them.
+ * resolves each decision natively when a bridge is present; in a plain web
+ * session the decision is resolved through the local confirmation API and the
+ * dialog refreshes so approved replies disappear as the engine sends them.
  */
 export default function AutoReplyPendingDialog({ accounts, onClose, fallbackFocusRef }: AutoReplyPendingDialogProps) {
   const { t } = useI18n();
@@ -94,9 +99,14 @@ export default function AutoReplyPendingDialog({ accounts, onClose, fallbackFocu
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [resolving, setResolving] = useState<string | null>(null);
   useDialogFocus(true, dialogRef, { fallbackFocusRef });
 
-  const desktopAvailable = Boolean(desktopBridge()?.onAgentConfirmationResult);
+  const bridge = desktopBridge();
+  const desktopAvailable = Boolean(bridge?.onAgentConfirmationResult);
+  // The desktop preload resolves decisions natively; otherwise the local web
+  // surface resolves them through the confirmation API.
+  const canResolve = desktopAvailable || !bridge;
   const { closing, requestClose } = useDismissTransition(onClose);
 
   const refresh = useCallback(async () => {
@@ -114,6 +124,23 @@ export default function AutoReplyPendingDialog({ accounts, onClose, fallbackFocu
       setRefreshing(false);
     }
   }, [t]);
+
+  const resolve = useCallback(async (confirmationId: string, decision: "approve" | "reject") => {
+    // In the desktop runtime the Electron preload handles the trusted click
+    // itself; React must not double-resolve the confirmation.
+    if (desktopAvailable || resolving) return;
+    setResolving(confirmationId);
+    try {
+      await api.resolveAgentConfirmation(confirmationId, decision);
+      await refresh();
+    } catch (requestError) {
+      setError(requestError instanceof ApiError
+        ? requestError.message
+        : t("autoReply.pending.loadError"));
+    } finally {
+      setResolving(null);
+    }
+  }, [desktopAvailable, refresh, resolving, t]);
 
   useEffect(() => {
     void refresh();
@@ -161,7 +188,7 @@ export default function AutoReplyPendingDialog({ accounts, onClose, fallbackFocu
           </div>
         </header>
 
-        {!desktopAvailable && (
+        {!canResolve && (
           <div className="form-status warning auto-reply-warning" role="status"><CircleAlert size={16} />{t("autoReply.pending.desktopOnly")}</div>
         )}
         {error && <div className="form-status error auto-reply-error" role="alert"><CircleAlert size={16} />{error}</div>}
@@ -182,7 +209,8 @@ export default function AutoReplyPendingDialog({ accounts, onClose, fallbackFocu
               key={item.confirmationId}
               item={item}
               accountEmail={accountEmail(accounts, item.accountId)}
-              desktopAvailable={desktopAvailable}
+              canResolve={canResolve}
+              onResolve={(confirmationId, decision) => void resolve(confirmationId, decision)}
               style={{ animationDelay: `${Math.min(index * 32, 130)}ms` } satisfies CSSProperties}
             />
           ))}

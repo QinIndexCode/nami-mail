@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { I18nProvider, translate } from "./i18n";
 import AutoReplyPendingDialog, { AutoReplyPendingCard, autoReplySenderLabel } from "./AutoReplyPendingDialog";
 import type { AutoReplyPendingSummary } from "./agentTypes";
@@ -41,10 +41,10 @@ const pending: AutoReplyPendingSummary = {
   },
 };
 
-function renderCard(desktopAvailable: boolean, accountEmail?: string): string {
+function renderCard(canResolve: boolean, accountEmail?: string): string {
   return renderToStaticMarkup(
     <I18nProvider>
-      <AutoReplyPendingCard item={pending} accountEmail={accountEmail} desktopAvailable={desktopAvailable} />
+      <AutoReplyPendingCard item={pending} accountEmail={accountEmail} canResolve={canResolve} onResolve={() => undefined} />
     </I18nProvider>,
   );
 }
@@ -66,20 +66,25 @@ describe("auto-reply pending review", () => {
     expect(autoReplySenderLabel("张三", "sender@example.com")).toBe("张三 <sender@example.com>");
   });
 
-  it("routes decisions through the desktop confirmation attributes and disables them outside the desktop", () => {
-    const desktopMarkup = renderCard(true);
-    expect(desktopMarkup).toContain('data-nami-agent-confirmation-id="confirm_auto_reply_1"');
-    expect(desktopMarkup).toContain('data-nami-agent-confirmation-decision="approve"');
-    expect(desktopMarkup).toContain('data-nami-agent-confirmation-decision="reject"');
-    expect(desktopMarkup).not.toContain('disabled=""');
+  it("routes decisions through the desktop confirmation attributes and the web resolve handler", () => {
+    const resolve = vi.fn();
+    const markup = renderToStaticMarkup(
+      <I18nProvider>
+        <AutoReplyPendingCard item={pending} canResolve={true} onResolve={resolve} />
+      </I18nProvider>,
+    );
+    expect(markup).toContain('data-nami-agent-confirmation-id="confirm_auto_reply_1"');
+    expect(markup).toContain('data-nami-agent-confirmation-decision="approve"');
+    expect(markup).toContain('data-nami-agent-confirmation-decision="reject"');
+    expect(markup).not.toContain('disabled=""');
 
-    const webMarkup = renderCard(false);
-    expect(webMarkup).toContain('data-nami-agent-confirmation-decision="approve"');
-    expect(webMarkup).toContain('data-nami-agent-confirmation-decision="reject"');
-    expect(webMarkup).toContain('disabled=""');
+    const disabledMarkup = renderCard(false);
+    expect(disabledMarkup).toContain('data-nami-agent-confirmation-decision="approve"');
+    expect(disabledMarkup).toContain('data-nami-agent-confirmation-decision="reject"');
+    expect(disabledMarkup).toContain('disabled=""');
   });
 
-  it("keeps the dialog chrome accessible and explains the desktop requirement outside the desktop app", () => {
+  it("keeps the dialog chrome accessible and resolves locally in a plain web session", () => {
     const markup = renderToStaticMarkup(
       <I18nProvider>
         <AutoReplyPendingDialog accounts={[account]} onClose={() => undefined} />
@@ -89,7 +94,9 @@ describe("auto-reply pending review", () => {
     expect(markup).toContain('role="dialog"');
     expect(markup).toContain('aria-modal="true"');
     expect(markup).toContain(zh("autoReply.pending.title"));
-    expect(markup).toContain(zh("autoReply.pending.desktopOnly"));
+    // Without a desktop bridge the local web surface resolves decisions, so
+    // the desktop-only warning must not appear.
+    expect(markup).not.toContain(zh("autoReply.pending.desktopOnly"));
     expect(markup).toContain('role="list"');
   });
 });

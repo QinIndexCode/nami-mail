@@ -89,7 +89,7 @@ describe("local API", () => {
     expect(response.headers["content-security-policy"]).toContain("default-src 'self'");
   });
 
-  it("keeps Agent confirmation decisions off the HTTP surface", async () => {
+  it("rejects confirmation decisions without the auto-reply engine", async () => {
     const unavailable = await app.inject({
       method: "POST",
       url: "/api/agent/confirmations/confirmation-1",
@@ -101,8 +101,8 @@ describe("local API", () => {
       payload: { decision: "approved" },
     });
 
-    expect(unavailable.statusCode).toBe(501);
-    expect(unavailable.json()).toMatchObject({ ok: false, code: "not_supported" });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json()).toMatchObject({ ok: false, code: "auto_reply_unavailable" });
     expect(malformed.statusCode).toBe(400);
   });
 
