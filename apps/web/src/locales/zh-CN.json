@@ -1776,6 +1776,8 @@
     "settings.agent.autoReplyToolsDesc": "查看待确认的回复、未回复的来信，或管理 Agent 记忆。",
     "settings.agent.autoReplyToolsPending": "待确认",
     "settings.agent.autoReplyToolsDeclined": "未回复",
-    "settings.agent.autoReplyToolsMemory": "记忆"
+    "settings.agent.autoReplyToolsMemory": "记忆",
+    "mail.expandAccounts": "展开所有账户",
+    "mail.collapseAccounts": "收起账户列表"
   }
 }
