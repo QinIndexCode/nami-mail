@@ -165,11 +165,19 @@ export function createContact(
   }, now, now);
 }
 
+/**
+ * Updates contact fields. A manual edit (the default) adopts the row: an
+ * auto-collected contact that the user has edited is no longer "auto-added"
+ * once the user has taken over its fields. Sender auto-collect's name
+ * backfill passes `{ preserveAutoCollected: true }` so it never flips the
+ * flag.
+ */
 export function updateContact(
   db: DatabaseHandle,
   masterKey: Buffer,
   id: string,
   patch: z.infer<typeof contactUpdateSchema>,
+  options?: { preserveAutoCollected?: boolean },
 ): Contact | undefined {
   const existing = contactForId(db, masterKey, id);
   if (!existing) return undefined;
@@ -182,11 +190,12 @@ export function updateContact(
   const now = new Date().toISOString();
   withContactKey(masterKey, (key) => {
     db.prepare(`
-      UPDATE contacts SET email_enc = ?, name_enc = ?, notes_enc = ?, updated_at = ? WHERE id = ?
+      UPDATE contacts SET email_enc = ?, name_enc = ?, notes_enc = ?, auto_collected = ?, updated_at = ? WHERE id = ?
     `).run(
       encryptTextEnvelope(email, key, contactAad(id)),
       encryptTextEnvelope(patch.name === undefined ? existing.name : patch.name, key, contactAad(id)),
       encryptTextEnvelope(patch.notes === undefined ? existing.notes : patch.notes, key, contactAad(id)),
+      options?.preserveAutoCollected ? (existing.autoCollected ? 1 : 0) : 0,
       now,
       id,
     );
@@ -220,7 +229,7 @@ export function autoCollectSender(
   const existing = findContactByEmail(db, masterKey, normalized);
   if (existing) {
     if (existing.name) return existing;
-    const updated = updateContact(db, masterKey, existing.id, { name });
+    const updated = updateContact(db, masterKey, existing.id, { name }, { preserveAutoCollected: true });
     if (!updated) throw new Error("Contact row vanished during sender auto-collect.");
     return updated;
   }

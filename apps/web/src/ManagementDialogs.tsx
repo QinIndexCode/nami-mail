@@ -17,8 +17,11 @@ export function ManagementDialogShell({
   description,
   eyebrow,
   onClose,
+  closing: closingProp,
+  requestClose: requestCloseProp,
   fallbackFocusRef,
   dialogRef,
+  focusSuspended,
   children,
 }: {
   titleId: string;
@@ -26,16 +29,33 @@ export function ManagementDialogShell({
   description: string;
   eyebrow: string;
   onClose: () => void;
+  /**
+   * Optional externally-managed exit transition (closing state + close
+   * request) from a host that already owns one. Without these the shell
+   * creates its own; the two must never both run, or the exit animation
+   * restarts when the shell clears its closing state mid-close.
+   */
+  closing?: boolean;
+  requestClose?: () => void;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
   /** Optional ref to the dialog card, used by hosts that layer nested overlays. */
   dialogRef?: RefObject<HTMLElement | null>;
+  /**
+   * Pass true while a nested overlay (editor, confirmation) is open so the
+   * shell's focus trap stands down and lets the overlay's own trap own the
+   * focus; without this the two traps fight and typing into the overlay is
+   * impossible because focus keeps getting pulled back into the shell.
+   */
+  focusSuspended?: boolean;
   children: ReactNode;
 }) {
   const { t } = useI18n();
   const innerRef = useRef<HTMLElement>(null);
   const sectionRef = dialogRef ?? innerRef;
-  useDialogFocus(true, sectionRef, { fallbackFocusRef });
-  const { closing, requestClose } = useDismissTransition(onClose);
+  useDialogFocus(true, sectionRef, { fallbackFocusRef, suspended: focusSuspended });
+  const { closing: selfClosing, requestClose: selfRequestClose } = useDismissTransition(onClose);
+  const closing = closingProp ?? selfClosing;
+  const requestClose = requestCloseProp ?? selfRequestClose;
   return (
     <div className={`modal-backdrop management-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
       <section ref={sectionRef} className={`modal-card management-dialog${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>

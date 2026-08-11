@@ -1,9 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseHandle } from "./db.js";
 import { buildMessageListSql, type MessageListFilterQuery } from "./message-filters.js";
-import { moveMessage, moveMessageToFolder, updateMessageFlagsBatch, type MessageFlagsPatch } from "./sync.js";
+import {
+  batchMoveMessages,
+  moveMessageToFolder,
+  resolveMoveDestination,
+  syncAccount,
+  updateMessageFlagsBatch,
+  type MessageFlagsPatch,
+} from "./sync.js";
 import { AgentMailStateEvents } from "./agent/mail-state-events.js";
 import { OAuthService } from "./oauth.js";
+import { config } from "./config.js";
 
 // In-memory batch jobs for predicate-scoped ("select all matching this view")
 // operations. Jobs resolve the affected message ids server-side so a 20 000
@@ -50,6 +58,8 @@ type BatchJobRecord = {
   updated: number;
   failed: number;
   createdAt: number;
+  /** Set when the job settles; the undo window counts from this moment. */
+  completedAt?: number;
   error?: string;
   patch?: MessageFlagsPatch;
   target?: "archive" | "trash";
@@ -70,7 +80,12 @@ export type BatchJobDeps = {
 export const BATCH_JOB_UNDO_WINDOW_MS = 5 * 60_000;
 const BATCH_JOB_TTL_MS = 15 * 60_000;
 const FLAGS_CHUNK_SIZE = 100;
-const MOVE_CHUNK_SIZE = 1;
+// The batch move API caps one request at 100 ids; each batch call opens one
+// connection per account and issues one MOVE command per (account, mailbox)
+// group. A per-message loop would open a fresh IMAP connection for every
+// message (Gmail costs ~4s per connection), turning a 10 000-message selection
+// into hours of work.
+const MOVE_CHUNK_SIZE = 100;
 
 const jobs = new Map<string, BatchJobRecord>();
 let queueTail: Promise<void> = Promise.resolve();
@@ -155,20 +170,37 @@ async function runJob(record: BatchJobRecord, deps: BatchJobDeps): Promise<void>
         record.done += chunk.length;
       }
     } else if (record.kind === "move" && record.target) {
-      for (const id of ids) {
-        const previous = deps.db
-          .prepare("SELECT mailbox FROM messages WHERE id = ?")
-          .get(id) as { mailbox: string } | undefined;
-        try {
-          await moveMessage(deps.db, deps.masterKey, id, record.target, deps.oauthService, deps.agentMailEvents);
-          record.updated += 1;
-          if (previous) record.undoEntries.push({ id, fromMailbox: previous.mailbox });
-        } catch {
-          record.failed += 1;
+      // Snapshot every origin mailbox up front so undo can restore it. The
+      // per-chunk batch call aggregates the whole chunk into one connection
+      // per account and one MOVE command per (account, mailbox) group instead
+      // of opening a connection for every message.
+      const placeholders = ids.map(() => "?").join(", ");
+      const origins = deps.db.prepare(`
+        SELECT id, mailbox FROM messages WHERE id IN (${placeholders})
+      `).all(...ids) as Array<{ id: string; mailbox: string }>;
+      const originMailboxById = new Map(origins.map((row) => [row.id, row.mailbox]));
+      for (let offset = 0; offset < ids.length; offset += MOVE_CHUNK_SIZE) {
+        const chunk = ids.slice(offset, offset + MOVE_CHUNK_SIZE);
+        const outcome = await batchMoveMessages(deps.db, deps.masterKey, chunk, record.target, deps.oauthService, deps.agentMailEvents);
+        record.updated += outcome.updated;
+        record.failed += outcome.failures.length;
+        const failedIds = new Set(outcome.failures.map((failure) => failure.id));
+        for (const id of chunk) {
+          if (failedIds.has(id)) continue;
+          const fromMailbox = originMailboxById.get(id);
+          if (fromMailbox) record.undoEntries.push({ id, fromMailbox });
         }
-        record.done += 1;
+        for (const accountId of outcome.pendingAccounts) {
+          // The provider could not confirm a batch MOVE outcome (no UIDPLUS or
+          // a lost response). Reconcile in the background so the cache shows
+          // the verified destination instead of a stale local snapshot.
+          void syncAccount(deps.db, deps.masterKey, accountId, config.syncMessageLimit, deps.oauthService, deps.agentMailEvents)
+            .catch(() => console.warn(`Batch job ${record.id}: background move reconciliation failed for account ${accountId}`));
+        }
+        record.done += chunk.length;
       }
     }
+    record.completedAt = Date.now();
     record.status = "completed";
   } catch (error) {
     record.status = "failed";
@@ -194,7 +226,9 @@ export function undoBatchJob(jobId: string, deps: BatchJobDeps): BatchJobUndoOut
   if (!parent) return { ok: false, reason: "not_found" };
   if (parent.status !== "completed") return { ok: false, reason: "not_completed" };
   if (parent.undone) return { ok: false, reason: "already_undone" };
-  if (Date.now() - parent.createdAt > parent.undoWindowMs) return { ok: false, reason: "expired" };
+  // Count from completion, not creation: a long-running job that finishes
+  // after several minutes must still expose its full undo window.
+  if (Date.now() - (parent.completedAt ?? parent.createdAt) > parent.undoWindowMs) return { ok: false, reason: "expired" };
   parent.undone = true;
 
   const record: BatchJobRecord = {
@@ -233,19 +267,33 @@ async function runUndo(record: BatchJobRecord, parent: BatchJobRecord, deps: Bat
         }
       }
     } else {
+      // The job's destination folder guards the restore: a message that was
+      // manually moved elsewhere after the job ran must not be dragged back
+      // by the undo.
+      const target = parent.target;
       for (const entry of record.undoEntries) {
         const current = deps.db
-          .prepare("SELECT mailbox FROM messages WHERE id = ?")
-          .get(entry.id) as { mailbox: string } | undefined;
+          .prepare("SELECT account_id, mailbox FROM messages WHERE id = ?")
+          .get(entry.id) as { account_id: string; mailbox: string } | undefined;
         if (!current) {
           record.failed += 1;
           record.done += 1;
           continue;
         }
         if (current.mailbox === entry.fromMailbox) {
+          // Already restored (or the move was an idempotent no-op).
           record.updated += 1;
           record.done += 1;
           continue;
+        }
+        if (target) {
+          const destination = resolveMoveDestination(deps.db, current.account_id, target);
+          if (!destination || current.mailbox !== destination.path) {
+            // The user re-moved the message after the job; leave it alone.
+            record.updated += 1;
+            record.done += 1;
+            continue;
+          }
         }
         try {
           await moveMessageToFolder(deps.db, deps.masterKey, entry.id, entry.fromMailbox, deps.oauthService, deps.agentMailEvents);
@@ -256,6 +304,7 @@ async function runUndo(record: BatchJobRecord, parent: BatchJobRecord, deps: Bat
         record.done += 1;
       }
     }
+    record.completedAt = Date.now();
     record.status = "completed";
   } catch (error) {
     record.status = "failed";

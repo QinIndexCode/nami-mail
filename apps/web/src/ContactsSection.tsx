@@ -1,5 +1,5 @@
 import { BookUser, Check, ChevronLeft, ChevronRight, LoaderCircle, Pencil, Plus, RefreshCw, Search, Trash2, UserRound, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
@@ -18,6 +18,8 @@ type ContactDraft = {
   email: string;
   name: string;
   notes: string;
+  /** Source marker of the row being edited (create drafts are manual). */
+  autoCollected: boolean;
 };
 
 type Notice = { kind: "success" | "error"; message: string } | null;
@@ -25,8 +27,30 @@ type Notice = { kind: "success" | "error"; message: string } | null;
 /** Contacts past this count unlock the search / pagination / bulk toolbar. */
 const CONTACTS_PER_PAGE = 5;
 
+type SourceFilter = "all" | "manual" | "auto";
+
+/**
+ * Narrow the contact list to one source. Kept as a pure function so the
+ * filtering behavior is unit-testable without DOM interaction.
+ */
+export function applySourceFilter(contacts: Contact[], sourceFilter: SourceFilter): Contact[] {
+  if (sourceFilter === "all") return contacts;
+  return contacts.filter((contact) => sourceFilter === "auto" ? contact.autoCollected : !contact.autoCollected);
+}
+
+/**
+ * The "all" view renders manual rows first and auto-added rows after, keeping
+ * each group's original ordering. Pure so the grouping is unit-testable.
+ */
+export function orderContactsBySource(contacts: Contact[]): Contact[] {
+  return [
+    ...contacts.filter((contact) => !contact.autoCollected),
+    ...contacts.filter((contact) => contact.autoCollected),
+  ];
+}
+
 function emptyDraft(): ContactDraft {
-  return { email: "", name: "", notes: "" };
+  return { email: "", name: "", notes: "", autoCollected: false };
 }
 
 export default function ContactsSection({ demoMode = false, initialContacts }: ContactsSectionProps) {
@@ -37,15 +61,16 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [draft, setDraft] = useState<ContactDraft | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [busyContactId, setBusyContactId] = useState<string | null>(null);
   const [armedDeleteId, setArmedDeleteId] = useState<string | null>(null);
   const [pendingBulkDelete, setPendingBulkDelete] = useState(false);
   const [page, setPage] = useState(1);
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [notice, setNotice] = useState<Notice>(null);
   const confirmationDialog = useRef<HTMLElement>(null);
+  const editorPanel = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (demoMode || initialContacts !== undefined) return undefined;
@@ -68,20 +93,34 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
 
   const showToolbar = contacts.length > CONTACTS_PER_PAGE;
 
-  const filteredContacts = useMemo(() => {
+  // Search narrows the full list; the source filter is applied afterwards, and
+  // its tab counts track the search so the numbers stay meaningful while typing.
+  const queryFiltered = useMemo(() => {
     if (!showToolbar || !query.trim()) return contacts;
     const needle = query.trim().toLocaleLowerCase();
     return contacts.filter((contact) =>
       contact.email.toLocaleLowerCase().includes(needle) || contact.name.toLocaleLowerCase().includes(needle));
   }, [contacts, query, showToolbar]);
 
-  const pageCount = Math.max(1, Math.ceil(filteredContacts.length / CONTACTS_PER_PAGE));
+  const sourceCounts = useMemo(() => {
+    const manual = queryFiltered.filter((contact) => !contact.autoCollected).length;
+    return { all: queryFiltered.length, manual, auto: queryFiltered.length - manual };
+  }, [queryFiltered]);
+
+  const filteredContacts = useMemo(() => applySourceFilter(queryFiltered, sourceFilter), [queryFiltered, sourceFilter]);
+
+  // The "all" view renders as two sections (manual first, then auto-added);
+  // grouping only kicks in when both source groups are present.
+  const orderedAll = useMemo(() => sourceFilter === "all" ? orderContactsBySource(filteredContacts) : filteredContacts, [filteredContacts, sourceFilter]);
+  const showSourceGroups = sourceFilter === "all" && sourceCounts.manual > 0 && sourceCounts.auto > 0;
+
+  const pageCount = Math.max(1, Math.ceil(orderedAll.length / CONTACTS_PER_PAGE));
   const clampedPage = Math.min(page, pageCount);
   const pageContacts = useMemo(() => {
-    if (!showToolbar) return filteredContacts;
+    if (!showToolbar) return orderedAll;
     const start = (clampedPage - 1) * CONTACTS_PER_PAGE;
-    return filteredContacts.slice(start, start + CONTACTS_PER_PAGE);
-  }, [filteredContacts, showToolbar, clampedPage]);
+    return orderedAll.slice(start, start + CONTACTS_PER_PAGE);
+  }, [orderedAll, showToolbar, clampedPage]);
 
   // Keep the page and selection valid after contacts change (e.g. removal).
   useEffect(() => {
@@ -104,6 +143,28 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
 
   useDialogFocus(pendingBulkDelete, confirmationDialog);
   const { closing: confirmClosing, requestClose: requestConfirmClose, reset: resetConfirmClosing } = useDismissTransition(() => setPendingBulkDelete(false));
+
+  // Contact editor — a floating dialog layered above the list; `draft` being
+  // set means the editor is open (create or edit).
+  useDialogFocus(Boolean(draft), editorPanel);
+  const { closing: editorClosing, requestClose: requestEditorClose, reset: resetEditorClosing } = useDismissTransition(() => setDraft(null));
+  const closeEditor = () => {
+    if (!busy) requestEditorClose();
+  };
+
+  // Escape first dismisses the editor (capture + stopImmediatePropagation so
+  // the host dialog beneath it stays open).
+  useEffect(() => {
+    if (!draft) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeEditor();
+    };
+    window.addEventListener("keydown", closeOnEscape, true);
+    return () => window.removeEventListener("keydown", closeOnEscape, true);
+  });
 
   const controlsBusy = busy || Boolean(busyContactId);
 
@@ -202,7 +263,6 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
         setNotice({ kind: "success", message: t("settings.contacts.saved") });
       }
       setDraft(null);
-      setEditingId(null);
     } catch (error) {
       setNotice({
         kind: "error",
@@ -230,15 +290,12 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
   };
 
   const startEdit = (contact: Contact) => {
+    resetEditorClosing();
     setArmedDeleteId(null);
-    setEditingId(contact.id);
-    setDraft({ id: contact.id, email: contact.email, name: contact.name, notes: contact.notes });
+    setDraft({ id: contact.id, email: contact.email, name: contact.name, notes: contact.notes, autoCollected: contact.autoCollected });
   };
 
-  const cancelEdit = () => {
-    setDraft(null);
-    setEditingId(null);
-  };
+  const pageStart = showToolbar ? (clampedPage - 1) * CONTACTS_PER_PAGE : 0;
 
   return (
     <>
@@ -304,53 +361,63 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
               </div>
             )}
 
+            {showToolbar && (
+              <div className="contacts-source-filter" role="group" aria-label={t("settings.contacts.sourceFilterLabel")}>
+                {([
+                  ["all", t("settings.contacts.filterAll"), sourceCounts.all],
+                  ["manual", t("settings.contacts.filterManual"), sourceCounts.manual],
+                  ["auto", t("settings.contacts.filterAuto"), sourceCounts.auto],
+                ] as const).map(([value, label, count]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className="source-filter-button"
+                    aria-pressed={sourceFilter === value}
+                    disabled={controlsBusy}
+                    onClick={() => {
+                      setSourceFilter(value);
+                      setPage(1);
+                    }}
+                  >
+                    {label}<span className="source-filter-count">{count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
             {filteredContacts.length === 0 ? (
               <p className="settings-empty">{showToolbar ? t("settings.contacts.noSearchResults") : (contacts.length === 0 ? t("settings.contacts.empty") : t("settings.contacts.noMatches"))}</p>
             ) : (
               <>
                 <div className="contacts-list">
-                  {pageContacts.map((contact) => {
+                  {pageContacts.map((contact, index) => {
                     const deleting = busyContactId === contact.id;
-                    const editing = editingId === contact.id;
                     const selected = selectedIds.has(contact.id);
+                    const globalIndex = pageStart + index;
+                    const groupStart = showSourceGroups && (globalIndex === 0 || Boolean(orderedAll[globalIndex - 1]?.autoCollected) !== contact.autoCollected);
                     return (
-                      <div className={`contact-row${selected ? " selected" : ""}${editing ? " editing" : ""}`} key={contact.id}>
-                        {showToolbar && !editing && (
+                      <Fragment key={contact.id}>
+                        {groupStart && (
+                          <div className="contact-group-head" role="heading" aria-level={3}>
+                            {contact.autoCollected ? t("settings.contacts.filterAuto") : t("settings.contacts.filterManual")}
+                            <span className="contact-group-count">({contact.autoCollected ? sourceCounts.auto : sourceCounts.manual})</span>
+                          </div>
+                        )}
+                      <div className={`contact-row${selected ? " selected" : ""}`}>
+                        {showToolbar && (
                           <label className="contacts-row-check">
                             <input type="checkbox" checked={selected} onChange={() => toggleSelect(contact.id)} aria-label={t("settings.contacts.selectAriaLabel", { email: contact.email })} />
                           </label>
                         )}
-                        {editing && draft ? (
-                          <div className="contact-editor">
-                            <label className="translation-setting-field" htmlFor={`contact-email-${contact.id}`}>
-                              <span><strong>{t("settings.contacts.emailLabel")}</strong></span>
-                              <input id={`contact-email-${contact.id}`} type="text" value={draft.email} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, email: event.target.value })} />
-                            </label>
-                            <label className="translation-setting-field" htmlFor={`contact-name-${contact.id}`}>
-                              <span><strong>{t("settings.contacts.nameLabel")}</strong></span>
-                              <input id={`contact-name-${contact.id}`} type="text" value={draft.name} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-                            </label>
-                            <label className="translation-setting-field" htmlFor={`contact-notes-${contact.id}`}>
-                              <span><strong>{t("settings.contacts.notesLabel")}</strong></span>
-                              <textarea id={`contact-notes-${contact.id}`} value={draft.notes} rows={2} disabled={busy} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} />
-                            </label>
-                            <div className="settings-inline-actions contact-editor-actions">
-                              <button className="primary-button" type="button" disabled={busy} onClick={() => void saveDraft()}>
-                                {busy ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{t("settings.contacts.save")}
-                              </button>
-                              <button className="secondary-button" type="button" disabled={busy} onClick={cancelEdit}>
-                                {t("common.cancel")}
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="contact-head">
+                        <div className="contact-head">
                             <span className="contact-avatar" aria-hidden="true"><UserRound size={16} /></span>
                             <div className="contact-copy">
                               <strong>{contact.name || contact.email}</strong>
                               {contact.name && <small>{contact.email}</small>}
                               {contact.notes && <small className="contact-notes">{contact.notes}</small>}
-                              {contact.autoCollected && <small className="contact-auto-badge">{t("settings.contacts.autoCollected")}</small>}
+                              {contact.autoCollected
+                                ? <small className="contact-auto-badge">{t("settings.contacts.autoCollected")}</small>
+                                : <small className="contact-manual-badge">{t("settings.contacts.manualAdded")}</small>}
                             </div>
                             <div className="contact-actions">
                               <button className="icon-button" type="button" aria-label={t("settings.contacts.edit")} data-tooltip={t("settings.contacts.edit")} disabled={Boolean(busyContactId)} onClick={() => startEdit(contact)}>
@@ -372,8 +439,8 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
                               )}
                             </div>
                           </div>
-                        )}
                       </div>
+                      </Fragment>
                     );
                   })}
                 </div>
@@ -391,20 +458,57 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
               </>
             )}
 
-            {!draft && (
-              <div className="settings-inline-actions">
+            <div className="settings-inline-actions">
                 <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => {
+                  resetEditorClosing();
                   setArmedDeleteId(null);
-                  setEditingId(null);
                   setDraft(emptyDraft());
                 }}>
                   <Plus size={15} />{t("settings.contacts.addContact")}
                 </button>
               </div>
-            )}
           </>
         )}
       </section>
+      {draft && (
+        <div className={`modal-backdrop contact-editor-backdrop${editorClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && closeEditor()}>
+          <section ref={editorPanel} className={`contact-editor-modal${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")} aria-labelledby="contact-editor-title" tabIndex={-1}>
+            <div className="contact-editor" role="form" aria-label={draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")}>
+              <div className="contact-editor-head">
+                <span className="contact-editor-avatar" aria-hidden="true">{(draft.name.trim() || draft.email.trim()).slice(0, 1).toUpperCase() || "?"}</span>
+                <div>
+                  <span className="eyebrow">{draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")}</span>
+                  <h3 id="contact-editor-title" className="contact-editor-title">{draft.name.trim() || draft.email || t("settings.contacts.title")}</h3>
+                </div>
+              </div>
+              {draft.id && draft.autoCollected && (
+                <div className="contact-editor-source">
+                  <small className="contact-auto-badge">{t("settings.contacts.autoCollected")}</small>
+                  <span>{t("settings.contacts.editPromotesManual")}</span>
+                </div>
+              )}
+              <label className="calendar-field" htmlFor="contact-email-input">
+                <span>{t("settings.contacts.emailLabel")}</span>
+                <input id="contact-email-input" type="text" value={draft.email} autoComplete="off" spellCheck={false} disabled={busy} autoFocus onChange={(event) => setDraft({ ...draft, email: event.target.value })} />
+              </label>
+              <label className="calendar-field" htmlFor="contact-name-input">
+                <span>{t("settings.contacts.nameLabel")}</span>
+                <input id="contact-name-input" type="text" value={draft.name} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+              </label>
+              <label className="calendar-field" htmlFor="contact-notes-input">
+                <span>{t("settings.contacts.notesLabel")}</span>
+                <textarea id="contact-notes-input" value={draft.notes} rows={3} disabled={busy} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} />
+              </label>
+              <div className="contact-editor-actions">
+                <button className="secondary-button" type="button" disabled={busy} onClick={closeEditor}>{t("common.cancel")}</button>
+                <button className="primary-button" type="button" disabled={busy} onClick={() => void saveDraft()}>
+                  {busy ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}{t("settings.contacts.save")}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
       {pendingBulkDelete && (
         <div className={`modal-backdrop confirmation-backdrop${confirmClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && requestConfirmClose()}>
           <section ref={confirmationDialog} className={`confirmation-card${confirmClosing ? " closing" : ""}`} role="alertdialog" aria-modal="true" aria-labelledby="contacts-bulk-confirmation-title" aria-describedby="contacts-bulk-confirmation-description" tabIndex={-1}>

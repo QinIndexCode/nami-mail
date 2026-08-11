@@ -108,6 +108,20 @@ export default function AccountsDialog({
   });
   const { closing: confirmClosing, requestClose: requestConfirmClose, reset: resetConfirmClosing } = useDismissTransition(dismissRemoval);
 
+  // Account editor — a floating dialog layered above the list; `editingId`
+  // being set means the editor is open.
+  const editingAccount = accounts.find((account) => account.id === editingId) ?? null;
+  const editorDialog = useRef<HTMLElement>(null);
+  useDialogFocus(Boolean(editingAccount), editorDialog);
+  const { closing: editorClosing, requestClose: requestEditorClose } = useDismissTransition(() => setEditingId(null));
+  const closeEditor = () => {
+    if (busyAction) return;
+    if (editingAccount) {
+      setSignatureDrafts((drafts) => ({ ...drafts, [editingAccount.id]: editingAccount.signature }));
+    }
+    requestEditorClose();
+  };
+
   // Capture-phase so Escape first dismisses the nested removal confirmation,
   // and `stopImmediatePropagation` keeps the host keydown handler from also
   // closing the dialog underneath it.
@@ -116,6 +130,10 @@ export default function AccountsDialog({
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopImmediatePropagation();
+      if (editingId) {
+        requestEditorClose();
+        return;
+      }
       if (pendingAccountRemoval || pendingBulkRemoval) {
         requestConfirmClose();
         return;
@@ -126,7 +144,7 @@ export default function AccountsDialog({
     return () => window.removeEventListener("keydown", closeOnEscape, true);
   });
 
-  useDialogFocus(true, accountsDialog, { fallbackFocusRef });
+  useDialogFocus(true, accountsDialog, { fallbackFocusRef, suspended: Boolean(editingAccount) });
   useDialogFocus(Boolean(pendingAccountRemoval || pendingBulkRemoval), confirmationDialog, { fallbackFocusRef: accountsDialog });
 
   const removeAccount = async (accountId: string) => {
@@ -278,8 +296,11 @@ export default function AccountsDialog({
         title={t("settings.account.title")}
         description={demoMode ? t("settings.account.demoDescription") : t("settings.account.description")}
         onClose={requestClose}
+        closing={closing}
+        requestClose={requestClose}
         fallbackFocusRef={fallbackFocusRef}
         dialogRef={accountsDialog}
+        focusSuspended={Boolean(editingAccount)}
       >
         <section className="settings-section settings-accounts">
           {notice && (
@@ -341,12 +362,10 @@ export default function AccountsDialog({
                     {pageAccounts.map((account) => {
                       const issue = accountHealthIssue(account, t);
                       const retrying = busyAction === `account-sync-${account.id}`;
-                      const saving = busyAction === `account-signature-${account.id}`;
-                      const editing = editingId === account.id;
                       const selected = selectedIds.has(account.id);
                       const providerName = providerDisplayName({ id: account.provider, name: account.providerName }, locale, t);
                       return (
-                        <div className={`accounts-row${selected ? " selected" : ""}${editing ? " editing" : ""}${issue ? " has-issue" : ""}`} key={account.id}>
+                        <div className={`accounts-row${selected ? " selected" : ""}${issue ? " has-issue" : ""}`} key={account.id}>
                           <div className="accounts-row-main">
                             {showToolbar && (
                               <label className="accounts-row-check">
@@ -365,7 +384,7 @@ export default function AccountsDialog({
                                   {retrying ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}{t("settings.account.resync")}
                                 </button>
                               )}
-                              <button className="secondary-button" type="button" aria-label={t("settings.account.editAriaLabel", { email: account.email })} disabled={controlsBusy} onClick={() => setEditingId(editing ? null : account.id)}>
+                              <button className="secondary-button" type="button" aria-label={t("settings.account.editAriaLabel", { email: account.email })} disabled={controlsBusy} onClick={() => setEditingId(account.id)}>
                                 <Pencil size={15} />{t("settings.account.edit")}
                               </button>
                               <button className="icon-button danger-icon-button" type="button" aria-label={t("settings.account.removeAriaLabel", { email: account.email })} data-tooltip={t("settings.account.removeTooltip")} disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingAccountRemoval(account.id); }}>
@@ -373,20 +392,6 @@ export default function AccountsDialog({
                               </button>
                             </div>
                           </div>
-                          {editing && (
-                            <div className="accounts-row-edit">
-                              <label htmlFor={`account-signature-${account.id}`}>{t("settings.account.signatureLabel")}</label>
-                              <textarea id={`account-signature-${account.id}`} rows={3} maxLength={2000} value={signatureDrafts[account.id] ?? ""} onChange={(event) => setSignatureDrafts((drafts) => ({ ...drafts, [account.id]: event.target.value }))} placeholder={t("settings.account.signaturePlaceholder")} />
-                              <div className="settings-account-signature-actions">
-                                <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => { setEditingId(null); setSignatureDrafts((drafts) => ({ ...drafts, [account.id]: account.signature })); }}>
-                                  {t("settings.account.cancelEdit")}
-                                </button>
-                                <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => void saveAccountSignature(account)}>
-                                  {saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}{t("settings.account.saveSignature")}
-                                </button>
-                              </div>
-                            </div>
-                          )}
                         </div>
                       );
                     })}
@@ -408,6 +413,32 @@ export default function AccountsDialog({
           )}
         </section>
       </ManagementDialogShell>
+      {editingAccount && (
+        <div className={`modal-backdrop accounts-editor-backdrop${editorClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && closeEditor()}>
+          <section ref={editorDialog} className={`accounts-editor-modal${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={t("settings.account.editAriaLabel", { email: editingAccount.email })} aria-labelledby="accounts-editor-title" tabIndex={-1}>
+            <div className="accounts-editor" role="form" aria-label={t("settings.account.editAriaLabel", { email: editingAccount.email })}>
+              <div className="accounts-editor-head">
+                <span className="contact-editor-avatar" aria-hidden="true">{editingAccount.email.slice(0, 1).toUpperCase()}</span>
+                <div>
+                  <span className="eyebrow">{t("settings.account.edit")}</span>
+                  <h3 id="accounts-editor-title" className="contact-editor-title">{editingAccount.email}</h3>
+                  <small className="accounts-editor-provider">{providerDisplayName({ id: editingAccount.provider, name: editingAccount.providerName }, locale, t)}</small>
+                </div>
+              </div>
+              <label className="calendar-field" htmlFor="account-signature-input">
+                <span>{t("settings.account.signatureLabel")}</span>
+                <textarea id="account-signature-input" rows={4} maxLength={2000} value={signatureDrafts[editingAccount.id] ?? ""} onChange={(event) => setSignatureDrafts((drafts) => ({ ...drafts, [editingAccount.id]: event.target.value }))} placeholder={t("settings.account.signaturePlaceholder")} autoFocus />
+              </label>
+              <div className="accounts-editor-actions">
+                <button className="secondary-button" type="button" disabled={controlsBusy} onClick={closeEditor}>{t("settings.account.cancelEdit")}</button>
+                <button className="primary-button" type="button" disabled={controlsBusy} onClick={() => void saveAccountSignature(editingAccount)}>
+                  {busyAction === `account-signature-${editingAccount.id}` ? <LoaderCircle className="spin" size={14} /> : <Save size={15} />}{t("settings.account.saveSignature")}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
       {(pendingRemovalAccount || pendingBulkRemoval) && (
         <div className={`modal-backdrop confirmation-backdrop${confirmClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestConfirmClose()}>
           <section ref={confirmationDialog} className={`confirmation-card${confirmClosing ? " closing" : ""}`} role="alertdialog" aria-modal="true" aria-labelledby="accounts-confirmation-title" aria-describedby="accounts-confirmation-description" tabIndex={-1}>

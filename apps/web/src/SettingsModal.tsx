@@ -136,6 +136,7 @@ const restoreDefaultsPatch: AppSettingsPatch = {
   notifyWhenFocused: defaultAppSettings.notifyWhenFocused,
   notificationSound: defaultAppSettings.notificationSound,
   refreshIntervalSeconds: defaultAppSettings.refreshIntervalSeconds,
+  realtimePushEnabled: defaultAppSettings.realtimePushEnabled,
   closeBehavior: defaultAppSettings.closeBehavior,
   agentToolRoundLimit: defaultAppSettings.agentToolRoundLimit,
   listDensity: defaultAppSettings.listDensity,
@@ -1379,6 +1380,13 @@ export default function SettingsModal({
               <option value={300}>{t("settings.sync.refresh.fiveMinutes")}</option>
             </ThemedSelect>
           </label>
+          <Switch
+            checked={currentSettings.realtimePushEnabled}
+            disabled={controlsBusy}
+            label={t("settings.sync.realtime.label")}
+            description={t("settings.sync.realtime.description")}
+            onChange={() => void applyOptimisticSettings({ realtimePushEnabled: !currentSettings.realtimePushEnabled }, currentSettings.realtimePushEnabled ? t("settings.sync.realtime.disabled") : t("settings.sync.realtime.enabled"))}
+          />
         </section>
 
         <FilterRulesSection accounts={accounts} demoMode={demoMode} />

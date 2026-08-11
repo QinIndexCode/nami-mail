@@ -86,16 +86,33 @@ describe("contacts", () => {
     expect(again.id).toBe(first.id);
     expect(again.name).toBe("Newsletter");
 
-    // An unnamed repeat gains a name.
+    // An unnamed repeat gains a name without flipping the source flag.
     const unnamed = autoCollectSender(db, masterKey, "no-name@example.com", "", ["me@example.com"]);
     expect(unnamed.name).toBe("");
     const named = autoCollectSender(db, masterKey, "no-name@example.com", "Now Named", ["me@example.com"]);
     expect(named.id).toBe(unnamed.id);
     expect(named.name).toBe("Now Named");
+    expect(named.autoCollected).toBe(true);
 
     // The user's own mailbox is never seeded.
     expect(() => autoCollectSender(db, masterKey, "ME@example.com", "Me", ["me@example.com"])).toThrow(ContactConflictError);
     expect(listContacts(db, masterKey).map((contact) => contact.email)).not.toContain("me@example.com");
+  });
+
+  it("adopts auto-collected rows as manual after a user edit, but never via sender backfill", () => {
+    const auto = autoCollectSender(db, masterKey, "push@example.com", "Pusher", ["me@example.com"]);
+    expect(auto.autoCollected).toBe(true);
+
+    // The internal name backfill keeps the row auto-collected.
+    const backfilled = updateContact(db, masterKey, auto.id, { name: "Pusher Co." }, { preserveAutoCollected: true });
+    expect(backfilled?.autoCollected).toBe(true);
+    expect(backfilled?.name).toBe("Pusher Co.");
+
+    // A manual edit (the default) adopts the row as a manual contact.
+    const edited = updateContact(db, masterKey, auto.id, { notes: "verification codes" });
+    expect(edited?.autoCollected).toBe(false);
+    expect(edited?.name).toBe("Pusher Co.");
+    expect(edited?.notes).toBe("verification codes");
   });
 
   it("exposes CRUD and search through the local API with friendly conflicts", async () => {

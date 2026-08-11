@@ -2,14 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   applyBatchSeenChange,
   applyMessageMove,
+  applyMessageMoveConfirmation,
   applyMessageSeenChange,
   isArchivedMessage,
   isVisibleInUnreadView,
   matchesServerMessageQuery,
   mergePendingArchiveMoves,
+  mergeRolledBackMessages,
   mergeUnreadViewSnapshot,
   nextMessageTotalForMove,
   nextUnreadViewRecentlyReadIds,
+  revertMessageMove,
   sidebarBadgeCounts,
 } from "./mailListState";
 import type { Account, Message, Stats } from "./types";
@@ -332,5 +335,73 @@ describe("mail list state", () => {
 
     expect(merged.items).toEqual([destinationCopy, first]);
     expect(merged.retainedVisibleCount).toBe(1);
+  });
+
+  it("re-inserts rolled-back messages at their sorted positions", () => {
+    const newer = { ...unreadMessage, id: "message-2", sentAt: "2026-07-22T02:00:00.000Z" };
+    const older = { ...unreadMessage, id: "message-3", sentAt: "2026-07-21T00:00:00.000Z" };
+    const middle = { ...unreadMessage, id: "message-4", sentAt: "2026-07-21T12:00:00.000Z" };
+    const list = [newer, older];
+
+    expect(mergeRolledBackMessages(list, [middle], "newest").map((message) => message.id))
+      .toEqual(["message-2", "message-4", "message-3"]);
+    expect(mergeRolledBackMessages(list, [middle], "oldest").map((message) => message.id))
+      .toEqual(["message-3", "message-4", "message-2"]);
+  });
+
+  it("merges rolled-back messages by id so a reload cannot duplicate them", () => {
+    const duplicate = { ...unreadMessage, id: "message-2", sentAt: "2026-07-22T02:00:00.000Z" };
+    const list = [unreadMessage, duplicate];
+
+    expect(mergeRolledBackMessages(list, [duplicate], "newest")).toHaveLength(2);
+    expect(mergeRolledBackMessages(list, [], "newest")).toBe(list);
+  });
+
+  it("reverses an optimistic single move back to the original state", () => {
+    const moved = applyMessageMove(accounts, [unreadMessage], stats, unreadMessage.id, "Archive");
+    expect(moved.messages[0]).toMatchObject({ mailbox: "Archive" });
+    expect(moved.accounts[0]?.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ total: 2, unseen: 1 });
+    expect(moved.accounts[0]?.folders.find((folder) => folder.path === "Archive")).toMatchObject({ total: 5, unseen: 1 });
+    expect(moved.stats).toEqual({ accounts: 1, messages: 2, unread: 1 });
+
+    // Revert against the post-move state (what the app holds while optimistic).
+    const restored = revertMessageMove(moved.accounts, moved.messages, moved.stats, unreadMessage, "Archive");
+    expect(restored.messages[0]).toEqual(unreadMessage);
+    expect(restored.accounts).toEqual(accounts);
+    expect(restored.stats).toEqual(stats);
+  });
+
+  it("reverses an optimistic archive move through Gmail All Mail without touching its counts", () => {
+    const gmailAccounts: Account[] = [{
+      ...accounts[0],
+      folders: [
+        { path: "INBOX", name: "Inbox", specialUse: "\\Inbox", total: 3, unseen: 2 },
+        { path: "[Gmail]/All Mail", name: "All Mail", specialUse: "\\All", total: 9, unseen: 2 },
+      ],
+    }];
+
+    const moved = applyMessageMove(gmailAccounts, [unreadMessage], stats, unreadMessage.id, "[Gmail]/All Mail");
+    expect(moved.messages[0]).toMatchObject({ mailbox: "[Gmail]/All Mail", archived: true });
+    expect(moved.accounts[0]?.folders.find((folder) => folder.path === "[Gmail]/All Mail")).toMatchObject({ total: 9, unseen: 2 });
+
+    const restored = revertMessageMove(moved.accounts, moved.messages, moved.stats, unreadMessage, "[Gmail]/All Mail");
+    expect(restored.messages[0]).toEqual(unreadMessage);
+    expect(restored.accounts).toEqual(gmailAccounts);
+    expect(restored.stats).toEqual(stats);
+  });
+
+  it("leaves state untouched when a reload already restored the message before the rollback", () => {
+    // The list copy sits at its source mailbox, so the optimistic state is no
+    // longer in effect and the rollback must not re-apply any count deltas.
+    const restored = revertMessageMove(accounts, [unreadMessage], stats, unreadMessage, "Archive");
+    expect(restored).toEqual({ accounts, messages: [unreadMessage], stats });
+  });
+
+  it("refines a confirmed optimistic move without re-running count deltas", () => {
+    const moved = applyMessageMove(accounts, [unreadMessage], stats, unreadMessage.id, "Archive").messages;
+    const refined = applyMessageMoveConfirmation(moved, unreadMessage.id, 99, true, true);
+
+    expect(refined[0]).toMatchObject({ mailbox: "Archive", uid: 99, movePending: true, moveLocationUnverified: true });
+    expect(applyMessageMoveConfirmation(moved, "message-other", 7)).toEqual(moved);
   });
 });

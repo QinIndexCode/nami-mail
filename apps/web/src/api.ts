@@ -52,6 +52,8 @@ export type BatchMessageOperationResult = {
   ok: boolean;
   updated: number;
   failed: number;
+  /** Per-message failure details (batch moves only; absent for flag batches). */
+  failures?: Array<{ id: string; message: string }>;
 };
 
 export type BatchJobQuery = {

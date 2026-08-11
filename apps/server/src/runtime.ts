@@ -23,6 +23,8 @@ import { buildApp } from "./app.js";
 import { config } from "./config.js";
 import { loadOrCreateMasterKey } from "./crypto.js";
 import { openDatabase, type DatabaseHandle } from "./db.js";
+import { ServerEventBus, emitAccountSynced } from "./events.js";
+import { createIdleWatcher, type IdleWatcher } from "./idle.js";
 import { OAuthService } from "./oauth.js";
 import { cleanupExpiredOutboundAttachments, outboundAttachmentDirectory } from "./outbound-attachments.js";
 import { getAppSettings, updateAppSettings, type AppSettings, type AppSettingsPatch } from "./settings.js";
@@ -271,6 +273,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
   let db: DatabaseHandle | undefined;
   let app: FastifyInstance | undefined;
   let scheduler: SyncScheduler | undefined;
+  let idleWatcher: IdleWatcher | undefined;
   let microsoftOAuthCallbackBridge: Server | undefined;
   let closePromise: Promise<void> | undefined;
   let masterKey: Buffer | undefined;
@@ -339,7 +342,35 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     } catch (error) {
       console.warn("Nami Mail could not clean stale outbound attachments", error);
     }
+    const serverEvents = new ServerEventBus();
+    const broadcastNewInboxMessages = (messages: NewInboxMessage[]) => {
+      if (!messages.length) return;
+      const byAccount = new Map<string, NewInboxMessage[]>();
+      for (const message of messages) {
+        const group = byAccount.get(message.accountId) ?? [];
+        group.push(message);
+        byAccount.set(message.accountId, group);
+      }
+      for (const [accountId, accountMessages] of byAccount) {
+        serverEvents.emit({
+          type: "mail.received",
+          payload: { accountId, count: accountMessages.length, messages: accountMessages },
+        });
+      }
+    };
+    const broadcastSyncedAccounts = (accounts: AccountRecord[], results: PromiseSettledResult<{ synced: number; folders: number; failedFolders: number; newInboxMessages: NewInboxMessage[] }>[]) => {
+      for (let i = 0; i < accounts.length; i += 1) {
+        const account = accounts[i];
+        if (!account || results[i]?.status !== "fulfilled") continue;
+        emitAccountSynced(database, serverEvents, account.id);
+      }
+    };
     const syncAll = async () => {
+      // Keep the live watcher in step with the account list; new accounts get
+      // an IDLE connection on the next pass, removed ones are dropped.
+      if (getAppSettings(database).realtimePushEnabled) {
+        await idleWatcher?.ensureAccounts();
+      }
       const accounts = database.prepare("SELECT * FROM accounts ORDER BY created_at").all() as AccountRecord[];
       const results = await Promise.allSettled(
         accounts.map((account) => syncAccount(
@@ -366,6 +397,8 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
           fastify.log.warn({ error }, "New-mail notification callback failed");
         }
       }
+      broadcastNewInboxMessages(newInboxMessages);
+      broadcastSyncedAccounts(accounts, results);
       // Submit scheduled sends whose time has arrived through the outbox queue.
       try {
         const outcome = await submitDueScheduledSubmissions(database, runtimeMasterKey, {
@@ -392,6 +425,32 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       }
     };
 
+    idleWatcher = createIdleWatcher({
+      db: database,
+      masterKey: runtimeMasterKey,
+      accessTokenProvider: oauthService,
+      // A reported INBOX change runs the account through the same pipeline as
+      // a poll pass (re-entrancy guarded by syncAccount), so notifications,
+      // rules, and SSE all stay in one code path.
+      onChange: (accountId) => {
+        void (async () => {
+          try {
+            const result = await syncAccount(database, runtimeMasterKey, accountId, config.syncMessageLimit, oauthService, agentMailEvents);
+            if (result.newInboxMessages.length) {
+              if (options.onNewInboxMessages) {
+                await options.onNewInboxMessages(result.newInboxMessages);
+              }
+              broadcastNewInboxMessages(result.newInboxMessages);
+            }
+            emitAccountSynced(database, serverEvents, accountId);
+          } catch (error) {
+            fastify.log.warn({ accountId, error }, "IDLE-triggered mailbox sync failed");
+          }
+        })();
+      },
+      log: { warn: (message, meta) => fastify.log.warn(meta ?? {}, message) },
+    });
+
     const runtimeContext: RuntimeContext = {
       db: database,
       masterKey: runtimeMasterKey,
@@ -402,6 +461,11 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       outboundAttachmentDirectory: outboundDirectory,
       onRefreshIntervalChanged: () => scheduler?.reschedule(),
       oauthService,
+      serverEvents,
+      onRealtimePushChanged: (enabled) => {
+        if (enabled) void idleWatcher?.ensureAccounts();
+        else void idleWatcher?.close();
+      },
       ...(options.listExternalPairings ? { listExternalPairings: options.listExternalPairings } : {}),
     };
     const fastify = await buildApp(runtimeContext, {
@@ -443,6 +507,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
           try {
             await Promise.all([
               scheduler?.close(),
+              idleWatcher?.close(),
               fastify.close(),
               agentService?.close(),
             ]);
@@ -481,6 +546,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     translationAbortController.abort();
     await closeMicrosoftOAuthCallbackBridge(microsoftOAuthCallbackBridge).catch(() => undefined);
     await scheduler?.close();
+    await idleWatcher?.close();
     await agentService?.close();
     autoReplyEngine?.close();
     registerAutoReplyEngine(undefined);
