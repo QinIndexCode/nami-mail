@@ -3080,8 +3080,11 @@ export default function App() {
               const issue = accountIssues.get(account.id);
               const providerName = localizedProviderName(account);
               const freshness = formatSyncFreshness(account.lastSyncedAt, t);
+              // With a single account selected, the other account rows fold
+              // away so the folder list gets the room; "all accounts" stays.
+              const collapsed = selectedAccount !== "all" && selectedAccount !== account.id;
               return (
-                <button key={account.id} aria-pressed={selectedAccount === account.id} className={selectedAccount === account.id ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}>
+                <button key={account.id} aria-pressed={selectedAccount === account.id} aria-hidden={collapsed} tabIndex={collapsed ? -1 : undefined} className={`${selectedAccount === account.id ? "active" : ""}${collapsed ? " hidden" : ""}`} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}>
                   <span className={`account-avatar tone-${accountTone(account.email)}`}>{account.email[0]?.toUpperCase()}</span>
                   <span className="account-copy"><strong>{account.email.split("@")[0]}</strong><small>{issue?.title ?? t("mail.accountFreshness", { provider: providerName, freshness })}</small></span>
                   <span className={`status-dot ${issue ? "error" : account.status}`} aria-hidden="true" />
@@ -3090,14 +3093,16 @@ export default function App() {
             })}
           </div>
 
-          {selectedAccountRecord && selectedAccountRecord.folders.length > 0 && (
-            <div className="folder-list">
-              <span className="folder-title">{t("mail.folders")}</span>
-              {selectedAccountRecord.folders.map((folder) => (
-                <button key={folder.path} className={selectedFolder === folder.path ? "active" : ""} aria-pressed={selectedFolder === folder.path} onClick={() => chooseFolder(folder.path)}><FolderNavigationIcon specialUse={folder.specialUse} /><span>{folder.name}</span><em>{folder.unseen || ""}</em></button>
-              ))}
-            </div>
-          )}
+          <div className={`folder-list${selectedAccountRecord && selectedAccountRecord.folders.length > 0 ? " show" : ""}`} aria-hidden={!(selectedAccountRecord && selectedAccountRecord.folders.length > 0)}>
+            {selectedAccountRecord && selectedAccountRecord.folders.length > 0 && (
+              <>
+                <span className="folder-title">{t("mail.folders")}</span>
+                {selectedAccountRecord.folders.map((folder) => (
+                  <button key={folder.path} className={selectedFolder === folder.path ? "active" : ""} aria-pressed={selectedFolder === folder.path} onClick={() => chooseFolder(folder.path)}><FolderNavigationIcon specialUse={folder.specialUse} /><span>{folder.name}</span><em>{folder.unseen || ""}</em></button>
+                ))}
+              </>
+            )}
+          </div>
 
           <div className="sidebar-footer">
             <div><ShieldCheck size={16} /><span><strong>{t("app.localEncryption")}</strong><small>{t("app.credentialsLocal")}</small></span></div>
