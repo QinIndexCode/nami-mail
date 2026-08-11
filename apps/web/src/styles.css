@@ -1840,11 +1840,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .agent-workspace > * { animation: fade-in .16s ease both; }
 .agent-conversation-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 14px 11px 12px; border-right: 1px solid var(--line); background: var(--panel-muted); }
 .agent-sidebar-top { display: flex; align-items: center; justify-content: space-between; gap: 7px; padding: 0 2px 12px; }
-.agent-new-conversation-button { display: inline-flex; align-items: center; gap: 5px; min-height: 29px; padding: 5px 7px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel-solid); color: var(--text-soft); cursor: pointer; font-size: 9px; font-weight: 700; white-space: nowrap; transition: border-color .16s ease, background .16s ease, color .16s ease; }
+.agent-new-conversation-button { display: inline-grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-soft); cursor: pointer; transition: background .16s ease, color .16s ease; }
 .agent-sidebar-top .agent-mode-switch { flex: 1 1 auto; min-width: 0; }
 .agent-sidebar-top .agent-mode-switch button { min-width: 0; padding: 5px 4px; overflow: hidden; }
-.agent-new-conversation-button:hover:not(:disabled) { border-color: var(--text-faint); background: var(--hover); color: var(--text); }
-.agent-new-conversation-button:focus-visible { outline: none; border-color: var(--focus-ring); box-shadow: 0 0 0 3px var(--focus-ring-subtle); }
+.agent-new-conversation-button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.agent-new-conversation-button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--focus-ring-subtle); }
 .agent-new-conversation-button:disabled { cursor: default; opacity: .45; }
 .agent-sidebar-search { display: flex; align-items: center; gap: 7px; min-height: 35px; margin-bottom: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-solid); color: var(--text-faint); }
 .agent-sidebar-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--text); font-size: 11px; }

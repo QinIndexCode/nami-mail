@@ -16,6 +16,7 @@ import {
   KeyRound,
   LoaderCircle,
   MessageCircle,
+  MessageCirclePlus,
   MessageSquarePlus,
   MoreHorizontal,
   PanelLeftClose,
@@ -2549,7 +2550,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
             <button type="button" className={mode === "agent" ? "active" : ""} aria-pressed={mode === "agent"} onClick={() => setMode("agent")}><Bot size={14} />{t("agent.mode.agent")}</button>
             <button type="button" className={mode === "chat" ? "active" : ""} aria-pressed={mode === "chat"} onClick={() => setMode("chat")}><MessageCircle size={14} />{t("agent.mode.chat")}</button>
           </div>
-          <button className="agent-new-conversation-button" type="button" onClick={() => { setMobileConversationsOpen(false); void createConversation(); }} disabled={streaming || demoMode} aria-label={t("agent.conversation.new")}><MessageSquarePlus size={15} /><span>{t("agent.conversation.new")}</span></button>
+          <button className="agent-new-conversation-button" type="button" onClick={() => { setMobileConversationsOpen(false); void createConversation(); }} disabled={streaming || demoMode} aria-label={t("agent.conversation.new")} data-tooltip={t("agent.conversation.new")}><MessageCirclePlus size={16} /></button>
         </div>
         <div className="agent-sidebar-search"><Search size={15} /><label className="visually-hidden" htmlFor="agent-conversation-search">{t("agent.conversation.search")}</label><input id="agent-conversation-search" value={conversationSearch} onChange={(event) => setConversationSearch(event.target.value)} placeholder={t("agent.conversation.searchPlaceholder")} /></div>
         <div className="agent-conversation-list">
