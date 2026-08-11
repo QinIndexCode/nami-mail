@@ -416,4 +416,132 @@ describe("Agent auto-reply engine", () => {
     expect(events.filter((event) => event.kind === "pending")).toHaveLength(1);
     expect(mail.prepareSubmission).not.toHaveBeenCalled();
   });
+
+  // ── Web surface mode (no desktop confirmation authority) ────────────────
+
+  function makeWebEngine(dailyLimitPerAccount = 30, evaluate: (input: never) => Promise<AutoReplyEvaluationResult> = async () => ({
+    replyValue: "high" as const,
+    sensitive: false,
+    replyText: "收到，谢谢！",
+  })) {
+    db = openDatabase(":memory:");
+    masterKey = randomBytes(32);
+    insertAccount(db);
+    applyAgentStoreSchema(db, FIXED_NOW);
+    const lifecycle = new AccountLifecycleStore(db, masterKey, () => FIXED_NOW);
+    lifecycle.acquireLease("account-1");
+    const audit = new EncryptedAgentAuditStore(db, masterKey, lifecycle);
+    const memory = new EncryptedAgentMemoryStore(db, masterKey, () => FIXED_NOW);
+    const decisions = new EncryptedAutoReplyDecisionStore(db, masterKey, () => FIXED_NOW);
+    const webCapability = Object.freeze({ capability: "web-local-only" });
+    const confirmations = new ImmutableGuiConfirmationStore(db, masterKey, lifecycle, () => FIXED_NOW, {
+      verify: ({ capability, caller }) =>
+        capability === webCapability && caller.kind === "web-ui" && caller.interactive === true
+          ? { principalId: "web-main-user", surfaceId: "browser-window" }
+          : undefined,
+    });
+    const mail = {
+      prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1" })),
+      submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1" })),
+    } as unknown as MailApplicationService;
+    updateAppSettings(db, { autoReply: { enabled: true, accountIds: ["account-1"], dailyLimitPerAccount } });
+    const engine = new AutoReplyEngine({
+      db,
+      masterKey,
+      evaluate,
+      mail,
+      audit,
+      memory,
+      decisions,
+      confirmationStore: confirmations,
+      webConfirmation: { capability: webCapability },
+      clock: () => FIXED_NOW,
+    });
+    return { engine, mail, memory, db: db as DatabaseHandle };
+  }
+
+  it("creates a confirmation and sends a reply when resolved from the web surface", async () => {
+    const { engine, mail, db: handle } = makeWebEngine();
+    insertMessage(handle, masterKey!, { id: "message-1" });
+
+    const notify = engine.notifyInboxMessages("account-1", ["message-1"]);
+    const [pending] = await waitForPending(engine, 1);
+    expect(pending!.preview.title).toBe("自动回复确认");
+
+    const resolution = engine.resolveConfirmation(pending!.confirmationId, "approve", "web");
+    expect(resolution).toEqual({ ok: true });
+    await notify;
+
+    expect(engine.listPending()).toHaveLength(0);
+    expect(mail.prepareSubmission).toHaveBeenCalledTimes(1);
+    expect(mail.submitPreparedMail).toHaveBeenCalledTimes(1);
+    expect(ledgerDecision(handle, "message-1")).toBe("sent");
+  });
+
+  it("records a web rejection and never sends", async () => {
+    const { engine, mail, db: handle } = makeWebEngine();
+    insertMessage(handle, masterKey!, { id: "message-1" });
+
+    const notify = engine.notifyInboxMessages("account-1", ["message-1"]);
+    const [pending] = await waitForPending(engine, 1);
+    expect(engine.resolveConfirmation(pending!.confirmationId, "reject", "web")).toEqual({ ok: true });
+    await notify;
+
+    expect(mail.prepareSubmission).not.toHaveBeenCalled();
+    expect(ledgerDecision(handle, "message-1")).toBe("ignored");
+    expect(engine.listPending()).toHaveLength(0);
+  });
+
+  it("never trusts a desktop resolution when only the web authority is wired", async () => {
+    const { engine, mail, db: handle } = makeWebEngine();
+    insertMessage(handle, masterKey!, { id: "message-1" });
+
+    // The engine waits for a settlement that a rejected desktop resolution
+    // never produces, so the notify promise is intentionally not awaited.
+    void engine.notifyInboxMessages("account-1", ["message-1"]);
+    const [pending] = await waitForPending(engine, 1);
+
+    // A desktop-sourced resolution has no desktop capability to record with.
+    expect(engine.resolveConfirmation(pending!.confirmationId, "approve")).toEqual({ decision: "not-found" });
+    expect(engine.listPending()).toHaveLength(1);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mail.prepareSubmission).not.toHaveBeenCalled();
+  });
+
+  it("fails the message with a send-failed decision when no confirmation authority is wired", async () => {
+    db = openDatabase(":memory:");
+    masterKey = randomBytes(32);
+    insertAccount(db);
+    applyAgentStoreSchema(db, FIXED_NOW);
+    const lifecycle = new AccountLifecycleStore(db, masterKey, () => FIXED_NOW);
+    lifecycle.acquireLease("account-1");
+    const audit = new EncryptedAgentAuditStore(db, masterKey, lifecycle);
+    const memory = new EncryptedAgentMemoryStore(db, masterKey, () => FIXED_NOW);
+    const decisions = new EncryptedAutoReplyDecisionStore(db, masterKey, () => FIXED_NOW);
+    const mail = {
+      prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1" })),
+      submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1" })),
+    } as unknown as MailApplicationService;
+    updateAppSettings(db, { autoReply: { enabled: true, accountIds: ["account-1"], dailyLimitPerAccount: 30 } });
+    const engine = new AutoReplyEngine({
+      db,
+      masterKey,
+      evaluate: async () => ({ replyValue: "high" as const, sensitive: false, replyText: "收到，谢谢！" }),
+      mail,
+      audit,
+      memory,
+      decisions,
+      clock: () => FIXED_NOW,
+    });
+    const handle = db as DatabaseHandle;
+    insertMessage(handle, masterKey!, { id: "message-1" });
+
+    await engine.notifyInboxMessages("account-1", ["message-1"]);
+
+    expect(engine.listPending()).toHaveLength(0);
+    expect(ledgerDecision(handle, "message-1")).toBe("failed");
+    expect(mail.prepareSubmission).not.toHaveBeenCalled();
+    const failed = engine.listDecisions({ reason: "send-failed", limit: 10 });
+    expect(failed.some((record) => record.messageId === "message-1")).toBe(true);
+  });
 });

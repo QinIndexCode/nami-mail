@@ -132,7 +132,10 @@ export class ImmutableGuiConfirmationStore implements ConfirmationAuthority {
     requestId: string,
     operation: DesktopConfirmationVerificationInput["operation"],
   ): TrustedDesktopConfirmation | undefined {
-    if (!capability || caller.kind !== "desktop-ui" || !caller.interactive) return undefined;
+    // Both the Electron window and the local web surface resolve confirmations
+    // interactively; each verifier only ever accepts its own capability, so a
+    // desktop authority never trusts a web caller and vice versa.
+    if (!capability || !caller.interactive || (caller.kind !== "desktop-ui" && caller.kind !== "web-ui")) return undefined;
     const trusted = this.desktopConfirmationVerifier?.verify({
       capability,
       caller,

@@ -329,6 +329,32 @@ CREATE TABLE IF NOT EXISTS calendar_events (
 CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start_at);
 CREATE INDEX IF NOT EXISTS idx_calendar_events_end ON calendar_events(end_at);
 
+-- Durable write-operation queue. Every user-initiated message write (move,
+-- flag update) is recorded here before it dispatches to the provider, so a
+-- process shutdown while an operation is queued or in flight never loses it:
+-- pending and running rows are re-enqueued on startup. Per-account execution
+-- is serialized by an in-memory lock chain; this table is the crash-safe
+-- record of what still needs to run.
+CREATE TABLE IF NOT EXISTS operation_queue (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('move', 'batch-move', 'flags')),
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  error_code TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_operation_queue_ready
+  ON operation_queue(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_operation_queue_account
+  ON operation_queue(account_id, status, created_at);
+
 -- Full-text search over the decrypted message payload. The messages table keeps
 -- the encrypted envelope; this FTS5 table holds the plaintext searchable text
 -- (subject, sender, body) so substring/token matching never needs to decrypt

@@ -51,15 +51,17 @@ describe("auto-reply toast stack", () => {
     expect(markup).toContain("张三 &lt;sender@example.com&gt;");
   });
 
-  it("routes cancellation through the desktop confirmation attributes", () => {
+  it("routes approval and cancellation through the desktop confirmation attributes", () => {
     const markup = renderStack([pending]);
 
     expect(markup).toContain('data-nami-agent-confirmation-card=""');
     expect(markup).toContain('data-nami-agent-confirmation-id="confirm_auto_reply_1"');
     expect(markup).toContain('data-nami-agent-confirmation-decision="reject"');
+    expect(markup).toContain('data-nami-agent-confirmation-decision="approve"');
+    expect(markup).toContain(zh("autoReply.pending.approve"));
   });
 
-  it("renders a sent notice without a cancel action", () => {
+  it("renders a sent notice without approval or cancellation actions", () => {
     const markup = renderStack([sent]);
 
     expect(markup).toContain(zh("autoReply.notice.sentEyebrow"));
@@ -68,7 +70,9 @@ describe("auto-reply toast stack", () => {
     expect(markup).toContain(sent.replyPreview);
     expect(markup).toContain("李四 &lt;lisi@example.com&gt;");
     expect(markup).not.toContain(zh("autoReply.notice.cancel"));
+    expect(markup).not.toContain(zh("autoReply.pending.approve"));
     expect(markup).not.toContain('data-nami-agent-confirmation-decision="reject"');
+    expect(markup).not.toContain('data-nami-agent-confirmation-decision="approve"');
   });
 
   it("always offers a close button and announces itself as a live region", () => {

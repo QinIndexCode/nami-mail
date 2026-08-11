@@ -36,6 +36,7 @@ import {
 } from "./message-storage.js";
 import { ensureMessageFtsIndex, ftsLikeEscape } from "./message-search.js";
 import { createBatchJob, getBatchJobSnapshot, undoBatchJob } from "./batch-jobs.js";
+import { createOperationQueue } from "./operation-queue.js";
 import { archivedMessageFilter, effectiveMailboxExpression, inboxMessageFilter } from "./message-filters.js";
 import {
   MAX_OUTBOUND_ATTACHMENT_COUNT,
@@ -84,6 +85,10 @@ import {
   syncAccount,
   updateMessageFlags,
   updateMessageFlagsBatch,
+  type BatchMessageMoveOutcome,
+  type MessageFlagsPatch,
+  type MessageMoveResult,
+  type MessageMoveTarget,
 } from "./sync.js";
 import {
   createFilterRule,
@@ -1034,6 +1039,25 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   if (recoveredSubmissions) {
     app.log.warn({ recoveredSubmissions }, "Marked interrupted SMTP submissions as unknown delivery");
   }
+  // Durable write-operation queue. User moves and flag updates are recorded
+  // before they dispatch, so a shutdown while an operation is queued or in
+  // flight never loses it: pending/running rows are re-enqueued here.
+  const operationQueue = createOperationQueue(context.db);
+  operationQueue.registerRunner("move", async (payload) => {
+    const { messageId, target } = payload as { messageId: string; target: MessageMoveTarget };
+    return moveMessage(context.db, context.masterKey, messageId, target, context.oauthService, context.agentMailEvents);
+  });
+  operationQueue.registerRunner("batch-move", async (payload) => {
+    const { ids, target } = payload as { ids: string[]; target: MessageMoveTarget };
+    return batchMoveMessages(context.db, context.masterKey, ids, target, context.oauthService, context.agentMailEvents);
+  });
+  operationQueue.registerRunner("flags", async (payload) => {
+    const { messageId, patch } = payload as { messageId: string; patch: MessageFlagsPatch };
+    await updateMessageFlags(context.db, context.masterKey, messageId, patch, context.oauthService, context.agentMailEvents);
+  });
+  void operationQueue.resumePending().then((resumed) => {
+    if (resumed) app.log.warn({ resumed }, "Resumed interrupted write operations");
+  });
   const localApiAccessToken = options.localApiAccessToken?.trim() || undefined;
 
   // Backgrounds and mail attachments use this binary path so image data never
@@ -1317,11 +1341,20 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   app.post<{ Params: { id: string } }>("/api/agent/confirmations/:id", async (request, reply) => {
     const parsed = agentConfirmationDecisionSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
-    return reply.code(501).send({
-      ok: false,
-      code: "not_supported",
-      message: "当前版本尚未启用可执行的 Agent 高风险操作确认。",
-    });
+    // Resolves auto-reply confirmations from the local web surface. The
+    // engine verifies the web confirmation capability before recording the
+    // decision; conversational Agent confirmations remain desktop-only.
+    const engine = getAutoReplyEngine();
+    if (!engine) return reply.code(503).send({ ok: false, code: "auto_reply_unavailable", message: "自动回复引擎当前不可用。" });
+    const resolution = engine.resolveConfirmation(request.params.id, parsed.data.decision, "web");
+    if ("ok" in resolution) return { ok: resolution.ok };
+    if (resolution.decision === "expired") {
+      return reply.code(409).send({ ok: false, code: "confirmation_expired", message: "该自动回复确认已过期。" });
+    }
+    if (resolution.decision === "failed") {
+      return reply.code(409).send({ ok: false, code: "confirmation_record_failed", message: "自动回复确认记录失败。" });
+    }
+    return reply.code(404).send({ ok: false, code: "confirmation_not_found", message: "未找到该自动回复确认。" });
   });
 
   app.get("/api/agent/memory", async (request, reply) => {
@@ -2692,18 +2725,39 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const parsed = batchMessageMoveSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
     try {
-      const outcome = await batchMoveMessages(
-        context.db,
-        context.masterKey,
-        parsed.data.ids,
-        parsed.data.target,
-        context.oauthService,
-        context.agentMailEvents,
-      );
-      for (const failure of outcome.failures) {
+      // Enqueue one durable operation per affected account. Each row waits
+      // for that account's write slot, so a batch issued while another move
+      // is in flight queues instead of failing the whole request.
+      const rows = context.db
+        .prepare(`SELECT id, account_id FROM messages WHERE id IN (${parsed.data.ids.map(() => "?").join(", ")})`)
+        .all(...parsed.data.ids) as Array<{ id: string; account_id: string }>;
+      const idsByAccount = new Map<string, string[]>();
+      for (const row of rows) {
+        const list = idsByAccount.get(row.account_id);
+        if (list) list.push(row.id);
+        else idsByAccount.set(row.account_id, [row.id]);
+      }
+      const knownIds = new Set(rows.map((row) => row.id));
+      const failures: Array<{ id: string; message: string }> = [];
+      for (const id of parsed.data.ids) {
+        if (!knownIds.has(id)) failures.push({ id, message: "Message not found." });
+      }
+      let updated = 0;
+      const pendingAccounts = new Set<string>();
+      for (const [accountId, accountIds] of idsByAccount) {
+        const outcome = await operationQueue.enqueueAndRun<BatchMessageMoveOutcome>(
+          [accountId],
+          "batch-move",
+          { ids: accountIds, target: parsed.data.target },
+        );
+        updated += outcome.updated;
+        failures.push(...outcome.failures);
+        for (const pending of outcome.pendingAccounts) pendingAccounts.add(pending);
+      }
+      for (const failure of failures) {
         request.log.warn({ messageId: failure.id, reason: failure.message }, "Batch move failed for message");
       }
-      for (const accountId of outcome.pendingAccounts) {
+      for (const accountId of pendingAccounts) {
         // Some providers cannot confirm a batch MOVE outcome synchronously.
         // Reconcile each affected account in the background so the renderer
         // receives the verified destination instead of a stale local snapshot.
@@ -2718,7 +2772,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
           .then(() => emitAccountSynced(context.db, context.serverEvents, accountId))
           .catch(() => request.log.warn({ accountId }, "Batch move cache refresh is pending"));
       }
-      return { ok: true, updated: outcome.updated, failed: outcome.failed, failures: outcome.failures };
+      return { ok: true, updated, failed: failures.length, failures };
     } catch (error) {
       request.log.error({ error }, "Batch move failed");
       return reply.code(500).send({ ok: false, message: "批量移动失败。" });
@@ -2765,13 +2819,14 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const parsed = messageFlagsPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
     try {
-      await updateMessageFlags(
-        context.db,
-        context.masterKey,
-        request.params.id,
-        parsed.data,
-        context.oauthService,
-        context.agentMailEvents,
+      // Queued behind any move in flight on the message's account, so
+      // starring a message right after deleting another one waits its turn
+      // instead of failing with a "pending move" error.
+      const messageAccount = context.db.prepare("SELECT account_id FROM messages WHERE id = ?").get(request.params.id) as { account_id: string } | undefined;
+      await operationQueue.enqueueAndRun(
+        messageAccount ? [messageAccount.account_id] : [],
+        "flags",
+        { messageId: request.params.id, patch: parsed.data },
       );
       return { ok: true };
     } catch (error) {
@@ -2784,13 +2839,15 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const parsed = messageMoveSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
     try {
-      const { accountId, ...result } = await moveMessage(
-        context.db,
-        context.masterKey,
-        request.params.id,
-        parsed.data.target,
-        context.oauthService,
-        context.agentMailEvents,
+      // The operation is recorded durably before it waits for the account's
+      // write slot: a second delete issued while the first is still in flight
+      // queues behind it instead of failing, and survives a shutdown while
+      // queued (resumePending re-enqueues it on the next start).
+      const messageAccount = context.db.prepare("SELECT account_id FROM messages WHERE id = ?").get(request.params.id) as { account_id: string } | undefined;
+      const { accountId, ...result } = await operationQueue.enqueueAndRun<MessageMoveResult>(
+        messageAccount ? [messageAccount.account_id] : [],
+        "move",
+        { messageId: request.params.id, target: parsed.data.target },
       );
       if (result.refreshPending || result.locationUnverified) {
         // UIDPLUS may be unavailable, a provider may omit a stable message ID,

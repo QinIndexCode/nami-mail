@@ -17,6 +17,36 @@ import { AutoReplyEngine, registerAutoReplyEngine, type AutoReplyUiEvent } from 
 import { AccountLifecycleStore } from "./agent/lifecycle.js";
 import { AgentMailStateEvents } from "./agent/mail-state-events.js";
 import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
+
+/**
+ * Local web confirmation authority used when Electron does not inject a
+ * desktop capability (plain browser / dev-server hosts). The capability is an
+ * in-process Symbol that never crosses the HTTP boundary, mirroring the
+ * desktop main process; the verifier only accepts a web-ui caller carrying it,
+ * so a desktop authority never trusts a web caller and vice versa.
+ */
+const webConfirmationCapability = Symbol("nami-web-confirmation");
+const webConfirmationVerifier: TrustedDesktopConfirmationVerifier = Object.freeze({
+  verify: (input: unknown) => {
+    if (!input || typeof input !== "object") return undefined;
+    const candidate = input as {
+      capability?: unknown;
+      caller?: { kind?: unknown; interactive?: unknown };
+      confirmationId?: unknown;
+      requestId?: unknown;
+      operation?: unknown;
+    };
+    if (
+      candidate.capability !== webConfirmationCapability
+      || candidate.caller?.kind !== "web-ui"
+      || candidate.caller?.interactive !== true
+      || typeof candidate.confirmationId !== "string"
+      || typeof candidate.requestId !== "string"
+      || (candidate.operation !== "record-decision" && candidate.operation !== "consume-approval")
+    ) return undefined;
+    return { principalId: "nami-web-main", surfaceId: "nami-web-browser" };
+  },
+});
 import { applyAgentStoreSchema } from "./agent/schema.js";
 import { AgentSourceEventOutbox } from "./agent/source-events.js";
 import { buildApp } from "./app.js";
@@ -315,27 +345,31 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       ...(options.externalConfirmation ? { externalConfirmation: options.externalConfirmation } : {}),
     });
     agentService.start();
-    if (options.desktopConfirmation) {
-      autoReplyEngine = new AutoReplyEngine({
-        db: database,
-        masterKey: runtimeMasterKey,
-        evaluate: (input) => agentService!.evaluateAutoReply(input),
-        mail: mailApplication,
-        audit: new EncryptedAgentAuditStore(database, runtimeMasterKey, agentLifecycle),
-        memory: new EncryptedAgentMemoryStore(database, runtimeMasterKey),
-        decisions: new EncryptedAutoReplyDecisionStore(database, runtimeMasterKey),
-        confirmationStore: new ImmutableGuiConfirmationStore(
-          database,
-          runtimeMasterKey,
-          agentLifecycle,
-          undefined,
-          options.desktopConfirmation.verifier,
-        ),
-        desktopConfirmation: options.desktopConfirmation,
-        onEvent: options.onAutoReplyEvent,
-      });
-      registerAutoReplyEngine(autoReplyEngine);
-    }
+    const autoReplyConfirmationAuthority = options.desktopConfirmation ?? {
+      capability: webConfirmationCapability,
+      verifier: webConfirmationVerifier,
+    };
+    autoReplyEngine = new AutoReplyEngine({
+      db: database,
+      masterKey: runtimeMasterKey,
+      evaluate: (input) => agentService!.evaluateAutoReply(input),
+      mail: mailApplication,
+      audit: new EncryptedAgentAuditStore(database, runtimeMasterKey, agentLifecycle),
+      memory: new EncryptedAgentMemoryStore(database, runtimeMasterKey),
+      decisions: new EncryptedAutoReplyDecisionStore(database, runtimeMasterKey),
+      confirmationStore: new ImmutableGuiConfirmationStore(
+        database,
+        runtimeMasterKey,
+        agentLifecycle,
+        undefined,
+        autoReplyConfirmationAuthority.verifier,
+      ),
+      ...(options.desktopConfirmation
+        ? { desktopConfirmation: options.desktopConfirmation }
+        : { webConfirmation: { capability: webConfirmationCapability } }),
+      onEvent: options.onAutoReplyEvent,
+    });
+    registerAutoReplyEngine(autoReplyEngine);
     const outboundDirectory = outboundAttachmentDirectory({});
     try {
       cleanupExpiredOutboundAttachments(database, outboundDirectory);

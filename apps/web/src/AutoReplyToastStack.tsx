@@ -1,6 +1,8 @@
-import { useEffect } from "react";
-import { CornerDownLeft, MessageSquareReply, ShieldAlert, X } from "lucide-react";
+import { useEffect, type MouseEvent } from "react";
+import { CheckCheck, CornerDownLeft, MessageSquareReply, ShieldAlert, X } from "lucide-react";
+import { api } from "./api";
 import type { DesktopAutoReplyNotice } from "./desktop";
+import { desktopBridge } from "./desktop";
 import { autoReplySenderLabel } from "./AutoReplyPendingDialog";
 import { useI18n } from "./i18n";
 import { useDismissTransition } from "./useDismissTransition";
@@ -29,6 +31,7 @@ function AutoReplyToastItem({
 }) {
   const { t } = useI18n();
   const { closing, requestClose } = useDismissTransition(onDismiss, EXIT_DURATION_MS);
+  const desktopAvailable = Boolean(desktopBridge()?.onAgentConfirmationResult);
   const cardAttributes = notice.kind === "pending"
     ? {
       "data-nami-agent-confirmation-card": "",
@@ -43,6 +46,30 @@ function AutoReplyToastItem({
     const timer = window.setTimeout(requestClose, remaining);
     return () => window.clearTimeout(timer);
   }, [closing, notice, requestClose]);
+  const cancel = (event: MouseEvent<HTMLButtonElement>) => {
+    // In the desktop runtime the Electron preload handles the trusted click;
+    // in a plain web session the rejection goes through the local API.
+    if (notice.kind !== "pending" || desktopAvailable) {
+      requestClose();
+      return;
+    }
+    event.preventDefault();
+    void api.resolveAgentConfirmation(notice.confirmationId, "reject")
+      .catch(() => undefined)
+      .finally(requestClose);
+  };
+  const approve = (event: MouseEvent<HTMLButtonElement>) => {
+    // Same split as cancel: the desktop preload resolves the approval natively,
+    // while a plain web session approves through the local confirmation API.
+    if (notice.kind !== "pending" || desktopAvailable) {
+      requestClose();
+      return;
+    }
+    event.preventDefault();
+    void api.resolveAgentConfirmation(notice.confirmationId, "approve")
+      .catch(() => undefined)
+      .finally(requestClose);
+  };
   return (
     <article
       className={`auto-reply-toast${closing ? " closing" : ""}`}
@@ -78,15 +105,26 @@ function AutoReplyToastItem({
             : autoReplySenderLabel(notice.toName, notice.toAddress)}
         </span>
         {notice.kind === "pending" && (
-          <button
-            className="auto-reply-toast-cancel"
-            type="button"
-            data-nami-agent-confirmation-id={notice.confirmationId}
-            data-nami-agent-confirmation-decision="reject"
-            onClick={requestClose}
-          >
-            {t("autoReply.notice.cancel")}
-          </button>
+          <>
+            <button
+              className="auto-reply-toast-send"
+              type="button"
+              data-nami-agent-confirmation-id={notice.confirmationId}
+              data-nami-agent-confirmation-decision="approve"
+              onClick={approve}
+            >
+              <CheckCheck size={14} />{t("autoReply.pending.approve")}
+            </button>
+            <button
+              className="auto-reply-toast-cancel"
+              type="button"
+              data-nami-agent-confirmation-id={notice.confirmationId}
+              data-nami-agent-confirmation-decision="reject"
+              onClick={cancel}
+            >
+              {t("autoReply.notice.cancel")}
+            </button>
+          </>
         )}
       </footer>
     </article>

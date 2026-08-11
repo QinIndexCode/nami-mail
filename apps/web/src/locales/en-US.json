@@ -37,7 +37,7 @@
     "navigation.management": "Management",
     "navigation.openMenu": "Open menu",
     "calendar.title": "Calendar",
-    "calendar.description": "Manage local calendar events, encrypted and stored on this device.",
+    "calendar.description": "Description",
     "calendar.demoDescription": "Demo calendar events exist only for this session.",
     "calendar.today": "Today",
     "calendar.previousMonth": "Previous month",
@@ -54,7 +54,6 @@
     "calendar.end": "End",
     "calendar.location": "Location",
     "calendar.locationPlaceholder": "Meeting location (optional)",
-    "calendar.description": "Description",
     "calendar.descriptionPlaceholder": "Event details (optional)",
     "calendar.color": "Color",
     "calendar.color.blue": "Blue",
@@ -1382,7 +1381,7 @@
     "agent.suggestion.actionItems": "Extract the items I need to follow up",
     "agent.suggestion.reply": "Draft a reply to the current message",
     "agent.message.you": "You",
-"agent.message.assistant": "Mail assistant",
+    "agent.message.assistant": "Mail assistant",
     "agent.message.system": "System",
     "agent.message.copy": "Copy reply",
     "agent.message.followUp": "Follow up",
@@ -1482,6 +1481,7 @@
     "agent.providers.title": "Model providers",
     "agent.providers.description": "Configure the models used by the mail assistant. Keys are written only to local encrypted storage and are never shown again.",
     "agent.providers.close": "Close model settings",
+    "settings.nav.title": "Contents",
     "agent.providers.available": "Added models",
     "agent.providers.new": "Add model",
     "agent.providers.loading": "Loading model settings…",
@@ -1770,6 +1770,12 @@
     "autoReply.notice.pendingTitle": "An auto-reply needs your approval",
     "autoReply.notice.sentEyebrow": "Auto-reply",
     "autoReply.notice.sentTitle": "Auto-reply sent",
-    "autoReply.notice.cancel": "Cancel"
+    "autoReply.notice.cancel": "Cancel",
+    "mail.action.queued": "Action queued; it will run after the current operation finishes.",
+    "settings.agent.autoReplyTools": "Auto-reply & memory",
+    "settings.agent.autoReplyToolsDesc": "Review pending replies, unanswered mail, or manage Agent memory.",
+    "settings.agent.autoReplyToolsPending": "Pending",
+    "settings.agent.autoReplyToolsDeclined": "Unanswered",
+    "settings.agent.autoReplyToolsMemory": "Memory"
   }
 }
