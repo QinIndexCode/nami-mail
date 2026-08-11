@@ -640,27 +640,10 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
           ...(manualConfig.smtp.username.trim() ? { smtpUsername: manualConfig.smtp.username.trim() } : {}),
         })
         : await api.addAccount(normalizedEmail, password);
-      const detail = result.sync
-        ? t("account.status.sync_details", { synced: result.sync.synced, folders: result.sync.folders })
-        : "";
-      if (result.syncWarning) {
-        setAccountAdded(true);
-        setPassword("");
-        await onAdded();
-        const issue = result.account.lastErrorCode
-          ? presentMailError({ code: result.account.lastErrorCode, message: result.syncWarning }, t)
-          : null;
-        setStatus({
-          kind: "warning",
-          message: issue
-            ? t("account.status.sync_warning_issue", { title: issue.title, guidance: issue.guidance })
-            : locale === "zh-CN"
-              ? t("account.status.sync_warning", { warning: result.syncWarning })
-              : t("account.status.sync_warning_generic"),
-        });
-        return;
-      }
-      await finishAddedAccount(t("account.status.connected", { detail }));
+      // The first full mailbox sync already runs in the background: this
+      // request returns as soon as the connection is verified, so the dialog
+      // closes immediately and the messages appear via the post-add refresh.
+      await finishAddedAccount(t("account.status.connected"));
     } catch (error) {
       const issue = presentMailError(error, t);
       // A network, TLS, or protocol problem is not corrected by retyping a

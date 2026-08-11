@@ -261,7 +261,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     };
   }, [view, demoMode, loadAttempt]);
 
-  useDialogFocus(true, dialogRef, { fallbackFocusRef });
+  useDialogFocus(true, dialogRef, { fallbackFocusRef, suspended: Boolean(editor || pendingDelete || pendingBulkDelete) });
   useDialogFocus(Boolean(editor), editorDialog, { fallbackFocusRef: dialogRef });
   useDialogFocus(Boolean(pendingDelete || pendingBulkDelete), confirmationDialog, { fallbackFocusRef: dialogRef });
   const { closing, requestClose } = useDismissTransition(() => {
@@ -612,6 +612,8 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
         title={t("calendar.title")}
         description={demoMode ? t("calendar.demoDescription") : t("calendar.description")}
         onClose={guardedRequestClose}
+        closing={closing}
+        requestClose={guardedRequestClose}
         fallbackFocusRef={fallbackFocusRef}
         dialogRef={dialogRef}
       >

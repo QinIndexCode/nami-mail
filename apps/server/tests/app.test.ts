@@ -776,7 +776,15 @@ it("keeps an Agent stream running after the client closes its response", async (
       payload: { ids: ["missing-message", "also-missing"], target: "trash" },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ ok: true, updated: 0, failed: 2 });
+    expect(response.json()).toEqual({
+      ok: true,
+      updated: 0,
+      failed: 2,
+      failures: [
+        { id: "missing-message", message: "Message not found." },
+        { id: "also-missing", message: "Message not found." },
+      ],
+    });
   });
 
   function seedJobAccount(accountId: string, archiveFolder = false) {

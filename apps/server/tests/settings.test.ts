@@ -63,6 +63,8 @@ describe("app settings migrations", () => {
       const columns = migrated.prepare("PRAGMA table_info(app_settings)").all() as Array<{ name: string }>;
       expect(columns.some((column) => column.name === "translation_configuration")).toBe(true);
       expect(columns.some((column) => column.name === "translation_configuration_version")).toBe(true);
+      expect(columns.some((column) => column.name === "realtime_push_enabled")).toBe(true);
+      expect(getAppSettings(migrated).realtimePushEnabled).toBe(true);
     } finally {
       migrated.close();
     }
@@ -96,5 +98,23 @@ describe("app settings migrations", () => {
       requireConfirmation: true,
     });
     expect(parsed.success).toBe(true);
+  });
+
+  it("defaults realtime push to enabled and persists the toggle", () => {
+    const db = openDatabase(":memory:");
+    try {
+      expect(getAppSettings(db).realtimePushEnabled).toBe(true);
+      const persisted = db.prepare("SELECT realtime_push_enabled FROM app_settings WHERE id = 1").get() as { realtime_push_enabled: number };
+      expect(persisted.realtime_push_enabled).toBe(1);
+
+      expect(updateAppSettings(db, { realtimePushEnabled: false })).toMatchObject({ realtimePushEnabled: false });
+      expect(getAppSettings(db)).toMatchObject({ realtimePushEnabled: false });
+      expect((db.prepare("SELECT realtime_push_enabled FROM app_settings WHERE id = 1").get() as { realtime_push_enabled: number }).realtime_push_enabled).toBe(0);
+
+      expect(updateAppSettings(db, { realtimePushEnabled: true })).toMatchObject({ realtimePushEnabled: true });
+      expect(getAppSettings(db)).toMatchObject({ realtimePushEnabled: true });
+    } finally {
+      db.close();
+    }
   });
 });

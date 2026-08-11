@@ -374,6 +374,7 @@ export type AppSettings = {
   notifyWhenFocused: boolean;
   notificationSound: NotificationSound;
   refreshIntervalSeconds: 30 | 60 | 180 | 300;
+  realtimePushEnabled: boolean;
   closeBehavior: CloseBehavior;
   agentToolRoundLimit: number;
   listDensity: ListDensity;
@@ -387,7 +388,7 @@ export type AppSettings = {
 
 export type AppSettingsPatch = Partial<Pick<
   AppSettings,
-  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "closeBehavior" | "agentToolRoundLimit" | "listDensity" | "agentAccessLevel" | "agentCliAccessLevel" | "agentMcpAccessLevel" | "autoReply"
+  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "realtimePushEnabled" | "closeBehavior" | "agentToolRoundLimit" | "listDensity" | "agentAccessLevel" | "agentCliAccessLevel" | "agentMcpAccessLevel" | "autoReply"
 >>;
 
 export const defaultAppSettings: AppSettings = {
@@ -399,6 +400,7 @@ export const defaultAppSettings: AppSettings = {
   notifyWhenFocused: false,
   notificationSound: "soft",
   refreshIntervalSeconds: 60,
+  realtimePushEnabled: true,
   closeBehavior: "ask",
   agentToolRoundLimit: 15,
   listDensity: "comfortable",

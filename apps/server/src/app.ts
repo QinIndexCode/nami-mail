@@ -19,6 +19,7 @@ import {
   type AccountCredentialIdentity,
 } from "./account-credentials.js";
 import { downloadMessageAttachment } from "./attachments.js";
+import { emitAccountSynced } from "./events.js";
 import { config } from "./config.js";
 import { discardDraft, saveDraft } from "./drafts.js";
 import { friendlyMailError, mailErrorHttpStatus, safeMailError, sendMail, testAccountConnection } from "./mail.js";
@@ -77,6 +78,7 @@ import { BuiltinTranslationService } from "./builtin-translation.js";
 import { TranslationConfigurationStore, type TranslationConfigurationPatch } from "./translation-configuration.js";
 import { MAX_TRANSLATION_TEXT_LENGTH, TranslationService, TranslationServiceError, splitTranslationChunks, translationErrorStatus, translationLanguageForLocale } from "./translation.js";
 import {
+  batchMoveMessages,
   moveMessage,
   scheduleSentSubmissionVerification,
   syncAccount,
@@ -310,6 +312,7 @@ const settingsPatchSchema = z.object({
   notifyWhenFocused: z.boolean().optional(),
   notificationSound: z.enum(NOTIFICATION_SOUNDS).optional(),
   refreshIntervalSeconds: z.union([z.literal(30), z.literal(60), z.literal(180), z.literal(300)]).optional(),
+  realtimePushEnabled: z.boolean().optional(),
   closeBehavior: z.enum(CLOSE_BEHAVIORS).optional(),
   agentToolRoundLimit: z.number().int().min(1).max(50).optional(),
   listDensity: z.enum(LIST_DENSITIES).optional(),
@@ -670,6 +673,7 @@ function startOAuthInitialSync(app: FastifyInstance, context: RuntimeContext, ac
     context.oauthService,
     context.agentMailEvents,
   )
+    .then(() => emitAccountSynced(context.db, context.serverEvents, accountId))
     .catch((error) => {
       const failure = mailFailure(error);
       app.log.warn({ accountId, code: failure.body.code }, "Initial OAuth mailbox sync failed");
@@ -807,6 +811,7 @@ function publicSettings(context: RuntimeContext, settings: AppSettings) {
     notifyWhenFocused: settings.notifyWhenFocused,
     notificationSound: settings.notificationSound,
     refreshIntervalSeconds: settings.refreshIntervalSeconds,
+    realtimePushEnabled: settings.realtimePushEnabled,
     closeBehavior: settings.closeBehavior,
     agentToolRoundLimit: settings.agentToolRoundLimit,
     listDensity: settings.listDensity,
@@ -973,8 +978,15 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   agentService?.start();
   const memoryStore = new EncryptedAgentMemoryStore(context.db, context.masterKey);
   const app = Fastify({
-    logger: { level: config.logLevel },
+    logger: {
+      level: config.logLevel,
+    },
     bodyLimit: 3 * 1024 * 1024,
+    // The agent RAG backfill can hold the event loop for tens of seconds on a
+    // large mailbox (every message is scanned on first startup); the default
+    // 10s avvio timeout would then kill the fastify-static registration and
+    // the server would fail to boot.
+    pluginTimeout: 60_000,
   });
   const translationConfigurationStore = new TranslationConfigurationStore(context.db, context.masterKey, {
     endpoint: config.translationEndpoint,
@@ -1469,7 +1481,69 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     if (updated.refreshIntervalSeconds !== current.refreshIntervalSeconds) {
       context.onRefreshIntervalChanged?.(updated.refreshIntervalSeconds);
     }
+    if (updated.realtimePushEnabled !== current.realtimePushEnabled) {
+      context.onRealtimePushChanged?.(updated.realtimePushEnabled);
+    }
     return publicSettings(context, updated);
+  });
+
+  // Server-originated mail events. The browser renderer (and the desktop
+  // renderer via the same code path) keeps an EventSource open here so new
+  // inbox mail can refresh the list immediately once the IDLE watcher or a
+  // poll pass reports it — no waiting for the next poll tick.
+  app.get("/api/events", async (request, reply) => {
+    const bus = context.serverEvents;
+    if (!bus) {
+      return reply.code(404).send({ ok: false, code: "events_unavailable", message: "Server events are not available." });
+    }
+    let deliveryStopped = false;
+    const stopDelivery = () => { deliveryStopped = true; };
+    request.raw.once("aborted", stopDelivery);
+    reply.raw.once("close", stopDelivery);
+    const responseSocket = reply.raw.socket;
+    responseSocket?.once("close", stopDelivery);
+    reply.hijack();
+    reply.raw.statusCode = 200;
+    reply.raw.setHeader("content-type", "text/event-stream; charset=utf-8");
+    reply.raw.setHeader("cache-control", "no-store, no-cache");
+    reply.raw.setHeader("connection", "keep-alive");
+    const unsubscribe = bus.subscribe((event) => {
+      if (deliveryStopped || reply.raw.destroyed) return;
+      try {
+        // Named event per the WHATWG EventSource format: the `event:` field
+        // is what lets clients subscribe with addEventListener("mail.received")
+        // etc. Without it every frame is delivered as the default "message"
+        // event and the named listeners never fire. The `type` key stays in
+        // the payload as well; it is what the toast and unread-merge paths
+        // switch on.
+        reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      } catch {
+        deliveryStopped = true;
+      }
+    });
+    // Browsers ignore comment frames; the beat keeps middleboxes from timing
+    // the silent stream out while no mail arrives.
+    const heartbeat = setInterval(() => {
+      if (deliveryStopped || reply.raw.destroyed) return;
+      try {
+        reply.raw.write(": ping\n\n");
+      } catch {
+        deliveryStopped = true;
+      }
+    }, 25_000);
+    const cleanup = () => {
+      unsubscribe();
+      clearInterval(heartbeat);
+      request.raw.removeListener("aborted", stopDelivery);
+      reply.raw.removeListener("close", stopDelivery);
+      responseSocket?.removeListener("close", stopDelivery);
+      responseSocket?.removeListener("close", cleanup);
+      if (!reply.raw.destroyed) reply.raw.end();
+    };
+    reply.raw.once("close", cleanup);
+    // A vanished client surfaces as a socket close; end the response so the
+    // server does not hold the connection (and app.close()) open forever.
+    responseSocket?.once("close", cleanup);
   });
 
   app.post<{ Body: Buffer }>("/api/settings/background", {
@@ -1846,25 +1920,25 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       provider.usernameMode ?? "email", now,
     );
 
-    let sync: Awaited<ReturnType<typeof syncAccount>> | null = null;
-    let syncWarning: string | null = null;
-    try {
-      sync = await syncAccount(
-        context.db,
-        context.masterKey,
-        id,
-        config.syncMessageLimit,
-        context.oauthService,
-        context.agentMailEvents,
-      );
-      if (sync.failedFolders > 0) syncWarning = `${sync.failedFolders} 个文件夹同步失败，其他邮件已完成同步`;
-    } catch (error) {
-      const failure = mailFailure(error, detected.credentialHint);
-      syncWarning = failure.body.message;
-      app.log.warn({ accountId: id, code: failure.body.code }, "Initial manually configured mailbox sync failed");
-    }
+    // The first full mailbox sync runs in the background so this request
+    // returns as soon as the credentials are verified; the renderer's
+    // post-add refresh together with the periodic sync loop pick up the
+    // folders and messages shortly after.
+    void syncAccount(
+      context.db,
+      context.masterKey,
+      id,
+      config.syncMessageLimit,
+      context.oauthService,
+      context.agentMailEvents,
+    )
+      .then(() => emitAccountSynced(context.db, context.serverEvents, id))
+      .catch((error) => {
+        const failure = mailFailure(error, detected.credentialHint);
+        app.log.warn({ accountId: id, code: failure.body.code }, "Initial manually configured mailbox sync failed");
+      });
     const row = context.db.prepare("SELECT * FROM accounts WHERE id = ?").get(id) as AccountRecord;
-    return reply.code(201).send({ ok: true, account: publicAccount(row), sync, syncWarning });
+    return reply.code(201).send({ ok: true, account: publicAccount(row), sync: null, syncWarning: null });
   });
 
   app.post("/api/accounts/test", async (request, reply) => {
@@ -1961,27 +2035,25 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         now,
       );
 
-    let sync: Awaited<ReturnType<typeof syncAccount>> | null = null;
-    let syncWarning: string | null = null;
-    try {
-      sync = await syncAccount(
-        context.db,
-        context.masterKey,
-        id,
-        config.syncMessageLimit,
-        context.oauthService,
-        context.agentMailEvents,
-      );
-      if (sync.failedFolders > 0) {
-        syncWarning = `${sync.failedFolders} 个文件夹同步失败，其他邮件已完成同步`;
-      }
-    } catch (error) {
-      const failure = mailFailure(error, provider.credentialHint);
-      syncWarning = failure.body.message;
-      app.log.warn({ accountId: id, code: failure.body.code }, "Initial mailbox sync failed");
-    }
+    // The first full mailbox sync runs in the background so this request
+    // returns as soon as the credentials are verified; the renderer's
+    // post-add refresh together with the periodic sync loop pick up the
+    // folders and messages shortly after.
+    void syncAccount(
+      context.db,
+      context.masterKey,
+      id,
+      config.syncMessageLimit,
+      context.oauthService,
+      context.agentMailEvents,
+    )
+      .then(() => emitAccountSynced(context.db, context.serverEvents, id))
+      .catch((error) => {
+        const failure = mailFailure(error, provider.credentialHint);
+        app.log.warn({ accountId: id, code: failure.body.code }, "Initial mailbox sync failed");
+      });
     const row = context.db.prepare("SELECT * FROM accounts WHERE id = ?").get(id) as AccountRecord;
-    return reply.code(201).send({ ok: true, account: publicAccount(row), sync, syncWarning });
+    return reply.code(201).send({ ok: true, account: publicAccount(row), sync: null, syncWarning: null });
   });
 
   app.delete<{ Params: { id: string } }>("/api/accounts/:id", async (request, reply) => {
@@ -2047,6 +2119,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         context.oauthService,
         context.agentMailEvents,
       );
+      emitAccountSynced(context.db, context.serverEvents, request.params.id);
       return { ok: true, ...result };
     } catch (error) {
       const account = context.db.prepare("SELECT * FROM accounts WHERE id = ?").get(request.params.id) as AccountRecord | undefined;
@@ -2619,26 +2692,18 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const parsed = batchMessageMoveSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
     try {
-      let updated = 0;
-      let failed = 0;
-      const pendingAccounts = new Set<string>();
-      for (const id of parsed.data.ids) {
-        try {
-          const { accountId, refreshPending } = await moveMessage(
-            context.db,
-            context.masterKey,
-            id,
-            parsed.data.target,
-            context.oauthService,
-            context.agentMailEvents,
-          );
-          updated += 1;
-          if (refreshPending) pendingAccounts.add(accountId);
-        } catch {
-          failed += 1;
-        }
+      const outcome = await batchMoveMessages(
+        context.db,
+        context.masterKey,
+        parsed.data.ids,
+        parsed.data.target,
+        context.oauthService,
+        context.agentMailEvents,
+      );
+      for (const failure of outcome.failures) {
+        request.log.warn({ messageId: failure.id, reason: failure.message }, "Batch move failed for message");
       }
-      for (const accountId of pendingAccounts) {
+      for (const accountId of outcome.pendingAccounts) {
         // Some providers cannot confirm a batch MOVE outcome synchronously.
         // Reconcile each affected account in the background so the renderer
         // receives the verified destination instead of a stale local snapshot.
@@ -2649,9 +2714,11 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
           config.syncMessageLimit,
           context.oauthService,
           context.agentMailEvents,
-        ).catch(() => request.log.warn({ accountId }, "Batch move cache refresh is pending"));
+        )
+          .then(() => emitAccountSynced(context.db, context.serverEvents, accountId))
+          .catch(() => request.log.warn({ accountId }, "Batch move cache refresh is pending"));
       }
-      return { ok: true, updated, failed };
+      return { ok: true, updated: outcome.updated, failed: outcome.failed, failures: outcome.failures };
     } catch (error) {
       request.log.error({ error }, "Batch move failed");
       return reply.code(500).send({ ok: false, message: "批量移动失败。" });
@@ -2738,6 +2805,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
           context.oauthService,
           context.agentMailEvents,
         )
+          .then(() => emitAccountSynced(context.db, context.serverEvents, accountId))
           .catch(() => request.log.warn({ messageId: request.params.id }, "Message move cache refresh is pending"));
       }
       return { ok: true, ...result };

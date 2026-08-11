@@ -10,6 +10,7 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import {
   MOVE_LOCATION_UNVERIFIED_ERROR,
+  PENDING_MOVE_RECONCILIATION_ERROR,
   hasPendingMove,
   hasUnverifiedMoveLocation,
   messagePayloadForRow,
@@ -19,6 +20,7 @@ import {
 import { markSubmissionSubmitted, prepareSubmission, submissionForId } from "../src/outbox.js";
 import {
   scheduleSentSubmissionVerification,
+  batchMoveMessages,
   moveMessage,
   syncAccount,
   updateMessageFlags,
@@ -370,6 +372,303 @@ describe("IMAP message flag updates", () => {
     });
     expect(fetch).toHaveBeenCalledWith([42], { uid: true }, { uid: true });
     expect(client.messageMove).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a stale move intent when the source UID is still present", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    // A previous MOVE response was lost and the row still carries the intent.
+    db.prepare(`
+      UPDATE messages
+      SET pending_move_destination = ?, pending_move_state = 'intent', pending_move_special_use = ?
+      WHERE id = ?
+    `).run("Archive", "\\Archive", "message-1");
+    Object.assign(client, {
+      fetch: vi.fn(async function* (range: unknown) {
+        if (Array.isArray(range) && range.includes(42)) {
+          yield { uid: 42, emailId: "stale-intent-source", flags: new Set(["\\Seen"]) };
+        }
+      }),
+    });
+    client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Archive", uidMap: new Map([[42, 84]]) });
+
+    await expect(moveMessage(db, masterKey, "message-1", "archive"))
+      .resolves.toEqual({ accountId: "account-1", destination: "Archive", refreshPending: false, uid: 84 });
+
+    // The probe proved the earlier MOVE never executed: the stale intent was
+    // discarded and a fresh move ran on the same connection.
+    expect(client.fetch).toHaveBeenCalledWith([42], { uid: true }, { uid: true });
+    expect(client.messageMove).toHaveBeenCalledWith(42, "Archive", { uid: true });
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    const row = db.prepare(`
+      SELECT mailbox, uid, pending_move_destination, pending_move_state
+      FROM messages WHERE id = ?
+    `).get("message-1");
+    expect(row).toEqual({ mailbox: "Archive", uid: 84, pending_move_destination: null, pending_move_state: null });
+  });
+
+  it("keeps a stale move intent blocked when the source UID is absent", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare(`
+      UPDATE messages
+      SET pending_move_destination = ?, pending_move_state = 'intent', pending_move_special_use = ?
+      WHERE id = ?
+    `).run("Archive", "\\Archive", "message-1");
+    Object.assign(client, {
+      // The source UID is gone: the interrupted MOVE did execute and
+      // reconciliation owns the outcome.
+      fetch: vi.fn(async function* () { /* no rows */ }),
+    });
+
+    await expect(moveMessage(db, masterKey, "message-1", "archive"))
+      .rejects.toThrow(PENDING_MOVE_RECONCILIATION_ERROR);
+    expect(client.messageMove).not.toHaveBeenCalled();
+    const row = db.prepare(`
+      SELECT pending_move_destination, pending_move_state
+      FROM messages WHERE id = ?
+    `).get("message-1");
+    expect(row).toEqual({ pending_move_destination: "Archive", pending_move_state: "intent" });
+  });
+
+  it("moves a whole batch with one MOVE command and confirms each UIDPLUS result", async () => {
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("message-2", "account-1", "INBOX", 43, "Second", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+    client.messageMove.mockResolvedValueOnce({
+      path: "INBOX",
+      destination: "Archive",
+      uidMap: new Map([[42, 84], [43, 85]]),
+    });
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1", "message-2"], "archive");
+
+    expect(result.updated).toBe(2);
+    expect(result.failed).toBe(0);
+    expect(result.failures).toEqual([]);
+    expect(result.pendingAccounts).toEqual(new Set());
+    // One connection and one RFC 6851 message-set command served the whole
+    // batch instead of one MOVE per message.
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    expect(client.logout).toHaveBeenCalledTimes(1);
+    expect(client.messageMove).toHaveBeenCalledTimes(1);
+    expect(client.messageMove).toHaveBeenCalledWith([42, 43], "Archive", { uid: true });
+    expect(db.prepare("SELECT mailbox, uid, pending_move_destination FROM messages WHERE id = ?").get("message-1"))
+      .toEqual({ mailbox: "Archive", uid: 84, pending_move_destination: null });
+    expect(db.prepare("SELECT mailbox, uid, pending_move_destination FROM messages WHERE id = ?").get("message-2"))
+      .toEqual({ mailbox: "Archive", uid: 85, pending_move_destination: null });
+  });
+
+  it("removes All Mail / Important mirror rows after a UIDPLUS-confirmed trash move", async () => {
+    const now = new Date().toISOString();
+    for (const [path, name, specialUse, total] of [
+      ["Trash", "Trash", "\\Trash", 0],
+      ["[Gmail]/所有邮件", "All Mail", "\\All", 875],
+      // Gmail does not expose \Important via LIST special-use; the folder
+      // arrives with special_use NULL and must still be recognized as a
+      // system view through the [Gmail]/ namespace prefix.
+      ["[Gmail]/重要", "Important", null, 373],
+      ["Projects", "Projects", null, 5],
+    ] as Array<[string, string, string | null, number]>) {
+      db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+        .run("account-1", path, name, specialUse, total, 0);
+    }
+    const insert = (id: string, mailbox: string, uid: number, lookup: string | null) => {
+      db.prepare(`
+        INSERT INTO messages (
+          id, account_id, mailbox, uid, remote_id_lookup, subject, from_name, from_address, to_json,
+          sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, "account-1", mailbox, uid, lookup, "Subject", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+    };
+    insert("mirror-all", "[Gmail]/所有邮件", 777, "lookup-1");
+    insert("mirror-important", "[Gmail]/重要", 555, "lookup-1");
+    insert("mirror-projects", "Projects", 333, "lookup-1");
+    db.prepare("UPDATE messages SET remote_id_lookup = ? WHERE id = ?").run("lookup-1", "message-1");
+    client.messageMove.mockResolvedValueOnce({
+      path: "INBOX",
+      destination: "Trash",
+      uidMap: new Map([[42, 84]]),
+    });
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1"], "trash");
+
+    expect(result.updated).toBe(1);
+    expect(result.failed).toBe(0);
+    // The moved row itself was rebound to Trash with its UIDPLUS UID.
+    expect(db.prepare("SELECT mailbox, uid FROM messages WHERE id = ?").get("message-1"))
+      .toEqual({ mailbox: "Trash", uid: 84 });
+    // Gmail's \All and \Important views exclude trashed messages, so the
+    // cached mirror rows must disappear immediately instead of waiting for
+    // the slow remote-deletion probe sweep.
+    expect(db.prepare("SELECT 1 FROM messages WHERE id = ?").get("mirror-all")).toBeUndefined();
+    expect(db.prepare("SELECT 1 FROM messages WHERE id = ?").get("mirror-important")).toBeUndefined();
+    // Custom-label folders keep their membership on trashed messages.
+    expect(db.prepare("SELECT 1 FROM messages WHERE id = ?").get("mirror-projects")).toBeDefined();
+    const allMail = db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "[Gmail]/所有邮件") as { total: number };
+    expect(allMail.total).toBe(874);
+    const important = db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "[Gmail]/重要") as { total: number };
+    expect(important.total).toBe(372);
+    const projects = db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Projects") as { total: number };
+    expect(projects.total).toBe(5);
+  });
+
+  it("keeps system-view mirror rows when the move target is not trash", async () => {
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "[Gmail]/所有邮件", "All Mail", "\\All", 875, 0);
+    for (const [id, mailbox, uid, lookup] of [
+      ["mirror-all", "[Gmail]/所有邮件", 777, "lookup-1"],
+    ] as Array<[string, string, number, string | null]>) {
+      db.prepare(`
+        INSERT INTO messages (
+          id, account_id, mailbox, uid, remote_id_lookup, subject, from_name, from_address, to_json,
+          sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, "account-1", mailbox, uid, lookup, "Subject", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+    }
+    db.prepare("UPDATE messages SET remote_id_lookup = ? WHERE id = ?").run("lookup-1", "message-1");
+    client.messageMove.mockResolvedValueOnce({
+      path: "INBOX",
+      destination: "[Gmail]/所有邮件",
+      uidMap: new Map([[42, 84]]),
+    });
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1"], "archive");
+
+    expect(result.updated).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(db.prepare("SELECT 1 FROM messages WHERE id = ?").get("mirror-all")).toBeDefined();
+    const allMail = db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "[Gmail]/所有邮件") as { total: number };
+    expect(allMail.total).toBe(875);
+  });
+
+  it("treats a move into the folder the message already lives in as an idempotent no-op", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Trash", "Trash", "\\Trash", 1, 0);
+    db.prepare("UPDATE messages SET mailbox = ?, uid = ? WHERE id = ?").run("Trash", 84, "message-1");
+
+    await expect(moveMessage(db, masterKey, "message-1", "trash"))
+      .resolves.toEqual({ accountId: "account-1", destination: "Trash", refreshPending: false });
+
+    // No provider round-trip at all: the row and folder counts stay untouched.
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(client.messageMove).not.toHaveBeenCalled();
+    expect(db.prepare("SELECT mailbox, uid FROM messages WHERE id = ?").get("message-1"))
+      .toEqual({ mailbox: "Trash", uid: 84 });
+    expect(db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Trash"))
+      .toEqual({ total: 1 });
+  });
+
+  it("counts a whole already-trashed batch as moved without touching the provider", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Trash", "Trash", "\\Trash", 1, 0);
+    db.prepare("UPDATE messages SET mailbox = ?, uid = ? WHERE id = ?").run("Trash", 84, "message-1");
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("message-2", "account-1", "Trash", 85, "Second", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1", "message-2"], "trash");
+
+    expect(result.updated).toBe(2);
+    expect(result.failed).toBe(0);
+    expect(result.failures).toEqual([]);
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(client.messageMove).not.toHaveBeenCalled();
+  });
+
+  it("clears claimed intents when the provider refuses the whole message set", async () => {    const now = new Date().toISOString();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("message-2", "account-1", "INBOX", 43, "Second", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+    client.messageMove.mockResolvedValueOnce(false);
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1", "message-2"], "archive");
+
+    expect(result.updated).toBe(0);
+    expect(result.failed).toBe(2);
+    expect(result.failures).toEqual([
+      { id: "message-1", message: "邮件服务器未确认移动操作，请稍后重试。" },
+      { id: "message-2", message: "邮件服务器未确认移动操作，请稍后重试。" },
+    ]);
+    expect(client.messageMove).toHaveBeenCalledTimes(1);
+    // The refused message set left both source rows untouched with no intent.
+    for (const id of ["message-1", "message-2"]) {
+      const row = db.prepare("SELECT mailbox, uid, pending_move_destination, pending_move_state FROM messages WHERE id = ?").get(id);
+      expect(row).toMatchObject({ mailbox: "INBOX", pending_move_destination: null, pending_move_state: null });
+    }
+  });
+
+  it("keeps an entry blocked when its intent cannot be claimed and still moves the rest", async () => {
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("message-2", "account-1", "INBOX", 43, "Second", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+    // message-2 carries an intent left by an interrupted transfer; the probe
+    // proves its source UID is gone, so reconciliation owns the outcome and
+    // the entry stays blocked while message-1 still moves.
+    db.prepare(`
+      UPDATE messages
+      SET pending_move_destination = 'Archive', pending_move_state = 'intent',
+          pending_move_candidate_uid = NULL, pending_move_special_use = NULL
+      WHERE id = ?
+    `).run("message-2");
+    client.fetch = vi.fn(async function* () { /* no rows: source UID absent */ });
+    client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Archive", uidMap: new Map([[42, 84]]) });
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1", "message-2"], "archive");
+
+    expect(result.updated).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(result.failures).toEqual([{ id: "message-2", message: PENDING_MOVE_RECONCILIATION_ERROR }]);
+    expect(client.fetch).toHaveBeenCalledWith([43], { uid: true }, { uid: true });
+    // Only message-1 reached the provider command.
+    expect(client.messageMove).toHaveBeenCalledTimes(1);
+    expect(client.messageMove).toHaveBeenCalledWith([42], "Archive", { uid: true });
+    // The blocked entry keeps its durable intent for the reconciling sync.
+    const blocked = db.prepare("SELECT pending_move_destination, pending_move_state FROM messages WHERE id = ?").get("message-2");
+    expect(blocked).toEqual({ pending_move_destination: "Archive", pending_move_state: "intent" });
+  });
+
+  it("falls back to pending reconciliation when the server lacks UIDPLUS", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Archive", uidMap: new Map() });
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1"], "archive");
+
+    expect(result.updated).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(client.messageMove).toHaveBeenCalledTimes(1);
+    // The row is kept durable at the source mailbox with a local pending UID
+    // and a 'confirmed' intent; a later sync reconciles the exact remote id.
+    const row = db.prepare("SELECT mailbox, uid, pending_move_destination, pending_move_state FROM messages WHERE id = ?").get("message-1");
+    expect(row).toEqual({
+      mailbox: "INBOX",
+      uid: -42,
+      pending_move_destination: "Archive",
+      pending_move_state: "confirmed",
+    });
   });
 
   it("reconciles an Archive target in the same pass after a custom source UID is proven absent", async () => {

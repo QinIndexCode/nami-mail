@@ -229,13 +229,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .selection-actions .icon-button { width: 27px; height: 27px; border-radius: 7px; }
 .selection-action-danger { color: color-mix(in srgb, var(--danger) 82%, var(--text-soft)) !important; }
 .selection-action-danger:hover:not(:disabled) { color: var(--danger) !important; }
-.account-health-banner { display: flex; align-items: flex-start; gap: 10px; margin: 7px 14px 8px; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--danger) 8%, var(--panel-muted)); box-shadow: 0 4px 12px color-mix(in srgb, var(--danger) 8%, transparent); color: var(--danger); }
+.account-health-banner { display: flex; align-items: flex-start; gap: 10px; margin: 7px 14px 8px; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--danger) 8%, var(--panel-muted)); box-shadow: 0 4px 12px color-mix(in srgb, var(--danger) 8%, transparent); color: var(--danger); animation: account-health-banner-in .18s ease-out; }
+@keyframes account-health-banner-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .account-health-banner > svg { flex: none; margin-top: 1px; }
 .account-health-banner > span { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 2px; }
 .account-health-banner strong { color: var(--text); font-size: 11px; line-height: 1.35; }
 .account-health-banner small { color: var(--text-soft); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.account-health-banner .account-health-countdown { color: color-mix(in srgb, var(--danger) 78%, var(--text-soft)); font-size: 10px; font-style: normal; line-height: 1.4; }
 .account-health-banner button { align-self: center; flex: none; min-height: 30px; padding: 5px 8px; border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--line)); border-radius: 6px; background: var(--panel-solid); color: var(--danger); cursor: pointer; font-size: 10px; font-weight: 700; white-space: nowrap; transition: border-color .16s ease, background .16s ease; }
 .account-health-banner button:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--panel-solid)); }
+.account-health-banner .account-health-dismiss { min-height: 26px; padding: 3px 6px; line-height: 0; }
 .message-list { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
 /* Virtualized list: rows are absolutely positioned inside .message-list-viewport. */
 .message-list-viewport { position: relative; }
@@ -271,7 +274,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .message-item.unread .message-meta strong, .message-item.unread .message-subject { font-weight: 700; }
 .message-meta time { color: var(--text-faint); font-family: "DM Mono", monospace; font-size: 10px; }
 .message-subject { overflow: hidden; margin-top: 4px; font-size: 12px; font-weight: 600; letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; }
-.message-snippet { display: -webkit-box; overflow: hidden; margin-top: 4px; color: var(--text-soft); font-size: 11px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.message-snippet { overflow: hidden; margin-top: 4px; color: var(--text-soft); font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .message-tags { display: flex; align-items: center; gap: 6px; height: 17px; margin-top: 6px; color: var(--text-faint); }
 .message-tags i { padding: 2px 5px; border: 1px solid var(--line); border-radius: 999px; font-size: 9px; font-style: normal; }
 .message-tags .message-local-copy { border-color: color-mix(in srgb, var(--warning) 42%, var(--line)); background: color-mix(in srgb, var(--warning) 6%, transparent); color: var(--text-soft); }
@@ -294,11 +297,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 :root[data-density="compact"] .row-quick-action { width: 24px; height: 24px; }
 .message-item.selection-mode .row-quick-actions, .message-item.recently-read-in-unread .row-quick-actions { display: none; }
 
-/* Compact list density: tighter rows and a single-line preview. */
+/* Compact list density: tighter rows (preview is already single-line in the
+   base style). */
 :root[data-density="compact"] .message-item { gap: 8px; margin-bottom: 1px; padding: 7px 10px; }
 :root[data-density="compact"] .sender-avatar { width: 28px; height: 28px; font-size: 8px; }
 :root[data-density="compact"] .message-subject { margin-top: 2px; font-size: 11.5px; }
-:root[data-density="compact"] .message-snippet { margin-top: 2px; -webkit-line-clamp: 1; }
+:root[data-density="compact"] .message-snippet { margin-top: 2px; }
 :root[data-density="compact"] .message-tags { display: none; }
 :root[data-density="compact"] .unread-dot { top: 14px; }
 :root[data-density="compact"] .message-item.unread .message-meta { padding-right: 12px; }
@@ -1083,8 +1087,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .accounts-row:hover { background: color-mix(in srgb, var(--focus-ring) 4%, transparent); }
 .accounts-row.selected { background: color-mix(in srgb, var(--focus-ring) 8%, transparent); }
 .accounts-row.has-issue { padding-bottom: 6px; }
-.accounts-row.has-issue .accounts-row-main { margin: 4px -10px 0; padding: 10px; border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--danger) 6%, transparent); }
-.accounts-row-main { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 11px 0; }
+.accounts-row.has-issue .accounts-row-main { margin: 4px -12px 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--danger) 6%, transparent); }
+.accounts-row-main { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 11px 12px; }
 .accounts-row-check { display: inline-flex; align-items: center; flex: none; align-self: center; }
 .accounts-row-check input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--focus-ring); }
 .accounts-row-main > .status-dot { flex: none; margin-top: 5px; }
@@ -1095,11 +1099,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .accounts-row-copy small.account-error-guidance { overflow: visible; color: color-mix(in srgb, var(--danger) 78%, var(--text-soft)); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; }
 .accounts-row-actions { display: flex; align-items: center; gap: 7px; flex: none; }
 .accounts-row-actions .secondary-button { min-height: 30px; padding: 6px 10px; font-size: 11px; white-space: nowrap; }
-.accounts-row-edit { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 0 0 11px 24px; }
-.accounts-row-edit > label { font-size: 10px; font-weight: 650; color: var(--text-faint); }
-.accounts-row-edit textarea { width: 100%; min-height: 64px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; background: var(--panel-muted); color: var(--text); font: inherit; font-size: 11px; line-height: 1.6; resize: vertical; }
-.accounts-row-edit textarea::placeholder { color: var(--text-faint); opacity: .82; }
-.accounts-row-edit textarea:focus-visible { border-color: var(--focus-ring); box-shadow: 0 0 0 3px var(--focus-ring-subtle); }
+/* Account editor — floating dialog for editing a single account's signature;
+   reuses the contact editor card recipe so the two panels feel identical. */
+.accounts-editor-backdrop { z-index: 60; padding: 24px; background: var(--scrim-nested); }
+.accounts-editor-modal { width: min(520px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; padding: 24px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--panel-solid); box-shadow: var(--shadow-raised), inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent); animation: modal-in .2s cubic-bezier(.2,.8,.2,1) both; scrollbar-gutter: stable; }
+.accounts-editor-modal.closing { animation: modal-out .17s cubic-bezier(.2,.8,.2,1) both; pointer-events: none; }
+.accounts-editor { display: flex; flex-direction: column; gap: 13px; }
+.accounts-editor-head { display: flex; align-items: center; gap: 12px; }
+.accounts-editor-head > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.accounts-editor-head .contact-editor-title { font-size: 14px; }
+.accounts-editor-provider { color: var(--text-faint); font-size: 10px; }
+.accounts-editor .calendar-field textarea { min-height: 96px; }
+.accounts-editor-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 4px; }
+.accounts-editor-actions .secondary-button,
+.accounts-editor-actions .primary-button { min-height: 34px; padding: 8px 16px; font-size: 12px; }
 .accounts-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 14px; }
 .accounts-pager .secondary-button { min-height: 30px; padding: 6px 10px; font-size: 11px; white-space: nowrap; }
 .accounts-pager-status { color: var(--text-soft); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -1140,8 +1153,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .contact-row { display: flex; align-items: flex-start; gap: 8px; padding: 11px 0; border-bottom: 1px solid var(--line); transition: background .12s; }
 .contact-row:hover { background: color-mix(in srgb, var(--focus-ring) 3%, transparent); }
 .contact-row.selected { background: color-mix(in srgb, var(--focus-ring) 7%, transparent); }
-.contact-row.editing { background: color-mix(in srgb, var(--focus-ring) 4%, transparent); }
-.contact-row > .contact-editor { flex: 1 1 auto; min-width: 0; }
 .contacts-row-check { display: inline-flex; align-items: center; flex: none; align-self: center; }
 .contacts-row-check input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--focus-ring); }
 .contact-head { display: flex; align-items: flex-start; gap: 10px; min-width: 0; flex: 1 1 auto; }
@@ -1150,12 +1161,33 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .contact-copy strong { font-size: 12px; overflow-wrap: anywhere; }
 .contact-copy small { color: var(--text-faint); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 .contact-notes { color: var(--text-soft); }
-.contact-auto-badge { align-self: flex-start; padding: 2px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--text-faint); font-size: 9px; }
+.contact-auto-badge { align-self: flex-start; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--warning) 55%, var(--line)); border-radius: 999px; color: color-mix(in srgb, var(--warning) 70%, var(--text)); background: color-mix(in srgb, var(--warning) 8%, transparent); font-size: 9px; }
+.contact-manual-badge { align-self: flex-start; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--focus-ring) 45%, var(--line)); border-radius: 999px; color: color-mix(in srgb, var(--focus-ring) 65%, var(--text)); background: color-mix(in srgb, var(--focus-ring) 6%, transparent); font-size: 9px; }
+.contact-group-head { display: flex; align-items: center; gap: 6px; padding: 9px 0 3px; color: var(--text-faint); font-size: 10px; font-weight: 600; letter-spacing: .04em; }
+.contact-group-count { opacity: .8; font-weight: 400; }
+.contacts-source-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.source-filter-button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-soft); font-size: 11px; cursor: pointer; transition: background .12s, border-color .12s, color .12s; }
+.source-filter-button:hover { border-color: var(--line-strong); }
+.source-filter-button[aria-pressed="true"] { background: color-mix(in srgb, var(--focus-ring) 12%, transparent); border-color: color-mix(in srgb, var(--focus-ring) 55%, var(--line-strong)); color: var(--text); }
+.source-filter-count { font-size: 10px; opacity: .72; }
+.contact-editor-source { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px dashed var(--line-strong); border-radius: 10px; background: color-mix(in srgb, var(--panel-muted) 50%, transparent); color: var(--text-faint); font-size: 11px; }
+.contact-editor-source .contact-auto-badge { align-self: auto; }
 .contact-actions { display: flex; align-items: center; gap: 7px; flex: none; }
 .contact-actions .secondary-button { min-height: 30px; padding: 6px 10px; font-size: 11px; white-space: nowrap; }
-.contact-editor { display: grid; gap: 10px; }
-.contact-editor textarea { min-height: 46px; resize: vertical; }
-.contact-editor-actions { margin-top: 2px; }
+/* Contact editor — floating dialog layered above the list; reused field and
+   card styling from the calendar editor keeps the two surfaces consistent. */
+.contact-editor-backdrop { z-index: 60; padding: 24px; background: var(--scrim-nested); }
+.contact-editor-modal { width: min(520px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; padding: 24px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--panel-solid); box-shadow: var(--shadow-raised), inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent); animation: modal-in .2s cubic-bezier(.2,.8,.2,1) both; scrollbar-gutter: stable; }
+.contact-editor-modal.closing { animation: modal-out .17s cubic-bezier(.2,.8,.2,1) both; pointer-events: none; }
+.contact-editor { display: flex; flex-direction: column; gap: 13px; }
+.contact-editor-head { display: flex; align-items: center; gap: 12px; }
+.contact-editor-head > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.contact-editor-avatar { display: grid; place-items: center; flex: none; width: 42px; height: 42px; border-radius: 50%; background: color-mix(in srgb, var(--focus-ring) 14%, var(--panel-muted)); color: var(--text-soft); font-size: 16px; font-weight: 700; }
+.contact-editor-title { margin: 0; font-size: 15px; line-height: 1.35; overflow-wrap: anywhere; }
+.contact-editor .calendar-field textarea { min-height: 64px; }
+.contact-editor-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 4px; }
+.contact-editor-actions .secondary-button,
+.contact-editor-actions .primary-button { min-height: 34px; padding: 8px 16px; font-size: 12px; }
 .contacts-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 14px; }
 .contacts-pager .secondary-button { min-height: 30px; padding: 6px 10px; font-size: 11px; white-space: nowrap; }
 .contacts-pager-status { color: var(--text-soft); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -1364,7 +1396,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .accounts-bulk-actions .secondary-button { flex: 1 1 auto; justify-content: center; }
   .accounts-row-main { flex-wrap: wrap; }
   .accounts-row-actions { width: 100%; justify-content: flex-end; }
-  .accounts-row-edit { padding-left: 0; }
   .account-health-banner { margin-right: 12px; margin-left: 12px; }
   .attachment-card { grid-template-columns: 42px minmax(0, 1fr) 44px; min-height: 68px; padding: 10px; }
   .compose-attachment-list { grid-template-columns: minmax(0, 1fr); }

@@ -7,6 +7,7 @@ import type { OAuthService } from "./oauth.js";
 import type { TranslationResult } from "./translation.js";
 import type { TranslationServiceError } from "./translation.js";
 import type { AppSettings } from "./settings.js";
+import type { ServerEventBus } from "./events.js";
 import type { ExternalPairingSummary } from "@nami/agent-contracts";
 
 /**
@@ -89,6 +90,12 @@ export type RuntimeContext = {
   // Desktop-injected, non-secret summaries of active/revoked/expired
   // CLI/MCP pairing records. Absent in browser-only and test hosts.
   listExternalPairings?: () => readonly ExternalPairingSummary[] | Promise<readonly ExternalPairingSummary[]>;
+  // Server-originated mail events fanned out to connected clients over the
+  // `GET /api/events` SSE endpoint by the route layer.
+  serverEvents?: ServerEventBus;
+  // The owning runtime (re)starts or stops the live IMAP IDLE watcher after
+  // the user toggles the realtime push setting.
+  onRealtimePushChanged?: (enabled: boolean) => void;
 };
 
 export function publicAccount(row: AccountRecord) {

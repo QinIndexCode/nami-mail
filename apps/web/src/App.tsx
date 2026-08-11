@@ -60,15 +60,18 @@ import { mailBackgroundColor, mailReaderSurface, mailSurfaceForBackground, shoul
 import {
   applyBatchSeenChange as applyBatchSeenChangeState,
   applyMessageMove,
+  applyMessageMoveConfirmation,
   applyMessageSeenChange,
   isArchivedMessage,
   isInboxMessage,
   isSnoozedMessage,
   matchesServerMessageQuery,
   mergePendingArchiveMoves,
+  mergeRolledBackMessages,
   mergeUnreadViewSnapshot,
   nextMessageTotalForMove,
   nextUnreadViewRecentlyReadIds,
+  revertMessageMove,
   sidebarBadgeCounts,
   type MessageListQuery,
   type PendingArchiveMove,
@@ -86,6 +89,7 @@ import { useDialogFocus } from "./useDialogFocus";
 import { findVerificationCodes } from "./verificationCode";
 import { resolveLocale, type Translate, useI18n } from "./i18n";
 import type { AgentBootstrap } from "./agentTypes";
+import MessageList, { type MessageListEmptyState } from "./MessageList";
 import { AutoReplyToastStack, autoReplyNoticeKey } from "./AutoReplyToastStack";
 
 const AgentWorkspace = lazy(() => import("./AgentWorkspace"));
@@ -147,6 +151,8 @@ const isDesktopSmoke = new URLSearchParams(window.location.search).get("desktopS
 // Mirrors MAX_TRANSLATION_TEXT_LENGTH in the local server so the reader rejects
 // oversized messages before any mail content is sent to a translation provider.
 const MAX_LLM_TRANSLATION_TEXT_LENGTH = 50_000;
+// Account-health banner lifetime; it shows a visible auto-dismiss countdown.
+const ACCOUNT_HEALTH_ALERT_MS = 8_000;
 
 function formatMessageTime(value: string, locale: string): string {
   const date = new Date(value);
@@ -480,6 +486,12 @@ export default function App() {
   const [snoozeBusy, setSnoozeBusy] = useState(false);
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [toast, setToast] = useState<ToastNotice>(null);
+  // Account-health banner is transient: it appears when the unhealthy-account
+  // set changes and auto-dismisses after a few seconds with a visible
+  // countdown. The sidebar status dot stays red/green until the account heals.
+  const [healthAlert, setHealthAlert] = useState<{ until: number } | null>(null);
+  const [healthTick, setHealthTick] = useState(() => Date.now());
+  const prevHealthFingerprintRef = useRef("");
   const [autoReplyNotices, setAutoReplyNotices] = useState<DesktopAutoReplyNotice[]>([]);
   const [fatalError, setFatalError] = useState<MailErrorPresentation | null>(null);
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateSnapshot | null>(null);
@@ -937,6 +949,82 @@ export default function App() {
     const timer = window.setInterval(() => void silentRefresh(), settings.refreshIntervalSeconds * 1000);
     return () => window.clearInterval(timer);
   }, [silentRefresh, settings.refreshIntervalSeconds]);
+  // Real-time push: the server broadcasts over GET /api/events when the IDLE
+  // watcher (or a poll pass) finds new inbox mail. Refresh immediately so
+  // verification codes never wait for the next poll tick. The desktop
+  // renderer gets its own notification through the IPC bridge, so only the
+  // browser fallback shows an in-app toast here.
+  //
+  // The EventSource connection must survive sidebar view/folder switches:
+  // binding it to silentRefresh would re-create it on every selection change
+  // and drop any event in flight (the server log showed reconnect storms
+  // during switches). The SSE effect therefore only depends on the push
+  // toggle; the latest closures are reached through sseHandlersRef, which is
+  // re-pointed on every render so a mail.received is never handled with
+  // stale view/folder state.
+  const sseHandlersRef = useRef<{ mailReceived: (event: MessageEvent<string>) => void; mailSynced: () => void }>({
+      mailReceived: () => undefined,
+      mailSynced: () => undefined,
+    });
+    useEffect(() => {
+      sseHandlersRef.current.mailReceived = (event: MessageEvent<string>) => {
+        void silentRefresh();
+        if (desktopBridge()) return;
+        let payload: { count: number; messages: Array<{ subject?: string; fromName?: string; fromAddress?: string }> };
+        try {
+          const parsed = JSON.parse(event.data) as { type?: unknown; payload?: { count?: unknown; messages?: unknown } };
+          if (parsed.type !== "mail.received" || !parsed.payload || typeof parsed.payload.count !== "number") return;
+          payload = parsed.payload as typeof payload;
+        } catch {
+          return;
+        }
+        if (payload.count < 1) return;
+        const first = payload.messages[0];
+        showToast(payload.count === 1
+          ? t("mail.notification.singleToast", { sender: first?.fromName || first?.fromAddress || t("mail.notification.newContact") })
+          : t("mail.notification.multipleToast", { count: payload.count }));
+      };
+      // A finished sync pass refreshes the sidebar freshness immediately; the
+      // account list is re-fetched inside silentRefresh so "尚未同步" never
+      // lingers until the next poll tick.
+      sseHandlersRef.current.mailSynced = () => { void silentRefresh(); };
+    });
+
+    useEffect(() => {
+      if (isDemo || !settings.realtimePushEnabled) return undefined;
+      let closed = false;
+      let source: EventSource | null = null;
+      let retryTimer = 0;
+      let attempt = 0;
+
+      const handleMailReceived = (event: MessageEvent<string>) => sseHandlersRef.current.mailReceived(event);
+      const handleMailSynced = () => sseHandlersRef.current.mailSynced();
+
+      const connect = () => {
+        source?.close();
+        const next = new EventSource("/api/events");
+        source = next;
+        next.addEventListener("mail.received", handleMailReceived);
+        next.addEventListener("mail.synced", handleMailSynced);
+        next.onopen = () => { attempt = 0; };
+        next.onerror = () => {
+          if (closed || next !== source) return;
+          // EventSource would auto-reconnect and hammer a dead endpoint; close
+          // and retry with capped exponential backoff instead.
+          next.close();
+          const delay = Math.min(1_000 * 2 ** attempt, 30_000);
+          attempt += 1;
+          retryTimer = window.setTimeout(() => { if (!closed) connect(); }, delay);
+        };
+      };
+
+      connect();
+      return () => {
+        closed = true;
+        window.clearTimeout(retryTimer);
+        source?.close();
+      };
+    }, [isDemo, settings.realtimePushEnabled]);
   useEffect(() => {
     if (isDemo || !pendingMoveVerificationKey) return undefined;
     const pendingIds = pendingMoveVerificationKey.split("|").filter(Boolean);
@@ -1087,15 +1175,8 @@ export default function App() {
   }, [threadGroups]);
 
   // Virtualize the message list so only the visible window (plus overscan) is
-  // mounted. Rows are measured lazily (their height varies with snippet line
-  // count and density); estimateSize only seeds the initial layout.
-  const rowVirtualizer = useVirtualizer({
-    count: filteredMessages.length,
-    getScrollElement: () => messageListRef.current,
-    estimateSize: () => (settings.listDensity === "compact" ? 62 : 112),
-    getItemKey: (index) => filteredMessages[index]?.id ?? index,
-    overscan: 8,
-  });
+  // mounted. The virtualizer itself lives inside MessageList so scroll frames
+  // re-render only the list, not this whole tree.
 
   // Pins the reading position once a background merge has been applied; runs
   // before the browser paints, so the correction is never visible. Skipped
@@ -1112,6 +1193,17 @@ export default function App() {
     const rect = node.getBoundingClientRect();
     viewport.scrollTop = rect.top - viewportRect.top + viewport.scrollTop - anchor.offset;
   }, [filteredMessages]);
+
+  // Right after an account is added the server returns as soon as the
+  // credentials are verified while the first mailbox sync continues in the
+  // background. The immediate reload makes the account show up right away and
+  // a couple of scheduled refreshes pick up its folders/messages as the sync
+  // lands, without waiting for the periodic refresh interval.
+  const handleAccountAdded = useCallback(async () => {
+    await load();
+    window.setTimeout(() => void silentRefresh(), 8_000);
+    window.setTimeout(() => void silentRefresh(), 30_000);
+  }, [load, silentRefresh]);
 
   const loadedServerMessageCount = useMemo(() => {
     if (isDemo) return filteredMessages.length;
@@ -1280,6 +1372,31 @@ export default function App() {
   const accountsNeedingAttention = accounts.filter((account) => accountIssues.has(account.id));
   const primaryAccountNeedingAttention = accountsNeedingAttention[0];
   const primaryAccountIssue = primaryAccountNeedingAttention ? accountIssues.get(primaryAccountNeedingAttention.id) : undefined;
+  // A banner is raised only when the unhealthy-account set actually changes;
+  // a persistent issue fires once, then the countdown closes it without the
+  // banner nagging on every poll tick.
+  const healthFingerprint = accountsNeedingAttention
+    .map((account) => `${account.id}:${accountIssues.get(account.id)?.title ?? ""}`)
+    .join("|");
+  useEffect(() => {
+    if (healthFingerprint === prevHealthFingerprintRef.current) return;
+    prevHealthFingerprintRef.current = healthFingerprint;
+    if (!healthFingerprint) {
+      setHealthAlert(null);
+      return;
+    }
+    setHealthAlert({ until: Date.now() + ACCOUNT_HEALTH_ALERT_MS });
+    setHealthTick(Date.now());
+  }, [healthFingerprint]);
+  useEffect(() => {
+    if (!healthAlert) return;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setHealthTick(now);
+      if (now >= healthAlert.until) setHealthAlert(null);
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [healthAlert]);
   const safeHtml = useMemo(
     () => selected?.htmlBody ? sanitizeMailHtml(selected.htmlBody, theme === "dark") : "",
     [selected?.htmlBody, theme],
@@ -1668,80 +1785,111 @@ export default function App() {
     // A response started before this confirmed MOVE still describes the
     // source mailbox. Keep it from replacing the local destination state.
     if (!isDemo) loadRequestRef.current += 1;
+    const requestAtStart = loadRequestRef.current;
     setMessageAction(target);
+    let revert = (): void => undefined;
     try {
+      const currentQuery: MessageListQuery = {
+        accountId: selectedAccount,
+        folder: selectedFolder,
+        search: debouncedQuery,
+        messageView: view,
+      };
+      const destination = demoMoveDestination(accounts, selected.accountId, target);
+      // Optimistic: predict the destination with the same folder resolution
+      // the server uses, then apply the move locally before the round-trip.
+      const optimisticSnapshot = destination && destination !== selected.mailbox
+        ? applyMessageMove(accounts, [selected], stats, selected.id, destination).messages[0]
+        : undefined;
+      const optimisticAccounts = optimisticSnapshot
+        ? applyMessageMove(accounts, [selected], stats, selected.id, destination).accounts
+        : null;
+      const optimisticStats = optimisticSnapshot
+        ? applyMessageMove(accounts, [selected], stats, selected.id, destination).stats
+        : null;
+      let wasIncluded = false;
+      let remainsIncluded = false;
+      if (optimisticSnapshot) {
+        wasIncluded = matchesServerMessageQuery(selected, accounts, currentQuery);
+        remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, currentQuery);
+        // Sync the ref synchronously (like load) so a fast failure can gate
+        // its rollback on the exact optimistic state it must reverse.
+        messagesRef.current = applyMessageMove(accounts, messagesRef.current, stats, selected.id, destination).messages;
+        setMessages(messagesRef.current);
+        setAccounts((items) => applyMessageMove(items, [selected], stats, selected.id, destination).accounts);
+        setStats((current) => applyMessageMove(accounts, [selected], current, selected.id, destination).stats);
+        setMessageTotal((total) => nextMessageTotalForMove(total, wasIncluded, remainsIncluded));
+      }
+      revert = () => {
+        if (!optimisticSnapshot || !optimisticAccounts || !optimisticStats) return;
+        // A reload that landed mid-flight already holds server truth (the
+        // message restored at its source); leave it alone in that case.
+        if (!messagesRef.current.some((item) => item.id === selected.id && item.mailbox === destination)) return;
+        const restored = revertMessageMove(optimisticAccounts, messagesRef.current, optimisticStats, selected, destination);
+        messagesRef.current = restored.messages;
+        setMessages(restored.messages);
+        setAccounts(restored.accounts);
+        setStats(restored.stats);
+        if (loadRequestRef.current === requestAtStart) {
+          setMessageTotal((total) => nextMessageTotalForMove(total, remainsIncluded, wasIncluded));
+        }
+      };
       const move = isDemo
-        ? { destination: demoMoveDestination(accounts, selected.accountId, target), uid: undefined, refreshPending: false, uncertain: false, locationUnverified: false }
+        ? { destination, uid: undefined, refreshPending: false, uncertain: false, ok: true, locationUnverified: false }
         : await api.moveMessage(selected.id, target);
       if (move.uncertain) {
-        // Do not optimistically move an item when the provider connection ended
-        // after the command was issued. The durable server intent will resolve
-        // from protocol evidence during the background refresh.
+        // The provider connection ended after the command was issued: restore
+        // the source state; the durable server intent resolves from protocol
+        // evidence during the background refresh.
+        revert();
         setSelectedId(null);
         setPendingMoveVerifications((current) => current.includes(selected.id) ? current : [...current, selected.id]);
         void load({ silent: true });
         showToast(t("mail.action.moveChecking"), "info");
         return;
       }
-      const destination = move.destination;
-      const movedSnapshot = applyMessageMove(
+      if (!move.ok) {
+        revert();
+        showToast(t("mail.error.move"), "error");
+        return;
+      }
+      if (optimisticSnapshot && move.destination === destination) {
+        // Confirmed: refine the optimistic copy with the server's mapped UID
+        // and any pending/location state.
+        const refined = applyMessageMoveConfirmation(messagesRef.current, selected.id, move.uid, move.refreshPending, move.locationUnverified);
+        messagesRef.current = refined;
+        setMessages(refined);
+      } else if (!optimisticSnapshot && move.destination && move.destination !== selected.mailbox) {
+        // No predictable destination (e.g. the provider exposes no archive
+        // folder locally): apply the move only after the server confirms it.
+        setMessages((items) => {
+          const next = applyMessageMove(accounts, items, stats, selected.id, move.destination, move.uid, move.refreshPending, move.locationUnverified).messages;
+          messagesRef.current = next;
+          return next;
+        });
+        setAccounts((items) => applyMessageMove(items, [selected], stats, selected.id, move.destination, move.uid, move.refreshPending, move.locationUnverified).accounts);
+        setStats((current) => applyMessageMove(accounts, [selected], current, selected.id, move.destination, move.uid, move.refreshPending, move.locationUnverified).stats);
+      }
+      const movedSnapshot = optimisticSnapshot ?? applyMessageMove(
         accounts,
         [selected],
         stats,
         selected.id,
-        destination,
+        move.destination,
         move.uid,
         move.refreshPending,
         move.locationUnverified,
       ).messages[0];
-      setMessages((items) => {
-        const next = applyMessageMove(
-          accounts,
-          items,
-          stats,
-          selected.id,
-          destination,
-          move.uid,
-          move.refreshPending,
-          move.locationUnverified,
-        ).messages;
-        messagesRef.current = next;
-        return next;
-      });
-      setAccounts((items) => applyMessageMove(
-        items,
-        [selected],
-        stats,
-        selected.id,
-        destination,
-        move.uid,
-        move.refreshPending,
-        move.locationUnverified,
-      ).accounts);
-      setStats((current) => applyMessageMove(
-        accounts,
-        [selected],
-        current,
-        selected.id,
-        destination,
-        move.uid,
-        move.refreshPending,
-        move.locationUnverified,
-      ).stats);
       if (movedSnapshot) {
-        const currentQuery: MessageListQuery = {
-          accountId: selectedAccount,
-          folder: selectedFolder,
-          search: debouncedQuery,
-          messageView: view,
-        };
-        const wasIncluded = matchesServerMessageQuery(selected, accounts, currentQuery);
-        const remainsIncluded = matchesServerMessageQuery(movedSnapshot, accounts, currentQuery);
-        setMessageTotal((total) => nextMessageTotalForMove(total, wasIncluded, remainsIncluded));
+        if (!optimisticSnapshot) {
+          const fallbackWasIncluded = matchesServerMessageQuery(selected, accounts, currentQuery);
+          const fallbackRemainsIncluded = matchesServerMessageQuery(movedSnapshot, accounts, currentQuery);
+          setMessageTotal((total) => nextMessageTotalForMove(total, fallbackWasIncluded, fallbackRemainsIncluded));
+        }
         if (!isDemo && target === "archive" && move.refreshPending) {
           replacePendingArchiveMoves([
             ...pendingArchiveMovesRef.current.filter((pending) => pending.id !== selected.id),
-            { id: selected.id, accountId: selected.accountId, destination, snapshot: movedSnapshot },
+            { id: selected.id, accountId: selected.accountId, destination: move.destination, snapshot: movedSnapshot },
           ]);
         }
         if (!isDemo && move.refreshPending) {
@@ -1776,6 +1924,7 @@ export default function App() {
       );
       if (!isDemo && !move.refreshPending) void load({ silent: true });
     } catch (error) {
+      revert();
       showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
     } finally {
       setMessageAction(null);
@@ -1817,12 +1966,27 @@ export default function App() {
   }, []);
 
   const toggleMessageSelected = useCallback((id: string) => {
-    // Any manual toggle exits a predicate-wide selection back to explicit ids.
+    // Any manual toggle (Ctrl/Shift click included) enters selection mode and
+    // exits a predicate-wide selection back to explicit ids.
+    setSelectionMode(true);
     setSelectAllPaged(false);
     setSelectedMessageIds((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const selectMessageRange = useCallback((ids: string[]) => {
+    // Shift+click range: merge the whole span into the selection. Re-entering
+    // selection mode is a no-op when it is already active.
+    setSelectionMode(true);
+    setSelectAllPaged(false);
+    setSelectedMessageIds((current) => {
+      if (ids.every((id) => current.has(id))) return current;
+      const next = new Set(current);
+      for (const id of ids) next.add(id);
       return next;
     });
   }, []);
@@ -1983,6 +2147,9 @@ export default function App() {
       return;
     }
     setBatchBusy(true);
+    // The selection leaves the list and the toolbar immediately; failures are
+    // rolled back (re-inserted and re-selected) once the server responds.
+    exitSelectionMode();
     try {
       if (isDemo) {
         setMessages((items) => {
@@ -2017,40 +2184,90 @@ export default function App() {
           return next;
         });
       } else {
+        // Optimistic: drop the selection from the list immediately; whatever
+        // the server cannot move is rolled back into the list at its sorted
+        // position, re-selected, and explained in the toast.
+        const selectedSet = new Set(ids);
+        const snapshots = messagesRef.current.filter((item) => selectedSet.has(item.id));
+        const snapshotById = new Map<string, Message>(snapshots.map((item) => [item.id, item]));
+        const inViewById = new Map<string, boolean>(ids.map((id) => [id, filteredMessages.some((item) => item.id === id)]));
+        const inViewCount = ids.reduce((count, id) => count + (inViewById.get(id) ? 1 : 0), 0);
+        // Invalidate any in-flight reload so it cannot resurrect the removed
+        // rows from pre-move server state.
+        loadRequestRef.current += 1;
+        const requestAtStart = loadRequestRef.current;
+        messagesRef.current = messagesRef.current.filter((item) => !selectedSet.has(item.id));
+        setMessages(messagesRef.current);
+        if (inViewCount) setMessageTotal((total) => Math.max(0, total - inViewCount));
+
+        const rollback = (failedIds: ReadonlySet<string>) => {
+          const failed = ids
+            .filter((id) => failedIds.has(id))
+            .map((id) => snapshotById.get(id))
+            .filter((message): message is Message => Boolean(message));
+          if (failed.length) {
+            setMessages((items) => {
+              const next = mergeRolledBackMessages(items, failed, sortOrder);
+              messagesRef.current = next;
+              return next;
+            });
+          }
+          // A reload that landed mid-flight already owns the authoritative
+          // total (which still includes the failed messages); only restore
+          // the optimistic decrement when it is still the live value.
+          if (loadRequestRef.current === requestAtStart) {
+            const restoredInView = ids.reduce((count, id) => count + (failedIds.has(id) && inViewById.get(id) ? 1 : 0), 0);
+            if (restoredInView) setMessageTotal((total) => total + restoredInView);
+          }
+          if (failed.length) {
+            setSelectionMode(true);
+            setSelectedMessageIds(new Set(failedIds));
+          }
+        };
+
         // The server caps a single batch at 100 ids; split large selections
         // into chunks exactly like batchUpdateFlags so moves never fail with
-        // a 400 for size alone.
+        // a 400 for size alone. The counters live outside the try so the
+        // catch can distinguish processed chunks from unprocessed ones.
         const CHUNK_SIZE = 100;
         let updated = 0;
         let failed = 0;
-        for (let offset = 0; offset < ids.length; offset += CHUNK_SIZE) {
-          const chunk = ids.slice(offset, offset + CHUNK_SIZE);
-          const result = await api.batchMoveMessages(chunk, target);
-          updated += result.updated;
-          failed += result.failed;
-        }
-        if (updated === 0 && failed > 0) {
-          showToast(t("mail.selection.partialFailure", { done: 0, failed }), "error");
-          return;
-        }
-        setMessages((items) => {
-          const moved = new Set(ids);
-          const next = items.filter((item) => !moved.has(item.id));
-          messagesRef.current = next;
-          return next;
-        });
-        const inViewCount = ids.filter((id) => filteredMessages.some((item) => item.id === id)).length;
-        if (inViewCount) setMessageTotal((total) => Math.max(0, total - inViewCount));
-        void load({ silent: true });
-        if (failed) {
-          showToast(t("mail.selection.partialFailure", { done: updated, failed }), "error");
-          return;
+        let processed = 0;
+        const failedIds = new Set<string>();
+        const failureReasons: string[] = [];
+        try {
+          for (let offset = 0; offset < ids.length; offset += CHUNK_SIZE) {
+            const chunk = ids.slice(offset, offset + CHUNK_SIZE);
+            const result = await api.batchMoveMessages(chunk, target);
+            updated += result.updated;
+            failed += result.failed;
+            for (const failure of result.failures ?? []) {
+              failedIds.add(failure.id);
+              if (failureReasons.length < 1 && failure.message) failureReasons.push(failure.message);
+            }
+            processed += chunk.length;
+          }
+          if (failedIds.size) {
+            rollback(failedIds);
+            const detail = failureReasons[0] ? ` — ${failureReasons[0]}` : "";
+            showToast(`${t("mail.selection.partialFailure", { done: updated, failed })}${detail}`, "error");
+            return;
+          }
+          // The list already reflects the move; reload to reconcile the
+          // server-side truth (mapped UIDs, folder counts).
+          void load({ silent: true });
+        } catch (error) {
+          // A mid-stream failure leaves earlier chunks moved server-side; roll
+          // back only the unprocessed remainder plus any recorded failures,
+          // then let a reload settle the rest.
+          const unreconciled = new Set(ids.slice(processed));
+          for (const id of failedIds) unreconciled.add(id);
+          rollback(unreconciled);
+          void load({ silent: true });
+          showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
         }
       }
       showToast(t(target === "archive" ? "mail.selection.archived" : "mail.selection.trashed", { count: ids.length }));
-      // Match batchUpdateFlags UX: selection survives failures so the user can
-      // retry; it is exited only after a fully successful move.
-      exitSelectionMode();
     } catch (error) {
       showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
     } finally {
@@ -2125,6 +2342,10 @@ export default function App() {
 
   const quickMoveMessage = async (message: Message, target: "archive" | "trash") => {
     if (batchBusy || messageAction !== null || messageFlagging) return;
+    // Keep an in-flight reload from resurrecting the row from pre-move state
+    // while the optimistic apply is live.
+    if (!isDemo) loadRequestRef.current += 1;
+    const requestAtStart = loadRequestRef.current;
     setMessageAction(target);
     try {
       if (isDemo) {
@@ -2147,19 +2368,57 @@ export default function App() {
           return applyMessageMove(accounts, [msg], current, message.id, destination3).stats;
         });
       } else {
-        const result = await api.moveMessage(message.id, target);
-        if (!result.ok) {
-          showToast(t("mail.error.move"), "error");
+        const destination = demoMoveDestination(accounts, message.accountId, target);
+        // Optimistic: map the row to its destination before the provider
+        // round-trip; a failure restores the original snapshot and counts.
+        const optimisticSnapshot = destination && destination !== message.mailbox
+          ? applyMessageMove(accounts, [message], stats, message.id, destination).messages[0]
+          : undefined;
+        const optimisticAccounts = optimisticSnapshot
+          ? applyMessageMove(accounts, [message], stats, message.id, destination).accounts
+          : null;
+        const optimisticStats = optimisticSnapshot
+          ? applyMessageMove(accounts, [message], stats, message.id, destination).stats
+          : null;
+        if (optimisticSnapshot) {
+          const wasIncluded = filteredMessages.some((item) => item.id === message.id);
+          const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view });
+          if (wasIncluded !== remainsIncluded) {
+            setMessageTotal((total) => nextMessageTotalForMove(total, wasIncluded, remainsIncluded));
+          }
+          // Sync the ref synchronously (like load) so a fast failure can gate
+          // its rollback on the exact optimistic state it must reverse.
+          messagesRef.current = applyMessageMove(accounts, messagesRef.current, stats, message.id, destination).messages;
+          setMessages(messagesRef.current);
+          setAccounts((items) => applyMessageMove(items, [message], stats, message.id, destination).accounts);
+          setStats((current) => applyMessageMove(accounts, [message], current, message.id, destination).stats);
+        }
+        try {
+          const result = await api.moveMessage(message.id, target);
+          if (!result.ok) throw new Error(t("mail.error.move"));
+          void load({ silent: true });
+        } catch (error) {
+          if (optimisticSnapshot && optimisticAccounts && optimisticStats) {
+            // A reload that landed mid-flight already holds server truth (the
+            // message restored at its source); leave it alone in that case.
+            if (messagesRef.current.some((item) => item.id === message.id && item.mailbox === destination)) {
+              const restored = revertMessageMove(optimisticAccounts, messagesRef.current, optimisticStats, message, destination);
+              messagesRef.current = restored.messages;
+              setMessages(restored.messages);
+              setAccounts(restored.accounts);
+              setStats(restored.stats);
+            }
+          }
+          if (loadRequestRef.current === requestAtStart && optimisticSnapshot) {
+            const wasIncluded = filteredMessages.some((item) => item.id === message.id);
+            const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view });
+            if (wasIncluded !== remainsIncluded) {
+              setMessageTotal((total) => nextMessageTotalForMove(total, remainsIncluded, wasIncluded));
+            }
+          }
+          showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
           return;
         }
-        setMessages((items) => {
-          const next = items.filter((item) => item.id !== message.id);
-          messagesRef.current = next;
-          return next;
-        });
-        const inViewCount = filteredMessages.some((item) => item.id === message.id) ? 1 : 0;
-        if (inViewCount) setMessageTotal((total) => Math.max(0, total - inViewCount));
-        void load({ silent: true });
       }
       showToast(target === "archive" ? t("mail.action.archived") : t("mail.action.trashed"));
     } catch (error) {
@@ -2233,14 +2492,18 @@ export default function App() {
 
   const setSelectedSnoozed = async (untilIso: string) => {
     if (!selected || snoozeBusy || selectedRemoteActionsBlocked) return;
+    const previousUntil = selected.snoozedUntil ?? null;
     setSnoozeBusy(true);
     setSnoozeOpen(false);
     setSnoozeCustomUntil("");
+    // Optimistic: apply the local snooze before the provider round-trip; a
+    // failure restores the previous state and counts.
+    applyLocalSnooze(selected.id, untilIso, previousUntil);
     try {
       if (!isDemo) await api.snoozeMessage(selected.id, untilIso);
-      applyLocalSnooze(selected.id, untilIso, selected.snoozedUntil ?? null);
       showToast(t("mail.snooze.scheduled"));
     } catch (error) {
+      applyLocalSnooze(selected.id, previousUntil, untilIso);
       showToast(mailErrorToastMessage(error, t("mail.error.snooze"), t), "error");
     } finally {
       setSnoozeBusy(false);
@@ -2249,14 +2512,19 @@ export default function App() {
 
   const clearSelectedSnooze = async () => {
     if (!selected || snoozeBusy) return;
+    const previousUntil = selected.snoozedUntil ?? null;
     setSnoozeBusy(true);
     setSnoozeOpen(false);
+    // Optimistic: the row leaves the snoozed view (and the reader closes)
+    // immediately; a failure restores both.
+    if (viewRef.current === "snoozed") setSelectedId(null);
+    applyLocalSnooze(selected.id, null, previousUntil);
     try {
       if (!isDemo) await api.clearMessageSnooze(selected.id);
-      applyLocalSnooze(selected.id, null, selected.snoozedUntil ?? null);
-      if (viewRef.current === "snoozed") setSelectedId(null);
       showToast(t("mail.snooze.cleared"));
     } catch (error) {
+      applyLocalSnooze(selected.id, previousUntil, null);
+      if (viewRef.current === "snoozed") setSelectedId(selected.id);
       showToast(mailErrorToastMessage(error, t("mail.error.snooze"), t), "error");
     } finally {
       setSnoozeBusy(false);
@@ -2738,18 +3006,19 @@ export default function App() {
             <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={selectionMode ? t("mail.selection.done") : t("mail.selection.select")} className={selectionMode ? "selection-toggle active" : "selection-toggle"} onClick={toggleSelectionMode} disabled={!accounts.length}><ListChecks size={17} /></IconButton><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? openCompose() : setAddOpen(true)}><PenLine size={17} /></IconButton>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton><button ref={agentLaunchButtonRef} className="agent-launch-button" type="button" onClick={() => setAgentOpen(true)} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><img decoding="sync" className="nami-brand-logo nami-brand-logo-light" src="/nami-logo-light.png" alt="" /><img decoding="sync" className="nami-brand-logo nami-brand-logo-dark" src="/nami-logo-dark.png" alt="" /></span><span>{t("agent.launch")}</span></button></div>
           </header>
 
-          {accountsNeedingAttention.length > 0 && (
+          {healthAlert && (
             <div className="account-health-banner" role="status">
               <CircleAlert size={17} />
-              <span><strong>{t("mail.accountAttention", { count: accountsNeedingAttention.length })}</strong><small>{primaryAccountNeedingAttention && primaryAccountIssue ? t("mail.accountProblem", { email: primaryAccountNeedingAttention.email, title: primaryAccountIssue.title }) : t("mail.otherAccountsAvailable")}</small></span>
-              <button type="button" onClick={() => setAccountsOpen(true)}>{t("mail.viewReason")}</button>
+              <span><strong>{t("mail.accountAttention", { count: accountsNeedingAttention.length })}</strong><small>{primaryAccountNeedingAttention && primaryAccountIssue ? t("mail.accountProblem", { email: primaryAccountNeedingAttention.email, title: primaryAccountIssue.title }) : t("mail.otherAccountsAvailable")}</small><em className="account-health-countdown">{t("mail.accountAttentionCountdown", { seconds: Math.max(1, Math.ceil((healthAlert.until - healthTick) / 1000)) })}</em></span>
+              <button type="button" onClick={() => { setAccountsOpen(true); setHealthAlert(null); }}>{t("mail.viewReason")}</button>
+              <button type="button" className="account-health-dismiss" aria-label={t("mail.accountHealthDismiss")} onClick={() => setHealthAlert(null)}><X size={14} /></button>
             </div>
           )}
 
           {selectionMode ? (
             <div className="list-toolbar selection-toolbar">
               <button className="selection-select-all" type="button" onClick={selectAllVisibleMessages} disabled={batchBusy || !filteredMessages.length}>{selectAllPaged ? t("mail.selection.selectAllMatching", { count: currentMessageTotal }) : t("mail.selection.selectAll")}</button>
-              <span className="selection-count">{batchJob ? t("mail.selection.batchProcessing", { done: batchJob.done, total: batchJob.total || currentMessageTotal }) : t("mail.selection.count", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}</span>
+              <span className="selection-count">{batchJob ? t("mail.selection.batchProcessing", { done: batchJob.done, total: batchJob.total || currentMessageTotal }) : batchBusy ? t("mail.selection.busy") : t("mail.selection.count", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}</span>
               <div className="selection-actions">
                 <IconButton label={t("mail.action.markRead")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: true }, "mail.selection.markedRead")} disabled={batchBusy || !selectedMessageIds.size}><MailOpen size={15} /></IconButton>
                 <IconButton label={t("mail.action.markUnread")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: false }, "mail.selection.markedUnread")} disabled={batchBusy || !selectedMessageIds.size}><Mail size={15} /></IconButton>
@@ -2778,55 +3047,30 @@ export default function App() {
             </div>
           )}
 
-          <div className="message-list">
-            {loading && <div className="message-skeleton-list" role="status" aria-label={t("mail.loading")}><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div></div>}
-            {!loading && fatalError && <div className="center-state error-state"><X size={24} /><h3>{fatalError.title}</h3><p>{fatalError.message} {fatalError.guidance}</p><button className="secondary-button" onClick={() => void load()}>{t("mail.reconnect")}</button></div>}
-            {!loading && !fatalError && !accounts.length && (
-              <div className="center-state empty-state"><div className="empty-orb"><Mail size={28} /></div><h3>{t("mail.empty.firstAccountTitle")}</h3><p>{t("mail.empty.firstAccountDescription")}</p><button className="primary-button" onClick={() => setAddOpen(true)}><Plus size={17} />{t("account.add")}</button></div>
-            )}
-            {!loading && accounts.length > 0 && filteredMessages.length === 0 && (
-              <div className="center-state empty-state">
-                {emptyMessageList.canClearSearch ? <Search size={24} /> : <Mail size={24} />}
-                <h3>{emptyMessageList.title}</h3>
-                <p>{emptyMessageList.description}</p>
-                {emptyMessageList.canClearSearch && <button className="secondary-button" type="button" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}>{t("mail.clearSearch")}</button>}
-              </div>
-            )}
-            {!loading && accounts.length > 0 && filteredMessages.length > 0 && (
-              <div className="message-list-viewport" style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
-                {rowVirtualizer.getVirtualItems().map((virtualItem) => {
-                  const message = filteredMessages[virtualItem.index];
-                  const threadSize = threadById.get(message.id)?.length ?? 1;
-                  return (
-                  <div
-                    key={virtualItem.key}
-                    data-index={virtualItem.index}
-                    className="message-list-row"
-                    style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualItem.start}px)` }}
-                  >
-                    <button ref={(node) => { rowVirtualizer.measureElement(node); if (node) messageButtonRefs.current.set(message.id, node); else messageButtonRefs.current.delete(message.id); }} className={`message-item ${selectedId === message.id ? "selected" : ""} ${message.seen ? "" : "unread"} ${selectionMode ? "selection-mode" : ""} ${selectionMode && selectedMessageIds.has(message.id) ? "multi-selected" : ""} ${view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id) ? "recently-read-in-unread" : ""}`} onClick={() => { if (selectionMode) toggleMessageSelected(message.id); else void openMessage(message); }}>
-                      <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
-                      {selectionMode && <span className={`selection-checkbox ${selectedMessageIds.has(message.id) ? "checked" : ""}`} aria-hidden="true" />}
-                      <span className={`sender-avatar tone-${accountTone(message.from.address)}`}>{initials(message.from.name, message.from.address)}</span>
-                      <span className="message-copy">
-                        <span className="message-meta"><strong>{message.from.name || message.from.address}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
-                        <span className="message-subject">{message.subject}</span>
-                        <span className="message-snippet">{message.snippet}</span>
-                        <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
-                      </span>
-                      {!message.seen && <span className="unread-dot" />}
-                      <span className="row-quick-actions" onClick={(event) => event.stopPropagation()}>
-                        <span role="button" tabIndex={-1} aria-label={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} data-tooltip={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} className="row-quick-action" onClick={() => void quickToggleStar(message)}><Star size={14} fill={message.flagged ? "currentColor" : "none"} /></span>
-                        <span role="button" tabIndex={-1} aria-label={t("mail.action.archive")} data-tooltip={t("mail.action.archive")} className="row-quick-action" onClick={() => void quickMoveMessage(message, "archive")}><Archive size={14} /></span>
-                        <span role="button" tabIndex={-1} aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => void quickMoveMessage(message, "trash")}><Trash2 size={14} /></span>
-                      </span>
-                    </button>
-                  </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <MessageList
+            loading={loading}
+            fatalError={fatalError}
+            accounts={accounts}
+            messages={filteredMessages}
+            selectedId={selectedId}
+            selectionMode={selectionMode}
+            selectedMessageIds={selectedMessageIds}
+            view={view}
+            unreadViewRecentlyReadIds={unreadViewRecentlyReadIds}
+            threadById={threadById}
+            listDensity={settings.listDensity}
+            emptyMessageList={emptyMessageList}
+            messageListRef={messageListRef}
+            messageButtonRefs={messageButtonRefs}
+            onReconnect={load}
+            onAddAccount={() => setAddOpen(true)}
+            onClearSearch={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}
+            onOpenMessage={(message) => { void openMessage(message); }}
+            onToggleSelected={toggleMessageSelected}
+            onSelectRange={selectMessageRange}
+            onQuickToggleStar={(message) => { void quickToggleStar(message); }}
+            onQuickMoveMessage={(message, target) => { void quickMoveMessage(message, target); }}
+          />
         </section>
 
         <section className={`reader-column ${selected ? "has-message" : ""}`}>
@@ -2994,7 +3238,7 @@ export default function App() {
         </aside>
       </main>
 
-      {addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} onClose={() => setAddOpen(false)} onAdded={load} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
+      {addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} onClose={() => setAddOpen(false)} onAdded={handleAccountAdded} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
       {composeOpen && <ComposeModal accounts={accounts} draft={composeDraft} onClose={() => setComposeOpen(false)} onSent={(message, kind, undoDraft) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), run: () => { window.setTimeout(() => { setComposeDraft(undoDraft); setComposeOpen(true); }, 0); } }); else showToast(message, kind); }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} />}
       {settingsOpen && <Suspense fallback={null}><SettingsModal settings={settings} accounts={accounts} onClose={() => setSettingsOpen(false)} onSettingsChange={applySettings} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} onOpenAgentProviderSettings={() => { setSettingsOpen(false); setAgentProviderSettingsRequestId((requestId) => requestId + 1); setAgentOpen(true); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
       {contactsOpen && <Suspense fallback={null}><ManagementDialogs demoMode={isDemo} onClose={() => setContactsOpen(false)} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}

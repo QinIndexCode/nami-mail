@@ -207,6 +207,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
   notify_when_focused INTEGER NOT NULL DEFAULT 0 CHECK (notify_when_focused IN (0, 1)),
   notification_sound TEXT NOT NULL DEFAULT 'soft' CHECK (notification_sound IN ('system', 'soft', 'bright', 'none')),
   refresh_interval_seconds INTEGER NOT NULL DEFAULT 60 CHECK (refresh_interval_seconds IN (30, 60, 180, 300)),
+  realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1)),
   close_behavior TEXT NOT NULL DEFAULT 'ask' CHECK (close_behavior IN ('ask', 'tray', 'quit')),
   locale TEXT NOT NULL DEFAULT 'zh-CN',
   translation_configuration TEXT,
@@ -362,6 +363,12 @@ export function openDatabase(databasePath: string): DatabaseHandle {
   // Migration: add agent_tool_round_limit column for existing databases
   try {
     db.prepare("ALTER TABLE app_settings ADD COLUMN agent_tool_round_limit INTEGER NOT NULL DEFAULT 15 CHECK (agent_tool_round_limit BETWEEN 1 AND 50)").run();
+  } catch {
+    // Column already exists
+  }
+  // Migration: add realtime_push_enabled column for existing databases
+  try {
+    db.prepare("ALTER TABLE app_settings ADD COLUMN realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1))").run();
   } catch {
     // Column already exists
   }

@@ -336,3 +336,87 @@ export function applyMessageMove(
     stats: nextStats,
   };
 }
+
+/**
+ * Re-inserts messages whose optimistic move failed back into the list at their
+ * correct sorted positions, merging by id so a reload that already restored
+ * them cannot produce duplicates.
+ */
+export function mergeRolledBackMessages(
+  items: Message[],
+  incoming: readonly Message[],
+  sortOrder: "newest" | "oldest",
+): Message[] {
+  const existing = new Set(items.map((message) => message.id));
+  const additions = incoming.filter((message) => !existing.has(message.id));
+  if (!additions.length) return items;
+  const byTime = (message: Message) => new Date(message.sentAt).getTime();
+  const compare = sortOrder === "newest"
+    ? (left: Message, right: Message) => byTime(right) - byTime(left)
+    : (left: Message, right: Message) => byTime(left) - byTime(right);
+  return [...items, ...additions].sort(compare);
+}
+
+/**
+ * Reverses an optimistic single-message move after the server refused it (or
+ * the connection ended before the outcome was known). Restores the original
+ * snapshot in place of the destination copy and reverses the folder counts
+ * and unified stats the optimistic apply produced. When the optimistic state
+ * is no longer in effect (a reload already restored or dropped the message),
+ * the input is returned untouched — server truth has taken over.
+ */
+export function revertMessageMove(
+  accounts: Account[],
+  messages: Message[],
+  stats: Stats,
+  original: Message,
+  destination: string,
+): MessageMove {
+  const current = messages.find((message) => message.id === original.id);
+  if (!current || current.mailbox !== destination) return { accounts, messages, stats };
+
+  const unseenDelta = original.seen ? 0 : 1;
+  let nextAccounts = withFolderCountDeltaForAccount(accounts, original.accountId, original.mailbox, 1, unseenDelta);
+  const destinationIsAllMail = accounts
+    .find((account) => account.id === original.accountId)
+    ?.folders.some((folder) => folder.path === destination && folder.specialUse === "\\All") ?? false;
+  if (!destinationIsAllMail) {
+    nextAccounts = withFolderCountDeltaForAccount(nextAccounts, original.accountId, destination, -1, -unseenDelta);
+  }
+  const nextStats = isInboxMessage(original, accounts)
+    ? {
+      ...stats,
+      messages: nonNegative(stats.messages + 1),
+      unread: nonNegative(stats.unread + unseenDelta),
+    }
+    : stats;
+
+  return {
+    accounts: nextAccounts,
+    messages: messages.map((message) => message.id === original.id ? original : message),
+    stats: nextStats,
+  };
+}
+
+/**
+ * Refines a message whose optimistic move the server has confirmed: applies
+ * the mapped UID and any pending/location state without re-running the move's
+ * count deltas (the optimistic apply already produced those).
+ */
+export function applyMessageMoveConfirmation(
+  messages: Message[],
+  messageId: string,
+  mappedUid?: number,
+  movePending = false,
+  moveLocationUnverified = false,
+): Message[] {
+  return messages.map((message) => {
+    if (message.id !== messageId) return message;
+    return {
+      ...message,
+      uid: mappedUid ?? message.uid,
+      ...(movePending ? { movePending: true } : {}),
+      ...(moveLocationUnverified ? { moveLocationUnverified: true } : {}),
+    };
+  });
+}
