@@ -2397,7 +2397,9 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   // commands are offered. Parameterless commands send immediately; commands
   // with parameters are completed into the composer for editing. Expansion
   // itself happens on the server, which validates the controlled command set.
-  const slashMenu = useMemo(() => buildSlashMenu(composer, { streaming, dismissed: slashDismissed }), [composer, slashDismissed, streaming]);
+  // Slash commands are mail-operation scoped: only the mail-assistant mode
+  // builds the menu, plain chat ignores the leading "/".
+  const slashMenu = useMemo(() => mode === "agent" ? buildSlashMenu(composer, { streaming, dismissed: slashDismissed }) : null, [composer, slashDismissed, mode, streaming]);
   const activeSlashIndex = slashMenuActiveIndex(slashMenu, slashIndex);
   const completeSlash = useCallback((command: AgentSlashCommand, sub?: AgentSlashSubcommand) => {
     setSlashDismissed(!slashKeepsMenuOpen(command, sub));
@@ -2449,6 +2451,9 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   const currentPermissionLabel = permissionOptions.find((option) => option.level === agentAccessLevel)?.label;
   const permissionPopover = useMountedVisible(permissionOpen);
   const modelPopover = useMountedVisible(modelPickerOpen);
+  // Switching to plain chat hides the permission trigger; close the popover
+  // so it does not resurface stale-open when switching back to agent mode.
+  useEffect(() => { setPermissionOpen(false); }, [mode]);
   // The composer stays editable when there is a configured provider. Demo mode
   // ignores the server-side enabled flag so the textarea/model picker remain
   // interactive for UI demonstration, while sending stays disabled below.
@@ -2782,7 +2787,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
             <div className="agent-composer-bar">
               <div className="agent-composer-bar-left" ref={permissionRef}>
                 <button className="agent-composer-attach" type="button" onClick={() => fileInputRef.current?.click()} disabled={streaming} aria-label={t("agent.composer.attachFile")} data-tooltip={t("agent.composer.attachFile")}><Plus size={16} /></button>
-                <button className="agent-composer-attach agent-composer-slash" type="button" onClick={() => { if (composer.trim()) return; setComposer("/"); setSlashDismissed(false); window.requestAnimationFrame(() => { const el = composerRef.current; if (el) { el.focus(); el.setSelectionRange(1, 1); } }); }} disabled={streaming || composer.trim().length > 0} aria-label={t("agent.commands.open")} data-tooltip={t("agent.commands.open")}><Slash size={16} /></button>
+                {mode === "agent" && <button className="agent-composer-attach agent-composer-slash" type="button" onClick={() => { if (composer.trim()) return; setComposer("/"); setSlashDismissed(false); window.requestAnimationFrame(() => { const el = composerRef.current; if (el) { el.focus(); el.setSelectionRange(1, 1); } }); }} disabled={streaming || composer.trim().length > 0} aria-label={t("agent.commands.open")} data-tooltip={t("agent.commands.open")}><Slash size={16} /></button>}
                 {/* Permission control is mail-operation scoped, so it only
                     matters in the mail-assistant mode; plain chat hides it. */}
                 {hasConfiguredProvider && mode === "agent" && (
