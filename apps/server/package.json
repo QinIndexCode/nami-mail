@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",
-    "@fastify/static": "^10.1.2",
+    "@fastify/static": "^10.1.3",
     "@huggingface/transformers": "3.8.1",
     "@nami/agent-contracts": "file:../../packages/agent-contracts",
     "@nami/agent-core": "file:../../packages/agent-core",
