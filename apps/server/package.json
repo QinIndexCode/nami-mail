@@ -24,7 +24,7 @@
     "dotenv": "^17.2.3",
     "fastify": "^5.11.2",
     "imapflow": "^1.6.5",
-    "mailparser": "^3.9.14",
+    "mailparser": "^3.9.15",
     "nodemailer": "^9.0.5",
     "oauth4webapi": "^3.8.6",
     "zod": "^4.4.3"
