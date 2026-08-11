@@ -631,6 +631,47 @@ export default function App() {
     return () => mediaQuery.removeEventListener("change", onChange);
   }, []);
 
+  // Hover-reveal scrollbars: Chromium does not match container :hover against
+  // ::-webkit-scrollbar pseudo-elements, so the reveal class is driven from
+  // JS — hovering anywhere inside a container adds .scrollbar-reveal. Keep
+  // this selector list in sync with the Hover-reveal list in styles.css.
+  useEffect(() => {
+    const REVEAL = [
+      ".translation-terms-content", ".mail-html", ".mail-html pre", ".attachment-preview-text",
+      ".thread-strip-messages", ".modal-backdrop", ".modal-card", ".update-prompt-card",
+      ".accounts-editor-modal", ".contact-editor-modal", ".calendar-editor-modal", ".settings-modal",
+      ".settings-body", ".compose-card > form", ".compose-contact-suggestions", ".compose-template-picker",
+      ".sending-status-list", ".sending-status-floating-tooltip", ".external-guide-code",
+      ".themed-select-menu", ".agent-message-content pre", ".agent-message-content table",
+      ".agent-slash-menu", ".agent-provider-settings-scrim", ".agent-provider-list",
+      ".agent-provider-form", ".agent-provider-settings-body", ".auto-reply-list",
+      ".agent-memory-list", ".auto-reply-toast-reply",
+      ".settings-account-signature textarea", ".template-editor textarea",
+      ".agent-provider-field > textarea.agent-mcp-args-input", ".calendar-field textarea",
+    ].join(",");
+    const reveal = (el: HTMLElement) => el.classList.add("scrollbar-reveal");
+    const conceal = (el: HTMLElement) => el.classList.remove("scrollbar-reveal");
+    const onMouseOver = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const el = target.closest<HTMLElement>(REVEAL);
+      if (el) reveal(el);
+    };
+    const onMouseOut = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const el = target.closest<HTMLElement>(REVEAL);
+      const next = event.relatedTarget;
+      if (el && !(next instanceof Node && el.contains(next))) conceal(el);
+    };
+    document.addEventListener("mouseover", onMouseOver);
+    document.addEventListener("mouseout", onMouseOut);
+    return () => {
+      document.removeEventListener("mouseover", onMouseOver);
+      document.removeEventListener("mouseout", onMouseOut);
+    };
+  }, []);
+
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 820px)");
     const closeDesktopDrawer = () => {

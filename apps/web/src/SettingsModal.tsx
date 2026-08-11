@@ -388,35 +388,36 @@ export default function SettingsModal({
   const [activeNavKey, setActiveNavKey] = useState<string | null>(null);
 
   // Sidebar nav: keep the highlighted entry in sync with the section that is
-  // currently below the sticky header while the dialog scrolls.
+  // currently at the top of the scrollable content column.
   useEffect(() => {
-    const modal = settingsDialog.current;
-    if (!modal) return;
-    const sections = Array.from(modal.querySelectorAll<HTMLElement>("[data-settings-nav]"));
+    const body = settingsBody.current;
+    if (!body) return;
+    const sections = Array.from(body.querySelectorAll<HTMLElement>("[data-settings-nav]"));
     if (sections.length === 0) return;
     const onScroll = () => {
-      const marker = modal.getBoundingClientRect().top + 82;
+      const marker = body.getBoundingClientRect().top + 1;
       let active: string | null = null;
       for (const section of sections) {
-        if (section.getBoundingClientRect().top <= marker + 1) active = section.dataset.settingsNav ?? null;
+        if (section.getBoundingClientRect().top <= marker) active = section.dataset.settingsNav ?? null;
         else break;
       }
-      // At the very bottom the last section may be too tall to align under
-      // the sticky header; treat it as active so the highlight always lands
-      // on a real section.
-      if (modal.scrollTop + modal.clientHeight >= modal.scrollHeight - 2) {
+      // At the very bottom the last section may be too tall to align at the
+      // top of the content column; treat it as active so the highlight
+      // always lands on a real section.
+      if (body.scrollTop + body.clientHeight >= body.scrollHeight - 2) {
         active = sections[sections.length - 1]?.dataset.settingsNav ?? null;
       }
       setActiveNavKey(active);
     };
     onScroll();
-    modal.addEventListener("scroll", onScroll, { passive: true });
-    return () => modal.removeEventListener("scroll", onScroll);
+    body.addEventListener("scroll", onScroll, { passive: true });
+    return () => body.removeEventListener("scroll", onScroll);
   }, []);
   const [externalPairingsReload, setExternalPairingsReload] = useState(0);
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadButton = useRef<HTMLButtonElement>(null);
   const settingsDialog = useRef<HTMLElement>(null);
+  const settingsBody = useRef<HTMLDivElement>(null);
   const confirmationDialog = useRef<HTMLElement>(null);
   const backgroundAlert = useRef<HTMLElement>(null);
   const activeLocale = currentSettings.locale || locale;
@@ -1112,15 +1113,15 @@ export default function SettingsModal({
     { key: "translation", icon: KeyRound, label: t("settings.translation.title") },
   ];
   const scrollToSection = (key: string) => {
-    const modal = settingsDialog.current;
-    if (!modal) return;
-    const section = modal.querySelector<HTMLElement>(`[data-settings-nav="${key}"]`);
+    const body = settingsBody.current;
+    if (!body) return;
+    const section = body.querySelector<HTMLElement>(`[data-settings-nav="${key}"]`);
     if (!section) return;
-    // Scroll only the dialog itself. scrollIntoView would walk the whole
-    // scroll chain and nudge the outer app frame (overflow: hidden containers
-    // are programmatically scrollable), shifting the background view.
-    modal.scrollTo({
-      top: section.getBoundingClientRect().top - modal.getBoundingClientRect().top + modal.scrollTop - 82,
+    // Scroll only the content column. The header and the sidebar stay fixed
+    // (the modal itself does not scroll), so no offset is needed and nothing
+    // outside the dialog can shift.
+    body.scrollTo({
+      top: section.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop,
       behavior: "smooth",
     });
   };
@@ -1153,7 +1154,7 @@ export default function SettingsModal({
               </button>
             ))}
           </nav>
-          <div className="settings-body">
+          <div className="settings-body" ref={settingsBody}>
             {notice && <div className={`form-status ${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}>{notice.kind === "success" ? <Check size={17} /> : <X size={17} />}{notice.message}</div>}
 
             <section className="settings-section" data-settings-nav="language" aria-labelledby="language-settings">

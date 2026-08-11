@@ -550,6 +550,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .contact-editor-modal,
   .calendar-editor-modal,
   .settings-modal,
+  .settings-body,
   .compose-card > form,
   .compose-contact-suggestions,
   .compose-template-picker,
@@ -588,6 +589,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .contact-editor-modal,
   .calendar-editor-modal,
   .settings-modal,
+  .settings-body,
   .compose-card > form,
   .compose-contact-suggestions,
   .compose-template-picker,
@@ -626,6 +628,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .contact-editor-modal,
   .calendar-editor-modal,
   .settings-modal,
+  .settings-body,
   .compose-card > form,
   .compose-contact-suggestions,
   .compose-template-picker,
@@ -664,6 +667,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .contact-editor-modal,
   .calendar-editor-modal,
   .settings-modal,
+  .settings-body,
   .compose-card > form,
   .compose-contact-suggestions,
   .compose-template-picker,
@@ -702,6 +706,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .contact-editor-modal,
   .calendar-editor-modal,
   .settings-modal,
+  .settings-body,
   .compose-card > form,
   .compose-contact-suggestions,
   .compose-template-picker,
@@ -745,7 +750,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .mail-reader,
   .agent-conversation-list)::-webkit-scrollbar-thumb:active { background: var(--text-faint); }
 
-/* Hover-reveal surfaces: hidden at rest, fade in while hovered. */
+/* Hover-reveal surfaces: hidden at rest, shown while the container is
+   hovered. Chromium does not match container :hover against
+   ::-webkit-scrollbar pseudo-elements, so the reveal state is driven from
+   JS — hovering anywhere inside a container adds .scrollbar-reveal (see
+   App.tsx). 45% matches the always-on thumbs so transient surfaces do not
+   look thicker than primary work areas. No :hover brightening rule: the
+   browser propagates container hover to the pseudo-element anyway, which
+   made the thumb look inconsistent. */
 :is(  .translation-terms-content,
   .mail-html,
   .mail-html pre,
@@ -758,6 +770,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .contact-editor-modal,
   .calendar-editor-modal,
   .settings-modal,
+  .settings-body,
   .compose-card > form,
   .compose-contact-suggestions,
   .compose-template-picker,
@@ -778,7 +791,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .settings-account-signature textarea,
   .template-editor textarea,
   .agent-provider-field > textarea.agent-mcp-args-input,
-  .calendar-field textarea):hover::-webkit-scrollbar-thumb { background: transparent; }
+  .calendar-field textarea)::-webkit-scrollbar-thumb { background: transparent; }
 :is(  .translation-terms-content,
   .mail-html,
   .mail-html pre,
@@ -791,6 +804,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .contact-editor-modal,
   .calendar-editor-modal,
   .settings-modal,
+  .settings-body,
   .compose-card > form,
   .compose-contact-suggestions,
   .compose-template-picker,
@@ -811,7 +825,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .settings-account-signature textarea,
   .template-editor textarea,
   .agent-provider-field > textarea.agent-mcp-args-input,
-  .calendar-field textarea):hover::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--text-faint) 72%, transparent); }
+  .calendar-field textarea).scrollbar-reveal::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--text-faint) 45%, transparent); }
 :is(  .translation-terms-content,
   .mail-html,
   .mail-html pre,
@@ -824,6 +838,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .contact-editor-modal,
   .calendar-editor-modal,
   .settings-modal,
+  .settings-body,
   .compose-card > form,
   .compose-contact-suggestions,
   .compose-template-picker,
@@ -844,7 +859,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .settings-account-signature textarea,
   .template-editor textarea,
   .agent-provider-field > textarea.agent-mcp-args-input,
-  .calendar-field textarea):hover::-webkit-scrollbar-thumb:active { background: var(--text-faint); }
+  .calendar-field textarea).scrollbar-reveal::-webkit-scrollbar-thumb:active { background: var(--text-faint); }
 
 /* Firefox: thin scrollbar (no arrows of its own) for the same registry. */
 @supports (-moz-appearance: none) {
@@ -865,6 +880,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
     .contact-editor-modal,
     .calendar-editor-modal,
     .settings-modal,
+    .settings-body,
     .compose-card > form,
     .compose-contact-suggestions,
     .compose-template-picker,
@@ -1251,7 +1267,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .truncated-tooltip[data-tooltip] > span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .settings-backdrop { z-index: 45; padding: 24px; background: var(--scrim-settings); }
-.settings-modal { width: min(860px, 100%); max-height: min(890px, calc(100vh - 40px)); padding: 0; border-radius: 14px; }
+.settings-modal { display: flex; flex-direction: column; overflow: hidden; width: min(860px, 100%); max-height: min(890px, calc(100vh - 40px)); padding: 0; border-radius: 14px; }
 .confirmation-backdrop { z-index: 60; padding: 24px; background: var(--scrim-nested); }
 .confirmation-card { width: min(390px, 100%); padding: 22px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--panel-solid); box-shadow: var(--shadow); animation: modal-in .2s cubic-bezier(.2,.8,.2,1) both; }
 .confirmation-card h3 { margin: 5px 0 8px; font-size: 17px; font-weight: 650; }
@@ -1265,11 +1281,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .settings-alert-card p { margin: 0; color: var(--text-soft); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .settings-alert-actions { display: flex; justify-content: flex-end; margin-top: 21px; }
 .settings-heading { position: sticky; z-index: 2; top: 0; padding: 21px 24px 18px; border-bottom: 1px solid var(--line); background: var(--panel-solid); box-shadow: 0 1px 0 var(--line), 0 7px 16px color-mix(in srgb, var(--panel-solid) 72%, transparent); -webkit-backdrop-filter: none; backdrop-filter: none; }
-/* SettingsModal 左侧目录：sticky 固定在 sticky 标题下方，右侧内容区独立滚动 */
-.settings-layout { display: flex; align-items: flex-start; }
+/* SettingsModal 布局：标题固定，左侧目录固定，仅右栏内容区滚动 */
+.settings-layout { display: flex; flex: 1; min-height: 0; }
 .settings-nav {
-  position: sticky; z-index: 3; top: 82px;
-  flex: none; width: 176px; padding: 18px 12px 28px 14px;
+  align-self: flex-start; flex: none; width: 176px; padding: 18px 12px 28px 14px;
   border-right: 1px solid var(--line);
 }
 .settings-nav-title { margin: 0 0 8px; padding: 0 10px; color: var(--text-faint); font-size: 10px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
@@ -1283,7 +1298,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .settings-nav-item.active { background: var(--panel-muted); color: var(--text); box-shadow: inset 0 0 0 1px var(--line-strong); }
 .settings-nav-item svg { flex: none; opacity: .75; }
 .settings-nav-item.active svg { opacity: 1; }
-.settings-body { flex: 1; min-width: 0; }
+.settings-body { flex: 1; min-width: 0; overflow-y: auto; }
 @media (max-width: 760px) { .settings-nav { display: none; } }
 .management-backdrop { z-index: 45; padding: 24px; background: var(--scrim-settings); }
 .management-dialog { width: min(860px, 100%); max-height: min(890px, calc(100vh - 40px)); padding: 0; border-radius: 14px; }
@@ -1292,7 +1307,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .management-dialog-body .settings-section-title { display: none; }
 .management-dialog-body .settings-section { border-bottom: 0; }
 .management-dialog-body .form-status { margin: 0 0 14px; }
-.settings-section { padding: 22px 24px; border-bottom: 1px solid var(--line); scroll-margin-top: 82px; }
+.settings-section { padding: 22px 24px; border-bottom: 1px solid var(--line); }
 .settings-section-title { display: flex; align-items: flex-start; gap: 9px; color: var(--text-soft); }
 .settings-section-title > svg { flex: none; margin-top: 1px; }
 .settings-section-title > div { display: flex; flex-direction: column; gap: 2px; }
@@ -1626,7 +1641,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .templates-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 14px; }
 .templates-pager .secondary-button { min-height: 30px; padding: 6px 10px; font-size: 11px; white-space: nowrap; }
 .templates-pager-status { color: var(--text-soft); font-size: 11px; font-variant-numeric: tabular-nums; }
-.settings-body > .form-status { position: sticky; z-index: 3; top: 82px; margin: 0; border-right: 0; border-left: 0; border-radius: 0; box-shadow: 0 7px 16px color-mix(in srgb, var(--panel-solid) 72%, transparent); }
+.settings-body > .form-status { position: sticky; z-index: 3; top: 0; margin: 0; border-right: 0; border-left: 0; border-radius: 0; box-shadow: 0 7px 16px color-mix(in srgb, var(--panel-solid) 72%, transparent); }
 .settings-footer { position: sticky; z-index: 2; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 15px 24px; border-top: 1px solid var(--line); background: var(--panel-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
 
 /* A shared, app-owned listbox avoids browser-specific select popups. */
