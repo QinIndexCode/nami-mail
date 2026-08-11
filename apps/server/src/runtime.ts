@@ -13,7 +13,6 @@ import { buildApp } from "./app.js";
 import { config } from "./config.js";
 import { loadOrCreateMasterKey } from "./crypto.js";
 import { openDatabase, type DatabaseHandle } from "./db.js";
-import { LocalTranslationService } from "./local-translation.js";
 import { OAuthService } from "./oauth.js";
 import { cleanupExpiredOutboundAttachments, outboundAttachmentDirectory } from "./outbound-attachments.js";
 import { getAppSettings, updateAppSettings, type AppSettings, type AppSettingsPatch } from "./settings.js";
@@ -36,9 +35,6 @@ export type ServerRuntimeOptions = {
   // Electron supplies a DPAPI-unwrapped copy directly in memory. The
   // command-line runtime intentionally keeps its file-backed development key.
   masterKey?: Buffer;
-  // Electron provides a user-data subdirectory for the local NLLB-200 model.
-  // Leaving it empty keeps local translation disabled in command-line development.
-  translationCacheDir?: string;
   /**
    * Desktop-only confirmation authority. This object is passed directly from
    * Electron main and intentionally never enters Fastify's runtime context.
@@ -305,11 +301,6 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       outboundAttachmentDirectory: outboundDirectory,
       onRefreshIntervalChanged: () => scheduler?.reschedule(),
       oauthService,
-      // A desktop cache directory enables offline NLLB-200 translation when
-      // the user has not configured an external translation endpoint.
-      ...(options.translationCacheDir
-        ? { translationService: new LocalTranslationService({ cacheDir: options.translationCacheDir }) }
-        : {}),
     };
     const fastify = await buildApp(runtimeContext, {
       localApiAccessToken: config.localApiAccessToken,
