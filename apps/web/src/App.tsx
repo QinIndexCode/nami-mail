@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type FormEvent, type RefObject } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { computePosition, flip, offset, shift } from "@floating-ui/dom";
 import DOMPurify from "dompurify";
@@ -471,6 +471,35 @@ export default function App() {
       el.removeEventListener("scroll", update);
     };
   }, [accounts.length, selectedAccount, accountsExpanded]);
+  // The folder tree animates its max-height into whatever vertical room the
+  // sidebar has left, so a short folder list never shows a scrollbar while
+  // there is free space below (only the fixed 36vh cap caused that). The
+  // measured value feeds the --folder-list-max variable used in styles.css.
+  const folderListRef = useRef<HTMLDivElement>(null);
+  const [folderListMaxHeight, setFolderListMaxHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const sidebar = sidebarRef.current;
+    const folderList = folderListRef.current;
+    const footer = sidebar?.querySelector<HTMLElement>(".sidebar-footer");
+    if (!sidebar || !folderList || !footer) return;
+    const measure = () => {
+      const sidebarRect = sidebar.getBoundingClientRect();
+      const folderTop = folderList.getBoundingClientRect().top - sidebarRect.top;
+      const paddingBottom = Number.parseFloat(getComputedStyle(sidebar).paddingBottom) || 0;
+      const available = Math.floor(sidebar.clientHeight - folderTop - footer.offsetHeight - paddingBottom);
+      setFolderListMaxHeight(Math.max(60, available));
+    };
+    measure();
+    // Layout of any sibling (nav-section collapse, account rows folding,
+    // more button appearing) moves the folder list top, so watch them all.
+    const observer = new ResizeObserver(measure);
+    for (const child of sidebar.children) observer.observe(child);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [accountsExpanded, selectedAccount, accounts.length]);
   const [selectedFolder, setSelectedFolder] = useState("");
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -3086,7 +3115,7 @@ export default function App() {
 
           <button className="compose-button" type="button" onClick={() => { setMobileSidebar(false); if (accounts.length) openCompose(); else setAddOpen(true); }}><PenLine size={18} />{t("mail.compose")}</button>
 
-          <nav className={`nav-section${selectedAccount === "all" ? "" : " collapsed"}`} aria-label={t("navigation.mailViews")}>
+          <nav className={`nav-section${selectedAccount === "all" && !accountsExpanded ? "" : " collapsed"}`} aria-label={t("navigation.mailViews")}>
             <button aria-pressed={view === "inbox" && !selectedFolder} className={view === "inbox" && !selectedFolder ? "active" : ""} onClick={() => chooseView("inbox")}><Inbox size={18} /><span>{t("mail.unifiedInbox")}</span><em className="sidebar-count" data-tooltip={t("mail.inboxCountTooltip")}>{sidebarCounts.inbox || ""}</em></button>
             <button aria-pressed={view === "unread"} className={view === "unread" ? "active" : ""} onClick={() => chooseView("unread")}><Mail size={18} /><span>{t("mail.unread")}</span><em className="sidebar-count" data-tooltip={t("mail.unreadCountTooltip")}>{sidebarCounts.unread || ""}</em></button>
             <button aria-pressed={view === "starred"} className={view === "starred" ? "active" : ""} onClick={() => chooseView("starred")}><Star size={18} /><span>{t("mail.starred")}</span></button>
@@ -3125,7 +3154,7 @@ export default function App() {
             </button>
           )}
 
-          <div className={`folder-list${!accountsExpanded && selectedAccountRecord && selectedAccountRecord.folders.length > 0 ? " show" : ""}`} aria-hidden={accountsExpanded || !(selectedAccountRecord && selectedAccountRecord.folders.length > 0)}>
+          <div className={`folder-list${!accountsExpanded && selectedAccountRecord && selectedAccountRecord.folders.length > 0 ? " show" : ""}`} ref={folderListRef} style={folderListMaxHeight != null ? ({ "--folder-list-max": `${folderListMaxHeight}px` } as CSSProperties) : undefined} aria-hidden={accountsExpanded || !(selectedAccountRecord && selectedAccountRecord.folders.length > 0)}>
             {selectedAccountRecord && selectedAccountRecord.folders.length > 0 && (
               <>
                 <span className="folder-title">{t("mail.folders")}</span>
