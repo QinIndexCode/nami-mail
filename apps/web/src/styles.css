@@ -519,7 +519,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
      thumb stays visible for position feedback.
    - Hover-reveal (dialogs, popovers, previews, resizable textareas): the
      thumb is transparent until the container is hovered — transient
-     surfaces stay clean while scrollability stays discoverable. The 10px
+     surfaces stay clean while scrollability stays discoverable. The 8px
      track keeps its space at all times, so nothing shifts on reveal.
    - Hidden (immersion): .agent-transcript keeps its scrubber-only design.
 
@@ -571,7 +571,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .settings-account-signature textarea,
   .template-editor textarea,
   .agent-provider-field > textarea.agent-mcp-args-input,
-  .calendar-field textarea)::-webkit-scrollbar { width: 10px; height: 10px; }
+  .calendar-field textarea)::-webkit-scrollbar { width: 8px; height: 8px; }
 :is(  .account-list,
   .folder-list,
   .message-list,
@@ -728,7 +728,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .template-editor textarea,
   .agent-provider-field > textarea.agent-mcp-args-input,
   .calendar-field textarea)::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
+  border: 2px solid transparent;
   border-radius: 999px;
   background-clip: padding-box;
 }
@@ -750,12 +750,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .mail-reader,
   .agent-conversation-list)::-webkit-scrollbar-thumb:active { background: var(--text-faint); }
 
-/* Hover-reveal surfaces: hidden at rest, shown while the container is
-   hovered. Chromium does not match container :hover against
-   ::-webkit-scrollbar pseudo-elements, so the reveal state is driven from
-   JS — hovering anywhere inside a container adds .scrollbar-reveal (see
-   App.tsx). 45% matches the always-on thumbs so transient surfaces do not
-   look thicker than primary work areas. No :hover brightening rule: the
+/* Hover-reveal surfaces: hidden at rest, shown while the pointer is on the
+   track band. Chromium does not match container :hover against
+   ::-webkit-scrollbar pseudo-elements, and a mouse over the track still
+   targets the container's DOM, so the reveal class is driven from JS by
+   geometry — pointer inside the container's track band adds
+   .scrollbar-reveal (see App.tsx). 45% matches the always-on thumbs so
+   transient surfaces do not look thicker than primary work areas. No
+   :hover brightening rule: the
    browser propagates container hover to the pseudo-element anyway, which
    made the thumb look inconsistent. */
 :is(  .translation-terms-content,

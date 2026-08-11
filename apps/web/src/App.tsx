@@ -631,10 +631,13 @@ export default function App() {
     return () => mediaQuery.removeEventListener("change", onChange);
   }, []);
 
-  // Hover-reveal scrollbars: Chromium does not match container :hover against
-  // ::-webkit-scrollbar pseudo-elements, so the reveal class is driven from
-  // JS — hovering anywhere inside a container adds .scrollbar-reveal. Keep
-  // this selector list in sync with the Hover-reveal list in styles.css.
+  // Hover-reveal scrollbars: Chromium matches container :hover only against
+  // the scrollbar pseudo-elements' own states, never the track underneath —
+  // and a mouse over the track still targets the container's DOM. So the
+  // reveal class is driven geometrically: while the pointer sits inside the
+  // container's track band (right/bottom edge, BAND px wide), the container
+  // gets .scrollbar-reveal. Keep the selector list in sync with the
+  // Hover-reveal list in styles.css, and BAND with the track width there.
   useEffect(() => {
     const REVEAL = [
       ".translation-terms-content", ".mail-html", ".mail-html pre", ".attachment-preview-text",
@@ -649,26 +652,27 @@ export default function App() {
       ".settings-account-signature textarea", ".template-editor textarea",
       ".agent-provider-field > textarea.agent-mcp-args-input", ".calendar-field textarea",
     ].join(",");
-    const reveal = (el: HTMLElement) => el.classList.add("scrollbar-reveal");
-    const conceal = (el: HTMLElement) => el.classList.remove("scrollbar-reveal");
-    const onMouseOver = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const el = target.closest<HTMLElement>(REVEAL);
-      if (el) reveal(el);
+    const BAND = 8; // matches the custom track width in styles.css
+    let raf = 0;
+    const onMove = (event: MouseEvent) => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const x = event.clientX;
+        const y = event.clientY;
+        for (const el of document.querySelectorAll<HTMLElement>(REVEAL)) {
+          const r = el.getBoundingClientRect();
+          const onTrack =
+            (x >= r.right - BAND && x <= r.right && y >= r.top && y <= r.bottom) ||
+            (y >= r.bottom - BAND && y <= r.bottom && x >= r.left && x <= r.right);
+          el.classList.toggle("scrollbar-reveal", onTrack);
+        }
+      });
     };
-    const onMouseOut = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const el = target.closest<HTMLElement>(REVEAL);
-      const next = event.relatedTarget;
-      if (el && !(next instanceof Node && el.contains(next))) conceal(el);
-    };
-    document.addEventListener("mouseover", onMouseOver);
-    document.addEventListener("mouseout", onMouseOut);
+    document.addEventListener("mousemove", onMove);
     return () => {
-      document.removeEventListener("mouseover", onMouseOver);
-      document.removeEventListener("mouseout", onMouseOut);
+      document.removeEventListener("mousemove", onMove);
+      if (raf) cancelAnimationFrame(raf);
     };
   }, []);
 
