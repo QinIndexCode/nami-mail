@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseHandle } from "./db.js";
-import { withAccountWriteLocks } from "./sync.js";
+import { acquireAccountWriteSlots } from "./sync.js";
 
 /**
  * Durable queue for user-initiated message write operations (moves, flag
@@ -43,6 +43,27 @@ export type OperationQueue = {
 
 const TERMINAL_ROW_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** Longest a single queued operation may hold the account write slot before
+ * it is abandoned and the slot released. A hung provider command (e.g. an
+ * IMAP MOVE that never answers, despite the 45s provider socket timeout)
+ * must not stall every later flag update and move on the same account
+ * forever. Generous by design: a normal move or flag batch finishes in
+ * seconds, so this only fires on true hangs. */
+const OPERATION_RUN_TIMEOUT_MS = 5 * 60 * 1000;
+
+function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), milliseconds);
+    // Do not keep the process alive for an abandoned run that will never
+    // settle on its own during shutdown.
+    timer.unref?.();
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 export function createOperationQueue(db: DatabaseHandle): OperationQueue {
   const runners = new Map<OperationKind, OperationRunner>();
 
@@ -73,24 +94,37 @@ export function createOperationQueue(db: DatabaseHandle): OperationQueue {
       throw new Error(`Operation kind "${row.kind}" has no registered executor.`);
     }
     const payload = JSON.parse(row.payload_json) as unknown;
+    // The slot is acquired and released here instead of through
+    // withAccountWriteLocks so a timed-out run still releases the account
+    // lock: the abandoned executor keeps running in the background, but later
+    // operations on the account are no longer stalled behind it forever.
+    const releases = await acquireAccountWriteSlots([row.account_id]);
     try {
-      const result = await withAccountWriteLocks([row.account_id], async () => {
-        // Only mark running once the account slot is held: an operation that
-        // is still waiting its turn stays 'pending' (resumable on restart).
-        markRunning.run(new Date().toISOString(), row.id);
-        return runner(payload);
-      });
+      const result = await withTimeout(
+        (async () => {
+          // Only mark running once the account slot is held: an operation that
+          // is still waiting its turn stays 'pending' (resumable on restart).
+          markRunning.run(new Date().toISOString(), row.id);
+          return runner(payload);
+        })(),
+        OPERATION_RUN_TIMEOUT_MS,
+        `Operation "${row.kind}" timed out after ${OPERATION_RUN_TIMEOUT_MS / 1000}s.`,
+      );
       const now = new Date().toISOString();
       markSettled.run("completed", null, null, now, now, row.id);
       return result as T;
     } catch (error) {
-      // The operation failed while holding the slot. Record the outcome so
-      // the row never resurrects on the next restart (only pending/running
-      // rows are resumed) and rethrow for the HTTP layer to map.
+      // The operation failed while holding the slot. Record the outcome so the
+      // row never resurrects on the next restart (only pending/running rows
+      // are resumed) and rethrow for the HTTP layer to map. Timeouts are
+      // recorded as failed too, so a hung operation is not resumed after a
+      // restart; any half-applied provider effect is reconciled by sync.
       const message = error instanceof Error ? error.message : String(error);
       const now = new Date().toISOString();
       markSettled.run("failed", null, message, now, now, row.id);
       throw error;
+    } finally {
+      for (const release of releases.reverse()) release();
     }
   }
 
