@@ -448,6 +448,29 @@ export default function App() {
   const translationTermsPendingRef = useRef<"free" | "llm" | null>(null);
   const [view, setView] = useState<MailView>("inbox");
   const [selectedAccount, setSelectedAccount] = useState("all");
+  // The bottom fade strip one-tap expands every account row (and hides the
+  // folder list) so accounts that were folded or overflow the viewport can
+  // still be reached; collapsing restores the previous mode.
+  const [accountsExpanded, setAccountsExpanded] = useState(false);
+  const accountListRef = useRef<HTMLDivElement>(null);
+  const [accountListOverflow, setAccountListOverflow] = useState(false);
+  const [accountListAtBottom, setAccountListAtBottom] = useState(true);
+  useEffect(() => {
+    const el = accountListRef.current;
+    if (!el) return;
+    const update = () => {
+      setAccountListOverflow(el.scrollHeight > el.clientHeight + 1);
+      setAccountListAtBottom(el.scrollTop + el.clientHeight >= el.scrollHeight - 1);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    el.addEventListener("scroll", update, { passive: true });
+    return () => {
+      observer.disconnect();
+      el.removeEventListener("scroll", update);
+    };
+  }, [accounts.length, selectedAccount, accountsExpanded]);
   const [selectedFolder, setSelectedFolder] = useState("");
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -3074,26 +3097,35 @@ export default function App() {
           </nav>
 
           <div className="accounts-heading"><span>{t("mail.accounts")}</span><IconButton label={t("account.add")} onClick={() => { setMobileSidebar(false); setAddOpen(true); }}><Plus size={16} /></IconButton></div>
-          <div className="account-list">
-            <button aria-pressed={selectedAccount === "all"} className={selectedAccount === "all" ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount("all"); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}><span className="account-avatar all"><Layers3 size={14} /></span><span className="account-copy"><strong>{t("mail.allAccounts")}</strong><small>{t("mail.accountCount", { count: accounts.length })}</small></span></button>
+          <div className="account-list" ref={accountListRef}>
+            <button aria-pressed={selectedAccount === "all"} className={selectedAccount === "all" ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount("all"); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}><span className="account-avatar all"><Layers3 size={14} /></span><span className="account-copy"><strong>{t("mail.allAccounts")}</strong><small>{t("mail.accountCount", { count: accounts.length })}</small></span></button>
             {accounts.map((account) => {
               const issue = accountIssues.get(account.id);
               const providerName = localizedProviderName(account);
               const freshness = formatSyncFreshness(account.lastSyncedAt, t);
               // With a single account selected, the other account rows fold
               // away so the folder list gets the room; "all accounts" stays.
-              const collapsed = selectedAccount !== "all" && selectedAccount !== account.id;
+              // Expanded mode shows every row again for one-tap switching.
+              const collapsed = !accountsExpanded && selectedAccount !== "all" && selectedAccount !== account.id;
               return (
-                <button key={account.id} aria-pressed={selectedAccount === account.id} aria-hidden={collapsed} tabIndex={collapsed ? -1 : undefined} className={`${selectedAccount === account.id ? "active" : ""}${collapsed ? " hidden" : ""}`} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}>
+                <button key={account.id} aria-pressed={selectedAccount === account.id} aria-hidden={collapsed} tabIndex={collapsed ? -1 : undefined} className={`${selectedAccount === account.id ? "active" : ""}${collapsed ? " hidden" : ""}`} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}>
                   <span className={`account-avatar tone-${accountTone(account.email)}`}>{account.email[0]?.toUpperCase()}</span>
                   <span className="account-copy"><strong>{account.email.split("@")[0]}</strong><small>{issue?.title ?? t("mail.accountFreshness", { provider: providerName, freshness })}</small></span>
                   <span className={`status-dot ${issue ? "error" : account.status}`} aria-hidden="true" />
                 </button>
               );
             })}
+            {!accountsExpanded && selectedAccount === "all" && accountListOverflow && !accountListAtBottom && <div className="account-list-fade" aria-hidden="true" />}
           </div>
 
-          <div className={`folder-list${selectedAccountRecord && selectedAccountRecord.folders.length > 0 ? " show" : ""}`} aria-hidden={!(selectedAccountRecord && selectedAccountRecord.folders.length > 0)}>
+          {(accountsExpanded || selectedAccount !== "all" || accountListOverflow) && (
+            <button type="button" className={`account-list-more${accountsExpanded ? " expanded" : ""}`} aria-expanded={accountsExpanded} aria-label={accountsExpanded ? t("mail.collapseAccounts") : t("mail.expandAccounts")} onClick={() => setAccountsExpanded(!accountsExpanded)}>
+              <ChevronDown size={16} />
+              {accountsExpanded && <span>{t("mail.collapseAccounts")}</span>}
+            </button>
+          )}
+
+          <div className={`folder-list${!accountsExpanded && selectedAccountRecord && selectedAccountRecord.folders.length > 0 ? " show" : ""}`} aria-hidden={accountsExpanded || !(selectedAccountRecord && selectedAccountRecord.folders.length > 0)}>
             {selectedAccountRecord && selectedAccountRecord.folders.length > 0 && (
               <>
                 <span className="folder-title">{t("mail.folders")}</span>

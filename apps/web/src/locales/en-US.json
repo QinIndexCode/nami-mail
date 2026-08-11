@@ -1776,6 +1776,8 @@
     "settings.agent.autoReplyToolsDesc": "Review pending replies, unanswered mail, or manage Agent memory.",
     "settings.agent.autoReplyToolsPending": "Pending",
     "settings.agent.autoReplyToolsDeclined": "Unanswered",
-    "settings.agent.autoReplyToolsMemory": "Memory"
+    "settings.agent.autoReplyToolsMemory": "Memory",
+    "mail.expandAccounts": "Show all accounts",
+    "mail.collapseAccounts": "Collapse account list"
   }
 }

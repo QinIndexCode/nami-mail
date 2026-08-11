@@ -146,7 +146,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .nav-section button span, .folder-list button span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .nav-section em, .folder-list em { min-width: 18px; color: var(--text-faint); font-size: 10px; font-style: normal; text-align: right; }
 .accounts-heading { display: flex; align-items: center; justify-content: space-between; margin: 22px 5px 7px 9px; color: var(--text-faint); font-family: "DM Mono", monospace; font-size: 10px; letter-spacing: 0; text-transform: uppercase; }
-.account-list { display: flex; flex: 0 1 auto; flex-direction: column; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 1px 0; }
+.account-list { position: relative; display: flex; flex: 0 1 auto; flex-direction: column; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 1px 0; }
 .account-list > button { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 48px; max-height: 62px; margin-top: 2px; overflow: hidden; padding: 7px 8px; border: 0; border-radius: 10px; background: transparent; color: var(--text-soft); cursor: pointer; text-align: left; transition: background .16s ease, color .16s ease, box-shadow .16s ease, min-height .32s ease, max-height .32s ease, margin .32s ease, padding .32s ease, opacity .32s ease, visibility 0s; }
 .account-list > button:hover { background: var(--hover); color: var(--text); }
 .account-list > button.active { background: var(--selected); color: var(--text); font-weight: 600; }
@@ -155,6 +155,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
    the collapse animates height/margin/padding and hides last (.32s
    visibility delay) while the selected row stays put. */
 .account-list > button.hidden { min-height: 0; max-height: 0; margin-top: 0; padding-top: 0; padding-bottom: 0; opacity: 0; visibility: hidden; pointer-events: none; transition: min-height .32s ease, max-height .32s ease, margin .32s ease, padding .32s ease, opacity .32s ease, visibility 0s linear .32s; }
+/* The fade strip sits over the list bottom while more accounts are still
+   out of view; the more button below it expands every account row. */
+.account-list-fade { position: absolute; left: 0; right: 0; bottom: 0; height: 34px; background: linear-gradient(to bottom, transparent, var(--panel-muted)); pointer-events: none; opacity: 1; transition: opacity .2s ease; border-radius: 0 0 10px 10px; }
+.account-list-more { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 30px; margin-top: 2px; border: 0; border-radius: 9px; background: transparent; color: var(--text-faint); cursor: pointer; font-family: inherit; font-size: 11px; font-weight: 650; transition: background .16s ease, color .16s ease; }
+.account-list-more:hover { background: var(--hover); color: var(--text); }
+.account-list-more svg { flex: none; transition: transform .32s ease; }
+.account-list-more:hover svg { transform: translateY(1px); }
+.account-list-more.expanded svg { transform: rotate(180deg); }
+.account-list-more.expanded:hover svg { transform: rotate(180deg) translateY(-1px); }
 .account-avatar, .sender-avatar { flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--selected); color: var(--text); font-size: 10px; font-weight: 700; }
 .account-avatar { width: 29px; height: 29px; }
 .account-avatar.all { background: var(--text); color: var(--panel-solid); }
