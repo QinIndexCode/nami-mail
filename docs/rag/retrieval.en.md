@@ -8,7 +8,7 @@ A retrieval request needs a verified caller, account scope, and current account 
 
 ## Current retrieval
 
-The current runtime uses lexical term scoring and structured scope filters, and enables hybrid retrieval when the default model provider can serve embeddings. It verifies account scope, current generation, message restrictions, and page state before scoring active decrypted pages held in memory; when semantic retrieval is enabled, pages and the query are both embedded through the user-configured default provider endpoint, and lexical and semantic candidates are merged with reciprocal-rank fusion (RRF) before citations are revalidated. Persistent pages remain encrypted; both the lexical index and the semantic index are in-memory structures rebuildable from pages and source events.
+The current runtime uses lexical term scoring and structured scope filters, and enables hybrid retrieval when the default model provider can serve embeddings. It verifies account scope, current generation, message restrictions, and page state, then generates lexical candidates from the persisted SQLite inverted index (`agent_rag_index`) by fetching postings per query term and scoring them with BM25, decrypting payloads only for the top candidate pool; when semantic retrieval is enabled, pages and the query are both embedded through the user-configured default provider endpoint, and lexical and semantic candidates are merged with reciprocal-rank fusion (RRF) before citations are revalidated. Persistent pages remain encrypted; the lexical index is a SQLite inverted table inside the Agent store (tokens and tf counts only), while the semantic index is an in-memory structure, and both are rebuildable from pages and source events.
 
 Suggested flow:
 
@@ -35,6 +35,6 @@ Privacy boundary:
 
 ## Performance and degradation
 
-Queries have time, memory, and candidate budgets. Missing memory indexes, unavailable providers, unready pages, or deleting accounts return an explainable state rather than partial scope-escaping results. Do not improve cold start by persisting plaintext caches.
+Queries have time, memory, and candidate budgets. Missing or corrupted inverted indexes, unavailable providers, unready pages, or deleting accounts return an explainable state rather than partial scope-escaping results. Do not improve cold start by persisting plaintext caches; persisting the lexical index does not change this boundary — the index table holds derived tokens only, and message text remains confined to encrypted pages and memory.
 
 See [Consistency](consistency.en.md) and [Security](../agent/security.en.md).

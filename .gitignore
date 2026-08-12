@@ -1,4 +1,5 @@
 node_modules/
+.mimosa/
 apps/server/.native/
 dist/
 .env
