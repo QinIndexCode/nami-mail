@@ -15,12 +15,12 @@ flowchart LR
   Worker --> Clean["清洗"]
   Clean --> Chunk["确定性分块"]
   Chunk --> Pages["加密 RAG 页面"]
-  Pages --> Memory["内存词法索引"]
+  Pages --> Lexical["SQLite 倒排索引"]
   Pages --> Semantic["内存语义索引"]
   Embed["默认 Provider 嵌入端点"] -.-> Semantic
-  Query["授权查询"] --> Memory
+  Query["授权查询"] --> Lexical
   Query --> Semantic
-  Memory --> Cite["来源引用"]
+  Lexical --> Cite["来源引用"]
   Semantic --> Cite
 ```
 
@@ -29,7 +29,7 @@ flowchart LR
 | 邮件主数据 | 既有邮件 SQLite | 仍由 IMAP/邮件服务拥有 |
 | 来源事件 | Agent SQLite Outbox | 与本地邮件状态在同一事务入队 |
 | RAG 页面 | 每账号 DEK 加密 | 可由来源事件重建 |
-| 词法索引 | 仅内存 | 不存储为第二个明文或独立向量库 |
+| 词法索引 | SQLite 倒排表（Agent store 内，`agent_rag_index`/`agent_rag_index_stats`） | 只存派生 token 与 tf 计数，无正文明文；可由加密页面增量重建 |
 | 语义索引 | 仅内存 | 向量不落盘；仅由用户配置的默认 Provider 嵌入端点填充 |
 | 引用 | 结构化元数据/必要片段 | 回链到受授权的邮件或页面 |
 
@@ -39,7 +39,7 @@ flowchart LR
 
 ## 当前实现与验证边界
 
-清洗、分块、加密页面存储、来源事件、代际生命周期、引用、词法检索与可选语义检索已有可单测实现。语义检索由默认模型 Provider 的嵌入端点驱动（`openai-compatible`/`ollama` 类型；云端端点需显式授权云端邮件内容），向量仅存进程内。当前常规 server/runtime 还会启动 `AgentService` 及其 RAG 工作者，并由既有同步/邮件状态路径写入消息来源事件；嵌入式 GUI 查询路径会使用这些检索结果。当前没有附件正文摄取。该接线存在于当前源码，但尚不是发布级用户功能证明：同一版本仍必须完成打包桌面版、真实账户/Provider、删除与重建生命周期和安全确认流验证。
+清洗、分块、加密页面存储、来源事件、代际生命周期、引用、词法检索与可选语义检索已有可单测实现。词法索引持久化为 Agent store 的 SQLite 倒排表（`agent_rag_index`/`agent_rag_index_stats`），只存分词 token 与 tf 计数、不落正文明文；查询按词取 postings 后用 BM25 打分，仅对 top 候选池解密 payload，重启后 warm 只增量补齐缺失页、不再整账户全量解密。语义检索由默认模型 Provider 的嵌入端点驱动（`openai-compatible`/`ollama` 类型；云端端点需显式授权云端邮件内容），向量仅存进程内。当前常规 server/runtime 还会启动 `AgentService` 及其 RAG 工作者，并由既有同步/邮件状态路径写入消息来源事件；嵌入式 GUI 查询路径会使用这些检索结果。当前没有附件正文摄取。该接线存在于当前源码，但尚不是发布级用户功能证明：同一版本仍必须完成打包桌面版、真实账户/Provider、删除与重建生命周期和安全确认流验证。
 
 ## 非目标
 

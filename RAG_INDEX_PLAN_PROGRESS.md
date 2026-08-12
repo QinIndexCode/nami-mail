@@ -1,6 +1,6 @@
 # RAG 词法索引持久化（B-1.1）实施计划与进度
 
-> 交接文档（供更换编码 Agent 后续推进）。创建：2026-08-09
+> 交接文档（供更换编码 Agent 后续推进）。创建：2026-08-09，最后更新：2026-08-12（B-1.1 全部完成，S6 文档同步已收尾）
 > 项目根：`d:\MyCode\nami-workspace\nami-mail-agent`（pnpm workspace）
 > 前置文档：`docs/development/agent-improvement.plan.zh-CN.md`（Phase B-1.1）、`docs/rag/*`
 
@@ -108,14 +108,14 @@ CREATE TABLE IF NOT EXISTS agent_rag_index_stats (
 
 ## 4. 实施步骤（顺序执行，每步可独立验证）
 
-| 步 | 内容 | 验证 |
-|---|---|---|
-| S1 | schema v5：两表 + 版本号 + 迁移 + shape 断言 + `agentTableNames` | `agent-store.test.ts` 迁移用例更新（现有断言版本 4 的同步改 5），新表幂等用例 |
-| S2 | 新增 `apps/server/src/agent/rag-index.ts`：`SqliteRagIndex`（写：replacePage/removePage/removeGeneration/onPurge；读：postingsFor/accountStats）+ 纯函数 `bm25Score`/`aggregatePageTf` | 新单测 `tests/rag-index.test.ts`（tf 聚合、BM25 排序、stats 维护） |
-| S3 | worker 写入路径接线：upsert/remove/tombstone/lifecycle/purge 全删改 + 增量 warmAccount | `agent-rag-backfill/verify/semantic` 现有用例全过 |
-| S4 | 查询路径改造：SQL BM25 候选 + top 解密 + hybrid 修正 + 移除内存 Map 查询依赖 | `agent-service-rag`、`agent-retrieval-citations`、`agent-rag-semantic` 全过 |
-| S5 | verify() 改造 + 重启持久化回归测试（同 db 双 worker 实例，第二次零全量解密搜索） | 新增 `tests/rag-persistence.test.ts` |
-| S6 | 全量回归 + 基准 + 文档（docs/rag/architecture 双语同步："process-local index" → 持久化倒排表说明；`agent-improvement.plan` 状态更新） | 见 §6 |
+| 步 | 内容 | 验证 | 状态 |
+|---|---|---|---|
+| S1 | schema v5：两表 + 版本号 + 迁移 + shape 断言 + `agentTableNames` | `agent-store.test.ts` 迁移用例更新（现有断言版本 4 的同步改 5），新表幂等用例 | ✅ 完成 |
+| S2 | 新增 `apps/server/src/agent/rag-index.ts`：`SqliteRagIndex`（写：replacePage/removePage/removeGeneration/onPurge；读：postingsFor/accountStats）+ 纯函数 `bm25Score`/`aggregatePageTf` | 新单测 `tests/rag-index.test.ts`（tf 聚合、BM25 排序、stats 维护） | ✅ 完成（10/10 通过） |
+| S3 | worker 写入路径接线：upsert/remove/tombstone/lifecycle/purge 全删改 + 增量 warmAccount | `agent-rag-backfill/verify/semantic` 现有用例全过 | ✅ 完成 |
+| S4 | 查询路径改造：SQL BM25 候选 + top 解密 + hybrid 修正 + 移除内存 Map 查询依赖 | `agent-service-rag`、`agent-retrieval-citations`、`agent-rag-semantic` 全过 | ✅ 完成 |
+| S5 | verify() 改造 + 重启持久化回归测试（同 db 双 worker 实例，第二次零全量解密搜索） | 新增 `tests/rag-persistence.test.ts` | ✅ 完成（6/6 通过） |
+| S6 | 全量回归 + 基准 + 文档（docs/rag/architecture 双语同步："process-local index" → 持久化倒排表说明；`agent-improvement.plan` 状态更新） | 见 §6 | ✅ 完成（2026-08-12） |
 
 ---
 
