@@ -19,7 +19,7 @@ import {
   type AccountCredentialIdentity,
 } from "./account-credentials.js";
 import { downloadMessageAttachment } from "./attachments.js";
-import { emitAccountSynced } from "./events.js";
+import { emitAccountSynced, emitSettingsChanged } from "./events.js";
 import { config } from "./config.js";
 import { discardDraft, saveDraft } from "./drafts.js";
 import { friendlyMailError, mailErrorHttpStatus, safeMailError, sendMail, testAccountConnection } from "./mail.js";
@@ -75,9 +75,29 @@ import {
 import { detectProvider, loginUsername, providerPresets, resolveProvider, type DetectedProvider, type ProviderPreset } from "./providers.js";
 import { OAuthError, isSupportedOAuthProvider } from "./oauth.js";
 import { normalizeLocale, oauthCallbackCopy, supportedLocale } from "./localization.js";
-import { BuiltinTranslationService } from "./builtin-translation.js";
-import { TranslationConfigurationStore, type TranslationConfigurationPatch } from "./translation-configuration.js";
+import { BuiltinTranslationChain } from "./builtin-translation.js";
+import { TranslationConfigurationStore, type TranslationConfigurationPatch, type TranslationConfigurationSummary } from "./translation-configuration.js";
+
+/**
+ * Builds the effective translation service from the current configuration:
+ * - a custom endpoint exists -> chain routes custom + built-in engines by the
+ *   user's primary/backup selection
+ * - no custom endpoint -> chain over the built-in Google/MyMemory engines
+ * Falls back to Google -> MyMemory when nothing is configured.
+ */
+function buildTranslationService(summary: TranslationConfigurationSummary): TranslationServiceLike {
+  const customOptions = summary.endpoint.trim()
+    ? { endpoint: summary.endpoint, timeoutMs: summary.timeoutMs }
+    : undefined;
+  // A "custom" selection without a configured endpoint is not meaningful; the
+  // chain falls back to the built-in Google engine for that slot.
+  const primary = summary.primary === "custom" && !customOptions ? "google" : summary.primary;
+  const backup = summary.backup === "custom" && !customOptions ? "mymemory" : summary.backup;
+  return new BuiltinTranslationChain(primary, backup, customOptions);
+}
 import { MAX_TRANSLATION_TEXT_LENGTH, TranslationService, TranslationServiceError, splitTranslationChunks, translationErrorStatus, translationLanguageForLocale } from "./translation.js";
+import { protectTranslationUrls, restoreTranslationUrls } from "./translation-url-guard.js";
+import { buildTranslationBlocks, splitTranslatedBlock } from "./translation-segments.js";
 import {
   batchMoveMessages,
   moveMessage,
@@ -117,6 +137,7 @@ import {
   createTemplate,
   deleteTemplate,
   listTemplates,
+  seedBuiltinTemplates,
   templateCreateSchema,
   templateUpdateSchema,
   updateTemplate,
@@ -142,7 +163,7 @@ import {
   type AppSettings,
   type AppSettingsPatch,
 } from "./settings.js";
-import { publicAccount, type AccountRecord, type RuntimeContext } from "./types.js";
+import { publicAccount, type AccountRecord, type RuntimeContext, type TranslationServiceLike } from "./types.js";
 
 const credentialsSchema = z.object({
   email: z.email().transform((value) => value.trim().toLowerCase()),
@@ -303,9 +324,15 @@ const translationConfigurationPatchSchema = z.object({
   apiKey: z.string().max(2_048).optional(),
   clearApiKey: z.boolean().optional(),
   timeoutMs: z.number().int().min(1_000).max(60_000).optional(),
+  primary: z.enum(["google", "mymemory", "custom"]).optional(),
+  backup: z.enum(["google", "mymemory", "custom"]).optional(),
+  clearEndpoint: z.boolean().optional(),
 }).strict().refine(
   (patch) => Object.keys(patch).length > 0,
   { message: "At least one translation configuration value is required." },
+).refine(
+  (patch) => !(patch.primary === "custom" && !patch.endpoint),
+  { message: "A custom primary provider requires an endpoint." },
 );
 
 const settingsPatchSchema = z.object({
@@ -434,10 +461,18 @@ class BackgroundUploadError extends Error {
 /**
  * Strips HTML tags and decodes entities to produce plain text suitable for
  * translation. Used as a fallback when a message has no textBody.
+ *
+ * Links are preserved as "text (url)" so a link-only body survives translation:
+ * the URL is picked up by protectTranslationUrls and restored verbatim, keeping
+ * the original destination clickable in the translated output.
  */
 function htmlToPlainText(html: string): string {
   return html
     .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+    .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_match, href: string, label: string) => {
+      const inner = label.replace(/<[^>]+>/g, "").trim();
+      return inner ? `${inner} (${href})` : href;
+    })
     .replace(/<(\/?)(p|div|br|h[1-6]|li|tr|hr)\b[^>]*>/gi, "\n")
     .replace(/<[^>]+>/g, "")
     .replace(/&amp;/g, "&")
@@ -977,6 +1012,8 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       lifecycle: context.agentLifecycle,
       sourceEvents: context.agentSourceEvents,
       mailApplication: ownedAgentMailApplication,
+      hasCustomBackground: (filename) => Boolean(customBackgroundPath(context, filename) && fs.existsSync(customBackgroundPath(context, filename)!)),
+      onSettingsChanged: () => emitSettingsChanged(context.serverEvents),
     })
     : undefined;
   const agentService = context.agentService ?? ownedAgentService;
@@ -999,8 +1036,12 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     timeoutMs: config.translationTimeoutMs,
   });
   const translationConfigurationManaged = !context.translationService;
-  let translationService = context.translationService ?? translationConfigurationStore.createService();
-  const builtinTranslationService = new BuiltinTranslationService();
+  // A single translate-capable service honoring the user's primary/backup
+  // provider selection. When no custom endpoint is configured it is a built-in
+  // chain (Google -> MyMemory); once the user stores a custom endpoint or
+  // chooses a built-in provider explicitly, the chain routes accordingly.
+  let translationService: TranslationServiceLike =
+    context.translationService ?? buildTranslationService(translationConfigurationStore.summary());
   const translationAbortController = new AbortController();
   const abortTranslationsForShutdown = () => translationAbortController.abort();
   const externalTranslationAbortSignal = options.translationAbortSignal;
@@ -1283,6 +1324,23 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
+  // Mark a conversation message as revoked (or restore it). Idempotent: the
+  // server stores the latest intent per message and filters revoked turns out
+  // of the model context, so the client can optimistically update the UI and
+  // reconcile here without conflict.
+  app.post<{ Params: { id: string }; Body: { messageId?: unknown; revoked?: unknown } }>("/api/agent/conversations/:id/messages/revoke", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const { messageId, revoked } = request.body ?? {};
+    if (typeof messageId !== "string" || !messageId) return reply.code(400).send({ ok: false, code: "invalid_argument", message: "缺少消息 ID。" });
+    if (revoked !== undefined && typeof revoked !== "boolean") return reply.code(400).send({ ok: false, code: "invalid_argument", message: "revoked 必须是布尔值。" });
+    try {
+      const summary = agentService.revokeMessage(request.params.id, messageId, revoked !== false);
+      return { ok: true as const, conversation: summary };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
   app.post<{ Params: { id: string } }>("/api/agent/conversations/:id/messages", async (request, reply) => {
     if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
     const parsed = agentMessageSchema.safeParse(request.body);
@@ -1517,6 +1575,9 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     if (updated.realtimePushEnabled !== current.realtimePushEnabled) {
       context.onRealtimePushChanged?.(updated.realtimePushEnabled);
     }
+    // Broadcast so every connected renderer (including the one that did NOT make
+    // this change, and the desktop host) re-fetches the fresh settings snapshot.
+    emitSettingsChanged(context.serverEvents);
     return publicSettings(context, updated);
   });
 
@@ -1820,6 +1881,10 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
     return { ok: true };
   });
+
+  // Seed the app's starter templates idempotently on every startup. Existing
+  // rows (edited or deleted by the user) are never overwritten.
+  seedBuiltinTemplates(context.db, context.masterKey);
 
   app.get("/api/templates", async (request, reply) => {
     const parsed = z.object({ q: z.string().trim().max(200).optional(), limit: z.coerce.number().int().min(1).max(1000).optional() }).strict().safeParse(request.query);
@@ -2303,7 +2368,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
     try {
       const summary = translationConfigurationStore.update(parsed.data as TranslationConfigurationPatch);
-      translationService = translationConfigurationStore.createService();
+      translationService = buildTranslationService(summary);
       return { ok: true, ...summary };
     } catch (error) {
       if (error instanceof TranslationServiceError) {
@@ -2332,7 +2397,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
     try {
       const summary = translationConfigurationStore.clear();
-      translationService = translationConfigurationStore.createService();
+      translationService = buildTranslationService(summary);
       return { ok: true, ...summary };
     } catch {
       app.log.warn("Could not remove translation configuration");
@@ -2340,6 +2405,62 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         ok: false,
         code: "translation_configuration_failed",
         message: "Translation configuration could not be removed.",
+      });
+    }
+  });
+
+  // Translates an array of plain-text segments in parallel. Used by the
+  // reader's style-preserving translation: the client extracts the visible
+  // text nodes of the sanitized HTML body, sends them here, and writes the
+  // translations back into the DOM so markup, links, and inline styles survive.
+  app.post<{ Body: { targetLocale?: unknown; segments?: unknown } }>("/api/messages/translate-segments", async (request, reply) => {
+    const body = request.body ?? {};
+    if (
+      typeof body.targetLocale !== "string" || !body.targetLocale
+      || !Array.isArray(body.segments) || body.segments.length === 0
+      || body.segments.some((segment) => typeof segment !== "string" || !segment.trim())
+    ) {
+      return reply.code(400).send({
+        ok: false,
+        code: "translation_invalid_target",
+        message: "The translation target or segments are invalid.",
+      });
+    }
+    if (body.segments.length > 1_000) {
+      return reply.code(400).send({
+        ok: false,
+        code: "translation_request_too_large",
+        message: "Too many translation segments.",
+      });
+    }
+    const effectiveService = translationService;
+    try {
+      // Merge consecutive segments into engine-safe blocks (see
+      // translation-segments.ts) so hundreds of text nodes become a handful of
+      // translation requests, staying under the free engines' rate limits.
+      const blocks = buildTranslationBlocks(body.segments);
+      const translations: string[] = new Array(body.segments.length);
+      for (const block of blocks) {
+        if (block.text.trim() === "") continue;
+        const urlGuard = protectTranslationUrls(block.text);
+        const result = await effectiveService.translate(urlGuard.text, body.targetLocale as string);
+        const translatedBlock = restoreTranslationUrls(result.translatedText, urlGuard.urls, urlGuard.text);
+        splitTranslatedBlock(translatedBlock, block.indices, translations);
+      }
+      return { ok: true as const, translations };
+    } catch (error) {
+      if (error instanceof TranslationServiceError) {
+        return reply.code(translationErrorStatus(error)).send({
+          ok: false,
+          code: error.code,
+          message: error.message,
+        });
+      }
+      app.log.warn("Segment translation failed");
+      return reply.code(500).send({
+        ok: false,
+        code: "translation_failed",
+        message: "The message text could not be translated.",
       });
     }
   });
@@ -2379,21 +2500,23 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
           ...(llmProviders.length > 0 ? { llmAvailable: true } : {}),
         });
       }
-      // Use the configured translation service when available; otherwise fall
-      // back to the built-in free translator (Google Translate + MyMemory).
-      // The built-in service is only used for user-managed configuration, not
-      // for environment-injected services that are expected to be configured.
-      const useBuiltin = translationConfigurationManaged
-        && !translationService.isConfigured();
-      const effectiveService = useBuiltin ? builtinTranslationService : translationService;
-      const chunks = splitTranslationChunks(translatableText);
+      // translationService already routes through the user's primary/backup
+      // chain (built-in Google/MyMemory when nothing is configured), so it is
+      // used directly in both single-chunk and streamed multi-chunk paths.
+      const effectiveService = translationService;
+      // Protect URLs before chunking so link-only bodies survive translation
+      // (see translation-url-guard.ts). Placeholders are single tokens, so a URL
+      // never splits across a chunk boundary.
+      const urlGuard = protectTranslationUrls(translatableText);
+      const chunks = splitTranslationChunks(urlGuard.text);
+      const restoreUrls = (value: string) => restoreTranslationUrls(value, urlGuard.urls, urlGuard.text);
       // Single-chunk translations keep the original JSON response for backward
       // compatibility. Multi-chunk translations stream partial results via SSE
       // so the reader sees incremental progress instead of waiting for the
       // whole message to finish.
       if (chunks.length <= 1) {
-        const result = await effectiveService.translate(translatableText, parsed.data.targetLocale, translationAbortController.signal);
-        return { ok: true, targetLocale: parsed.data.targetLocale, ...result };
+        const result = await effectiveService.translate(urlGuard.text, parsed.data.targetLocale, translationAbortController.signal);
+        return { ok: true, targetLocale: parsed.data.targetLocale, ...result, translatedText: restoreUrls(result.translatedText) };
       }
 
       reply.hijack();
@@ -2424,10 +2547,12 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
           if (!detectedLanguage && chunkResult.detectedLanguage) {
             detectedLanguage = chunkResult.detectedLanguage;
           }
-          send({ type: "chunk", partial: parts.join("\n"), chunkIndex: index, totalChunks: chunks.length });
+          // Restore URLs on the incremental preview so links stay clickable
+          // during streaming too.
+          send({ type: "chunk", partial: restoreUrls(parts.join("\n")), chunkIndex: index, totalChunks: chunks.length });
         }
         if (!requestAbortController.signal.aborted) {
-          send({ type: "complete", translatedText: parts.join("\n"), ...(detectedLanguage ? { detectedLanguage } : {}) });
+          send({ type: "complete", translatedText: restoreUrls(parts.join("\n")), ...(detectedLanguage ? { detectedLanguage } : {}) });
         }
       } catch (error) {
         if (requestAbortController.signal.aborted) {
@@ -2520,13 +2645,17 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
       };
       try {
+        // Protect URLs so link-only bodies survive LLM translation (placeholders
+        // are opaque tokens that stay intact as the model streams).
+        const urlGuard = protectTranslationUrls(translatableText);
+        const restoreUrls = (value: string) => restoreTranslationUrls(value, urlGuard.urls, urlGuard.text, false);
         // Stream every LLM token through SSE so the reader sees the
         // translation appear incrementally instead of waiting for the whole
         // model response to finish.
         let partial = "";
         const result = await agentService.translateWithProvider(
           parsed.data.providerId,
-          translatableText,
+          urlGuard.text,
           parsed.data.targetLocale,
           {
             ...(parsed.data.model ? { model: parsed.data.model } : {}),
@@ -2534,13 +2663,13 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
             onDelta: (delta) => {
               partial += delta;
               if (partial.trim()) {
-                try { send({ type: "chunk", partial }); } catch { /* client may have disconnected */ }
+                try { send({ type: "chunk", partial: restoreUrls(partial) }); } catch { /* client may have disconnected */ }
               }
             },
           },
         );
         if (!requestAbortController.signal.aborted) {
-          send({ type: "complete", translatedText: result.translatedText });
+          send({ type: "complete", translatedText: restoreUrls(result.translatedText) });
         }
       } catch (error) {
         if (requestAbortController.signal.aborted) {

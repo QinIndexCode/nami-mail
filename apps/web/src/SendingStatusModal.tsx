@@ -1,6 +1,5 @@
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
-import { createPortal } from "react-dom";
-import { CalendarClock, Check, CircleAlert, LoaderCircle, Mail, PenLine, RefreshCw, Send, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
+import { CalendarClock, Check, ChevronLeft, ChevronRight, CircleAlert, Eye, LoaderCircle, Mail, PenLine, RefreshCw, Send, X } from "lucide-react";
 import { mailErrorMessage, mailErrorToastMessage } from "./errorPresentation";
 import { translate, type Translate, useI18n } from "./i18n";
 import {
@@ -12,6 +11,7 @@ import {
 import type { Account, OutboundSubmission } from "./types";
 import { useDialogFocus } from "./useDialogFocus";
 import { useDismissTransition } from "./useDismissTransition";
+import { useStablePagedListHeight } from "./useStablePagedListHeight";
 
 type SendingStatusModalProps = {
   accounts: Account[];
@@ -24,13 +24,6 @@ type SendingStatusModalProps = {
   onCreateNewMessage: (draft: { accountId: string; to?: string; subject?: string }) => void;
   onCancelScheduled: (submissionId: string) => Promise<void>;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
-};
-
-type StatusIconButtonProps = {
-  label: string;
-  disabled?: boolean;
-  onClick: () => void;
-  children: ReactNode;
 };
 
 export function submissionNoticeMessage(
@@ -54,85 +47,6 @@ export function submissionNoticeMessage(
   return null;
 }
 
-/** Theme-owned tooltip keeps icon actions discoverable without native title bubbles. */
-function StatusIconButton({ label, disabled = false, onClick, children }: StatusIconButtonProps) {
-  const tooltipId = useId();
-  return (
-    <span className="app-tooltip app-tooltip-icon">
-      <button className="icon-button" type="button" aria-label={label} aria-describedby={tooltipId} onClick={onClick} disabled={disabled}>
-        {children}
-      </button>
-      <span id={tooltipId} className="app-tooltip-content" role="tooltip">{label}</span>
-    </span>
-  );
-}
-
-type TooltipPosition = {
-  left: number;
-  maxHeight: number;
-  placement: "above" | "below";
-  top: number;
-};
-
-/**
- * Sending records live in a scroll container, so their hover hints are portaled
- * to the document body instead of being cut off by that container.
- */
-function StatusValueTooltip({ text, children }: { text: string; children: ReactNode }) {
-  const tooltipId = useId();
-  const [position, setPosition] = useState<TooltipPosition | null>(null);
-
-  useEffect(() => {
-    if (!position || typeof window === "undefined") return;
-    const dismiss = () => setPosition(null);
-    window.addEventListener("resize", dismiss);
-    window.addEventListener("scroll", dismiss, true);
-    return () => {
-      window.removeEventListener("resize", dismiss);
-      window.removeEventListener("scroll", dismiss, true);
-    };
-  }, [position]);
-
-  const show = (event: ReactMouseEvent<HTMLSpanElement>) => {
-    if (
-      typeof window === "undefined"
-      || typeof window.matchMedia !== "function"
-      || !window.matchMedia("(hover: hover) and (pointer: fine)").matches
-    ) return;
-
-    const anchor = event.currentTarget.getBoundingClientRect();
-    const gutter = 16;
-    const gap = 8;
-    const availableAbove = Math.max(0, anchor.top - gutter - gap);
-    const availableBelow = Math.max(0, window.innerHeight - anchor.bottom - gutter - gap);
-    const placement = availableBelow >= 120 || availableBelow >= availableAbove ? "below" : "above";
-    const availableSpace = placement === "below" ? availableBelow : availableAbove;
-    const maxWidth = Math.min(420, Math.max(160, window.innerWidth - gutter * 2));
-    const maxLeft = Math.max(gutter, window.innerWidth - maxWidth - gutter);
-
-    setPosition({
-      left: Math.max(gutter, Math.min(anchor.left, maxLeft)),
-      maxHeight: Math.max(56, Math.min(240, availableSpace)),
-      placement,
-      top: placement === "below" ? anchor.bottom + gap : anchor.top - gap,
-    });
-  };
-
-  const tooltipStyle: CSSProperties | undefined = position
-    ? { left: position.left, maxHeight: position.maxHeight, top: position.top }
-    : undefined;
-
-  return (
-    <span className="sending-status-tooltip-trigger" onMouseEnter={show} onMouseLeave={() => setPosition(null)}>
-      {children}
-      {position && typeof document !== "undefined" && createPortal(
-        <span id={tooltipId} className="sending-status-floating-tooltip" data-placement={position.placement} role="tooltip" style={tooltipStyle}>{text}</span>,
-        document.body,
-      )}
-    </span>
-  );
-}
-
 function formatSubmissionTime(
   value: string,
   formatDate: (input: Date | number | string, options?: Intl.DateTimeFormatOptions) => string,
@@ -147,6 +61,20 @@ function formatSubmissionTime(
     minute: "2-digit",
   });
 }
+
+function statusIcon(deliveryStatus: OutboundSubmission["deliveryStatus"]): ReactNode {
+  if (deliveryStatus === "submitting") return <LoaderCircle className="spin" size={13} />;
+  if (deliveryStatus === "confirmed") return <Check size={13} />;
+  if (deliveryStatus === "failed") return <X size={13} />;
+  if (deliveryStatus === "unknown_delivery") return <CircleAlert size={13} />;
+  return <Send size={13} />;
+}
+
+const FILTER_OPTIONS = ["all", "active", "attention", "confirmed"] as const;
+type SubmissionFilter = (typeof FILTER_OPTIONS)[number];
+
+/** Matches the per-page size used by the contacts/templates management lists. */
+const SUBMISSIONS_PER_PAGE = 5;
 
 export default function SendingStatusModal({
   accounts,
@@ -165,10 +93,12 @@ export default function SendingStatusModal({
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [actionErrors, setActionErrors] = useState<Readonly<Record<string, string>>>({});
   const [confirmReplacement, setConfirmReplacement] = useState<OutboundSubmission | null>(null);
-  const [expandedSubmissionId, setExpandedSubmissionId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<"all" | "active" | "attention" | "confirmed">("all");
+  const [detailsSubmission, setDetailsSubmission] = useState<OutboundSubmission | null>(null);
+  const [filter, setFilter] = useState<SubmissionFilter>("all");
+  const [page, setPage] = useState(1);
   const dialogRef = useRef<HTMLElement>(null);
   const confirmationRef = useRef<HTMLElement>(null);
+  const detailsRef = useRef<HTMLElement>(null);
   const accountById = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const counts = useMemo(() => ({
     all: submissions.length,
@@ -182,6 +112,22 @@ export default function SendingStatusModal({
     if (filter === "attention") return submissions.filter((item) => ["unknown_delivery", "failed"].includes(item.deliveryStatus));
     return submissions.filter((item) => item.deliveryStatus === "confirmed");
   }, [filter, submissions]);
+  // Pagination mirrors the management lists (5 rows per page). The page is
+  // re-clamped whenever the filtered set shrinks (e.g. after a refresh).
+  const pageCount = Math.max(1, Math.ceil(visibleSubmissions.length / SUBMISSIONS_PER_PAGE));
+  const clampedPage = Math.min(page, pageCount);
+  const showToolbar = visibleSubmissions.length > SUBMISSIONS_PER_PAGE;
+  const pageSubmissions = useMemo(() => {
+    if (!showToolbar) return visibleSubmissions;
+    const start = (clampedPage - 1) * SUBMISSIONS_PER_PAGE;
+    return visibleSubmissions.slice(start, start + SUBMISSIONS_PER_PAGE);
+  }, [visibleSubmissions, showToolbar, clampedPage]);
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount);
+  }, [page, pageCount]);
+  // Keep the modal footprint stable: while the pager is visible every page has
+  // the same row count, so pin the list viewport and let only its content change.
+  const listScroll = useStablePagedListHeight<HTMLDivElement>(showToolbar);
 
   const runRecordAction = async (submission: OutboundSubmission, action: () => Promise<void>) => {
     if (busyIds.has(submission.id)) return;
@@ -205,21 +151,30 @@ export default function SendingStatusModal({
     }
   };
 
-  useDialogFocus(true, dialogRef, { fallbackFocusRef, suspended: Boolean(confirmReplacement) });
+  useDialogFocus(true, dialogRef, { fallbackFocusRef, suspended: Boolean(confirmReplacement) || Boolean(detailsSubmission) });
   useDialogFocus(Boolean(confirmReplacement), confirmationRef, { fallbackFocusRef: dialogRef });
+  useDialogFocus(Boolean(detailsSubmission), detailsRef, { fallbackFocusRef: dialogRef, suspended: Boolean(confirmReplacement) });
   const { closing, requestClose } = useDismissTransition(onClose);
   const { closing: confirmClosing, requestClose: requestConfirmClose, reset: resetConfirmClosing } = useDismissTransition(() => setConfirmReplacement(null));
+  const { closing: detailsClosing, requestClose: requestDetailsClose } = useDismissTransition(() => setDetailsSubmission(null));
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.stopPropagation();
-      if (confirmReplacement) requestConfirmClose();
-      else requestClose();
+      if (detailsSubmission) {
+        requestDetailsClose();
+        return;
+      }
+      if (confirmReplacement) {
+        requestConfirmClose();
+        return;
+      }
+      requestClose();
     };
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [confirmReplacement, requestClose, requestConfirmClose]);
+  }, [detailsSubmission, confirmReplacement, requestClose, requestConfirmClose, requestDetailsClose]);
 
   const refresh = async () => {
     if (loading) return;
@@ -251,138 +206,199 @@ export default function SendingStatusModal({
     onCreateNewMessage(draft);
   };
 
+  const openDetails = (submission: OutboundSubmission) => {
+    setDetailsSubmission(submission);
+  };
+
+  const closeDetails = () => {
+    requestDetailsClose();
+  };
+
   return (
     <>
       <div className={`modal-backdrop sending-status-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !confirmReplacement) requestClose();
+        if (event.target === event.currentTarget && !confirmReplacement && !detailsSubmission) requestClose();
       }}>
         <section ref={dialogRef} className={`modal-card sending-status-modal${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="sending-status-title" tabIndex={-1}>
-            <header className="modal-heading sending-status-heading">
-              <div><span className="eyebrow">{t("sending.modal.eyebrow")}</span><h2 id="sending-status-title">{t("sending.modal.title")}</h2></div>
-              <div className="sending-status-heading-actions">
-                <StatusIconButton label={t("sending.modal.refreshTooltip")} onClick={() => void refresh()} disabled={loading}>
-                  {loading ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}
-                </StatusIconButton>
-                <StatusIconButton label={t("sending.modal.closeTooltip")} onClick={requestClose}><X size={18} /></StatusIconButton>
-              </div>
-            </header>
-
-            <div className="sending-status-overview" role="tablist" aria-label={t("sending.modal.overviewLabel")}>
-              <button type="button" role="tab" aria-selected={filter === "all"} className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}><span>{t("sending.modal.all")}</span><strong>{counts.all}</strong></button>
-              <button type="button" role="tab" aria-selected={filter === "active"} className={filter === "active" ? "active" : ""} onClick={() => setFilter("active")}><span>{t("sending.modal.active")}</span><strong>{counts.active}</strong></button>
-              <button type="button" role="tab" aria-selected={filter === "attention"} className={`${filter === "attention" ? "active" : ""}${counts.attention ? " attention" : ""}`} onClick={() => setFilter("attention")}><span>{t("sending.modal.attention")}</span><strong>{counts.attention}</strong></button>
-              <button type="button" role="tab" aria-selected={filter === "confirmed"} className={filter === "confirmed" ? "active" : ""} onClick={() => setFilter("confirmed")}><span>{t("sending.modal.confirmed")}</span><strong>{counts.confirmed}</strong></button>
+          <header className="modal-heading management-heading sending-status-heading">
+            <div>
+              <span className="eyebrow">{t("sending.modal.eyebrow")}</span>
+              <h2 id="sending-status-title">{t("sending.modal.title")}</h2>
+              <p className="management-heading-description">{t("sending.modal.description")}</p>
             </div>
+            <div className="sending-status-heading-actions">
+              <button className="icon-button" type="button" aria-label={t("sending.modal.refreshTooltip")} data-tooltip={t("sending.modal.refreshTooltip")} disabled={loading} onClick={() => void refresh()}>
+                {loading ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}
+              </button>
+              <button className="icon-button" type="button" aria-label={t("sending.modal.closeTooltip")} data-tooltip={t("sending.modal.closeTooltip")} onClick={requestClose}>
+                <X size={18} />
+              </button>
+            </div>
+          </header>
 
-            {(refreshError || loadError) && <div className="form-status error sending-status-error" role="alert"><CircleAlert size={16} />{refreshError || loadError}</div>}
-
-            <div className="sending-status-list" role="list" aria-label={t("sending.modal.listLabel")} aria-live="polite" aria-busy={loading}>
-              {loading && submissions.length === 0 && (
-                <div className="skeleton-stack" aria-hidden="true">
-                  <div className="skeleton-card" />
-                  <div className="skeleton-card" />
-                  <div className="skeleton-card" />
-                </div>
-              )}
-              {!loading && visibleSubmissions.length === 0 && <div className="sending-status-empty"><Mail size={26} /><h3>{filter === "all" ? t("sending.modal.emptyTitle") : t("sending.modal.filteredEmptyTitle")}</h3><p>{filter === "all" ? t("sending.modal.emptyDescription") : t("sending.modal.filteredEmptyDescription")}</p></div>}
-              {visibleSubmissions.map((submission) => {
-                const presentation = submissionStatusPresentation(submission.deliveryStatus, t);
-                const account = accountById.get(submission.accountId);
-                const recipients = recipientSummary(submission.recipients, 3, t);
-                const fullRecipients = recipientSummary(submission.recipients, Number.MAX_SAFE_INTEGER, t) ?? t("sending.modal.recipientsMissing");
-                const title = submission.subject === undefined || submission.subject === null
-                  ? t("sending.modal.recordTitle", { id: submissionMessageIdSuffix(submission.messageId) })
-                  : submission.subject || t("sending.modal.untitled");
-                const canSync = submission.deliveryStatus === "unknown_delivery" || submission.deliveryStatus === "submitted";
-                const canCreate = submission.deliveryStatus === "unknown_delivery" || submission.deliveryStatus === "failed";
-                const isPendingScheduled = submission.deliveryStatus === "pending" && Boolean(submission.sendAt);
-                const statusMessage = submissionNoticeMessage(submission, t);
-                const isConfirmed = submission.deliveryStatus === "confirmed";
-                const detailsId = `sending-status-details-${submission.id}`;
-                const detailsExpanded = expandedSubmissionId === submission.id;
-                const recordBusy = busyIds.has(submission.id);
-                const actionError = actionErrors[submission.id];
-                return (
-                  <article className={`sending-status-item tone-${presentation.tone}${isConfirmed ? " sending-status-item-compact" : ""}`} key={submission.id} role="listitem">
-                    <div className="sending-status-item-main">
-                      <span className={`sending-status-badge tone-${presentation.tone}`}>
-                        {submission.deliveryStatus === "submitting" ? <LoaderCircle className="spin" size={13} /> : submission.deliveryStatus === "confirmed" ? <Check size={13} /> : submission.deliveryStatus === "failed" ? <X size={13} /> : submission.deliveryStatus === "unknown_delivery" ? <CircleAlert size={13} /> : <Send size={13} />}
-                        {presentation.label}
-                      </span>
-                      {isConfirmed && (
-                        <h3 className="sending-status-title">
-                          <StatusValueTooltip text={title}>
-                            <span className="sending-status-truncate">{title}</span>
-                          </StatusValueTooltip>
-                          <span className="sending-status-mobile-value">{title}</span>
-                        </h3>
-                      )}
-                      <time dateTime={submission.updatedAt}>{formatSubmissionTime(submission.updatedAt, formatDate, t)}</time>
-                    </div>
-                    {!isConfirmed && (
-                      <h3 className="sending-status-title">
-                        <StatusValueTooltip text={title}>
-                          <span className="sending-status-truncate">{title}</span>
-                        </StatusValueTooltip>
-                        <span className="sending-status-mobile-value">{title}</span>
-                      </h3>
-                    )}
-                    {!isConfirmed && recipients && (
-                      <p className="sending-status-recipients">
-                        <StatusValueTooltip text={t("sending.modal.recipientsValue", { recipients: fullRecipients })}>
-                          <span className="sending-status-truncate">{t("sending.modal.recipientsValue", { recipients })}</span>
-                        </StatusValueTooltip>
-                        <span className="sending-status-mobile-value">{t("sending.modal.recipientsValue", { recipients: fullRecipients })}</span>
-                      </p>
-                    )}
-                    {!isConfirmed && <p className="sending-status-detail">{presentation.detail}</p>}
-                    {isPendingScheduled && submission.sendAt && (
-                      <p className="sending-status-scheduled-time"><CalendarClock size={13} />{t("sending.modal.scheduledTime", { time: formatSubmissionTime(submission.sendAt, formatDate, t) })}</p>
-                    )}
-                    {statusMessage && (
-                      <p className="sending-status-message">{statusMessage}</p>
-                    )}
-                    {actionError && (
-                      <p className="sending-status-action-error" role="alert"><CircleAlert size={13} />{actionError}</p>
-                    )}
-                    {!isConfirmed && (
-                      <div className="sending-status-meta">
-                        <span>{account?.email ?? t("sending.modal.removedAccount")}</span>
-                        <StatusValueTooltip text={t("sending.modal.verifyTooltip")}>
-                          <code className="sending-status-message-id">{t("sending.modal.verifyId", { id: submissionMessageIdSuffix(submission.messageId) })}</code>
-                        </StatusValueTooltip>
-                      </div>
-                    )}
-                    <button
-                      className="sending-status-details-toggle"
-                      type="button"
-                      aria-controls={detailsId}
-                      aria-expanded={detailsExpanded}
-                      onClick={() => setExpandedSubmissionId((current) => current === submission.id ? null : submission.id)}
-                    >
-                      {detailsExpanded ? t("sending.modal.collapseDetails") : t("sending.modal.expandDetails")}
-                    </button>
-                    <section id={detailsId} className="sending-status-expanded-details" role="region" aria-label={t("sending.modal.detailsRegion", { title })} hidden={!detailsExpanded}>
-                      <dl>
-                        <div><dt>{t("sending.modal.subject")}</dt><dd>{title}</dd></div>
-                        <div><dt>{t("sending.modal.recipientsLabel")}</dt><dd>{fullRecipients}</dd></div>
-                        <div><dt>{t("sending.modal.account")}</dt><dd>{account?.email ?? t("sending.modal.removedAccount")}</dd></div>
-                        <div><dt>{t("sending.modal.messageId")}</dt><dd><code>{submission.messageId}</code></dd></div>
-                      </dl>
-                    </section>
-                    {!isConfirmed && (canSync || canCreate || isPendingScheduled) && (
-                      <div className="sending-status-actions">
-                        {canSync && <button className="secondary-button" type="button" onClick={() => void syncSent(submission)} disabled={recordBusy}>{recordBusy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}{t("sending.modal.syncSent")}</button>}
-                        {canCreate && <button className="secondary-button" type="button" onClick={() => { if (submission.deliveryStatus === "unknown_delivery") { resetConfirmClosing(); setConfirmReplacement(submission); } else onCreateNewMessage(newMessageDraftFromSubmission(submission)); }} disabled={recordBusy}><PenLine size={14} />{t("sending.modal.createRetryDraft")}</button>}
-                        {isPendingScheduled && <button className="secondary-button" type="button" onClick={() => void cancelScheduled(submission)} disabled={recordBusy}>{recordBusy ? <LoaderCircle className="spin" size={14} /> : <X size={14} />}{t("sending.modal.cancelScheduled")}</button>}
-                      </div>
-                    )}
-                  </article>
-                );
-              })}
+          <div className="sending-status-filter" role="group" aria-label={t("sending.modal.overviewLabel")}>
+            {FILTER_OPTIONS.map((value) => (
+              <button
+                key={value}
+                type="button"
+                className="source-filter-button"
+                aria-pressed={filter === value}
+                onClick={() => {
+                  setFilter(value);
+                  setPage(1);
+                }}
+              >
+                {t(`sending.modal.${value}`)}
+                <span className={`source-filter-count${value === "attention" && counts.attention ? " attention" : ""}`}>{counts[value]}</span>
+              </button>
+            ))}
           </div>
+
+          {(refreshError || loadError) && <div className="form-status error sending-status-error" role="alert"><CircleAlert size={16} />{refreshError || loadError}</div>}
+
+          <div ref={listScroll.ref} className="sending-status-list" style={listScroll.style} role="list" aria-label={t("sending.modal.listLabel")} aria-live="polite" aria-busy={loading}>
+            {loading && submissions.length === 0 && (
+              <div className="skeleton-stack" aria-hidden="true">
+                <div className="skeleton-card" />
+                <div className="skeleton-card" />
+                <div className="skeleton-card" />
+              </div>
+            )}
+            {!loading && visibleSubmissions.length === 0 && <div className="sending-status-empty"><Mail size={26} /><h3>{filter === "all" ? t("sending.modal.emptyTitle") : t("sending.modal.filteredEmptyTitle")}</h3><p>{filter === "all" ? t("sending.modal.emptyDescription") : t("sending.modal.filteredEmptyDescription")}</p></div>}
+            {pageSubmissions.map((submission) => {
+              const presentation = submissionStatusPresentation(submission.deliveryStatus, t);
+              const account = accountById.get(submission.accountId);
+              const recipients = recipientSummary(submission.recipients, 3, t);
+              const fullRecipients = recipientSummary(submission.recipients, Number.MAX_SAFE_INTEGER, t) ?? t("sending.modal.recipientsMissing");
+              const title = submission.subject === undefined || submission.subject === null
+                ? t("sending.modal.recordTitle", { id: submissionMessageIdSuffix(submission.messageId) })
+                : submission.subject || t("sending.modal.untitled");
+              const canSync = submission.deliveryStatus === "unknown_delivery" || submission.deliveryStatus === "submitted";
+              const canCreate = submission.deliveryStatus === "unknown_delivery" || submission.deliveryStatus === "failed";
+              const isPendingScheduled = submission.deliveryStatus === "pending" && Boolean(submission.sendAt);
+              const isOverdueScheduled = isPendingScheduled && submission.sendAt !== null && new Date(submission.sendAt).getTime() < Date.now();
+              const statusMessage = submissionNoticeMessage(submission, t);
+              const recordBusy = busyIds.has(submission.id);
+              const actionError = actionErrors[submission.id];
+              return (
+                <div className={`sending-status-row tone-${presentation.tone}`} key={submission.id} role="listitem">
+                  <div className="sending-status-row-main">
+                    <span className={`sending-status-dot tone-${presentation.tone}`} aria-hidden="true" />
+                    <div className="sending-status-row-copy">
+                      <strong className="sending-status-row-title">{title}</strong>
+                      {recipients && <small className="sending-status-row-recipients">{t("sending.modal.recipientsValue", { recipients })}</small>}
+                      <small className="sending-status-row-detail">{presentation.detail}</small>
+                      {isPendingScheduled && submission.sendAt && (
+                        <small className="sending-status-row-scheduled"><CalendarClock size={12} />{t("sending.modal.scheduledTime", { time: formatSubmissionTime(submission.sendAt, formatDate, t) })}</small>
+                      )}
+                      {isOverdueScheduled && (
+                        <small className="sending-status-row-overdue"><CircleAlert size={12} />{t("sending.modal.overdueScheduled")}</small>
+                      )}
+                      {statusMessage && <small className="sending-status-row-message">{statusMessage}</small>}
+                      {actionError && <small className="sending-status-row-action-error" role="alert"><CircleAlert size={12} />{actionError}</small>}
+                    </div>
+                    <time dateTime={submission.updatedAt} className="sending-status-row-time">{formatSubmissionTime(submission.updatedAt, formatDate, t)}</time>
+                    <div className="sending-status-row-actions">
+                      <button className="icon-button" type="button" aria-label={t("sending.modal.viewDetails", { title })} data-tooltip={t("sending.modal.viewDetails", { title })} onClick={() => openDetails(submission)}>
+                        <Eye size={15} />
+                      </button>
+                      {canSync && <button className="secondary-button" type="button" onClick={() => void syncSent(submission)} disabled={recordBusy}>{recordBusy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}{t("sending.modal.syncSent")}</button>}
+                      {canCreate && <button className="secondary-button" type="button" onClick={() => { if (submission.deliveryStatus === "unknown_delivery") { resetConfirmClosing(); setConfirmReplacement(submission); } else onCreateNewMessage(newMessageDraftFromSubmission(submission)); }} disabled={recordBusy}><PenLine size={14} />{t("sending.modal.createRetryDraft")}</button>}
+                      {isPendingScheduled && <button className="secondary-button" type="button" onClick={() => void cancelScheduled(submission)} disabled={recordBusy}>{recordBusy ? <LoaderCircle className="spin" size={14} /> : <X size={14} />}{t("sending.modal.cancelScheduled")}</button>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {showToolbar && (
+            <div className="sending-status-pager">
+              <button className="secondary-button" type="button" disabled={clampedPage <= 1} onClick={() => setPage(clampedPage - 1)} aria-label={t("sending.modal.pagerPrevious")}>
+                <ChevronLeft size={15} />{t("sending.modal.pagerPrevious")}
+              </button>
+              <span className="sending-status-pager-status" role="status">{t("sending.modal.pagerLabel", { page: clampedPage, total: pageCount })}</span>
+              <button className="secondary-button" type="button" disabled={clampedPage >= pageCount} onClick={() => setPage(clampedPage + 1)} aria-label={t("sending.modal.pagerNext")}>
+                {t("sending.modal.pagerNext")}<ChevronRight size={15} />
+              </button>
+            </div>
+          )}
         </section>
       </div>
+
+      {detailsSubmission && (
+        <div className={`modal-backdrop sending-status-details-backdrop${detailsClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !confirmReplacement) closeDetails();
+        }}>
+          <section ref={detailsRef} className={`sending-status-details-modal${detailsClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={t("sending.modal.detailsLabel")} aria-labelledby="sending-status-details-title" tabIndex={-1}>
+            <div className="sending-status-details">
+              <div className="sending-status-details-head">
+                <span className="contact-editor-avatar" aria-hidden="true">{statusIcon(detailsSubmission.deliveryStatus)}</span>
+                <div>
+                  <span className="eyebrow">{t("sending.modal.detailsEyebrow")}</span>
+                  <h3 id="sending-status-details-title" className="contact-editor-title">
+                    {detailsSubmission.subject === undefined || detailsSubmission.subject === null
+                      ? t("sending.modal.recordTitle", { id: submissionMessageIdSuffix(detailsSubmission.messageId) })
+                      : detailsSubmission.subject || t("sending.modal.untitled")}
+                  </h3>
+                  <small className="sending-status-details-account">{accountById.get(detailsSubmission.accountId)?.email ?? t("sending.modal.removedAccount")}</small>
+                </div>
+                <button className="icon-button" type="button" aria-label={t("sending.modal.closeTooltip")} data-tooltip={t("sending.modal.closeTooltip")} onClick={closeDetails}>
+                  <X size={18} />
+                </button>
+              </div>
+              <dl className="sending-status-details-fields">
+                {(() => {
+                  const detailsPresentation = submissionStatusPresentation(detailsSubmission.deliveryStatus, t);
+                  const detailsRecipients = recipientSummary(detailsSubmission.recipients, Number.MAX_SAFE_INTEGER, t) ?? t("sending.modal.recipientsMissing");
+                  return (
+                    <>
+                      <div><dt>{t("sending.modal.statusLabel")}</dt><dd><span className={`sending-status-badge tone-${detailsPresentation.tone}`}>{statusIcon(detailsSubmission.deliveryStatus)}{detailsPresentation.label}</span></dd></div>
+                      <div><dt>{t("sending.modal.detailLabel")}</dt><dd>{detailsPresentation.detail}</dd></div>
+                      <div><dt>{t("sending.modal.subject")}</dt><dd>{detailsSubmission.subject === undefined || detailsSubmission.subject === null ? t("sending.modal.untitled") : detailsSubmission.subject}</dd></div>
+                      <div><dt>{t("sending.modal.recipientsLabel")}</dt><dd>{detailsRecipients}</dd></div>
+                      <div><dt>{t("sending.modal.account")}</dt><dd>{accountById.get(detailsSubmission.accountId)?.email ?? t("sending.modal.removedAccount")}</dd></div>
+                      <div><dt>{t("sending.modal.messageId")}</dt><dd><code>{detailsSubmission.messageId}</code></dd></div>
+                      {detailsSubmission.sendAt && (
+                        <div><dt>{t("sending.modal.scheduledLabel")}</dt><dd><CalendarClock size={12} />{formatSubmissionTime(detailsSubmission.sendAt, formatDate, t)}</dd></div>
+                      )}
+                      {detailsSubmission.submittedAt && (
+                        <div><dt>{t("sending.modal.submittedLabel")}</dt><dd>{formatSubmissionTime(detailsSubmission.submittedAt, formatDate, t)}</dd></div>
+                      )}
+                      {detailsSubmission.confirmedAt && (
+                        <div><dt>{t("sending.modal.confirmedLabel")}</dt><dd>{formatSubmissionTime(detailsSubmission.confirmedAt, formatDate, t)}</dd></div>
+                      )}
+                      <div><dt>{t("sending.modal.updatedLabel")}</dt><dd>{formatSubmissionTime(detailsSubmission.updatedAt, formatDate, t)}</dd></div>
+                    </>
+                  );
+                })()}
+              </dl>
+              {submissionNoticeMessage(detailsSubmission, t) && (
+                <div className="sending-status-details-message" role="alert"><CircleAlert size={14} />{submissionNoticeMessage(detailsSubmission, t)}</div>
+              )}
+              {actionErrors[detailsSubmission.id] && (
+                <div className="sending-status-details-action-error" role="alert"><CircleAlert size={14} />{actionErrors[detailsSubmission.id]}</div>
+              )}
+              <div className="sending-status-details-actions">
+                <button className="secondary-button" type="button" onClick={closeDetails}>{t("sending.modal.closeDetails")}</button>
+                {(() => {
+                  const detailsCanSync = detailsSubmission.deliveryStatus === "unknown_delivery" || detailsSubmission.deliveryStatus === "submitted";
+                  const detailsCanCreate = detailsSubmission.deliveryStatus === "unknown_delivery" || detailsSubmission.deliveryStatus === "failed";
+                  const detailsPendingScheduled = detailsSubmission.deliveryStatus === "pending" && Boolean(detailsSubmission.sendAt);
+                  const detailsBusy = busyIds.has(detailsSubmission.id);
+                  return (
+                    <>
+                      {detailsCanSync && <button className="secondary-button" type="button" onClick={() => void syncSent(detailsSubmission)} disabled={detailsBusy}>{detailsBusy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}{t("sending.modal.syncSent")}</button>}
+                      {detailsCanCreate && <button className="secondary-button" type="button" onClick={() => { if (detailsSubmission.deliveryStatus === "unknown_delivery") { resetConfirmClosing(); setConfirmReplacement(detailsSubmission); } else onCreateNewMessage(newMessageDraftFromSubmission(detailsSubmission)); }} disabled={detailsBusy}><PenLine size={14} />{t("sending.modal.createRetryDraft")}</button>}
+                      {detailsPendingScheduled && <button className="secondary-button" type="button" onClick={() => void cancelScheduled(detailsSubmission)} disabled={detailsBusy}>{detailsBusy ? <LoaderCircle className="spin" size={14} /> : <X size={14} />}{t("sending.modal.cancelScheduled")}</button>}
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
 
       {confirmReplacement && (
         <div className={`modal-backdrop confirmation-backdrop sending-status-confirmation-backdrop${confirmClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => {

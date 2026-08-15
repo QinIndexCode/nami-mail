@@ -139,6 +139,9 @@ export type AgentMessage = {
   quote?: string;
   /** Locally revoked by the user (hidden behind a placeholder, never sent back to the agent). */
   revoked?: boolean;
+  /** Set when the user interrupts a still-streaming assistant reply to send a
+   *  new message; the partial content stays visible but reads as stopped. */
+  interrupted?: boolean;
 };
 
 export type AgentConversationSummary = {
@@ -195,6 +198,7 @@ export type AgentStreamEvent =
   | { type: "tool"; activity: AgentToolActivity }
   | { type: "confirmation"; confirmation: AgentConfirmation }
   | { type: "memory_suggestion"; summary: string }
+  | { type: "title"; title: string }
   | { type: "error"; error: { code: string; message: string; suggestion?: string; retryable?: boolean } }
   | { type: "completed"; reason: "stop" | "length" | "cancelled" | "error" };
 

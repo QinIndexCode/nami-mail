@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>文档 · Nami Mail</title>
+<meta name="description" content="Nami Mail 文档：安装、邮箱接入、Agent、MCP、CLI、RAG 与开发指南。" />
+<meta name="color-scheme" content="light dark" />
+<link rel="icon" href="assets/mark-dark.png" type="image/png" />
+<link rel="stylesheet" href="assets/docs.css" />
+<link rel="stylesheet" href="assets/docs-extra.css" />
+<script src="assets/vendor/marked.min.js"></script>
+</head>
+<body>
+<header class="nav" id="nav">
+  <div class="wrap nav-inner">
+    <a class="nav-brand" href="index.html"><img src="assets/mark-dark.png" alt="Nami Mail" /><span>Nami Mail</span></a>
+    <div class="nav-right">
+      <nav class="nav-links">
+        <a href="index.html#features" data-i18n="nav_features">功能</a>
+        <a href="index.html#agent" data-i18n="nav_agent">Agent</a>
+        <a href="index.html#privacy" data-i18n="nav_privacy">隐私</a>
+        <a href="docs.html" class="on" data-i18n="nav_docs">文档</a>
+        <a href="https://github.com/QinIndexCode/nami-mail" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+      <div class="lang-switch" role="group" aria-label="Language">
+        <button type="button" data-lang-btn="zh" class="active">中</button>
+        <button type="button" data-lang-btn="en">EN</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap docs">
+  <aside class="sidebar">
+    <div class="search-box">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="搜索全部文档…" />
+      <div class="search-panel" id="search-panel"></div>
+    </div>
+    <nav id="tree" aria-label="Documentation tree"></nav>
+    <div class="sidebar-foot" id="sidebar-foot"></div>
+  </aside>
+
+  <main class="article" id="article">
+    <div class="crumb" id="crumb"></div>
+    <div class="md" id="md"></div>
+    <div class="md-foot" id="md-foot"></div>
+  </main>
+
+  <aside class="ptoc" id="ptoc" aria-label="On this page"></aside>
+</div>
+
+<footer>
+  <div class="wrap foot-inner">
+    <div class="foot-brand"><img src="assets/mark-dark.png" alt="Nami Mail" /><span data-i18n="footer_copyright">© 2026 Nami Mail · MIT License</span></div>
+    <div class="foot-links">
+      <a href="index.html" data-i18n="foot_home">首页</a>
+      <a href="https://github.com/QinIndexCode/nami-mail/blob/HEAD/CHANGELOG.zh-CN.md" target="_blank" rel="noopener" data-i18n="foot_changelog">更新日志</a>
+      <a href="https://github.com/QinIndexCode/nami-mail/issues" target="_blank" rel="noopener" data-i18n="foot_issues">反馈</a>
+      <a href="https://github.com/QinIndexCode/nami-mail/blob/HEAD/docs/PRIVACY.zh-CN.md" target="_blank" rel="noopener" data-i18n="foot_privacy">隐私</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/docs.js"></script>
+</body>
+</html>

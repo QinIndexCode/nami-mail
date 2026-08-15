@@ -5,6 +5,7 @@ import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
 import { useDialogFocus } from "./useDialogFocus";
 import { useDismissTransition } from "./useDismissTransition";
+import { useStablePagedListHeight } from "./useStablePagedListHeight";
 import type { Contact, ContactInput } from "./types";
 
 export type ContactsSectionProps = {
@@ -167,6 +168,9 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
   });
 
   const controlsBusy = busy || Boolean(busyContactId);
+  // Must run before any early return so the hook count stays stable across
+  // renders (rules-of-hooks); it is inert while the pager is hidden.
+  const listScroll = useStablePagedListHeight<HTMLDivElement>(showToolbar);
 
   const toggleSelect = (contactId: string) => {
     setSelectedIds((previous) => {
@@ -389,7 +393,7 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
               <p className="settings-empty">{showToolbar ? t("settings.contacts.noSearchResults") : (contacts.length === 0 ? t("settings.contacts.empty") : t("settings.contacts.noMatches"))}</p>
             ) : (
               <>
-                <div className="contacts-list">
+                <div ref={listScroll.ref} className="contacts-list" style={listScroll.style}>
                   {pageContacts.map((contact, index) => {
                     const deleting = busyContactId === contact.id;
                     const selected = selectedIds.has(contact.id);

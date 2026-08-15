@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
 import {
   Bot,
   CalendarDays,
@@ -13,6 +13,7 @@ import {
   EyeOff,
   FileText,
   FolderSearch,
+  Globe,
   KeyRound,
   LoaderCircle,
   MessageCircle,
@@ -20,7 +21,9 @@ import {
   MoreHorizontal,
   PanelLeftClose,
   Pencil,
-  PencilLine,
+  CheckSquare,
+  ExternalLink,
+  MessageSquare,
   Plus,
   Reply,
   Search,
@@ -40,7 +43,7 @@ import {
 import { ApiError, api } from "./api";
 import { type AgentSlashCommand, type AgentSlashSubcommand } from "@nami/agent-contracts";
 import { buildSlashMenu, slashCompletionText, slashKeepsMenuOpen, slashMenuActiveIndex } from "./slashMenu";
-import { AgentMarkdown } from "./AgentMarkdown";
+import { AgentMarkdown, streamingMarkdownContent } from "./AgentMarkdown";
 import { desktopBridge } from "./desktop";
 import type {
   AgentBootstrap,
@@ -93,18 +96,11 @@ type AgentMode = "agent" | "chat";
 // never the transcript content.
 const SCRUBBER_BAR_GAP = 12;
 const SCRUBBER_EDGE_ZONE = 28;
-const SCRUBBER_MAX_SPEED = 16;
-const SCRUBBER_MIN_SPEED = 2;
+// Delay before the hovered-bar preview bubble appears, so resting on a bar
+// shows its content while quick passes across the scrubber stay quiet.
+const SCRUBBER_PREVIEW_DELAY_MS = 500;
 // Maximum blur (px) applied to bars as they approach the track edges.
 const SCRUBBER_BLUR_MAX = 1.5;
-
-// Edge-zone scroll speed eases toward the edge: the closer the cursor gets to
-// the boundary, the faster the bar group scrolls, with a small floor so the
-// motion is always perceptible once the zone is entered.
-function scrubberEdgeSpeed(distanceToEdge: number): number {
-  const factor = Math.pow(1 - Math.min(1, distanceToEdge / SCRUBBER_EDGE_ZONE), 2);
-  return Math.max(SCRUBBER_MIN_SPEED, SCRUBBER_MAX_SPEED * factor);
-}
 
 // Bars blur near the top/bottom edge of the track so the group visually
 // dissolves into the boundary instead of being clipped hard.
@@ -128,14 +124,23 @@ const CONVERSATION_PROVIDERS_KEY = "nami-agent-conversation-providers";
 // Keeps a conditionally rendered panel (e.g. the permission/model pickers)
 // mounted long enough to run its exit transition: closing sets visible=false
 // (the CSS fades/slides out) and only then unmounts the node.
-function useMountedVisible(open: boolean, duration = 160): { mounted: boolean; visible: boolean } {
+function useMountedVisible(open: boolean, duration = 240): { mounted: boolean; visible: boolean } {
   const [mounted, setMounted] = useState(open);
   const [visible, setVisible] = useState(open);
   useEffect(() => {
     if (open) {
       setMounted(true);
-      const raf = requestAnimationFrame(() => setVisible(true));
-      return () => cancelAnimationFrame(raf);
+      // Double rAF: the element must paint its closed state once before the
+      // .show class lands, otherwise the browser batches both DOM updates into
+      // a single frame and the opening transition never runs.
+      let second = 0;
+      const first = requestAnimationFrame(() => {
+        second = requestAnimationFrame(() => setVisible(true));
+      });
+      return () => {
+        cancelAnimationFrame(first);
+        if (second !== 0) cancelAnimationFrame(second);
+      };
     }
     setVisible(false);
     const reduced = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -143,6 +148,63 @@ function useMountedVisible(open: boolean, duration = 160): { mounted: boolean; v
     return () => window.clearTimeout(timer);
   }, [open, duration]);
   return { mounted, visible };
+}
+
+/**
+ * Shared upward accordion panel used by the composer permission and model
+ * pickers. Wraps the options in the animated popover surface and provides
+ * roving-tabindex keyboard navigation (Arrow/Home/End), focusing the checked
+ * option when it opens so the menu is immediately keyboard-ready. Options are
+ * native buttons, so Enter/Space activate them without extra wiring.
+ */
+function AgentPickerPopover({
+  id,
+  anchor,
+  visible,
+  label,
+  children,
+}: {
+  id: string;
+  anchor: "left" | "right";
+  visible: boolean;
+  label: string;
+  children: ReactNode;
+}) {
+  const innerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    const host = innerRef.current;
+    if (!host) return;
+    const checked = host.querySelector<HTMLButtonElement>('.agent-popover-option[aria-checked="true"]');
+    const target = checked ?? host.querySelector<HTMLButtonElement>(".agent-popover-option");
+    target?.focus({ preventScroll: true });
+  }, [visible]);
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const host = innerRef.current;
+    if (!host) return;
+    const options = Array.from(host.querySelectorAll<HTMLButtonElement>(".agent-popover-option"));
+    if (options.length === 0) return;
+    const current = document.activeElement;
+    const index = options.indexOf(current as HTMLButtonElement);
+    let next: number;
+    if (event.key === "ArrowDown") next = index === -1 ? 0 : Math.min(index + 1, options.length - 1);
+    else if (event.key === "ArrowUp") next = index === -1 ? options.length - 1 : Math.max(index - 1, 0);
+    else if (event.key === "Home") next = 0;
+    else next = options.length - 1;
+    event.preventDefault();
+    options[next]?.focus({ preventScroll: true });
+  };
+
+  return (
+    <div id={id} className={`agent-popover anchor-${anchor}${visible ? " show" : ""}`} role="menu" aria-label={label} onKeyDown={handleKeyDown}>
+      <div className="agent-popover-inner" ref={innerRef}>
+        {children}
+      </div>
+    </div>
+  );
 }
 
 function shortDate(value: string, locale: string): string {
@@ -168,6 +230,9 @@ function formatCountdown(remainingMs: number): string {
  * revocation state).
  */
 const REVOKED_STORAGE_KEY = "nami.agent.revokedByConversation";
+
+/** How long the "已撤回信息" notice stays above the composer before fading. */
+const REVOKE_NOTICE_SECONDS = 10;
 
 function readRevokedIds(conversationId: string): Set<string> {
   try {
@@ -213,12 +278,41 @@ export function lastMessageIsUnanswered(conversation: AgentConversation): boolea
   return Boolean(last && last.role === "user");
 }
 
+/** True when the newest turn has an assistant reply that is still streaming
+ *  (a re-opened panel renders the in-flight snapshot and should keep polling
+ *  until the turn persists as complete). */
+export function lastMessageIsStreaming(conversation: AgentConversation): boolean {
+  const last = conversation.messages[conversation.messages.length - 1];
+  return Boolean(last && last.role === "assistant" && last.state === "streaming");
+}
+
 function applyRevokedMarks(conversation: AgentConversation): AgentConversation {
-  const revokedIds = readRevokedIds(conversation.id);
-  if (revokedIds.size === 0) return conversation;
+  return mergeRevokedMarks(conversation, readRevokedIds(conversation.id));
+}
+
+/**
+ * Merges the server's authoritative revoked marks with the local cache so a
+ * cleared localStorage (or a stale cache) never resurrects revoked rows, and
+ * an offline revoke still applies once the server round-trip lands.
+ */
+export function mergeRevokedMarks(
+  conversation: AgentConversation,
+  localRevoked: ReadonlySet<string>,
+): AgentConversation {
+  let serverHasAny = false;
+  for (const message of conversation.messages) {
+    if (message.revoked) {
+      serverHasAny = true;
+      break;
+    }
+  }
+  if (localRevoked.size === 0 && !serverHasAny) return conversation;
   return {
     ...conversation,
-    messages: conversation.messages.map((message) => (revokedIds.has(message.id) ? { ...message, revoked: true } : message)),
+    messages: conversation.messages.map((message) => {
+      const revoked = message.revoked === true || localRevoked.has(message.id);
+      return revoked ? { ...message, revoked: true } : message;
+    }),
   };
 }
 
@@ -244,6 +338,42 @@ function sourceLabel(citation: AgentCitation): string {
   return citation.sender ? `${citation.sender} · ${citation.subject}` : citation.subject;
 }
 
+/** Copies text to the clipboard, falling back to a hidden textarea + execCommand
+ *  when the async Clipboard API is unavailable (non-secure contexts). */
+async function copyToClipboard(content: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(content);
+  } catch {
+    const input = document.createElement("textarea");
+    input.value = content;
+    input.style.position = "fixed";
+    input.style.opacity = "0";
+    document.body.append(input);
+    input.select();
+    document.execCommand("copy");
+    input.remove();
+  }
+}
+
+/**
+ * The "来源邮件" panel lists distinct source messages, not search chunks.
+ * Deduplicate by `messageId` (falling back to the citation id) so the same
+ * mail can never appear twice, even if the stream re-emits a citation or two
+ * retrieval paths produce one for the same message. Server-side RAG already
+ * dedupes by message, so this is a defensive guard, not a data fix.
+ */
+export function dedupeCitations(citations: readonly AgentCitation[]): AgentCitation[] {
+  const seen = new Set<string>();
+  const result: AgentCitation[] = [];
+  for (const citation of citations) {
+    const key = citation.messageId || citation.id;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(citation);
+  }
+  return result;
+}
+
 function truncateForPreview(text: string, maxLen = 80): string {
   const clean = text.replace(/\s+/g, " ").trim();
   if (clean.length <= maxLen) return clean;
@@ -261,13 +391,13 @@ function messageWithEvent(message: AgentMessage, event: AgentStreamEvent): Agent
     case "text_delta":
       return { ...message, content: `${message.content}${event.delta}` };
     case "citation":
-      return { ...message, citations: [...message.citations, event.citation] };
+      return { ...message, citations: dedupeCitations([...message.citations, event.citation]) };
     case "tool": {
       const previous = message.toolActivities.filter((activity) => activity.id !== event.activity.id);
       return { ...message, toolActivities: [...previous, event.activity] };
     }
     case "confirmation":
-      return { ...message, confirmation: event.confirmation, toolActivities: message.toolActivities.map((activity) => activity.state === "awaiting_confirmation" ? activity : activity) };
+      return { ...message, confirmation: event.confirmation };
     case "error":
       return { ...message, state: "error", error: event.error };
     case "completed":
@@ -275,6 +405,30 @@ function messageWithEvent(message: AgentMessage, event: AgentStreamEvent): Agent
     default:
       return message;
   }
+}
+
+/**
+ * Folds an in-flight assistant message into a clearly "interrupted" state when
+ * the user sends a new message while the agent is still streaming. It:
+ *   - flags the message as interrupted so the partial reply reads as stopped;
+ *   - marks every tool that was still running or waiting for confirmation as
+ *     failed ("interrupted") so no activity is left spinning forever;
+ *   - expires a pending confirmation so it cannot be acted on after the run.
+ */
+export function interruptAssistantMessage(message: AgentMessage, interruptedLabel: string): AgentMessage {
+  return {
+    ...message,
+    state: message.state === "error" ? "error" : "complete",
+    interrupted: true,
+    toolActivities: message.toolActivities.map((activity) =>
+      activity.state === "running" || activity.state === "awaiting_confirmation"
+        ? { ...activity, state: "failed", error: { code: "INTERRUPTED", message: interruptedLabel, retryable: false } }
+        : activity,
+    ),
+    confirmation: message.confirmation?.state === "pending"
+      ? { ...message.confirmation, state: "expired" }
+      : message.confirmation,
+  };
 }
 
 /**
@@ -317,8 +471,11 @@ export function expireConfirmation(message: AgentMessage, confirmationId: string
   };
 }
 
+const agentFeedbackIssuesUrl = "https://github.com/QinIndexCode/nami-mail/issues";
+
 const toolLabelKeys: Readonly<Record<string, string>> = {
   "rag.search": "agent.tool.ragSearch",
+  "web.search": "agent.tool.webSearch",
   "accounts.list": "agent.tool.accountsList",
   "accounts.delete": "agent.tool.accountsDelete",
   "folders.list": "agent.tool.foldersList",
@@ -572,6 +729,26 @@ return {
         ],
       },
       {
+        id: "demo-msg-17",
+        role: "user",
+        content: "帮我查一下「星辰科技」这家公司的公开信息。",
+        createdAt: minutesAgo(4),
+        state: "complete",
+        citations: [],
+        toolActivities: [],
+      },
+      {
+        id: "demo-msg-18",
+        role: "assistant",
+        content: "根据公开信息，「星辰科技」是一家专注工业传感器与自动化控制方案的供应商，总部位于深圳，近期发布了新一代边缘计算网关产品线。\n\n以上为联网搜索结果，仅供参考。",
+        createdAt: minutesAgo(2),
+        state: "complete",
+        citations: [],
+        toolActivities: [
+          tool("demo-tool-11", "web.search", "web.search", "completed", { summary: "找到 5 条相关结果" }),
+        ],
+      },
+      {
         id: "demo-msg-15",
         role: "user",
         content: "明天上午还有什么安排吗？",
@@ -593,14 +770,25 @@ return {
   };
 }
 
+// Search tools show a small type icon on their completed card (the shared
+// checkmark stays for every other tool) so "searched the web" and "searched
+// local mail" read distinctly at a glance.
+const toolTypeIcons: Readonly<Record<string, ReactNode>> = {
+  "web.search": <Globe size={15} />,
+  "rag.search": <Search size={15} />,
+};
+
 function AgentToolCard({ activity }: { activity: AgentToolActivity }) {
   const { t } = useI18n();
-  const icon = activity.state === "failed" ? <CircleAlert size={15} /> : activity.state === "completed" ? <Check size={15} /> : <LoaderCircle className="spin" size={15} />;
+  const typeIcon = toolTypeIcons[activity.toolName];
+  const icon = activity.state === "failed" ? <CircleAlert size={15} /> : activity.state === "completed" ? (typeIcon ?? <Check size={15} />) : <LoaderCircle className="spin" size={15} />;
   const title = toolLabelKeys[activity.toolName] ? t(toolLabelKeys[activity.toolName]) : activity.title;
   const summary = activity.state === "failed"
-    ? activity.error?.code?.startsWith("CONFIRMATION_")
-      ? activity.error.message
-      : t("agent.tool.failed")
+    ? activity.error?.code === "INTERRUPTED"
+      ? t("agent.interrupted")
+      : activity.error?.code?.startsWith("CONFIRMATION_")
+        ? activity.error.message
+        : t("agent.tool.failed")
     : activity.state === "completed"
       ? activity.summary ?? t("agent.tool.completed")
       : activity.state === "awaiting_confirmation"
@@ -646,7 +834,24 @@ export const AgentToolList = memo(function AgentToolListInner({ activities, supe
     <div className={`agent-tool-list${open ? " open" : ""}`}>
       <button type="button" className="agent-tool-summary" aria-expanded={open} onClick={() => (open ? collapse() : setExpanded(true))}>
         <Wrench size={13} />
-        <span>{t("agent.tool.summary", { count: activities.length })}</span>
+        {/* The count renders as a rolling odometer digit: only the number spins
+            (like a taximeter) when a new tool call lands. The full sentence is
+            kept for screen readers; the visual is the prefix + rolling digit +
+            suffix so the surrounding text never moves. */}
+        <span className="agent-tool-summary-label">
+          <span className="visually-hidden">{t("agent.tool.summary", { count: activities.length })}</span>
+          <span className="agent-tool-summary-visual" aria-hidden="true">
+            <span className="agent-tool-summary-prefix">{t("agent.tool.summaryPrefix")}</span>
+            <span className="agent-tool-count-window">
+              <span className="agent-tool-count-strip" style={{ transform: `translateY(${-activities.length}em)` }}>
+                {Array.from({ length: Math.max(10, activities.length + 1) }, (_, digit) => (
+                  <span key={digit} className="agent-tool-count-digit">{digit}</span>
+                ))}
+              </span>
+            </span>
+            <span className="agent-tool-summary-suffix">{t("agent.tool.summarySuffix")}</span>
+          </span>
+        </span>
         <span className="agent-tool-summary-chips">{failedCount > 0 && <em className="agent-tool-summary-failed">{t("agent.tool.failedCount", { count: failedCount })}</em>}{runningCount > 0 && <em className="agent-tool-summary-running">{t("agent.tool.runningCount", { count: runningCount })}</em>}</span>
         <ChevronDown size={13} className="agent-tool-summary-chevron" />
       </button>
@@ -769,6 +974,47 @@ const AgentScrubberBar = memo(function AgentScrubberBarInner({
 
 const ollamaEndpointSuggestion = "http://127.0.0.1:11434/v1";
 
+/** Copy button with a transient checkmark: copies, shows a check, then returns
+ *  to the copy icon so repeated copies stay possible. The row keeps rendering
+ *  only this tiny control, isolated from the memoised message row. */
+function CopyMessageButton({ content, label }: { content: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timerRef.current), []);
+  const handleCopy = () => {
+    void copyToClipboard(content);
+    setCopied(true);
+    window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <button
+      type="button"
+      className={`agent-corner-button copy${copied ? " copied" : ""}`}
+      onClick={handleCopy}
+      aria-label={label}
+      data-tooltip={label}
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+    </button>
+  );
+}
+
+/**
+ * Renders an assistant turn's body. While it is streaming, the content is
+ * parsed and rendered live by `AgentMarkdown` (a mature react-markdown-based
+ * renderer) instead of showing plain text, so bold/headings/code appear as the
+ * model types them. `streamingMarkdownContent` guards against an unfinished
+ * code fence swallowing the tail; once the turn completes, the full content is
+ * parsed with no truncation.
+ */
+const AgentMessageContent = memo(function AgentMessageContentInner({ content, streaming }: { content: string; streaming: boolean }) {
+  if (streaming) {
+    return <AgentMarkdown content={streamingMarkdownContent(content)} />;
+  }
+  return <AgentMarkdown content={content} />;
+});
+
 type AgentMessageRowProps = {
   message: AgentMessage;
   /** Whether a newer user turn follows this message (supersedes its warnings). */
@@ -778,9 +1024,7 @@ type AgentMessageRowProps = {
   locale: string;
   t: Translate;
   onOpenAttachment: (path?: string) => void;
-  onCopy: (content: string) => void;
   onRevoke: (messageId: string) => void;
-  onRestore: (messageId: string) => void;
   onRetry: () => void;
   onUserMessageRef: (messageId: string, node: HTMLElement | null) => void;
 };
@@ -798,35 +1042,31 @@ export const AgentMessageRow = memo(function AgentMessageRowInner({
   locale,
   t,
   onOpenAttachment,
-  onCopy,
   onRevoke,
-  onRestore,
   onRetry,
   onUserMessageRef,
 }: AgentMessageRowProps) {
   const userMessageRef = useCallback((node: HTMLElement | null) => {
     onUserMessageRef(message.id, node);
   }, [message.id, onUserMessageRef]);
+  // A revoked message disappears from the transcript entirely; the "已撤回信息"
+  // notice lives above the composer instead of leaving a placeholder row.
+  if (message.revoked) return null;
   return (
     <article
-      className={`agent-message ${message.role} ${message.state === "streaming" ? "streaming" : ""}`}
+      className={`agent-message ${message.role} ${message.state === "streaming" ? "streaming" : ""}${message.interrupted ? " interrupted" : ""}`}
       ref={message.role === "user" ? userMessageRef : undefined}
     >
-      {message.revoked ? (
-        <div className="agent-message-revoked">
-          <span className="agent-message-revoked-badge">{t("agent.message.revoked")}</span>
-          <button type="button" className="agent-corner-button resend" onClick={() => onRestore(message.id)} data-tooltip={message.role === "user" ? t("agent.message.resend") : t("agent.message.restore")} aria-label={message.role === "user" ? t("agent.message.resend") : t("agent.message.restore")}><PencilLine size={12} /></button>
-        </div>
-      ) : (
+      {!message.revoked && (
         <>
           {message.quote && <div className="agent-message-quote"><span className="agent-quote-mark" aria-hidden="true">"</span><span className="agent-quote-text">{truncateForPreview(message.quote)}</span><span className="agent-quote-mark" aria-hidden="true">"</span></div>}
-          {message.content ? <AgentMarkdown content={message.content} /> : message.state === "streaming" && <div className="agent-thinking"><LoaderCircle className="spin" size={16} />{statusMessage || t("agent.message.thinking")}</div>}
+          {message.content ? <AgentMessageContent content={message.content} streaming={message.state === "streaming"} /> : message.state === "streaming" && <div className="agent-thinking"><span className="agent-thinking-dots" aria-hidden="true"><span className="agent-thinking-dot" /><span className="agent-thinking-dot" /><span className="agent-thinking-dot" /></span>{statusMessage || t("agent.message.thinking")}</div>}
           {message.attachments && message.attachments.length > 0 && <div className="agent-message-attachments">{message.attachments.map((attachment, index) => <button key={`${attachment.name}-${index}`} type="button" className="agent-message-attachment" onClick={() => onOpenAttachment(attachment.path)} data-tooltip={attachment.path ?? attachment.name}><FileText size={15} /><span>{attachment.name}</span></button>)}</div>}
           {message.toolActivities.length > 0 && <AgentToolList activities={message.toolActivities} superseded={superseded} />}
           {message.error && <div className="agent-message-error"><CircleAlert size={15} /><span>{message.error.message}{message.error.suggestion ? ` ${message.error.suggestion}` : ""}</span>{message.error.retryable && <button type="button" onClick={onRetry}>{t("agent.message.retry")}</button>}</div>}
         </>
       )}
-      <div className="agent-message-meta">{message.role === "system" && <span className="agent-message-role">{t("agent.message.system")}</span>}<time>{shortDate(message.createdAt, locale)}</time><span className="agent-message-actions">{message.content && <button type="button" className="agent-corner-button" onClick={() => void onCopy(message.content)} aria-label={t("agent.message.copy")} data-tooltip={t("agent.message.copy")}><Copy size={12} /></button>}{message.role === "user" && <AgentRecallButton disabled={!message.content || message.state === "streaming"} onRevoke={() => onRevoke(message.id)} label={t("agent.message.revoke")} confirmLabel={t("agent.message.revokeConfirm")} />}</span></div>
+      <div className="agent-message-meta">{message.role === "system" && <span className="agent-message-role">{t("agent.message.system")}</span>}{message.interrupted && <span className="agent-message-interrupted">{t("agent.message.interrupted")}</span>}<time>{shortDate(message.createdAt, locale)}</time>{!message.revoked && <span className="agent-message-actions">{message.content && <CopyMessageButton content={message.content} label={t("agent.message.copy")} />}{message.role === "user" && <AgentRecallButton disabled={!message.content || message.state === "streaming"} onRevoke={() => onRevoke(message.id)} label={t("agent.message.revoke")} confirmLabel={t("agent.message.revokeConfirm")} />}</span>}</div>
     </article>
   );
 });
@@ -883,8 +1123,14 @@ type ProviderForm = {
 };
 
 function configuredProviderId(providers: readonly AgentProviderSummary[], defaultProviderId: string | null): string {
-  const configured = providers.filter((provider) => provider.configured);
-  return configured.find((provider) => provider.id === defaultProviderId)?.id ?? configured[0]?.id ?? "";
+  // The default provider wins even when it is not yet configured (e.g. the API
+  // key was left empty or the connection check has not run): the composer must
+  // reflect the user's explicit default choice. Configured providers still
+  // fill in when no default exists.
+  return providers.find((provider) => provider.id === defaultProviderId)?.id
+    ?? providers.filter((provider) => provider.configured)[0]?.id
+    ?? providers[0]?.id
+    ?? "";
 }
 
 function providerFormFor(provider: AgentProviderSummary | null, defaultProviderId: string | null): ProviderForm {
@@ -951,13 +1197,24 @@ function AgentProviderSettings({
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [deletePending, setDeletePending] = useState(false);
+  const [deletePendingId, setDeletePendingId] = useState<string | null>(null);
   const [keyVisible, setKeyVisible] = useState(false);
   const selectedProviderIdRef = useRef<string | null>(null);
 
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? null;
   const isDefaultProvider = Boolean(selectedProvider && selectedProvider.id === defaultProviderId);
   const isOllama = form.kind === "ollama";
+  // "Send selected mail to the model" is only meaningful for remote endpoints:
+  // a loopback service (Ollama, LM Studio, …) never leaves the machine, so the
+  // switch is locked off there regardless of kind.
+  const isLocalEndpoint = useMemo(() => {
+    try {
+      const hostname = new URL(form.endpoint.trim()).hostname.toLowerCase();
+      return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+    } catch {
+      return false;
+    }
+  }, [form.endpoint]);
   // These kinds serve the OpenAI-compatible /embeddings endpoint on the same
   // origin as chat, so the optional embedding model is exposed for them.
   const embeddingCapable = form.kind === "openai-compatible" || form.kind === "ollama";
@@ -991,7 +1248,7 @@ function AgentProviderSettings({
   const selectProvider = useCallback((provider: AgentProviderSummary | null, nextDefaultProviderId = defaultProviderId) => {
     setSelectedProviderId(provider?.id ?? null);
     setForm(providerFormFor(provider, nextDefaultProviderId));
-    setDeletePending(false);
+    setDeletePendingId(null);
     setKeyVisible(false);
     setNotice(null);
   }, [defaultProviderId]);
@@ -1007,7 +1264,7 @@ function AgentProviderSettings({
       ?? null;
     setSelectedProviderId(selected?.id ?? null);
     setForm(providerFormFor(selected, snapshot.defaultProviderId));
-    setDeletePending(false);
+    setDeletePendingId(null);
     setKeyVisible(false);
   }, [onProvidersChanged]);
 
@@ -1034,7 +1291,7 @@ function AgentProviderSettings({
     setForm(providerFormFor(null, initialDefaultProviderId));
     setLoadError(null);
     setNotice(null);
-    setDeletePending(false);
+    setDeletePendingId(null);
     void refreshProviders();
   }, [open]);
 
@@ -1061,7 +1318,7 @@ function AgentProviderSettings({
   const updateForm = <Key extends keyof ProviderForm>(key: Key, value: ProviderForm[Key]) => {
     setForm((current) => ({ ...current, [key]: value }));
     setNotice(null);
-    setDeletePending(false);
+    setDeletePendingId(null);
   };
 
   const updateKind = (kind: AgentProviderKind) => {
@@ -1072,7 +1329,7 @@ function AgentProviderSettings({
       allowCloudMailContent: kind === "ollama" ? false : current.allowCloudMailContent,
     }));
     setNotice(null);
-    setDeletePending(false);
+    setDeletePendingId(null);
   };
 
   const validationMessage = useMemo(() => {
@@ -1100,7 +1357,7 @@ function AgentProviderSettings({
       model: form.model.trim(),
       ...(form.embeddingModel.trim() ? { embeddingModel: form.embeddingModel.trim() } : {}),
       timeoutMs,
-      allowCloudMailContent: isOllama ? false : form.allowCloudMailContent,
+      allowCloudMailContent: isOllama || isLocalEndpoint ? false : form.allowCloudMailContent,
       ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
       ...(form.clearApiKey ? { clearApiKey: true } : {}),
       ...(form.makeDefault ? { makeDefault: true } : {}),
@@ -1129,17 +1386,21 @@ function AgentProviderSettings({
     }
   };
 
-  const deleteProvider = async () => {
-    if (!selectedProvider || saving) return;
-    if (!deletePending) {
-      setDeletePending(true);
+  // Deletes a provider by id; the first call arms the two-step confirmation
+  // (deletePendingId), the second actually removes it. Works both from the
+  // catalog list delete button and the form's footer button.
+  const deleteProviderById = async (providerId: string) => {
+    const target = providers.find((provider) => provider.id === providerId);
+    if (!target || saving) return;
+    if (deletePendingId !== providerId) {
+      setDeletePendingId(providerId);
       return;
     }
     setSaving(true);
     setLoadError(null);
     setNotice(null);
     try {
-      await api.deleteAgentProvider(selectedProvider.id);
+      await api.deleteAgentProvider(providerId);
       await refreshProviders();
       setNotice(t("agent.providers.deleted"));
     } catch (error) {
@@ -1160,7 +1421,7 @@ function AgentProviderSettings({
     >
       <aside ref={dialogRef} className={`agent-provider-settings${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={t("agent.providers.title")} tabIndex={-1}>
         <header className="agent-provider-settings-header">
-          <div><span className="eyebrow">NAMI AGENT</span><h2>{t("agent.providers.title")}</h2><p>{t("agent.providers.description")}</p></div>
+          <div><span className="eyebrow">{t("agent.providers.eyebrow")}</span><h2>{t("agent.providers.title")}</h2><p>{t("agent.providers.description")}</p></div>
           <div className="agent-provider-settings-actions">
             {onOpenMcpServers && <button className="agent-mcp-switch-button" type="button" disabled={saving} data-tooltip={t("agent.mcpServers.openHint")} onClick={onOpenMcpServers}><Server size={14} />{t("agent.mcpServers.open")}</button>}
             <button className="icon-button" type="button" data-dialog-initial-focus aria-label={t("agent.providers.close")} data-tooltip={t("agent.providers.close")} disabled={saving} onClick={requestClose}><X size={18} /></button>
@@ -1176,12 +1437,18 @@ function AgentProviderSettings({
               {providers.map((provider) => {
                 const active = provider.id === selectedProviderId;
                 const state = providerVisualState(provider);
+                const pending = deletePendingId === provider.id;
                 return (
-                  <button key={provider.id} className={`agent-provider-list-item ${active ? "active" : ""}`} type="button" aria-pressed={active} disabled={saving} onClick={() => selectProvider(provider)}>
-                    <span className={`agent-provider-state ${state}`} aria-hidden="true" />
-                    <span><strong>{provider.label}</strong><small>{provider.model}</small><span className="agent-provider-list-meta">{provider.id === defaultProviderId && <em className="default">{t("agent.providers.status.default")}</em>}<em className={state}>{t(`agent.providers.status.${state}`)}</em></span></span>
-                    {provider.cloud ? <Cloud size={14} aria-label={t("agent.providers.status.cloud")} /> : <Server size={14} aria-label={t("agent.providers.status.local")} />}
-                  </button>
+                  <div key={provider.id} className={`agent-provider-list-row${pending ? " delete-pending" : ""}`}>
+                    <button className={`agent-provider-list-item ${active ? "active" : ""}`} type="button" aria-pressed={active} disabled={saving} onClick={() => selectProvider(provider)}>
+                      <span className={`agent-provider-state ${state}`} aria-hidden="true" />
+                      <span><strong>{provider.label}</strong><small>{provider.model}</small><span className="agent-provider-list-meta">{provider.id === defaultProviderId && <em className="default">{t("agent.providers.status.default")}</em>}<em className={state}>{t(`agent.providers.status.${state}`)}</em></span></span>
+                      {provider.cloud ? <Cloud size={14} aria-label={t("agent.providers.status.cloud")} /> : <Server size={14} aria-label={t("agent.providers.status.local")} />}
+                    </button>
+                    <button className={`agent-provider-list-delete${pending ? " pending" : ""}`} type="button" disabled={saving} aria-label={pending ? t("agent.providers.deleteConfirm") : t("agent.providers.delete")} data-tooltip={pending ? t("agent.providers.deleteConfirm") : t("agent.providers.delete")} onClick={() => void deleteProviderById(provider.id)}>
+                      {pending ? <Check size={14} /> : <Trash2 size={14} />}
+                    </button>
+                  </div>
                 );
               })}
             </div>
@@ -1200,12 +1467,12 @@ function AgentProviderSettings({
             {embeddingCapable && <label className="agent-provider-field"><span><strong>{t("agent.providers.fields.embeddingModel")}</strong><small>{t("agent.providers.fields.embeddingModelHint")}</small></span><input value={form.embeddingModel} placeholder={kindMeta.embeddingModelPlaceholder} maxLength={256} disabled={saving} onChange={(event) => updateForm("embeddingModel", event.target.value)} autoComplete="off" spellCheck={false} /></label>}
             <label className="agent-provider-field agent-provider-timeout"><span><strong>{t("agent.providers.fields.timeout")}</strong><small>{t("agent.providers.fields.timeoutHint")}</small></span><input type="text" inputMode="numeric" pattern="[0-9]*" value={form.timeoutMs} disabled={saving} onChange={(event) => updateForm("timeoutMs", event.target.value)} autoComplete="off" /></label>
             <div className="agent-provider-field"><span><strong>{t("agent.providers.fields.apiKey")}</strong><small>{selectedProvider?.apiKeyConfigured ? t("agent.providers.fields.apiKeyConfigured") : t("agent.providers.fields.apiKeyOptional")}</small></span><div className="agent-provider-secret"><input type={keyVisible ? "text" : "password"} value={form.apiKey} disabled={saving || form.clearApiKey} onChange={(event) => updateForm("apiKey", event.target.value)} placeholder={selectedProvider?.apiKeyConfigured ? t("agent.providers.fields.apiKeyKeep") : t("agent.providers.fields.apiKeyPlaceholder")} autoComplete="new-password" spellCheck={false} /><button className="icon-button" type="button" disabled={saving || form.clearApiKey} aria-label={keyVisible ? t("agent.providers.fields.hideKey") : t("agent.providers.fields.showKey")} data-tooltip={keyVisible ? t("agent.providers.fields.hideKey") : t("agent.providers.fields.showKey")} onClick={() => setKeyVisible((visible) => !visible)}>{keyVisible ? <EyeOff size={15} /> : <Eye size={15} />}</button></div>{selectedProvider?.apiKeyConfigured && <button className={`agent-provider-inline-toggle ${form.clearApiKey ? "active" : ""}`} type="button" role="switch" aria-checked={form.clearApiKey} disabled={saving || Boolean(form.apiKey)} onClick={() => updateForm("clearApiKey", !form.clearApiKey)}><span aria-hidden="true" /><span>{t("agent.providers.fields.clearApiKey")}</span></button>}</div>
-            <button className={`agent-provider-toggle-row ${form.allowCloudMailContent ? "active" : ""}`} type="button" role="switch" aria-checked={form.allowCloudMailContent} disabled={saving || isOllama} onClick={() => updateForm("allowCloudMailContent", !form.allowCloudMailContent)}><span><strong>{t("agent.providers.cloud.title")}</strong><small>{isOllama ? t("agent.providers.cloud.localOnly") : t("agent.providers.cloud.description")}</small></span><span className="agent-provider-switch" aria-hidden="true"><span /></span></button>
+            <button className={`agent-provider-toggle-row ${form.allowCloudMailContent ? "active" : ""}`} type="button" role="switch" aria-checked={form.allowCloudMailContent} disabled={saving || isOllama || isLocalEndpoint} onClick={() => updateForm("allowCloudMailContent", !form.allowCloudMailContent)}><span><strong>{t("agent.providers.cloud.title")}</strong><small>{isOllama || isLocalEndpoint ? t("agent.providers.cloud.localOnly") : t("agent.providers.cloud.description")}</small></span><span className="agent-provider-switch" aria-hidden="true"><span /></span></button>
             <button className={`agent-provider-toggle-row ${form.makeDefault ? "active" : ""}`} type="button" role="switch" aria-checked={form.makeDefault} disabled={saving || isDefaultProvider} onClick={() => updateForm("makeDefault", !form.makeDefault)}><span><strong>{t("agent.providers.default.title")}</strong><small>{isDefaultProvider ? t("agent.providers.default.current") : t("agent.providers.default.description")}</small></span><span className="agent-provider-switch" aria-hidden="true"><span /></span></button>
 
             {validationMessage && <p className="agent-provider-validation" role="status"><CircleAlert size={14} />{validationMessage}</p>}
-            <div className="agent-provider-form-actions"><button className="primary-button" type="submit" disabled={saving || Boolean(validationMessage)}>{saving ? <LoaderCircle className="spin" size={15} /> : <KeyRound size={15} />}{saving ? t("agent.providers.savingAndChecking") : t("agent.providers.save")}</button>{selectedProvider && <button className={`secondary-button danger-button ${deletePending ? "agent-provider-delete-pending" : ""}`} type="button" disabled={saving} onClick={() => void deleteProvider()}><Trash2 size={15} />{deletePending ? t("agent.providers.deleteConfirm") : t("agent.providers.delete")}</button>}</div>
-            {deletePending && <p className="agent-provider-delete-note">{t("agent.providers.deletePrompt")}</p>}
+            <div className="agent-provider-form-actions"><button className="primary-button" type="submit" disabled={saving || Boolean(validationMessage)}>{saving ? <LoaderCircle className="spin" size={15} /> : <KeyRound size={15} />}{saving ? t("agent.providers.savingAndChecking") : t("agent.providers.save")}</button>{selectedProvider && <button className={`secondary-button danger-button ${deletePendingId === selectedProvider.id ? "agent-provider-delete-pending" : ""}`} type="button" disabled={saving} onClick={() => void deleteProviderById(selectedProvider.id)}><Trash2 size={15} />{deletePendingId === selectedProvider.id ? t("agent.providers.deleteConfirm") : t("agent.providers.delete")}</button>}</div>
+            {deletePendingId !== null && <p className="agent-provider-delete-note">{t("agent.providers.deletePrompt")}</p>}
           </form>
         </div>
       </aside>
@@ -1519,7 +1786,7 @@ function AgentMcpServerSettings({
     >
       <aside ref={dialogRef} className={`agent-provider-settings${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={t("agent.mcpServers.title")} tabIndex={-1}>
         <header className="agent-provider-settings-header">
-          <div><span className="eyebrow">NAMI AGENT</span><h2>{t("agent.mcpServers.title")}</h2><p>{t("agent.mcpServers.description")}</p></div>
+          <div><span className="eyebrow">{t("agent.mcpServers.eyebrow")}</span><h2>{t("agent.mcpServers.title")}</h2><p>{t("agent.mcpServers.description")}</p></div>
           <div className="agent-provider-settings-actions">
             {onOpenProviders && <button className="agent-mcp-switch-button" type="button" disabled={busy} onClick={onOpenProviders}><KeyRound size={14} />{t("agent.providers.open")}</button>}
             <button className="icon-button" type="button" data-dialog-initial-focus aria-label={t("agent.mcpServers.close")} data-tooltip={t("agent.mcpServers.close")} disabled={busy} onClick={requestClose}><X size={18} /></button>
@@ -1609,7 +1876,10 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   const [streaming, setStreaming] = useState(false);
   /** Live provider status text shown in the in-flight assistant's thinking line. */
   const [streamStatus, setStreamStatus] = useState<string | null>(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  /** Holds the conversation(s) awaiting delete confirmation in a modal dialog. */
+  const [pendingDelete, setPendingDelete] = useState<{ conversationIds: string[] } | null>(null);
+  const deleteConfirmRef = useRef<HTMLElement>(null);
+  const { closing: deleteConfirmClosing, requestClose: requestDeleteConfirmClose, reset: resetDeleteConfirmClose } = useDismissTransition(() => setPendingDelete(null));
   /** Holds a full-access request that still needs the user's explicit warning acknowledgment. */
   const [pendingAccessLevel, setPendingAccessLevel] = useState<AgentAccessLevel | null>(null);
   /** Whether the composer permission picker popover is open. */
@@ -1654,8 +1924,23 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<ProcessedFile[]>([]);
   const [processingFileName, setProcessingFileName] = useState<string | null>(null);
+  const [composerDragActive, setComposerDragActive] = useState(false);
+  // Keeps the original File for failed uploads so a "retry" can re-upload
+  // without re-extracting the text. Keyed by name:size.
+  const failedUploadFilesRef = useRef(new Map<string, File>());
+  const retryUploadRef = useRef(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const feedbackDialogRef = useRef<HTMLElement>(null);
+  const { closing: feedbackClosing, requestClose: requestFeedbackClose, reset: resetFeedbackClose } = useDismissTransition(() => setFeedbackOpen(false));
   const [citationsExpanded, setCitationsExpanded] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [conversationMenu, setConversationMenu] = useState<{ x: number; y: number; conversationId: string | null } | null>(null);
+  // Multi-select on the conversation list (entered from the right-click menu).
+  // While active, rows toggle their selection on click and a footer bar shows
+  // bulk-delete controls. Deleting a streaming conversation is handled by
+  // deleteConversation (cancels the run and unlocks local streaming state).
+  const [multiSelect, setMultiSelect] = useState(false);
+  const [selectedConversationIds, setSelectedConversationIds] = useState<ReadonlySet<string>>(new Set());
   const [quoteContext, setQuoteContext] = useState<string | null>(null);
   // Content coordinates of each user message, used only as the jump target
   // when a scrubber bar is clicked. Bar layout itself is a fixed-interval
@@ -1663,13 +1948,12 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   const [userMarkerPositions, setUserMarkerPositions] = useState<number[]>([]);
   const [hoveredUserIndex, setHoveredUserIndex] = useState<number | null>(null);
   const userMessageElsRef = useRef<Map<string, HTMLElement>>(new Map());
-  // Auto-scroll while the cursor sits in the top/bottom edge zone: the
-  // direction and per-frame speed are read from refs so a rAF loop keeps
-  // running without restarting on every mouse move; the boolean state only
-  // controls whether the loop is active.
-  const [scrubberScrolling, setScrubberScrolling] = useState(false);
-  const scrubberDirectionRef = useRef<-1 | 1>(1);
-  const scrubberSpeedRef = useRef(0);
+  // Preview bubble visibility is delayed: the mountain highlight follows the
+  // cursor immediately, but the preview appears only after the cursor rests on
+  // a bar for a moment (see SCRUBBER_PREVIEW_DELAY_MS). The timer is kept in a
+  // ref so quick passes reset it without re-rendering.
+  const [showScrubberPreview, setShowScrubberPreview] = useState(false);
+  const scrubberPreviewTimerRef = useRef<number | undefined>(undefined);
   // Viewport offset (px) of the bar group inside the track. When the group
   // fits it is centred; once it overflows it is bottom-anchored (newest
   // visible). Hovering the edge zones auto-scrolls this offset — the BARS
@@ -1682,8 +1966,14 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   // recalculates on resize without reading the DOM during render.
   const [scrubberTrackHeight, setScrubberTrackHeight] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  // Monotonic run id. Each send bumps it; every stream callback, error and
+  // finally handler checks it matches before touching shared state, so a
+  // cancelled run that resolves late can never close the streaming flag of
+  // (or write into) the run that replaced it.
+  const runIdRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const conversationMenuRef = useRef<HTMLDivElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -1709,16 +1999,20 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
     window.requestAnimationFrame(() => composerRef.current?.focus());
   }, []);
 
-  useDialogFocus(true, workspaceRef, { restoreFocusRef, suspended: providerSettingsOpen || mcpServerSettingsOpen || Boolean(pendingAccessLevel) });
+  useDialogFocus(true, workspaceRef, { restoreFocusRef, suspended: providerSettingsOpen || mcpServerSettingsOpen || Boolean(pendingAccessLevel) || Boolean(pendingDelete) });
   useDialogFocus(Boolean(pendingAccessLevel), accessConfirmRef, { restoreFocusRef: workspaceRef });
+  useDialogFocus(Boolean(pendingDelete), deleteConfirmRef, { restoreFocusRef: workspaceRef });
+  useDialogFocus(Boolean(feedbackOpen), feedbackDialogRef, { restoreFocusRef: workspaceRef });
 
   const scope = useMemo(() => agentScopeFor(scopeMode, currentMessage, accounts), [accounts, currentMessage, scopeMode]);
   const providers = bootstrap?.providers ?? [];
   const configuredProviders = useMemo(() => providers.filter((provider) => provider.configured), [providers]);
   const selectedProvider = configuredProviders.find((provider) => provider.id === providerId)
-    ?? configuredProviders.find((provider) => provider.id === bootstrap?.defaultProviderId)
+    ?? providers.find((provider) => provider.id === bootstrap?.defaultProviderId)
     ?? configuredProviders[0];
-  const hasConfiguredProvider = Boolean(selectedProvider);
+  // Sending still requires a ready provider; the composer may show an
+  // unconfigured default model but must not claim it can send with it.
+  const hasConfiguredProvider = Boolean(selectedProvider && selectedProvider.configured);
   const filteredConversations = useMemo(() => {
     const query = conversationSearch.trim().toLocaleLowerCase(locale);
     if (!query) return conversations;
@@ -1798,9 +2092,15 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
         try {
           const conversation = await api.agentConversation(initialTarget);
           setActive(applyRevokedMarks(purgeStaleErrors(conversation)));
-          setProviderId((current) => value.providers.some((provider) => provider.id === conversation.providerId && provider.configured)
-            ? conversation.providerId
-            : current || configuredProviderId(value.providers, value.defaultProviderId));
+          // Resolve the conversation's model exactly like switching to it: the
+          // user's per-conversation choice (persisted across restarts) wins,
+          // then the provider recorded on the conversation, then the default.
+          const localProvider = conversationProviders[initialTarget];
+          setProviderId(localProvider && value.providers.some((provider) => provider.id === localProvider && provider.configured)
+            ? localProvider
+            : conversation.providerId && value.providers.some((provider) => provider.id === conversation.providerId && provider.configured)
+              ? conversation.providerId
+              : configuredProviderId(value.providers, value.defaultProviderId));
           setScopeMode(conversation.scope.mode);
         } catch {
           // Background load of the first conversation failed — user can retry by clicking it.
@@ -1817,7 +2117,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   useEffect(() => { void loadBootstrap(); }, [loadBootstrap]);
 
   // Close the permission and model pickers when the user clicks anywhere
-  // outside them.
+  // outside them or presses Escape.
   useEffect(() => {
     if (!permissionOpen && !modelPickerOpen) return;
     const onPointerDown = (event: PointerEvent) => {
@@ -1828,8 +2128,18 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
         setModelPickerOpen(false);
       }
     };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPermissionOpen(false);
+        setModelPickerOpen(false);
+      }
+    };
     document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, [permissionOpen, modelPickerOpen]);
   useEffect(() => {
     if (demoMode || providerSettingsRequestId === 0) return;
@@ -1874,7 +2184,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   // messages changes (streamed assistant tokens never move earlier messages,
   // so measuring on message-identity changes keeps this cheap).
   const userMessages = useMemo(
-    () => active?.messages.filter((message) => message.role === "user") ?? [],
+    () => active?.messages.filter((message) => message.role === "user" && !message.revoked) ?? [],
     [active?.messages],
   );
   // Index of the newest user turn. Rows before it are superseded: the user has
@@ -1951,51 +2261,44 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
         nearest = index;
       }
     }
-    setHoveredUserIndex(nearest);
-    // Auto-scroll only once the group overflows the track: hovering the
-    // top/bottom edge zone scrolls the BAR GROUP (not the transcript) faster
-    // the closer the cursor gets to the edge. Leaving the scrubber stops it.
-    if (totalHeight > track.height) {
-      if (y <= SCRUBBER_EDGE_ZONE) {
-        scrubberDirectionRef.current = 1;
-        scrubberSpeedRef.current = scrubberEdgeSpeed(y);
-        setScrubberScrolling(true);
-        return;
-      }
-      if (y >= track.height - SCRUBBER_EDGE_ZONE) {
-        scrubberDirectionRef.current = -1;
-        scrubberSpeedRef.current = scrubberEdgeSpeed(track.height - y);
-        setScrubberScrolling(true);
-        return;
-      }
+    // Restart the preview delay only when the cursor moves onto a different
+    // bar; staying on the same bar keeps the pending timer so the bubble
+    // appears after resting for a moment.
+    if (nearest !== hoveredUserIndex) {
+      window.clearTimeout(scrubberPreviewTimerRef.current);
+      setShowScrubberPreview(false);
+      setHoveredUserIndex(nearest);
+      scrubberPreviewTimerRef.current = window.setTimeout(() => setShowScrubberPreview(true), SCRUBBER_PREVIEW_DELAY_MS);
     }
-    setScrubberScrolling(false);
+  }, [hoveredUserIndex, userMessages.length]);
+  // The wheel replaces the old edge-zone auto-scroll: it moves the BAR GROUP
+  // (never the transcript content) by the scroll delta so the user controls
+  // the speed directly. Only active once the group overflows the track.
+  const handleScrubberWheel = useCallback((event: React.WheelEvent) => {
+    if (userMessages.length === 0) return;
+    const track = event.currentTarget.getBoundingClientRect();
+    const count = userMessages.length;
+    const totalHeight = (count - 1) * SCRUBBER_BAR_GAP;
+    if (totalHeight <= track.height) return;
+    event.preventDefault();
+    // Initial viewport: centre the group when it fits; anchor it to the
+    // bottom (newest visible) once it overflows the track.
+    if (scrubberViewportRef.current === null) {
+      const initial = Math.min((track.height - totalHeight) / 2, track.height - totalHeight);
+      scrubberViewportRef.current = initial;
+      setScrubberViewport(initial);
+    }
+    const maxOffset = totalHeight - track.height;
+    const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+    const current = scrubberViewportRef.current;
+    if (current === null) return;
+    // Scrolling up (deltaY < 0) reveals older messages; scrolling down moves
+    // toward the newest, matching the natural wheel direction.
+    const next = Math.min(0, Math.max(-maxOffset, current - delta));
+    if (next === current) return;
+    scrubberViewportRef.current = next;
+    setScrubberViewport(next);
   }, [userMessages.length]);
-  // Drives the auto-scroll loop while the cursor stays in the edge zone. Each
-  // frame the viewport offset moves toward the bound the cursor points at;
-  // reaching a bound stops the loop.
-  useEffect(() => {
-    if (!scrubberScrolling) return;
-    const track = scrubberTrackRef.current;
-    if (!track || userMessages.length === 0) return;
-    const totalHeight = (userMessages.length - 1) * SCRUBBER_BAR_GAP;
-    const maxOffset = totalHeight - track.clientHeight;
-    let raf = 0;
-    const tick = () => {
-      const current = scrubberViewportRef.current;
-      if (current === null) return;
-      const next = Math.min(0, Math.max(-maxOffset, current + scrubberDirectionRef.current * scrubberSpeedRef.current));
-      if (next === current) {
-        setScrubberScrolling(false);
-        return;
-      }
-      scrubberViewportRef.current = next;
-      setScrubberViewport(next);
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [scrubberScrolling, userMessages.length]);
   const jumpToUserMessage = useCallback((index: number) => {
     const el = transcriptRef.current;
     const position = userMarkerPositions[index];
@@ -2007,7 +2310,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   // and neighbours fall off towards the base, forming a mountain around the
   // cursor. All bars are longer than the resting state once hovered.
   const scrubberBarWidth = (index: number, hovered: number | null): number => {
-    if (hovered === null) return 3;
+    if (hovered === null) return 5;
     return Math.max(9, 26 - Math.abs(index - hovered) * 6);
   };
   const hoveredUserMessage = hoveredUserIndex !== null ? userMessages[hoveredUserIndex] : undefined;
@@ -2057,10 +2360,54 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
     return () => { window.removeEventListener("click", close); window.removeEventListener("resize", close); window.removeEventListener("keydown", onKey); };
   }, [contextMenu]);
 
-  const handleFileSelect = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
-    for (const file of Array.from(files)) {
+  // Conversation-list context menu (right-click on a row or the list padding).
+  // The row menu offers open / rename / delete / multi-select; the empty-area
+  // menu offers new conversation and (in multi-select) select-all.
+  useEffect(() => {
+    if (!conversationMenu) return;
+    const close = () => setConversationMenu(null);
+    const menu = conversationMenuRef.current;
+    const items = menu ? Array.from(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')) : [];
+    items[0]?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        close();
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (items.length === 0) return;
+        const current = items.indexOf(document.activeElement as HTMLButtonElement);
+        const delta = e.key === "ArrowDown" ? 1 : -1;
+        const next = items[(current + delta + items.length) % items.length];
+        next?.focus();
+        return;
+      }
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("resize", close); window.removeEventListener("keydown", onKey); };
+  }, [conversationMenu]);
+
+  const openConversationMenu = useCallback((event: React.MouseEvent, conversationId: string | null) => {
+    if (demoMode) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu(null);
+    // Keep the menu on-screen near the cursor.
+    const x = Math.min(event.clientX, window.innerWidth - 170);
+    const y = Math.min(event.clientY, window.innerHeight - 150);
+    setConversationMenu({ x, y, conversationId });
+  }, [demoMode]);
+
+  // Shared attachment intake used by the file picker, drag-and-drop onto the
+  // composer, and Ctrl/Cmd+V paste. Supported files are extracted (text) and
+  // uploaded as outbound mail attachments (best-effort; demo mode skips the
+  // upload); unsupported types such as images are skipped for now (see
+  // ROADMAP — multimodal image input is a planned backlog item).
+  const acceptFiles = useCallback(async (files: readonly File[]) => {
+    for (const file of files) {
       if (!isSupportedFile(file)) {
         setProcessingFileName(null);
         continue;
@@ -2068,21 +2415,18 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
       setProcessingFileName(file.name);
       try {
         const processed = await processFile(file);
-        // Upload the file as an outbound mail attachment so the Agent can
-        // attach it to drafts/messages (bound to the first scoped account).
-        // Uploading is best-effort: the extracted text remains usable even if
-        // the attachment upload fails or the scope has no account. Demo mode
-        // skips the upload entirely (no backend) and keeps the extracted text.
         const accountId = demoMode ? undefined : scope.accountIds[0];
         setAttachedFiles((prev) => [...prev, { ...processed, mailUploadState: accountId ? "uploading" : undefined }]);
         if (accountId) {
           try {
             const attachment = await api.uploadOutboundAttachment(accountId, file);
+            failedUploadFilesRef.current.delete(`${file.name}:${file.size}`);
             setAttachedFiles((prev) => prev.map((item) =>
               item.name === processed.name && item.size === processed.size && item.mailUploadState === "uploading"
                 ? { ...item, mailToken: attachment.token, mailAccountId: accountId, mailUploadState: "ready" }
                 : item));
           } catch {
+            failedUploadFilesRef.current.set(`${file.name}:${file.size}`, file);
             setAttachedFiles((prev) => prev.map((item) =>
               item.name === processed.name && item.size === processed.size && item.mailUploadState === "uploading"
                 ? { ...item, mailUploadState: "failed" }
@@ -2095,7 +2439,53 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
     }
     setProcessingFileName(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
-  }, [scope.accountIds]);
+  }, [demoMode, scope.accountIds]);
+
+  const handleFileSelect = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    await acceptFiles(Array.from(files));
+  }, [acceptFiles]);
+
+  const handleComposerDrop = useCallback((event: React.DragEvent) => {
+    event.preventDefault();
+    setComposerDragActive(false);
+    if (streaming) return;
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length) void acceptFiles(files);
+  }, [acceptFiles, streaming]);
+
+  const handleComposerPaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.files);
+    if (files.length === 0) return; // plain text paste unchanged
+    event.preventDefault();
+    void acceptFiles(files);
+  }, [acceptFiles]);
+
+  // Retries the outbound upload for a previously failed attachment without
+  // re-extracting the text (the original File is cached on failure).
+  const retryAttachedFile = useCallback(async (index: number) => {
+    const file = attachedFiles[index];
+    if (!file || file.mailUploadState !== "failed" || retryUploadRef.current) return;
+    const accountId = demoMode ? undefined : scope.accountIds[0];
+    const original = accountId ? failedUploadFilesRef.current.get(`${file.name}:${file.size}`) : undefined;
+    if (!accountId || !original) {
+      // Cannot re-upload (no account or the original File is gone); keep the
+      // read-only extracted text and surface the failure state.
+      return;
+    }
+    retryUploadRef.current = true;
+    setAttachedFiles((prev) => prev.map((item, itemIndex) => itemIndex === index ? { ...item, mailUploadState: "uploading" } : item));
+    try {
+      const attachment = await api.uploadOutboundAttachment(accountId, original);
+      failedUploadFilesRef.current.delete(`${file.name}:${file.size}`);
+      setAttachedFiles((prev) => prev.map((item, itemIndex) => itemIndex === index ? { ...item, mailToken: attachment.token, mailAccountId: accountId, mailUploadState: "ready" } : item));
+    } catch {
+      setAttachedFiles((prev) => prev.map((item, itemIndex) => itemIndex === index ? { ...item, mailUploadState: "failed" } : item));
+    } finally {
+      retryUploadRef.current = false;
+    }
+  }, [attachedFiles, demoMode, scope.accountIds]);
 
   const removeAttachedFile = useCallback((index: number) => {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
@@ -2107,6 +2497,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   }, []);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => window.clearTimeout(scrubberPreviewTimerRef.current), []);
   // Remember which conversation the panel was on so reopening lands on it
   // (closing the panel does not cancel a running turn; the user returns to
   // that conversation to see the completed reply).
@@ -2124,9 +2515,13 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   // stops as soon as the local transcript moves on (new send, conversation
   // switch) or the attempt budget runs out.
   useEffect(() => {
-    if (demoMode || streaming || !active || !lastMessageIsUnanswered(active)) return;
+    // Poll while the newest turn is unfinished: the last message is either the
+    // user's (server still answering) or a streaming assistant snapshot from a
+    // run that outlived the panel. Once a complete assistant reply arrives,
+    // fold it in and stop.
+    if (demoMode || streaming || !active || (!lastMessageIsUnanswered(active) && !lastMessageIsStreaming(active))) return;
     const targetId = active.id;
-    const pendingUserMessageId = active.messages[active.messages.length - 1].id;
+    const pendingLastId = active.messages[active.messages.length - 1].id;
     let stopped = false;
     let attempts = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -2137,14 +2532,23 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
         const fresh = await api.agentConversation(targetId);
         if (stopped) return;
         const freshLast = fresh.messages[fresh.messages.length - 1];
-        if (freshLast && freshLast.role === "assistant") {
+        if (freshLast && freshLast.role === "assistant" && freshLast.state === "complete") {
           const next = applyRevokedMarks(purgeStaleErrors(fresh));
           setActive((current) => current && current.id === targetId
-            && current.messages[current.messages.length - 1]?.id === pendingUserMessageId
+            && current.messages[current.messages.length - 1]?.id === pendingLastId
             ? next
             : current);
           void refreshConversations(conversationSearch);
           return;
+        }
+        if (freshLast && freshLast.role === "assistant" && freshLast.state === "streaming") {
+          // The in-flight reply gained content since the last read; refresh the
+          // live snapshot while continuing to poll for its completion.
+          const next = applyRevokedMarks(purgeStaleErrors(fresh));
+          setActive((current) => current && current.id === targetId
+            && current.messages[current.messages.length - 1]?.id === pendingLastId
+            ? next
+            : current);
         }
       } catch {
         // Transient failure — keep polling until the attempt budget runs out.
@@ -2228,15 +2632,84 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
       await api.deleteAgentConversation(id);
       const next = conversations.filter((conversation) => conversation.id !== id);
       setConversations(next);
-      setPendingDeleteId(null);
       if (active?.id === id) {
+        if (streaming) {
+          // The deleted conversation may still be streaming: invalidate the run
+          // so late stream events are dropped by the isCurrentRun guard, abort
+          // the local SSE stream (the server cancels the run on delete too),
+          // and clear the local streaming state. Without this the composer
+          // stays locked — select/create read `streaming` — and the UI can no
+          // longer switch conversations. A deleted running conversation lands
+          // on the welcome screen rather than auto-switching.
+          runIdRef.current += 1;
+          abortRef.current?.abort();
+          void api.cancelAgentRun(id).catch(() => undefined);
+          setStreaming(false);
+          setStreamStatus(null);
+          setActive(null);
+          return;
+        }
         setActive(null);
         if (next[0]) void selectConversation(next[0].id);
       }
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : t("agent.error.deleteConversation"));
     }
-  }, [active?.id, conversations, selectConversation, t]);
+  }, [active?.id, conversations, selectConversation, streaming, t]);
+
+  const renameFromMenu = useCallback((conversationId: string) => {
+    const conversation = conversations.find((item) => item.id === conversationId);
+    if (!conversation) return;
+    setConversationMenu(null);
+    if (active?.id === conversationId) {
+      setDraftTitle(conversation.title);
+      setRenaming(true);
+    } else {
+      // Select first so the header renders the right conversation, then edit.
+      void selectConversation(conversationId).then(() => {
+        setDraftTitle(conversation.title);
+        setRenaming(true);
+      });
+    }
+  }, [active?.id, conversations, selectConversation]);
+
+  const toggleMultiSelect = useCallback((conversationId: string) => {
+    setSelectedConversationIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(conversationId)) next.delete(conversationId);
+      else next.add(conversationId);
+      return next;
+    });
+  }, []);
+
+  const exitMultiSelect = useCallback(() => {
+    setMultiSelect(false);
+    setSelectedConversationIds(new Set());
+  }, []);
+
+  // Runs after the user confirms deletion in the modal. Deletes each target
+  // conversation (deleteConversation cancels any streaming run and unlocks the
+  // local streaming state, so batch deletion is safe against active replies),
+  // then leaves multi-select mode.
+  const confirmDelete = useCallback(async () => {
+    if (!pendingDelete) return;
+    const { conversationIds } = pendingDelete;
+    // Fade the dialog out while the deletion runs in parallel.
+    requestDeleteConfirmClose();
+    for (const id of conversationIds) {
+      await deleteConversation(id);
+    }
+    exitMultiSelect();
+  }, [deleteConversation, exitMultiSelect, pendingDelete, requestDeleteConfirmClose]);
+
+  // Resolved conversation rows for the delete-confirmation modal.
+  const pendingDeleteTargets = useMemo(() => {
+    if (!pendingDelete) return null;
+    const targets = pendingDelete.conversationIds
+      .map((id) => conversations.find((item) => item.id === id))
+      .filter((item): item is typeof conversations[number] => Boolean(item));
+    return { ids: pendingDelete.conversationIds, targets, single: targets[0] ?? null };
+  }, [conversations, pendingDelete]);
 
   const mutateAssistant = useCallback((messageId: string, event: AgentStreamEvent) => {
     setActive((current) => {
@@ -2275,10 +2748,26 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
 
   const sendMessage = useCallback(async (contentOverride?: string) => {
     const userText = (contentOverride ?? composer).trim();
-    if (!userText || streaming) return;
-    if (!selectedProvider) {
+    if (!userText) return;
+    if (!selectedProvider || !selectedProvider.configured) {
       setProviderSettingsOpen(true);
       return;
+    }
+    // Interrupt-to-send: if the agent is still streaming, sending a new message
+    // folds the running reply into an "interrupted" state and cancels the run
+    // before the new one starts. The abort + cancel are fire-and-forget — we do
+    // not block the new message on the old run's teardown; a runId guard makes
+    // the late teardown harmless if it lands after the new run begins.
+    if (streaming && abortRef.current) {
+      const interruptLabel = t("agent.interrupted");
+      abortRef.current.abort();
+      void api.cancelAgentRun(active?.id ?? "").catch(() => undefined);
+      setActive((current) => current ? {
+        ...current,
+        messages: current.messages.map((message) =>
+          message.role === "assistant" && message.state === "streaming" ? interruptAssistantMessage(message, interruptLabel) : message,
+        ),
+      } : current);
     }
     const files = attachedFiles;
     // Quote context from "Follow up" — sent to the LLM as truncated context,
@@ -2317,6 +2806,8 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
     setStreamStatus(null);
     setLoadError(null);
     setConfirmationErrors({});
+    // Sending a new message dismisses the revoke notice immediately.
+    setRevokeNoticeRemaining(0);
     setActive((current) => current && current.id === conversation!.id
       ? {
         ...current,
@@ -2337,28 +2828,62 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
       : current);
     const controller = new AbortController();
     abortRef.current = controller;
+    const runId = runIdRef.current + 1;
+    runIdRef.current = runId;
+    const isCurrentRun = () => runId === runIdRef.current;
+    const streamPayload: Parameters<typeof api.streamAgentMessage>[1] = {
+      content: apiContent,
+      providerId: selectedProvider.id,
+      mode,
+      scope,
+      context: {
+        ...(currentMessage ? { currentMessageId: currentMessage.id } : {}),
+      },
+      ...(truncatedQuote ? { quote: truncatedQuote } : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
+    };
+    // A still-unwinding previous run on the server can briefly reject the new
+    // stream with CONFLICT. We retry a few times (swallowing the conflict and
+    // its trailing events) until the old run finishes tearing down.
+    let conflictRetries = 0;
+    const MAX_CONFLICT_RETRIES = 5;
     try {
-      await api.streamAgentMessage(conversation.id, {
-        content: apiContent,
-        providerId: selectedProvider.id,
-        mode,
-        scope,
-        context: {
-          ...(currentMessage ? { currentMessageId: currentMessage.id } : {}),
-        },
-        ...(truncatedQuote ? { quote: truncatedQuote } : {}),
-        ...(attachments.length > 0 ? { attachments } : {}),
-      }, (event) => {
-        mutateAssistant(assistantMessage.id, event);
-        if (event.type === "status" && event.message) {
-          setStreamStatus(event.message);
-        } else if (event.type === "completed") {
-          setStreamStatus(null);
-        }
-        if (event.type === "memory_suggestion") {
-          setPendingMemorySuggestions((suggestions) => (suggestions.includes(event.summary) ? suggestions : [...suggestions, event.summary]));
-        }
-      }, controller.signal);
+      for (;;) {
+        let conflictRetry = false;
+        await api.streamAgentMessage(conversation.id, streamPayload, (event) => {
+          // A cancelled run may still emit buffered events as it unwinds. They
+          // belong to a superseded run and must not touch the current one.
+          if (!isCurrentRun()) return;
+          if (event.type === "error" && event.error.code === "CONFLICT" && !controller.signal.aborted && conflictRetries < MAX_CONFLICT_RETRIES) {
+            conflictRetry = true;
+            return;
+          }
+          // Once this attempt hit a conflict, drop the rest of its events
+          // (including the trailing completed/error) so the assistant message
+          // is not wrongly marked; the retry below restarts cleanly.
+          if (conflictRetry) return;
+          mutateAssistant(assistantMessage.id, event);
+          if (event.type === "status" && event.message) {
+            setStreamStatus(event.message);
+          } else if (event.type === "completed") {
+            setStreamStatus(null);
+          }
+          if (event.type === "memory_suggestion") {
+            setPendingMemorySuggestions((suggestions) => (suggestions.includes(event.summary) ? suggestions : [...suggestions, event.summary]));
+          }
+          if (event.type === "title") {
+            // The server generated a concise title for the first turn; reflect it
+            // in both the active conversation and the sidebar list.
+            setActive((current) => current && current.id === conversation.id ? { ...current, title: event.title } : current);
+            setConversations((items) => items.map((item) => item.id === conversation.id ? { ...item, title: event.title } : item));
+          }
+        }, controller.signal);
+        if (!conflictRetry) break;
+        conflictRetries += 1;
+        setStreamStatus(t("agent.error.streamBusy"));
+        // Give the superseded run time to release the conversation on the server.
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
+      }
 // A successful turn clears stale failure rows — both the one the retry
 // targeted and any others left behind — so the transcript stops showing
       // outdated errors once the conversation moves on.
@@ -2370,6 +2895,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
       } : current);
       await refreshConversations(conversationSearch);
     } catch (error) {
+      if (!isCurrentRun()) return;
       if (controller.signal.aborted) {
         mutateAssistant(assistantMessage.id, { type: "completed", reason: "cancelled" });
       } else {
@@ -2382,8 +2908,12 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
         mutateAssistant(assistantMessage.id, { type: "error", error: { code, message, retryable: true } });
       }
     } finally {
-      if (abortRef.current === controller) abortRef.current = null;
-      setStreaming(false);
+      // Only the latest run may clear shared run state; a superseded run's
+      // teardown must not drop the streaming flag of the run that replaced it.
+      if (isCurrentRun()) {
+        if (abortRef.current === controller) abortRef.current = null;
+        setStreaming(false);
+      }
     }
   }, [active, attachedFiles, composer, conversationSearch, currentMessage, mode, mutateAssistant, quoteContext, refreshConversations, scope, selectedProvider, streaming, t]);
 
@@ -2422,30 +2952,15 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
     if (!slashMenu) setSlashIndex(0);
   }, [slashMenu]);
 
-  const copyText = useCallback(async (content: string) => {
-    try {
-      await navigator.clipboard.writeText(content);
-    } catch {
-      const input = document.createElement("textarea");
-      input.value = content;
-      input.style.position = "fixed";
-      input.style.opacity = "0";
-      document.body.append(input);
-      input.select();
-      document.execCommand("copy");
-      input.remove();
-    }
-  }, []);
-
   const scopeOptions: Array<{ mode: AgentScopeMode; label: string; title: string; disabled?: boolean }> = [
     { mode: "all_accounts", label: t("agent.scope.all"), title: t("agent.scope.all.tooltip") },
     { mode: "selected_account", label: t("agent.scope.account"), title: t("agent.scope.account.tooltip"), disabled: !currentMessage },
     { mode: "current_message", label: t("agent.scope.message"), title: t("agent.scope.message.tooltip"), disabled: !currentMessage },
   ];
-  const permissionOptions: Array<{ level: AgentAccessLevel; label: string; detail: string; features: string[]; icon: ReactNode }> = [
-    { level: "read-only", label: t("agent.permission.readOnly"), detail: t("agent.permission.readOnly.detail"), features: [t("agent.permission.readOnly.feature1"), t("agent.permission.readOnly.feature2"), t("agent.permission.readOnly.feature3")], icon: <Eye size={12} /> },
-    { level: "send-confirmed", label: t("agent.permission.confirmed"), detail: t("agent.permission.confirmed.detail"), features: [t("agent.permission.confirmed.feature1"), t("agent.permission.confirmed.feature2"), t("agent.permission.confirmed.feature3")], icon: <ShieldCheck size={12} /> },
-    { level: "full-access", label: t("agent.permission.fullAccess"), detail: t("agent.permission.fullAccess.detail"), features: [t("agent.permission.fullAccess.feature1"), t("agent.permission.fullAccess.feature2"), t("agent.permission.fullAccess.feature3")], icon: <Zap size={12} /> },
+  const permissionOptions: Array<{ level: AgentAccessLevel; label: string; hint: string; detail: string; features: string[]; icon: ReactNode }> = [
+    { level: "read-only", label: t("agent.permission.readOnly"), hint: t("agent.permission.readOnly.hint"), detail: t("agent.permission.readOnly.detail"), features: [t("agent.permission.readOnly.feature1"), t("agent.permission.readOnly.feature2"), t("agent.permission.readOnly.feature3")], icon: <Eye size={12} /> },
+    { level: "send-confirmed", label: t("agent.permission.confirmed"), hint: t("agent.permission.confirmed.hint"), detail: t("agent.permission.confirmed.detail"), features: [t("agent.permission.confirmed.feature1"), t("agent.permission.confirmed.feature2"), t("agent.permission.confirmed.feature3")], icon: <ShieldCheck size={12} /> },
+    { level: "full-access", label: t("agent.permission.fullAccess"), hint: t("agent.permission.fullAccess.hint"), detail: t("agent.permission.fullAccess.detail"), features: [t("agent.permission.fullAccess.feature1"), t("agent.permission.fullAccess.feature2"), t("agent.permission.fullAccess.feature3")], icon: <Zap size={12} /> },
   ];
   const cloudMailContextBlocked = Boolean(selectedProvider?.cloud && !selectedProvider.cloudContentConsent);
   const currentPermissionLabel = permissionOptions.find((option) => option.level === agentAccessLevel)?.label;
@@ -2457,7 +2972,10 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   // The composer stays editable when there is a configured provider. Demo mode
   // ignores the server-side enabled flag so the textarea/model picker remain
   // interactive for UI demonstration, while sending stays disabled below.
-  const composerDisabled = streaming || !hasConfiguredProvider || (!demoMode && !bootstrap?.enabled);
+  // The composer stays editable while the agent runs so the user can type the
+  // next message and interrupt-send it; only an unconfigured/disabled backend
+  // locks the field. Sending is always allowed mid-run (it interrupts).
+  const composerDisabled = !hasConfiguredProvider || (!demoMode && !bootstrap?.enabled);
   // Sending is never available in demo mode (there is no Agent backend).
   const sendDisabled = demoMode || !composer.trim() || composerDisabled || (mode === "agent" && cloudMailContextBlocked);
 
@@ -2465,7 +2983,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
     if (!active) return [];
     for (let i = active.messages.length - 1; i >= 0; i--) {
       const msg = active.messages[i]!;
-      if (msg.role === "assistant" && msg.citations.length > 0) return msg.citations;
+      if (msg.role === "assistant" && msg.citations.length > 0) return dedupeCitations(msg.citations);
     }
     return [];
   }, [active]);
@@ -2499,6 +3017,20 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
   const confirmationRemaining = pendingConfirmation
     ? Math.max(0, confirmationDeadline - Date.now())
     : 0;
+  // "已撤回信息" notice above the composer: a countdown that clears on its own
+  // or the moment the user sends a new message.
+  const [revokeNoticeRemaining, setRevokeNoticeRemaining] = useState(0);
+  /** Message ids whose revoke/unrevoke request is still in flight. Duplicate
+   *  clicks are ignored while pending (idempotent server endpoint). */
+  const [pendingRevokeIds, setPendingRevokeIds] = useState<ReadonlySet<string>>(new Set());
+  const pendingRevokeIdsRef = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    if (revokeNoticeRemaining <= 0) return;
+    const timer = window.setInterval(() => {
+      setRevokeNoticeRemaining((remaining) => Math.max(0, remaining - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [revokeNoticeRemaining > 0]);
   const resolveDemoConfirmation = useCallback((confirmationId: string, decision: "approve" | "reject") => {
     setActive((current) => current ? {
       ...current,
@@ -2509,6 +3041,12 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
     } : current);
   }, [t]);
   const revokeMessage = useCallback((messageId: string) => {
+    const revokeTarget = activeMessagesRef.current?.find((message) => message.id === messageId);
+    const conversationId = active?.id;
+    if (!conversationId || pendingRevokeIdsRef.current.has(messageId)) return;
+    // Optimistic update: the transcript hides the message immediately. The
+    // server is reconciled afterwards; on failure the local mark is rolled back.
+    const revokedSet = new Set<string>();
     setActive((current) => {
       if (!current) return current;
       const index = current.messages.findIndex((message) => message.id === messageId);
@@ -2525,24 +3063,40 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
           revokedIds.add(follow.id);
         }
       }
+      revokedSet.clear();
+      revokedIds.forEach((id) => revokedSet.add(id));
       writeRevokedIds(current.id, revokedIds);
       return { ...current, messages: current.messages.map((message) => (revokedIds.has(message.id) ? { ...message, revoked: true } : message)) };
     });
-  }, []);
-  const restoreMessage = useCallback((messageId: string) => {
-    const restoreTarget = activeMessagesRef.current?.find((message) => message.id === messageId);
-    setActive((current) => {
-      if (!current) return current;
-      const revokedIds = readRevokedIds(current.id);
-      if (!revokedIds.delete(messageId)) return current;
-      writeRevokedIds(current.id, revokedIds);
-      return { ...current, messages: current.messages.map((message) => (message.id === messageId && message.revoked ? { ...message, revoked: false } : message)) };
-    });
-    if (restoreTarget?.role === "user") {
-      setComposer((instruction) => instruction || restoreTarget.content);
+    // Revoking the user's own message returns its text to the composer so it
+    // can be edited and resent; the assistant reply has no text to recover and
+    // stays revoked. A small "已撤回信息" notice (with a countdown) shows above
+    // the composer and clears as soon as the user sends a new message.
+    if (revokeTarget?.role === "user" && revokeTarget.content) {
+      setComposer(revokeTarget.content);
       window.requestAnimationFrame(() => composerRef.current?.focus());
     }
-  }, []);
+    setRevokeNoticeRemaining(REVOKE_NOTICE_SECONDS);
+    // Server reconciliation: idempotent, duplicates ignored while in flight.
+    pendingRevokeIdsRef.current = new Set(pendingRevokeIdsRef.current).add(messageId);
+    setPendingRevokeIds(pendingRevokeIdsRef.current);
+    void api.revokeAgentMessage(conversationId, messageId, true).catch(() => {
+      // Roll back the optimistic marks so the transcript matches the server.
+      setActive((current) => {
+        if (!current) return current;
+        const revokedIds = new Set(readRevokedIds(current.id));
+        revokedSet.forEach((id) => revokedIds.delete(id));
+        writeRevokedIds(current.id, revokedIds);
+        return { ...current, messages: current.messages.map((message) => (revokedSet.has(message.id) ? { ...message, revoked: false } : message)) };
+      });
+      setLoadError(t("agent.message.revokeFailed"));
+    }).finally(() => {
+      const next = new Set(pendingRevokeIdsRef.current);
+      next.delete(messageId);
+      pendingRevokeIdsRef.current = next;
+      setPendingRevokeIds(next);
+    });
+  }, [active?.id, t]);
 
   return (
     <section ref={workspaceRef} className="agent-workspace" role="dialog" aria-modal="true" aria-label={t("agent.workspace.aria")} tabIndex={-1}>
@@ -2557,18 +3111,52 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
           <button className="agent-new-conversation-button" type="button" onClick={() => { setMobileConversationsOpen(false); void createConversation(); }} disabled={streaming || demoMode} aria-label={t("agent.conversation.new")} data-tooltip={t("agent.conversation.new")}><MessageCirclePlus size={16} /></button>
         </div>
         <div className="agent-sidebar-search"><Search size={15} /><label className="visually-hidden" htmlFor="agent-conversation-search">{t("agent.conversation.search")}</label><input id="agent-conversation-search" value={conversationSearch} onChange={(event) => setConversationSearch(event.target.value)} placeholder={t("agent.conversation.searchPlaceholder")} /></div>
-        <div className="agent-conversation-list">
+        <div className="agent-conversation-list" onContextMenu={(event) => openConversationMenu(event, null)}>
           {loading && <div className="agent-sidebar-state"><LoaderCircle className="spin" size={18} />{t("agent.loading")}</div>}
           {!loading && !filteredConversations.length && <div className="agent-sidebar-state"><MessageCircle size={18} />{t("agent.conversation.empty")}</div>}
-          {filteredConversations.map((conversation) => (
-            <div key={conversation.id} className={`agent-conversation-row ${active?.id === conversation.id ? "active" : ""}`}>
-              <button type="button" onClick={() => { setMobileConversationsOpen(false); void selectConversation(conversation.id); }} disabled={streaming}><span><strong>{conversation.title}</strong><small>{conversation.preview || t("agent.conversation.emptyPreview")}</small></span><time>{shortDate(conversation.updatedAt, locale)}</time></button>
-              <button className="agent-row-delete" type="button" aria-label={t("agent.conversation.delete")} disabled={streaming} onClick={() => setPendingDeleteId((current) => current === conversation.id ? null : conversation.id)}><Trash2 size={14} /></button>
-              {pendingDeleteId === conversation.id && <div className="agent-row-confirm"><span>{t("agent.conversation.deletePrompt")}</span><button type="button" onClick={() => void deleteConversation(conversation.id)}>{t("agent.conversation.delete")}</button><button type="button" onClick={() => setPendingDeleteId(null)}>{t("common.cancel")}</button></div>}
-            </div>
-          ))}
+          {filteredConversations.map((conversation) => {
+            const selected = selectedConversationIds.has(conversation.id);
+            return (
+              <div key={conversation.id} className={`agent-conversation-row ${active?.id === conversation.id ? "active" : ""} ${multiSelect ? "multi-select" : ""} ${selected ? "selected" : ""}`} onContextMenu={(event) => openConversationMenu(event, conversation.id)}>
+                <button type="button" disabled={streaming} onClick={() => {
+                  if (multiSelect) {
+                    toggleMultiSelect(conversation.id);
+                    return;
+                  }
+                  setMobileConversationsOpen(false);
+                  void selectConversation(conversation.id);
+                }}>{multiSelect && <span className="agent-row-check" aria-hidden="true">{selected ? <Check size={13} /> : null}</span>}<span><strong>{conversation.title}</strong><small>{conversation.preview || t("agent.conversation.emptyPreview")}</small></span><time>{shortDate(conversation.updatedAt, locale)}</time></button>
+              </div>
+            );
+          })}
         </div>
+        {multiSelect && (
+          <div className="agent-selection-bar">
+            <span className="agent-selection-count"><CheckSquare size={13} />{t("agent.conversation.selected", { count: selectedConversationIds.size })}</span>
+            <button className="agent-selection-danger" type="button" disabled={selectedConversationIds.size === 0} onClick={() => { resetDeleteConfirmClose(); setPendingDelete({ conversationIds: [...selectedConversationIds] }); }}><Trash2 size={13} />{t("agent.conversation.bulkDelete")}</button>
+            <button className="agent-selection-plain" type="button" onClick={exitMultiSelect}>{t("agent.conversation.cancelSelect")}</button>
+          </div>
+        )}
         <div className="agent-sidebar-footer"><Bot size={15} /><span>{t("agent.localBoundary")}</span></div>
+        {conversationMenu && (
+          <div className="agent-context-menu" ref={conversationMenuRef} style={{ left: conversationMenu.x, top: conversationMenu.y }} role="menu" onClick={(event) => event.stopPropagation()}>
+            {conversationMenu.conversationId ? (
+              <>
+                <button type="button" role="menuitem" onClick={() => { setConversationMenu(null); setMobileConversationsOpen(false); void selectConversation(conversationMenu.conversationId!); }}><MessageSquare size={14} /><span>{t("agent.conversation.open")}</span></button>
+                <button type="button" role="menuitem" onClick={() => renameFromMenu(conversationMenu.conversationId!)}><Pencil size={14} /><span>{t("agent.conversation.rename")}</span></button>
+                <button type="button" role="menuitem" onClick={() => { resetDeleteConfirmClose(); setPendingDelete({ conversationIds: [conversationMenu.conversationId!] }); setConversationMenu(null); }}><Trash2 size={14} /><span>{t("agent.conversation.delete")}</span></button>
+                <button type="button" role="menuitem" onClick={() => { setMultiSelect(true); setConversationMenu(null); }}><CheckSquare size={14} /><span>{t("agent.conversation.select")}</span></button>
+              </>
+            ) : (
+              <>
+                <button type="button" role="menuitem" onClick={() => { setConversationMenu(null); setMobileConversationsOpen(false); void createConversation(); }}><MessageCirclePlus size={14} /><span>{t("agent.conversation.new")}</span></button>
+                {multiSelect && (
+                  <button type="button" role="menuitem" onClick={() => { setSelectedConversationIds(new Set(filteredConversations.map((item) => item.id))); setConversationMenu(null); }}><CheckSquare size={14} /><span>{t("agent.conversation.selectAll")}</span></button>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </aside>
 
       <section className="agent-main-panel">
@@ -2577,7 +3165,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
             <span className="agent-heading-mark" aria-hidden="true"><img decoding="sync" className="nami-brand-logo nami-brand-logo-light" src="/nami-logo-light.png" alt="" /><img decoding="sync" className="nami-brand-logo nami-brand-logo-dark" src="/nami-logo-dark.png" alt="" /></span>
             {renaming && active ? (
               <form onSubmit={(event) => { event.preventDefault(); void renameConversation(); }}><input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} aria-label={t("agent.conversation.rename")} autoFocus onBlur={() => setRenaming(false)} /></form>
-            ) : <><div className="agent-conversation-title"><span className="eyebrow">{t("agent.eyebrow")}</span><h1>{active?.title ?? t("agent.conversation.newTitle")}</h1></div>{active && <button className="icon-button" type="button" aria-label={t("agent.conversation.rename")} data-tooltip={t("agent.conversation.rename")} onClick={() => { setDraftTitle(active.title); setRenaming(true); }}><Pencil size={15} /></button>}</>}
+            ) : <div className="agent-conversation-title"><span className="eyebrow">{t("agent.eyebrow")}</span><span className="agent-title-line"><h1>{active?.title ?? t("agent.conversation.newTitle")}</h1>{active && <button className="icon-button" type="button" aria-label={t("agent.conversation.rename")} data-tooltip={t("agent.conversation.rename")} onClick={() => { setDraftTitle(active.title); setRenaming(true); }}><Pencil size={15} /></button>}</span></div>}
           </div>
           <div className="agent-header-actions">
             <div className="agent-scope-switch" role="group" aria-label={t("agent.scope.label")} data-scope={scopeMode}>
@@ -2604,6 +3192,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
         <div className="agent-transcript-wrap">
         <div className="agent-transcript" ref={transcriptRef} aria-live="polite" onContextMenu={handleTranscriptContextMenu}>
           {loadError && <div className="agent-error-panel" role="status"><CircleAlert size={18} /><span><strong>{t("agent.error.title")}</strong><small>{loadError}</small></span><button className="secondary-button" type="button" onClick={() => void loadBootstrap()}>{t("common.retry")}</button></div>}
+          {loading && !active && <div className="agent-loading-state" role="status"><LoaderCircle className="spin" size={18} />{t("agent.loading")}</div>}
           {!loading && !active && <div className="agent-empty-state"><span className="agent-wordmark" aria-hidden="true">{"NamiMailAgent".split("").map((char, index) => <span key={index} style={{ animationDelay: `${index * 0.05}s` }}>{char}</span>)}</span>{hasConfiguredProvider ? <div className="agent-suggestion-cards"><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.today"))}><CalendarDays size={17} /><span>{t("agent.suggestion.today")}</span></button><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.actionItems"))}><ClipboardList size={17} /><span>{t("agent.suggestion.actionItems")}</span></button><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.reply"))}><Reply size={17} /><span>{t("agent.suggestion.reply")}</span></button></div> : <button className="agent-configure-provider-button" type="button" onClick={() => setProviderSettingsOpen(true)}><Wrench size={16} />{t("agent.providers.configure")}</button>}</div>}
           {active?.messages.map((message, index) => (
             <AgentMessageRow
@@ -2614,9 +3203,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
               locale={locale}
               t={t}
               onOpenAttachment={openAttachmentFolder}
-              onCopy={copyText}
               onRevoke={revokeMessage}
-              onRestore={restoreMessage}
               onRetry={retryLastUserTurn}
               onUserMessageRef={registerUserMessageEl}
             />
@@ -2624,7 +3211,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
           <div ref={messagesEndRef} />
           {contextMenu && (
             <div className="agent-context-menu" ref={contextMenuRef} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onClick={(e) => e.stopPropagation()}>
-              <button type="button" role="menuitem" onClick={() => { void copyText(contextMenu.text); setContextMenu(null); }}><Copy size={14} /><span>{t("agent.message.copy")}</span></button>
+              <button type="button" role="menuitem" onClick={() => { void copyToClipboard(contextMenu.text); setContextMenu(null); }}><Copy size={14} /><span>{t("agent.message.copy")}</span></button>
               <button type="button" role="menuitem" onClick={() => { setQuoteContext(contextMenu.text); setContextMenu(null); window.requestAnimationFrame(() => composerRef.current?.focus()); }}><ArrowUp size={14} /><span>{t("agent.message.followUp")}</span></button>
             </div>
           )}
@@ -2634,8 +3221,13 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
             className="agent-scrubber"
             role="presentation"
             ref={scrubberTrackRef}
-            onMouseLeave={() => { setHoveredUserIndex(null); setScrubberScrolling(false); }}
+            onMouseLeave={() => {
+              window.clearTimeout(scrubberPreviewTimerRef.current);
+              setShowScrubberPreview(false);
+              setHoveredUserIndex(null);
+            }}
             onMouseMove={handleScrubberMove}
+            onWheel={handleScrubberWheel}
             onClick={() => { if (hoveredUserIndex !== null) jumpToUserMessage(hoveredUserIndex); }}
           >
             {scrubberViewport !== null && userMessages.map((message, index) => {
@@ -2655,7 +3247,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
                 />
               );
             })}
-            {hoveredUserMessage && scrubberViewport !== null && (
+            {hoveredUserMessage && showScrubberPreview && scrubberViewport !== null && (
               <div
                 className="agent-scrubber-preview"
                 style={{
@@ -2678,7 +3270,13 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
                   <span>{file.name}</span>
                   {file.mailUploadState === "uploading" && <LoaderCircle size={11} className="spin" aria-label={t("agent.attachment.uploading")} />}
                   {file.mailUploadState === "ready" && <em className="agent-attachment-chip-note ready">{t("agent.attachment.ready")}</em>}
-                  {file.mailUploadState === "failed" && <em className="agent-attachment-chip-note failed">{t("agent.attachment.failed")}</em>}
+                  {file.mailUploadState === "failed" && (
+                    <span className="agent-attachment-chip-note failed">
+                      <em>{t("agent.attachment.failed")}</em>
+                      <button type="button" onClick={() => void retryAttachedFile(index)}>{t("agent.attachment.retry")}</button>
+                      <button type="button" onClick={() => { resetFeedbackClose(); setFeedbackOpen(true); }}>{t("agent.attachment.feedback")}</button>
+                    </span>
+                  )}
                   <button type="button" onClick={() => removeAttachedFile(index)} aria-label={t("agent.composer.removeAttachment")}><X size={11} /></button>
                 </span>
               ))}
@@ -2698,6 +3296,12 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
               <button type="button" onClick={() => setQuoteContext(null)} aria-label={t("common.dismiss")}><X size={12} /></button>
             </div>
           )}
+          {revokeNoticeRemaining > 0 && (
+            <div className="agent-revoke-notice" role="status">
+              <span>{t("agent.message.revokeNotice")}</span>
+              <em aria-hidden="true">{revokeNoticeRemaining}s</em>
+            </div>
+          )}
           {pendingConfirmation && <AgentConfirmationCard
             confirmation={pendingConfirmation}
             desktopConfirmationAvailable={desktopConfirmationAvailable}
@@ -2705,7 +3309,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
             onDecision={demoMode ? (decision) => resolveDemoConfirmation(pendingConfirmation.id, decision) : undefined}
             remainingMs={confirmationRemaining}
           />}
-          <div className="agent-composer">
+          <div className={`agent-composer${streaming ? " streaming" : ""}${composerDragActive ? " drag-active" : ""}`} onDragOver={(event) => { if (streaming || composerDisabled) return; event.preventDefault(); setComposerDragActive(true); }} onDragLeave={(event) => { if (event.currentTarget.contains(event.relatedTarget as Node | null)) return; setComposerDragActive(false); }} onDrop={handleComposerDrop}>
             <button className={`agent-scroll-to-bottom ${showScrollToBottom ? "visible" : ""}`} type="button" onClick={scrollToBottom} aria-label={t("agent.composer.scrollToBottom")}><ChevronDown size={17} /></button>
             <input ref={fileInputRef} type="file" multiple onChange={(e) => void handleFileSelect(e)} accept=".txt,.md,.markdown,.csv,.tsv,.json,.xml,.html,.htm,.py,.js,.ts,.tsx,.jsx,.css,.scss,.less,.yaml,.yml,.log,.rtf,.ini,.cfg,.conf,.sh,.bash,.zsh,.sql,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.vue,.svelte,.pdf,.docx,.pptx" style={{ display: "none" }} />
             <label className="visually-hidden" htmlFor="agent-composer">{t("agent.composer.label")}</label>
@@ -2741,7 +3345,7 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
                 event.preventDefault();
                 void sendMessage();
               }
-            }} placeholder={t("agent.composer.placeholder")} disabled={composerDisabled} rows={1} aria-expanded={slashMenu !== null && slashMenu.length > 0} aria-controls="agent-slash-menu" />
+            }} onPaste={handleComposerPaste} placeholder={t("agent.composer.placeholder")} disabled={composerDisabled} rows={1} aria-expanded={slashMenu !== null && slashMenu.length > 0} aria-controls="agent-slash-menu" />
             {slashMenu && slashMenu.length > 0 && (
               <div className="agent-slash-menu" id="agent-slash-menu" role="listbox" aria-label={t("agent.commands.label")}>
                 {slashMenu.map((item, index) => (
@@ -2792,35 +3396,38 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
                     matters in the mail-assistant mode; plain chat hides it. */}
                 {hasConfiguredProvider && mode === "agent" && (
                   <>
-                    <button type="button" className={`agent-composer-permission${agentAccessLevel === "full-access" ? " full-access" : ""}`} onClick={() => setPermissionOpen((open) => !open)} aria-expanded={permissionOpen} aria-haspopup="menu" aria-label={t("agent.permission.label")}>
+                    <button type="button" className={`agent-composer-permission${agentAccessLevel === "full-access" ? " full-access" : ""}`} onClick={() => setPermissionOpen((open) => !open)} aria-expanded={permissionOpen} aria-haspopup="menu" aria-controls="agent-permission-picker" aria-label={t("agent.permission.label")}>
                       {agentAccessLevel === "full-access" ? <ShieldAlert size={13} /> : <ShieldCheck size={13} />}
                       <span>{currentPermissionLabel}</span>
                       <ChevronDown size={11} className={`agent-permission-chevron${permissionOpen ? " open" : ""}`} aria-hidden="true" />
                     </button>
                     {permissionPopover.mounted && (
-                      <div className={`agent-popover anchor-left${permissionPopover.visible ? " show" : ""}`} role="menu" aria-label={t("agent.permission.label")}>
-                        {permissionOptions.map((option) => {
+                      <AgentPickerPopover id="agent-permission-picker" anchor="left" visible={permissionPopover.visible} label={t("agent.permission.label")}>
+                        {permissionOptions.map((option, index) => {
                           const active = agentAccessLevel === option.level;
                           return (
-                            <button key={option.level} type="button" role="menuitemradio" aria-checked={active} className={`agent-popover-option${active ? " active" : ""}${option.level === "full-access" ? " danger" : ""}`} onClick={() => {
-                              if (option.level === "full-access" && !active) {
+                            <Fragment key={option.level}>
+                              {index > 0 && <div className="agent-popover-divider" role="separator" />}
+                              <button type="button" role="menuitemradio" aria-checked={active} className={`agent-popover-option${active ? " active" : ""}${option.level === "full-access" ? " danger" : ""}`} onClick={() => {
+                                if (option.level === "full-access" && !active) {
+                                  setPermissionOpen(false);
+                                  setPendingAccessLevel("full-access");
+                                  return;
+                                }
                                 setPermissionOpen(false);
-                                setPendingAccessLevel("full-access");
-                                return;
-                              }
-                              setPermissionOpen(false);
-                              if (!active) onAgentAccessLevelChange?.(option.level);
-                            }}>
-                              <span className="agent-popover-option-radio" aria-hidden="true" />
-                              <span className="agent-popover-option-copy">
-                                <strong>{option.label}</strong>
-                                <small>{option.detail}</small>
-                              </span>
-                              {active && <Check size={13} className="agent-popover-option-check" />}
-                            </button>
+                                if (!active) onAgentAccessLevelChange?.(option.level);
+                              }}>
+                                <span className="agent-popover-option-icon" aria-hidden="true">{option.icon}</span>
+                                <span className="agent-popover-option-main">
+                                  <strong>{option.label}</strong>
+                                  <small>{option.hint}</small>
+                                </span>
+                                {active && <Check size={13} className="agent-popover-option-check" />}
+                              </button>
+                            </Fragment>
                           );
                         })}
-                      </div>
+                      </AgentPickerPopover>
                     )}
                   </>
                 )}
@@ -2829,17 +3436,16 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
                 {streaming && <LoaderCircle size={13} className="spin agent-composer-loading" aria-label={t("agent.composer.stop")} />}
                 {hasConfiguredProvider && (
                   <div className="agent-composer-model-wrap" ref={modelPickerRef}>
-                    <button type="button" className="agent-composer-model" onClick={() => setModelPickerOpen((open) => !open)} aria-expanded={modelPickerOpen} aria-haspopup="menu" aria-label={t("agent.provider.label")} disabled={streaming}>
-                      <Bot size={12} aria-hidden="true" />
-                      <span>{selectedProvider ? `${selectedProvider.label} · ${selectedProvider.model}` : ""}</span>
+                    <button type="button" className="agent-composer-model" onClick={() => setModelPickerOpen((open) => !open)} aria-expanded={modelPickerOpen} aria-haspopup="menu" aria-controls="agent-model-picker" aria-label={t("agent.provider.label")} disabled={streaming}>
+                      <span>{selectedProvider ? selectedProvider.model : ""}</span>
                       <ChevronDown size={11} className={`agent-model-chevron${modelPickerOpen ? " open" : ""}`} aria-hidden="true" />
                     </button>
                     {modelPopover.mounted && (
-                      <div className={`agent-popover anchor-right${modelPopover.visible ? " show" : ""}`} role="menu" aria-label={t("agent.provider.label")}>
+                      <AgentPickerPopover id="agent-model-picker" anchor="right" visible={modelPopover.visible} label={t("agent.provider.label")}>
                         {configuredProviders.map((provider) => {
                           const isCurrent = selectedProvider?.id === provider.id;
                           return (
-                            <button key={provider.id} type="button" role="menuitemradio" aria-checked={isCurrent} className={`agent-popover-option${isCurrent ? " active" : ""}`} onClick={() => {
+                            <button key={provider.id} type="button" role="menuitemradio" aria-checked={isCurrent} className={`agent-popover-option agent-model-option${isCurrent ? " active" : ""}`} onClick={() => {
                               setProviderId(provider.id);
                               // Pin the chosen model to the active conversation so switching
                               // back restores it; conversations without an explicit choice
@@ -2847,20 +3453,18 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
                               if (!isCurrent && active) setConversationProviders((prev) => ({ ...prev, [active.id]: provider.id }));
                               setModelPickerOpen(false);
                             }}>
-                              <span className="agent-popover-option-radio" aria-hidden="true" />
-                              <span className="agent-popover-option-copy">
-                                <strong>{provider.label} · {provider.model}</strong>
-                                <small>{provider.cloud ? t("agent.provider.cloud") : t("agent.provider.local")}</small>
-                              </span>
+                              <strong>{provider.model}</strong>
                               {isCurrent && <Check size={13} className="agent-popover-option-check" />}
                             </button>
                           );
                         })}
-                      </div>
+                      </AgentPickerPopover>
                     )}
                   </div>
                 )}
-                {streaming ? <button className="agent-send-button stop" type="button" onClick={stopStreaming} aria-label={t("agent.composer.stop")} data-tooltip={t("agent.composer.stop")}><Square size={12} fill="currentColor" /></button> : <button className="agent-send-button" type="button" disabled={sendDisabled} onClick={() => void sendMessage()} aria-label={t("agent.composer.send")} data-tooltip={t("agent.composer.send")}><ArrowUp size={16} strokeWidth={2.5} /></button>}
+                {streaming && !composer.trim()
+                  ? <button className="agent-send-button stop" type="button" onClick={stopStreaming} aria-label={t("agent.composer.stop")} data-tooltip={t("agent.composer.stop")}><Square size={12} fill="currentColor" /></button>
+                  : <button className="agent-send-button" type="button" disabled={sendDisabled} onClick={() => void sendMessage()} aria-label={t("agent.composer.send")} data-tooltip={t("agent.composer.send")}><ArrowUp size={16} strokeWidth={2.5} /></button>}
               </div>
             </div>
           </div>
@@ -2924,6 +3528,43 @@ export default function AgentWorkspace({ accounts, messages, currentMessage, onC
                 setPendingAccessLevel(null);
                 onAgentAccessLevelChange?.(level);
               }}><Zap size={14} />{t("agent.permission.fullAccessWarningAction")}</button>
+            </div>
+          </section>
+        </div>
+      )}
+      {pendingDelete && pendingDeleteTargets && (
+        <div className={`modal-backdrop confirmation-backdrop${deleteConfirmClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestDeleteConfirmClose()}>
+          <section ref={deleteConfirmRef} className={`confirmation-card${deleteConfirmClosing ? " closing" : ""}`} role="alertdialog" aria-modal="true" aria-labelledby="agent-delete-confirm-title" tabIndex={-1}>
+            <span className="eyebrow">{t("agent.conversation.delete")}</span>
+            <h3 id="agent-delete-confirm-title">{pendingDelete.conversationIds.length > 1 ? t("agent.conversation.bulkDeleteTitle") : t("agent.conversation.deleteTitle")}</h3>
+            <p>{pendingDelete.conversationIds.length > 1
+              ? t("agent.conversation.bulkDeleteConfirm", { count: pendingDelete.conversationIds.length })
+              : t("agent.conversation.deleteBody", { title: pendingDeleteTargets.single?.title ?? t("agent.conversation.newTitle") })}</p>
+            {pendingDelete.conversationIds.length > 1 && pendingDeleteTargets.targets.length > 0 && (
+              <ul className="confirmation-delete-list">
+                {pendingDeleteTargets.targets.slice(0, 3).map((item) => <li key={item.id}>{item.title}</li>)}
+                {pendingDeleteTargets.targets.length > 3 && <li className="confirmation-delete-more">{t("agent.conversation.deleteMore", { count: pendingDeleteTargets.targets.length - 3 })}</li>}
+              </ul>
+            )}
+            <p className="confirmation-irreversible">{t("agent.conversation.deleteIrreversible")}</p>
+            <div className="confirmation-actions">
+              <button className="secondary-button" type="button" data-dialog-initial-focus onClick={requestDeleteConfirmClose}>{t("common.cancel")}</button>
+              <button className="secondary-button danger-button" type="button" onClick={() => void confirmDelete()}><Trash2 size={14} />{t("agent.conversation.delete")}</button>
+            </div>
+          </section>
+        </div>
+      )}
+      {feedbackOpen && (
+        <div className={`modal-backdrop confirmation-backdrop${feedbackClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestFeedbackClose()}>
+          <section ref={feedbackDialogRef} className={`confirmation-card${feedbackClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="agent-feedback-title" tabIndex={-1}>
+            <span className="eyebrow">{t("agent.attachment.feedback")}</span>
+            <h3 id="agent-feedback-title">{t("agent.attachment.feedbackTitle")}</h3>
+            <p>{t("agent.attachment.feedbackBody")}</p>
+            <p>{t("agent.attachment.feedbackSteps")}</p>
+            <p className="confirmation-note">{t("agent.attachment.feedbackRestart")}</p>
+            <div className="confirmation-actions">
+              <button className="secondary-button" type="button" data-dialog-initial-focus onClick={requestFeedbackClose}>{t("common.cancel")}</button>
+              <a className="secondary-button external-link" href={agentFeedbackIssuesUrl} target="_blank" rel="noopener noreferrer" onClick={requestFeedbackClose}>{t("agent.attachment.feedback")}<ExternalLink size={13} /></a>
             </div>
           </section>
         </div>

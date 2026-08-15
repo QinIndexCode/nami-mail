@@ -1090,7 +1090,7 @@ describe("AgentService chat mode", () => {
       // Chat mode system prompt must explicitly tell the LLM no tools are available.
       const systemMessage = providerRequests[0]!.messages.find((message) => message.role === "system");
       expect(systemMessage?.content).toContain("Chat mode");
-      expect(systemMessage?.content).toContain("No mail tools are available");
+      expect(systemMessage?.content).toContain("No tools are available in this mode");
       expect(systemMessage?.content).not.toContain("Tool usage guidelines");
       // Chat mode must not emit tool activities or citations.
       expect(events).not.toContainEqual(expect.objectContaining({ type: "tool" }));

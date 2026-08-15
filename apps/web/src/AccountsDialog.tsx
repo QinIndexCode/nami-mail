@@ -8,6 +8,7 @@ import type { Account } from "./types";
 import { ManagementDialogShell } from "./ManagementDialogs";
 import { useDialogFocus } from "./useDialogFocus";
 import { useDismissTransition } from "./useDismissTransition";
+import { useStablePagedListHeight } from "./useStablePagedListHeight";
 
 type Notice = { kind: "success" | "error"; message: string } | null;
 
@@ -146,6 +147,7 @@ export default function AccountsDialog({
 
   useDialogFocus(true, accountsDialog, { fallbackFocusRef, suspended: Boolean(editingAccount) });
   useDialogFocus(Boolean(pendingAccountRemoval || pendingBulkRemoval), confirmationDialog, { fallbackFocusRef: accountsDialog });
+  const listScroll = useStablePagedListHeight<HTMLDivElement>(showToolbar);
 
   const removeAccount = async (accountId: string) => {
     if (busyAction) return;
@@ -358,7 +360,7 @@ export default function AccountsDialog({
                 <p className="settings-empty">{t("settings.account.noSearchResults")}</p>
               ) : (
                 <>
-                  <div className="accounts-table-list">
+                  <div ref={listScroll.ref} className="accounts-table-list" style={listScroll.style}>
                     {pageAccounts.map((account) => {
                       const issue = accountHealthIssue(account, t);
                       const retrying = busyAction === `account-sync-${account.id}`;

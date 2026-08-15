@@ -1,4 +1,5 @@
 import { Plus, Trash2 } from "lucide-react";
+import DatePicker from "./DatePicker";
 import { useI18n } from "./i18n";
 import type { AutoReplyScope, AutoReplyScopeAction, AutoReplyScopeField, AutoReplyScopeOperator, AutoReplyScopeRule } from "./types";
 
@@ -47,17 +48,13 @@ export default function AutoReplyScopeEditor({
 }) {
   const { t } = useI18n();
   const dateInput = (key: "startDate" | "endDate") => (
-    <input
-      type="date"
-      className="auto-reply-date-input"
+    <DatePicker
+      mode="date"
       value={scope[key] ?? ""}
       disabled={disabled}
       aria-label={key === "startDate" ? t("settings.agent.autoReplyScopeStartDate") : t("settings.agent.autoReplyScopeEndDate")}
-      onChange={(event) => {
-        const value = event.target.value || null;
-        if (value && scope.startDate && scope.endDate && value < scope.startDate) return;
-        onChange({ ...scope, [key]: value });
-      }}
+      minDate={key === "endDate" ? (scope.startDate ?? undefined) : undefined}
+      onChange={(value) => onChange({ ...scope, [key]: value || null })}
     />
   );
 

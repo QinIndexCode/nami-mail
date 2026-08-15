@@ -7,6 +7,9 @@ export type SidebarBadgeCounts = {
 
 export type MessageListView = "inbox" | "unread" | "starred" | "archived" | "snoozed";
 
+/** Sort modes offered by the message-list toolbar. */
+export type MessageListSortOrder = "newest" | "oldest" | "sender" | "importance";
+
 export type MessageListQuery = {
   accountId: string;
   folder: string;
@@ -201,6 +204,29 @@ export function mergeUnreadViewSnapshot(
   return [...serverItems, ...retained].sort((left, right) => new Date(right.sentAt).getTime() - new Date(left.sentAt).getTime());
 }
 
+/**
+ * Re-applies optimistic read-state changes on top of a fresh server snapshot.
+ *
+ * A read/unread toggle is applied locally the moment the user acts, while the
+ * server round-trip is still in flight. A background poll that returns in that
+ * window would otherwise overwrite the optimistic `seen`/`\Seen` flag with the
+ * server's stale value, flipping the row back to unread. For every id listed in
+ * `pendingSeenIds` we keep the local state; every other row stays authoritative.
+ */
+export function mergeLocalPendingSeen(
+  serverItems: readonly Message[],
+  currentItems: readonly Message[],
+  pendingSeenIds: ReadonlySet<string>,
+): Message[] {
+  if (pendingSeenIds.size === 0) return [...serverItems];
+  const currentById = new Map(currentItems.map((message) => [message.id, message]));
+  return serverItems.map((message) => {
+    const local = currentById.get(message.id);
+    if (!local || !pendingSeenIds.has(message.id)) return message;
+    return { ...message, seen: local.seen, flags: local.flags };
+  });
+}
+
 /** Applies a confirmed or optimistic read-state change to every visible count source. */
 export function applyMessageSeenChange(
   accounts: Account[],
@@ -341,15 +367,21 @@ export function applyMessageMove(
  * Re-inserts messages whose optimistic move failed back into the list at their
  * correct sorted positions, merging by id so a reload that already restored
  * them cannot produce duplicates.
+ *
+ * Time-based orders (`newest`/`oldest`) re-position the additions with the same
+ * comparator the list uses. Non-time orders (`sender`/`importance`) cannot be
+ * re-positioned from a single timestamp, so the additions are deduplicated and
+ * appended once; the next list recomputation re-sorts them into place.
  */
 export function mergeRolledBackMessages(
   items: Message[],
   incoming: readonly Message[],
-  sortOrder: "newest" | "oldest",
+  sortOrder: MessageListSortOrder,
 ): Message[] {
   const existing = new Set(items.map((message) => message.id));
   const additions = incoming.filter((message) => !existing.has(message.id));
   if (!additions.length) return items;
+  if (sortOrder === "sender" || sortOrder === "importance") return [...items, ...additions];
   const byTime = (message: Message) => new Date(message.sentAt).getTime();
   const compare = sortOrder === "newest"
     ? (left: Message, right: Message) => byTime(right) - byTime(left)

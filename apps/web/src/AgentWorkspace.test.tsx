@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AgentMessageRow, AgentToolList, applyConfirmationDecision, expireConfirmation, lastMessageIsUnanswered } from "./AgentWorkspace";
+import { AgentMessageRow, AgentToolList, applyConfirmationDecision, dedupeCitations, expireConfirmation, interruptAssistantMessage, lastMessageIsStreaming, lastMessageIsUnanswered, mergeRevokedMarks } from "./AgentWorkspace";
 import { I18nProvider, translate } from "./i18n";
-import type { AgentConfirmation, AgentConversation, AgentMessage, AgentToolActivity } from "./agentTypes";
+import type { AgentCitation, AgentConfirmation, AgentConversation, AgentMessage, AgentToolActivity } from "./agentTypes";
 
 const message = (
   confirmation: AgentConfirmation,
@@ -92,6 +92,73 @@ describe("expireConfirmation", () => {
   it("leaves messages with a different confirmation untouched", () => {
     const input = message(pendingConfirmation(), ["awaiting_confirmation"]);
     expect(expireConfirmation(input, "confirm-other", "已过期")).toBe(input);
+  });
+});
+
+describe("interruptAssistantMessage", () => {
+  const label = "已中断";
+
+  it("flags the message interrupted and completes its state", () => {
+    const input: AgentMessage = { ...message(pendingConfirmation(), []), state: "streaming", content: "partial answer" };
+    const result = interruptAssistantMessage(input, label);
+    expect(result.interrupted).toBe(true);
+    expect(result.state).toBe("complete");
+    expect(result.content).toBe("partial answer");
+  });
+
+  it("fails running and awaiting-confirmation tools so none are left spinning", () => {
+    const input = { ...message(pendingConfirmation(), ["running", "awaiting_confirmation", "completed"]), state: "streaming" as const };
+    const result = interruptAssistantMessage(input, label);
+    expect(result.toolActivities.map((tool) => tool.state)).toEqual(["failed", "failed", "completed"]);
+    expect(result.toolActivities[0]?.error).toEqual({ code: "INTERRUPTED", message: label, retryable: false });
+  });
+
+  it("expires a pending confirmation so it can no longer be acted on", () => {
+    const result = interruptAssistantMessage(message(pendingConfirmation(), ["awaiting_confirmation"]), label);
+    expect(result.confirmation?.state).toBe("expired");
+  });
+
+  it("preserves an already-failed message state instead of overwriting it", () => {
+    const input: AgentMessage = {
+      ...message(pendingConfirmation(), ["failed"]),
+      state: "error",
+      error: { code: "agent_stream_invalid", message: "stream broke", retryable: true },
+    };
+    const result = interruptAssistantMessage(input, label);
+    expect(result.state).toBe("error");
+    expect(result.interrupted).toBe(true);
+    expect(result.error?.code).toBe("agent_stream_invalid");
+  });
+});
+
+describe("dedupeCitations", () => {
+  const cite = (id: string, messageId: string, sender = ""): AgentCitation => ({
+    id,
+    messageId,
+    accountId: "account-1",
+    subject: `subject-${id}`,
+    sender,
+    sentAt: "2026-08-08T00:00:00.000Z",
+    excerpt: `excerpt-${id}`,
+  });
+
+  it("keeps only the first citation per source message", () => {
+    const result = dedupeCitations([
+      cite("a", "mail-1"),
+      cite("b", "mail-1"), // same mail as "a" — dropped
+      cite("c", "mail-2"),
+    ]);
+    expect(result.map((citation) => citation.id)).toEqual(["a", "c"]);
+  });
+
+  it("falls back to the citation id when messageId is absent", () => {
+    const noMessageId = cite("a", ""); // messageId is empty string here
+    const result = dedupeCitations([noMessageId, { ...noMessageId, id: "a" }]);
+    expect(result.map((citation) => citation.id)).toEqual(["a"]);
+  });
+
+  it("returns an empty array unchanged", () => {
+    expect(dedupeCitations([])).toEqual([]);
   });
 });
 
@@ -187,9 +254,7 @@ describe("AgentMessageRow streaming status", () => {
           locale="zh-CN"
           t={(key, values) => translate("zh-CN", key, values)}
           onOpenAttachment={noop}
-          onCopy={noop}
           onRevoke={noop}
-          onRestore={noop}
           onRetry={noop}
           onUserMessageRef={noop}
         />
@@ -250,5 +315,81 @@ describe("lastMessageIsUnanswered", () => {
 
   it("does not flag an empty transcript", () => {
     expect(lastMessageIsUnanswered({ ...conversation({} as AgentMessage), messages: [] })).toBe(false);
+  });
+});
+
+describe("lastMessageIsStreaming", () => {
+  const conversation = (message: AgentMessage): AgentConversation => ({
+    id: "conversation-1",
+    title: "测试",
+    preview: "",
+    updatedAt: "2026-08-10T00:00:00.000Z",
+    providerId: "provider-1",
+    scope: { mode: "all_accounts", accountIds: [], messageIds: [] },
+    messages: [message],
+  });
+
+  it("flags an assistant reply that is still streaming (reopened mid-run snapshot)", () => {
+    expect(lastMessageIsStreaming(conversation({
+      id: "assistant-1",
+      role: "assistant",
+      content: "部分内容",
+      createdAt: "2026-08-10T00:00:00.000Z",
+      state: "streaming",
+      citations: [],
+      toolActivities: [{ id: "tool-1", toolName: "rag.search", title: "Search", state: "running" }],
+    }))).toBe(true);
+  });
+
+  it("does not flag a completed assistant reply or a pending user message", () => {
+    expect(lastMessageIsStreaming(conversation({
+      id: "assistant-1", role: "assistant", content: "完成", createdAt: "2026-08-10T00:00:00.000Z",
+      state: "complete", citations: [], toolActivities: [],
+    }))).toBe(false);
+    expect(lastMessageIsStreaming(conversation({
+      id: "user-1", role: "user", content: "继续", createdAt: "2026-08-10T00:00:00.000Z",
+      state: "complete", citations: [], toolActivities: [],
+    }))).toBe(false);
+  });
+});
+
+describe("mergeRevokedMarks", () => {
+  const turn = (id: string, role: "user" | "assistant", content: string): AgentMessage => ({
+    id,
+    role,
+    content,
+    createdAt: "2026-08-10T00:00:00.000Z",
+    state: "complete",
+    citations: [],
+    toolActivities: [],
+  });
+
+  const conversation = (messages: AgentMessage[]): AgentConversation => ({
+    id: "conversation-1",
+    title: "测试",
+    preview: "",
+    updatedAt: "2026-08-10T00:00:00.000Z",
+    providerId: "provider-1",
+    scope: { mode: "all_accounts", accountIds: [], messageIds: [] },
+    messages,
+  });
+
+  it("keeps the server's revoked marks even when the local cache is empty", () => {
+    const input = conversation([{ ...turn("user-1", "user", "hi"), revoked: true }, turn("assistant-1", "assistant", "reply")]);
+    const result = mergeRevokedMarks(input, new Set());
+    expect(result.messages[0]?.revoked).toBe(true);
+    expect(result.messages[1]?.revoked).toBeUndefined();
+  });
+
+  it("applies local cache marks when the server snapshot predates the revoke", () => {
+    const input = conversation([turn("user-1", "user", "hi"), turn("assistant-1", "assistant", "reply")]);
+    const result = mergeRevokedMarks(input, new Set(["assistant-1"]));
+    expect(result.messages[0]?.revoked).toBeUndefined();
+    expect(result.messages[1]?.revoked).toBe(true);
+  });
+
+  it("leaves the conversation untouched when nothing is revoked", () => {
+    const input = conversation([turn("user-1", "user", "hi")]);
+    expect(mergeRevokedMarks(input, new Set())).toBe(input);
   });
 });

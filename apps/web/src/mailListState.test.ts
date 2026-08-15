@@ -7,6 +7,7 @@ import {
   isArchivedMessage,
   isVisibleInUnreadView,
   matchesServerMessageQuery,
+  mergeLocalPendingSeen,
   mergePendingArchiveMoves,
   mergeRolledBackMessages,
   mergeUnreadViewSnapshot,
@@ -189,6 +190,27 @@ describe("mail list state", () => {
       .toEqual([freshUnread]);
   });
 
+  it("keeps the optimistic read state when a poll snapshot races the in-flight markSeen", () => {
+    const readMessage = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
+    // The server snapshot still reports the row as unread because the markSeen
+    // request has not landed yet.
+    const staleServer = [unreadMessage];
+
+    const merged = mergeLocalPendingSeen(staleServer, [readMessage], new Set([readMessage.id]));
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ id: "message-1", seen: true, flags: ["\\Seen"] });
+  });
+
+  it("does not touch rows without an in-flight seen mutation", () => {
+    const readMessage = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
+    const freshServer = [{ ...unreadMessage, subject: "Updated on server" }];
+
+    const merged = mergeLocalPendingSeen(freshServer, [readMessage], new Set());
+
+    expect(merged[0]).toMatchObject({ seen: false, subject: "Updated on server" });
+  });
+
   it("uses the server-reported move destination to update folder badges and unified totals", () => {
     const next = applyMessageMove(accounts, [unreadMessage], stats, unreadMessage.id, "Archive", 42);
 
@@ -355,6 +377,20 @@ describe("mail list state", () => {
 
     expect(mergeRolledBackMessages(list, [duplicate], "newest")).toHaveLength(2);
     expect(mergeRolledBackMessages(list, [], "newest")).toBe(list);
+  });
+
+  it("deduplicates and appends rolled-back messages in non-time sort modes", () => {
+    const newer = { ...unreadMessage, id: "message-2", sentAt: "2026-07-22T02:00:00.000Z" };
+    const older = { ...unreadMessage, id: "message-3", sentAt: "2026-07-21T00:00:00.000Z" };
+    const rolledBack = { ...unreadMessage, id: "message-4", sentAt: "2026-07-21T12:00:00.000Z" };
+    const list = [newer, older];
+
+    for (const order of ["sender", "importance"] as const) {
+      expect(mergeRolledBackMessages(list, [rolledBack], order).map((message) => message.id))
+        .toEqual(["message-2", "message-3", "message-4"]);
+      // A message the reload already restored must not be duplicated.
+      expect(mergeRolledBackMessages(list, [newer], order)).toHaveLength(2);
+    }
   });
 
   it("reverses an optimistic single move back to the original state", () => {

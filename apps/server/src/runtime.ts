@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type OutgoingHttpHeaders, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import fs from "node:fs";
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { migrateAccountCredentialStorage, migrateKnownProviderUsernameCredentials } from "./account-credentials.js";
 import {
@@ -53,7 +55,7 @@ import { buildApp } from "./app.js";
 import { config } from "./config.js";
 import { loadOrCreateMasterKey } from "./crypto.js";
 import { openDatabase, type DatabaseHandle } from "./db.js";
-import { ServerEventBus, emitAccountSynced } from "./events.js";
+import { ServerEventBus, emitAccountSynced, emitSettingsChanged } from "./events.js";
 import { createIdleWatcher, type IdleWatcher } from "./idle.js";
 import { OAuthService } from "./oauth.js";
 import { cleanupExpiredOutboundAttachments, outboundAttachmentDirectory } from "./outbound-attachments.js";
@@ -323,6 +325,12 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     migrateAccountCredentialStorage(database, runtimeMasterKey);
     migrateKnownProviderUsernameCredentials(database, runtimeMasterKey);
     applyAgentStoreSchema(database);
+    // The settings tool needs to broadcast changes over SSE and decide whether
+    // a "custom" background preset is selectable, so the bus and the background
+    // directory are resolved before the Agent service is constructed.
+    const serverEvents = new ServerEventBus();
+    const backgroundDirectory = path.join(path.dirname(config.databasePath), "backgrounds");
+    const customBackgroundPattern = /^custom-background-[a-f0-9-]+\.(jpg|png|webp)$/;
     const agentLifecycle = new AccountLifecycleStore(database, runtimeMasterKey);
     const agentSourceEvents = new AgentSourceEventOutbox(database, runtimeMasterKey, agentLifecycle);
     const agentMailEvents = new AgentMailStateEvents(runtimeMasterKey, agentLifecycle, agentSourceEvents);
@@ -341,6 +349,8 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       lifecycle: agentLifecycle,
       sourceEvents: agentSourceEvents,
       mailApplication,
+      hasCustomBackground: (filename) => Boolean(filename && customBackgroundPattern.test(filename) && fs.existsSync(path.join(backgroundDirectory, filename))),
+      onSettingsChanged: () => emitSettingsChanged(serverEvents),
       ...(options.desktopConfirmation ? { desktopConfirmation: options.desktopConfirmation } : {}),
       ...(options.externalConfirmation ? { externalConfirmation: options.externalConfirmation } : {}),
     });
@@ -376,7 +386,6 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     } catch (error) {
       console.warn("Nami Mail could not clean stale outbound attachments", error);
     }
-    const serverEvents = new ServerEventBus();
     const broadcastNewInboxMessages = (messages: NewInboxMessage[]) => {
       if (!messages.length) return;
       const byAccount = new Map<string, NewInboxMessage[]>();

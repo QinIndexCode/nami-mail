@@ -814,7 +814,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                 data-dialog-initial-focus
                 autoComplete="email"
                 spellCheck={false}
-                placeholder="name@example.com"
+                placeholder={t("account.email.placeholder")}
                 value={email}
                 onChange={updateEmail}
                 onFocus={() => setEmailFocused(true)}

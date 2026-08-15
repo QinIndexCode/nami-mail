@@ -49,6 +49,12 @@ describe("translation error presentation", () => {
       timeoutMs: 25_000,
       apiKeyConfigured: false,
       source: "local" as const,
+      primary: "google" as const,
+      backup: "mymemory" as const,
+      providers: [
+        { id: "google" as const, label: "google", builtin: true },
+        { id: "mymemory" as const, label: "mymemory", builtin: true },
+      ],
     };
 
     expect(translationConfigurationStatusMessage({ ...base, configurationError: "unreadable" }, keyOnly))
@@ -67,17 +73,28 @@ describe("translation error presentation", () => {
       timeoutMs: 25_000,
       apiKeyConfigured: true,
       source: "local" as const,
+      primary: "custom" as const,
+      backup: "google" as const,
+      providers: [
+        { id: "google" as const, label: "google", builtin: true },
+        { id: "mymemory" as const, label: "mymemory", builtin: true },
+        { id: "custom" as const, label: "custom", builtin: false, endpoint: "https://translate.example.test/translate" },
+      ],
     };
 
     expect(hasUnsavedTranslationConfiguration(configuration, {
       endpoint: " https://translate.example.test/translate ",
       apiKey: "",
       timeoutMs: 25_000,
+      primary: "custom",
+      backup: "google",
     })).toBe(false);
     expect(hasUnsavedTranslationConfiguration(configuration, {
       endpoint: "https://translate.example.test/translate",
       apiKey: "replacement-key",
       timeoutMs: 25_000,
+      primary: "custom",
+      backup: "google",
     })).toBe(true);
   });
 });

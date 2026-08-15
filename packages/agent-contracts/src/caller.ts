@@ -18,6 +18,7 @@ export const agentPermissionScopes = [
   "manage:providers",
   "manage:rag",
   "manage:settings",
+  "web:search",
   "external:network",
   "admin:host",
 ] as const;

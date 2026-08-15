@@ -356,4 +356,49 @@ describe("slash command expansion", () => {
       await closeFixture(value);
     }
   });
+
+  it("persists the default provider choice across a service restart", async () => {
+    const value = fixture();
+    try {
+      const provider = value.service.createProvider({
+        label: "Default provider",
+        kind: "ollama",
+        endpoint: "http://127.0.0.1:11434/v1",
+        model: "default-model",
+        timeoutMs: 30_000,
+        allowCloudMailContent: false,
+        makeDefault: true,
+      });
+      expect(value.service.providers.list().defaultProviderId).toBe(provider.id);
+
+      // Simulate an app restart: same database and master key, fresh service.
+      await value.service.close();
+      const lifecycle = new AccountLifecycleStore(value.db, value.masterKey);
+      const sourceEvents = new AgentSourceEventOutbox(value.db, value.masterKey, lifecycle);
+      const mail = fakeMailApplication();
+      const memory = new EncryptedAgentMemoryStore(value.db, value.masterKey, () => timestamp);
+      const restarted = new AgentService({
+        db: value.db,
+        masterKey: value.masterKey,
+        lifecycle,
+        sourceEvents,
+        mailApplication: mail.service,
+        memoryStore: memory,
+      });
+      try {
+        const listing = restarted.providers.list();
+        expect(listing.defaultProviderId).toBe(provider.id);
+        expect(listing.items.map((item) => item.id)).toContain(provider.id);
+
+        // Removing the default clears the persisted default.
+        restarted.providers.remove(provider.id);
+        expect(restarted.providers.list().defaultProviderId).toBeNull();
+      } finally {
+        await restarted.close();
+      }
+    } finally {
+      await value.service.close().catch(() => undefined);
+      value.db.close();
+    }
+  });
 });

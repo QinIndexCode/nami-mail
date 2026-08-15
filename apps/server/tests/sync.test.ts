@@ -162,7 +162,6 @@ describe("IMAP message flag updates", () => {
   it("reports missing and pending-move messages as failed without touching IMAP", async () => {
     const now = new Date().toISOString();
     await updateMessageFlags(db, Buffer.alloc(32, 7), "message-1", { seen: false });
-    let current = db.prepare("SELECT * FROM messages WHERE id = ?").get("message-1") as { flags_json: string };
 
     const result = await updateMessageFlagsBatch(
       db, Buffer.alloc(32, 7), ["message-1", "message-missing"], { seen: true },

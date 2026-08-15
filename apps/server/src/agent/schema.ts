@@ -1,7 +1,7 @@
 import type { DatabaseHandle } from "../db.js";
 
-export const AGENT_STORE_SCHEMA_VERSION = 5;
-export const AGENT_STORE_MINIMUM_READER_VERSION = 5;
+export const AGENT_STORE_SCHEMA_VERSION = 6;
+export const AGENT_STORE_MINIMUM_READER_VERSION = 6;
 
 export class AgentStoreVersionError extends Error {
   constructor(message: string) {
@@ -169,6 +169,24 @@ CREATE TABLE IF NOT EXISTS agent_conversation_records (
 
 CREATE INDEX IF NOT EXISTS idx_agent_conversation_records_sequence
   ON agent_conversation_records(conversation_id, sequence, record_id);
+
+-- Durable in-progress assistant draft. Unlike agent_conversation_records
+-- (append-only immutable history), this row is updated in place while a reply
+-- streams and is removed once the finished turn is appended. A re-opened panel
+-- reads it from storage instead of relying on process memory; if the process
+-- disappears mid-stream the stale draft marks the reply as interrupted.
+CREATE TABLE IF NOT EXISTS agent_conversation_streaming (
+  conversation_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  encrypted_payload TEXT NOT NULL,
+  crypto_version INTEGER NOT NULL CHECK (crypto_version >= 1),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (conversation_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_conversation_streaming_updated
+  ON agent_conversation_streaming(updated_at);
 
 CREATE TRIGGER IF NOT EXISTS agent_conversation_records_no_update
 BEFORE UPDATE ON agent_conversation_records
@@ -340,6 +358,7 @@ const agentTableNames = [
   "agent_conversations",
   "agent_conversation_scopes",
   "agent_conversation_records",
+  "agent_conversation_streaming",
   "agent_audit_intents",
   "agent_audit_events",
   "agent_gui_confirmation_records",
@@ -405,6 +424,14 @@ function assertCurrentSchemaShape(db: DatabaseHandle): void {
     "encrypted_payload",
     "crypto_version",
     "occurred_at",
+    "created_at",
+    "updated_at",
+  ]);
+  requireColumns(db, "agent_conversation_streaming", [
+    "conversation_id",
+    "message_id",
+    "encrypted_payload",
+    "crypto_version",
     "created_at",
     "updated_at",
   ]);
@@ -653,6 +680,22 @@ function migrateAgentStoreV4ToV5(db: DatabaseHandle): void {
   db.exec(agentStoreSchemaSql);
 }
 
+/** v5 → v6 adds the replaceable in-progress streaming draft table. */
+function migrateAgentStoreV5ToV6(db: DatabaseHandle): void {
+  if (tableExists(db, "agent_conversation_streaming")) {
+    requireColumns(db, "agent_conversation_streaming", [
+      "conversation_id",
+      "message_id",
+      "encrypted_payload",
+      "crypto_version",
+      "created_at",
+      "updated_at",
+    ]);
+    return;
+  }
+  db.exec(agentStoreSchemaSql);
+}
+
 function versionRow(db: DatabaseHandle): AgentStoreVersionRow | undefined {
   return db.prepare(`
     SELECT schema_version, minimum_reader_version
@@ -696,6 +739,8 @@ export function applyAgentStoreSchema(db: DatabaseHandle, now = new Date().toISO
       migrateAgentStoreV3ToV4(db);
     } else if (row.schema_version === 4) {
       migrateAgentStoreV4ToV5(db);
+    } else if (row.schema_version === 5) {
+      migrateAgentStoreV5ToV6(db);
     } else if (row.schema_version !== AGENT_STORE_SCHEMA_VERSION) {
       throw new AgentStoreVersionError("The Agent store schema is not supported by this Runtime.");
     }

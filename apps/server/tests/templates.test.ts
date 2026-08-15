@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
+import { BUILTIN_TEMPLATES } from "../src/builtin-templates.js";
 import {
   createTemplate,
   deleteTemplate,
   listTemplates,
+  seedBuiltinTemplates,
   templateForId,
   templateUpdateSchema,
   updateTemplate,
@@ -34,6 +36,8 @@ describe("mail templates", () => {
     });
     expect(created.name).toBe("Follow-up");
     expect(created.subject).toBe("Re: {{topic}}");
+    // User-created templates are never marked built-in.
+    expect(created.builtin).toBe(false);
 
     // The stored columns are ciphertext, never the plaintext template.
     const row = db.prepare("SELECT name_enc, body_enc FROM mail_templates WHERE id = ?").get(created.id) as { name_enc: string; body_enc: string };
@@ -41,9 +45,10 @@ describe("mail templates", () => {
     expect(row.body_enc).not.toContain("following up");
     expect(row.name_enc).toMatch(/^nami-v1\./);
 
+    // buildApp seeds the built-in starter templates; the new row is on top.
     const listed = listTemplates(db, masterKey);
-    expect(listed).toHaveLength(1);
-    expect(listed[0]?.name).toBe("Follow-up");
+    expect(listed).toHaveLength(1 + BUILTIN_TEMPLATES.length);
+    expect(listed.some((template) => template.name === "Follow-up")).toBe(true);
 
     const updated = updateTemplate(db, masterKey, created.id, { body: "Updated body." });
     expect(updated?.body).toBe("Updated body.");
@@ -55,7 +60,7 @@ describe("mail templates", () => {
 
     expect(deleteTemplate(db, created.id)).toBe(true);
     expect(deleteTemplate(db, created.id)).toBe(false);
-    expect(listTemplates(db, masterKey)).toHaveLength(0);
+    expect(listTemplates(db, masterKey)).toHaveLength(BUILTIN_TEMPLATES.length);
     expect(templateForId(db, masterKey, created.id)).toBeUndefined();
   });
 
@@ -66,7 +71,8 @@ describe("mail templates", () => {
     expect(listTemplates(db, masterKey, "STATUS").map((template) => template.name)).toEqual(["Weekly Status"]);
     expect(listTemplates(db, masterKey, "invoice").map((template) => template.name)).toEqual(["Invoice Reminder"]);
     expect(listTemplates(db, masterKey, "zzz")).toHaveLength(0);
-    expect(listTemplates(db, masterKey)).toHaveLength(2);
+    // The built-in starter templates are always present alongside user rows.
+    expect(listTemplates(db, masterKey)).toHaveLength(2 + BUILTIN_TEMPLATES.length);
   });
 
   it("exposes CRUD through the local API", async () => {
@@ -103,7 +109,33 @@ describe("mail templates", () => {
     const deleted = await app.inject({ method: "DELETE", url: `/api/templates/${createdBody.template.id}` });
     expect(deleted.statusCode).toBe(200);
     const gone = await app.inject({ method: "GET", url: "/api/templates" });
-    expect((gone.json() as { items: unknown[] }).items).toHaveLength(0);
+    // Deleting the user row leaves only the built-in starter templates.
+    expect((gone.json() as { items: unknown[] }).items).toHaveLength(BUILTIN_TEMPLATES.length);
+  });
+
+  it("seeds built-in templates idempotently and keeps user edits", () => {
+    const seeded = listTemplates(db, masterKey);
+    const builtin = seeded.filter((template) => template.builtin);
+    expect(builtin).toHaveLength(BUILTIN_TEMPLATES.length);
+    // Built-in rows carry the flag and are readable.
+    expect(builtin[0]?.builtin).toBe(true);
+    expect(builtin[0]?.name.length).toBeGreaterThan(0);
+    expect(builtin[0]?.body.length).toBeGreaterThan(0);
+
+    // Seeding again is a no-op (no duplicates).
+    seedBuiltinTemplates(db, masterKey);
+    expect(listTemplates(db, masterKey)).toHaveLength(seeded.length);
+
+    // Editing a built-in template promotes it to a user template.
+    const target = builtin[0]!;
+    const edited = updateTemplate(db, masterKey, target.id, { body: "Customized body" });
+    expect(edited?.body).toBe("Customized body");
+    expect(edited?.builtin).toBe(false);
+
+    // Deleting a built-in template does not re-seed it on the next startup.
+    expect(deleteTemplate(db, target.id)).toBe(true);
+    seedBuiltinTemplates(db, masterKey);
+    expect(templateForId(db, masterKey, target.id)).toBeUndefined();
   });
 
   it("validates template input through the strict schema", async () => {

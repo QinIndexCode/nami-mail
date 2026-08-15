@@ -171,4 +171,53 @@ describe("encrypted conversations, audit, and GUI confirmations", () => {
     expect(() => db.prepare("UPDATE agent_gui_confirmation_records SET event_type = 'rejected'").run()).toThrow();
     db.close();
   });
+
+  it("mirrors streaming drafts in one replaceable row and clears them when finished", () => {
+    const db = openDatabase(":memory:");
+    const masterKey = randomBytes(32);
+    insertAccount(db, "account-1");
+    insertAccount(db, "account-2");
+    applyAgentStoreSchema(db);
+    const lifecycle = new AccountLifecycleStore(db, masterKey, () => "2026-07-27T10:00:01.000Z");
+    const leaseOne = lifecycle.acquireLease("account-1");
+    const leaseTwo = lifecycle.acquireLease("account-2");
+    const conversations = new EncryptedConversationStore(db, lifecycle, () => "2026-07-27T10:00:02.000Z");
+    conversations.create([leaseOne, leaseTwo], { title: "Streaming" }, "conversation-streaming");
+    const turn = (content: string, state: "streaming" | "complete") => ({
+      type: "conversation-turn",
+      message: {
+        id: "message-x",
+        role: "assistant",
+        content,
+        createdAt: "2026-07-27T10:00:02.000Z",
+        state,
+        citations: [],
+        toolActivities: [],
+      },
+      mailContextIncluded: false,
+    });
+
+    // Two throttled streaming snapshots under the same message id: the draft
+    // row is replaced in place, never duplicated.
+    conversations.upsertStreaming("conversation-streaming", [leaseOne, leaseTwo], turn("Partial one. ", "streaming"), "message-x");
+    conversations.upsertStreaming("conversation-streaming", [leaseOne, leaseTwo], turn("Partial one. Partial two. ", "streaming"), "message-x");
+    expect(db.prepare("SELECT COUNT(*) AS count FROM agent_conversation_streaming").get()).toEqual({ count: 1 });
+    const draft = conversations.readStreaming("conversation-streaming", [leaseOne, leaseTwo]) as { message: { content: string; state: string } };
+    expect(draft.message.content).toBe("Partial one. Partial two. ");
+    expect(draft.message.state).toBe("streaming");
+
+    conversations.clearStreaming("conversation-streaming", [leaseOne, leaseTwo]);
+    expect(conversations.readStreaming("conversation-streaming", [leaseOne, leaseTwo])).toBeNull();
+
+    // The finished turn is appended to the immutable log; the draft is gone, so
+    // the durable history holds exactly metadata + one turn row.
+    conversations.append("conversation-streaming", [leaseOne, leaseTwo], "turn", turn("Partial one. Partial two. Final.", "complete"), "message-x");
+    const stored = conversations.get("conversation-streaming", [leaseOne, leaseTwo]);
+    expect(stored.records).toHaveLength(2);
+    const persisted = stored.records.filter((record) => record.kind === "turn").map((record) => record.value) as Array<{ message: { content: string; state: string } }>;
+    expect(persisted).toEqual([expect.objectContaining({
+      message: expect.objectContaining({ content: "Partial one. Partial two. Final.", state: "complete" }),
+    })]);
+    db.close();
+  });
 });

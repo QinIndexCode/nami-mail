@@ -1,4 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { ListResponse } from "imapflow";
 import { simpleParser, type AddressObject } from "mailparser";
 import { attachmentMetadataFromParsedMail } from "./attachments.js";
@@ -36,6 +37,34 @@ const movingAccounts = new Set<string>();
 // immediate failure: queued writes must never block a sync cycle.
 const accountWriteChains = new Map<string, Promise<void>>();
 
+// Tracks which accounts the current async execution context already holds a
+// write slot for. Nested acquisitions — the operation queue takes the slot
+// before invoking an executor that also takes it, and batch moves fall back to
+// single-message moves that take it again — must be no-ops instead of waiting
+// on their own gate forever (a self-deadlock).
+const heldWriteSlots = new AsyncLocalStorage<Set<string>>();
+
+/** Longest an operation may wait for the account write slot it is queued
+ * behind. A predecessor whose provider command hangs (and whose executor is
+ * later abandoned) must not block this operation forever; on timeout the
+ * operation fails and its place in the chain is released so operations behind
+ * it still proceed. Generous relative to a normal operation (seconds) but far
+ * shorter than the queue's executor run timeout. */
+const ACCOUNT_WRITE_SLOT_TIMEOUT_MS = 30_000;
+
+/** Rejects with `message` after `milliseconds`, without keeping the process
+ * alive for a run that may never settle on its own during shutdown. */
+export function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), milliseconds);
+    timer.unref?.();
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 /**
  * Acquires write slots for every account in a deterministic order (sorted, so
  * concurrent multi-account batches can never deadlock). The returned release
@@ -44,16 +73,31 @@ const accountWriteChains = new Map<string, Promise<void>>();
 export async function acquireAccountWriteSlots(accountIds: readonly string[]): Promise<Array<() => void>> {
   const sorted = [...new Set(accountIds)].sort();
   const releases: Array<() => void> = [];
+  const held = heldWriteSlots.getStore();
   try {
     for (const accountId of sorted) {
+      // A nested acquisition within the same execution context already holds
+      // this account's slot: do not wait on our own gate (self-deadlock).
+      if (held?.has(accountId)) continue;
       const prev = accountWriteChains.get(accountId) ?? Promise.resolve();
       let release!: () => void;
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
       accountWriteChains.set(accountId, prev.then(() => gate));
-      await prev;
-      releases.push(release);
+      try {
+        await withTimeout(prev, ACCOUNT_WRITE_SLOT_TIMEOUT_MS, `Timed out waiting for the account ${accountId} write slot.`);
+      } catch (error) {
+        // Give up our place instead of leaving an unresolved gate that would
+        // block every operation queued behind us.
+        release();
+        throw error;
+      }
+      held?.add(accountId);
+      releases.push(() => {
+        release();
+        held?.delete(accountId);
+      });
     }
     return releases;
   } catch (error) {
@@ -64,12 +108,28 @@ export async function acquireAccountWriteSlots(accountIds: readonly string[]): P
 
 /** Runs `fn` while holding write slots for every named account. */
 export async function withAccountWriteLocks<T>(accountIds: readonly string[], fn: () => Promise<T>): Promise<T> {
-  const releases = await acquireAccountWriteSlots(accountIds);
-  try {
-    return await fn();
-  } finally {
-    for (const release of releases.reverse()) release();
-  }
+  return heldWriteSlots.run(heldWriteSlots.getStore() ?? new Set<string>(), async () => {
+    const releases = await acquireAccountWriteSlots(accountIds);
+    try {
+      return await fn();
+    } finally {
+      for (const release of releases.reverse()) release();
+    }
+  });
+}
+
+/**
+ * Runs `fn` in a context that considers every named account's write slot as
+ * already held, so the executor's own nested `withAccountWriteLocks` calls are
+ * reentrant no-ops. Used by the operation queue, which acquires the slot
+ * itself (to release it on timeout) before invoking an executor that would
+ * otherwise acquire it again and deadlock.
+ */
+export function withHeldWriteSlots<T>(accountIds: readonly string[], fn: () => Promise<T>): Promise<T> {
+  const parent = heldWriteSlots.getStore();
+  const held = new Set(accountIds);
+  if (parent) for (const accountId of parent) held.add(accountId);
+  return heldWriteSlots.run(held, fn);
 }
 const scheduledSentVerifications = new Map<string, Promise<void>>();
 const sentVerificationRetryDelaysMs = [0, 2_000, 10_000] as const;
@@ -1384,95 +1444,101 @@ export async function updateMessageFlagsBatch(
   let failed = blocked.length + (messageIds.length - rows.length);
   const changedIds: string[] = [];
   for (const [accountId, messages] of byAccount) {
-    const account = accountById(db, accountId);
-    if (!account) {
-      failed += messages.length;
-      continue;
-    }
-    const agentLease = agentMailEvents?.acquireLease(accountId);
-    const client = await imapClientForAccount(account, masterKey, accessTokenProvider);
-    let remoteSucceeded = false;
-    try {
-      await client.connect();
-      const byMailbox = new Map<string, PreparedMessage[]>();
-      for (const item of messages) {
-        const group = byMailbox.get(item.message.mailbox) ?? [];
-        group.push(item);
-        byMailbox.set(item.message.mailbox, group);
+    // The account write slot serializes the read-modify-write against any move
+    // or flag update in flight on the same account, mirroring the single-message
+    // `updateMessageFlags` path. Without it, a batch STORE racing a move (or
+    // sync) can overwrite the freshly reconciled flags_json.
+    await withAccountWriteLocks([accountId], async () => {
+      const account = accountById(db, accountId);
+      if (!account) {
+        failed += messages.length;
+        return;
       }
-      for (const [mailbox, mailboxMessages] of byMailbox) {
-        const lock = await client.getMailboxLock(mailbox);
-        try {
-          // Messages in the same mailbox may need different flag changes
-          // (some add \\Seen, others already have it). Group by the exact
-          // flag set so each STORE command covers a uniform batch.
-          const byFlagGroup = new Map<string, { add: string[]; remove: string[]; uids: number[] }>();
-          for (const item of mailboxMessages) {
-            const key = `${item.add.join(",")}\u0000${item.remove.join(",")}`;
-            let group = byFlagGroup.get(key);
-            if (!group) {
-              group = { add: item.add, remove: item.remove, uids: [] };
-              byFlagGroup.set(key, group);
-            }
-            group.uids.push(item.message.uid);
-          }
-          for (const group of byFlagGroup.values()) {
-            if (group.add.length && group.uids.length) {
-              const added = await client.messageFlagsAdd(group.uids, group.add, { uid: true });
-              if (added === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
-            }
-            if (group.remove.length && group.uids.length) {
-              const removed = await client.messageFlagsRemove(group.uids, group.remove, { uid: true });
-              if (removed === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
-            }
-          }
-        } finally {
-          lock.release();
+      const agentLease = agentMailEvents?.acquireLease(accountId);
+      const client = await imapClientForAccount(account, masterKey, accessTokenProvider);
+      let remoteSucceeded = false;
+      try {
+        await client.connect();
+        const byMailbox = new Map<string, PreparedMessage[]>();
+        for (const item of messages) {
+          const group = byMailbox.get(item.message.mailbox) ?? [];
+          group.push(item);
+          byMailbox.set(item.message.mailbox, group);
         }
+        for (const [mailbox, mailboxMessages] of byMailbox) {
+          const lock = await client.getMailboxLock(mailbox);
+          try {
+            // Messages in the same mailbox may need different flag changes
+            // (some add \\Seen, others already have it). Group by the exact
+            // flag set so each STORE command covers a uniform batch.
+            const byFlagGroup = new Map<string, { add: string[]; remove: string[]; uids: number[] }>();
+            for (const item of mailboxMessages) {
+              const key = `${item.add.join(",")}\u0000${item.remove.join(",")}`;
+              let group = byFlagGroup.get(key);
+              if (!group) {
+                group = { add: item.add, remove: item.remove, uids: [] };
+                byFlagGroup.set(key, group);
+              }
+              group.uids.push(item.message.uid);
+            }
+            for (const group of byFlagGroup.values()) {
+              if (group.add.length && group.uids.length) {
+                const added = await client.messageFlagsAdd(group.uids, group.add, { uid: true });
+                if (added === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
+              }
+              if (group.remove.length && group.uids.length) {
+                const removed = await client.messageFlagsRemove(group.uids, group.remove, { uid: true });
+                if (removed === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
+              }
+            }
+          } finally {
+            lock.release();
+          }
+        }
+        remoteSucceeded = true;
+      } catch {
+        remoteSucceeded = false;
+      } finally {
+        if (client?.usable) await client.logout().catch(() => undefined);
       }
-      remoteSucceeded = true;
-    } catch {
-      remoteSucceeded = false;
-    } finally {
-      if (client?.usable) await client.logout().catch(() => undefined);
-    }
-    if (!remoteSucceeded) {
-      failed += messages.length;
-      continue;
-    }
+      if (!remoteSucceeded) {
+        failed += messages.length;
+        return;
+      }
 
-    // Persist locally only after the remote STORE succeeded for every message
-    // in the account.
-    db.transaction(() => {
-      for (const item of messages) {
-        const { message } = item;
-        db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run(JSON.stringify(item.nextFlags), message.id);
-        // Only messages that actually changed state are undo candidates;
-        // idempotent no-ops (already in the requested state) stay in `updated`.
-        if (item.add.length || item.remove.length) changedIds.push(message.id);
-        if (item.seenChanged) {
-          db.prepare(`
-            UPDATE folders
-            SET unseen = CASE
-              WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
-              ELSE unseen + 1
-            END
-            WHERE account_id = ? AND path = ?
-          `).run(item.nextFlags.includes("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
+      // Persist locally only after the remote STORE succeeded for every message
+      // in the account.
+      db.transaction(() => {
+        for (const item of messages) {
+          const { message } = item;
+          db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run(JSON.stringify(item.nextFlags), message.id);
+          // Only messages that actually changed state are undo candidates;
+          // idempotent no-ops (already in the requested state) stay in `updated`.
+          if (item.add.length || item.remove.length) changedIds.push(message.id);
+          if (item.seenChanged) {
+            db.prepare(`
+              UPDATE folders
+              SET unseen = CASE
+                WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
+                ELSE unseen + 1
+              END
+              WHERE account_id = ? AND path = ?
+            `).run(item.nextFlags.includes("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
+          }
+          if (agentMailEvents && agentLease) {
+            agentMailEvents.messageUpsertedWithinTransaction(agentLease, message.id, {
+              mailbox: message.mailbox,
+              uid: message.uid,
+              remoteIdLookup: message.remote_id_lookup,
+              flags: [...item.nextFlags].sort(),
+              pendingMoveDestination: message.pending_move_destination,
+              pendingMoveState: message.pending_move_state,
+            });
+          }
         }
-        if (agentMailEvents && agentLease) {
-          agentMailEvents.messageUpsertedWithinTransaction(agentLease, message.id, {
-            mailbox: message.mailbox,
-            uid: message.uid,
-            remoteIdLookup: message.remote_id_lookup,
-            flags: [...item.nextFlags].sort(),
-            pendingMoveDestination: message.pending_move_destination,
-            pendingMoveState: message.pending_move_state,
-          });
-        }
-      }
-    })();
-    updated += messages.length;
+      })();
+      updated += messages.length;
+    });
   }
   const changedSet = new Set(changedIds);
   return { updated, failed, changedIds: messageIds.filter((id) => changedSet.has(id)) };

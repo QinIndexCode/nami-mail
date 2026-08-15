@@ -1,7 +1,9 @@
 import {
   MAX_TRANSLATION_TEXT_LENGTH,
+  TranslationService,
   TranslationServiceError,
   type TranslationResult,
+  type TranslationServiceOptions,
   translationLanguageForLocale,
 } from "./translation.js";
 
@@ -132,6 +134,30 @@ export class BuiltinTranslationService {
     }
 
     throw lastError ?? new TranslationServiceError("translation_service_unavailable", "All translation engines failed.");
+  }
+
+  /** Translates using only the Google engine (used as a standalone provider). */
+  async translateWithGoogleOnly(text: string, targetLocale: string, signal?: AbortSignal): Promise<TranslationResult> {
+    if (text.length > MAX_TRANSLATION_TEXT_LENGTH) {
+      throw new TranslationServiceError("translation_request_too_large", "The message is too large to translate.");
+    }
+    if (!text.trim()) {
+      throw new TranslationServiceError("translation_content_unavailable", "The message does not contain translatable text.");
+    }
+    const targetLanguage = translationLanguageForLocale(targetLocale);
+    return this.translateWithGoogle(text, targetLanguage, signal, {});
+  }
+
+  /** Translates using only the MyMemory engine (used as a standalone provider). */
+  async translateWithMyMemoryOnly(text: string, targetLocale: string, signal?: AbortSignal): Promise<TranslationResult> {
+    if (text.length > MAX_TRANSLATION_TEXT_LENGTH) {
+      throw new TranslationServiceError("translation_request_too_large", "The message is too large to translate.");
+    }
+    if (!text.trim()) {
+      throw new TranslationServiceError("translation_content_unavailable", "The message does not contain translatable text.");
+    }
+    const targetLanguage = translationLanguageForLocale(targetLocale);
+    return this.translateWithMyMemory(text, targetLanguage, MYMEMORY_DEFAULT_SOURCE_LANGUAGE, signal);
   }
 
   private async translateWithGoogle(
@@ -271,5 +297,75 @@ export class BuiltinTranslationService {
       clearTimeout(timeout);
       externalSignal?.removeEventListener("abort", abortForExternalSignal);
     }
+  }
+}
+
+export type BuiltinEngineId = "google" | "mymemory";
+
+/**
+ * A translation provider that always succeeds structurally (isConfigured() ->
+ * true) and routes through a primary/backup chain of engines:
+ *   1. the primary engine (or a custom LibreTranslate endpoint)
+ *   2. the backup engine (or the remaining built-in)
+ *   3. the built-in chain (Google -> MyMemory)
+ * Used when the user picks a built-in provider as primary/backup.
+ */
+export class BuiltinTranslationChain {
+  private readonly builtin = new BuiltinTranslationService();
+  private readonly custom: TranslationService | undefined;
+
+  constructor(
+    private readonly primary: BuiltinEngineId | "custom",
+    private readonly backup: BuiltinEngineId | "custom",
+    customOptions?: TranslationServiceOptions,
+  ) {
+    if (customOptions?.endpoint?.trim()) {
+      this.custom = new TranslationService(customOptions);
+    }
+  }
+
+  isConfigured(): boolean {
+    return true;
+  }
+
+  configurationIssue(): TranslationServiceError | undefined {
+    return undefined;
+  }
+
+  async translate(text: string, targetLocale: string, signal?: AbortSignal): Promise<TranslationResult> {
+    const engines: Array<{ id: BuiltinEngineId | "custom"; label: string }> = [];
+    if (this.custom && this.primary === "custom") engines.push({ id: "custom", label: "custom" });
+    if (this.primary !== "custom") engines.push({ id: this.primary, label: this.primary });
+    if (this.custom && this.backup === "custom") engines.push({ id: "custom", label: "custom" });
+    if (this.backup !== "custom") engines.push({ id: this.backup, label: this.backup });
+    // Final safety net: the full built-in chain (Google -> MyMemory).
+    engines.push({ id: "google", label: "builtin-chain" });
+
+    let lastError: TranslationServiceError | undefined;
+    for (const engine of engines) {
+      try {
+        if (engine.id === "custom") {
+          if (!this.custom) throw new TranslationServiceError("translation_not_configured", "The custom translation service is not configured.");
+          return await this.custom.translate(text, targetLocale, signal);
+        }
+        if (engine.id === "google") {
+          // If this is the explicit google engine (primary or backup), use it
+          // alone; the trailing builtin-chain slot (also google) is the full
+          // Google -> MyMemory chain.
+          if (engine.label !== "builtin-chain") {
+            return await this.builtin.translateWithGoogleOnly(text, targetLocale, signal);
+          }
+          return await this.builtin.translate(text, targetLocale, signal);
+        }
+        if (engine.id === "mymemory") {
+          return await this.builtin.translateWithMyMemoryOnly(text, targetLocale, signal);
+        }
+      } catch (error) {
+        lastError = error instanceof TranslationServiceError
+          ? error
+          : new TranslationServiceError("translation_service_unavailable", "The translation service is unavailable.");
+      }
+    }
+    throw lastError ?? new TranslationServiceError("translation_service_unavailable", "All translation engines failed.");
   }
 }
