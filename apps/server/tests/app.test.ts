@@ -240,19 +240,21 @@ it("keeps an Agent stream running after the client closes its response", async (
         });
 
         const deadline = Date.now() + 10_000;
-        let lastMessage: { role: string; content: string } | undefined;
+        let lastMessage: { role: string; content: string; state?: string } | undefined;
         let roles: string[] = [];
         while (Date.now() < deadline) {
           const response = await streamingApp.inject({ method: "GET", url: `/api/agent/conversations/${conversation.id}` });
           const conversationSnapshot = response.json();
           roles = conversationSnapshot.messages.map((message: { role: string }) => message.role);
           lastMessage = conversationSnapshot.messages[conversationSnapshot.messages.length - 1];
-          if (roles[roles.length - 1] === "assistant") break;
+          // The run publishes an in-flight streaming assistant snapshot while it
+          // is still answering; wait for the persisted, complete reply instead.
+          if (roles[roles.length - 1] === "assistant" && lastMessage?.state === "complete") break;
           await new Promise<void>((resolve) => setTimeout(resolve, 150));
         }
 
         expect(roles).toEqual(["user", "assistant"]);
-        expect(lastMessage).toMatchObject({ role: "assistant", content: "First half. Second half." });
+        expect(lastMessage).toMatchObject({ role: "assistant", content: "First half. Second half.", state: "complete" });
       } finally {
         await streamingApp.close();
       }

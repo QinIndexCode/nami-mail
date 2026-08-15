@@ -15,11 +15,13 @@ import {
   Laptop,
   Languages,
   LoaderCircle,
+  Globe,
   MessageSquareReply,
   MessageSquareX,
   Minimize2,
   Moon,
   Palette,
+  Server,
   Power,
   RefreshCw,
   RotateCcw,
@@ -35,7 +37,7 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
-import { api, type TranslationConfiguration } from "./api";
+import { api, type TranslationConfiguration, type TranslationProviderId } from "./api";
 import type { ExternalPairingSummary } from "./agentTypes";
 import { desktopBridge, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
 import { mailErrorMessage } from "./errorPresentation";
@@ -379,6 +381,8 @@ export default function SettingsModal({
   const [translationApiKey, setTranslationApiKey] = useState("");
   const [translationApiKeyVisible, setTranslationApiKeyVisible] = useState(false);
   const [translationTimeoutMs, setTranslationTimeoutMs] = useState(25_000);
+  const [translationPrimary, setTranslationPrimary] = useState<TranslationProviderId>("google");
+  const [translationBackup, setTranslationBackup] = useState<TranslationProviderId>("mymemory");
   const [autoReplyDialogOpen, setAutoReplyDialogOpen] = useState(false);
   const [autoReplyDecisionsOpen, setAutoReplyDecisionsOpen] = useState(false);
   const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
@@ -427,6 +431,8 @@ export default function SettingsModal({
     endpoint: translationEndpoint,
     apiKey: translationApiKey,
     timeoutMs: translationTimeoutMs,
+    primary: translationPrimary,
+    backup: translationBackup,
   });
   const pendingTranslationDiscard = pendingConfirmation === "discard-translation-changes"
     || pendingConfirmation === "discard-translation-changes-and-open-agent";
@@ -507,6 +513,8 @@ export default function SettingsModal({
       setTranslationApiKey("");
       setTranslationApiKeyVisible(false);
       setTranslationTimeoutMs(configuration.timeoutMs);
+      setTranslationPrimary(configuration.primary ?? "google");
+      setTranslationBackup(configuration.backup ?? "mymemory");
     }).catch((error: unknown) => {
       if (!active) return;
       setTranslationConfiguration(null);
@@ -971,6 +979,8 @@ export default function SettingsModal({
       const next = await api.updateTranslationConfiguration({
         endpoint,
         timeoutMs,
+        primary: translationPrimary,
+        backup: translationBackup,
         ...(translationApiKey.trim() ? { apiKey: translationApiKey } : {}),
       });
       await applyTranslationConfiguration(next, t("settings.translation.saved"));
@@ -1213,6 +1223,14 @@ export default function SettingsModal({
                   ))}
                 </ThemedSelect>
               </label>
+
+              <Switch
+                checked={currentSettings.avatarGravatarEnabled}
+                disabled={controlsBusy}
+                label={t("settings.avatars.gravatar.label")}
+                description={t("settings.avatars.gravatar.description")}
+                onChange={() => void applyOptimisticSettings({ avatarGravatarEnabled: !currentSettings.avatarGravatarEnabled }, currentSettings.avatarGravatarEnabled ? t("settings.avatars.gravatar.disabled") : t("settings.avatars.gravatar.enabled"))}
+              />
 
               <div className="setting-subheading"><span>{t("settings.background.title")}</span><small>{t("settings.background.offlineHint")}</small></div>
               <div className="background-preset-grid" role="group" aria-label={t("settings.background.presetGroupLabel")}>
@@ -1777,6 +1795,48 @@ export default function SettingsModal({
                   event.preventDefault();
                   void saveTranslationConfiguration();
                 }}>
+                  <div className="translation-provider-picker">
+                    <div className="translation-provider-column">
+                      <span className="translation-provider-role">{t("settings.translation.primary")}</span>
+                      <div className="translation-provider-options" role="radiogroup" aria-label={t("settings.translation.primary")}>
+                        {translationConfiguration.providers.map((provider) => (
+                          <button
+                            key={provider.id}
+                            type="button"
+                            role="radio"
+                            aria-checked={translationPrimary === provider.id}
+                            className={`translation-provider-option${translationPrimary === provider.id ? " active" : ""}`}
+                            disabled={controlsBusy || (provider.id === "custom" && !provider.endpoint)}
+                            onClick={() => setTranslationPrimary(provider.id)}
+                          >
+                            {provider.builtin ? <Globe size={14} /> : <Server size={14} />}
+                            <span>{t(`settings.translation.provider.${provider.id}`)}</span>
+                            {translationPrimary === provider.id && <Check size={13} className="translation-provider-check" />}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="translation-provider-column">
+                      <span className="translation-provider-role">{t("settings.translation.backup")}</span>
+                      <div className="translation-provider-options" role="radiogroup" aria-label={t("settings.translation.backup")}>
+                        {translationConfiguration.providers.map((provider) => (
+                          <button
+                            key={provider.id}
+                            type="button"
+                            role="radio"
+                            aria-checked={translationBackup === provider.id}
+                            className={`translation-provider-option${translationBackup === provider.id ? " active" : ""}`}
+                            disabled={controlsBusy || provider.id === translationPrimary || (provider.id === "custom" && !provider.endpoint)}
+                            onClick={() => setTranslationBackup(provider.id)}
+                          >
+                            {provider.builtin ? <Globe size={14} /> : <Server size={14} />}
+                            <span>{t(`settings.translation.provider.${provider.id}`)}</span>
+                            {translationBackup === provider.id && <Check size={13} className="translation-provider-check" />}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
                   <label className="translation-setting-field" htmlFor="translation-service-endpoint">
                     <span><strong>{t("settings.translation.endpoint")}</strong><small>{t("settings.translation.endpointHint")}</small></span>
                     <input

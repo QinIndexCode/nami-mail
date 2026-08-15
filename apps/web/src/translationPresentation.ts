@@ -1,4 +1,4 @@
-import { ApiError, type TranslationConfiguration } from "./api";
+import { ApiError, type TranslationConfiguration, type TranslationProviderId } from "./api";
 import type { Translate } from "./i18n";
 import { colorLuminance, mailBackgroundColor } from "./mailHtmlTheme";
 
@@ -205,6 +205,8 @@ export type TranslationConfigurationDraft = {
   endpoint: string;
   apiKey: string;
   timeoutMs: number;
+  primary?: TranslationProviderId;
+  backup?: TranslationProviderId;
 };
 
 /** Detects unsaved fields without comparing an API key that is deliberately never returned. */
@@ -215,5 +217,7 @@ export function hasUnsavedTranslationConfiguration(
   if (!configuration) return false;
   return draft.endpoint.trim() !== configuration.endpoint
     || Boolean(draft.apiKey.trim())
-    || draft.timeoutMs !== configuration.timeoutMs;
+    || draft.timeoutMs !== configuration.timeoutMs
+    || (draft.primary ?? "google") !== (configuration.primary ?? "google")
+    || (draft.backup ?? "mymemory") !== (configuration.backup ?? "mymemory");
 }

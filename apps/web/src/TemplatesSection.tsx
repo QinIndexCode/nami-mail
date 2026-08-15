@@ -5,6 +5,7 @@ import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
 import { useDialogFocus } from "./useDialogFocus";
 import { useDismissTransition } from "./useDismissTransition";
+import { useStablePagedListHeight } from "./useStablePagedListHeight";
 import type { MailTemplate, MailTemplateInput } from "./types";
 
 export type TemplatesSectionProps = {
@@ -103,8 +104,15 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
 
   useDialogFocus(pendingBulkDelete, confirmationDialog);
   const { closing: confirmClosing, requestClose: requestConfirmClose } = useDismissTransition(() => setPendingBulkDelete(false));
+  const { closing: editorClosing, requestClose: requestEditorClose } = useDismissTransition(() => {
+    setDraft(null);
+    setEditingId(null);
+  });
 
   const controlsBusy = busy || Boolean(busyTemplateId);
+  // Must run before any early return so the hook count stays stable across
+  // renders (rules-of-hooks); it is inert while the pager is hidden.
+  const listScroll = useStablePagedListHeight<HTMLDivElement>(showToolbar);
 
   const toggleSelect = (templateId: string) => {
     setSelectedIds((previous) => {
@@ -307,70 +315,47 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
               <p className="settings-empty">{showToolbar ? t("settings.templates.noSearchResults") : (templates.length === 0 ? t("settings.templates.empty") : t("settings.templates.noMatches"))}</p>
             ) : (
               <>
-                <div className="templates-list">
+                {templates.some((template) => template.builtin) && (
+                  <p className="templates-builtin-hint" role="note">{t("settings.templates.builtinHint")}</p>
+                )}
+                <div ref={listScroll.ref} className="templates-list" style={listScroll.style}>
                   {pageTemplates.map((template) => {
                     const deleting = busyTemplateId === template.id;
-                    const editing = editingId === template.id;
                     const selected = selectedIds.has(template.id);
                     return (
-                      <div className={`template-row${selected ? " selected" : ""}${editing ? " editing" : ""}`} key={template.id}>
-                        {showToolbar && !editing && (
+                      <div className={`template-row${selected ? " selected" : ""}`} key={template.id}>
+                        {showToolbar && (
                           <label className="templates-row-check">
                             <input type="checkbox" checked={selected} onChange={() => toggleSelect(template.id)} aria-label={t("settings.templates.selectAriaLabel", { name: template.name })} />
                           </label>
                         )}
-                        {editing && draft ? (
-                          <div className="template-editor">
-                            <label className="translation-setting-field" htmlFor={`template-name-${template.id}`}>
-                              <span><strong>{t("settings.templates.nameLabel")}</strong></span>
-                              <input id={`template-name-${template.id}`} type="text" value={draft.name} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-                            </label>
-                            <label className="translation-setting-field" htmlFor={`template-subject-${template.id}`}>
-                              <span><strong>{t("settings.templates.subjectLabel")}</strong><small>{t("settings.templates.subjectHint")}</small></span>
-                              <input id={`template-subject-${template.id}`} type="text" value={draft.subject} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, subject: event.target.value })} />
-                            </label>
-                            <label className="translation-setting-field" htmlFor={`template-body-${template.id}`}>
-                              <span><strong>{t("settings.templates.bodyLabel")}</strong></span>
-                              <textarea id={`template-body-${template.id}`} value={draft.body} rows={4} disabled={busy} onChange={(event) => setDraft({ ...draft, body: event.target.value })} />
-                            </label>
-                            <div className="settings-inline-actions template-editor-actions">
-                              <button className="primary-button" type="button" disabled={busy} onClick={() => void saveDraft()}>
-                                {busy ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{t("settings.templates.save")}
-                              </button>
-                              <button className="secondary-button" type="button" disabled={busy} onClick={cancelEdit}>
-                                {t("common.cancel")}
-                              </button>
-                            </div>
+                        <div className="template-head">
+                          <span className="template-icon" aria-hidden="true"><FileText size={16} /></span>
+                          <div className="template-copy">
+                            <strong>{template.name}{template.builtin && <em className="template-builtin-badge">{t("settings.templates.builtinBadge")}</em>}</strong>
+                            {template.subject && <small className="template-subject">{template.subject}</small>}
+                            <small className="template-preview">{template.body}</small>
                           </div>
-                        ) : (
-                          <div className="template-head">
-                            <span className="template-icon" aria-hidden="true"><FileText size={16} /></span>
-                            <div className="template-copy">
-                              <strong>{template.name}</strong>
-                              {template.subject && <small className="template-subject">{template.subject}</small>}
-                              <small className="template-preview">{template.body}</small>
-                            </div>
-                            <div className="template-actions">
-                              <button className="icon-button" type="button" aria-label={t("settings.templates.edit")} data-tooltip={t("settings.templates.edit")} disabled={Boolean(busyTemplateId)} onClick={() => startEdit(template)}>
-                                <Pencil size={15} />
-                              </button>
-                              {armedDeleteId === template.id ? (
-                                <>
-                                  <button className="secondary-button danger-button" type="button" disabled={Boolean(busyTemplateId)} onClick={() => void deleteTemplate(template.id)}>
-                                    {deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}{t("settings.templates.confirmDelete")}
-                                  </button>
-                                  <button className="secondary-button" type="button" disabled={Boolean(busyTemplateId)} onClick={() => setArmedDeleteId(null)}>
-                                    {t("common.cancel")}
-                                  </button>
-                                </>
-                              ) : (
-                                <button className="icon-button danger-icon-button" type="button" aria-label={t("settings.templates.delete")} data-tooltip={t("settings.templates.delete")} disabled={Boolean(busyTemplateId)} onClick={() => setArmedDeleteId(template.id)}>
-                                  <Trash2 size={15} />
+                          <div className="template-actions">
+                            <button className="icon-button" type="button" aria-label={t("settings.templates.edit")} data-tooltip={t("settings.templates.edit")} disabled={Boolean(busyTemplateId)} onClick={() => startEdit(template)}>
+                              <Pencil size={15} />
+                            </button>
+                            {armedDeleteId === template.id ? (
+                              <>
+                                <button className="secondary-button danger-button" type="button" disabled={Boolean(busyTemplateId)} onClick={() => void deleteTemplate(template.id)}>
+                                  {deleting ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}{t("settings.templates.confirmDelete")}
                                 </button>
-                              )}
-                            </div>
+                                <button className="secondary-button" type="button" disabled={Boolean(busyTemplateId)} onClick={() => setArmedDeleteId(null)}>
+                                  {t("common.cancel")}
+                                </button>
+                              </>
+                            ) : (
+                              <button className="icon-button danger-icon-button" type="button" aria-label={t("settings.templates.delete")} data-tooltip={t("settings.templates.delete")} disabled={Boolean(busyTemplateId)} onClick={() => setArmedDeleteId(template.id)}>
+                                <Trash2 size={15} />
+                              </button>
+                            )}
                           </div>
-                        )}
+                        </div>
                       </div>
                     );
                   })}
@@ -389,20 +374,50 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
               </>
             )}
 
-            {!draft && (
-              <div className="settings-inline-actions">
-                <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => {
-                  setArmedDeleteId(null);
-                  setEditingId(null);
-                  setDraft(emptyDraft());
-                }}>
-                  <Plus size={15} />{t("settings.templates.addTemplate")}
-                </button>
-              </div>
-            )}
+            <div className="settings-inline-actions">
+              <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => {
+                setArmedDeleteId(null);
+                setEditingId(null);
+                setDraft(emptyDraft());
+              }}>
+                <Plus size={15} />{t("settings.templates.addTemplate")}
+              </button>
+            </div>
           </>
         )}
       </section>
+      {draft && (
+        <div className={`modal-backdrop settings-modal-backdrop${editorClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && requestEditorClose()}>
+          <section className={`modal-card template-editor-card${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="template-editor-title" tabIndex={-1}>
+            <div className="modal-card-header">
+              <span className="eyebrow">{editingId ? t("settings.templates.edit") : t("settings.templates.addTemplate")}</span>
+              <h3 id="template-editor-title">{editingId ? t("settings.templates.editTitle") : t("settings.templates.addTitle")}</h3>
+            </div>
+            <div className="template-editor">
+              <label className="translation-setting-field" htmlFor="template-editor-name">
+                <span><strong>{t("settings.templates.nameLabel")}</strong></span>
+                <input id="template-editor-name" type="text" value={draft.name} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, name: event.target.value })} data-dialog-initial-focus />
+              </label>
+              <label className="translation-setting-field" htmlFor="template-editor-subject">
+                <span><strong>{t("settings.templates.subjectLabel")}</strong><small>{t("settings.templates.subjectHint")}</small></span>
+                <input id="template-editor-subject" type="text" value={draft.subject} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, subject: event.target.value })} />
+              </label>
+              <label className="translation-setting-field" htmlFor="template-editor-body">
+                <span><strong>{t("settings.templates.bodyLabel")}</strong></span>
+                <textarea id="template-editor-body" value={draft.body} rows={8} disabled={busy} onChange={(event) => setDraft({ ...draft, body: event.target.value })} />
+              </label>
+            </div>
+            <div className="settings-inline-actions template-editor-actions">
+              <button className="secondary-button" type="button" disabled={busy} onClick={requestEditorClose}>
+                {t("common.cancel")}
+              </button>
+              <button className="primary-button" type="button" disabled={busy || !draft.name.trim()} onClick={() => void saveDraft()}>
+                {busy ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{t("settings.templates.save")}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {pendingBulkDelete && (
         <div className={`modal-backdrop confirmation-backdrop${confirmClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && requestConfirmClose()}>
           <section ref={confirmationDialog} className={`confirmation-card${confirmClosing ? " closing" : ""}`} role="alertdialog" aria-modal="true" aria-labelledby="templates-bulk-confirmation-title" aria-describedby="templates-bulk-confirmation-description" tabIndex={-1}>

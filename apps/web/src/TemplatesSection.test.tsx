@@ -86,4 +86,25 @@ describe("templates section", () => {
     expect(markup).toContain(zh("settings.templates.demoUnavailable"));
     expect(markup).not.toContain(zh("settings.templates.addTemplate"));
   });
+
+  it("marks built-in templates with a badge and shows the built-in hint", () => {
+    const withBuiltin: MailTemplate[] = [
+      { ...templates[0]!, builtin: true },
+      templates[1]!,
+    ];
+    const markup = renderSection({ initialTemplates: withBuiltin });
+
+    expect(markup).toContain("template-builtin-badge");
+    expect(markup).toContain(zh("settings.templates.builtinBadge"));
+    expect(markup).toContain(zh("settings.templates.builtinHint"));
+  });
+
+  it("renders the template editor as a modal card when a draft is open", () => {
+    // A draft is only opened interactively (client-side); the static render
+    // with no draft must not show the editor card, proving the editor lives in
+    // a modal rather than inline in the row.
+    const markup = renderSection({ initialTemplates: templates });
+    expect(markup).not.toContain("template-editor-card");
+    expect(markup).not.toContain("template-editor");
+  });
 });

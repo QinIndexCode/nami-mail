@@ -4,25 +4,30 @@ import { Archive, Layers3, Mail, Paperclip, Plus, Search, Star, Trash2, X } from
 import type { MessageListQuery } from "./mailListState";
 import { useI18n, type Translate } from "./i18n";
 import type { MailErrorPresentation } from "./errorPresentation";
+import { SenderAvatar, accountTone } from "./SenderAvatar";
 import type { Account, AppSettings, Message } from "./types";
 
-// Duplicated from App.tsx (file-local helpers) so the list stays self-contained.
-function initials(name: string, address: string): string {
-  const value = name.trim() || address.split("@")[0] || "?";
-  return [...value].slice(0, 2).join("").toUpperCase();
-}
+// `Intl.DateTimeFormat` construction is not free; per-row-per-frame allocation
+// during scrolling is avoidable. Cache the three variants per locale so each
+// row reuses a formatter instead of rebuilding it every render.
+const messageTimeFormatters = new Map<string, Intl.DateTimeFormat>();
 
-function accountTone(value: string): number {
-  return [...value].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4;
+function messageTimeFormatter(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${locale}\u0000${JSON.stringify(options)}`;
+  const cached = messageTimeFormatters.get(key);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat(locale, options);
+  messageTimeFormatters.set(key, formatter);
+  return formatter;
 }
 
 function formatMessageTime(value: string, locale: string): string {
   const date = new Date(value);
   const now = new Date();
   const sameDay = date.toDateString() === now.toDateString();
-  if (sameDay) return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(date);
+  if (sameDay) return messageTimeFormatter(locale, { hour: "2-digit", minute: "2-digit" }).format(date);
   const sameYear = date.getFullYear() === now.getFullYear();
-  return new Intl.DateTimeFormat(locale, sameYear ? { month: "numeric", day: "numeric" } : { year: "2-digit", month: "numeric", day: "numeric" }).format(date);
+  return messageTimeFormatter(locale, sameYear ? { month: "numeric", day: "numeric" } : { year: "2-digit", month: "numeric", day: "numeric" }).format(date);
 }
 
 type MailView = MessageListQuery["messageView"];
@@ -45,6 +50,7 @@ type MessageListProps = {
   unreadViewRecentlyReadIds: ReadonlySet<string>;
   threadById: Map<string, Message[]>;
   listDensity: AppSettings["listDensity"];
+  avatarGravatarEnabled: boolean;
   emptyMessageList: MessageListEmptyState;
   // Refs are owned by App.tsx (scroll anchoring, load-more listener and
   // focus restoration read the same registries after list messages change).
@@ -83,6 +89,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
     unreadViewRecentlyReadIds,
     threadById,
     listDensity,
+    avatarGravatarEnabled,
     emptyMessageList,
     messageListRef,
     messageButtonRefs,
@@ -99,9 +106,13 @@ function MessageList(props: MessageListProps): React.JSX.Element {
   // Gmail-style range selection: the anchor is the last row touched by a
   // selection click; Shift+click extends the selection from it. Reset it when
   // the visible list changes so a range never crosses into unrelated rows.
+  // A cheap length + first/last-id signature catches prepend/append/remove and
+  // ordinary re-sorts without an O(n) map+join on every scroll frame.
   const anchorIndexRef = useRef<number | null>(null);
   const lastMessagesKeyRef = useRef<string>("");
-  const messagesKey = messages.map((message) => message.id).join("\u0000");
+  const messagesKey = messages.length === 0
+    ? ""
+    : `${messages.length}\u0000${messages[0]!.id}\u0000${messages[messages.length - 1]!.id}`;
   if (messagesKey !== lastMessagesKeyRef.current) {
     lastMessagesKeyRef.current = messagesKey;
     anchorIndexRef.current = null;
@@ -119,7 +130,21 @@ function MessageList(props: MessageListProps): React.JSX.Element {
 
   return (
     <div className="message-list" ref={messageListRef}>
-      {loading && <div className="message-skeleton-list" role="status" aria-label={t("mail.loading")}><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div><div className="message-skeleton-row"><span className="message-skeleton-avatar" /><span className="message-skeleton-lines"><span className="message-skeleton-line subject" /><span className="message-skeleton-line snippet" /></span></div></div>}
+      {loading && (
+        <div className="message-skeleton-list" role="status" aria-label={t("mail.loading")} data-density={listDensity}>
+          {Array.from({ length: 6 }, (_, index) => (
+            <div className="message-skeleton-row" key={index}>
+              <span className="message-skeleton-avatar" />
+              <span className="message-skeleton-copy">
+                <span className="message-skeleton-meta"><span className="message-skeleton-line meta-sender" /><span className="message-skeleton-line meta-time" /></span>
+                <span className="message-skeleton-line subject" />
+                <span className="message-skeleton-line snippet" />
+                <span className="message-skeleton-tags"><span className="message-skeleton-line tag" /></span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       {!loading && fatalError && <div className="center-state error-state"><X size={24} /><h3>{fatalError.title}</h3><p>{fatalError.message} {fatalError.guidance}</p><button className="secondary-button" onClick={onReconnect}>{t("mail.reconnect")}</button></div>}
       {!loading && !fatalError && !accounts.length && (
         <div className="center-state empty-state"><div className="empty-orb"><Mail size={28} /></div><h3>{t("mail.empty.firstAccountTitle")}</h3><p>{t("mail.empty.firstAccountDescription")}</p><button className="primary-button" onClick={onAddAccount}><Plus size={17} />{t("account.add")}</button></div>
@@ -167,7 +192,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
                       }}>
                     <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
                     {selectionMode && <span className={`selection-checkbox ${selectedMessageIds.has(message.id) ? "checked" : ""}`} aria-hidden="true" />}
-                    <span className={`sender-avatar tone-${accountTone(message.from.address)}`}>{initials(message.from.name, message.from.address)}</span>
+                    <SenderAvatar name={message.from.name} address={message.from.address} tone={accountTone(message.from.address)} gravatarEnabled={avatarGravatarEnabled} />
                     <span className="message-copy">
                       <span className="message-meta"><strong>{message.from.name || message.from.address}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
                       <span className="message-subject">{message.subject}</span>
@@ -175,12 +200,12 @@ function MessageList(props: MessageListProps): React.JSX.Element {
                       <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
                     </span>
                     {!message.seen && <span className="unread-dot" />}
-                    <span className="row-quick-actions" onClick={(event) => event.stopPropagation()}>
-                      <span role="button" tabIndex={-1} aria-label={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} data-tooltip={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} className="row-quick-action" onClick={() => onQuickToggleStar(message)}><Star size={14} fill={message.flagged ? "currentColor" : "none"} /></span>
-                      <span role="button" tabIndex={-1} aria-label={t("mail.action.archive")} data-tooltip={t("mail.action.archive")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "archive")}><Archive size={14} /></span>
-                      <span role="button" tabIndex={-1} aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "trash")}><Trash2 size={14} /></span>
-                    </span>
                   </button>
+                    <span className="row-quick-actions">
+                      <button type="button" aria-label={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} data-tooltip={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} className="row-quick-action" onClick={() => onQuickToggleStar(message)}><Star size={14} fill={message.flagged ? "currentColor" : "none"} /></button>
+                      <button type="button" aria-label={t("mail.action.archive")} data-tooltip={t("mail.action.archive")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "archive")}><Archive size={14} /></button>
+                      <button type="button" aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "trash")}><Trash2 size={14} /></button>
+                    </span>
             </div>
             );
           })}

@@ -53,6 +53,10 @@ export const agentMessageCatalog = {
     "zh-CN": "未找到可引用的相关邮件内容。",
     "en-US": "No relevant mail content found to cite.",
   },
+  "context.rag_retrieved_label": {
+    "zh-CN": "以下邮件是你（Agent）从用户本地邮箱中检索到的候选内容，仅供回答时参考。它们不是用户发送给你的消息，用户并未引用或提供这些邮件。只有在与用户问题相关时才可引用；不要在回答中声称用户发送或提到了这些邮件。",
+    "en-US": "The messages below are candidates you (the Agent) retrieved from the user's local mailbox for reference only. They are NOT messages the user sent you, and the user did not quote or provide them. Only cite them when directly relevant to the user's question; never claim the user sent or mentioned these messages.",
+  },
   "status.empty_mailbox_hint": {
     "zh-CN": "当前邮箱中没有邮件",
     "en-US": "There are no emails in the current mailbox",

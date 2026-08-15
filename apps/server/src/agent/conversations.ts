@@ -4,6 +4,7 @@ import {
   decryptMultiAccountAgentRecord,
   encryptMultiAccountAgentRecord,
   canonicalAgentJson,
+  AGENT_STORE_CRYPTO_VERSION,
   type AccountEnvelopeScope,
   type EncryptedAccountEnvelope,
 } from "./store-crypto.js";
@@ -11,7 +12,7 @@ import type { AccountLifecycleStore} from "./lifecycle.js";
 import { type AccountGenerationLease } from "./lifecycle.js";
 import { assertAgentStoreReadable } from "./schema.js";
 
-export type ConversationRecordKind = "metadata" | "turn" | "tool-call" | "tool-result" | "citation" | "audit" | "regeneration" | "tombstone";
+export type ConversationRecordKind = "metadata" | "turn" | "tool-call" | "tool-result" | "citation" | "audit" | "regeneration" | "tombstone" | "revoke";
 
 export type ConversationDescriptor = {
   conversationId: string;
@@ -226,7 +227,7 @@ export class EncryptedConversationStore {
     leases: readonly AccountGenerationLease[],
     kind: ConversationRecordKind,
     value: unknown,
-    recordId = randomUUID(),
+    recordId: string = randomUUID(),
   ): DecryptedConversationRecord {
     assertAgentStoreReadable(this.db);
     ensureIdentifier(conversationId, "Conversation id");
@@ -253,6 +254,95 @@ export class EncryptedConversationStore {
     });
   }
 
+  /**
+   * Writes (or replaces in place) the single in-progress assistant draft for a
+   * conversation. The draft lives in a separate replaceable table so the
+   * append-only conversation record log stays immutable: throttled streaming
+   * snapshots update this row under one message id, and the finished turn is
+   * appended to the durable log while this row is cleared. Mail-derived drafts
+   * use the same per-account encryption envelopes as the durable log, so a
+   * removed source account still makes the partial reply unreadable.
+   */
+  upsertStreaming(conversationId: string, leases: readonly AccountGenerationLease[], value: unknown, messageId: string): void {
+    assertAgentStoreReadable(this.db);
+    ensureIdentifier(conversationId, "Conversation id");
+    ensureIdentifier(messageId, "Conversation message id");
+    this.transaction(() => {
+      const conversation = this.conversationRow(conversationId);
+      if (!conversation || conversation.state !== "active") throw new Error("Conversation is unavailable.");
+      this.requireMatchingScopes(conversationId, leases);
+      const scopes = this.accountEncryptionScopes(leases);
+      try {
+        const plaintext = canonicalAgentJson(value);
+        const envelopes = encryptMultiAccountAgentRecord(scopes, "conversation-record", messageId, plaintext);
+        const now = this.clock();
+        this.db.prepare(`
+          INSERT OR REPLACE INTO agent_conversation_streaming (
+            conversation_id, message_id, encrypted_payload, crypto_version, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+        `).run(conversationId, messageId, JSON.stringify(envelopes), AGENT_STORE_CRYPTO_VERSION, now, now);
+      } finally {
+        this.zeroAccountEncryptionScopes(scopes);
+      }
+    });
+  }
+
+  /** Returns the current in-progress assistant draft, or null when none exists. */
+  readStreaming(conversationId: string, leases: readonly AccountGenerationLease[]): unknown | null {
+    assertAgentStoreReadable(this.db);
+    ensureIdentifier(conversationId, "Conversation id");
+    return this.transaction(() => {
+      const conversation = this.conversationRow(conversationId);
+      if (!conversation || conversation.state !== "active") throw new Error("Conversation is unavailable.");
+      const stored = this.requireMatchingScopes(conversationId, leases);
+      const row = this.db.prepare(`
+        SELECT message_id, encrypted_payload, crypto_version
+        FROM agent_conversation_streaming
+        WHERE conversation_id = ?
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `).get(conversationId) as { message_id: string; encrypted_payload: string; crypto_version: number } | undefined;
+      if (!row) return null;
+      if (row.crypto_version !== AGENT_STORE_CRYPTO_VERSION) throw new Error("Conversation streaming record has an unsupported format.");
+      let envelopes: EncryptedAccountEnvelope[];
+      try {
+        envelopes = JSON.parse(row.encrypted_payload) as EncryptedAccountEnvelope[];
+      } catch {
+        throw new Error("Conversation streaming record is invalid.");
+      }
+      if (!Array.isArray(envelopes) || !sameScopes(
+        stored.map((scope) => ({ accountId: scope.account_id, generation: scope.account_generation })),
+        envelopes.map((envelope) => ({ accountId: envelope.accountId, generation: envelope.generation })),
+      )) {
+        throw new Error("Conversation streaming record is missing an account encryption envelope.");
+      }
+      const leaseByScope = new Map(leases.map((lease) => [scopeIdentity(lease), lease]));
+      const plaintext = decryptMultiAccountAgentRecord(envelopes, "conversation-record", row.message_id, (accountId, generation) => {
+        const lease = leaseByScope.get(scopeIdentity({ accountId, generation }));
+        if (!lease) throw new Error("Conversation account scope is unavailable.");
+        this.lifecycle.assertCurrent(lease);
+        return this.lifecycle.accountDataKey(lease);
+      });
+      try {
+        return JSON.parse(plaintext) as unknown;
+      } catch {
+        throw new Error("Conversation streaming record is invalid.");
+      }
+    });
+  }
+
+  /** Removes the in-progress assistant draft once the finished turn is durable. */
+  clearStreaming(conversationId: string, leases: readonly AccountGenerationLease[]): void {
+    assertAgentStoreReadable(this.db);
+    ensureIdentifier(conversationId, "Conversation id");
+    this.transaction(() => {
+      const conversation = this.conversationRow(conversationId);
+      if (!conversation || conversation.state !== "active") throw new Error("Conversation is unavailable.");
+      this.requireMatchingScopes(conversationId, leases);
+      this.db.prepare("DELETE FROM agent_conversation_streaming WHERE conversation_id = ?").run(conversationId);
+    });
+  }
+
   rename(conversationId: string, leases: readonly AccountGenerationLease[], title: string): DecryptedConversationRecord {
     if (!title.trim() || title.length > 512) throw new Error("Conversation title is invalid.");
     return this.append(conversationId, leases, "metadata", { title: title.trim(), kind: "rename" });
@@ -274,6 +364,7 @@ export class EncryptedConversationStore {
           FROM agent_conversation_records WHERE conversation_id = ?
         `).get(conversationId) as { last_sequence: number };
         this.insertRecord(conversationId, randomUUID(), "tombstone", sequenceRow.last_sequence + 1, { reason: "user_deleted" }, scopes, now);
+        this.db.prepare("DELETE FROM agent_conversation_streaming WHERE conversation_id = ?").run(conversationId);
         this.db.prepare(`
           UPDATE agent_conversations
           SET state = 'deleted', updated_at = ?, deleted_at = ?

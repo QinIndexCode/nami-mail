@@ -39,6 +39,9 @@ export type AppSettings = {
   closeBehavior: CloseBehavior;
   agentToolRoundLimit: number;
   listDensity: ListDensity;
+  /** Enables Gravatar lookup (md5(email)) for sender avatars. Off by default:
+   *  the hash is sent to a third party, which is a privacy consideration. */
+  avatarGravatarEnabled: boolean;
   agentAccessLevel: AgentAccessLevel;
   agentCliAccessLevel: AgentAccessLevel;
   agentMcpAccessLevel: AgentAccessLevel;
@@ -62,8 +65,9 @@ const defaults: Omit<AppSettings, "updatedAt"> = {
   refreshIntervalSeconds: 60,
   realtimePushEnabled: true,
   closeBehavior: "ask",
-  agentToolRoundLimit: 15,
+  agentToolRoundLimit: 30,
   listDensity: "comfortable",
+  avatarGravatarEnabled: false,
   agentAccessLevel: "send-confirmed",
   agentCliAccessLevel: "read-only",
   agentMcpAccessLevel: "read-only",
@@ -84,6 +88,7 @@ type SettingsRow = {
   close_behavior: CloseBehavior;
   agent_tool_round_limit: number;
   list_density: ListDensity;
+  avatar_gravatar_enabled: number;
   agent_access_level: AgentAccessLevel;
   agent_cli_access_level: AgentAccessLevel;
   agent_mcp_access_level: AgentAccessLevel;
@@ -108,17 +113,18 @@ function ensureSettingsRow(db: DatabaseHandle): void {
       id, theme, locale, background_preset, background_intensity,
       notifications_enabled, notify_when_focused, notification_sound,
       refresh_interval_seconds, realtime_push_enabled, close_behavior, agent_tool_round_limit,
-      list_density, agent_access_level, agent_cli_access_level, agent_mcp_access_level,
+      list_density, avatar_gravatar_enabled, agent_access_level, agent_cli_access_level, agent_mcp_access_level,
       custom_background_filename, updated_at
     ) VALUES (1, @theme, @locale, @backgroundPreset, @backgroundIntensity, @notificationsEnabled,
       @notifyWhenFocused, @notificationSound, @refreshIntervalSeconds, @realtimePushEnabled, @closeBehavior,
-      @agentToolRoundLimit, @listDensity, @agentAccessLevel, @agentCliAccessLevel, @agentMcpAccessLevel,
+      @agentToolRoundLimit, @listDensity, @avatarGravatarEnabled, @agentAccessLevel, @agentCliAccessLevel, @agentMcpAccessLevel,
       NULL, @updatedAt)
   `).run({
     ...defaults,
     notificationsEnabled: defaults.notificationsEnabled ? 1 : 0,
     notifyWhenFocused: defaults.notifyWhenFocused ? 1 : 0,
     realtimePushEnabled: defaults.realtimePushEnabled ? 1 : 0,
+    avatarGravatarEnabled: defaults.avatarGravatarEnabled ? 1 : 0,
     updatedAt: new Date().toISOString(),
   });
 }
@@ -137,6 +143,7 @@ function rowToSettings(row: SettingsRow): AppSettings {
     closeBehavior: row.close_behavior,
     agentToolRoundLimit: row.agent_tool_round_limit,
     listDensity: row.list_density,
+    avatarGravatarEnabled: Boolean(row.avatar_gravatar_enabled),
     agentAccessLevel: row.agent_access_level,
     agentCliAccessLevel: row.agent_cli_access_level,
     agentMcpAccessLevel: row.agent_mcp_access_level,
@@ -180,6 +187,7 @@ export function updateAppSettings(db: DatabaseHandle, patch: AppSettingsPatch): 
       close_behavior = @closeBehavior,
       agent_tool_round_limit = @agentToolRoundLimit,
       list_density = @listDensity,
+      avatar_gravatar_enabled = @avatarGravatarEnabled,
       agent_access_level = @agentAccessLevel,
       agent_cli_access_level = @agentCliAccessLevel,
       agent_mcp_access_level = @agentMcpAccessLevel,
@@ -192,6 +200,7 @@ export function updateAppSettings(db: DatabaseHandle, patch: AppSettingsPatch): 
     notificationsEnabled: next.notificationsEnabled ? 1 : 0,
     notifyWhenFocused: next.notifyWhenFocused ? 1 : 0,
     realtimePushEnabled: next.realtimePushEnabled ? 1 : 0,
+    avatarGravatarEnabled: next.avatarGravatarEnabled ? 1 : 0,
     autoReplyConfig: JSON.stringify(next.autoReply),
   });
 

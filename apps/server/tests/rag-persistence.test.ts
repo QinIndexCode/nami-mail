@@ -255,4 +255,38 @@ describe("Persisted RAG lexical index", () => {
     expect(absent).toBe(0);
     expect(present).toBeGreaterThan(absent);
   });
+
+  it("repairs pages missing remoteIdLookup once the message gains a stable id", async () => {
+    db = openDatabase(":memory:");
+    masterKey = randomBytes(32);
+    insertAccount(db);
+    applyAgentStoreSchema(db);
+    const context = setup(db, masterKey);
+    insertMessage(db, "message-1", 1, "Project review", "The approved project review is on Friday.");
+    context.outbox.enqueue({
+      lease: context.lease,
+      event: upsertEvent(context.lease, "message-1", "revision-1", "source-upsert-1"),
+    });
+    const first = new AgentRagWorker({ db, masterKey, lifecycle: context.lifecycle, sourceEvents: context.outbox });
+    await first.drainOnce();
+    await first.stop();
+
+    // The page was written before the message carried a provider-stable id.
+    const store = new EncryptedRagPageStore(db, masterKey, context.lifecycle);
+    const lease = context.lifecycle.acquireLease("account-1");
+    const pageId = "message:message-1:chunk:0";
+    const before = store.get(lease, pageId);
+    expect(before).toBeDefined();
+    expect((before!.payload as { remoteIdLookup?: string }).remoteIdLookup).toBeUndefined();
+
+    // The message later gains a stable remote id (e.g. Gmail's Message-ID HMAC).
+    db.prepare("UPDATE messages SET remote_id_lookup = ? WHERE id = ?").run("h1.stable-id", "message-1");
+
+    // Warm-up on the next worker repairs the page in place.
+    const second = new AgentRagWorker({ db, masterKey, lifecycle: context.lifecycle, sourceEvents: context.outbox });
+    await second.search(["account-1"], "project review", 5);
+    const after = store.get(lease, pageId);
+    expect((after!.payload as { remoteIdLookup?: string }).remoteIdLookup).toBe("h1.stable-id");
+    await second.stop();
+  });
 });

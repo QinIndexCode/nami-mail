@@ -24,11 +24,21 @@ const RAG_PAYLOAD_VERSION = 1;
 const workerIntervalMs = 1_500;
 const maximumSearchTerms = 32;
 const maximumInitialBackfillScan = 100;
+/** Pages repaired per warm-up pass by the remote-id migration, so a first search
+ * on a large mailbox never blocks the event loop on a full re-encryption sweep. */
+const REMOTE_ID_REPAIR_BATCH = 20;
 
 export type AgentRagPagePayload = {
   version: typeof RAG_PAYLOAD_VERSION;
   kind: "mail-chunk";
   messageId: string;
+  /** Provider-stable identity (HMAC of the IMAP Message-ID/emailId). Gmail
+   *  exposes one physical message under several labels (Inbox + All Mail + a
+   *  user label), which become several local `messageId`s; this key is the same
+   *  across all of those copies and is what dedupe collapses on. Absent when
+   *  the provider supplied no stable identifier — dedupe then falls back to
+   *  `messageId`. */
+  remoteIdLookup?: string;
   sourceRevision: string;
   chunkId: string;
   chunkIndex: number;
@@ -247,6 +257,7 @@ function parsePayload(value: unknown): AgentRagPagePayload | undefined {
     version: RAG_PAYLOAD_VERSION,
     kind: "mail-chunk",
     messageId: item.messageId,
+    ...(typeof item.remoteIdLookup === "string" ? { remoteIdLookup: item.remoteIdLookup } : {}),
     sourceRevision: item.sourceRevision,
     chunkId: item.chunkId,
     chunkIndex: item.chunkIndex,
@@ -321,6 +332,12 @@ function excerpt(value: string): string {
   return normalized.length <= 360 ? normalized : `${normalized.slice(0, 357).trimEnd()}...`;
 }
 
+/** Stable identity a citation/chunk collapses on: the provider-stable id when
+ *  present (Gmail's one-message-many-labels case), else the local message id. */
+function dedupeKey(payload: AgentRagPagePayload): string {
+  return payload.remoteIdLookup || payload.messageId;
+}
+
 function asCitation(entry: IndexedPage, confidence: number): StoredCitationReference {
   const payload = entry.payload;
   return {
@@ -366,6 +383,12 @@ export class AgentRagWorker {
   private readonly backfillCursors = new Map<string, BackfillCursor>();
   /** Generations whose tombstoned rows and stale revisions were already purged. */
   private readonly purgedGenerations = new Set<string>();
+  /** Generations whose pages were already repaired for the missing remote id. */
+  private readonly remoteIdRepairedGenerations = new Set<string>();
+  /** Progress cursor for the remote-id repair, keyed by `accountId:generation`. */
+  private readonly remoteIdRepairCursor = new Map<string, string>();
+  /** Cached candidate prefixes (`message:<id>:` → remoteIdLookup) per generation. */
+  private readonly remoteIdCandidatePrefixes = new Map<string, Map<string, string>>();
   private timer: NodeJS.Timeout | undefined;
   private draining: Promise<void> | undefined;
   private stopped = false;
@@ -438,6 +461,8 @@ export class AgentRagWorker {
     this.pendingSemantic.clear();
     this.sentAtByKey.clear();
     this.backfillCursors.clear();
+    this.remoteIdRepairCursor.clear();
+    this.remoteIdCandidatePrefixes.clear();
   }
 
   async drainOnce(limit = 25): Promise<void> {
@@ -505,13 +530,15 @@ export class AgentRagWorker {
     const maximum = Math.max(1, Math.min(30, limit));
     const results: AgentRagSearchResult[] = [];
     // A single message can span many chunks; keep only its best chunk so the
-    // top results stay diverse across messages instead of one long mail.
+    // top results stay diverse across messages instead of one long mail. The
+    // key is the provider-stable id when available so Gmail's label copies of
+    // the same physical mail also collapse into a single result.
     const seenMessages = new Set<string>();
     for (const candidate of candidates) {
       if (signal?.aborted || results.length >= maximum) break;
-      const messageId = candidate.entry.payload.messageId;
-      if (seenMessages.has(messageId)) continue;
-      seenMessages.add(messageId);
+      const key = dedupeKey(candidate.entry.payload);
+      if (seenMessages.has(key)) continue;
+      seenMessages.add(key);
       const confidence = Math.min(1, candidate.score / Math.max(terms.length * 2.25, 1));
       const reference = asCitation(candidate.entry, confidence);
       const validated = this.citations.revalidate(reference);
@@ -563,8 +590,9 @@ export class AgentRagWorker {
       if (!page || page.pageRevision !== decoded.pageRevision) continue;
       const payload = parsePayload(page.payload);
       if (!payload) continue;
-      if (seenMessages.has(payload.messageId)) continue;
-      seenMessages.add(payload.messageId);
+      const key = dedupeKey(payload);
+      if (seenMessages.has(key)) continue;
+      seenMessages.add(key);
       resolved.push({ citation: result.citation, content: payload.content, score: result.score });
     }
     return resolved;
@@ -1073,6 +1101,9 @@ export class AgentRagWorker {
         version: RAG_PAYLOAD_VERSION,
         kind: "mail-chunk",
         messageId,
+        ...(typeof stored.row.remote_id_lookup === "string" && stored.row.remote_id_lookup
+          ? { remoteIdLookup: stored.row.remote_id_lookup }
+          : {}),
         sourceRevision: String(event.revision),
         chunkId: chunk.chunkId,
         chunkIndex: chunk.chunkIndex,
@@ -1165,6 +1196,85 @@ export class AgentRagWorker {
     }
     this.ragIndex.reconcileStats(lease.accountId, lease.generation);
     this.purgeAccountGeneration(lease);
+    this.repairRemoteIdLookup(lease);
+  }
+
+  /**
+   * One-time migration for pages indexed before the provider-stable identity
+   * was persisted: a page whose payload lacks `remoteIdLookup` but whose source
+   * message now carries one is re-encrypted in place with the SAME source
+   * revision and content (a new page revision) so Gmail label copies of one
+   * physical mail collapse during dedup. Runs once per account generation,
+   * lazily on warm-up; a failure is retried on the next warm-up.
+   */
+  private repairRemoteIdLookup(lease: AccountGenerationLease): void {
+    const generationKey = `${lease.accountId}:${lease.generation}`;
+    if (this.remoteIdRepairedGenerations.has(generationKey)) return;
+    try {
+      // Only pages whose message NOW carries a provider-stable id need repair.
+      // The prefix map is computed once per generation and reused, so warm-up
+      // stays a single JOIN rather than re-scanning on every search.
+      let prefixToRemoteId = this.remoteIdCandidatePrefixes.get(generationKey);
+      if (!prefixToRemoteId) {
+        const candidates = this.options.db.prepare(`
+          SELECT DISTINCT i.message_id AS messageId, m.remote_id_lookup AS remoteIdLookup
+          FROM agent_rag_index i
+          JOIN messages m ON m.id = i.message_id AND m.account_id = i.account_id
+          WHERE i.account_id = ? AND i.account_generation = ?
+            AND m.remote_id_lookup IS NOT NULL AND m.remote_id_lookup <> ''
+        `).all(lease.accountId, lease.generation) as Array<{ messageId: string; remoteIdLookup: string }>;
+        prefixToRemoteId = new Map(candidates.map((candidate) => [pagePrefix(candidate.messageId), candidate.remoteIdLookup]));
+        this.remoteIdCandidatePrefixes.set(generationKey, prefixToRemoteId);
+        if (candidates.length === 0) {
+          this.remoteIdRepairedGenerations.add(generationKey);
+          this.remoteIdRepairCursor.delete(generationKey);
+          return;
+        }
+      }
+      const cursor = this.remoteIdRepairCursor.get(generationKey) ?? "";
+      const pages = this.pageStore.listMetadata(lease)
+        .filter((page) => page.state === "active")
+        .sort((left, right) => left.pageId.localeCompare(right.pageId));
+      let repaired = 0;
+      let scannedToEnd = true;
+      for (const page of pages) {
+        if (page.pageId <= cursor) continue;
+        // Advance the cursor on every inspected page so a later warm-up resumes
+        // right after it, whether or not this page needed a repair.
+        this.remoteIdRepairCursor.set(generationKey, page.pageId);
+        let remoteIdLookup: string | undefined;
+        for (const [prefix, remoteId] of prefixToRemoteId) {
+          if (page.pageId.startsWith(prefix)) { remoteIdLookup = remoteId; break; }
+        }
+        if (!remoteIdLookup) continue;
+        const decrypted = this.pageStore.get(lease, page.pageId);
+        if (!decrypted) continue;
+        const payload = parsePayload(decrypted.payload);
+        if (!payload || payload.remoteIdLookup) continue;
+        const nextPayload: AgentRagPagePayload = { ...payload, remoteIdLookup };
+        const revised = this.pageStore.put({
+          lease,
+          pageId: page.pageId,
+          pageRevision: this.nextPageRevision(lease, page.pageId, page),
+          pageKind: page.pageKind,
+          payload: nextPayload,
+        });
+        this.upsertIndex({ ...revised, payload: nextPayload });
+        repaired += 1;
+        if (repaired >= REMOTE_ID_REPAIR_BATCH) {
+          scannedToEnd = false;
+          break;
+        }
+      }
+      if (scannedToEnd) {
+        this.remoteIdRepairedGenerations.add(generationKey);
+        this.remoteIdRepairCursor.delete(generationKey);
+        this.remoteIdCandidatePrefixes.delete(generationKey);
+      }
+    } catch {
+      // Best-effort migration; a failure keeps the cursor so the next warm-up
+      // resumes from where it stopped instead of restarting the whole pass.
+    }
   }
 
   /**

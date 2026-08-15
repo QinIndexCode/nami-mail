@@ -259,6 +259,8 @@ export type MailTemplate = {
   body: string;
   createdAt: string;
   updatedAt: string;
+  /** True for templates shipped with the app and not yet edited by the user. */
+  builtin?: boolean;
 };
 
 export type MailTemplateInput = {
@@ -378,6 +380,8 @@ export type AppSettings = {
   closeBehavior: CloseBehavior;
   agentToolRoundLimit: number;
   listDensity: ListDensity;
+  /** Enables Gravatar lookup (md5(email)) for sender avatars. Off by default. */
+  avatarGravatarEnabled: boolean;
   agentAccessLevel: AgentAccessLevel;
   agentCliAccessLevel: AgentAccessLevel;
   agentMcpAccessLevel: AgentAccessLevel;
@@ -388,7 +392,7 @@ export type AppSettings = {
 
 export type AppSettingsPatch = Partial<Pick<
   AppSettings,
-  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "realtimePushEnabled" | "closeBehavior" | "agentToolRoundLimit" | "listDensity" | "agentAccessLevel" | "agentCliAccessLevel" | "agentMcpAccessLevel" | "autoReply"
+  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "realtimePushEnabled" | "closeBehavior" | "agentToolRoundLimit" | "listDensity" | "avatarGravatarEnabled" | "agentAccessLevel" | "agentCliAccessLevel" | "agentMcpAccessLevel" | "autoReply"
 >>;
 
 export const defaultAppSettings: AppSettings = {
@@ -402,8 +406,9 @@ export const defaultAppSettings: AppSettings = {
   refreshIntervalSeconds: 60,
   realtimePushEnabled: true,
   closeBehavior: "ask",
-  agentToolRoundLimit: 15,
+  agentToolRoundLimit: 30,
   listDensity: "comfortable",
+  avatarGravatarEnabled: false,
   agentAccessLevel: "send-confirmed",
   agentCliAccessLevel: "read-only",
   agentMcpAccessLevel: "read-only",

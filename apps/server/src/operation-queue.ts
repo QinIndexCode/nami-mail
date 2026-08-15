@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseHandle } from "./db.js";
-import { acquireAccountWriteSlots } from "./sync.js";
+import { acquireAccountWriteSlots, withHeldWriteSlots, withTimeout } from "./sync.js";
 
 /**
  * Durable queue for user-initiated message write operations (moves, flag
@@ -51,19 +51,6 @@ const TERMINAL_ROW_TTL_MS = 24 * 60 * 60 * 1000;
  * seconds, so this only fires on true hangs. */
 const OPERATION_RUN_TIMEOUT_MS = 5 * 60 * 1000;
 
-function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), milliseconds);
-    // Do not keep the process alive for an abandoned run that will never
-    // settle on its own during shutdown.
-    timer.unref?.();
-    promise.then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      (error) => { clearTimeout(timer); reject(error); },
-    );
-  });
-}
-
 export function createOperationQueue(db: DatabaseHandle): OperationQueue {
   const runners = new Map<OperationKind, OperationRunner>();
 
@@ -101,12 +88,12 @@ export function createOperationQueue(db: DatabaseHandle): OperationQueue {
     const releases = await acquireAccountWriteSlots([row.account_id]);
     try {
       const result = await withTimeout(
-        (async () => {
+        withHeldWriteSlots([row.account_id], async () => {
           // Only mark running once the account slot is held: an operation that
           // is still waiting its turn stays 'pending' (resumable on restart).
           markRunning.run(new Date().toISOString(), row.id);
           return runner(payload);
-        })(),
+        }),
         OPERATION_RUN_TIMEOUT_MS,
         `Operation "${row.kind}" timed out after ${OPERATION_RUN_TIMEOUT_MS / 1000}s.`,
       );

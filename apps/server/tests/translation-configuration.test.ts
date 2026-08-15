@@ -16,6 +16,13 @@ describe("translation configuration storage", () => {
         timeoutMs: 18_000,
         apiKeyConfigured: true,
         source: "local",
+        primary: "google",
+        backup: "mymemory",
+        providers: [
+          { id: "google", label: "google", builtin: true },
+          { id: "mymemory", label: "mymemory", builtin: true },
+          { id: "custom", label: "custom", builtin: false, endpoint, apiKeyConfigured: true },
+        ],
       });
 
       const row = db.prepare("SELECT translation_configuration FROM app_settings WHERE id = 1").get() as {
@@ -29,6 +36,13 @@ describe("translation configuration storage", () => {
         timeoutMs: 18_000,
         apiKeyConfigured: true,
         source: "local",
+        primary: "google",
+        backup: "mymemory",
+        providers: [
+          { id: "google", label: "google", builtin: true },
+          { id: "mymemory", label: "mymemory", builtin: true },
+          { id: "custom", label: "custom", builtin: false, endpoint, apiKeyConfigured: true },
+        ],
       });
       expect(store.createService().isConfigured()).toBe(true);
     } finally {
@@ -57,6 +71,13 @@ describe("translation configuration storage", () => {
         timeoutMs: 20_000,
         apiKeyConfigured: false,
         source: "local",
+        primary: "google",
+        backup: "mymemory",
+        providers: [
+          { id: "google", label: "google", builtin: true },
+          { id: "mymemory", label: "mymemory", builtin: true },
+          { id: "custom", label: "custom", builtin: false, endpoint: "https://translate.example.test/translate", apiKeyConfigured: false },
+        ],
       });
     } finally {
       masterKey.fill(0);
@@ -88,6 +109,12 @@ describe("translation configuration storage", () => {
         timeoutMs: 25_000,
         apiKeyConfigured: false,
         source: "none",
+        primary: "google",
+        backup: "mymemory",
+        providers: [
+          { id: "google", label: "google", builtin: true },
+          { id: "mymemory", label: "mymemory", builtin: true },
+        ],
       });
     } finally {
       masterKey.fill(0);
@@ -135,6 +162,12 @@ describe("translation configuration storage", () => {
         apiKeyConfigured: false,
         source: "local",
         configurationError: "unreadable",
+        primary: "google",
+        backup: "mymemory",
+        providers: [
+          { id: "google", label: "google", builtin: true },
+          { id: "mymemory", label: "mymemory", builtin: true },
+        ],
       });
       expect(store.createService().isConfigured()).toBe(false);
     } finally {
@@ -161,6 +194,12 @@ describe("translation configuration storage", () => {
         apiKeyConfigured: false,
         source: "local",
         configurationError: "unreadable",
+        primary: "google",
+        backup: "mymemory",
+        providers: [
+          { id: "google", label: "google", builtin: true },
+          { id: "mymemory", label: "mymemory", builtin: true },
+        ],
       });
     } finally {
       masterKey.fill(0);

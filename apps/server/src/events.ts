@@ -18,9 +18,15 @@ export type MailSyncedEvent = {
   lastSyncedAt: string;
 };
 
+export type SettingsChangedEvent = {
+  /** Always empty of data — the renderer re-fetches its own settings snapshot. */
+  at: string;
+};
+
 export type ServerEvent =
   | { type: "mail.received"; payload: MailReceivedEvent }
-  | { type: "mail.synced"; payload: MailSyncedEvent };
+  | { type: "mail.synced"; payload: MailSyncedEvent }
+  | { type: "settings.changed"; payload: SettingsChangedEvent };
 
 export type ServerEventListener = (event: ServerEvent) => void;
 
@@ -67,4 +73,11 @@ export function emitAccountSynced(db: DatabaseHandle, bus: ServerEventBus | unde
   if (row?.last_synced_at) {
     bus.emit({ type: "mail.synced", payload: { accountId, lastSyncedAt: row.last_synced_at } });
   }
+}
+
+/** Broadcasts that app settings changed (e.g. via the Agent settings tool) so
+ * connected renderers re-fetch and apply them immediately. */
+export function emitSettingsChanged(bus: ServerEventBus | undefined): void {
+  if (!bus) return;
+  bus.emit({ type: "settings.changed", payload: { at: new Date().toISOString() } });
 }

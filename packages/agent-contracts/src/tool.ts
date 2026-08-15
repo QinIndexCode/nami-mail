@@ -15,6 +15,7 @@ export const agentToolCategories = [
   "drafts",
   "mail",
   "system",
+  "search",
 ] as const;
 
 export const agentToolExecutionModes = ["read", "draft", "write", "high-risk"] as const;

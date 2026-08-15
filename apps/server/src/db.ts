@@ -212,13 +212,15 @@ CREATE TABLE IF NOT EXISTS app_settings (
   locale TEXT NOT NULL DEFAULT 'zh-CN',
   translation_configuration TEXT,
   translation_configuration_version INTEGER NOT NULL DEFAULT 0,
-  agent_tool_round_limit INTEGER NOT NULL DEFAULT 15 CHECK (agent_tool_round_limit BETWEEN 1 AND 50),
+  agent_tool_round_limit INTEGER NOT NULL DEFAULT 30 CHECK (agent_tool_round_limit BETWEEN 1 AND 50),
   list_density TEXT NOT NULL DEFAULT 'comfortable' CHECK (list_density IN ('comfortable', 'compact')),
+  avatar_gravatar_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_gravatar_enabled IN (0, 1)),
   agent_access_level TEXT NOT NULL DEFAULT 'send-confirmed' CHECK (agent_access_level IN ('read-only', 'send-confirmed', 'full-access')),
   agent_cli_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_cli_access_level IN ('read-only', 'send-confirmed', 'full-access')),
   agent_mcp_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_mcp_access_level IN ('read-only', 'send-confirmed', 'full-access')),
   custom_background_filename TEXT,
   auto_reply_config TEXT,
+  builtin_templates_seeded INTEGER NOT NULL DEFAULT 0 CHECK (builtin_templates_seeded IN (0, 1)),
   updated_at TEXT NOT NULL
 );
 
@@ -301,13 +303,16 @@ CREATE INDEX IF NOT EXISTS idx_contacts_auto_collected ON contacts(auto_collecte
 
 -- Local mail template library. Name/subject/body are encrypted with a derived
 -- master-key envelope; templates are user content that stays at rest encrypted.
+-- builtin marks templates shipped with the app: they are seeded on first run
+-- and can be edited/deleted by the user like any other template.
 CREATE TABLE IF NOT EXISTS mail_templates (
   id TEXT PRIMARY KEY,
   name_enc TEXT NOT NULL,
   subject_enc TEXT NOT NULL,
   body_enc TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  builtin INTEGER NOT NULL DEFAULT 0 CHECK (builtin IN (0, 1))
 );
 
 -- Local calendar. Title/description/location are encrypted with a derived
@@ -388,10 +393,14 @@ export function openDatabase(databasePath: string): DatabaseHandle {
   db.exec(schema);
   // Migration: add agent_tool_round_limit column for existing databases
   try {
-    db.prepare("ALTER TABLE app_settings ADD COLUMN agent_tool_round_limit INTEGER NOT NULL DEFAULT 15 CHECK (agent_tool_round_limit BETWEEN 1 AND 50)").run();
+    db.prepare("ALTER TABLE app_settings ADD COLUMN agent_tool_round_limit INTEGER NOT NULL DEFAULT 30 CHECK (agent_tool_round_limit BETWEEN 1 AND 50)").run();
   } catch {
     // Column already exists
   }
+  // Migration: the Agent tool round limit default moved from 15 to 30. Rows
+  // still holding the old default (never explicitly configured) follow along;
+  // values the user set on purpose are left untouched.
+  db.exec("UPDATE app_settings SET agent_tool_round_limit = 30 WHERE agent_tool_round_limit = 15");
   // Migration: add realtime_push_enabled column for existing databases
   try {
     db.prepare("ALTER TABLE app_settings ADD COLUMN realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1))").run();
@@ -530,6 +539,9 @@ function migrateDatabase(db: DatabaseHandle): void {
   if (!settingsColumns.some((column) => column.name === "list_density")) {
     db.exec("ALTER TABLE app_settings ADD COLUMN list_density TEXT NOT NULL DEFAULT 'comfortable' CHECK (list_density IN ('comfortable', 'compact'))");
   }
+  if (!settingsColumns.some((column) => column.name === "avatar_gravatar_enabled")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN avatar_gravatar_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_gravatar_enabled IN (0, 1))");
+  }
   if (!settingsColumns.some((column) => column.name === "agent_access_level")) {
     db.exec("ALTER TABLE app_settings ADD COLUMN agent_access_level TEXT NOT NULL DEFAULT 'send-confirmed' CHECK (agent_access_level IN ('read-only', 'send-confirmed', 'full-access'))");
   }
@@ -539,6 +551,9 @@ function migrateDatabase(db: DatabaseHandle): void {
   if (!settingsColumns.some((column) => column.name === "agent_mcp_access_level")) {
     db.exec("ALTER TABLE app_settings ADD COLUMN agent_mcp_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_mcp_access_level IN ('read-only', 'send-confirmed', 'full-access'))");
   }
+  if (!settingsColumns.some((column) => column.name === "builtin_templates_seeded")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN builtin_templates_seeded INTEGER NOT NULL DEFAULT 0 CHECK (builtin_templates_seeded IN (0, 1))");
+  }
   if (!settingsColumns.some((column) => column.name === "auto_reply_config")) {
     db.exec("ALTER TABLE app_settings ADD COLUMN auto_reply_config TEXT");
   }
@@ -547,4 +562,12 @@ function migrateDatabase(db: DatabaseHandle): void {
   // write capabilities by the upgrade (the SQLite CHECK still permits the old
   // value, so the UPDATE passes; new writes only ever use the three levels).
   db.exec("UPDATE app_settings SET agent_access_level = 'read-only' WHERE agent_access_level = 'draft-only'");
+
+  // Built-in mail templates: the app ships with a few starter templates. Older
+  // databases created the table without the builtin column; upgrading rows as
+  // user templates (0) preserves existing content unchanged.
+  const templateColumns = db.prepare("PRAGMA table_info(mail_templates)").all() as Array<{ name: string }>;
+  if (!templateColumns.some((column) => column.name === "builtin")) {
+    db.exec("ALTER TABLE mail_templates ADD COLUMN builtin INTEGER NOT NULL DEFAULT 0 CHECK (builtin IN (0, 1))");
+  }
 }

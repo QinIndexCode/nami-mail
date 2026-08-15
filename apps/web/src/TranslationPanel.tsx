@@ -44,6 +44,12 @@ export type TranslationContent = {
   visible: boolean;
   /** True while a chunked translation stream is still in progress. */
   streaming?: boolean;
+  /**
+   * Style-preserving translation of an HTML mail body: the sanitized HTML with
+   * the visible text nodes replaced by their translations, keeping markup,
+   * links, and inline styles intact. Present only for HTML-bodied messages.
+   */
+  translatedHtml?: string;
 };
 
 export type TranslationPanelState =
@@ -206,7 +212,7 @@ export default function TranslationPanel({ availability, state, llmAvailable, ma
             <small>{t("translation.llmCostNote")}</small>
           </div>
         )}
-        {isVisible && content && (
+        {isVisible && content && !content.translatedHtml && (
           <div className="translation-result" role="region" aria-label={t("translation.resultAria", { language: targetName })}>
             <div className="translation-result-heading">
               <span>{t("translation.resultTitle", { language: targetName })}</span>
@@ -225,6 +231,14 @@ export default function TranslationPanel({ availability, state, llmAvailable, ma
               ...(mailStyle.fontFamily ? { fontFamily: mailStyle.fontFamily } : {}),
               ...(mailStyle.fontSize ? { fontSize: mailStyle.fontSize } : {}),
             } : undefined}>{formatTranslationText(content.translatedText)}</div>
+          </div>
+        )}
+        {isVisible && content && content.translatedHtml && (
+          <div className="translation-inline-note" role="region" aria-label={t("translation.resultAria", { language: targetName })}>
+            <span>{t("translation.inlineApplied", { language: targetName })}</span>
+            <button type="button" onClick={hideTranslation} aria-label={t("translation.hide")} data-tooltip={t("translation.hide")}>
+              <EyeOff size={15} aria-hidden="true" />
+            </button>
           </div>
         )}
       </div>

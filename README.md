@@ -8,6 +8,8 @@
 
 Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端开源项目，代码托管于 [QinIndexCode/nami-mail](https://github.com/QinIndexCode/nami-mail)。
 
+**项目介绍网页（GitHub Pages）：[nami-mail 官网](https://qinindexcode.github.io/nami-mail/)**（由 [`site/`](site/) 目录自动构建部署）。
+
 **本文件是仓库导航入口，不承载完整文档。** 产品介绍、使用说明与全部文档请按语言选择：
 
 | 语言 / Language | 完整说明 / Full README | 文档导航 / Documentation index |

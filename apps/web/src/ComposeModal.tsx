@@ -6,6 +6,7 @@ import { summarizeComposeAttachments } from "./attachmentWorkflow";
 import { mailErrorMessage } from "./errorPresentation";
 import { applyTemplateToDraft } from "./mailTemplateInsert";
 import { pollSubmittingSubmission } from "./sendingStatus";
+import DatePicker from "./DatePicker";
 import ThemedSelect from "./ThemedSelect";
 import { useDialogFocus } from "./useDialogFocus";
 import { useDismissTransition } from "./useDismissTransition";
@@ -52,6 +53,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const [composeTemplates, setComposeTemplates] = useState<MailTemplate[] | null>(null);
   const [templateLoadBusy, setTemplateLoadBusy] = useState(false);
   const [templateLoadFailed, setTemplateLoadFailed] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composeDialogRef = useRef<HTMLElement>(null);
   const discardConfirmDialogRef = useRef<HTMLElement>(null);
@@ -223,20 +225,6 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     }
   };
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      if (confirmAction) {
-        requestConfirmClose();
-        return;
-      }
-      requestClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [confirmAction, requestClose, requestConfirmClose]);
-
   const chooseFiles = () => fileInputRef.current?.click();
 
   const uploadAttachment = async (targetAccountId: string, uploadId: string, file: File) => {
@@ -262,6 +250,12 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const addFiles = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.currentTarget.files ?? []);
     event.currentTarget.value = "";
+    await acceptFiles(files);
+  };
+
+  // Shared by the file picker and drag-and-drop (dropFiles): validates size
+  // limits and starts the upload chain for each file.
+  const acceptFiles = async (files: File[]) => {
     if (!files.length || busy || uploading || uploadInFlightRef.current) return;
     if (!accountId) {
       setError(t("compose.error.selectSender"));
@@ -296,6 +290,10 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     } finally {
       uploadInFlightRef.current = false;
     }
+  };
+
+  const dropFiles = (files: File[]) => {
+    void acceptFiles(Array.from(files));
   };
 
   const retryPendingUpload = async (upload: PendingAttachmentUpload) => {
@@ -333,8 +331,8 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     }
   };
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
+  const submit = async (event?: FormEvent) => {
+    event?.preventDefault();
     if (busy || uploading || discarding) return;
     if (hasPendingUploads) {
       setError(t("compose.error.pendingAttachments"));
@@ -441,6 +439,29 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     }
   };
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      // Ctrl/Cmd+Enter sends, mirroring the Agent composer's Enter-to-send.
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        if (confirmAction) return;
+        event.preventDefault();
+        void submit();
+        return;
+      }
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      if (confirmAction) {
+        requestConfirmClose();
+        return;
+      }
+      requestClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // submit is a plain function recreated each render; re-register the
+    // listener so the shortcut always reads the latest state.
+  }, [confirmAction, requestClose, requestConfirmClose, submit]);
+
   const saveDraft = async () => {
     if (!accountId || busy || uploading || discarding) return;
     if (hasPendingUploads) {
@@ -491,7 +512,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
       if (confirmAction) requestConfirmClose();
       else requestClose();
     }}>
-      <section ref={composeDialogRef} className={`compose-card${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="compose-title" tabIndex={-1}>
+      <section ref={composeDialogRef} className={`compose-card${closing ? " closing" : ""}${dragActive ? " drag-active" : ""}`} role="dialog" aria-modal="true" aria-labelledby="compose-title" tabIndex={-1} onDragOver={(event) => { if (busy || uploading || discarding || !accountId) return; event.preventDefault(); setDragActive(true); }} onDragLeave={(event) => { if (event.currentTarget.contains(event.relatedTarget as Node | null)) return; setDragActive(false); }} onDrop={(event) => { event.preventDefault(); setDragActive(false); if (busy || uploading || discarding || !accountId) return; dropFiles(Array.from(event.dataTransfer.files)); }}>
         <header className="compose-header">
           <div><span className="eyebrow">{draft.sourceDraftId ? t("compose.draft") : t("compose.new")}</span><h2 id="compose-title">{draft.sourceDraftId ? t("compose.editDraft") : t("compose.new")}</h2></div>
           <div className="compose-header-actions">{draft.sourceDraftId && <IconButton label={t("compose.deleteDraft")} onClick={() => { resetConfirmClosing(); setConfirmAction("delete"); }} disabled={busy || uploading || discarding}><Trash2 size={18} /></IconButton>}<IconButton label={t("common.close")} onClick={requestClose} disabled={busy || uploading || discarding}><X size={18} /></IconButton></div>
@@ -510,7 +531,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             }
           }} disabled={busy || uploading || discarding}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}</ThemedSelect></label>
           <div className="compose-row compose-to-row">
-            <label htmlFor="compose-to"><span>{t("compose.to")}</span><input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => { setTo(event.target.value); searchContacts(event.target.value); }} onKeyDown={(event) => { if (event.key === "Escape") setToSuggestionsOpen(false); }} placeholder="email@example.com" disabled={busy || discarding} /></label>
+            <label htmlFor="compose-to"><span>{t("compose.to")}</span><input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => { setTo(event.target.value); searchContacts(event.target.value); }} onKeyDown={(event) => { if (event.key === "Escape") setToSuggestionsOpen(false); }} placeholder={t("compose.toPlaceholder")} disabled={busy || discarding} /></label>
             {toSuggestionsOpen && (
               <div className="compose-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
                 {toSuggestions.map((contact) => (
@@ -523,7 +544,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
           </div>
           <label className="compose-row" htmlFor="compose-cc"><span>{t("compose.cc")}</span><input id="compose-cc" type="text" value={cc} onChange={(event) => setCc(event.target.value)} placeholder={t("compose.ccPlaceholder")} disabled={busy || discarding} /></label>
           <label className="compose-row" htmlFor="compose-subject"><span>{t("compose.subject")}</span><input id="compose-subject" type="text" value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={t("compose.subjectPlaceholder")} disabled={busy || discarding} /></label>
-          <label className="compose-row compose-schedule-row" htmlFor="compose-schedule"><span><Clock size={14} />{t("compose.schedule")}</span><span className="compose-schedule-field"><CalendarClock size={15} className="compose-schedule-icon" /><input id="compose-schedule" type="datetime-local" value={sendAtLocal} onChange={(event) => setSendAtLocal(event.target.value)} disabled={busy || discarding} />{sendAtLocal ? <button className="compose-schedule-clear" type="button" onClick={() => setSendAtLocal("")} disabled={busy || discarding} aria-label={t("compose.schedule.clear")}><X size={15} /></button> : null}</span></label>
+          <label className="compose-row compose-schedule-row" htmlFor="compose-schedule"><span><Clock size={14} />{t("compose.schedule")}</span><span className="compose-schedule-field"><CalendarClock size={15} className="compose-schedule-icon" /><DatePicker mode="datetime" value={sendAtLocal} onChange={setSendAtLocal} disabled={busy || discarding} aria-label={t("compose.schedule")} />{sendAtLocal ? <button className="compose-schedule-clear" type="button" onClick={() => setSendAtLocal("")} disabled={busy || discarding} aria-label={t("compose.schedule.clear")}><X size={15} /></button> : null}</span></label>
           <div className="compose-schedule-quick" role="group" aria-label={t("compose.schedule.quickLabel")}>
             {scheduleOptions.map((option) => (
               <button key={option.key} type="button" className={`schedule-chip${sendAtLocal === datetimeLocalFromDate(option.compute()) ? " active" : ""}`} onClick={() => setSendAtLocal(datetimeLocalFromDate(option.compute()))} disabled={busy || discarding}>{option.label}</button>
@@ -559,7 +580,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             )}
           </div>
           <label className="visually-hidden" htmlFor="compose-body">{t("compose.body")}</label>
-          <textarea id="compose-body" className="compose-body" value={text} onChange={(event) => setText(event.target.value)} placeholder={t("compose.bodyPlaceholder")} disabled={busy || discarding} />
+          <textarea id="compose-body" className="compose-body" value={text} onChange={(event) => setText(event.target.value)} onPaste={(event) => { const pasted = Array.from(event.clipboardData.files); if (pasted.length === 0) return; event.preventDefault(); void dropFiles(pasted); }} placeholder={t("compose.bodyPlaceholder")} disabled={busy || discarding} />
           <section className="compose-attachments" aria-label={t("compose.attachment.aria", { count: attachmentSummary.attachedCount, status: attachmentStatus })}>
             <div className="compose-attachments-heading"><span><Paperclip size={16} />{t("compose.attachments")}</span><small aria-live="polite">{attachmentSummary.attachedCount} / 10{t("common.dotSeparator")}{formatFileSize(attachmentSummary.attachedBytes)}{attachmentStatus ? `${t("common.dotSeparator")}${attachmentStatus}` : ""}</small><button className="compose-attachment-add" type="button" onClick={chooseFiles} disabled={busy || uploading || discarding || !accountId}>{uploading ? <LoaderCircle className="spin" size={15} /> : <Paperclip size={15} />}{uploading ? t("compose.attachment.uploading") : t("compose.attachment.add")}</button></div>
             <input ref={fileInputRef} className="visually-hidden" type="file" tabIndex={-1} multiple onChange={(event) => void addFiles(event)} />

@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
   Clock,
   List,
   LoaderCircle,
@@ -20,6 +21,7 @@ import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
 import type { CalendarEvent, CalendarEventColor, CalendarEventInput } from "./types";
 import { calendarEventColors } from "./types";
+import DatePicker from "./DatePicker";
 import { ManagementDialogShell } from "./ManagementDialogs";
 import { useDialogFocus } from "./useDialogFocus";
 import { useDismissTransition } from "./useDismissTransition";
@@ -202,6 +204,10 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
   const [notice, setNotice] = useState<Notice>(null);
   const [busy, setBusy] = useState(false);
   const [editor, setEditor] = useState<{ event: CalendarEvent | null; dayKey: string } | null>(null);
+  // Validation/save errors shown inside the event editor modal, distinct from
+  // the calendar page's global notice (which stays for save/delete success and
+  // list-level bulk actions).
+  const [editorError, setEditorError] = useState<string | null>(null);
   const [draft, setDraft] = useState<EventDraft>(() => emptyDraft(localDateKey(new Date())));
   const [pendingDelete, setPendingDelete] = useState<CalendarEvent | null>(null);
   const [pendingBulkDelete, setPendingBulkDelete] = useState(false);
@@ -434,6 +440,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     resetEditorClosing();
     setDraft(emptyDraft(dayKey));
     setEditor({ event: null, dayKey });
+    setEditorError(null);
     setNotice(null);
   };
 
@@ -441,6 +448,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     resetEditorClosing();
     setDraft(draftFromEvent(event));
     setEditor({ event, dayKey: isoToDate(event.startAt) });
+    setEditorError(null);
     setNotice(null);
   };
 
@@ -448,7 +456,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     if (!editor || busy) return;
     const title = draft.title.trim();
     if (!title) {
-      setNotice({ kind: "error", message: t("calendar.validation.titleRequired") });
+      setEditorError(t("calendar.validation.titleRequired"));
       return;
     }
     let startIso: string;
@@ -457,11 +465,11 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
       startIso = draft.allDay ? dateToStartIso(draft.startDate) : dateTimeToIso(draft.startDate, draft.startTime);
       endIso = draft.allDay ? dateToEndIso(draft.endDate) : dateTimeToIso(draft.endDate, draft.endTime);
     } catch {
-      setNotice({ kind: "error", message: t("calendar.validation.invalidDates") });
+      setEditorError(t("calendar.validation.invalidDates"));
       return;
     }
     if (Date.parse(endIso) < Date.parse(startIso)) {
-      setNotice({ kind: "error", message: t("calendar.validation.endBeforeStart") });
+      setEditorError(t("calendar.validation.endBeforeStart"));
       return;
     }
     const input: CalendarEventInput = {
@@ -474,7 +482,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
       color: draft.color,
     };
     setBusy(true);
-    setNotice(null);
+    setEditorError(null);
     try {
       if (demoMode) {
         if (editor.event) {
@@ -513,7 +521,8 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
       setEditor(null);
       setNotice({ kind: "success", message: t("calendar.saved") });
     } catch (error) {
-      setNotice({ kind: "error", message: mailErrorMessage(error, t("calendar.saveFailed"), t) });
+      // Keep the editor open and surface the failure inside it.
+      setEditorError(mailErrorMessage(error, t("calendar.saveFailed"), t));
     } finally {
       setBusy(false);
     }
@@ -531,7 +540,8 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
       setEditor(null);
       setNotice({ kind: "success", message: t("calendar.deleted") });
     } catch (error) {
-      setNotice({ kind: "error", message: mailErrorMessage(error, t("calendar.deleteFailed"), t) });
+      // The editor stays open; show the failure inside it instead of the page.
+      setEditorError(mailErrorMessage(error, t("calendar.deleteFailed"), t));
     } finally {
       setBusy(false);
     }
@@ -838,6 +848,9 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
                   </button>
                 )}
               </div>
+              {editorError && (
+                <div className="calendar-editor-error" role="alert"><CircleAlert size={14} /><span>{editorError}</span></div>
+              )}
               <label className="calendar-field">
                 <span>{t("calendar.titleLabel")}</span>
                 <input type="text" maxLength={300} value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder={t("calendar.titlePlaceholder")} autoFocus />
@@ -850,19 +863,19 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
                 <label className="calendar-field">
                   <span>{t("calendar.start")}</span>
                   {draft.allDay
-                    ? <input type="date" value={draft.startDate} onChange={(event) => setDraft((value) => ({ ...value, startDate: event.target.value }))} />
-                    : <input type="datetime-local" value={`${draft.startDate}T${draft.startTime}`} onChange={(event) => {
-                        const [date, time = "00:00"] = event.target.value.split("T");
-                        setDraft((value) => ({ ...value, startDate: date, startTime: time }));
+                    ? <DatePicker mode="date" value={draft.startDate} aria-label={t("calendar.start")} onChange={(value) => setDraft((draftValue) => ({ ...draftValue, startDate: value }))} />
+                    : <DatePicker mode="datetime" value={`${draft.startDate}T${draft.startTime}`} aria-label={t("calendar.start")} onChange={(value) => {
+                        const [date, time = "00:00"] = value.split("T");
+                        setDraft((draftValue) => ({ ...draftValue, startDate: date, startTime: time }));
                       }} />}
                 </label>
                 <label className="calendar-field">
                   <span>{t("calendar.end")}</span>
                   {draft.allDay
-                    ? <input type="date" value={draft.endDate} onChange={(event) => setDraft((value) => ({ ...value, endDate: event.target.value }))} />
-                    : <input type="datetime-local" value={`${draft.endDate}T${draft.endTime}`} onChange={(event) => {
-                        const [date, time = "00:00"] = event.target.value.split("T");
-                        setDraft((value) => ({ ...value, endDate: date, endTime: time }));
+                    ? <DatePicker mode="date" value={draft.endDate} aria-label={t("calendar.end")} onChange={(value) => setDraft((draftValue) => ({ ...draftValue, endDate: value }))} />
+                    : <DatePicker mode="datetime" value={`${draft.endDate}T${draft.endTime}`} aria-label={t("calendar.end")} onChange={(value) => {
+                        const [date, time = "00:00"] = value.split("T");
+                        setDraft((draftValue) => ({ ...draftValue, endDate: date, endTime: time }));
                       }} />}
                 </label>
               </div>

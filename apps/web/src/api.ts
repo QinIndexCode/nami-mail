@@ -96,6 +96,16 @@ export type TranslationServiceStatus = {
   configurationError?: "invalid" | "unreadable";
 };
 
+export type TranslationProviderId = "google" | "mymemory" | "custom";
+
+export type TranslationProviderSummary = {
+  id: TranslationProviderId;
+  label: string;
+  builtin: boolean;
+  endpoint?: string;
+  apiKeyConfigured?: boolean;
+};
+
 export type TranslationConfiguration = {
   ok: true;
   enabled: boolean;
@@ -104,6 +114,12 @@ export type TranslationConfiguration = {
   apiKeyConfigured: boolean;
   source: "environment" | "local" | "none";
   configurationError?: "invalid" | "unreadable";
+  /** Id of the primary translation provider (defaults to "google"). */
+  primary: TranslationProviderId;
+  /** Id of the backup translation provider (defaults to "mymemory"). */
+  backup: TranslationProviderId;
+  /** All selectable providers, built-in + user-added. */
+  providers: TranslationProviderSummary[];
 };
 
 export type TranslationConfigurationPatch = {
@@ -111,6 +127,10 @@ export type TranslationConfigurationPatch = {
   apiKey?: string;
   clearApiKey?: boolean;
   timeoutMs?: number;
+  primary?: TranslationProviderId;
+  backup?: TranslationProviderId;
+  /** Resets to the built-in Google provider (removes any custom endpoint). */
+  clearEndpoint?: boolean;
 };
 
 export class ApiError extends Error {
@@ -127,6 +147,14 @@ type ErrorResponse = {
   code?: string;
   llmAvailable?: boolean;
 };
+
+/** Longest a JSON request may wait for the local service before it is treated
+ * as a failure. A wedged local service (e.g. a hung account write slot behind
+ * the operation queue) must not leave the renderer's optimistic state —
+ * seen/move ids and the list poll — pending forever: rejecting here lets the
+ * callers' `.finally()` clear those ids so a later poll can write back the
+ * server's true state. */
+const REQUEST_TIMEOUT_MS = 30_000;
 
 async function requestResponse(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
@@ -157,9 +185,33 @@ async function apiError(response: Response): Promise<ApiError> {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await requestResponse(path, init);
-  if (!response.ok) throw await apiError(response);
-  return (await response.json().catch(() => ({}))) as T;
+  // Only the JSON path is bounded here; streaming requests (agent messages,
+  // translation) manage their own lifetime via an explicit signal and must not
+  // be cut at a fixed 30s. A caller-supplied signal is forwarded so an
+  // intentional abort still propagates as an AbortError, while a timeout
+  // surfaces as a distinct "local service did not respond" failure.
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new DOMException("The Nami Mail local service did not respond in time.", "TimeoutError"));
+  }, REQUEST_TIMEOUT_MS);
+  timer.unref?.();
+  const callerSignal = init?.signal ?? null;
+  const forwardAbort = () => controller.abort(callerSignal?.reason);
+  if (callerSignal?.aborted) {
+    // The caller already cancelled before the fetch started: honour it as an
+    // AbortError instead of silently proceeding on our own signal.
+    controller.abort(callerSignal.reason);
+  } else {
+    callerSignal?.addEventListener("abort", forwardAbort, { once: true });
+  }
+  try {
+    const response = await requestResponse(path, { ...init, signal: controller.signal });
+    if (!response.ok) throw await apiError(response);
+    return (await response.json().catch(() => ({}))) as T;
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", forwardAbort);
+  }
 }
 
 function parseAgentEvent(value: unknown): AgentStreamEvent | null {
@@ -338,6 +390,20 @@ export const api = {
   // message into multiple chunks. Falls back to a plain JSON response when the
   // server translates the message as a single chunk. The optional signal lets
   // callers abort an in-flight stream.
+  translateMessageSegments: async (segments: string[], targetLocale: string): Promise<{ ok: true; translations: string[] }> => {
+    // The server merges consecutive segments into larger blocks before calling
+    // the translation engine, so a single request stays well within rate limits
+    // even for mails with hundreds of visible text nodes.
+    const response = await requestResponse("/api/messages/translate-segments", {
+      method: "POST",
+      body: JSON.stringify({ targetLocale, segments }),
+    });
+    const json = await response.json() as { ok: true; translations: string[] };
+    if (!json.ok || !Array.isArray(json.translations) || json.translations.length !== segments.length) {
+      throw new ApiError("translation_failed", "The message segments could not be translated.");
+    }
+    return json;
+  },
   translateMessageStream: async (
     id: string,
     targetLocale: string,
@@ -563,6 +629,11 @@ export const api = {
     request<AgentConversationSummary>(`/api/agent/conversations/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   deleteAgentConversation: (id: string) =>
     request<{ ok: true }>(`/api/agent/conversations/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  revokeAgentMessage: (id: string, messageId: string, revoked: boolean) =>
+    request<{ ok: true; conversation: AgentConversationSummary }>(
+      `/api/agent/conversations/${encodeURIComponent(id)}/messages/revoke`,
+      { method: "POST", body: JSON.stringify({ messageId, revoked }) },
+    ),
   streamAgentMessage: async (
     conversationId: string,
     payload: AgentMessageRequest,
