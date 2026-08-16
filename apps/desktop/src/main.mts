@@ -829,6 +829,46 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
+let cachedSystemBrowser: string | null | undefined;
+
+function resolveChromePath(): Promise<string | null> {
+  const candidates = [
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe") : "",
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return Promise.resolve(candidate);
+  }
+  return new Promise((resolve) => {
+    exec('reg query "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe" /ve', (error, stdout) => {
+      if (error || !stdout) {
+        resolve(null);
+        return;
+      }
+      const match = /REG_SZ\s+(.+)\r?$/.exec(stdout.trim());
+      resolve(match ? match[1]!.trim() : null);
+    });
+  });
+}
+
+/**
+ * Opens external URLs in a real browser. On Windows the OAuth authorization
+ * page is handed to Chrome when installed (matching the "log in with
+ * Google" flow), falling back to the OS default browser otherwise.
+ */
+async function openInBrowser(url: string): Promise<void> {
+  if (process.platform === "win32") {
+    if (cachedSystemBrowser === undefined) cachedSystemBrowser = await resolveChromePath();
+    if (cachedSystemBrowser !== null) {
+      const child = nodeSpawn(cachedSystemBrowser, [url], { detached: true, stdio: "ignore" });
+      child.unref();
+      return;
+    }
+  }
+  await shell.openExternal(url);
+}
+
 function isLocalAppUrl(value: string): boolean {
   try {
     return new URL(value).origin === new URL(localServer?.url ?? "http://invalid.local").origin;
@@ -1685,13 +1725,13 @@ async function createMainWindow(): Promise<void> {
     desktopSmokeDiagnostics.push(`Renderer ${event.level}: ${event.message}`);
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isHttpUrl(url)) void shell.openExternal(url);
+    if (isHttpUrl(url)) void openInBrowser(url);
     return { action: "deny" };
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (isLocalAppUrl(url)) return;
     event.preventDefault();
-    if (isHttpUrl(url)) void shell.openExternal(url);
+    if (isHttpUrl(url)) void openInBrowser(url);
   });
   mainWindow.once("ready-to-show", () => {
     if (!smokeExitDelay) mainWindow?.show();

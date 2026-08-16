@@ -1,5 +1,5 @@
 import { type ReactNode, type RefObject } from "react";
-import { Archive, FileArchive, FileImage, FileSpreadsheet, FileText, Folder, Inbox, Send, Trash2 } from "lucide-react";
+import { Archive, FileArchive, FileAudio, FileCode2, FileImage, FileSpreadsheet, FileText, Folder, Inbox, Send, Trash2 } from "lucide-react";
 import type { AttachmentKind } from "./attachmentPresentation";
 import type { OutboundAttachment } from "./types";
 
@@ -60,7 +60,11 @@ export function AttachmentFileIcon({ kind }: { kind: AttachmentKind }) {
       ? <FileImage size={19} />
       : kind === "spreadsheet"
         ? <FileSpreadsheet size={19} />
-        : <FileText size={19} />;
+        : kind === "code"
+          ? <FileCode2 size={19} />
+          : kind === "media"
+            ? <FileAudio size={19} />
+            : <FileText size={19} />;
   return <span className={`attachment-file-icon kind-${kind}`} aria-hidden="true">{icon}</span>;
 }
 

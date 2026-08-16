@@ -12,7 +12,7 @@
 | `1` | 未归类的 Agent、Broker、Provider 或工具错误 | `BROKER_SECURITY_UNAVAILABLE`、`PROVIDER_*`、`TOOL_*` | 读取 JSON `error.code`；不要仅按 `1` 猜测原因。 |
 | `2` | 命令或参数无效 | `INVALID_ARGUMENT`、`TOOL_INPUT_INVALID` | 修正命令、选项或 Tool Schema 输入。 |
 | `3` | 宿主或独占租约不可用 | `HOST_UNAVAILABLE`、`HOST_LEASE_UNAVAILABLE` | 打开 NamiMail 或运行 `namimail service start`；不要启动第二个 Runtime。 |
-| `4` | 配对、签名或重放防护失败 | `PAIRING_REQUIRED`、`PAIRING_REVOKED`、`BROKER_AUTHENTICATION_FAILED`、`BROKER_REPLAY_DETECTED`、`BROKER_COUNTER_INVALID` | 重新配对、撤销失效客户端或修复客户端计数器；不要重放请求。 |
+| `4` | 配对、签名或重放防护失败 | `PAIRING_REQUIRED`、`PAIRING_REVOKED`、`PAIRING_EXPIRED`、`BROKER_AUTHENTICATION_FAILED`、`BROKER_REPLAY_DETECTED`、`BROKER_COUNTER_INVALID` | 重新配对、撤销失效客户端或修复客户端计数器；不要重放请求。 |
 | `5` | 更新排空中 | `UPDATE_IN_PROGRESS` | 等待安装或恢复完成后重试。 |
 | `6` | 权限或 Runtime 边界违规 | `PERMISSION_DENIED`、`SCOPE_DENIED`、`CLI_RUNTIME_FORBIDDEN` | 使用可见 GUI 处理写操作，或改用允许的只读范围；不要改用数据库直连。 |
 

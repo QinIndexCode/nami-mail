@@ -137,6 +137,7 @@ export class AnthropicMessagesProvider implements LlmProvider {
       toolCalling: true,
       structuredOutput: false,
       embeddings: false,
+      vision: true,
       contextWindow: this.contextWindow,
       ...(this.maxOutputTokens ? { maxOutputTokens: this.maxOutputTokens } : {}),
     };
@@ -208,6 +209,7 @@ export class AnthropicMessagesProvider implements LlmProvider {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let sawStop = false;
       try {
         while (true) {
           const chunk = await awaitAbortable(reader.read(), lease.signal);
@@ -274,13 +276,19 @@ export class AnthropicMessagesProvider implements LlmProvider {
               }
               const usage = asRecord(event.usage);
               outputTokens = typeof usage?.output_tokens === "number" ? usage.output_tokens : outputTokens;
+            } else if (type === "message_stop") {
+              // Terminal event: the stream is complete. Some deployments do not
+              // close the underlying connection after it, so waiting for EOF
+              // would stall until the request timeout fires.
+              sawStop = true;
             } else if (type === "error") {
               const error = asRecord(event.error);
               throw new Error(typeof error?.message === "string" ? error.message : "The provider returned an error event.");
             }
           }
-          if (chunk.done) break;
+          if (chunk.done || sawStop) break;
         }
+        if (sawStop) await reader.cancel().catch(() => undefined);
       } finally {
         reader.releaseLock();
       }

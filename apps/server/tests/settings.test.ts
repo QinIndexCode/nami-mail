@@ -117,4 +117,47 @@ describe("app settings migrations", () => {
       db.close();
     }
   });
+
+  it("defaults sender photos to off, migrates older databases, and persists the toggle", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nami-mail-settings-gravatar-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "nami-mail.db");
+    const legacy = new Database(databasePath);
+    legacy.exec(`
+      CREATE TABLE app_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        theme TEXT NOT NULL DEFAULT 'system',
+        background_preset TEXT NOT NULL DEFAULT 'coast',
+        background_intensity INTEGER NOT NULL DEFAULT 68,
+        notifications_enabled INTEGER NOT NULL DEFAULT 1,
+        notify_when_focused INTEGER NOT NULL DEFAULT 0,
+        notification_sound TEXT NOT NULL DEFAULT 'soft',
+        refresh_interval_seconds INTEGER NOT NULL DEFAULT 60,
+        list_density TEXT NOT NULL DEFAULT 'comfortable',
+        custom_background_filename TEXT,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO app_settings (
+        id, theme, background_preset, background_intensity,
+        notifications_enabled, notify_when_focused, notification_sound,
+        refresh_interval_seconds, list_density, custom_background_filename, updated_at
+      ) VALUES (1, 'system', 'coast', 68, 1, 0, 'soft', 60, 'comfortable', NULL, '2026-08-15T00:00:00.000Z');
+    `);
+    legacy.close();
+
+    const migrated = openDatabase(databasePath);
+    try {
+      expect(getAppSettings(migrated).avatarGravatarEnabled).toBe(false);
+      expect((migrated.prepare("SELECT avatar_gravatar_enabled FROM app_settings WHERE id = 1").get() as { avatar_gravatar_enabled: number }).avatar_gravatar_enabled).toBe(0);
+
+      expect(updateAppSettings(migrated, { avatarGravatarEnabled: true })).toMatchObject({ avatarGravatarEnabled: true });
+      expect(getAppSettings(migrated)).toMatchObject({ avatarGravatarEnabled: true });
+      expect((migrated.prepare("SELECT avatar_gravatar_enabled FROM app_settings WHERE id = 1").get() as { avatar_gravatar_enabled: number }).avatar_gravatar_enabled).toBe(1);
+
+      expect(updateAppSettings(migrated, { avatarGravatarEnabled: false })).toMatchObject({ avatarGravatarEnabled: false });
+      expect(getAppSettings(migrated)).toMatchObject({ avatarGravatarEnabled: false });
+    } finally {
+      migrated.close();
+    }
+  });
 });

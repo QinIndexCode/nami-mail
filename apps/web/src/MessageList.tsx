@@ -2,7 +2,7 @@ import { memo, useRef, type RefObject } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Archive, Layers3, Mail, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
 import type { MessageListQuery } from "./mailListState";
-import { useI18n, type Translate } from "./i18n";
+import { useI18n } from "./i18n";
 import type { MailErrorPresentation } from "./errorPresentation";
 import { SenderAvatar, accountTone } from "./SenderAvatar";
 import type { Account, AppSettings, Message } from "./types";
@@ -165,11 +165,10 @@ function MessageList(props: MessageListProps): React.JSX.Element {
             return (
             <div
               key={virtualItem.key}
-              data-index={virtualItem.index}
               className="message-list-row"
               style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualItem.start}px)` }}
             >
-              <button ref={(node) => { rowVirtualizer.measureElement(node); if (node) messageButtonRefs.current.set(message.id, node); else messageButtonRefs.current.delete(message.id); }} className={`message-item ${selectedId === message.id ? "selected" : ""} ${message.seen ? "" : "unread"} ${selectionMode ? "selection-mode" : ""} ${selectionMode && selectedMessageIds.has(message.id) ? "multi-selected" : ""} ${view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id) ? "recently-read-in-unread" : ""}`} onClick={(event) => {
+              <button data-index={virtualItem.index} ref={(node) => { rowVirtualizer.measureElement(node); if (node) messageButtonRefs.current.set(message.id, node); else messageButtonRefs.current.delete(message.id); }} className={`message-item ${selectedId === message.id ? "selected" : ""} ${message.seen ? "" : "unread"} ${selectionMode ? "selection-mode" : ""} ${selectionMode && selectedMessageIds.has(message.id) ? "multi-selected" : ""} ${view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id) ? "recently-read-in-unread" : ""}`} onClick={(event) => {
                         const index = virtualItem.index;
                         if (event.shiftKey && anchorIndexRef.current !== null) {
                           const from = Math.min(anchorIndexRef.current, index);

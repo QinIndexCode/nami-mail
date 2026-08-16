@@ -1,13 +1,15 @@
+import { codeTextExtensions } from "./attachmentPresentation";
+
 export type AttachmentPreviewKind = "pdf" | "image" | "text" | "office" | "unsupported";
 
 /** Blob size cap for text extraction; PDFs and images render natively regardless. */
 export const maxAttachmentPreviewBytes = 20 * 1024 * 1024; // 20 MB
 export const maxPreviewTextChars = 64_000;
 
-const imageExtensions = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
+const imageExtensions = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif", "heic", "heif"]);
 const textExtensions = new Set([
-  "txt", "md", "markdown", "csv", "tsv", "json", "xml", "html", "htm",
-  "log", "rtf", "ini", "cfg", "conf", "yaml", "yml", "css", "js", "ts",
+  ...codeTextExtensions,
+  "txt", "md", "markdown", "csv", "tsv", "log", "rtf", "ini", "cfg", "conf",
 ]);
 
 /** Classifies an inbound attachment for the inline, read-only preview dialog. */

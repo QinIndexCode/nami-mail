@@ -21,6 +21,10 @@ export const providerCapabilitiesSchema = z.object({
   toolCalling: z.boolean(),
   structuredOutput: z.boolean(),
   embeddings: z.boolean(),
+  // Whether the provider's chat models accept image inputs (multimodal). The
+  // contract carries this flag so a host can gate image attachments on the
+  // selected model's actual capability instead of guessing by kind.
+  vision: z.boolean(),
   contextWindow: z.number().int().positive(),
   maxOutputTokens: z.number().int().positive().optional(),
 }).strict();

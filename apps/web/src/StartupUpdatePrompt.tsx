@@ -1,4 +1,4 @@
-﻿import { useEffect, useLayoutEffect, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CircleAlert, Clock3, Download, LoaderCircle, RefreshCw, RotateCcw, ShieldCheck, SkipForward } from "lucide-react";
 import { desktopBridge, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
 import { type Translate, useI18n } from "./i18n";
@@ -76,12 +76,12 @@ export default function StartupUpdatePrompt({
     frozenSnapshotRef.current = null;
   });
 
-  const closeDialog = () => {
+  const closeDialog = useCallback(() => {
     if (closing) return;
     frozenSnapshotRef.current = snapshot;
     setClosing(true);
     requestClose();
-  };
+  }, [closing, requestClose, snapshot]);
 
   useEffect(() => {
     if (defer) {

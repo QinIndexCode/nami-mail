@@ -141,7 +141,7 @@ export function AgentMemoryItemCard({
  * deleted here. Edits go straight to the local service's encrypted store.
  */
 export default function AgentMemoryDialog({ accounts, onClose, fallbackFocusRef }: AgentMemoryDialogProps) {
-  const { t, formatDate } = useI18n();
+  const { t } = useI18n();
   const dialogRef = useRef<HTMLElement>(null);
   const [filters, setFilters] = useState<MemoryFilters>(emptyFilters);
   const [debouncedQuery, setDebouncedQuery] = useState("");

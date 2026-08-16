@@ -15,7 +15,7 @@ MCP 客户端必须先调用 `tools/list`，并以其返回的 `description`、`
 | `namimail_accounts_list` | 列出已配对调用方可见的账户。 | 无。 | `{ accounts, truncated }`。上限 100 个账户。 | `read:accounts` |
 | `namimail_folders_list` | 列出某个账户内的文件夹。 | `accountId`（必填）。 | `{ folders, truncated }`。上限 500 个文件夹。 | `read:folders` |
 | `namimail_messages_list` | 在调用方账户范围内列出邮件元数据。 | `mailbox`、`unread`、`flagged`、`sender`、`after`、`before`、`limit`、`cursor`。 | `{ messages, nextCursor?, truncated }`。上限 50 封邮件。 | `read:messages` |
-| `namimail_mail_summarize` | 抓取近期匹配邮件的紧凑摘要（主题、发件人、日期、有界摘要片段），适合模型直接总结。 | `mailbox`、`unread`、`sender`、`after`、`before`、`limit`。 | `{ messages }`。上限 10 封邮件、每条摘要片段 2000 字符。 | `read:messages` |
+| `namimail_mail_summarize` | 抓取近期匹配邮件的紧凑摘要（主题、发件人、日期、有界摘要片段），适合模型直接总结。 | `mailbox`、`unread`、`sender`、`after`、`before`、`limit`。 | `{ messages, truncated }`。上限 10 封邮件、每条摘要片段 2000 字符。 | `read:messages` |
 | `namimail_message_get` | 读取一封已授权邮件的纯文本内容。 | `messageId`（必填）。 | `{ message }`。正文上限 8000 字符，超出以 `bodyTruncated` 标记。 | `read:messages` |
 | `namimail_messages_batch_get` | 一次调用读取最多 10 封已授权邮件的完整纯文本内容。 | `messageIds`（必填，1..10）。 | `{ messages, notFound }`。每封正文上限 8000 字符，超出以 `bodyTruncated` 标记；`notFound` 列出无法定位的请求 ID。 | `read:messages` |
 | `namimail_threads_get` | 读取一个已授权线程的纯文本内容。 | `threadId`（必填）。 | `{ threadId, messages, truncated }`。上限 25 封邮件。 | `read:messages` |

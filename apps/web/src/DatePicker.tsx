@@ -1,7 +1,6 @@
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { createPortal } from "react-dom";
-import { buildGrid, dateKey, pad, parseTime, parseValue, shiftDays, timeValue } from "./datePickerUtils";
+import { buildGrid, dateKey, pad, parseTime, parseValue, timeValue } from "./datePickerUtils";
 import { useI18n } from "./i18n";
 
 export type DatePickerMode = "date" | "datetime";
@@ -49,9 +48,8 @@ export default function DatePicker({
     return new Date(base.getFullYear(), base.getMonth(), 1);
   });
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
-  const [panelStyle, setPanelStyle] = useState<CSSProperties>({ opacity: 0 });
+  const [anchorStyle, setAnchorStyle] = useState<CSSProperties>({});
   const rootRef = useRef<HTMLSpanElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
   const parsed = useMemo(() => parseValue(value, mode), [value, mode]);
@@ -59,38 +57,27 @@ export default function DatePicker({
   const todayKey = useMemo(() => dateKey(new Date()), []);
   const selectedKey = parsed.date ? dateKey(parsed.date) : "";
 
-  // The panel is rendered through a portal into document.body and positioned
-  // with `position: fixed` relative to the trigger. This intentionally escapes
-  // any dialog container with `overflow: hidden` / `auto` (compose, calendar,
-  // settings, snooze) that would otherwise clip the popup. Reposition runs on
-  // every view change (day/month/year heights differ) and follows scroll/resize
-  // so the panel never lags behind the trigger.
+  // Reposition the panel when it would overflow the viewport edge. Runs in
+  // every panel view (day/month/year) and whenever its height changes (the
+  // time row appears/disappears) so narrow triggers never clip the popup.
   useEffect(() => {
     if (!open) return undefined;
-    const reposition = () => {
-      const trigger = triggerRef.current;
+    const frame = requestAnimationFrame(() => {
       const panel = panelRef.current;
-      if (!trigger || !panel) return;
-      const triggerRect = trigger.getBoundingClientRect();
-      const panelWidth = panel.offsetWidth;
-      const panelHeight = panel.offsetHeight;
-      let left = triggerRect.left;
-      let top = triggerRect.bottom + 6;
-      if (left + panelWidth > window.innerWidth - 8) {
-        left = Math.max(8, window.innerWidth - panelWidth - 8);
+      if (!panel) return;
+      const rect = panel.getBoundingClientRect();
+      const next: CSSProperties = {};
+      if (rect.right > window.innerWidth - 8) {
+        next.left = "auto";
+        next.right = 0;
       }
-      if (top + panelHeight > window.innerHeight - 8) {
-        top = Math.max(8, triggerRect.top - panelHeight - 6);
+      if (rect.bottom > window.innerHeight - 8) {
+        next.top = "auto";
+        next.bottom = "calc(100% + 6px)";
       }
-      setPanelStyle({ left, top, opacity: 1 });
-    };
-    reposition();
-    window.addEventListener("resize", reposition);
-    window.addEventListener("scroll", reposition, true);
-    return () => {
-      window.removeEventListener("resize", reposition);
-      window.removeEventListener("scroll", reposition, true);
-    };
+      setAnchorStyle(next);
+    });
+    return () => cancelAnimationFrame(frame);
   }, [open, view, selectedKey, parsed.time, mode]);
 
   // Sync the focused day when the panel opens or the selected date changes.
@@ -102,11 +89,7 @@ export default function DatePicker({
     if (!open) return undefined;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target;
-      if (!(target instanceof Node)) return;
-      // The panel lives in a portal (not a DOM child of the trigger), so both
-      // must be considered "inside" when deciding whether to close.
-      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return;
-      setOpen(false);
+      if (!(target instanceof Node) || !rootRef.current?.contains(target)) setOpen(false);
     };
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
@@ -320,7 +303,6 @@ export default function DatePicker({
   return (
     <span ref={rootRef} className={`date-picker${className ? ` ${className}` : ""}`}>
       <button
-        ref={triggerRef}
         type="button"
         className="date-picker-trigger"
         aria-haspopup="dialog"
@@ -334,12 +316,12 @@ export default function DatePicker({
         <CalendarDays size={14} aria-hidden="true" />
         <span className={displayValue ? "" : "placeholder"}>{displayValue || placeholder || t("datePicker.placeholder")}</span>
       </button>
-      {open && createPortal(
+      {open && (
         <div
           id={panelId}
           ref={panelRef}
           className="date-picker-panel"
-          style={panelStyle}
+          style={anchorStyle}
           role="dialog"
           aria-label={ariaLabel || t("datePicker.panelLabel")}
         >
@@ -351,8 +333,7 @@ export default function DatePicker({
           {view === "day" && renderDayView()}
           {view === "month" && renderMonthView()}
           {view === "year" && renderYearView()}
-        </div>,
-        document.body,
+        </div>
       )}
     </span>
   );

@@ -24,6 +24,10 @@ describe("attachmentPreviewKind", () => {
     ["README.md", "application/octet-stream", "text"],
     ["data.csv", "text/csv", "text"],
     ["config", "text/yaml", "text"],
+    ["main.py", "text/x-python", "text"],
+    ["App.tsx", "text/plain", "text"],
+    ["worker.rs", "application/octet-stream", "text"],
+    ["photo.avif", "image/avif", "image"],
     ["letter.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "office"],
     ["deck.pptx", "application/octet-stream", "office"],
     ["sheet.xlsx", "application/octet-stream", "office"],
@@ -45,6 +49,13 @@ describe("extractAttachmentPreviewText", () => {
     const blob = new Blob(["第一行\nsecond line"], { type: "text/plain" });
     const result = await extractAttachmentPreviewText(blob, "notes.txt");
     expect(result.text).toBe("第一行\nsecond line");
+    expect(result.truncated).toBe(false);
+  });
+
+  it("reads source files as plain text", async () => {
+    const blob = new Blob(["def main():\n    print('hi')"], { type: "text/x-python" });
+    const result = await extractAttachmentPreviewText(blob, "main.py");
+    expect(result.text).toBe("def main():\n    print('hi')");
     expect(result.truncated).toBe(false);
   });
 

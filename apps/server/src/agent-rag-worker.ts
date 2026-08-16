@@ -910,6 +910,7 @@ export class AgentRagWorker {
   private async drain(limit: number): Promise<void> {
     this.queueInitialBackfill(limit);
     const claims = this.options.sourceEvents.claimPending({ limit, owner: this.workerId });
+    let processed = 0;
     for (const claim of claims) {
       try {
         this.processClaim(claim);
@@ -923,6 +924,16 @@ export class AgentRagWorker {
         } catch {
           // A lost claim is safe: the durable outbox recovery path will decide its next state.
         }
+      }
+      // The claim loop is pure synchronous work (decrypt → clean → chunk →
+      // re-encrypt → index transactions). A backfilled mailbox can keep the
+      // event loop busy for a long stretch, starving concurrent HTTP: SSE
+      // flushes of a just-started run's first tool event and unrelated GETs
+      // (e.g. switching to another conversation) queue up behind it. Yield to
+      // the event loop every few claims so those stay responsive.
+      processed += 1;
+      if (processed % 4 === 0) {
+        await new Promise<void>((resolve) => setImmediate(() => resolve()));
       }
     }
   }

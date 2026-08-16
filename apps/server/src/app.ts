@@ -193,6 +193,8 @@ const manualAccountSchema = z.object({
   smtp: mailEndpointSchema,
   imapUsername: z.string().trim().min(1).max(320).optional(),
   smtpUsername: z.string().trim().min(1).max(320).optional(),
+  /** Provider the user is manually configuring (keeps preset identity instead of falling back to "custom"). */
+  providerId: z.string().trim().min(1).max(128).optional(),
 }).strict();
 
 const accountSignaturePatchSchema = z.object({
@@ -348,6 +350,7 @@ const settingsPatchSchema = z.object({
   closeBehavior: z.enum(CLOSE_BEHAVIORS).optional(),
   agentToolRoundLimit: z.number().int().min(1).max(50).optional(),
   listDensity: z.enum(LIST_DENSITIES).optional(),
+  avatarGravatarEnabled: z.boolean().optional(),
   agentAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
   agentCliAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
   agentMcpAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
@@ -408,6 +411,13 @@ const agentMessageSchema = z.object({
     type: z.string().trim().max(255).default("application/octet-stream"),
     token: z.string().regex(/^out_[0-9a-f-]{36}$/).optional(),
     accountId: z.string().trim().min(1).max(128).optional(),
+    // The Electron client includes the extracted file path for tools that
+    // re-read local files; it is opaque metadata to the server.
+    path: z.string().trim().max(2_048).optional(),
+    // Extracted file text carried separately from the user-visible content so
+    // the transcript stays clean; capped a little above the client truncation
+    // so a truncated file still signals its marker via length.
+    text: z.string().max(64_000).optional(),
   }).strict()).max(10).optional(),
 }).strict();
 
@@ -601,13 +611,21 @@ function providerDiscovery(provider: DetectedProvider) {
 }
 
 function manualProvider(provider: DetectedProvider, input: z.infer<typeof manualAccountSchema>): DetectedProvider {
+  // When the user tweaks endpoints for a known provider, keep its preset
+  // identity (id / name / family) so the account stays recognizable; only
+  // truly custom domains fall back to the "custom" label.
+  const declared = input.providerId && input.providerId !== "custom"
+    ? providerPresets.find((preset) => preset.id === input.providerId)
+    : undefined;
+  const identity = declared ?? provider;
   return {
-    ...provider,
-    id: "custom",
-    name: `手动配置 (${provider.domain})`,
-    family: "custom",
-    priority: "fallback",
-    domains: [provider.domain],
+    ...identity,
+    domain: provider.domain,
+    isCustom: provider.isCustom,
+    source: provider.source,
+    confidence: provider.confidence,
+    priority: identity.priority ?? "fallback",
+    domains: identity.domains?.length ? identity.domains : [provider.domain],
     imap: { ...input.imap, secure: input.imap.transport === "tls" },
     smtp: { ...input.smtp, secure: input.smtp.transport === "tls" },
     usernameMode: "email",
@@ -701,7 +719,7 @@ function oauthCallbackDocument(locale: unknown, success: boolean): string {
   const copy = oauthCallbackCopy(normalizedLocale, success);
   const title = escapeHtml(copy.title);
   const message = escapeHtml(copy.message);
-  return `<!doctype html><html lang="${normalizedLocale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head><body><main><h1>${title}</h1><p>${message}</p></main></body></html>`;
+  return `<!doctype html><html lang="${normalizedLocale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head><body><main><h1>${title}</h1><p>${message}</p></main><script>try{window.close()}catch(e){}</script></body></html>`;
 }
 
 function startOAuthInitialSync(app: FastifyInstance, context: RuntimeContext, accountId: string): void {
@@ -855,6 +873,7 @@ function publicSettings(context: RuntimeContext, settings: AppSettings) {
     closeBehavior: settings.closeBehavior,
     agentToolRoundLimit: settings.agentToolRoundLimit,
     listDensity: settings.listDensity,
+    avatarGravatarEnabled: settings.avatarGravatarEnabled,
     agentAccessLevel: settings.agentAccessLevel,
     agentCliAccessLevel: settings.agentCliAccessLevel,
     agentMcpAccessLevel: settings.agentMcpAccessLevel,

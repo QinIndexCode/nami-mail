@@ -183,3 +183,34 @@ it("Anthropic provider rejects a non-local HTTP endpoint and maps auth failures"
     assert.doesNotMatch(events[0].error.message, /never-return-this/);
   }
 });
+
+it("Anthropic provider completes at message_stop without waiting for the connection to close", async () => {
+  const provider = new AnthropicMessagesProvider({
+    id: "anthropic-hold-open",
+    endpoint: "https://api.anthropic.com",
+    apiKey: "sk-ant-test",
+    timeoutMs: 1_000,
+    fetchImpl: async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode('data: {"type":"message_start","message":{"usage":{"input_tokens":2}}}\n\n'));
+        controller.enqueue(encoder.encode('data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n'));
+        controller.enqueue(encoder.encode('data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done."}}\n\n'));
+        controller.enqueue(encoder.encode('data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}\n\n'));
+        controller.enqueue(encoder.encode('data: {"type":"message_stop"}\n\n'));
+        // Deliberately never close: some deployments keep the connection open
+        // after message_stop, so EOF must not be required to complete.
+      },
+    }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+  });
+  const events = [];
+  for await (const event of provider.streamChat(chatRequest({
+    providerId: "anthropic-hold-open",
+    model: "claude-3-7-sonnet",
+    messages: [{ role: "user", content: "Hello" }],
+    tools: [],
+    allowToolCalls: false,
+  }))) events.push(event);
+  assert.deepEqual(events.map((event) => event.type), ["response_started", "text_delta", "usage", "completed"]);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
+});

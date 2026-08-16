@@ -6,7 +6,7 @@ import type { FastifyInstance } from "fastify";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp, MAX_BACKGROUND_UPLOAD_BYTES } from "../src/app.js";
-import { AgentService } from "../src/agent-service.js";
+import { AGENT_ATTACHMENT_TEXT_LIMIT, AgentService, composeAttachmentContent } from "../src/agent-service.js";
 import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
 import { applyAgentStoreSchema } from "../src/agent/schema.js";
 import { AgentSourceEventOutbox } from "../src/agent/source-events.js";
@@ -255,6 +255,142 @@ it("keeps an Agent stream running after the client closes its response", async (
 
         expect(roles).toEqual(["user", "assistant"]);
         expect(lastMessage).toMatchObject({ role: "assistant", content: "First half. Second half.", state: "complete" });
+      } finally {
+        await streamingApp.close();
+      }
+    } finally {
+      agentService.close();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("accepts attachment metadata with a desktop file path and persists it with the turn", async () => {
+    const serviceMasterKey = Buffer.alloc(32, 7);
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, 'custom', 'Demo', 'encrypted', 'imap.example.test', 993, 1,
+        'smtp.example.test', 465, 1, 'email', 'connected', ?)
+    `).run("agent-attach", "attach@example.test", now);
+    applyAgentStoreSchema(db, "2026-08-10T00:00:00.000Z");
+    const lifecycle = new AccountLifecycleStore(db, serviceMasterKey);
+    const sourceEvents = new AgentSourceEventOutbox(db, serviceMasterKey, lifecycle);
+    const agentService = new AgentService({ db, masterKey: serviceMasterKey, lifecycle, sourceEvents });
+    try {
+      const provider = agentService.createProvider({
+        label: "Local test provider",
+        kind: "ollama",
+        endpoint: "http://127.0.0.1:11434/v1",
+        model: "test-model",
+        timeoutMs: 30_000,
+        allowCloudMailContent: false,
+        makeDefault: true,
+      });
+      const conversation = agentService.createConversation({
+        providerId: provider.id,
+        scope: { mode: "selected_account", accountIds: ["agent-attach"], messageIds: [] },
+      });
+      const internals = agentService as unknown as {
+        runtime: { streamChat: (input: unknown) => AsyncIterable<unknown> };
+      };
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+        yield { type: "text_delta", delta: "Done." };
+        yield { type: "completed", reason: "stop" };
+      });
+
+      const streamingApp = await buildApp({ db, masterKey: serviceMasterKey, backgroundDirectory, agentService });
+      try {
+        const attachments = [
+          {
+            name: "report.pdf",
+            type: "application/pdf",
+            token: "out_00000000-0000-4000-8000-000000000000",
+            accountId: "agent-attach",
+            path: "C:\\Users\\demo\\AppData\\extracted\\report.pdf",
+            text: "Quarterly figures.\nRevenue is up.",
+          },
+        ];
+        const post = await streamingApp.inject({
+          method: "POST",
+          url: `/api/agent/conversations/${conversation.id}/messages`,
+          payload: {
+            content: "Analyze this PDF",
+            providerId: provider.id,
+            mode: "agent",
+            scope: conversation.scope,
+            context: {},
+            attachments,
+          },
+        });
+        expect(post.statusCode).toBe(200);
+
+        const snapshot = await streamingApp.inject({ method: "GET", url: `/api/agent/conversations/${conversation.id}` });
+        const userMessage = snapshot.json().messages.find((message: { role: string }) => message.role === "user");
+        // The transcript returns attachment metadata for chips but strips the
+        // model-facing extracted text from the payload.
+        expect(userMessage.attachments).toEqual(attachments.map(({ text: _text, ...rest }) => rest));
+        expect(userMessage.attachments[0].text).toBeUndefined();
+        // The persisted transcript keeps the clean user text; the file dump
+        // must not leak into the visible message content.
+        expect(userMessage.content).toBe("Analyze this PDF");
+        expect(userMessage.content).not.toContain("[file:");
+      } finally {
+        await streamingApp.close();
+      }
+    } finally {
+      agentService.close();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("rejects agent messages with unknown attachment keys", async () => {
+    const serviceMasterKey = Buffer.alloc(32, 7);
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, 'custom', 'Demo', 'encrypted', 'imap.example.test', 993, 1,
+        'smtp.example.test', 465, 1, 'email', 'connected', ?)
+    `).run("agent-reject", "reject@example.test", now);
+    applyAgentStoreSchema(db, "2026-08-10T00:00:00.000Z");
+    const lifecycle = new AccountLifecycleStore(db, serviceMasterKey);
+    const sourceEvents = new AgentSourceEventOutbox(db, serviceMasterKey, lifecycle);
+    const agentService = new AgentService({ db, masterKey: serviceMasterKey, lifecycle, sourceEvents });
+    try {
+      const provider = agentService.createProvider({
+        label: "Local test provider",
+        kind: "ollama",
+        endpoint: "http://127.0.0.1:11434/v1",
+        model: "test-model",
+        timeoutMs: 30_000,
+        allowCloudMailContent: false,
+        makeDefault: true,
+      });
+      const conversation = agentService.createConversation({
+        providerId: provider.id,
+        scope: { mode: "selected_account", accountIds: ["agent-reject"], messageIds: [] },
+      });
+      const streamingApp = await buildApp({ db, masterKey: serviceMasterKey, backgroundDirectory, agentService });
+      try {
+        const post = await streamingApp.inject({
+          method: "POST",
+          url: `/api/agent/conversations/${conversation.id}/messages`,
+          payload: {
+            content: "Analyze this PDF",
+            providerId: provider.id,
+            mode: "agent",
+            scope: conversation.scope,
+            context: {},
+            attachments: [{ name: "report.pdf", type: "application/pdf", exploded: true }],
+          },
+        });
+        expect(post.statusCode).toBe(400);
+        expect(post.json().message).toContain("Unrecognized key");
       } finally {
         await streamingApp.close();
       }
@@ -1207,5 +1343,31 @@ it("keeps an Agent stream running after the client closes its response", async (
     });
     expect(detail.json()).toMatchObject({ id: "pending-archive", mailbox: "Archive", movePending: true });
     expect(intentDetail.json()).toMatchObject({ id: "pending-intent", mailbox: "INBOX", movePending: true, archived: false });
+  });
+});
+
+describe("composeAttachmentContent", () => {
+  it("returns content unchanged when there are no attachments", () => {
+    expect(composeAttachmentContent("hello", undefined)).toBe("hello");
+    expect(composeAttachmentContent("hello", [{ name: "a.txt", type: "text/plain" }])).toBe("hello");
+  });
+
+  it("prefixes attachment text blocks ahead of the user content", () => {
+    const composed = composeAttachmentContent("check it", [
+      { name: "a.txt", type: "text/plain", text: "alpha" },
+      { name: "b.pdf", type: "application/pdf", text: "beta" },
+    ]);
+    expect(composed).toBe("[file: a.txt]\nalpha\n[/file]\n\n[file: b.pdf]\nbeta\n[/file]\n\ncheck it");
+  });
+
+  it("marks truncated text with a (truncated) marker", () => {
+    const composed = composeAttachmentContent("q", [
+      { name: "big.txt", type: "text/plain", text: "x".repeat(AGENT_ATTACHMENT_TEXT_LIMIT) },
+    ]);
+    expect(composed.startsWith("[file: big.txt (truncated)]\n")).toBe(true);
+  });
+
+  it("keeps content unchanged when no attachment carries text", () => {
+    expect(composeAttachmentContent("plain", [{ name: "a.txt", type: "text/plain", token: "out_00000000-0000-4000-8000-000000000000" }])).toBe("plain");
   });
 });

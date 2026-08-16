@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { CalendarClock, Check, ChevronLeft, ChevronRight, CircleAlert, Eye, LoaderCircle, Mail, PenLine, RefreshCw, Send, X } from "lucide-react";
 import { mailErrorMessage, mailErrorToastMessage } from "./errorPresentation";
 import { translate, type Translate, useI18n } from "./i18n";
@@ -256,7 +256,7 @@ export default function SendingStatusModal({
 
           {(refreshError || loadError) && <div className="form-status error sending-status-error" role="alert"><CircleAlert size={16} />{refreshError || loadError}</div>}
 
-          <div ref={listScroll.ref} className="sending-status-list" style={listScroll.style} role="list" aria-label={t("sending.modal.listLabel")} aria-live="polite" aria-busy={loading}>
+          <div ref={listScroll.ref} className="sending-status-list content-enter" style={listScroll.style} role="list" aria-label={t("sending.modal.listLabel")} aria-live="polite" aria-busy={loading}>
             {loading && submissions.length === 0 && (
               <div className="skeleton-stack" aria-hidden="true">
                 <div className="skeleton-card" />
@@ -267,9 +267,7 @@ export default function SendingStatusModal({
             {!loading && visibleSubmissions.length === 0 && <div className="sending-status-empty"><Mail size={26} /><h3>{filter === "all" ? t("sending.modal.emptyTitle") : t("sending.modal.filteredEmptyTitle")}</h3><p>{filter === "all" ? t("sending.modal.emptyDescription") : t("sending.modal.filteredEmptyDescription")}</p></div>}
             {pageSubmissions.map((submission) => {
               const presentation = submissionStatusPresentation(submission.deliveryStatus, t);
-              const account = accountById.get(submission.accountId);
               const recipients = recipientSummary(submission.recipients, 3, t);
-              const fullRecipients = recipientSummary(submission.recipients, Number.MAX_SAFE_INTEGER, t) ?? t("sending.modal.recipientsMissing");
               const title = submission.subject === undefined || submission.subject === null
                 ? t("sending.modal.recordTitle", { id: submissionMessageIdSuffix(submission.messageId) })
                 : submission.subject || t("sending.modal.untitled");
