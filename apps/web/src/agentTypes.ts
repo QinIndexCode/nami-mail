@@ -14,6 +14,8 @@ export type AgentProviderSummary = {
   cloud: boolean;
   cloudContentConsent: boolean;
   streaming: boolean;
+  /** Whether the configured model accepts image inputs; gates image attachments. */
+  vision: boolean;
   health?: {
     state: "ready" | "degraded" | "unavailable";
     checkedAt: string;

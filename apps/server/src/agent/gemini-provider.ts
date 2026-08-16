@@ -174,6 +174,7 @@ export class GeminiProvider implements LlmProvider {
       toolCalling: true,
       structuredOutput: true,
       embeddings: false,
+      vision: true,
       contextWindow: this.contextWindow,
       ...(this.maxOutputTokens ? { maxOutputTokens: this.maxOutputTokens } : {}),
     };
@@ -203,7 +204,8 @@ export class GeminiProvider implements LlmProvider {
   async *streamChat(request: ProviderChatRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): AsyncIterable<ProviderStreamEvent> {
     const functionCalls = new Map<number, PendingFunctionCall>();
     let nextCallIndex = 0;
-    let finishReason: ProviderFinishReason = "stop";
+      let finishReason: ProviderFinishReason = "stop";
+      let sawDone = false;
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
     let cachedTokens: number | undefined;
@@ -259,7 +261,14 @@ export class GeminiProvider implements LlmProvider {
           for (const line of decoded.lines) {
             if (!line.startsWith("data:")) continue;
             const payload = line.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
+            if (!payload) continue;
+            // The [DONE] marker terminates the stream. Some deployments do not
+            // close the underlying connection after it, so waiting for EOF
+            // would stall until the request timeout fires.
+            if (payload === "[DONE]") {
+              sawDone = true;
+              break;
+            }
             let event: Record<string, unknown>;
             try {
               event = asRecord(JSON.parse(payload) as unknown) ?? {};
@@ -300,8 +309,9 @@ export class GeminiProvider implements LlmProvider {
                     : "content-filter";
             }
           }
-          if (chunk.done) break;
+          if (chunk.done || sawDone) break;
         }
+        if (sawDone) await reader.cancel().catch(() => undefined);
       } finally {
         reader.releaseLock();
       }

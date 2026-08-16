@@ -1,9 +1,9 @@
-const textExtensions = new Set([
-  "txt", "md", "markdown", "csv", "tsv", "json", "xml", "html", "htm",
-  "py", "js", "ts", "tsx", "jsx", "css", "scss", "less", "yaml", "yml",
-  "log", "rtf", "ini", "cfg", "conf", "sh", "bash", "zsh", "sql",
-  "java", "c", "cpp", "h", "hpp", "cs", "go", "rs", "rb", "php", "vue", "svelte",
-]);
+import { codeTextExtensions } from "./attachmentPresentation";
+
+/** Readable text formats on top of the shared code/format extensions. */
+const readableFormatExtensions = new Set(["txt", "md", "markdown", "csv", "tsv", "log", "rtf", "ini", "cfg", "conf"]);
+
+const textExtensions = new Set([...codeTextExtensions, ...readableFormatExtensions]);
 
 const maxFileBytes = 10 * 1024 * 1024; // 10 MB
 const maxExtractedChars = 32_000; // Keep extracted text within a reasonable LLM context budget.

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
 import {
   Bell,
   BookOpen,
@@ -143,6 +143,7 @@ const restoreDefaultsPatch: AppSettingsPatch = {
   closeBehavior: defaultAppSettings.closeBehavior,
   agentToolRoundLimit: defaultAppSettings.agentToolRoundLimit,
   listDensity: defaultAppSettings.listDensity,
+  avatarGravatarEnabled: defaultAppSettings.avatarGravatarEnabled,
 };
 
 const maxBackgroundUploadBytes = 50 * 1024 * 1024;
@@ -447,7 +448,7 @@ export default function SettingsModal({
   const { closing: confirmClosing, requestClose: requestConfirmClose, reset: resetConfirmClosing } = useDismissTransition(() => setPendingConfirmation(null));
   const { closing: alertClosing, requestClose: requestAlertClose, reset: resetAlertClosing } = useDismissTransition(dismissBackgroundUploadError);
 
-  const requestClose = () => {
+  const requestClose = useCallback(() => {
     if (controlsBusy) return;
     if (hasUnsavedTranslationDraft) {
       resetConfirmClosing();
@@ -455,7 +456,7 @@ export default function SettingsModal({
       return;
     }
     requestExit();
-  };
+  }, [controlsBusy, hasUnsavedTranslationDraft, requestExit, resetConfirmClosing]);
 
   const requestAgentProviderSettings = () => {
     if (controlsBusy || demoMode) return;
@@ -652,38 +653,6 @@ export default function SettingsModal({
       return;
     }
     void applyOptimisticSettings(patch, successMessage);
-  };
-
-  /**
-   * Pessimistic save: disables controls and waits for the API response.
-   * Reserved for operations that require server validation (e.g. background
-   * upload, account removal) or are not safely reversible.
-   */
-  const saveSettings = async (
-    patch: AppSettingsPatch,
-    action: string,
-    successMessage: string,
-    preserveSuccessLocale = false,
-  ): Promise<AppSettings | undefined> => {
-    if (busyAction) return undefined;
-    setBusyAction(action);
-    setNotice(null);
-    try {
-      const next = demoMode
-        ? { ...currentSettings, ...patch, updatedAt: new Date().toISOString() }
-        : await api.updateSettings(patch);
-      await publishSettings(next);
-      setNotice({
-        kind: "success",
-        message: demoMode && !preserveSuccessLocale ? t("settings.demo.resetAfterSession", { message: successMessage }) : successMessage,
-      });
-      return next;
-    } catch (error) {
-      setNotice({ kind: "error", message: errorMessage(error, t("settings.error.save"), t) });
-      return undefined;
-    } finally {
-      setBusyAction(null);
-    }
   };
 
   const changeLocale = (nextLocale: string) => {
@@ -1072,10 +1041,6 @@ export default function SettingsModal({
         ? t("settings.translation.apiKeyHint")
         : t("settings.translation.apiKeyOptionalHint");
   const updateControlsBusy = controlsBusy || Boolean(updateActionBusy);
-  const dismissConfirmation = () => {
-    if (controlsBusy) return;
-    setPendingConfirmation(null);
-  };
   const confirmationTitle = pendingConfirmation === "clear-background"
     ? t("settings.confirmation.clearBackgroundTitle")
     : pendingConfirmation === "install-update"

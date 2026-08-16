@@ -103,6 +103,9 @@ export function useDialogFocus(
       window.cancelAnimationFrame(focusAnimationFrame);
       document.removeEventListener("keydown", keepFocusInDialog, true);
       document.removeEventListener("focusin", preventFocusEscape, true);
+      // The cleanup reads the latest refs on purpose: focus returns to the
+      // most recent owner, even if a dialog swap updated the target mid-flight.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       const restoreTarget = [restoreFocusRef?.current, previousFocusRef.current, fallbackFocusRef?.current]
         .find(canRestoreFocus);
       if (restoreTarget) {

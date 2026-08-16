@@ -500,6 +500,7 @@ export const api = {
     smtp: Omit<ManualAccountConfig["smtp"], "username">;
     imapUsername?: string;
     smtpUsername?: string;
+    providerId?: string;
   }) => request<AccountAddResult>("/api/accounts/manual", {
     method: "POST",
     body: JSON.stringify(payload),

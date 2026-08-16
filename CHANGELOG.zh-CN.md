@@ -12,7 +12,7 @@
 - 新增安装包提供的 `namimail` PATH shim，并支持直接以 `"Nami Mail.exe" --cli <args>` 调用；
 - 新增 `namimail service start`、`status`、`doctor`，用于显式启动或检查本机 AgentHost；普通读取命令与 MCP stdio 不会隐式启动宿主；
 - 新增桌面可见确认的 `namimail pair --profile <name>` 与 `namimail revoke --profile <name>` 流程；首次配对固定当前账户 ID 快照，后续新增的账户不会自动进入旧 profile；
-- 新增 `namimail mcp start --profile <name>` 本机 MCP stdio 接入：使用 MCP `2025-03-26` 协议，`tools/list` 发布 15 个 External Mail v1 工具（8 个只读 + 7 个受限写入）；
+- 新增 `namimail mcp start --profile <name>` 本机 MCP stdio 接入：支持 MCP `2025-03-26` 与 `2025-06-18` 两种协议（服务端回显客户端所请求的版本），`tools/list` 发布 15 个 External Mail v1 工具（8 个只读 + 7 个受限写入）；
 - External Mail v1 提供账户、文件夹、邮件列表、邮件详情（单个与批量）、线程与附件元数据的读取，以及受限写入：草稿创建/更新/删除、邮件移动（归档/废纸篓）、已读/星标设置、发送与回复；成功数据由版本化严格 schema 验证，邮件正文为受限纯文本，附件不会导出为文件；
 - 新增邮件模板库：可在设置中管理常用主题与正文模板，撰写或回复邮件时一键插入；
 - 新增附件内联预览：PDF 与图片在只读预览中渲染，DOCX / PPTX / XLSX 与常见文本文件提供只读文本预览，不导出原始文件。

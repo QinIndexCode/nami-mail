@@ -39,8 +39,6 @@ export type AppSettings = {
   closeBehavior: CloseBehavior;
   agentToolRoundLimit: number;
   listDensity: ListDensity;
-  /** Enables Gravatar lookup (md5(email)) for sender avatars. Off by default:
-   *  the hash is sent to a third party, which is a privacy consideration. */
   avatarGravatarEnabled: boolean;
   agentAccessLevel: AgentAccessLevel;
   agentCliAccessLevel: AgentAccessLevel;

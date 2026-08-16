@@ -415,3 +415,33 @@ it("OpenAI compatible provider rejects an embedding response that is misaligned 
     inputs: ["text"],
   }), providerError);
 });
+
+it("OpenAI compatible provider completes at [DONE] without waiting for the connection to close", async () => {
+  const provider = new OpenAiCompatibleProvider({
+    id: "done-hold-open",
+    kind: "openai-compatible",
+    endpoint: "https://api.example.test/v1",
+    timeoutMs: 1_000,
+    fetchImpl: async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"Done."}}]}\n\n'));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        // Deliberately never close: some deployments keep the connection open
+        // after [DONE], so EOF must not be required to complete the stream.
+      },
+    }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+  });
+  const events = [];
+  for await (const event of provider.streamChat({
+    requestId: "123e4567-e89b-12d3-a456-426614174030",
+    providerId: "done-hold-open",
+    model: "gpt-test",
+    messages: [{ role: "user", content: "Hello" }],
+    tools: [],
+    allowToolCalls: false,
+    responseFormat: "text",
+  })) events.push(event);
+  assert.deepEqual(events.map((event) => event.type), ["response_started", "text_delta", "completed"]);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
+});

@@ -56,6 +56,15 @@ describe("settings tool", () => {
     expect(changes[0]!.theme).toBe("dark");
   });
 
+  it("applies the sender-photo (Gravatar) toggle and persists it", async () => {
+    const { registry, context, db } = fixture();
+    expect(getAppSettings(db).avatarGravatarEnabled).toBe(false);
+    const result = await registry.get("settings.update")!.execute(context, { avatarGravatarEnabled: true });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.settings.avatarGravatarEnabled).toBe(true);
+    expect(getAppSettings(db).avatarGravatarEnabled).toBe(true);
+  });
+
   it("rejects the custom background preset when no image exists", async () => {
     const { registry, context } = fixture(false);
     const result = await registry.get("settings.update")!.execute(context, { backgroundPreset: "custom" });

@@ -5,6 +5,7 @@ import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
 import { useDialogFocus } from "./useDialogFocus";
 import { useDismissTransition } from "./useDismissTransition";
+import { contactsCache } from "./dialogPrefetch";
 import { useStablePagedListHeight } from "./useStablePagedListHeight";
 import type { Contact, ContactInput } from "./types";
 
@@ -78,9 +79,9 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
     let active = true;
     setLoading(true);
     setLoadError(null);
-    void api.contacts().then((result) => {
+    void contactsCache.get().then((items) => {
       if (!active) return;
-      setContacts(result.items);
+      setContacts(items);
     }).catch((error: unknown) => {
       if (!active) return;
       setLoadError(error);
@@ -168,9 +169,6 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
   });
 
   const controlsBusy = busy || Boolean(busyContactId);
-  // Must run before any early return so the hook count stays stable across
-  // renders (rules-of-hooks); it is inert while the pager is hidden.
-  const listScroll = useStablePagedListHeight<HTMLDivElement>(showToolbar);
 
   const toggleSelect = (contactId: string) => {
     setSelectedIds((previous) => {
@@ -212,6 +210,7 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
       }
     }
     setContacts((current) => current.filter((contact) => !ids.includes(contact.id)));
+    contactsCache.refresh();
     setPendingBulkDelete(false);
     setSelectedIds(new Set());
     if (failed) {
@@ -221,6 +220,8 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
     }
     setBusy(false);
   };
+
+  const listScroll = useStablePagedListHeight<HTMLDivElement>(showToolbar);
 
   if (demoMode) {
     return (
@@ -266,6 +267,7 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
         setContacts((current) => [...current, result.contact]);
         setNotice({ kind: "success", message: t("settings.contacts.saved") });
       }
+      contactsCache.refresh();
       setDraft(null);
     } catch (error) {
       setNotice({
@@ -284,6 +286,7 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
     try {
       await api.deleteContact(contactId);
       setContacts((current) => current.filter((contact) => contact.id !== contactId));
+      contactsCache.refresh();
       setArmedDeleteId(null);
       setNotice({ kind: "success", message: t("settings.contacts.deleted") });
     } catch (error) {
@@ -321,7 +324,7 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
             </button>
           </div>
         ) : (
-          <>
+          <div className="content-enter">
             {showToolbar && (
               <div className="contacts-toolbar">
                 <label className="search-wrap contacts-search" htmlFor="contacts-search-input">
@@ -471,7 +474,7 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
                   <Plus size={15} />{t("settings.contacts.addContact")}
                 </button>
               </div>
-          </>
+          </div>
         )}
       </section>
       {draft && (

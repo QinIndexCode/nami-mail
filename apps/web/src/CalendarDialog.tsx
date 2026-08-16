@@ -5,7 +5,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  CircleAlert,
   Clock,
   List,
   LoaderCircle,
@@ -25,6 +24,7 @@ import DatePicker from "./DatePicker";
 import { ManagementDialogShell } from "./ManagementDialogs";
 import { useDialogFocus } from "./useDialogFocus";
 import { useDismissTransition } from "./useDismissTransition";
+import { calendarCache } from "./dialogPrefetch";
 
 type Notice = { kind: "success" | "error"; message: string } | null;
 
@@ -200,14 +200,9 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
   const [loading, setLoading] = useState(!demoMode);
   const [listLoading, setListLoading] = useState(!demoMode);
   const [loadError, setLoadError] = useState<unknown>(null);
-  const [loadAttempt, setLoadAttempt] = useState(0);
   const [notice, setNotice] = useState<Notice>(null);
   const [busy, setBusy] = useState(false);
   const [editor, setEditor] = useState<{ event: CalendarEvent | null; dayKey: string } | null>(null);
-  // Validation/save errors shown inside the event editor modal, distinct from
-  // the calendar page's global notice (which stays for save/delete success and
-  // list-level bulk actions).
-  const [editorError, setEditorError] = useState<string | null>(null);
   const [draft, setDraft] = useState<EventDraft>(() => emptyDraft(localDateKey(new Date())));
   const [pendingDelete, setPendingDelete] = useState<CalendarEvent | null>(null);
   const [pendingBulkDelete, setPendingBulkDelete] = useState(false);
@@ -219,18 +214,22 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
 
   const todayKey = localDateKey(new Date());
 
-  // Load events spanning the visible month plus its neighbours so the grid has
-  // data for the trailing days of the previous/next month as well.
+  // The grid spans the visible month plus its neighbours, so filter the cached
+  // full calendar locally — month paging is instant and never refetches.
   useEffect(() => {
     if (demoMode) return undefined;
     let active = true;
     setLoading(true);
     setLoadError(null);
-    const rangeStart = new Date(viewMonth.getFullYear(), viewMonth.getMonth() - 1, 1);
-    const rangeEnd = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 2, 0, 23, 59, 59, 999);
-    void api.calendarEvents({ after: rangeStart.toISOString(), before: rangeEnd.toISOString() }).then((result) => {
+    const rangeStart = new Date(viewMonth.getFullYear(), viewMonth.getMonth() - 1, 1).getTime();
+    const rangeEnd = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 2, 0, 23, 59, 59, 999).getTime();
+    void calendarCache.get().then((all) => {
       if (!active) return;
-      setEvents(result.items);
+      const inRange = all.filter((event) => {
+        const start = new Date(event.startAt).getTime();
+        return start >= rangeStart && start <= rangeEnd;
+      });
+      setEvents(inRange);
     }).catch((error: unknown) => {
       if (!active) return;
       setLoadError(error);
@@ -240,9 +239,9 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     return () => {
       active = false;
     };
-  }, [viewMonth, demoMode, loadAttempt]);
+  }, [viewMonth, demoMode]);
 
-  // The event list spans every month, so it loads the full calendar.
+  // The event list spans every month; it shows the cached full calendar.
   useEffect(() => {
     if (demoMode) {
       setListEvents(demoCalendarEvents());
@@ -253,9 +252,9 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     let active = true;
     setListLoading(true);
     setLoadError(null);
-    void api.calendarEvents().then((result) => {
+    void calendarCache.get().then((all) => {
       if (!active) return;
-      setListEvents(result.items);
+      setListEvents(all);
     }).catch((error: unknown) => {
       if (!active) return;
       setLoadError(error);
@@ -265,7 +264,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     return () => {
       active = false;
     };
-  }, [view, demoMode, loadAttempt]);
+  }, [view, demoMode]);
 
   useDialogFocus(true, dialogRef, { fallbackFocusRef, suspended: Boolean(editor || pendingDelete || pendingBulkDelete) });
   useDialogFocus(Boolean(editor), editorDialog, { fallbackFocusRef: dialogRef });
@@ -440,7 +439,6 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     resetEditorClosing();
     setDraft(emptyDraft(dayKey));
     setEditor({ event: null, dayKey });
-    setEditorError(null);
     setNotice(null);
   };
 
@@ -448,7 +446,6 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     resetEditorClosing();
     setDraft(draftFromEvent(event));
     setEditor({ event, dayKey: isoToDate(event.startAt) });
-    setEditorError(null);
     setNotice(null);
   };
 
@@ -456,7 +453,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     if (!editor || busy) return;
     const title = draft.title.trim();
     if (!title) {
-      setEditorError(t("calendar.validation.titleRequired"));
+      setNotice({ kind: "error", message: t("calendar.validation.titleRequired") });
       return;
     }
     let startIso: string;
@@ -465,11 +462,11 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
       startIso = draft.allDay ? dateToStartIso(draft.startDate) : dateTimeToIso(draft.startDate, draft.startTime);
       endIso = draft.allDay ? dateToEndIso(draft.endDate) : dateTimeToIso(draft.endDate, draft.endTime);
     } catch {
-      setEditorError(t("calendar.validation.invalidDates"));
+      setNotice({ kind: "error", message: t("calendar.validation.invalidDates") });
       return;
     }
     if (Date.parse(endIso) < Date.parse(startIso)) {
-      setEditorError(t("calendar.validation.endBeforeStart"));
+      setNotice({ kind: "error", message: t("calendar.validation.endBeforeStart") });
       return;
     }
     const input: CalendarEventInput = {
@@ -482,7 +479,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
       color: draft.color,
     };
     setBusy(true);
-    setEditorError(null);
+    setNotice(null);
     try {
       if (demoMode) {
         if (editor.event) {
@@ -518,11 +515,11 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
         setEvents((current) => [...current, result.event]);
         setListEvents((current) => [...current, result.event]);
       }
+      calendarCache.refresh();
       setEditor(null);
       setNotice({ kind: "success", message: t("calendar.saved") });
     } catch (error) {
-      // Keep the editor open and surface the failure inside it.
-      setEditorError(mailErrorMessage(error, t("calendar.saveFailed"), t));
+      setNotice({ kind: "error", message: mailErrorMessage(error, t("calendar.saveFailed"), t) });
     } finally {
       setBusy(false);
     }
@@ -536,12 +533,12 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
       if (!demoMode) await api.deleteCalendarEvent(pendingDelete.id);
       setEvents((current) => current.filter((event) => event.id !== pendingDelete.id));
       setListEvents((current) => current.filter((event) => event.id !== pendingDelete.id));
+      calendarCache.refresh();
       setPendingDelete(null);
       setEditor(null);
       setNotice({ kind: "success", message: t("calendar.deleted") });
     } catch (error) {
-      // The editor stays open; show the failure inside it instead of the page.
-      setEditorError(mailErrorMessage(error, t("calendar.deleteFailed"), t));
+      setNotice({ kind: "error", message: mailErrorMessage(error, t("calendar.deleteFailed"), t) });
     } finally {
       setBusy(false);
     }
@@ -565,6 +562,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     }
     setEvents((current) => current.filter((event) => !selectedIds.has(event.id)));
     setListEvents((current) => current.filter((event) => !selectedIds.has(event.id)));
+    calendarCache.refresh();
     setPendingBulkDelete(false);
     setSelectedIds(new Set());
     if (failed) {
@@ -685,7 +683,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
               ) : loadError ? (
                 <p className="settings-empty calendar-load-error" role="alert">{t("calendar.loadError")}</p>
               ) : (
-                <div className="calendar-grid">
+                <div className="calendar-grid content-enter">
                   {weekdays.map((weekday, index) => (
                     <div className="calendar-weekday" key={index}>{weekday}</div>
                   ))}
@@ -743,7 +741,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
               ) : sortedListEvents.length === 0 ? (
                 <p className="settings-empty">{t("calendar.listEmpty")}</p>
               ) : (
-                <>
+                <div className="content-enter">
                   {showListToolbar && (
                     <div className="calendar-list-toolbar">
                       <div className="search-wrap calendar-list-search">
@@ -830,7 +828,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
                       )}
                     </>
                   )}
-                </>
+                </div>
               )}
             </>
           )}
@@ -848,9 +846,6 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
                   </button>
                 )}
               </div>
-              {editorError && (
-                <div className="calendar-editor-error" role="alert"><CircleAlert size={14} /><span>{editorError}</span></div>
-              )}
               <label className="calendar-field">
                 <span>{t("calendar.titleLabel")}</span>
                 <input type="text" maxLength={300} value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} placeholder={t("calendar.titlePlaceholder")} autoFocus />

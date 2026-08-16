@@ -5,6 +5,7 @@ import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
 import { useDialogFocus } from "./useDialogFocus";
 import { useDismissTransition } from "./useDismissTransition";
+import { templatesCache } from "./dialogPrefetch";
 import { useStablePagedListHeight } from "./useStablePagedListHeight";
 import type { MailTemplate, MailTemplateInput } from "./types";
 
@@ -53,9 +54,9 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
     let active = true;
     setLoading(true);
     setLoadError(null);
-    void api.templates().then((result) => {
+    void templatesCache.get().then((items) => {
       if (!active) return;
-      setTemplates(result.items);
+      setTemplates(items);
     }).catch((error: unknown) => {
       if (!active) return;
       setLoadError(error);
@@ -110,9 +111,6 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
   });
 
   const controlsBusy = busy || Boolean(busyTemplateId);
-  // Must run before any early return so the hook count stays stable across
-  // renders (rules-of-hooks); it is inert while the pager is hidden.
-  const listScroll = useStablePagedListHeight<HTMLDivElement>(showToolbar);
 
   const toggleSelect = (templateId: string) => {
     setSelectedIds((previous) => {
@@ -154,6 +152,7 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
       }
     }
     setTemplates((current) => current.filter((template) => !ids.includes(template.id)));
+    templatesCache.refresh();
     setPendingBulkDelete(false);
     setSelectedIds(new Set());
     if (failed) {
@@ -163,6 +162,8 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
     }
     setBusy(false);
   };
+
+  const listScroll = useStablePagedListHeight<HTMLDivElement>(showToolbar);
 
   if (demoMode) {
     return (
@@ -208,6 +209,7 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
         setTemplates((current) => [...current, result.template]);
         setNotice({ kind: "success", message: t("settings.templates.saved") });
       }
+      templatesCache.refresh();
       setDraft(null);
       setEditingId(null);
     } catch (error) {
@@ -227,6 +229,7 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
     try {
       await api.deleteTemplate(templateId);
       setTemplates((current) => current.filter((template) => template.id !== templateId));
+      templatesCache.refresh();
       setArmedDeleteId(null);
       setNotice({ kind: "success", message: t("settings.templates.deleted") });
     } catch (error) {
@@ -240,11 +243,6 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
     setArmedDeleteId(null);
     setEditingId(template.id);
     setDraft({ id: template.id, name: template.name, subject: template.subject, body: template.body });
-  };
-
-  const cancelEdit = () => {
-    setDraft(null);
-    setEditingId(null);
   };
 
   return (
@@ -267,7 +265,7 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
             </button>
           </div>
         ) : (
-          <>
+          <div className="content-enter">
             {showToolbar && (
               <div className="templates-toolbar">
                 <label className="search-wrap templates-search" htmlFor="templates-search-input">
@@ -375,15 +373,15 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
             )}
 
             <div className="settings-inline-actions">
-              <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => {
-                setArmedDeleteId(null);
-                setEditingId(null);
-                setDraft(emptyDraft());
-              }}>
-                <Plus size={15} />{t("settings.templates.addTemplate")}
-              </button>
+<button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => {
+                  setArmedDeleteId(null);
+                  setEditingId(null);
+                  setDraft(emptyDraft());
+                }}>
+                  <Plus size={15} />{t("settings.templates.addTemplate")}
+                </button>
             </div>
-          </>
+          </div>
         )}
       </section>
       {draft && (

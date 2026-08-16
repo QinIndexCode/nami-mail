@@ -1,5 +1,5 @@
 import { FileText, LoaderCircle, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { api } from "./api";
 import {
   attachmentPreviewKind,

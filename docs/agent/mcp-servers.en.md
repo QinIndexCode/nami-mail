@@ -56,7 +56,7 @@ Common errors:
 | Message | Cause and fix |
 | --- | --- |
 | Connection failed | Wrong launch command, arguments, working directory, or environment variables; fix and retry |
-| Handshake failed | The server is not compatible with MCP protocol 2025-03-26, or the process exited after initialization |
+| Handshake failed | The server does not accept the requested MCP protocol version (supported: `2025-03-26`, `2025-06-18`), or the process exited after initialization |
 | Timeout | The server did not respond within the timeout; check the command and status, or increase the connection timeout |
 | Configuration changed during check | The configuration was modified while saving; save and check again |
 

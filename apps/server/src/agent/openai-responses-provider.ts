@@ -152,6 +152,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
       toolCalling: true,
       structuredOutput: true,
       embeddings: false,
+      vision: true,
       contextWindow: this.contextWindow,
       ...(this.maxOutputTokens ? { maxOutputTokens: this.maxOutputTokens } : {}),
     };
@@ -229,6 +230,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let sawDone = false;
       try {
         while (true) {
           const chunk = await awaitAbortable(reader.read(), lease.signal);
@@ -239,7 +241,14 @@ export class OpenAiResponsesProvider implements LlmProvider {
           for (const line of decoded.lines) {
             if (!line.startsWith("data:")) continue;
             const payload = line.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
+            if (!payload) continue;
+            // The [DONE] marker terminates the stream. Some deployments do not
+            // close the underlying connection after it, so waiting for EOF
+            // would stall until the request timeout fires.
+            if (payload === "[DONE]") {
+              sawDone = true;
+              break;
+            }
             let event: Record<string, unknown>;
             try {
               event = asRecord(JSON.parse(payload) as unknown) ?? {};
@@ -296,8 +305,9 @@ export class OpenAiResponsesProvider implements LlmProvider {
               throw new Error(typeof error?.message === "string" ? error.message : "The provider returned an error event.");
             }
           }
-          if (chunk.done) break;
+          if (chunk.done || sawDone) break;
         }
+        if (sawDone) await reader.cancel().catch(() => undefined);
       } finally {
         reader.releaseLock();
       }

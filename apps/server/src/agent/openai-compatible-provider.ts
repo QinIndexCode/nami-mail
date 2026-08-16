@@ -493,6 +493,11 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
       // origin as chat. Whether a specific model there accepts embedding input
       // is a provider-side concern; callers must handle a failed embed call.
       embeddings: true,
+      // OpenAI-compatible gateways vary wildly in multimodal support, and the
+      // chat model chosen per conversation decides it — not the endpoint. The
+      // host gates image attachments on this flag, so default to false and let
+      // per-model probing (or a future model registry) refine it.
+      vision: false,
       contextWindow: this.contextWindow,
       ...(this.maxOutputTokens ? { maxOutputTokens: this.maxOutputTokens } : {}),
     };
@@ -568,6 +573,7 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
   async *streamChat(request: ProviderChatRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): AsyncIterable<ProviderStreamEvent> {
     const calls = new Map<number, PendingToolCall>();
     let sawCompleted = false;
+    let sawDone = false;
     let responseLease: ProviderResponseLease | undefined;
     // Auto-detect vendor from endpoint and model to adapt extension field differences.
     const adapter = detectVendorAdapter(this.endpointString, request.model);
@@ -615,7 +621,14 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
           for (const line of decoded.lines) {
             if (!line.startsWith("data:")) continue;
             const payload = line.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
+            if (!payload) continue;
+            // The [DONE] marker terminates the stream. Some deployments do not
+            // close the underlying connection after it, so waiting for EOF
+            // would stall until the request timeout fires.
+            if (payload === "[DONE]") {
+              sawDone = true;
+              break;
+            }
             let event: Record<string, unknown>;
             try {
               const parsed = JSON.parse(payload) as unknown;
@@ -649,8 +662,9 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
                     : choice.finish_reason === "content_filter" ? "content-filter" : "stop";
             }
           }
-          if (chunk.done) break;
+          if (chunk.done || sawDone) break;
         }
+        if (sawDone) await reader.cancel().catch(() => undefined);
       } finally {
         reader.releaseLock();
       }

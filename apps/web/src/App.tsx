@@ -1,5 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type FormEvent, type RefObject } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { computePosition, flip, offset, shift } from "@floating-ui/dom";
 import DOMPurify from "dompurify";
 import {
@@ -14,11 +13,7 @@ import {
   Copy,
   Download,
   Eye,
-  FileArchive,
-  FileImage,
-  FileSpreadsheet,
   FileText,
-  Folder,
   Forward,
   Inbox,
   Layers3,
@@ -48,7 +43,9 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { AgentMark } from "./AgentMark";
 import { ApiError, api, type BatchJobCreatePayload, type BatchJobQuery, type BatchJobSnapshot } from "./api";
+import { calendarCache, contactsCache, templatesCache } from "./dialogPrefetch";
 import DatePicker from "./DatePicker";
 import { canPreviewAttachment } from "./attachmentPreview";
 import { presentAttachment } from "./attachmentPresentation";
@@ -90,13 +87,12 @@ import { createSettingsLoadCoordinator } from "./settingsLoadCoordinator";
 import TranslationPanel, { type TranslationAvailability, type TranslationContent, type TranslationPanelState } from "./TranslationPanel";
 import { applyMailTranslation, extractMailTextSegments } from "./mailDomTranslation";
 import { extractMailVisualStyle, llmTranslationErrorMessage, translationErrorMessage } from "./translationPresentation";
-import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Contact, type MailTemplate, type Message, type MessageAttachment, type OutboundAttachment, type OutboundSubmission, type ProviderInfo, type Stats } from "./types";
+import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type MessageAttachment, type OutboundAttachment, type OutboundSubmission, type ProviderInfo, type Stats } from "./types";
 import { useDialogFocus } from "./useDialogFocus";
 import { findVerificationCodes } from "./verificationCode";
 import { resolveLocale, type Translate, useI18n } from "./i18n";
 import type { AgentBootstrap } from "./agentTypes";
-import MessageList, { type MessageListEmptyState } from "./MessageList";
-import { SenderAvatar, accountTone } from "./SenderAvatar";
+import MessageList from "./MessageList";
 import { AutoReplyToastStack, autoReplyNoticeKey } from "./AutoReplyToastStack";
 
 const AgentWorkspace = lazy(() => import("./AgentWorkspace"));
@@ -270,6 +266,15 @@ function demoMoveDestination(accounts: readonly Account[], accountId: string, ta
     if (folder) return folder.path;
   }
   return "";
+}
+
+function initials(name: string, address: string): string {
+  const value = name.trim() || address.split("@")[0] || "?";
+  return [...value].slice(0, 2).join("").toUpperCase();
+}
+
+function accountTone(value: string): number {
+  return [...value].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4;
 }
 
 function currentSystemTheme(): "light" | "dark" {
@@ -524,7 +529,7 @@ export default function App() {
   /** Whether the header search box is expanded (icon-only when collapsed). */
   const [searchOpen, setSearchOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [, setLoadingMore] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
@@ -554,7 +559,7 @@ export default function App() {
   const [readerMoreOpen, setReaderMoreOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [snoozeCustomUntil, setSnoozeCustomUntil] = useState("");
-  const [snoozeBusy, setSnoozeBusy] = useState(false);
+  const [, setSnoozeBusy] = useState(false);
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [toast, setToast] = useState<ToastNotice>(null);
   // Account-health banner is transient: it appears when the unhealthy-account
@@ -918,7 +923,12 @@ export default function App() {
           if (current && nextMessages.some((item) => item.id === current)) return current;
           return null;
         });
-        await refreshSubmissions(nextAccounts, { silent: true });
+await refreshSubmissions(nextAccounts, { silent: true });
+        if (!isDemo) {
+          contactsCache.warm();
+          templatesCache.warm();
+          calendarCache.warm();
+        }
       }
     } catch (error) {
       if (requestId === loadRequestRef.current) {
@@ -939,7 +949,7 @@ export default function App() {
         }
       }
     }
-  }, [selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, replacePendingArchiveMoves, t, view]);
+  }, [selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, t, view]);
 
   /**
    * Silent periodic refresh that preserves pagination progress: only the first
@@ -1097,7 +1107,7 @@ export default function App() {
       splashAgentDoneRef.current = true;
       dismissSplash();
     });
-  }, [isDemo, dismissSplash]);
+  }, [dismissSplash]);
   useEffect(() => {
     const bridge = desktopBridge();
     if (!bridge || isDemo) return undefined;
@@ -1217,14 +1227,15 @@ export default function App() {
         window.clearTimeout(retryTimer);
         source?.close();
       };
-    }, [isDemo, settings.realtimePushEnabled]);
+    }, [settings.realtimePushEnabled]);
   // Defensive: a read/unread toggle whose request hangs would otherwise leave
   // its id in the in-flight set, pinning the optimistic seen state on top of
   // every later poll. Dropping it on unmount means a fresh mount starts from
   // server truth.
   useEffect(() => {
+    const seenMutationIdsRefCopy = seenMutationIdsRef;
     return () => {
-      seenMutationIdsRef.current.clear();
+      seenMutationIdsRefCopy.current.clear();
     };
   }, []);
   useEffect(() => {
@@ -1292,7 +1303,7 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [accountIdsKey, refreshSubmissions, submissionStatusRefreshIdsKey]);
+  }, [accountIdsKey, accounts, refreshSubmissions, submissionStatusRefreshIdsKey]);
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(null), toast.action ? 6000 : toast.kind === "warning" ? 9000 : toast.kind === "error" ? 6000 : 3200);
@@ -1453,13 +1464,6 @@ export default function App() {
       : currentMessageTotal > loadedServerMessageCount
         ? t("mail.loaded", { loaded: loadedServerMessageCount, total: currentMessageTotal })
         : t("mail.recentlySynced");
-  const sendingStatusDescription = submissionAttentionCount && submissionActiveCount
-    ? t("sending.sidebarAttentionAndActive", { attention: submissionAttentionCount, active: submissionActiveCount })
-    : submissionAttentionCount
-      ? t("sending.sidebarAttention", { count: submissionAttentionCount })
-      : submissionActiveCount
-        ? t("sending.sidebarActive", { count: submissionActiveCount })
-        : t("sending.sidebarComplete");
 
   useEffect(() => {
     if (!selectedId || filteredMessages.some((message) => message.id === selectedId)) return;
@@ -1532,11 +1536,11 @@ export default function App() {
     : selectedMoveLocationUnverified
       ? t("mail.action.locationUnverified")
       : null;
-  const translationState: TranslationPanelState = selected
+  const translationState = useMemo<TranslationPanelState>(() => selected
     && translationSession?.messageId === selected.id
     && translationSession.targetLocale === locale
     ? translationSession.state
-    : { phase: "idle" };
+    : { phase: "idle" }, [locale, selected, translationSession]);
   // Whether at least one LLM provider is configured AND authorized for mail
   // content, enabling AI translation. Cloud providers require the explicit
   // "allowCloudMailContent" consent; local providers (e.g. Ollama) always qualify.
@@ -1544,7 +1548,7 @@ export default function App() {
     () => !isDemo && Boolean(preloadedAgentBootstrap?.providers.some(
       (provider) => provider.configured && (!provider.cloud || provider.cloudContentConsent),
     )),
-    [isDemo, preloadedAgentBootstrap],
+    [preloadedAgentBootstrap],
   );
   const refreshTranslationAvailability = useCallback(async () => {
     const requestId = ++translationAvailabilityRequestIdRef.current;
@@ -1753,7 +1757,7 @@ export default function App() {
         state: { phase: "error", message: translationErrorMessage(error, t), ...(previous ? { previous } : {}), ...(llmAvailable ? { llmAvailable } : {}) },
       });
     }
-  }, [locale, selected, t, translationState.phase, translationTermsAccepted]);
+  }, [locale, selected, t, theme, translationState, translationTermsAccepted]);
   const translateSelectedMessageWithLlm = useCallback(async () => {
     if (!selected || translationState.phase === "loading") return;
     if (!translationTermsAccepted) {
@@ -1833,7 +1837,7 @@ export default function App() {
     } finally {
       if (llmTranslationAbortRef.current === controller) llmTranslationAbortRef.current = null;
     }
-  }, [locale, selected, t, translationState.phase, translationTermsAccepted]);
+  }, [locale, selected, t, translationState, translationTermsAccepted]);
   const showSelectedTranslation = useCallback(() => {
     setTranslationSession((current) => {
       if (!selected || !current || current.messageId !== selected.id || current.targetLocale !== locale || current.state.phase !== "ready") {
@@ -2291,7 +2295,7 @@ export default function App() {
     // more matches exist on the server, the next click upgrades to the whole
     // matching view (handled server-side as a batch job).
     if (!isDemo && loadedServerMessageCount < currentMessageTotal) setSelectAllPaged(true);
-  }, [currentMessageTotal, filteredMessages, isDemo, loadedServerMessageCount]);
+  }, [currentMessageTotal, filteredMessages, loadedServerMessageCount]);
 
   const exitSelectionMode = useCallback(() => {
     setSelectionMode(false);
@@ -2314,7 +2318,7 @@ export default function App() {
       starred: view === "starred" ? true : undefined,
       snoozed: view === "snoozed" ? true : undefined,
     };
-  }, [debouncedQuery, isDemo, selectAllPaged, selectedAccount, selectedFolder, view]);
+  }, [debouncedQuery, selectAllPaged, selectedAccount, selectedFolder, view]);
 
   // Polls a server-side batch job until it settles, then shows the real
   // outcome with an undo action. The toolbar stays interactive throughout;
@@ -3106,7 +3110,30 @@ export default function App() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [isDemo]);
+  }, []);
+
+  // Demo mode surfaces a realistic auto-reply confirmation so the product
+  // preview shows the pending-draft review card without a live agent.
+  useEffect(() => {
+    if (!isDemo) return;
+    const now = Date.now();
+    setAutoReplyNotices([
+      {
+        kind: "pending",
+        confirmationId: "demo-auto-reply-confirmation",
+        requestId: "demo-auto-reply-request",
+        accountId: demoAccounts[0]?.id ?? "personal",
+        messageId: "demo-auto-reply-message",
+        subject: "季度数据回顾与本周同步",
+        fromName: "Lena Chen",
+        fromAddress: "lena.chen@example.com",
+        sensitive: false,
+        createdAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + 20 * 60 * 1000).toISOString(),
+        replyPreview: "收到，我会在本周内完成数据回顾并同步给你。谢谢！",
+      },
+    ]);
+  }, []);
 
   useEffect(() => {
     if (!isDesktopSmoke) return;
@@ -3192,7 +3219,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [accounts.length, addOpen, closeReader, composeOpen, filteredMessages, mobileSidebar, openCompose, openForward, openMessage, openReply, openReplyAll, selected, selectedId, contactsOpen, templatesOpen, accountsOpen, sendingStatusOpen, settingsOpen, updatePromptOpen]);
+  }, [accounts.length, addOpen, calendarOpen, closeReader, composeOpen, filteredMessages, mobileSidebar, openCompose, openForward, openMessage, openReply, openReplyAll, selected, selectedId, contactsOpen, templatesOpen, accountsOpen, sendingStatusOpen, settingsOpen, updatePromptOpen]);
 
   const sync = async () => {
     if (!accounts.length || syncing) return;
@@ -3391,7 +3418,7 @@ export default function App() {
                 </div>
               )}
             </div>
-            <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={selectionMode ? t("mail.selection.done") : t("mail.selection.select")} className={selectionMode ? "selection-toggle active" : "selection-toggle"} onClick={toggleSelectionMode} disabled={!accounts.length}><SquareCheckBig size={17} /></IconButton><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? openCompose() : setAddOpen(true)}><PenLine size={17} /></IconButton>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton><button ref={agentLaunchButtonRef} className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><img decoding="sync" className="nami-brand-logo nami-brand-logo-light" src="/nami-logo-light.png" alt="" /><img decoding="sync" className="nami-brand-logo nami-brand-logo-dark" src="/nami-logo-dark.png" alt="" /></span><span>{t("agent.launch")}</span></button></div>
+            <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={selectionMode ? t("mail.selection.done") : t("mail.selection.select")} className={selectionMode ? "selection-toggle active" : "selection-toggle"} onClick={toggleSelectionMode} disabled={!accounts.length}><SquareCheckBig size={17} /></IconButton><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? openCompose() : setAddOpen(true)}><PenLine size={17} /></IconButton>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton><button ref={agentLaunchButtonRef} className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button></div>
           </header>
 
           {healthAlert && (
@@ -3403,8 +3430,11 @@ export default function App() {
             </div>
           )}
 
-          {selectionMode ? (
-            <div className="list-toolbar selection-toolbar">
+          <div className={`list-toolbar-frame${selectionMode ? " selection-on" : ""}`}>
+            <div className="list-toolbar list-status-bar">
+              <span className={recentlyReadVisibleCount ? "unread-retention-note" : ""} aria-live={recentlyReadVisibleCount ? "polite" : undefined}>{listToolbarStatus}</span>
+            </div>
+            <div className="list-toolbar selection-toolbar" aria-hidden={!selectionMode}>
               <button className="selection-select-all" type="button" onClick={selectAllVisibleMessages} disabled={!filteredMessages.length}>{selectAllPaged ? t("mail.selection.selectAllMatching", { count: currentMessageTotal }) : t("mail.selection.selectAll")}</button>
               <span className="selection-count">{batchJob ? t("mail.selection.batchProcessing", { done: batchJob.done, total: batchJob.total || currentMessageTotal }) : batchBusy ? t("mail.selection.busy") : t("mail.selection.count", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}</span>
               <div className="selection-actions">
@@ -3418,11 +3448,7 @@ export default function App() {
               </div>
               <button className="selection-done" type="button" onClick={exitSelectionMode} disabled={batchBusy}>{t("mail.selection.done")}</button>
             </div>
-          ) : (
-            <div className="list-toolbar">
-              <span className={recentlyReadVisibleCount ? "unread-retention-note" : ""} aria-live={recentlyReadVisibleCount ? "polite" : undefined}>{listToolbarStatus}</span>
-            </div>
-          )}
+          </div>
 
           <MessageList
             loading={loading}
@@ -3499,7 +3525,7 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                  <button className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><img decoding="sync" className="nami-brand-logo nami-brand-logo-light" src="/nami-logo-light.png" alt="" /><img decoding="sync" className="nami-brand-logo nami-brand-logo-dark" src="/nami-logo-dark.png" alt="" /></span><span>{t("agent.launch")}</span></button>
+                  <button className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button>
                 </div>
               </header>
                 {selectedThread && selectedThread.length > 1 && (
@@ -3508,7 +3534,7 @@ export default function App() {
                     <div className="thread-strip-messages">
                       {selectedThread.map((threadMessage) => (
                         <button key={threadMessage.id} type="button" className={`thread-strip-item ${threadMessage.id === selected.id ? "active" : ""}`} onClick={() => void openMessage(threadMessage)}>
-                          <SenderAvatar name={threadMessage.from.name} address={threadMessage.from.address} tone={accountTone(threadMessage.from.address)} size="small" gravatarEnabled={settings.avatarGravatarEnabled} />
+                          <span className={`sender-avatar small tone-${accountTone(threadMessage.from.address)}`}>{initials(threadMessage.from.name, threadMessage.from.address)}</span>
                           <span className="thread-strip-copy"><strong>{threadMessage.from.name || threadMessage.from.address}</strong><time>{formatMessageTime(threadMessage.sentAt, locale)}</time></span>
                           {!threadMessage.seen && <span className="unread-dot" aria-hidden="true" />}
                         </button>
@@ -3518,7 +3544,7 @@ export default function App() {
                 )}
                 {selectedMoveLocationUnverified && <section className="move-location-notice" role="status"><CircleAlert size={18} /><div><strong>{t("mail.moveLocationUnverified.title")}</strong><p>{t("mail.moveLocationUnverified.description")}</p></div></section>}
                 <article className="mail-reader">
-                <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people"><SenderAvatar name={selected.from.name} address={selected.from.address} tone={accountTone(selected.from.address)} size="large" gravatarEnabled={settings.avatarGravatarEnabled} /><div className="mail-people-copy"><strong>{selected.from.name || selected.from.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={selected.from.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div><time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
+                <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people"><span className={`sender-avatar large tone-${accountTone(selected.from.address)}`}>{initials(selected.from.name, selected.from.address)}</span><div className="mail-people-copy"><strong>{selected.from.name || selected.from.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={selected.from.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div><time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
                 {verificationCodes.length > 0 && (
                   <section className="verification-code-list" aria-label={t("mail.verification.detected") }>
                     {verificationCodes.map((candidate, index) => {
@@ -3580,7 +3606,7 @@ export default function App() {
                     })}
                   </section>
                 )}
-                <footer className="quick-reply"><SenderAvatar name="" address={selected.accountEmail} tone={accountTone(selected.accountEmail)} size="small" gravatarEnabled={settings.avatarGravatarEnabled} /><button onClick={openReply}>{t("mail.reader.replyTo", { sender: selected.from.name || selected.from.address })}</button></footer>
+                <footer className="quick-reply"><span className={`sender-avatar small tone-${accountTone(selected.accountEmail)}`}>{selected.accountEmail[0]?.toUpperCase()}</span><button onClick={openReply}>{t("mail.reader.replyTo", { sender: selected.from.name || selected.from.address })}</button></footer>
               </article>
             </>
           ) : (
@@ -3611,14 +3637,14 @@ export default function App() {
           <IconButton label={t("settings.title")} onClick={() => { setMobileSidebar(false); setSettingsOpen(true); }}><Settings size={18} /></IconButton>
           <IconButton label={t("sending.title")} className={submissionAttentionCount ? "attention" : ""} onClick={() => { setMobileSidebar(false); setSendingStatusOpen(true); void refreshSubmissions(accounts, { silent: true }); }}><ListChecks size={18} />{submissionOutstandingCount > 0 && <span className="rail-badge" aria-hidden="true">{submissionOutstandingCount}</span>}</IconButton>
           <span className="icon-rail-divider" aria-hidden="true" />
-          <IconButton label={t("calendar.title")} onClick={() => { setMobileSidebar(false); setCalendarOpen(true); }}><CalendarClock size={18} /></IconButton>
-          <IconButton label={t("settings.contacts.title")} onClick={() => { setMobileSidebar(false); setContactsOpen(true); }}><Users size={18} /></IconButton>
-          <IconButton label={t("settings.templates.title")} onClick={() => { setMobileSidebar(false); setTemplatesOpen(true); }}><FileText size={18} /></IconButton>
+          <IconButton label={t("calendar.title")} onClick={() => { setMobileSidebar(false); setCalendarOpen(true); if (!isDemo) calendarCache.warm(); }}><CalendarClock size={18} /></IconButton>
+          <IconButton label={t("settings.contacts.title")} onClick={() => { setMobileSidebar(false); setContactsOpen(true); if (!isDemo) contactsCache.warm(); }}><Users size={18} /></IconButton>
+          <IconButton label={t("settings.templates.title")} onClick={() => { setMobileSidebar(false); setTemplatesOpen(true); if (!isDemo) templatesCache.warm(); }}><FileText size={18} /></IconButton>
           <IconButton label={t("settings.account.title")} onClick={() => { setMobileSidebar(false); setAccountsOpen(true); }}><AtSign size={18} /></IconButton>
         </aside>
       </main>
 
-      {addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} onClose={() => setAddOpen(false)} onAdded={handleAccountAdded} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
+      {addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} existingAccounts={accounts} onClose={() => setAddOpen(false)} onAdded={handleAccountAdded} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
       {composeOpen && <ComposeModal accounts={accounts} draft={composeDraft} onClose={() => setComposeOpen(false)} onSent={(message, kind, undoDraft) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), run: () => { window.setTimeout(() => { setComposeDraft(undoDraft); setComposeOpen(true); }, 0); } }); else showToast(message, kind); }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} />}
       {settingsOpen && <Suspense fallback={null}><SettingsModal settings={settings} accounts={accounts} onClose={() => setSettingsOpen(false)} onSettingsChange={applySettings} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} onOpenAgentProviderSettings={() => { setSettingsOpen(false); setAgentProviderSettingsRequestId((requestId) => requestId + 1); openAgentWorkspace(); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
       {contactsOpen && <Suspense fallback={null}><ManagementDialogs demoMode={isDemo} onClose={() => setContactsOpen(false)} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}

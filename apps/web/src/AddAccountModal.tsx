@@ -31,9 +31,9 @@ import {
 } from "./providerOnboarding";
 import ThemedSelect from "./ThemedSelect";
 import type {
+  Account,
   AccountDiscoveryResult,
   ManualAccountConfig,
-  MailServerPreset,
   MailTransport,
   OAuthProvider,
   ProviderDiscovery,
@@ -49,6 +49,8 @@ type BusyAction = "idle" | "discover" | "password" | "manual" | "oauth";
 
 type AddAccountModalProps = {
   providers: ProviderInfo[];
+  /** Already-added local accounts, so a duplicate email is caught before the server round-trip. */
+  existingAccounts: Account[];
   onClose: () => void;
   onAdded: () => Promise<void>;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
@@ -60,6 +62,24 @@ const DISCOVERY_DEBOUNCE_MS = 600;
 
 function validEmail(value: string): boolean {
   return emailPattern.test(value.trim());
+}
+
+/**
+ * Gmail-style plus addressing (`user+tag@gmail.com`) delivers into the same
+ * mailbox as `user@gmail.com`, so duplicates must be detected against the
+ * canonical address. Other domains are untouched because `+` is not a
+ * guaranteed alias mechanism there.
+ */
+export function canonicalGmailEmail(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  const at = trimmed.lastIndexOf("@");
+  if (at <= 0) return trimmed;
+  const local = trimmed.slice(0, at);
+  const domain = trimmed.slice(at + 1);
+  if (domain !== "gmail.com" && domain !== "googlemail.com") return trimmed;
+  const plus = local.indexOf("+");
+  if (plus <= 0) return trimmed;
+  return `${local.slice(0, plus)}@${domain}`;
 }
 
 function emailDomain(value: string): string {
@@ -111,7 +131,9 @@ function providerFallback(provider: ProviderInfo | undefined, domain: string, t:
     basicAuthLimited: Boolean(provider?.basicAuthLimited),
     capabilities: { imap: true, smtp: true, pop: false, apis: [] },
     imap: provider?.imap ?? { host: `imap.${domain}`, port: 993, transport: "tls" },
-    smtp: provider?.smtp ?? { host: `smtp.${domain}`, port: 587, transport: "starttls" },
+    // Keep the conventional fallback aligned with the server-side custom
+    // provider (providers.ts), so what the user previews is what gets tested.
+    smtp: provider?.smtp ?? { host: `smtp.${domain}`, port: 465, transport: "tls" },
   };
 }
 
@@ -141,7 +163,7 @@ function manualConfigFor(email: string, provider?: ProviderDiscovery): ManualAcc
   const smtp = provider?.smtp;
   return {
     imap: defaultServer(imap?.host ?? (domain ? `imap.${domain}` : ""), imap?.port ?? 993, imap?.transport ?? "tls", imapUsername),
-    smtp: defaultServer(smtp?.host ?? (domain ? `smtp.${domain}` : ""), smtp?.port ?? 587, smtp?.transport ?? "starttls", smtpUsername),
+    smtp: defaultServer(smtp?.host ?? (domain ? `smtp.${domain}` : ""), smtp?.port ?? 465, smtp?.transport ?? "tls", smtpUsername),
   };
 }
 
@@ -205,7 +227,7 @@ async function copySetupTextToClipboard(text: string): Promise<boolean> {
   }
 }
 
-export default function AddAccountModal({ providers, onClose, onAdded, fallbackFocusRef, demoMode = false }: AddAccountModalProps) {
+export default function AddAccountModal({ providers, existingAccounts, onClose, onAdded, fallbackFocusRef, demoMode = false }: AddAccountModalProps) {
   const { locale, t } = useI18n();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -240,6 +262,23 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
   const discoveryRequestIdRef = useRef(0);
 
   const normalizedEmail = email.trim().toLowerCase();
+  // Matches an already-added local account. Gmail `+tag` sub-addresses are
+  // folded onto their canonical address; the matched account is surfaced so
+  // the message can say which mailbox was actually found. `accountAdded` is
+  // excluded: once the add succeeded, onAdded() refreshes the list and the
+  // just-added address would otherwise instantly "already exists" while the
+  // success state is shown before the dialog closes.
+  const existingAccountMatch = useMemo(() => {
+    if (accountAdded || !validEmail(normalizedEmail)) return undefined;
+    const needle = canonicalGmailEmail(normalizedEmail);
+    return existingAccounts.find((account) => canonicalGmailEmail(account.email) === needle);
+  }, [accountAdded, existingAccounts, normalizedEmail]);
+  const existingDuplicateMessage = useMemo(() => {
+    if (!existingAccountMatch) return "";
+    return existingAccountMatch.email.toLowerCase() === normalizedEmail
+      ? t("account.error.email_exists")
+      : t("account.error.email_exists_plus", { email: existingAccountMatch.email });
+  }, [existingAccountMatch, normalizedEmail, t]);
   const domain = emailDomain(normalizedEmail);
   const matchedProvider = useMemo(
     () => validEmail(normalizedEmail)
@@ -285,6 +324,8 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
   const needsProviderDiscovery = discoveryRequired;
   const authMethods = activeDiscovery?.authMethods ?? providerAuthMethods(matchedProvider);
   const oauthOnly = Boolean(activeOAuthProvider) && authMethods.length > 0 && authMethods.every((method) => method === "oauth2");
+  const passwordLooksLikeAppCredential = !manualOpen
+    && authMethods.some((method) => method === "app-password" || method === "client-authorization-code");
   const canUsePassword = !oauthOnly;
   const busy = busyAction !== "idle";
   const blockingBusy = busyAction === "password" || busyAction === "manual" || busyAction === "oauth";
@@ -417,7 +458,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
         setStatus({ kind: "warning", message: t("account.status.discovery_manual_review") });
       }
       return result;
-    } catch (error) {
+    } catch {
       if (mountedRef.current && requestId === discoveryRequestIdRef.current && candidate === emailValueRef.current.trim().toLowerCase()) {
         setDiscovery(null);
         setDiscoveryEmail(candidate);
@@ -544,6 +585,10 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
       showError(t("account.error.email_required_for_login"), "email");
       return;
     }
+    if (existingAccountMatch) {
+      showError(existingDuplicateMessage, "email");
+      return;
+    }
 
     // A web popup must be opened synchronously with this click or browsers may block it after the API request.
     const popup = desktopBridge() ? null : window.open("", "nami-mail-oauth", "popup,width=560,height=720");
@@ -605,9 +650,16 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
       showError(t("account.error.email_invalid"), "email");
       return;
     }
+    if (existingAccountMatch) {
+      showError(existingDuplicateMessage, "email");
+      return;
+    }
     if (!password) {
       showError(t("account.error.credential_required", { credential: activeOnboarding?.credentialLabel ?? t("account.credential.fallback") }), "password");
       return;
+    }
+    if (passwordLooksLikeAppCredential && password.length !== 16) {
+      setStatus({ kind: "warning", message: t("account.error.credential_app_password_hint") });
     }
     if (manualOpen && !isServerConfigValid(manualConfig)) {
       showError(t("account.error.manual_invalid"), "manual");
@@ -622,10 +674,11 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
         await finishAddedAccount(t("account.status.demo_connected"));
         return;
       }
-      const result = manualOpen
-        ? await api.addManualAccount({
+      await (manualOpen
+        ? api.addManualAccount({
           email: normalizedEmail,
           password,
+          ...(activeDiscovery && activeDiscovery.id !== "custom" ? { providerId: activeDiscovery.id } : {}),
           imap: {
             host: manualConfig.imap.host.trim(),
             port: manualConfig.imap.port,
@@ -639,7 +692,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
           ...(manualConfig.imap.username.trim() ? { imapUsername: manualConfig.imap.username.trim() } : {}),
           ...(manualConfig.smtp.username.trim() ? { smtpUsername: manualConfig.smtp.username.trim() } : {}),
         })
-        : await api.addAccount(normalizedEmail, password);
+        : api.addAccount(normalizedEmail, password));
       // The first full mailbox sync already runs in the background: this
       // request returns as soon as the connection is verified, so the dialog
       // closes immediately and the messages appear via the post-add refresh.
@@ -840,6 +893,12 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
           </div>
           <small id="account-email-help" className="account-field-help">{t("account.email.help")}</small>
 
+          {existingAccountMatch && (
+            <div className="form-status error account-email-exists" role="alert">
+              <X size={17} />{existingDuplicateMessage}
+            </div>
+          )}
+
           {activeDiscovery && (
             <section className={`provider-hint account-provider-result${manualReviewRecommended(activeDiscovery) ? " warning" : ""}`} aria-live="polite">
               <ShieldCheck size={17} />
@@ -928,7 +987,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                 <p>{t("account.oauth.description")}</p>
               </div>
               {!oauthAvailable && <small className="oauth-config-note">{t("account.oauth.config_unavailable", { provider: activeOAuthProvider === "google" ? "Google" : "Microsoft" })}</small>}
-              <button className="primary-button large oauth-button" type="button" onClick={() => void startOAuth()} disabled={busy || !oauthAvailable}>
+              <button className="primary-button large oauth-button" type="button" onClick={() => void startOAuth()} disabled={busy || !oauthAvailable || Boolean(existingAccountMatch)}>
                 {busyAction === "oauth" ? <LoaderCircle className="spin" size={18} /> : <ShieldCheck size={18} />}
                 {busyAction === "oauth"
                   ? t("account.oauth.waiting_browser")
@@ -1057,7 +1116,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                 </fieldset>
               )}
 
-              <button className="primary-button large" type="submit" disabled={busy || !password}>
+              <button className="primary-button large" type="submit" disabled={busy || !password || Boolean(existingAccountMatch)}>
                 {busyAction === "password" || busyAction === "manual" ? <LoaderCircle className="spin" size={18} /> : <Plus size={18} />}
                 {busyAction === "password" || busyAction === "manual"
                   ? t("account.manual.validating")

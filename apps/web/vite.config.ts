@@ -15,6 +15,9 @@ export default defineConfig({
       "/api": "http://127.0.0.1:3187",
     },
   },
+  optimizeDeps: {
+    include: ["pdfjs-dist"],
+  },
   build: {
     sourcemap: true,
   },

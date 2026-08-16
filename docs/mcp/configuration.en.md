@@ -23,7 +23,7 @@ The MCP client launches `namimail mcp start` as a managed child process through 
 
 1. A user opens NamiMail or explicitly requests AgentHost through `namimail service start`, then pairs the client profile with `namimail pair` and approves it in the visible window.
 2. The MCP client starts the MCP stdio child process with the command above.
-3. The client performs MCP initialization (protocol version `2025-03-26`, serverInfo name `NamiMail`) and `tools/list`.
+3. The client performs MCP initialization (protocol version `2025-03-26` or `2025-06-18`; the server echoes the client's requested version, serverInfo name `NamiMail`) and `tools/list`.
 4. The stdio adapter connects only to a paired, current-user-SID-restricted Broker; the Broker constructs `mcp` caller context and exposes only allowed tools.
 
 The interface must not auto-start a service, replace pairing with HTTP retries, or reuse stale schema, identity, or revoked-client state. After updates, account-scope changes, or revocation, clients must discover tools again.

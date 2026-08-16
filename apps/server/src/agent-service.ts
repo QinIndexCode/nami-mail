@@ -40,7 +40,6 @@ import { createMailTools } from "./agent/mail-tools.js";
 import { EncryptedAgentMemoryStore, buildMemoryContextLines } from "./agent/memory.js";
 import { createMemoryTools, createAutoReplyDecisionTools } from "./agent/memory-tools.js";
 import { createSettingsTools } from "./agent/settings-tools.js";
-import { createSearchTools } from "./agent/search-tools.js";
 import { EncryptedAutoReplyDecisionStore } from "./agent/auto-reply-decisions.js";
 import { extractMemorySuggestions, filterMemorySuggestionChunk, stripMemorySuggestions } from "./agent/memory-suggestions.js";
 import type { MailApplicationService } from "./agent/mail-application-service.js";
@@ -104,7 +103,6 @@ const allDesktopScopes = [
   "manage:providers",
   "manage:rag",
   "manage:settings",
-  "web:search",
   "external:network",
   "admin:host",
 ] as const;
@@ -147,6 +145,8 @@ export type AgentProviderSummary = {
   cloud: boolean;
   cloudContentConsent: boolean;
   streaming: boolean;
+  /** Whether the configured model accepts image inputs; gates image attachments. */
+  vision: boolean;
   health?: ProviderHealth;
 };
 
@@ -222,10 +222,9 @@ export type AgentMessage = {
    *  persisted; used by the client to hide the row and by the server to exclude
    *  it from the model context. */
   revoked?: boolean;
-  /** True when the reply was cut off by the user (interrupt). The partial
-   *  content stays in the transcript and is marked as interrupted rather than
-   *  an error. */
-  interrupted?: boolean;
+  /** Attachments the user attached to this message; persisted so the file chips
+   *  survive a page reload. */
+  attachments?: AgentMessageAttachmentInput[];
 };
 
 export type AgentConversation = AgentConversationSummary & {
@@ -257,6 +256,9 @@ export type AgentMessageAttachmentInput = {
   token?: string;
   /** Account the uploaded attachment is bound to (sender account). */
   accountId?: string;
+  /** Extracted file text sent to the model. Not shown in the transcript; the
+   *  client renders file chips from `name`/`type` instead. */
+  text?: string;
 };
 
 export type AgentMessageInput = {
@@ -296,6 +298,24 @@ export type AgentUiStreamEvent =
 
 type AgentCompletionReason = Extract<AgentUiStreamEvent, { type: "completed" }>["reason"];
 type AgentMessageError = NonNullable<AgentMessage["error"]>;
+
+// The web client truncates extracted file text at this length (fileProcessor.ts).
+export const AGENT_ATTACHMENT_TEXT_LIMIT = 32_000;
+
+/** Renders attachment text in the same `[file: …]` framing the client used to
+ *  inline, so model-facing content is unchanged while the transcript keeps
+ *  only the user's clean text. */
+export function composeAttachmentContent(content: string, attachments: readonly AgentMessageAttachmentInput[] | undefined): string {
+  if (!attachments || attachments.length === 0) return content;
+  const blocks = attachments
+    .filter((attachment) => typeof attachment.text === "string" && attachment.text.length > 0)
+    .map((attachment) => {
+      const marker = attachment.text!.length >= AGENT_ATTACHMENT_TEXT_LIMIT ? " (truncated)" : "";
+      return `[file: ${attachment.name}${marker}]\n${attachment.text}\n[/file]`;
+    });
+  if (blocks.length === 0) return content;
+  return `${blocks.join("\n\n")}\n\n${content}`;
+}
 
 export type AgentServiceOptions = {
   db: DatabaseHandle;
@@ -519,6 +539,9 @@ function providerSummary(configuration: ProviderConfiguration): AgentProviderSum
     cloud,
     cloudContentConsent: cloud && configuration.allowCloudMailContent,
     streaming: configuration.streaming,
+    // Mirrors the adapter-level vision capability (anthropic/gemini/openai-responses
+    // accept image inputs; openai-compatible kind and ollama do not by default).
+    vision: configuration.kind === "anthropic" || configuration.kind === "gemini" || configuration.kind === "openai-responses",
     ...(configuration.health ? { health: configuration.health } : {}),
   };
 }
@@ -909,7 +932,6 @@ export class AgentService {
         hasCustomBackground: options.hasCustomBackground ?? (() => false),
         ...(options.onSettingsChanged ? { onChanged: options.onSettingsChanged } : {}),
       }),
-      ...createSearchTools(),
     ]);
     this.confirmationStore = options.desktopConfirmation
       ? new ImmutableGuiConfirmationStore(
@@ -1527,57 +1549,19 @@ export class AgentService {
   }
 
   getConversation(id: string): AgentConversation {
-    const state = this.readConversation(id);
-    const view = this.toConversation(state);
-    // Streaming replies are mirrored into the storage draft (throttled
-    // snapshots under the final message id), so a re-opened panel already has
-    // the partial answer available from storage. When the run is still alive
-    // its in-memory snapshot can be fresher than the last throttled write by
-    // up to one persist interval, so it is folded in:
-    //   - no durable row yet  -> append the in-flight snapshot;
-    //   - durable row is still streaming -> replace it with the in-memory one;
-    //   - durable row is complete/error  -> keep the durable final copy.
-    // The last case is the teardown window: the final append runs before
-    // `activeRuns.delete`, and the complete row must never regress to partial
-    // streaming content.
-    const run = this.activeRuns.get(id);
-    const inFlight = run?.inFlight;
-    if (inFlight) {
-      const index = view.messages.findIndex((message) => message.id === inFlight.id);
-      if (index >= 0) {
-        if (view.messages[index]!.state === "streaming") {
-          view.messages = [
-            ...view.messages.slice(0, index),
-            { ...inFlight, content: stripMemorySuggestions(inFlight.content) },
-            ...view.messages.slice(index + 1),
-          ];
-        }
-      } else {
-        view.messages = [...view.messages, inFlight];
-      }
-      return view;
-    }
-    // No live run. A leftover storage draft means the process that was writing
-    // it is gone (restart) or its teardown never landed; surface it as an
-    // interrupted error so the client stops polling instead of waiting forever
-    // on a reply that can no longer advance. A finished turn that is already
-    // durable under the same message id simply wins over the stale draft.
-    let streaming: unknown = null;
-    try {
-      streaming = this.conversations.readStreaming(id, state.leases);
-    } catch {
-      // A removed source account makes the draft unreadable; ignore it.
-    }
-    if (streaming && typeof streaming === "object" && streaming !== null) {
-      const draft = streaming as { message?: Partial<AgentMessage>; mailContextIncluded?: boolean };
-      if (draft.message && typeof draft.message.id === "string" && !view.messages.some((message) => message.id === draft.message!.id)) {
-        view.messages = [...view.messages, {
-          ...(draft.message as AgentMessage),
-          state: "error",
-          error: { code: "INTERRUPTED", message: "响应已中断，请重新发送。", retryable: true },
-          mailContextIncluded: draft.mailContextIncluded === true,
-        } as AgentMessage];
-      }
+    const view = this.toConversation(this.readConversation(id));
+    // A run still answering this conversation publishes its in-flight assistant
+    // reply so a re-opened panel renders it immediately. It is appended once:
+    // the persisted turn later uses the same message id, so re-reading never
+    // produces a duplicate row.
+    const inFlight = this.activeRuns.get(id)?.inFlight;
+    // Guard against a narrow teardown window: the final `append` runs before
+    // `activeRuns.delete`, so for a few hundred milliseconds the persisted turn
+    // (complete, id X) and the in-flight snapshot (streaming, id X) coexist. If
+    // the persisted copy already carries this id, the in-flight snapshot is the
+    // same row — do not append it twice.
+    if (inFlight && !view.messages.some((message) => message.id === inFlight.id)) {
+      view.messages = [...view.messages, inFlight];
     }
     return view;
   }
@@ -1618,12 +1602,6 @@ export class AgentService {
   }
 
   deleteConversation(id: string): void {
-    // A conversation can be deleted while a run is still streaming it. Cancel
-    // the run first so the provider stream stops immediately (instead of
-    // continuing to burn tokens against a row that is about to vanish) and so
-    // its final append, which would fail against the deleted row, is never
-    // attempted. The abort also lets the client's SSE stream end promptly.
-    this.cancelRun(id);
     const state = this.readConversation(id);
     this.conversations.markDeleted(id, state.leases);
     this.removeSummaryEntry(id);
@@ -1869,6 +1847,10 @@ export class AgentService {
       commandConstraints = command.constraint ? [command.constraint] : [];
       providerContent = command.id === "help" ? buildAgentSlashHelpPrompt() : expandAgentSlashCommand(command, args);
       commandTitle = `${command.name}${args ? ` ${args}` : ""}`;
+    } else {
+      // Attachments carry their extracted text separately; reassemble the
+      // model-facing content while the persisted message stays clean.
+      providerContent = composeAttachmentContent(input.content.trim(), input.attachments);
     }
     const controller = new AbortController();
     const lifecycleTasks: AccountTask[] = [];
@@ -1893,6 +1875,7 @@ export class AgentService {
       citations: [],
       toolActivities: [],
       ...(input.quote ? { quote: input.quote } : {}),
+      ...(input.attachments && input.attachments.length > 0 ? { attachments: [...input.attachments] } : {}),
     };
     let assistantContent = "";
     let citations: AgentCitation[] = [];
@@ -1905,61 +1888,20 @@ export class AgentService {
     // with, so a panel that reopens mid-run renders this message and the final
     // persisted copy is the same row (no duplicate).
     const assistantMessageId = `message-${randomUUID()}`;
-    // Throttled streaming persistence: while the model is still answering, the
-    // current snapshot is written to a replaceable storage draft under the same
-    // message id. A re-opened panel therefore loads the partial reply from
-    // storage instead of relying on process memory. High-frequency text deltas
-    // are throttled to one write per interval to avoid overwhelming SQLite;
-    // discrete structural changes (citations, tools, confirmations) bypass the
-    // throttle because they are infrequent and must survive a restart.
-    const streamPersistIntervalMs = 800;
-    let lastStreamPersistAt = 0;
-    let lastStreamFingerprint = "";
-    const persistStreamSnapshot = (): void => {
-      const run = this.activeRuns.get(conversationId);
-      if (!run || run.controller !== controller) return;
-      if (!assistantContent && citations.length === 0 && toolActivities.length === 0 && !confirmation) {
-        lastStreamFingerprint = "";
-        return;
-      }
-      const fingerprint = `${citations.length}|${toolActivities.length}|${confirmation?.id ?? ""}|${toolActivities.map((activity) => `${activity.id}:${activity.state}`).join(",")}`;
-      const structuralChange = fingerprint !== lastStreamFingerprint;
-      const nowMs = Date.now();
-      if (!structuralChange && nowMs - lastStreamPersistAt < streamPersistIntervalMs) return;
-      lastStreamPersistAt = nowMs;
-      lastStreamFingerprint = fingerprint;
-      try {
-        this.conversations.upsertStreaming(conversationId, state.leases, {
-          type: "conversation-turn",
-          message: {
-            id: assistantMessageId,
-            role: "assistant",
-            content: stripMemorySuggestions(assistantContent),
-            createdAt: now(),
-            state: "streaming",
-            citations,
-            toolActivities,
-            ...(confirmation ? { confirmation } : {}),
-            ...(assistantError ? { error: assistantError } : {}),
-          },
-          mailContextIncluded,
-        } satisfies ConversationTurn, assistantMessageId);
-      } catch {
-        // A deletion fence can make the durable conversation unavailable while
-        // a stream is running. The final append in `finally` retries once more
-        // with the complete message; never revive a revoked account key here.
-      }
-    };
+    // Becomes true once the user message has been appended to the
+    // conversation. Before that nothing is published as in-flight.
+    let turnActive = false;
     // Publishes the assistant reply currently being built so a re-opened panel
-    // can render it immediately and so the durable store can mirror it. Only
-    // updates the entry when there is something meaningful to show (text,
-    // citations, tools, or a pending confirmation).
+    // can render it immediately. Once the turn is underway the row is
+    // published even while empty: the automatic mail search runs before any
+    // text/tools exist, and a panel that reopens in that window must still see
+    // a streaming row (and the generation affordances that come with it)
+    // instead of a hang that only shows the user message.
     const syncInFlight = () => {
       const run = this.activeRuns.get(conversationId);
       if (!run || run.controller !== controller) return;
-      if (!assistantContent && citations.length === 0 && toolActivities.length === 0 && !confirmation) {
+      if (!turnActive) {
         run.inFlight = null;
-        lastStreamFingerprint = "";
         return;
       }
       run.inFlight = {
@@ -1973,7 +1915,6 @@ export class AgentService {
         ...(confirmation ? { confirmation } : {}),
         ...(assistantError ? { error: assistantError } : {}),
       };
-      persistStreamSnapshot();
     };
     // Resolved inside the main try; captured here so the finally block can run
     // the separate title-generation call for a first turn.
@@ -1992,6 +1933,11 @@ export class AgentService {
         message: userMessage,
         mailContextIncluded: false,
       } satisfies ConversationTurn);
+      turnActive = true;
+      // Publish the (possibly empty) streaming row immediately so any snapshot
+      // read in the pre-content window (the automatic mail search) still shows
+      // an in-progress assistant row.
+      syncInFlight();
       const userTimestamp = now();
       if (isFirstTurn) {
         const title = titleForMessage(commandTitle ?? userMessage.content);
@@ -2080,14 +2026,11 @@ export class AgentService {
       // When cloud mail-content is not authorized, mail-scoped tools and any
       // external MCP tools are hidden: an external tool can return mail or
       // private content that would otherwise flow to the cloud provider.
-      // web.search is treated the same way: its query can carry mail-derived
-      // context, so it is a potential external leak even though it is built in.
-      const externalLeakToolNames = new Set<string>(this.externalMcpToolNames());
-      externalLeakToolNames.add("web.search");
+      const externalMcpToolNames = this.externalMcpToolNames();
       const availableTools = input.mode !== "agent" ? [] : canUseMailContext
         ? [...this.tools.list()]
         : [...this.tools.list()].filter((tool) =>
-            tool.accountAccess === "none" && !externalLeakToolNames.has(tool.name));
+            tool.accountAccess === "none" && !externalMcpToolNames.has(tool.name));
       // Read-only callers cannot execute draft/write tools (the permission
       // engine denies them), so hide those tools from the model entirely:
       // the prompt lists them and the provider only receives the visible set.
@@ -2392,39 +2335,24 @@ export class AgentService {
       // so future turns never see the protocol marker.
       const suggestions = extractMemorySuggestions(assistantContent);
       const persistedContent = stripMemorySuggestions(assistantContent);
-      // A user-initiated abort (terminal "cancelled") keeps the partial reply in
-      // the transcript so a follow-up question can reference what was cut off.
-      // Persist it as "interrupted" (mirroring the client's local fold) rather
-      // than an error row: the user chose to stop, nothing actually failed.
-      const interrupted = terminal === "cancelled";
       const assistant: AgentMessage = {
         id: assistantMessageId,
         role: "assistant",
         content: persistedContent,
         createdAt: now(),
-        state: interrupted ? "complete" : (assistantError || terminal === "error" ? "error" : "complete"),
+        state: assistantError || terminal === "error" ? "error" : "complete",
         citations,
         toolActivities,
-        ...(interrupted ? { interrupted: true } : {}),
         ...(confirmation ? { confirmation } : {}),
-        ...(!interrupted && assistantError ? { error: assistantError } : {}),
+        ...(assistantError ? { error: assistantError } : {}),
       };
       try {
-        // An interrupted run still persists its partial reply: only an account
-        // deletion fence (unrecoverable, keys revoked) prevents the write. The
-        // aborted signal itself must not block it, or the partial answer would
-        // vanish from the transcript and never reach the next turn's context.
-        for (const task of lifecycleTasks) task.assertCurrent();
-        // The finished turn is appended to the durable log under the same
-        // message id the throttled streaming snapshots used, then the in-place
-        // draft is cleared. During the narrow window between the two, a read
-        // sees both rows and prefers the durable (complete) copy.
+        this.assertRunCurrent(lifecycleTasks, controller.signal);
         this.conversations.append(conversationId, state.leases, "turn", {
           type: "conversation-turn",
           message: assistant,
           mailContextIncluded,
-        } satisfies ConversationTurn, assistantMessageId);
-        this.conversations.clearStreaming(conversationId, state.leases);
+        } satisfies ConversationTurn);
         this.updateSummaryEntry(conversationId, { preview: shortPreview(assistant.content), updatedAt: now() });
       } catch {
         // A deletion fence can make the durable conversation unavailable while
@@ -2842,16 +2770,13 @@ export class AgentService {
         role: parsed.role,
         content: parsed.content,
         createdAt: parsed.createdAt,
-        // Streaming is persisted by the throttled snapshot writer, so a read
-        // during an active run must keep the "streaming" marker for the client
-        // to keep polling instead of treating the partial reply as final.
-        state: parsed.state,
+        state: parsed.state === "streaming" ? "complete" : parsed.state,
         citations: parsed.citations as AgentCitation[],
         toolActivities: parsed.toolActivities as AgentToolActivity[],
         ...(parsed.confirmation ? { confirmation: parsed.confirmation as AgentConfirmation } : {}),
         ...(parsed.error ? { error: parsed.error as AgentMessage["error"] } : {}),
-        ...(parsed.interrupted ? { interrupted: true } : {}),
         ...(typeof parsed.quote === "string" ? { quote: parsed.quote } : {}),
+        ...(Array.isArray(parsed.attachments) ? { attachments: parsed.attachments as AgentMessageAttachmentInput[] } : {}),
         ...(revokedIds.get(parsed.id) ? { revoked: true } : {}),
         mailContextIncluded: value.mailContextIncluded === true,
       });
@@ -2871,6 +2796,12 @@ export class AgentService {
         break;
       }
     }
+    // Attachment `text` is model-facing only; the transcript renders chips from
+    // name/type. Stripping it keeps the conversation payload small and the
+    // client-side parse cheap.
+    const withoutAttachmentText = (message: AgentMessage): AgentMessage => message.attachments && message.attachments.some((attachment) => attachment.text)
+      ? { ...message, attachments: message.attachments.map(({ text: _text, ...attachment }) => attachment) }
+      : message;
     return {
       id: state.descriptor.conversationId,
       title: state.metadata.title,
@@ -2878,7 +2809,7 @@ export class AgentService {
       updatedAt: state.descriptor.updatedAt,
       scope: state.metadata.scope,
       providerId: state.metadata.providerId,
-      messages: state.messages.map(({ mailContextIncluded: _mailContextIncluded, ...message }) => message),
+      messages: state.messages.map(({ mailContextIncluded: _mailContextIncluded, ...message }) => withoutAttachmentText(message)),
     };
   }
 
@@ -2922,10 +2853,12 @@ export class AgentService {
       .filter((message) => allowMailContext || !message.mailContextIncluded)
       .slice(-14)
       .map((message) => {
+        // The current turn's content was already composed (providerContent).
+        if (message.id === userMessage.id) return { role: message.role, content: message.content } satisfies ProviderChatMessage;
         if (message.role === "user" && message.quote) {
-          return { role: "user", content: `"${message.quote}"\n\nUser follow-up question: ${message.content}` } satisfies ProviderChatMessage;
+          return { role: "user", content: `"${message.quote}"\n\nUser follow-up question: ${composeAttachmentContent(message.content, message.attachments)}` } satisfies ProviderChatMessage;
         }
-        return { role: message.role, content: message.content } satisfies ProviderChatMessage;
+        return { role: message.role, content: composeAttachmentContent(message.content, message.attachments) } satisfies ProviderChatMessage;
       });
     // Native providers (Anthropic, Gemini) reject a conversation whose first
     // message is an assistant turn. A full history can slice to an odd length,
@@ -2962,7 +2895,6 @@ export class AgentService {
             "- `memory.save` stores a concise durable note about the user (preferences, facts, decisions). Save proactively when the user asks you to remember something, and confirm briefly that it was saved.",
             "- `memory.update` corrects or refines an existing note by its `id` from memory.list. Use it when the user corrects or extends something already stored; replace the stale summary instead of adding a duplicate.",
             "- `memory.delete` removes a stored note by its `id` from memory.list. Only delete when the user asks to remove a note.",
-            "- `web.search` searches the public web via DuckDuckGo (no key needed). Use it for current events, facts, companies, or anything outside the user's local mail — never as the first tool for mail questions. The query MUST be sanitized: no email content, no quoted message text, no contact names or other private data. Use general keywords only. After a search, prefer answering from the snippets; if results are empty or the service is unavailable, say so honestly instead of inventing facts.",
             "- If the user states a durable personal fact or preference (not a one-off request), end your final reply — after the actual answer — with a single line: `MEMORY_SUGGEST: <concise summary>`. Never suggest for trivial or one-off messages; the user decides whether to save.",
             locale === "en-US"
               ? "- When a tool returns an empty list (e.g. no messages, no folders, no attachments), inform the user directly in English. Do NOT ask the user to provide account IDs, folder names, or other information — you already have the tools to discover it yourself."

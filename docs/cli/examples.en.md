@@ -18,7 +18,7 @@ namimail version
 
 ## Read-only queries
 
-The CLI allows only paired, scope-limited reads. The seven external commands are `accounts list`, `folders list`, `messages list`, `mail summarize`, `messages get`, `threads get`, and `attachments list`. `acct_work` and date ranges are illustrative values only; an account ID must be inside approved account scope.
+The CLI allows only paired, scope-limited reads. The eight external read commands are `accounts list`, `folders list`, `messages list`, `mail summarize`, `messages get`, `messages batch-get`, `threads get`, and `attachments list`. `acct_work` and date ranges are illustrative values only; an account ID must be inside approved account scope.
 
 ```text
 namimail accounts list --output json

@@ -200,3 +200,26 @@ it("OpenAI Responses provider health check reports ready and rejects non-local H
     endpoint: "http://api.openai.com/v1",
   }), /HTTPS or local loopback HTTP/);
 });
+
+it("OpenAI Responses provider completes at [DONE] without waiting for the connection to close", async () => {
+  const provider = new OpenAiResponsesProvider({
+    id: "responses-hold-open",
+    endpoint: "https://api.openai.com/v1",
+    apiKey: "sk-openai-test",
+    timeoutMs: 1_000,
+    fetchImpl: async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode('data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"delta":"Done."}\n\n'));
+        controller.enqueue(encoder.encode('data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{}}}\n\n'));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        // Deliberately never close: some deployments keep the connection open
+        // after [DONE], so EOF must not be required to complete the stream.
+      },
+    }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+  });
+  const events = [];
+  for await (const event of provider.streamChat(chatRequest({ providerId: "responses-hold-open", model: "gpt-4.1" }))) events.push(event);
+  assert.deepEqual(events.map((event) => event.type), ["response_started", "text_delta", "completed"]);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
+});

@@ -189,3 +189,33 @@ it("Gemini provider health check reports ready and rejects non-local HTTP endpoi
     endpoint: "http://generativelanguage.googleapis.com/v1beta",
   }), /HTTPS or local loopback HTTP/);
 });
+
+it("Gemini provider completes at [DONE] without waiting for the connection to close", async () => {
+  const provider = new GeminiProvider({
+    id: "gemini-hold-open",
+    endpoint: "https://generativelanguage.googleapis.com/v1beta",
+    apiKey: "gemini-key-test",
+    timeoutMs: 1_000,
+    fetchImpl: async () => new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode('data: {"candidates":[{"content":{"parts":[{"text":"Done."}]},"finishReason":"STOP"}]}\n\n'));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        // Deliberately never close: some deployments keep the connection open
+        // after [DONE], so EOF must not be required to complete the stream.
+      },
+    }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+  });
+  const events = [];
+  for await (const event of provider.streamChat({
+    requestId: "123e4567-e89b-12d3-a456-426614174030",
+    providerId: "gemini-hold-open",
+    model: "gemini-2.0-flash",
+    messages: [{ role: "user", content: "Hello" }],
+    tools: [],
+    allowToolCalls: false,
+    responseFormat: "text",
+  })) events.push(event);
+  assert.deepEqual(events.map((event) => event.type), ["response_started", "text_delta", "completed"]);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
+});
