@@ -228,12 +228,69 @@ export function encryptMessagePayload(masterKey: Buffer, id: string, accountId: 
     encryptTextEnvelope(JSON.stringify(payload), key, payloadAad(id, accountId)));
 }
 
+// Decrypting a row is cheap for a small message but dominates the cost of
+// listing folders full of large bodies (newsletters, receipts), where the
+// same page is re-read on every folder open. A payload is immutable once
+// written: any re-encryption (metadata hydration, migration) or tampering
+// changes the ciphertext, and the full ciphertext in the key forces a fresh
+// authenticated decrypt instead of a stale hit. Callers treat payloads as
+// read-only, so the cached object is shared.
+const PAYLOAD_CACHE_MAX_ENTRIES = 128;
+const PAYLOAD_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+const payloadCache = new Map<string, { payload: MessagePayload; bytes: number }>();
+let payloadCacheBytes = 0;
+
+function payloadByteEstimate(payload: MessagePayload): number {
+  let bytes = 256;
+  bytes += payload.subject.length + payload.fromName.length + payload.fromAddress.length;
+  bytes += payload.snippet.length + payload.textBody.length + payload.htmlBody.length;
+  if (payload.messageId) bytes += payload.messageId.length;
+  if (payload.inReplyTo) bytes += payload.inReplyTo.length;
+  bytes += payload.to.reduce((sum, entry) => sum + entry.name.length + entry.address.length, 0);
+  bytes += (payload.cc ?? []).reduce((sum, entry) => sum + entry.name.length + entry.address.length, 0);
+  bytes += (payload.references ?? []).reduce((sum, ref) => sum + ref.length, 0);
+  bytes += (payload.attachments ?? []).reduce(
+    (sum, item) => sum + item.filename.length + item.contentType.length + 64,
+    0,
+  );
+  if (payload.headers) {
+    const headers = payload.headers;
+    bytes += headers.autoSubmitted.length + headers.listUnsubscribe.length
+      + headers.precedence.length + headers.returnPath.length
+      + headers.labels.reduce((sum, label) => sum + label.length, 0);
+  }
+  return bytes;
+}
+
+function cachePayload(key: string, payload: MessagePayload): void {
+  const bytes = payloadByteEstimate(payload);
+  while (payloadCache.size >= PAYLOAD_CACHE_MAX_ENTRIES || payloadCacheBytes + bytes > PAYLOAD_CACHE_MAX_BYTES) {
+    const oldestKey = payloadCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    const oldest = payloadCache.get(oldestKey);
+    if (oldest) payloadCacheBytes -= oldest.bytes;
+    payloadCache.delete(oldestKey);
+  }
+  payloadCache.set(key, { payload, bytes });
+  payloadCacheBytes += bytes;
+}
+
 export function messagePayloadForRow(row: MessageStorageRow, masterKey: Buffer): MessagePayload {
   if (typeof row.encrypted_payload !== "string" || !row.encrypted_payload) return legacyPayload(row);
+  const cacheKey = `${masterKey.toString("hex")}\0${row.id}\0${row.encrypted_payload}`;
+  const cached = payloadCache.get(cacheKey);
+  if (cached) {
+    // Refresh LRU recency without re-decrypting.
+    payloadCache.delete(cacheKey);
+    payloadCache.set(cacheKey, cached);
+    return cached.payload;
+  }
   return withMessageKey(masterKey, (key) => {
     const plaintext = decryptTextEnvelope(row.encrypted_payload as string, key, payloadAad(row.id, row.account_id));
     try {
-      return normalizePayload(JSON.parse(plaintext) as unknown);
+      const payload = normalizePayload(JSON.parse(plaintext) as unknown);
+      cachePayload(cacheKey, payload);
+      return payload;
     } catch (error) {
       if (error instanceof Error && error.message === "Encrypted message payload is invalid.") throw error;
       throw new Error("Encrypted message payload is invalid.");
