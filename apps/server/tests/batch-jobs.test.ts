@@ -170,6 +170,46 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     expect(globalDone.changedIds.sort()).toEqual(["global-inbox", "global-projects"]);
   });
 
+  it("resolves an Attachments-view selection by the attachment flag alone", async () => {
+    // No accountId or folder: the Attachments view crosses every account and
+    // mailbox and only the has_attachments flag decides the candidate set.
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("account-2", "account-2@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("attach-projects", "account-2", "Projects", 10, "Budget pdf", "Demo", "account-2@example.com", "[]", now, "", "", "", JSON.stringify([]), 1, 0, now);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("plain-projects", "account-2", "Projects", 11, "Plain note", "Demo", "account-2@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+
+    const created = createBatchJob(
+      { kind: "flags", patch: { seen: true }, query: { hasAttachments: true } },
+      { db, masterKey, oauthService: undefined },
+    );
+    const done = await waitForJob(created.id);
+    expect(done.status).toBe("completed");
+    expect(done.updated).toBe(1);
+    expect(done.changedIds).toEqual(["attach-projects"]);
+    expect(db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("plain-projects")).toEqual({ flags_json: "[]" });
+
+    const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+    expect(undone.ok).toBe(true);
+    const undoJob = await waitForJob(undone.jobId!);
+    expect(undoJob.updated).toBe(1);
+  });
+
   it("leaves a message alone on undo when the user re-moved it after the job", async () => {
     const created = createBatchJob({ kind: "move", target: "trash", query: inboxQuery }, { db, masterKey, oauthService: undefined });
     await waitForJob(created.id);

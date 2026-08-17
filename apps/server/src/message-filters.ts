@@ -55,6 +55,10 @@ export type MessageListFilterQuery = {
   unread?: boolean;
   archived?: boolean;
   snoozed?: boolean;
+  // The Attachments view: messages carrying files, across every folder of the
+  // selected account (all accounts when no accountId is bound). Replaces the
+  // unified-inbox fallback, so it never needs a folder.
+  hasAttachments?: boolean;
   // "all" searches every account and mailbox (any view). Only meaningful
   // together with q; without q it is ignored, so a client can never turn the
   // list into an unbounded full-database dump by accident.
@@ -100,6 +104,8 @@ export function buildMessageListSql(query: MessageListFilterQuery): MessageListS
     // The Snoozed view lists messages whose snooze has not fired yet.
     filters.push("m.snoozed_until IS NOT NULL AND m.snoozed_until > ?");
     params.push(new Date().toISOString());
+  } else if (!globalSearch && query.hasAttachments) {
+    filters.push("m.has_attachments = 1");
   } else if (!globalSearch) {
     filters.push(inboxMessageFilter);
     // Snoozed messages are hidden from the unified inbox until due.

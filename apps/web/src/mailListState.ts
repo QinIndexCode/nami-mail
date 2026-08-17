@@ -5,7 +5,7 @@ export type SidebarBadgeCounts = {
   unread: number;
 };
 
-export type MessageListView = "inbox" | "unread" | "starred" | "archived" | "snoozed";
+export type MessageListView = "inbox" | "unread" | "starred" | "archived" | "snoozed" | "attachments";
 
 /** Sort modes offered by the message-list toolbar. */
 export type MessageListSortOrder = "newest" | "oldest" | "sender" | "importance";
@@ -135,6 +135,10 @@ export function matchesServerMessageQuery(
       if (!message.flagged) return false;
     } else if (query.messageView === "snoozed") {
       if (!isSnoozedMessage(message)) return false;
+    } else if (query.messageView === "attachments") {
+      // The Attachments view crosses every folder (like starred); only the
+      // message's own attachment flag decides, mirrored from the server.
+      if (!message.hasAttachments) return false;
     } else if (!isInboxMessage(message, accounts)) {
       return false;
     } else if (query.messageView === "inbox" && isSnoozedMessage(message)) {
