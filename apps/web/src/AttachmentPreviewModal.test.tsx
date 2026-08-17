@@ -28,6 +28,16 @@ describe("attachment preview modal", () => {
     expect(markup).not.toContain(zh("mail.attachment.previewUnsupported"));
   });
 
+  it("renders as an in-flow drawer keeping the dialog semantics", () => {
+    const markup = renderModal({ partId: "part-1", filename: "report.pdf", contentType: "application/pdf", size: 1024 });
+
+    expect(markup).toContain("attachment-preview-drawer");
+    expect(markup).toContain('role="dialog"');
+    expect(markup).toContain("aria-modal=\"false\"");
+    // The pane sits next to the message; no backdrop overlay is rendered.
+    expect(markup).not.toContain("backdrop");
+  });
+
   it("declines unsupported file types without fetching", () => {
     const markup = renderModal({ partId: "part-2", filename: "bundle.zip", contentType: "application/zip", size: 1024 });
 

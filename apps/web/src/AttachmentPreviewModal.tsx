@@ -1,5 +1,5 @@
 import { FileText, LoaderCircle, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import {
   attachmentPreviewKind,
@@ -10,7 +10,6 @@ import {
 } from "./attachmentPreview";
 import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
-import { useDialogFocus } from "./useDialogFocus";
 import { useDismissTransition } from "./useDismissTransition";
 
 export type PreviewAttachment = {
@@ -26,7 +25,6 @@ type AttachmentPreviewModalProps = {
   onClose: () => void;
   /** Test seam: override the blob fetcher used to load the attachment. */
   fetchBlob?: (messageId: string, partId: string) => Promise<Blob>;
-  fallbackFocusRef?: RefObject<HTMLElement | null>;
 };
 
 type PreviewPhase = "loading" | "ready" | "error";
@@ -38,7 +36,6 @@ export default function AttachmentPreviewModal({
   attachment,
   onClose,
   fetchBlob,
-  fallbackFocusRef,
 }: AttachmentPreviewModalProps) {
   const { t } = useI18n();
   const dialogRef = useRef<HTMLElement | null>(null);
@@ -90,10 +87,18 @@ export default function AttachmentPreviewModal({
     };
   }, [attachment, kind, messageId, fetch, t]);
 
-  useDialogFocus(Boolean(attachment), dialogRef, { fallbackFocusRef });
+  // The preview is a non-modal in-flow pane next to the message (a Gmail-style
+  // reading pane), so focus simply lands on the drawer itself and the reader
+  // stays interactive; no trap is installed.
+  useEffect(() => {
+    if (!attachment) return undefined;
+    dialogRef.current?.focus();
+    return undefined;
+  }, [attachment]);
+
   const { closing, requestClose } = useDismissTransition(() => {
     onClose();
-  });
+  }, 260);
 
   useEffect(() => {
     if (!attachment) return undefined;
@@ -109,8 +114,7 @@ export default function AttachmentPreviewModal({
   const objectUrl = objectUrlRef.current;
 
   return (
-    <div className={`modal-backdrop attachment-preview-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
-      <section ref={dialogRef} className={`modal-card attachment-preview-modal${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="attachment-preview-title" tabIndex={-1}>
+    <section ref={dialogRef} className={`attachment-preview-drawer${closing ? " closing" : ""}`} role="dialog" aria-modal="false" aria-labelledby="attachment-preview-title" tabIndex={-1}>
         <header className="modal-heading attachment-preview-heading">
           <div className="attachment-preview-title-copy">
             <h2 id="attachment-preview-title">{t("mail.attachment.previewTitle")}</h2>
@@ -149,6 +153,5 @@ export default function AttachmentPreviewModal({
           )}
         </div>
       </section>
-    </div>
   );
 }
