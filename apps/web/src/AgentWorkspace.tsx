@@ -869,18 +869,35 @@ function AgentConfirmationCard({
   desktopConfirmationAvailable,
   resolutionError,
   onDecision,
-  remainingMs,
+  expiresAt,
+  onExpire,
 }: {
   confirmation: AgentConfirmation;
   desktopConfirmationAvailable: boolean;
   resolutionError?: string;
   /** Local decision handler (demo mode) — real builds resolve through the desktop bridge. */
   onDecision?: (decision: "approve" | "reject") => void;
-  /** Milliseconds until the confirmation expires (0 when unknown/expired). */
-  remainingMs?: number;
+  /** Deadline (epoch ms) driving the local ticking countdown. */
+  expiresAt?: number;
+  /** Called once when the deadline passes while the card is mounted. */
+  onExpire?: () => void;
 }) {
   const { locale, t } = useI18n();
   const [leaving, setLeaving] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const expiredRef = useRef(false);
+  useEffect(() => {
+    if (expiresAt === undefined || !Number.isFinite(expiresAt)) return;
+    const timer = window.setInterval(() => {
+      const current = Date.now();
+      setNow(current);
+      if (!expiredRef.current && current >= expiresAt) {
+        expiredRef.current = true;
+        onExpire?.();
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [expiresAt, onExpire]);
   const decisionEnabled = Boolean(onDecision);
   const resolve = (decision: "approve" | "reject") => {
     if (leaving) return;
@@ -888,6 +905,7 @@ function AgentConfirmationCard({
     // Let the collapse animation finish before the card unmounts.
     window.setTimeout(() => onDecision?.(decision), 260);
   };
+  const remainingMs = expiresAt !== undefined && Number.isFinite(expiresAt) ? expiresAt - now : 0;
   return (
     <section
       className={`agent-confirmation-card${leaving ? " leaving" : ""}`}
@@ -895,7 +913,7 @@ function AgentConfirmationCard({
       data-nami-agent-confirmation-card
       data-nami-agent-confirmation-id={confirmation.id}
     >
-      <div className="agent-confirmation-heading"><ShieldAlert size={17} /><span><strong>{confirmation.title}</strong><small>{confirmation.summary}</small></span><small className="agent-confirmation-expiry">{remainingMs !== undefined && remainingMs > 0
+      <div className="agent-confirmation-heading"><ShieldAlert size={17} /><span><strong>{confirmation.title}</strong><small>{confirmation.summary}</small></span><small className="agent-confirmation-expiry">{remainingMs > 0
         ? t("agent.confirmation.expiresIn", { time: formatCountdown(remainingMs) })
         : t("agent.confirmation.expires", { time: shortDate(confirmation.expiresAt, locale) })}</small></div>
       <dl>
@@ -907,6 +925,31 @@ function AgentConfirmationCard({
       </div>
       {resolutionError && <div className="agent-message-error" role="alert"><CircleAlert size={15} /><span>{resolutionError}</span></div>}
     </section>
+  );
+}
+
+// Owns its own 1 s tick so the countdown does not re-render the workspace.
+function RevokeNotice({ until, onExpire }: { until: number; onExpire: () => void }) {
+  const { t } = useI18n();
+  const [now, setNow] = useState(() => Date.now());
+  const expiredRef = useRef(false);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const current = Date.now();
+      setNow(current);
+      if (!expiredRef.current && current >= until) {
+        expiredRef.current = true;
+        onExpire();
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [until, onExpire]);
+  const remaining = Math.max(0, Math.ceil((until - now) / 1000));
+  return (
+    <div className="agent-revoke-notice" role="status">
+      <span>{t("agent.message.revokeNotice")}</span>
+      <em aria-hidden="true">{remaining}s</em>
+    </div>
   );
 }
 
@@ -3225,7 +3268,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     setLoadError(null);
     setConfirmationErrors({});
     // Sending a new message dismisses the revoke notice immediately.
-    setRevokeNoticeRemaining(0);
+    setRevokeNoticeUntil(null);
     setActive((current) => current && current.id === conversation!.id
       ? {
         ...current,
@@ -3509,41 +3552,28 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     }
     return undefined;
   }, [active]);
-  // Countdown tick: re-renders every second while a confirmation waits, and
-  // expires it automatically once its deadline passes.
-  const [, setConfirmationTick] = useState(0);
-  useEffect(() => {
-    if (!pendingConfirmation) return;
-    const timer = window.setInterval(() => setConfirmationTick((value) => value + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [pendingConfirmation]);
+  // The confirmation card owns a local ticking countdown, so a waiting
+  // confirmation no longer re-renders the whole transcript every second.
   const confirmationDeadline = pendingConfirmation ? Date.parse(pendingConfirmation.expiresAt) : 0;
-  useEffect(() => {
-    if (!pendingConfirmation || !Number.isFinite(confirmationDeadline)) return;
-    if (Date.now() < confirmationDeadline) return;
+  const expirePendingConfirmation = useCallback(() => {
+    // Runs from the card's expiry tick when the pending confirmation can no
+    // longer be resolved, so use the live state instead of a captured id.
+    const confirmationId = pendingConfirmation?.id;
+    if (!confirmationId) return;
     setActive((current) => current ? {
       ...current,
-      messages: current.messages.map((message) => expireConfirmation(message, pendingConfirmation.id, t("agent.confirmation.expired"))),
+      messages: current.messages.map((message) => expireConfirmation(message, confirmationId, t("agent.confirmation.expired"))),
     } : current);
-  }, [confirmationDeadline, pendingConfirmation, t]);
-  const confirmationRemaining = pendingConfirmation
-    ? Math.max(0, confirmationDeadline - Date.now())
-    : 0;
+  }, [pendingConfirmation, t]);
   // "已撤回信息" notice above the composer: a countdown that clears on its own
-  // or the moment the user sends a new message.
-  const [revokeNoticeRemaining, setRevokeNoticeRemaining] = useState(0);
+  // or the moment the user sends a new message. The ticking countdown lives in
+  // the notice itself; this just records the deadline.
+  const [revokeNoticeUntil, setRevokeNoticeUntil] = useState<number | null>(null);
+  const revokeNoticeActive = revokeNoticeUntil !== null;
   /** Message ids whose revoke/unrevoke request is still in flight. Duplicate
    *  clicks are ignored while pending (idempotent server endpoint). */
   const [, setPendingRevokeIds] = useState<ReadonlySet<string>>(new Set());
   const pendingRevokeIdsRef = useRef<ReadonlySet<string>>(new Set());
-  const revokeNoticeActive = revokeNoticeRemaining > 0;
-  useEffect(() => {
-    if (!revokeNoticeActive) return;
-    const timer = window.setInterval(() => {
-      setRevokeNoticeRemaining((remaining) => Math.max(0, remaining - 1));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [revokeNoticeActive]);
   const resolveDemoConfirmation = useCallback((confirmationId: string, decision: "approve" | "reject") => {
     setActive((current) => current ? {
       ...current,
@@ -3589,7 +3619,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       setComposer(revokeTarget.content);
       window.requestAnimationFrame(() => composerRef.current?.focus());
     }
-    setRevokeNoticeRemaining(REVOKE_NOTICE_SECONDS);
+    setRevokeNoticeUntil(Date.now() + REVOKE_NOTICE_SECONDS * 1000);
     // Server reconciliation: idempotent, duplicates ignored while in flight.
     pendingRevokeIdsRef.current = new Set(pendingRevokeIdsRef.current).add(messageId);
     setPendingRevokeIds(pendingRevokeIdsRef.current);
@@ -3834,18 +3864,14 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
               <button type="button" onClick={() => setQuoteContext(null)} aria-label={t("common.dismiss")}><X size={12} /></button>
             </div>
           )}
-          {revokeNoticeRemaining > 0 && (
-            <div className="agent-revoke-notice" role="status">
-              <span>{t("agent.message.revokeNotice")}</span>
-              <em aria-hidden="true">{revokeNoticeRemaining}s</em>
-            </div>
-          )}
+          {revokeNoticeActive && <RevokeNotice until={revokeNoticeUntil!} onExpire={() => setRevokeNoticeUntil(null)} />}
           {pendingConfirmation && <AgentConfirmationCard
             confirmation={pendingConfirmation}
             desktopConfirmationAvailable={desktopConfirmationAvailable}
             resolutionError={confirmationErrors[pendingConfirmation.id]}
             onDecision={demoMode ? (decision) => resolveDemoConfirmation(pendingConfirmation.id, decision) : undefined}
-            remainingMs={confirmationRemaining}
+            expiresAt={Number.isFinite(confirmationDeadline) && confirmationDeadline > 0 ? confirmationDeadline : undefined}
+            onExpire={expirePendingConfirmation}
           />}
           <div className={`agent-composer${streaming ? " streaming" : ""}`}>
             <button className={`agent-scroll-to-bottom ${showScrollToBottom ? "visible" : ""}`} type="button" onClick={scrollToBottom} aria-label={t("agent.composer.scrollToBottom")}><ChevronDown size={17} /></button>
