@@ -54,6 +54,36 @@ describe("api transport errors", () => {
     );
   });
 
+  it("downloads an EML export with the server-provided UTF-8 filename", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(new Blob(["From: a@b.c\r\nSubject: 会议纪要\r\n\r\n内容"]), {
+      status: 200,
+      headers: {
+        "content-type": "message/rfc822",
+        "content-disposition": "attachment; filename*=UTF-8''%E4%BC%9A%E8%AE%AE%E7%BA%AA%E8%A6%81.eml",
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.downloadMessageEml("11111111-1111-4111-8111-111111111111");
+
+    expect(result.filename).toBe("会议纪要.eml");
+    expect(await result.blob.text()).toContain("Subject: 会议纪要");
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/messages/11111111-1111-4111-8111-111111111111/eml");
+    expect(init.cache).toBe("no-store");
+  });
+
+  it("falls back to message.eml when the server omits the filename", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Blob(["x"]), {
+      status: 200,
+      headers: { "content-type": "message/rfc822" },
+    })));
+
+    const result = await api.downloadMessageEml("11111111-1111-4111-8111-111111111111");
+
+    expect(result.filename).toBe("message.eml");
+  });
+
   it("keeps the confirmed move destination, mapped UID, and pending refresh state", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       ok: true,

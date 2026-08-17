@@ -162,6 +162,21 @@ type ErrorResponse = {
  * server's true state. */
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/** Extracts the RFC 5987 UTF-8 filename from a Content-Disposition header. */
+function emlFilenameFromDisposition(disposition: string | null): string {
+  const header = disposition ?? "";
+  const marker = "filename*=UTF-8''";
+  const markerIndex = header.indexOf(marker);
+  if (markerIndex < 0) return "message.eml";
+  const encoded = header.slice(markerIndex + marker.length).split(";")[0];
+  if (!encoded) return "message.eml";
+  try {
+    return decodeURIComponent(encoded) || "message.eml";
+  } catch {
+    return "message.eml";
+  }
+}
+
 async function requestResponse(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   if (init?.body && !headers.has("content-type")) headers.set("content-type", "application/json");
@@ -479,6 +494,12 @@ export const api = {
     const response = await requestResponse(`/api/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(partId)}`);
     if (!response.ok) throw await apiError(response);
     return response.blob();
+  },
+  downloadMessageEml: async (messageId: string): Promise<{ blob: Blob; filename: string }> => {
+    const response = await requestResponse(`/api/messages/${encodeURIComponent(messageId)}/eml`);
+    if (!response.ok) throw await apiError(response);
+    const filename = emlFilenameFromDisposition(response.headers.get("content-disposition"));
+    return { blob: await response.blob(), filename };
   },
   discardOutboundAttachments: (accountId: string, attachmentTokens: string[]) =>
     request<{ ok: boolean; removed: number }>("/api/outbound-attachments", {
