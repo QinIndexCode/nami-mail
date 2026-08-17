@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, powerMonitor, safeStorage, session, shell, Tray, type NativeImage } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, powerMonitor, safeStorage, session, shell, Tray, type NativeImage } from "electron";
 import { parse as parseDotenv } from "dotenv";
 import type { AgentResponseEnvelope, BrokerJsonValue, CallerContext, ExternalPairingSummary } from "@nami/agent-contracts";
 import { createHash, randomBytes } from "node:crypto";
@@ -16,6 +16,16 @@ import {
   type RendererCacheCleanupResult,
 } from "./renderer-cache-policy.mjs";
 import { nativeText, type NativeCopyKey, type NativeTranslationValues } from "./native-localization.mjs";
+import {
+  applyGlobalShortcut as applyGlobalShortcutPolicy,
+  applyLaunchAtStartup as applyLaunchAtStartupPolicy,
+  applyUnreadBadge as applyUnreadBadgePolicy,
+  BADGE_OVERLAY_DATA_URL,
+  FOCUS_GLOBAL_SHORTCUT_ACCELERATOR,
+  type GlobalShortcutApi,
+  type LaunchAtStartupApi,
+  type UnreadBadgeApi,
+} from "./desktop-behaviors.mjs";
 import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
 import type { DesktopUpdateSnapshot } from "./update-status.mjs";
 import { DesktopUpdater } from "./updater.mjs";
@@ -55,6 +65,8 @@ type RunningServer = {
     notifyWhenFocused: boolean;
     notificationSound: NotificationSound;
     closeBehavior: CloseBehavior;
+    launchAtStartup: boolean;
+    globalShortcutEnabled: boolean;
   };
   updateSettings: (patch: { closeBehavior: CloseBehavior }) => { closeBehavior: CloseBehavior };
   close: () => Promise<void>;
@@ -317,6 +329,25 @@ let singleInstanceSmokeResult: DesktopSingleInstanceSmokeResult | undefined;
 const appUserModelId = app.isPackaged ? "com.nami.mail" : "com.nami.mail.dev";
 const localApiAccessHeader = "x-nami-api-token";
 const localApiAccessTokenEnvironmentName = "NAMI_MAIL_LOCAL_API_TOKEN";
+// Desktop-only behaviors (badge, login item, global shortcut) live in
+// desktop-behaviors.mjs; the platform-specific Electron wiring is applied
+// through adapters here so the policy layer stays unit-testable.
+const unreadBadgeApi: UnreadBadgeApi = {
+  platform: process.platform,
+  setBadgeCount: (count) => app.setBadgeCount(count),
+  setOverlayIcon: (overlay, description) => mainWindow?.setOverlayIcon(overlay as NativeImage | null, description),
+  createOverlayIcon: () => nativeImage.createFromDataURL(BADGE_OVERLAY_DATA_URL),
+  overlayDescription: () => nativeCopy("trayTooltip"),
+};
+const launchAtStartupApi: LaunchAtStartupApi = {
+  platform: process.platform,
+  setLoginItemSettings: (options) => app.setLoginItemSettings(options),
+};
+const globalShortcutApi: GlobalShortcutApi = {
+  isRegistered: (accelerator) => globalShortcut.isRegistered(accelerator),
+  register: (accelerator, listener) => globalShortcut.register(accelerator, listener),
+  unregister: (accelerator) => globalShortcut.unregister(accelerator),
+};
 const desktopCliArguments = readDesktopCliArguments(process.argv);
 const desktopAgentLaunch = resolveDesktopAgentLaunch(process.argv);
 const initialPairingRequestIds = readAgentPairingRequestIds(process.argv);
@@ -559,6 +590,54 @@ function clearLocalApiAccessToken(): void {
     delete process.env[localApiAccessTokenEnvironmentName];
   }
   localApiAccessToken = undefined;
+}
+
+function applyUnreadBadge(count: number): void {
+  try {
+    applyUnreadBadgePolicy(unreadBadgeApi, count);
+  } catch (error) {
+    // Badge APIs vary by desktop session; a failure must not take the mail
+    // client down with it.
+    console.warn("Nami Mail could not update its unread badge", error);
+  }
+}
+
+function applyLaunchAtStartup(enabled: boolean): void {
+  try {
+    applyLaunchAtStartupPolicy(launchAtStartupApi, enabled);
+  } catch (error) {
+    // Login-item registration varies by desktop session; a failure must not
+    // take the mail client down with it.
+    console.warn("Nami Mail could not update its login item", error);
+  }
+}
+
+function applyGlobalShortcut(enabled: boolean): void {
+  try {
+    const registered = applyGlobalShortcutPolicy(
+      globalShortcutApi,
+      enabled,
+      FOCUS_GLOBAL_SHORTCUT_ACCELERATOR,
+      () => focusMainWindow(),
+    );
+    if (!registered) {
+      console.warn(`Nami Mail could not register ${FOCUS_GLOBAL_SHORTCUT_ACCELERATOR} as a global shortcut.`);
+    }
+  } catch (error) {
+    console.warn("Nami Mail could not update its global shortcut", error);
+  }
+}
+
+function applyDesktopSettingsFromServer(): void {
+  if (!localServer) return;
+  try {
+    const settings = localServer.getSettings();
+    applyLaunchAtStartup(settings.launchAtStartup);
+    applyGlobalShortcut(settings.globalShortcutEnabled);
+  } catch {
+    // Settings are not available yet (server still starting); the renderer
+    // applies the same values over IPC once it loads and saves settings.
+  }
 }
 
 function focusMainWindow(): void {
@@ -1991,6 +2070,7 @@ async function boot(): Promise<void> {
         listExternalPairings: () => (desktopAgentBroker ? desktopAgentBroker.describePairings() : Promise.resolve([])),
       });
       await writeDesktopSmokeProgress("local-service-ready");
+      applyDesktopSettingsFromServer();
     } finally {
       // startServer copies the key for its own lifetime. This copy exists only
       // to cross the Electron-to-runtime boundary and is no longer needed.
@@ -2146,6 +2226,18 @@ if (desktopCliArguments !== undefined) {
       console.warn("Nami Mail could not show item in folder", error);
     }
   });
+  ipcMain.on("nami:set-unread-badge", (event, count: unknown) => {
+    if (!isCurrentRenderer(event)) return;
+    applyUnreadBadge(typeof count === "number" ? count : 0);
+  });
+  ipcMain.on("nami:set-launch-at-startup", (event, enabled: unknown) => {
+    if (!isCurrentRenderer(event) || typeof enabled !== "boolean") return;
+    applyLaunchAtStartup(enabled);
+  });
+  ipcMain.on("nami:set-global-shortcut", (event, enabled: unknown) => {
+    if (!isCurrentRenderer(event) || typeof enabled !== "boolean") return;
+    applyGlobalShortcut(enabled);
+  });
   ipcMain.handle(agentConfirmationIpcChannel, createAgentConfirmationIpcHandler({
     getMainWindow: () => mainWindow,
     isLocalAppUrl,
@@ -2217,6 +2309,7 @@ if (desktopCliArguments !== undefined) {
   });
   app.on("will-quit", () => {
     desktopAgentBrokerRecoveryGate = "closed";
+    globalShortcut.unregisterAll();
     powerMonitor.removeListener("resume", checkForUpdatesAfterExternalTrigger);
     desktopUpdater?.dispose();
   });

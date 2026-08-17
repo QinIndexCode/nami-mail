@@ -1849,6 +1849,10 @@
     "mail.action.exportStarted": "已开始导出 {filename}",
     "mail.action.exportDemoUnavailable": "演示模式下无法导出原始邮件。",
     "mail.action.printDemoUnavailable": "演示模式下无法打印。",
-    "mail.error.exportEml": "导出邮件失败"
+    "mail.error.exportEml": "导出邮件失败",
+    "settings.launchAtStartup.label": "开机自启动",
+    "settings.launchAtStartup.description": "登录系统时自动启动 Nami Mail。",
+    "settings.shortcut.label": "全局快捷键",
+    "settings.shortcut.description": "按下 Ctrl+Shift+M（Mac 为 ⌘+Shift+M）可随时唤起邮件窗口。"
   }
 }
