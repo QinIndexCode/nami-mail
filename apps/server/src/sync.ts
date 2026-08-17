@@ -12,7 +12,6 @@ import {
   PENDING_MOVE_RECONCILIATION_ERROR,
   messagePayloadById,
   moveActionBlockedError,
-  messagePayloadForRow,
   protectedMessageColumns,
   type MessageStorageRow,
 } from "./message-storage.js";
@@ -498,11 +497,11 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       INSERT INTO messages (
         id, account_id, mailbox, uid, remote_id_lookup, all_mail_archived, message_id, subject, from_name, from_address,
         to_json, cc_json, in_reply_to, references_json, sent_at, snippet, text_body, html_body, flags_json,
-        has_attachments, attachments_json, encrypted_payload, payload_version, size, created_at
+        has_attachments, attachments_json, payload_metadata_ready, encrypted_payload, payload_version, size, created_at
       ) VALUES (
         @id, @accountId, @mailbox, @uid, @remoteIdLookup, @allMailArchived, @messageId, @subject, @fromName, @fromAddress,
         @toJson, @ccJson, @inReplyTo, @referencesJson, @sentAt, @snippet, @textBody, @htmlBody, @flagsJson,
-        @hasAttachments, @attachmentsJson, @encryptedPayload, @payloadVersion, @size, @createdAt
+        @hasAttachments, @attachmentsJson, @payloadMetadataReady, @encryptedPayload, @payloadVersion, @size, @createdAt
       )
       ON CONFLICT(account_id, mailbox, uid) DO UPDATE SET
         remote_id_lookup = COALESCE(excluded.remote_id_lookup, messages.remote_id_lookup),
@@ -522,6 +521,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         flags_json = excluded.flags_json,
         has_attachments = excluded.has_attachments,
         attachments_json = excluded.attachments_json,
+        payload_metadata_ready = excluded.payload_metadata_ready,
         encrypted_payload = excluded.encrypted_payload,
         payload_version = excluded.payload_version,
         size = excluded.size
@@ -991,10 +991,12 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
                 });
               }
             })();
-            // Rows cached before attachment metadata was introduced are hydrated
-            // once when they reappear in the normal sync window.
-            const payload = messagePayloadForRow(existing, masterKey);
-            if (payload.attachments === null || payload.cc === null || payload.references === null) {
+            // Rows cached before attachment metadata was introduced (and
+            // appended drafts, which cannot know MIME part ids yet) are
+            // hydrated once when they reappear in the normal sync window. The
+            // column is set by every metadata-complete write, so this check
+            // never needs to decrypt the row's full payload.
+            if (existing.payload_metadata_ready !== 1) {
               attachmentMetadataRefreshUids.push(message.uid);
               // A moved cache row retains its original id, which is part of
               // the encrypted payload AAD. Re-encrypt with that stable id.
@@ -1083,6 +1085,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
               flagsJson,
               hasAttachments,
               size,
+              payloadMetadataReady: 1,
               createdAt: new Date().toISOString(),
             });
             // The search index mirrors the decrypted payload text so a later
