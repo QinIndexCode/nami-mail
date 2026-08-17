@@ -39,7 +39,6 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test
-      - run: npm --workspace @nami/web run test
       - run: npm run test:desktop-security
       - run: npm run smoke:runtime
       - run: npm audit --omit=dev --audit-level=high

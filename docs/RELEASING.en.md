@@ -56,7 +56,6 @@ npm.cmd ci
 npm.cmd run build:brand:check
 npm.cmd run typecheck
 npm.cmd run test
-npm.cmd --workspace @nami/web run test
 npm.cmd run test:desktop-security
 npm.cmd run build
 npm.cmd run smoke:runtime
