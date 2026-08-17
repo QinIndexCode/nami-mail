@@ -1260,8 +1260,13 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
 
   app.post<{ Params: { id: string } }>("/api/agent/mcp-servers/:id/check", async (request, reply) => {
     if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    // Same pattern as the provider check: stop the probe as soon as the
+    // renderer disconnects instead of letting the subprocess ride out its
+    // full connect + tools/list timeout.
+    const controller = new AbortController();
+    request.raw.once("aborted", () => controller.abort());
     try {
-      return await agentService.checkMcpServer(request.params.id);
+      return await agentService.checkMcpServer(request.params.id, controller.signal);
     } catch (error) {
       return agentFailure(reply, error);
     }
@@ -2231,21 +2236,36 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   });
 
   app.post<{ Params: { id: string } }>("/api/accounts/:id/sync", async (request, reply) => {
+    const id = z.uuid().safeParse(request.params.id);
+    if (!id.success) return reply.code(400).send({ ok: false, message: "账号标识无效。" });
+    const accountId = id.data;
+    // A first full sync can run for minutes. The renderer gives up after 30s,
+    // so stop the pass as soon as the client disconnects instead of letting
+    // the IMAP session ride out its own (long) timeouts.
+    const syncController = new AbortController();
+    const syncRuntimeCap = setTimeout(() => syncController.abort(), 3 * 60_000);
+    request.raw.once("aborted", () => syncController.abort());
     try {
       const result = await syncAccount(
         context.db,
         context.masterKey,
-        request.params.id,
+        accountId,
         config.syncMessageLimit,
         context.oauthService,
         context.agentMailEvents,
+        syncController.signal,
       );
-      emitAccountSynced(context.db, context.serverEvents, request.params.id);
+      emitAccountSynced(context.db, context.serverEvents, accountId);
       return { ok: true, ...result };
     } catch (error) {
-      const account = context.db.prepare("SELECT * FROM accounts WHERE id = ?").get(request.params.id) as AccountRecord | undefined;
+      if (syncController.signal.aborted) {
+        return reply.code(499).send({ ok: false, code: "cancelled", message: "同步已取消或超时。" });
+      }
+      const account = context.db.prepare("SELECT * FROM accounts WHERE id = ?").get(accountId) as AccountRecord | undefined;
       const failure = mailFailure(error, account ? detectProvider(account.email).credentialHint : undefined);
       return reply.code(failure.statusCode).send(failure.body);
+    } finally {
+      clearTimeout(syncRuntimeCap);
     }
   });
 
@@ -2457,6 +2477,15 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       });
     }
     const effectiveService = translationService;
+    // Cancel the remaining blocks when the client disconnects or the app
+    // shuts down instead of finishing the whole batch on a dead request.
+    const requestAbortController = new AbortController();
+    const abortForClientDisconnect = () => requestAbortController.abort();
+    request.raw.once("aborted", abortForClientDisconnect);
+    reply.raw.once("close", abortForClientDisconnect);
+    const abortForShutdown = () => requestAbortController.abort();
+    if (translationAbortController.signal.aborted) abortForShutdown();
+    else translationAbortController.signal.addEventListener("abort", abortForShutdown, { once: true });
     try {
       // Merge consecutive segments into engine-safe blocks (see
       // translation-segments.ts) so hundreds of text nodes become a handful of
@@ -2464,9 +2493,10 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       const blocks = buildTranslationBlocks(body.segments);
       const translations: string[] = new Array(body.segments.length);
       for (const block of blocks) {
+        if (requestAbortController.signal.aborted) break;
         if (block.text.trim() === "") continue;
         const urlGuard = protectTranslationUrls(block.text);
-        const result = await effectiveService.translate(urlGuard.text, body.targetLocale as string);
+        const result = await effectiveService.translate(urlGuard.text, body.targetLocale as string, requestAbortController.signal);
         const translatedBlock = restoreTranslationUrls(result.translatedText, urlGuard.urls, urlGuard.text);
         splitTranslatedBlock(translatedBlock, block.indices, translations);
       }
@@ -2537,8 +2567,17 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       // compatibility. Multi-chunk translations stream partial results via SSE
       // so the reader sees incremental progress instead of waiting for the
       // whole message to finish.
+      // Combine the shutdown signal with client disconnect so cancelling the
+      // request stops the translation instead of wasting API calls.
+      const requestAbortController = new AbortController();
+      const abortForClientDisconnect = () => requestAbortController.abort();
+      request.raw.once("aborted", abortForClientDisconnect);
+      reply.raw.once("close", abortForClientDisconnect);
+      const abortForShutdown = () => requestAbortController.abort();
+      if (translationAbortController.signal.aborted) abortForShutdown();
+      else translationAbortController.signal.addEventListener("abort", abortForShutdown, { once: true });
       if (chunks.length <= 1) {
-        const result = await effectiveService.translate(urlGuard.text, parsed.data.targetLocale, translationAbortController.signal);
+        const result = await effectiveService.translate(urlGuard.text, parsed.data.targetLocale, requestAbortController.signal);
         return { ok: true, targetLocale: parsed.data.targetLocale, ...result, translatedText: restoreUrls(result.translatedText) };
       }
 
@@ -2548,15 +2587,6 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
       });
-      // Combine the shutdown signal with client disconnect so cancelling the
-      // request stops remaining chunks instead of wasting API calls.
-      const requestAbortController = new AbortController();
-      const abortForClientDisconnect = () => requestAbortController.abort();
-      request.raw.once("aborted", abortForClientDisconnect);
-      reply.raw.once("close", abortForClientDisconnect);
-      const abortForShutdown = () => requestAbortController.abort();
-      if (translationAbortController.signal.aborted) abortForShutdown();
-      else translationAbortController.signal.addEventListener("abort", abortForShutdown, { once: true });
       const send = (data: Record<string, unknown>) => {
         reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
       };

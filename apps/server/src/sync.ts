@@ -30,6 +30,16 @@ import { getAutoReplyEngine } from "./agent/auto-reply.js";
 
 const running = new Set<string>();
 const movingAccounts = new Set<string>();
+
+// Raised when a sync pass is aborted by its caller (client disconnect or the
+// route-level runtime cap). Distinguished from provider failures so the
+// account status is left untouched instead of being marked error/reauth.
+class SyncAbortedError extends Error {
+  constructor() {
+    super("Sync aborted.");
+    this.name = "SyncAbortedError";
+  }
+}
 // Per-account FIFO write lock chains. A second write operation on the same
 // account (another move, a flag update) waits in line instead of failing with
 // a busy error, so a burst of deletes or moves is processed in order rather
@@ -368,6 +378,7 @@ export async function syncAccount(
   messageLimit: number,
   accessTokenProvider?: AccountAccessTokenProvider,
   agentEvents?: AgentMailEventSink,
+  signal?: AbortSignal,
 ): Promise<{ synced: number; folders: number; failedFolders: number; newInboxMessages: NewInboxMessage[] }> {
   if (running.has(accountId) || movingAccounts.has(accountId)) {
     return { synced: 0, folders: 0, failedFolders: 0, newInboxMessages: [] };
@@ -812,6 +823,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     };
 
     for (const folder of folders) {
+      if (signal?.aborted) throw new SyncAbortedError();
       let lock: Awaited<ReturnType<typeof client.getMailboxLock>> | undefined;
       try {
         lock = await client.getMailboxLock(folder.path);
@@ -1176,6 +1188,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     pendingAutoReplyTargets = newInboxMessages.map((message) => message.id);
     return { synced, folders: folders.length, failedFolders, newInboxMessages };
   } catch (error) {
+    if (error instanceof SyncAbortedError) throw error;
     // Do not retain raw provider/socket errors. They can include opaque server
     // replies and must not become account data exposed by the local API.
     const code = mailErrorCode(error);

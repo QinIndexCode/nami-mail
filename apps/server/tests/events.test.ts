@@ -86,9 +86,9 @@ describe("server event bus", () => {
     try {
       const now = new Date().toISOString();
       db.prepare("INSERT INTO accounts (id, email, provider, provider_name, encrypted_password, imap_host, imap_port, imap_secure, imap_transport, smtp_host, smtp_port, smtp_secure, smtp_transport, username_mode, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-        "account-sync-1", "b@example.com", "custom", "Demo", "x", "imap.example.com", 993, 1, "tls", "smtp.example.com", 465, 1, "tls", "email", "connected", now,
+        "00000000-0000-4000-8000-000000000001", "b@example.com", "custom", "Demo", "x", "imap.example.com", 993, 1, "tls", "smtp.example.com", 465, 1, "tls", "email", "connected", now,
       );
-      const response = await app.inject({ method: "POST", url: "/api/accounts/account-sync-1/sync" });
+      const response = await app.inject({ method: "POST", url: "/api/accounts/00000000-0000-4000-8000-000000000001/sync" });
       expect(response.statusCode).toBe(200);
       const syncedEvents = listener.mock.calls
         .map((call) => call[0])
@@ -96,7 +96,7 @@ describe("server event bus", () => {
       expect(syncedEvents.length).toBeGreaterThan(0);
       expect(syncedEvents[0]).toMatchObject({
         type: "mail.synced",
-        payload: { accountId: "account-sync-1", lastSyncedAt: expect.any(String) },
+        payload: { accountId: "00000000-0000-4000-8000-000000000001", lastSyncedAt: expect.any(String) },
       });
     } finally {
       await app.close();

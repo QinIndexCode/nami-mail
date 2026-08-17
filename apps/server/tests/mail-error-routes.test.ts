@@ -93,11 +93,11 @@ describe("mail transport error API responses", () => {
   });
 
   it("returns the same safe code when a saved account sync cannot verify TLS", async () => {
-    insertAccount(db);
+    insertAccount(db, "00000000-0000-4000-8000-000000000001");
     const secret = "do-not-return-this-secret";
     syncAccount.mockRejectedValueOnce(Object.assign(new Error(`certificate has expired ${secret}`), { code: "CERT_HAS_EXPIRED" }));
 
-    const response = await app.inject({ method: "POST", url: "/api/accounts/account-1/sync" });
+    const response = await app.inject({ method: "POST", url: "/api/accounts/00000000-0000-4000-8000-000000000001/sync" });
 
     expect(response.statusCode).toBe(422);
     expect(response.json()).toMatchObject({ ok: false, code: "tls_certificate_failed" });
