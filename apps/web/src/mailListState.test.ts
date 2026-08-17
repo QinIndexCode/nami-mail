@@ -309,6 +309,18 @@ describe("mail list state", () => {
     expect(matchesServerMessageQuery(starredArchive, gmailAccounts, {
       accountId: "all", folder: "", search: "", messageView: "starred",
     })).toBe(true);
+
+    // Global search ignores the view/account/folder restrictions entirely and
+    // lets the needle alone decide, including non-inbox mailboxes.
+    expect(matchesServerMessageQuery(archivedUnread, gmailAccounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", searchScope: "all",
+    })).toBe(false);
+    expect(matchesServerMessageQuery(archivedUnread, gmailAccounts, {
+      accountId: "account-1", folder: "INBOX", search: "project", messageView: "inbox", searchScope: "all",
+    })).toBe(true);
+    expect(matchesServerMessageQuery(archivedUnread, gmailAccounts, {
+      accountId: "account-1", folder: "INBOX", search: "project", messageView: "inbox",
+    })).toBe(false);
     expect(nextMessageTotalForMove(4, true, true)).toBe(4);
     expect(nextMessageTotalForMove(4, false, false)).toBe(4);
     expect(nextMessageTotalForMove(4, true, false)).toBe(3);

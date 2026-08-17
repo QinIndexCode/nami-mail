@@ -284,6 +284,7 @@ const batchJobQuerySchema = z.object({
   unread: z.boolean().optional(),
   archived: z.boolean().optional(),
   snoozed: z.boolean().optional(),
+  scope: z.literal("all").optional(),
 }).strict();
 
 const batchJobCreateSchema = z.discriminatedUnion("kind", [
@@ -2260,41 +2261,45 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
-  app.get<{ Querystring: { accountId?: string; folder?: string; q?: string; page?: string; pageSize?: string; starred?: string; unread?: string; archived?: string; snoozed?: string } }>(
+  app.get<{ Querystring: { accountId?: string; folder?: string; q?: string; page?: string; pageSize?: string; starred?: string; unread?: string; archived?: string; snoozed?: string; scope?: string } }>(
     "/api/messages",
     async (request, reply) => {
       const page = Math.max(1, Number.parseInt(request.query.page ?? "1", 10) || 1);
       const pageSize = Math.min(100, Math.max(10, Number.parseInt(request.query.pageSize ?? "40", 10) || 40));
+      const query = request.query.q?.trim();
+      // scope=all searches every account and mailbox regardless of the current
+      // view. It is search-only: without q every restriction below applies as
+      // usual, so the parameter can never widen a normal list request.
+      const globalSearch = request.query.scope === "all" && Boolean(query);
       const filters: string[] = [];
       const params: unknown[] = [];
-      if (request.query.accountId) {
+      if (!globalSearch && request.query.accountId) {
         filters.push("m.account_id = ?");
         params.push(request.query.accountId);
       }
-      if (request.query.folder) {
+      if (!globalSearch && request.query.folder) {
         filters.push(`${effectiveMailboxExpression} = ?`);
         params.push(request.query.folder);
-      } else if (request.query.archived === "1") {
+      } else if (!globalSearch && request.query.archived === "1") {
         filters.push(archivedMessageFilter);
-      } else if (request.query.starred === "1") {
+      } else if (!globalSearch && request.query.starred === "1") {
         // Starred is a cross-folder view, unlike the normal unified inbox.
         filters.push("m.flags_json LIKE '%\\\\Flagged%'");
-      } else if (request.query.snoozed === "1") {
+      } else if (!globalSearch && request.query.snoozed === "1") {
         // The Snoozed view lists messages whose snooze has not fired yet.
         const nowIso = new Date().toISOString();
         filters.push("m.snoozed_until IS NOT NULL AND m.snoozed_until > ?");
         params.push(nowIso);
-      } else {
+      } else if (!globalSearch) {
         filters.push(inboxMessageFilter);
         // Snoozed messages are hidden from the unified inbox until due.
         filters.push("(m.snoozed_until IS NULL OR m.snoozed_until <= ?)");
         params.push(new Date().toISOString());
       }
-      if (request.query.unread === "1") {
+      if (!globalSearch && request.query.unread === "1") {
         filters.push("m.flags_json NOT LIKE '%\\\\Seen%'");
       }
       const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
-      const query = request.query.q?.trim();
       if (query) {
         // FTS5 substring/token search over the decrypted-payload index. The
         // trigram tokenizer accelerates LIKE patterns of three or more

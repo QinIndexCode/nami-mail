@@ -9,6 +9,7 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { createBatchJob, getBatchJobSnapshot, undoBatchJob } from "../src/batch-jobs.js";
+import { indexMessageFts } from "../src/message-search.js";
 import type { MessageListFilterQuery } from "../src/message-filters.js";
 
 describe("batch jobs (predicate-scoped list operations)", () => {
@@ -125,6 +126,48 @@ describe("batch jobs (predicate-scoped list operations)", () => {
       const row = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get(id) as { flags_json: string };
       expect(JSON.parse(row.flags_json)).not.toContain("\\Seen");
     }
+  });
+
+  it("resolves a scope=all selection across every account and mailbox", async () => {
+    // A second account with an inbox hit and a non-inbox hit; both must be
+    // selected by a global search while the plain q stays inbox-scoped.
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("account-2", "account-2@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", new Date().toISOString());
+    const now = new Date().toISOString();
+    const insertGlobal = (id: string, uid: number, mailbox: string, subject: string) => {
+      db.prepare(`
+        INSERT INTO messages (
+          id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+          sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, "account-2", mailbox, uid, subject, "Demo", "account-2@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+      indexMessageFts(db, id, { subject, fromName: "Demo", fromAddress: "account-2@example.com", textBody: "" });
+    };
+    insertGlobal("global-inbox", 10, "INBOX", "Quarterly figures");
+    insertGlobal("global-projects", 11, "Projects", "Quarterly figures");
+
+    const scoped = createBatchJob(
+      { kind: "flags", patch: { flagged: true }, query: { q: "Quarterly" } },
+      { db, masterKey, oauthService: undefined },
+    );
+    const scopedDone = await waitForJob(scoped.id);
+    expect(scopedDone.status).toBe("completed");
+    expect(scopedDone.updated).toBe(1);
+    expect(scopedDone.changedIds).toEqual(["global-inbox"]);
+
+    const global = createBatchJob(
+      { kind: "flags", patch: { seen: true }, query: { q: "Quarterly", scope: "all" } },
+      { db, masterKey, oauthService: undefined },
+    );
+    const globalDone = await waitForJob(global.id);
+    expect(globalDone.status).toBe("completed");
+    expect(globalDone.updated).toBe(2);
+    expect(globalDone.changedIds.sort()).toEqual(["global-inbox", "global-projects"]);
   });
 
   it("leaves a message alone on undo when the user re-moved it after the job", async () => {
