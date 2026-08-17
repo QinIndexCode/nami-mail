@@ -37,6 +37,12 @@ export type SendMessageResult = {
   sendAt?: string | null;
 };
 
+/**
+ * The server resolves these through each account's SPECIAL-USE folders; junk
+ * drives the report-spam action and inbox the "not spam" recovery path.
+ */
+export type MoveTarget = "archive" | "trash" | "junk" | "inbox";
+
 export type MoveMessageResult = {
   ok: boolean;
   destination: string;
@@ -68,7 +74,7 @@ export type BatchJobQuery = {
 
 export type BatchJobCreatePayload =
   | { kind: "flags"; patch: { seen?: boolean; flagged?: boolean }; query: BatchJobQuery }
-  | { kind: "move"; target: "archive" | "trash"; query: BatchJobQuery };
+  | { kind: "move"; target: MoveTarget; query: BatchJobQuery };
 
 export type BatchJobSnapshot = {
   id: string;
@@ -525,7 +531,7 @@ export const api = {
     request<{ ok: boolean }>(`/api/messages/${id}`, { method: "PATCH", body: JSON.stringify({ seen }) }),
   updateMessageFlags: (id: string, patch: { seen?: boolean; flagged?: boolean }) =>
     request<{ ok: boolean }>(`/api/messages/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
-  moveMessage: (id: string, target: "archive" | "trash") =>
+  moveMessage: (id: string, target: MoveTarget) =>
     request<MoveMessageResult>(`/api/messages/${encodeURIComponent(id)}/move`, {
       method: "POST",
       body: JSON.stringify({ target }),
@@ -535,7 +541,7 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ ids, patch }),
     }),
-  batchMoveMessages: (ids: string[], target: "archive" | "trash") =>
+  batchMoveMessages: (ids: string[], target: MoveTarget) =>
     request<BatchMessageOperationResult>("/api/messages/batch/move", {
       method: "POST",
       body: JSON.stringify({ ids, target }),

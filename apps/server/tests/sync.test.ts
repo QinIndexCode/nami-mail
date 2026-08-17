@@ -289,6 +289,38 @@ describe("IMAP message flag updates", () => {
       .toEqual({ total: 1, unseen: 1 });
   });
 
+  it("moves a reported message into the SPECIAL-USE Junk folder", async () => {
+    db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run("[]", "message-1");
+    db.prepare("UPDATE folders SET unseen = ? WHERE account_id = ? AND path = ?").run(1, "account-1", "INBOX");
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Junk", "Junk", "\\Junk", 0, 0);
+    client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Junk", uidMap: new Map([[42, 84]]) });
+
+    await expect(moveMessage(db, masterKey, "message-1", "junk"))
+      .resolves.toEqual({ accountId: "account-1", destination: "Junk", refreshPending: false, uid: 84 });
+
+    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
+      .toEqual({ total: 0, unseen: 0 });
+    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Junk"))
+      .toEqual({ total: 1, unseen: 1 });
+  });
+
+  it("recovers a misclassified message from Junk back into INBOX", async () => {
+    db.prepare("UPDATE messages SET mailbox = ?, flags_json = ? WHERE id = ?").run("Junk", "[]", "message-1");
+    db.prepare("UPDATE folders SET total = ?, unseen = ? WHERE account_id = ? AND path = ?").run(0, 0, "account-1", "INBOX");
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Junk", "Junk", "\\Junk", 1, 1);
+    client.messageMove.mockResolvedValueOnce({ path: "Junk", destination: "INBOX", uidMap: new Map([[42, 84]]) });
+
+    await expect(moveMessage(db, masterKey, "message-1", "inbox"))
+      .resolves.toEqual({ accountId: "account-1", destination: "INBOX", refreshPending: false, uid: 84 });
+
+    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Junk"))
+      .toEqual({ total: 0, unseen: 0 });
+    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
+      .toEqual({ total: 1, unseen: 1 });
+  });
+
   it("persists a source-preserving move intent before IMAP and clears it only after source membership is observed", async () => {
     const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
     const source = Buffer.from("Subject: Source still present\r\n\r\nBody");

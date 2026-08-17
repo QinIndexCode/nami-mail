@@ -251,7 +251,7 @@ const submissionsQuerySchema = z.object({
 }).strict();
 
 const messageMoveSchema = z.object({
-  target: z.enum(["archive", "trash"]),
+  target: z.enum(["archive", "trash", "junk", "inbox"]),
 }).strict();
 
 const messageFlagsPatchSchema = z.object({
@@ -272,7 +272,7 @@ const batchMessageFlagsPatchSchema = z.object({
 
 const batchMessageMoveSchema = z.object({
   ids: batchMessageIdsSchema,
-  target: z.enum(["archive", "trash"]),
+  target: z.enum(["archive", "trash", "junk", "inbox"]),
 }).strict();
 
 const batchJobQuerySchema = z.object({

@@ -925,6 +925,18 @@ it("keeps an Agent stream running after the client closes its response", async (
     });
   });
 
+  it("accepts junk and inbox move targets through the route schema", async () => {
+    for (const target of ["junk", "inbox"] as const) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/messages/batch/move",
+        payload: { ids: ["missing-message"], target },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ ok: true, updated: 0, failed: 1 });
+    }
+  });
+
   function seedJobAccount(accountId: string, archiveFolder = false) {
     const now = new Date().toISOString();
     db.prepare(`
