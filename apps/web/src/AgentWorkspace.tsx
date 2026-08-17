@@ -3570,9 +3570,8 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   // the notice itself; this just records the deadline.
   const [revokeNoticeUntil, setRevokeNoticeUntil] = useState<number | null>(null);
   const revokeNoticeActive = revokeNoticeUntil !== null;
-  /** Message ids whose revoke/unrevoke request is still in flight. Duplicate
-   *  clicks are ignored while pending (idempotent server endpoint). */
-  const [, setPendingRevokeIds] = useState<ReadonlySet<string>>(new Set());
+/** Message ids whose revoke/unrevoke request is still in flight. Duplicate
+ *  clicks are ignored while pending (idempotent server endpoint). */
   const pendingRevokeIdsRef = useRef<ReadonlySet<string>>(new Set());
   const resolveDemoConfirmation = useCallback((confirmationId: string, decision: "approve" | "reject") => {
     setActive((current) => current ? {
@@ -3622,7 +3621,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     setRevokeNoticeUntil(Date.now() + REVOKE_NOTICE_SECONDS * 1000);
     // Server reconciliation: idempotent, duplicates ignored while in flight.
     pendingRevokeIdsRef.current = new Set(pendingRevokeIdsRef.current).add(messageId);
-    setPendingRevokeIds(pendingRevokeIdsRef.current);
     void api.revokeAgentMessage(conversationId, messageId, true).catch(() => {
       // Roll back the optimistic marks so the transcript matches the server.
       setActive((current) => {
@@ -3637,7 +3635,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       const next = new Set(pendingRevokeIdsRef.current);
       next.delete(messageId);
       pendingRevokeIdsRef.current = next;
-      setPendingRevokeIds(next);
     });
   }, [active?.id, t]);
 
