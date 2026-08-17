@@ -44,6 +44,7 @@ import {
   X,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
+import { CustomAvatar } from "./SenderAvatar";
 import { ApiError, api, type BatchJobCreatePayload, type BatchJobQuery, type BatchJobSnapshot } from "./api";
 import { calendarCache, contactsCache, templatesCache } from "./dialogPrefetch";
 import DatePicker from "./DatePicker";
@@ -117,21 +118,21 @@ type MailView = MessageListQuery["messageView"];
 type ToastAction = { label: string; run: () => void };
 type ToastNotice = { kind: ToastKind; message: string; action?: ToastAction } | null;
 
-// Interface-switch ("block assembly") phases between the mail workspace and the
-// Agent workspace. Each interface swaps as a handful of large blocks that slide
-// out/in one after the other — the mail sidebar, its workspace and the icon
-// rail leave first, then the Agent's conversation rail and main panel enter
-// (and vice versa on close). These phases only drive class names; the motion
-// itself lives in styles.css. `idle` is the settled state in either direction.
+// Interface-switch ("fade hand-off") phases between the mail workspace and the
+// Agent workspace. Each interface fades out/in in two layers — the mail
+// sidebar and workspace leave first, then the Agent's conversation rail and
+// main panel enter (and vice versa on close). These phases only drive class
+// names; the motion itself lives in styles.css. `idle` is the settled state in
+// either direction.
 type AgentPhase = "idle" | "mail-leaving" | "agent-entering" | "agent-leaving" | "mail-entering";
-// Per-block duration and the stagger between blocks. Totals must match the CSS
-// keyframes (mail = 2 leaving blocks — sidebar + workspace, agent = 2 entering
-// blocks — conversation rail + main panel) — see `.mail-shell[data-agent-phase]`.
-const BLOCK_DURATION_MS = 300;
-const MAIL_BLOCK_STAGGER_MS = 60;
-const AGENT_BLOCK_STAGGER_MS = 80;
-const MAIL_SWITCH_TOTAL_MS = BLOCK_DURATION_MS + MAIL_BLOCK_STAGGER_MS;
-const AGENT_SWITCH_TOTAL_MS = BLOCK_DURATION_MS + AGENT_BLOCK_STAGGER_MS;
+// Per-layer fade duration and the stagger between layers. Totals must match
+// the CSS animations (mail = 2 leaving layers, agent = 2 entering layers) —
+// see `.mail-shell[data-agent-phase]`.
+const SWITCH_FADE_MS = 240;
+const MAIL_FADE_STAGGER_MS = 60;
+const AGENT_FADE_STAGGER_MS = 80;
+const MAIL_SWITCH_TOTAL_MS = SWITCH_FADE_MS + MAIL_FADE_STAGGER_MS;
+const AGENT_SWITCH_TOTAL_MS = SWITCH_FADE_MS + AGENT_FADE_STAGGER_MS;
 type TranslationSession = {
   messageId: string;
   targetLocale: string;
@@ -288,7 +289,7 @@ function resolveTheme(preference: AppSettings["theme"], systemTheme: "light" | "
 function backgroundUrl(settings: AppSettings): string | null {
   if (settings.backgroundPreset === "custom") return settings.customBackgroundUrl;
   if (settings.backgroundPreset === "none") return null;
-  return `/backgrounds/${settings.backgroundPreset}.png`;
+  return `/backgrounds/${settings.backgroundPreset}.svg`;
 }
 
 function reportCustomNotificationSoundAvailability(): void {
@@ -612,6 +613,12 @@ export default function App() {
   const batchJobStartedAtRef = useRef(0);
   const theme = resolveTheme(settings.theme, systemTheme);
   const activeBackgroundUrl = backgroundUrl(settings);
+  // In light theme the pale canvas dilutes the picture; render the background
+  // more densely there so presets stay visible. Dark theme is left untouched.
+  const backgroundOpacity =
+    activeBackgroundUrl && theme === "light"
+      ? Math.min(1, (settings.backgroundIntensity * 1.22) / 100)
+      : settings.backgroundIntensity / 100;
   const accountIdsKey = accounts.map((account) => account.id).sort().join("|");
   const pendingMoveVerificationKey = [...new Set([
     ...pendingMoveVerifications,
@@ -654,7 +661,7 @@ export default function App() {
     if (agentPhaseRef.current === "mail-leaving" || agentPhaseRef.current === "agent-entering") return;
     agentPhaseRef.current = "mail-leaving";
     setAgentPhase("mail-leaving");
-    // Warm the lazy chunk while the mail blocks slide out so the workspace is
+    // Warm the lazy chunk while the mail layers fade out so the workspace is
     // ready the moment it takes over (no Suspense spinner in the hand-off).
     void import("./AgentWorkspace").catch(() => undefined);
     queueAgentTimer(() => {
@@ -3303,7 +3310,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         <div
           key={activeBackgroundUrl}
           className="workspace-background"
-          style={{ backgroundImage: `url("${activeBackgroundUrl}")`, opacity: settings.backgroundIntensity / 100 }}
+          style={{ backgroundImage: `url("${activeBackgroundUrl}")`, opacity: backgroundOpacity }}
           aria-hidden="true"
         />
       )}
@@ -3358,7 +3365,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
               const collapsed = !accountsExpanded && selectedAccount !== "all" && selectedAccount !== account.id;
               return (
                 <button key={account.id} aria-pressed={selectedAccount === account.id} aria-hidden={collapsed} tabIndex={collapsed ? -1 : undefined} className={`${selectedAccount === account.id ? "active" : ""}${collapsed ? " hidden" : ""}`} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}>
-                  <span className={`account-avatar tone-${accountTone(account.email)}`}>{account.email[0]?.toUpperCase()}</span>
+                  <CustomAvatar name={account.email} address={account.email} tone={accountTone(account.email)} className="account-avatar" />
                   <span className="account-copy"><strong>{account.email.split("@")[0]}</strong><small>{issue?.title ?? t("mail.accountFreshness", { provider: providerName, freshness })}</small></span>
                   <span className={`status-dot ${issue ? "error" : account.status}`} aria-hidden="true" />
                 </button>
@@ -3534,7 +3541,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
                     <div className="thread-strip-messages">
                       {selectedThread.map((threadMessage) => (
                         <button key={threadMessage.id} type="button" className={`thread-strip-item ${threadMessage.id === selected.id ? "active" : ""}`} onClick={() => void openMessage(threadMessage)}>
-                          <span className={`sender-avatar small tone-${accountTone(threadMessage.from.address)}`}>{initials(threadMessage.from.name, threadMessage.from.address)}</span>
+                          <CustomAvatar name={threadMessage.from.name} address={threadMessage.from.address} tone={accountTone(threadMessage.from.address)} size="small" />
                           <span className="thread-strip-copy"><strong>{threadMessage.from.name || threadMessage.from.address}</strong><time>{formatMessageTime(threadMessage.sentAt, locale)}</time></span>
                           {!threadMessage.seen && <span className="unread-dot" aria-hidden="true" />}
                         </button>
@@ -3544,7 +3551,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
                 )}
                 {selectedMoveLocationUnverified && <section className="move-location-notice" role="status"><CircleAlert size={18} /><div><strong>{t("mail.moveLocationUnverified.title")}</strong><p>{t("mail.moveLocationUnverified.description")}</p></div></section>}
                 <article className="mail-reader">
-                <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people"><span className={`sender-avatar large tone-${accountTone(selected.from.address)}`}>{initials(selected.from.name, selected.from.address)}</span><div className="mail-people-copy"><strong>{selected.from.name || selected.from.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={selected.from.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div><time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
+                <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people"><CustomAvatar name={selected.from.name} address={selected.from.address} tone={accountTone(selected.from.address)} size="large" /><div className="mail-people-copy"><strong>{selected.from.name || selected.from.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={selected.from.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div><time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
                 {verificationCodes.length > 0 && (
                   <section className="verification-code-list" aria-label={t("mail.verification.detected") }>
                     {verificationCodes.map((candidate, index) => {
@@ -3606,7 +3613,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
                     })}
                   </section>
                 )}
-                <footer className="quick-reply"><span className={`sender-avatar small tone-${accountTone(selected.accountEmail)}`}>{selected.accountEmail[0]?.toUpperCase()}</span><button onClick={openReply}>{t("mail.reader.replyTo", { sender: selected.from.name || selected.from.address })}</button></footer>
+                <footer className="quick-reply"><CustomAvatar name={selected.accountEmail} address={selected.accountEmail} tone={accountTone(selected.accountEmail)} size="small" /><button onClick={openReply}>{t("mail.reader.replyTo", { sender: selected.from.name || selected.from.address })}</button></footer>
               </article>
             </>
           ) : (

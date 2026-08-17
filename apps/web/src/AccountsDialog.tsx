@@ -5,6 +5,8 @@ import { accountHealthIssue, mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
 import { providerDisplayName } from "./providerOnboarding";
 import type { Account } from "./types";
+import { setAvatar, useCustomAvatar } from "./avatarStore";
+import { AvatarEditor } from "./AvatarEditor";
 import { ManagementDialogShell } from "./ManagementDialogs";
 import { useDialogFocus } from "./useDialogFocus";
 import { useDismissTransition } from "./useDismissTransition";
@@ -112,6 +114,7 @@ export default function AccountsDialog({
   // Account editor — a floating dialog layered above the list; `editingId`
   // being set means the editor is open.
   const editingAccount = accounts.find((account) => account.id === editingId) ?? null;
+  const editingAvatar = useCustomAvatar(editingAccount?.email ?? "");
   const editorDialog = useRef<HTMLElement>(null);
   useDialogFocus(Boolean(editingAccount), editorDialog);
   const { closing: editorClosing, requestClose: requestEditorClose } = useDismissTransition(() => setEditingId(null));
@@ -420,7 +423,7 @@ export default function AccountsDialog({
           <section ref={editorDialog} className={`accounts-editor-modal${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={t("settings.account.editAriaLabel", { email: editingAccount.email })} aria-labelledby="accounts-editor-title" tabIndex={-1}>
             <div className="accounts-editor" role="form" aria-label={t("settings.account.editAriaLabel", { email: editingAccount.email })}>
               <div className="accounts-editor-head">
-                <span className="contact-editor-avatar" aria-hidden="true">{editingAccount.email.slice(0, 1).toUpperCase()}</span>
+                <AvatarEditor name={editingAccount.email} address={editingAccount.email} current={editingAvatar} disabled={controlsBusy} onChange={(dataUrl) => setAvatar(editingAccount.email, dataUrl)} />
                 <div>
                   <span className="eyebrow">{t("settings.account.edit")}</span>
                   <h3 id="accounts-editor-title" className="contact-editor-title">{editingAccount.email}</h3>

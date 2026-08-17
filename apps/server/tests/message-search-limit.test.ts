@@ -27,7 +27,9 @@ describe("encrypted message search scale", () => {
     db?.close();
   });
 
-  it("searches more than 5000 messages without the previous candidate cap", async () => {
+  // Inserting 5001 encrypted messages plus FTS rows takes ~2.5s alone; the
+  // 5s default is too tight when the full suite runs in parallel.
+  it("searches more than 5000 messages without the previous candidate cap", { timeout: 30_000 }, async () => {
     db = openDatabase(":memory:");
     insertAccount(db);
     app = await buildApp({ db, masterKey: Buffer.alloc(32, 19) });

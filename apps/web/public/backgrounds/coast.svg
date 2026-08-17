@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="0.48">
+      <stop offset="0" stop-color="#a9d0e0"/>
+      <stop offset="1" stop-color="#7fb0c6"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="0" y1="0.48" x2="0" y2="1">
+      <stop offset="0" stop-color="#3e7e95"/>
+      <stop offset="0.5" stop-color="#2b5f74"/>
+      <stop offset="1" stop-color="#16404f"/>
+    </linearGradient>
+    <radialGradient id="glint" cx="0.32" cy="0.5" r="0.14">
+      <stop offset="0" stop-color="#ffe9c4" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#ffe9c4" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+  <rect y="0" width="1600" height="480" fill="url(#sky)"/>
+  <rect y="480" width="1600" height="520" fill="url(#sea)"/>
+  <rect y="476" width="1600" height="8" fill="#bcdbe6" opacity="0.9"/>
+  <ellipse cx="512" cy="486" rx="210" ry="34" fill="url(#glint)"/>
+  <ellipse cx="900" cy="520" rx="760" ry="60" fill="#cfe6ee" opacity="0.28" filter="url(#soft)"/>
+  <ellipse cx="430" cy="660" rx="520" ry="70" fill="#b7d4de" opacity="0.22" filter="url(#soft)"/>
+  <ellipse cx="1200" cy="820" rx="560" ry="80" fill="#9fc4d0" opacity="0.24" filter="url(#soft)"/>
+</svg>

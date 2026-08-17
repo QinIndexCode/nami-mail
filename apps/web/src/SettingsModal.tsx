@@ -46,7 +46,7 @@ import AgentMemoryDialog from "./AgentMemoryDialog";
 import AutoReplyPendingDialog from "./AutoReplyPendingDialog";
 import AutoReplyScopeEditor from "./AutoReplyScopeEditor";
 import AutoReplyDecisionsDialog from "./AutoReplyDecisionsDialog";
-import { translate, useI18n } from "./i18n";
+import { useI18n } from "./i18n";
 import { canPlayCustomNotificationSound, playNotificationSound, primeNotificationSound } from "./sounds";
 import ThemedSelect from "./ThemedSelect";
 import {
@@ -81,11 +81,11 @@ export type BackgroundPresetOption = {
 
 export const backgroundPresetOptions: readonly BackgroundPresetOption[] = [
   { id: "none", labelKey: "settings.backgroundPreset.none.label", descriptionKey: "settings.backgroundPreset.none.description" },
-  { id: "paper", labelKey: "settings.backgroundPreset.paper.label", descriptionKey: "settings.backgroundPreset.paper.description", image: "/backgrounds/paper.png" },
-  { id: "mist", labelKey: "settings.backgroundPreset.mist.label", descriptionKey: "settings.backgroundPreset.mist.description", image: "/backgrounds/mist.png" },
-  { id: "coast", labelKey: "settings.backgroundPreset.coast.label", descriptionKey: "settings.backgroundPreset.coast.description", image: "/backgrounds/coast.png" },
-  { id: "dawn", labelKey: "settings.backgroundPreset.dawn.label", descriptionKey: "settings.backgroundPreset.dawn.description", image: "/backgrounds/dawn.png" },
-  { id: "night", labelKey: "settings.backgroundPreset.night.label", descriptionKey: "settings.backgroundPreset.night.description", image: "/backgrounds/night.png" },
+  { id: "paper", labelKey: "settings.backgroundPreset.paper.label", descriptionKey: "settings.backgroundPreset.paper.description", image: "/backgrounds/paper.svg" },
+  { id: "mist", labelKey: "settings.backgroundPreset.mist.label", descriptionKey: "settings.backgroundPreset.mist.description", image: "/backgrounds/mist.svg" },
+  { id: "coast", labelKey: "settings.backgroundPreset.coast.label", descriptionKey: "settings.backgroundPreset.coast.description", image: "/backgrounds/coast.svg" },
+  { id: "dawn", labelKey: "settings.backgroundPreset.dawn.label", descriptionKey: "settings.backgroundPreset.dawn.description", image: "/backgrounds/dawn.svg" },
+  { id: "night", labelKey: "settings.backgroundPreset.night.label", descriptionKey: "settings.backgroundPreset.night.description", image: "/backgrounds/night.svg" },
 ];
 
 export type SettingsModalProps = {
@@ -369,7 +369,7 @@ export default function SettingsModal({
   const [intensityDraft, setIntensityDraft] = useState(settings.backgroundIntensity);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingSettingsConfirmation | null>(null);
   /** Holds the pending access-level patch while the full-access warning is open. */
-  const [pendingFullAccess, setPendingFullAccess] = useState<{ patch: AppSettingsPatch; successMessage: string } | null>(null);
+  const [pendingFullAccess, setPendingFullAccess] = useState<{ patch: AppSettingsPatch; successMessage: string | null } | null>(null);
   const [backgroundUploadError, setBackgroundUploadError] = useState<string | null>(null);
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateSnapshot | null>(null);
   const [updateActionBusy, setUpdateActionBusy] = useState<"check" | "download" | "skip" | "snooze" | "install" | null>(null);
@@ -599,8 +599,7 @@ export default function SettingsModal({
    */
   const applyOptimisticSettings = async (
     patch: AppSettingsPatch,
-    successMessage: string,
-    preserveSuccessLocale = false,
+    successMessage: string | null,
   ): Promise<AppSettings | undefined> => {
     const previousSettings = currentSettings;
     const optimisticNext: AppSettings = {
@@ -627,10 +626,17 @@ export default function SettingsModal({
         setCurrentSettings(serverNext);
         await onSettingsChange(serverNext);
       }
-      setNotice({
-        kind: "success",
-        message: demoMode && !preserveSuccessLocale ? t("settings.demo.resetAfterSession", { message: successMessage }) : successMessage,
-      });
+      // Most settings take effect visually the moment they are changed, so a
+      // success banner is noise; only surface messages that carry information
+      // (demo session-scoped saves, submit-style saves).
+      if (successMessage) {
+        // Demo mode appends the session-only caveat so the user knows the
+        // change will not survive a restart.
+        setNotice({
+          kind: "success",
+          message: demoMode ? t("settings.demo.resetAfterSession", { message: successMessage }) : successMessage,
+        });
+      }
       return serverNext;
     } catch (error) {
       // Roll back on failure.
@@ -645,7 +651,7 @@ export default function SettingsModal({
    * Applies an access-level change. Switching to full-access first shows a
    * warning dialog; only after the user confirms is the patch applied.
    */
-  const requestAccessLevelChange = (patch: AppSettingsPatch, value: AgentAccessLevel, successMessage: string) => {
+  const requestAccessLevelChange = (patch: AppSettingsPatch, value: AgentAccessLevel, successMessage: string | null) => {
     if (value === "full-access") {
       setPendingFullAccess({ patch, successMessage });
       resetConfirmClosing();
@@ -657,20 +663,16 @@ export default function SettingsModal({
 
   const changeLocale = (nextLocale: string) => {
     if (nextLocale === currentSettings.locale || busyAction) return;
-    const updatedMessage = translate(nextLocale, "language.updated");
-    const successMessage = demoMode
-      ? translate(nextLocale, "settings.demo.resetAfterSession", { message: updatedMessage })
-      : updatedMessage;
-    void applyOptimisticSettings({ locale: nextLocale }, successMessage, true);
+    void applyOptimisticSettings({ locale: nextLocale }, null);
   };
 
   const choosePreset = (preset: Exclude<BackgroundPreset, "custom">) => {
-    void applyOptimisticSettings({ backgroundPreset: preset }, t("settings.background.updated"));
+    void applyOptimisticSettings({ backgroundPreset: preset }, null);
   };
 
   const commitIntensity = () => {
     if (intensityDraft === currentSettings.backgroundIntensity || busyAction) return;
-    void applyOptimisticSettings({ backgroundIntensity: intensityDraft }, t("settings.background.intensityUpdated"));
+    void applyOptimisticSettings({ backgroundIntensity: intensityDraft }, null);
   };
 
   const uploadBackground = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -723,7 +725,7 @@ export default function SettingsModal({
 
   const chooseCustomBackground = () => {
     if (currentSettings.customBackgroundUrl) {
-      void applyOptimisticSettings({ backgroundPreset: "custom" }, t("settings.background.customSelected"));
+      void applyOptimisticSettings({ backgroundPreset: "custom" }, null);
       return;
     }
     uploadInput.current?.click();
@@ -1165,7 +1167,7 @@ export default function SettingsModal({
                     type="button"
                     aria-pressed={currentSettings.theme === option.value}
                     disabled={controlsBusy}
-                    onClick={() => void applyOptimisticSettings({ theme: option.value }, t("settings.theme.updated"))}
+                    onClick={() => void applyOptimisticSettings({ theme: option.value }, null)}
                   >
                     <ThemeIcon value={option.value} />
                     <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
@@ -1181,7 +1183,7 @@ export default function SettingsModal({
                   value={currentSettings.listDensity}
                   aria-label={t("settings.density.title")}
                   disabled={controlsBusy}
-                  onValueChange={(value) => void applyOptimisticSettings({ listDensity: value as ListDensity }, t("settings.density.updated"))}
+                  onValueChange={(value) => void applyOptimisticSettings({ listDensity: value as ListDensity }, null)}
                 >
                   {listDensityOptions.map((option) => (
                     <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
@@ -1194,7 +1196,7 @@ export default function SettingsModal({
                 disabled={controlsBusy}
                 label={t("settings.avatars.gravatar.label")}
                 description={t("settings.avatars.gravatar.description")}
-                onChange={() => void applyOptimisticSettings({ avatarGravatarEnabled: !currentSettings.avatarGravatarEnabled }, currentSettings.avatarGravatarEnabled ? t("settings.avatars.gravatar.disabled") : t("settings.avatars.gravatar.enabled"))}
+                onChange={() => void applyOptimisticSettings({ avatarGravatarEnabled: !currentSettings.avatarGravatarEnabled }, null)}
               />
 
               <div className="setting-subheading"><span>{t("settings.background.title")}</span><small>{t("settings.background.offlineHint")}</small></div>
@@ -1286,14 +1288,14 @@ export default function SettingsModal({
                 disabled={controlsBusy}
                 label={t("settings.notifications.desktop.label")}
                 description={t("settings.notifications.desktop.description")}
-                onChange={() => void applyOptimisticSettings({ notificationsEnabled: !currentSettings.notificationsEnabled }, currentSettings.notificationsEnabled ? t("settings.notifications.desktop.disabled") : t("settings.notifications.desktop.enabled"))}
+                onChange={() => void applyOptimisticSettings({ notificationsEnabled: !currentSettings.notificationsEnabled }, null)}
               />
               <Switch
                 checked={currentSettings.notifyWhenFocused}
                 disabled={controlsBusy || !currentSettings.notificationsEnabled}
                 label={t("settings.notifications.focused.label")}
                 description={t("settings.notifications.focused.description")}
-                onChange={() => void applyOptimisticSettings({ notifyWhenFocused: !currentSettings.notifyWhenFocused }, currentSettings.notifyWhenFocused ? t("settings.notifications.focused.disabled") : t("settings.notifications.focused.enabled"))}
+                onChange={() => void applyOptimisticSettings({ notifyWhenFocused: !currentSettings.notifyWhenFocused }, null)}
               />
 
               <div className={`setting-subheading${currentSettings.notificationsEnabled ? "" : " muted"}`}><span>{t("settings.sound.title")}</span><small>{currentSettings.notificationsEnabled ? t("settings.sound.description") : t("settings.sound.enableNotificationsFirst")}</small></div>
@@ -1305,7 +1307,7 @@ export default function SettingsModal({
                     type="button"
                     aria-pressed={currentSettings.notificationSound === option.value}
                     disabled={controlsBusy || !currentSettings.notificationsEnabled}
-                    onClick={() => void applyOptimisticSettings({ notificationSound: option.value }, t("settings.sound.updated"))}
+                    onClick={() => void applyOptimisticSettings({ notificationSound: option.value }, null)}
                   >
                     {option.value === "none" ? <VolumeX size={16} /> : <Volume2 size={16} />}
                     <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
@@ -1338,7 +1340,7 @@ export default function SettingsModal({
                       data-close-behavior={option.value}
                       aria-pressed={currentSettings.closeBehavior === option.value}
                       disabled={controlsBusy}
-                      onClick={() => void applyOptimisticSettings({ closeBehavior: option.value }, t("settings.closeBehavior.updated"))}
+                      onClick={() => void applyOptimisticSettings({ closeBehavior: option.value }, null)}
                     >
                       <CloseBehaviorIcon value={option.value} />
                       <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
@@ -1423,7 +1425,7 @@ export default function SettingsModal({
                   value={currentSettings.refreshIntervalSeconds}
                   aria-label={t("settings.sync.refresh.label")}
                   disabled={controlsBusy}
-                  onValueChange={(value) => void applyOptimisticSettings({ refreshIntervalSeconds: Number(value) as AppSettings["refreshIntervalSeconds"] }, t("settings.sync.refresh.updated"))}
+                  onValueChange={(value) => void applyOptimisticSettings({ refreshIntervalSeconds: Number(value) as AppSettings["refreshIntervalSeconds"] }, null)}
                 >
                   <option value={30}>{t("settings.sync.refresh.thirtySeconds")}</option>
                   <option value={60}>{t("settings.sync.refresh.oneMinute")}</option>
@@ -1436,7 +1438,7 @@ export default function SettingsModal({
                 disabled={controlsBusy}
                 label={t("settings.sync.realtime.label")}
                 description={t("settings.sync.realtime.description")}
-                onChange={() => void applyOptimisticSettings({ realtimePushEnabled: !currentSettings.realtimePushEnabled }, currentSettings.realtimePushEnabled ? t("settings.sync.realtime.disabled") : t("settings.sync.realtime.enabled"))}
+                onChange={() => void applyOptimisticSettings({ realtimePushEnabled: !currentSettings.realtimePushEnabled }, null)}
               />
             </section>
 
@@ -1472,7 +1474,7 @@ export default function SettingsModal({
                       disabled={controlsBusy}
                       decreaseLabel={t("settings.agent.toolRoundLimitDecrease")}
                       increaseLabel={t("settings.agent.toolRoundLimitIncrease")}
-                      onChange={(value) => void applyOptimisticSettings({ agentToolRoundLimit: value }, t("settings.agent.toolRoundLimitUpdated"))}
+                      onChange={(value) => void applyOptimisticSettings({ agentToolRoundLimit: value }, null)}
                     />
                   </div>
                   <div className="setting-subheading"><span>{t("settings.agent.autoReplyGroup")}</span><small>{t("settings.agent.autoReplyGroupDesc")}</small></div>
@@ -1483,7 +1485,7 @@ export default function SettingsModal({
                         description={t("settings.agent.autoReplyEnabledDesc")}
                         onChange={() => void applyOptimisticSettings(
                           { autoReply: { ...currentSettings.autoReply, enabled: !currentSettings.autoReply.enabled } },
-                          currentSettings.autoReply.enabled ? t("settings.agent.autoReplyDisabled") : t("settings.agent.autoReplyEnabledSaved"),
+                          null,
                         )}
                       />
                       {currentSettings.autoReply.enabled && (
@@ -1507,7 +1509,7 @@ export default function SettingsModal({
                                         const accountIds = checked
                                           ? currentSettings.autoReply.accountIds.filter((id) => id !== account.id)
                                           : [...currentSettings.autoReply.accountIds, account.id];
-                                        void applyOptimisticSettings({ autoReply: { ...currentSettings.autoReply, accountIds } }, t("settings.agent.autoReplyUpdated"));
+                                        void applyOptimisticSettings({ autoReply: { ...currentSettings.autoReply, accountIds } }, null);
                                       }}
                                       aria-label={t("settings.agent.autoReplyAccountAriaLabel", { email: account.email })}
                                     />
@@ -1529,7 +1531,7 @@ export default function SettingsModal({
                                 disabled={controlsBusy}
                                 onClick={() => void applyOptimisticSettings(
                                   { autoReply: { ...currentSettings.autoReply, mode: "llm" } },
-                                  t("settings.agent.autoReplyUpdated"),
+                                  null,
                                 )}
                               >
                                 {t("settings.agent.autoReplyModeLlm")}
@@ -1540,7 +1542,7 @@ export default function SettingsModal({
                                 disabled={controlsBusy}
                                 onClick={() => void applyOptimisticSettings(
                                   { autoReply: { ...currentSettings.autoReply, mode: "template" } },
-                                  t("settings.agent.autoReplyUpdated"),
+                                  null,
                                 )}
                               >
                                 {t("settings.agent.autoReplyModeTemplate")}
@@ -1564,7 +1566,7 @@ export default function SettingsModal({
                                   aria-label={t("settings.agent.autoReplyTemplate")}
                                   onChange={(event) => void applyOptimisticSettings(
                                     { autoReply: { ...currentSettings.autoReply, template: { ...currentSettings.autoReply.template, text: event.target.value } } },
-                                    t("settings.agent.autoReplyUpdated"),
+                                    null,
                                   )}
                                 />
                                 <p className="auto-reply-template-hint">{t("settings.agent.autoReplyTemplateHint")}</p>
@@ -1576,7 +1578,7 @@ export default function SettingsModal({
                                 description={t("settings.agent.autoReplySkipConfirmationDesc")}
                                 onChange={() => void applyOptimisticSettings(
                                   { autoReply: { ...currentSettings.autoReply, template: { ...currentSettings.autoReply.template, skipConfirmation: !currentSettings.autoReply.template.skipConfirmation } } },
-                                  t("settings.agent.autoReplyUpdated"),
+                                  null,
                                 )}
                               />
                             </>
@@ -1586,7 +1588,7 @@ export default function SettingsModal({
                             disabled={controlsBusy}
                             onChange={(scope) => void applyOptimisticSettings(
                               { autoReply: { ...currentSettings.autoReply, scope } },
-                              t("settings.agent.autoReplyUpdated"),
+                              null,
                             )}
                           />
                           <div className="setting-row">
@@ -1603,7 +1605,7 @@ export default function SettingsModal({
                               increaseLabel={t("settings.agent.autoReplyDailyLimitIncrease")}
                               onChange={(value) => void applyOptimisticSettings(
                                 { autoReply: { ...currentSettings.autoReply, dailyLimitPerAccount: value } },
-                                t("settings.agent.autoReplyUpdated"),
+                                null,
                               )}
                             />
                           </div>
@@ -1636,7 +1638,7 @@ export default function SettingsModal({
                   value={currentSettings.agentAccessLevel}
                   aria-label={t("settings.agent.builtinAccessLevel")}
                   disabled={controlsBusy}
-                  onValueChange={(value) => requestAccessLevelChange({ agentAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, t("settings.agent.accessLevelUpdated"))}
+                  onValueChange={(value) => requestAccessLevelChange({ agentAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, null)}
                 >
                   {agentAccessLevelOptions.map((option) => (
                     <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
@@ -1650,7 +1652,7 @@ export default function SettingsModal({
                   value={currentSettings.agentCliAccessLevel}
                   aria-label={t("settings.agent.cliAccessLevel")}
                   disabled={controlsBusy}
-                  onValueChange={(value) => requestAccessLevelChange({ agentCliAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, t("settings.agent.accessLevelUpdated"))}
+                  onValueChange={(value) => requestAccessLevelChange({ agentCliAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, null)}
                 >
                   {agentAccessLevelOptions.map((option) => (
                     <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
@@ -1664,7 +1666,7 @@ export default function SettingsModal({
                   value={currentSettings.agentMcpAccessLevel}
                   aria-label={t("settings.agent.mcpAccessLevel")}
                   disabled={controlsBusy}
-                  onValueChange={(value) => requestAccessLevelChange({ agentMcpAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, t("settings.agent.accessLevelUpdated"))}
+                  onValueChange={(value) => requestAccessLevelChange({ agentMcpAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, null)}
                 >
                   {agentAccessLevelOptions.map((option) => (
                     <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
