@@ -15,6 +15,9 @@ export type MessageListQuery = {
   folder: string;
   search: string;
   messageView: MessageListView;
+  // "all" mirrors the server's scope=all global search: every account and
+  // mailbox participates and the account/folder/view checks are skipped.
+  searchScope?: "view" | "all";
 };
 
 export type PendingArchiveMove = {
@@ -119,22 +122,27 @@ export function matchesServerMessageQuery(
   query: MessageListQuery,
   recentlyReadIds?: ReadonlySet<string>,
 ): boolean {
-  if (query.accountId !== "all" && message.accountId !== query.accountId) return false;
-  if (query.folder) {
-    if (message.mailbox !== query.folder) return false;
-  } else if (query.messageView === "archived") {
-    if (!isArchivedMessage(message, accounts)) return false;
-  } else if (query.messageView === "starred") {
-    if (!message.flagged) return false;
-  } else if (query.messageView === "snoozed") {
-    if (!isSnoozedMessage(message)) return false;
-  } else if (!isInboxMessage(message, accounts)) {
-    return false;
-  } else if (query.messageView === "inbox" && isSnoozedMessage(message)) {
-    // Mirror the server: active snoozes are hidden from the unified inbox.
-    return false;
+  if (query.searchScope === "all" && query.search.trim()) {
+    // Global search: the needle alone decides visibility, mirroring the
+    // server's scope=all which skips every account/folder/view restriction.
+  } else {
+    if (query.accountId !== "all" && message.accountId !== query.accountId) return false;
+    if (query.folder) {
+      if (message.mailbox !== query.folder) return false;
+    } else if (query.messageView === "archived") {
+      if (!isArchivedMessage(message, accounts)) return false;
+    } else if (query.messageView === "starred") {
+      if (!message.flagged) return false;
+    } else if (query.messageView === "snoozed") {
+      if (!isSnoozedMessage(message)) return false;
+    } else if (!isInboxMessage(message, accounts)) {
+      return false;
+    } else if (query.messageView === "inbox" && isSnoozedMessage(message)) {
+      // Mirror the server: active snoozes are hidden from the unified inbox.
+      return false;
+    }
+    if (query.messageView === "unread" && message.seen && !recentlyReadIds?.has(message.id)) return false;
   }
-  if (query.messageView === "unread" && message.seen && !recentlyReadIds?.has(message.id)) return false;
 
   const needle = query.search.trim().toLowerCase();
   if (!needle) return true;

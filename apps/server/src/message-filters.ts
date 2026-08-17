@@ -55,6 +55,10 @@ export type MessageListFilterQuery = {
   unread?: boolean;
   archived?: boolean;
   snoozed?: boolean;
+  // "all" searches every account and mailbox (any view). Only meaningful
+  // together with q; without q it is ignored, so a client can never turn the
+  // list into an unbounded full-database dump by accident.
+  scope?: "all";
 };
 
 export type MessageListSqlSelection = {
@@ -75,32 +79,36 @@ export type MessageListSqlSelection = {
 export function buildMessageListSql(query: MessageListFilterQuery): MessageListSqlSelection {
   const filters: string[] = [];
   const params: unknown[] = [];
-  if (query.accountId) {
+  const search = query.q?.trim();
+  // A global search drops every view/account/folder restriction so the FTS
+  // match alone decides the candidate set. It is a search-only mode: without
+  // q the standard view precedence applies and scope is ignored.
+  const globalSearch = query.scope === "all" && Boolean(search);
+  if (!globalSearch && query.accountId) {
     filters.push("m.account_id = ?");
     params.push(query.accountId);
   }
-  if (query.folder) {
+  if (!globalSearch && query.folder) {
     filters.push(`${effectiveMailboxExpression} = ?`);
     params.push(query.folder);
-  } else if (query.archived) {
+  } else if (!globalSearch && query.archived) {
     filters.push(archivedMessageFilter);
-  } else if (query.starred) {
+  } else if (!globalSearch && query.starred) {
     // Starred is a cross-folder view, unlike the normal unified inbox.
     filters.push("m.flags_json LIKE '%\\\\Flagged%'");
-  } else if (query.snoozed) {
+  } else if (!globalSearch && query.snoozed) {
     // The Snoozed view lists messages whose snooze has not fired yet.
     filters.push("m.snoozed_until IS NOT NULL AND m.snoozed_until > ?");
     params.push(new Date().toISOString());
-  } else {
+  } else if (!globalSearch) {
     filters.push(inboxMessageFilter);
     // Snoozed messages are hidden from the unified inbox until due.
     filters.push("(m.snoozed_until IS NULL OR m.snoozed_until <= ?)");
     params.push(new Date().toISOString());
   }
-  if (query.unread) {
+  if (!globalSearch && query.unread) {
     filters.push("m.flags_json NOT LIKE '%\\\\Seen%'");
   }
-  const search = query.q?.trim();
   if (search) {
     const pattern = `%${ftsLikeEscape(search)}%`;
     const ftsMatch = `(fts.subject LIKE ? ESCAPE '\\'

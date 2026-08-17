@@ -70,6 +70,8 @@ export type BatchJobQuery = {
   unread?: boolean;
   archived?: boolean;
   snoozed?: boolean;
+  /** Matches the server's scope=all: search every account and mailbox. */
+  scope?: "all";
 };
 
 export type BatchJobCreatePayload =

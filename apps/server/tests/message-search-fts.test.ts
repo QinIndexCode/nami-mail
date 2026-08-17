@@ -200,6 +200,64 @@ describe("message FTS search", () => {
     expect(folderScoped.json().items[0].id).toBe("a1-archive");
   });
 
+  it("searches every account and mailbox with scope=all, ignoring view restrictions", async () => {
+    db = openDatabase(":memory:");
+    insertAccount(db, "account-1");
+    insertAccount(db, "account-2");
+    app = await buildApp({ db, masterKey: MASTER_KEY });
+    insertIndexedMessage(db, "a1-archive", "account-1", "Archive", 1, {
+      subject: "Annual review",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "body",
+    });
+    insertIndexedMessage(db, "a2-inbox", "account-2", "INBOX", 1, {
+      subject: "Annual review",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "body",
+    });
+    // Not in the unified inbox, so a scoped search must never see it.
+    insertIndexedMessage(db, "a2-projects", "account-2", "Projects", 2, {
+      subject: "Annual review",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "body",
+    });
+
+    // The plain search is restricted to the unified inbox of the all-accounts
+    // view (Archive and Projects are not inboxes).
+    const scoped = await app.inject({ method: "GET", url: "/api/messages?q=Annual" });
+    expect(scoped.statusCode).toBe(200);
+    expect(scoped.json().total).toBe(1);
+    expect(scoped.json().items[0].id).toBe("a2-inbox");
+
+    // scope=all reaches every account and mailbox regardless of view flags.
+    const global = await app.inject({ method: "GET", url: "/api/messages?q=Annual&scope=all" });
+    expect(global.statusCode).toBe(200);
+    expect(global.json().total).toBe(3);
+    expect(new Set(global.json().items.map((item: { id: string }) => item.id))).toEqual(
+      new Set(["a1-archive", "a2-inbox", "a2-projects"]),
+    );
+
+    // View/account restrictions are meaningless under scope=all; passing them
+    // along does not narrow the result.
+    const globalWithRestrictions = await app.inject({
+      method: "GET",
+      url: "/api/messages?accountId=account-1&folder=INBOX&q=Annual&scope=all",
+    });
+    expect(globalWithRestrictions.statusCode).toBe(200);
+    expect(globalWithRestrictions.json().total).toBe(3);
+
+    // Without q, scope=all is ignored so the endpoint never becomes an
+    // unbounded full-database listing.
+    const noQuery = await app.inject({ method: "GET", url: "/api/messages?scope=all" });
+    expect(noQuery.statusCode).toBe(200);
+    const inboxOnly = await app.inject({ method: "GET", url: "/api/messages" });
+    expect(noQuery.json().total).toBe(inboxOnly.json().total);
+    expect(noQuery.json().total).toBe(1);
+  });
+
   it("keeps the index consistent when messages are removed", async () => {
     db = openDatabase(":memory:");
     insertAccount(db);

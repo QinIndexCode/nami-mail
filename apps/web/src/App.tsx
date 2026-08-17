@@ -254,23 +254,31 @@ function buildMessageQuery({
   folder,
   search,
   messageView,
+  searchScope,
   page = 1,
 }: {
   accountId: string;
   folder: string;
   search: string;
   messageView: MailView;
+  searchScope: "view" | "all";
   page?: number;
 }): string {
   const query = new URLSearchParams({ pageSize: "100" });
   if (page > 1) query.set("page", String(page));
-  if (accountId !== "all") query.set("accountId", accountId);
-  if (folder) query.set("folder", folder);
-  if (messageView === "starred") query.set("starred", "1");
-  if (messageView === "unread") query.set("unread", "1");
-  if (messageView === "archived") query.set("archived", "1");
-  if (messageView === "snoozed") query.set("snoozed", "1");
-  if (search.trim()) query.set("q", search.trim());
+  const globalSearch = searchScope === "all" && search.trim() !== "";
+  if (!globalSearch) {
+    if (accountId !== "all") query.set("accountId", accountId);
+    if (folder) query.set("folder", folder);
+    if (messageView === "starred") query.set("starred", "1");
+    if (messageView === "unread") query.set("unread", "1");
+    if (messageView === "archived") query.set("archived", "1");
+    if (messageView === "snoozed") query.set("snoozed", "1");
+  }
+  if (search.trim()) {
+    query.set("q", search.trim());
+    if (globalSearch) query.set("scope", "all");
+  }
   return query.toString();
 }
 
@@ -279,21 +287,25 @@ function demoMessageTotal(messages: readonly Message[], accounts: readonly Accou
   folder,
   search,
   messageView,
+  searchScope,
 }: {
   accountId: string;
   folder: string;
   search: string;
   messageView: MailView;
+  searchScope: "view" | "all";
 }): number {
   const normalizedQuery = search.trim().toLowerCase();
   return messages.filter((message) => {
-    if (accountId !== "all" && message.accountId !== accountId) return false;
-    if (folder && message.mailbox !== folder) return false;
-    if (!folder && messageView === "inbox" && !isInboxMessage(message, accounts)) return false;
-    if (messageView === "unread" && message.seen) return false;
-    if (messageView === "starred" && !message.flagged) return false;
-    if (messageView === "archived" && !isArchivedMessage(message, accounts)) return false;
-    if (messageView === "snoozed" && !isSnoozedMessage(message)) return false;
+    if (!(searchScope === "all" && normalizedQuery)) {
+      if (accountId !== "all" && message.accountId !== accountId) return false;
+      if (folder && message.mailbox !== folder) return false;
+      if (!folder && messageView === "inbox" && !isInboxMessage(message, accounts)) return false;
+      if (messageView === "unread" && message.seen) return false;
+      if (messageView === "starred" && !message.flagged) return false;
+      if (messageView === "archived" && !isArchivedMessage(message, accounts)) return false;
+      if (messageView === "snoozed" && !isSnoozedMessage(message)) return false;
+    }
     if (!normalizedQuery) return true;
     return `${message.subject} ${message.from.name} ${message.from.address} ${message.snippet}`.toLowerCase().includes(normalizedQuery);
   }).length;
@@ -578,6 +590,8 @@ export default function App() {
   const [selectedFolder, setSelectedFolder] = useState("");
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
+  /** Search reach: within the current view, or every account and mailbox. */
+  const [searchScope, setSearchScope] = useState<"view" | "all">("view");
   const [sortOrder, setSortOrder] = useState<MessageListSortOrder>("newest");
   const [filterAttachments, setFilterAttachments] = useState(false);
   /** Whether the compact sort/filter panel (list toolbar) is open. */
@@ -918,12 +932,14 @@ export default function App() {
     folder = selectedFolder,
     search = debouncedQuery,
     messageView = view,
+    scope = searchScope,
   }: {
     silent?: boolean;
     accountId?: string;
     folder?: string;
     search?: string;
     messageView?: MailView;
+    scope?: "view" | "all";
   } = {}) => {
     const requestId = ++loadRequestRef.current;
     // A full reload re-renders a fresh view; any predicate-wide selection was
@@ -938,7 +954,7 @@ export default function App() {
         const demoTotal = demoMessageTotal(
           demoLoadedRef.current && messagesRef.current.length ? messagesRef.current : demo.demoMessages,
           demo.demoAccounts,
-          { accountId, folder, search, messageView },
+          { accountId, folder, search, messageView, searchScope: scope },
         );
         if (!demoLoadedRef.current) {
           demoLoadedRef.current = true;
@@ -954,7 +970,7 @@ export default function App() {
         setSubmissionLoadError(null);
         setSubmissionLoading(false);
       } else {
-        const messageQuery = buildMessageQuery({ accountId, folder, search, messageView });
+        const messageQuery = buildMessageQuery({ accountId, folder, search, messageView, searchScope: scope });
         const [nextAccounts, nextProviders, messagePage, nextStats] = await Promise.all([
           api.accounts(),
           api.providers(),
@@ -966,7 +982,7 @@ export default function App() {
           messagePage.items,
           pendingArchiveMovesRef.current,
           nextAccounts,
-          { accountId, folder, search, messageView },
+          { accountId, folder, search, messageView, searchScope: scope },
         );
         const nextMessages = mergeLocalPendingSeen(
           mergeUnreadViewSnapshot(
@@ -1015,7 +1031,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         }
       }
     }
-  }, [selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, t, view]);
+  }, [selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, searchScope, t, view]);
 
   /**
    * Silent periodic refresh that preserves pagination progress: only the first
@@ -1057,7 +1073,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     captureScrollAnchor();
     const requestId = ++loadRequestRef.current;
     try {
-      const messageQuery = buildMessageQuery({ accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view });
+      const messageQuery = buildMessageQuery({ accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view, searchScope });
       const [nextAccounts, nextProviders, firstPage, nextStats] = await Promise.all([
         api.accounts(),
         api.providers(),
@@ -1069,7 +1085,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         firstPage.items,
         pendingArchiveMovesRef.current,
         nextAccounts,
-        { accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view },
+        { accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view, searchScope },
       );
       const current = messagesRef.current;
       const currentIds = new Set(current.map((item) => item.id));
@@ -1105,7 +1121,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     } catch {
       // Silent refresh must never disturb the current list; the next tick retries.
     }
-  }, [captureScrollAnchor, debouncedQuery, refreshSubmissions, selectedAccount, selectedFolder, view]);
+  }, [captureScrollAnchor, debouncedQuery, refreshSubmissions, searchScope, selectedAccount, selectedFolder, view]);
 
   const loadSettings = useCallback(async () => {
     if (isDemo) return;
@@ -1458,7 +1474,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     const base = messages.filter((message) => matchesServerMessageQuery(
       message,
       accounts,
-      { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view },
+      { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view, searchScope },
       unreadViewRecentlyReadIds,
     ) && (!filterAttachments || message.hasAttachments));
     return sortMessages(base, sortOrder, {
@@ -1525,9 +1541,10 @@ await refreshSubmissions(nextAccounts, { silent: true });
         folder: selectedFolder,
         search: debouncedQuery,
         messageView: view,
+        searchScope,
       })
       : 0;
-  }, [debouncedQuery, messageTotal, messages, selectedAccount, selectedFolder, view]);
+  }, [debouncedQuery, messageTotal, messages, searchScope, selectedAccount, selectedFolder, view]);
   const recentlyReadVisibleCount = useMemo(() => view === "unread"
     ? filteredMessages.filter((message) => message.seen && unreadViewRecentlyReadIds.has(message.id)).length
     : 0, [filteredMessages, unreadViewRecentlyReadIds, view]);
@@ -1537,7 +1554,9 @@ await refreshSubmissions(nextAccounts, { silent: true });
       : t("mail.count.unread", { count: currentMessageTotal })
     : t("mail.count.total", { count: currentMessageTotal });
   const listToolbarStatus = query
-    ? t("mail.search.results", { query })
+    ? searchScope === "all"
+      ? t("mail.search.resultsAll", { query })
+      : t("mail.search.results", { query })
     : recentlyReadVisibleCount
       ? t("mail.unread.retained", { count: recentlyReadVisibleCount })
       : currentMessageTotal > loadedServerMessageCount
@@ -1560,6 +1579,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         folder: selectedFolder,
         search: debouncedQuery,
         messageView: view,
+        searchScope,
         page: messagePage + 1,
       });
       const nextPage = await api.messages(nextQuery);
@@ -1568,7 +1588,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         nextPage.items,
         pendingArchiveMovesRef.current,
         accounts,
-        { accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view },
+        { accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view, searchScope },
       );
       setMessages((items) => {
         const existingIds = new Set(items.map((item) => item.id));
@@ -2167,6 +2187,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         folder: selectedFolder,
         search: debouncedQuery,
         messageView: view,
+        searchScope,
       };
       const destination = demoMoveDestination(accounts, selected.accountId, target);
       // Optimistic: predict the destination with the same folder resolution
@@ -2384,6 +2405,11 @@ const emptyMessageList = useMemo(() => (query.trim()
   // what the list shows.
   const selectionJobQuery = useMemo<BatchJobQuery | null>(() => {
     if (!selectAllPaged || isDemo) return null;
+    if (searchScope === "all" && debouncedQuery.trim()) {
+      // Global search selection: no account/folder/view restriction, the
+      // server matches the same FTS candidate set the list shows.
+      return { q: debouncedQuery.trim(), scope: "all" };
+    }
     return {
       accountId: selectedAccount === "all" ? undefined : selectedAccount,
       folder: selectedFolder || undefined,
@@ -2393,7 +2419,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       starred: view === "starred" ? true : undefined,
       snoozed: view === "snoozed" ? true : undefined,
     };
-  }, [debouncedQuery, selectAllPaged, selectedAccount, selectedFolder, view]);
+  }, [debouncedQuery, searchScope, selectAllPaged, selectedAccount, selectedFolder, view]);
 
   // Polls a server-side batch job until it settles, then shows the real
   // outcome with an undo action. The toolbar stays interactive throughout;
@@ -2771,7 +2797,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           : null;
         if (optimisticSnapshot) {
           const wasIncluded = filteredMessages.some((item) => item.id === message.id);
-          const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view });
+          const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view, searchScope });
           if (wasIncluded !== remainsIncluded) {
             setMessageTotal((total) => nextMessageTotalForMove(total, wasIncluded, remainsIncluded));
           }
@@ -2800,7 +2826,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           }
           if (loadRequestRef.current === requestAtStart && optimisticSnapshot) {
             const wasIncluded = filteredMessages.some((item) => item.id === message.id);
-            const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view });
+            const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view, searchScope });
             if (wasIncluded !== remainsIncluded) {
               setMessageTotal((total) => nextMessageTotalForMove(total, remainsIncluded, wasIncluded));
             }
@@ -3525,7 +3551,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         <section className="message-column">
           <header className="column-header">
             <IconButton label={t("navigation.openMenu")} className="mobile-only" buttonRef={mobileMenuButtonRef} onClick={() => setMobileSidebar(true)}><Menu size={19} /></IconButton>
-            <div><span className="eyebrow">{selectedAccount === "all" ? t("mail.unifiedMailbox") : selectedAccountRecord ? localizedProviderName(selectedAccountRecord).toUpperCase() : ""}</span><h1>{view === "unread" ? t("mail.unread") : view === "starred" ? t("mail.starred") : view === "archived" ? t("mail.action.archive") : view === "snoozed" ? t("mail.snoozed") : selectedFolderRecord?.name || t("mail.inbox")}</h1></div>
+            <div><span className="eyebrow">{selectedAccount === "all" ? t("mail.unifiedMailbox") : selectedAccountRecord ? localizedProviderName(selectedAccountRecord).toUpperCase() : ""}</span><h1>{query.trim() ? t("mail.search.resultsTitle", { query: query.trim() }) : view === "unread" ? t("mail.unread") : view === "starred" ? t("mail.starred") : view === "archived" ? t("mail.action.archive") : view === "snoozed" ? t("mail.snoozed") : selectedFolderRecord?.name || t("mail.inbox")}</h1></div>
             <div className={`search-wrap${searchOpen ? " expanded" : ""}`} ref={searchWrapRef}><IconButton label={searchOpen ? t("mail.search.collapse") : t("mail.search")} className="search-toggle" onClick={() => setSearchOpen((open) => !open)} expanded={searchOpen}><Search size={17} /></IconButton><label className="visually-hidden" htmlFor="mail-search">{t("mail.search")}</label><input id="mail-search" ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("mail.searchPlaceholder")} />{query && <IconButton label={t("mail.clearSearch")} className="search-clear" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}><X size={15} /></IconButton>}</div>
             <div className="list-filter-wrap" ref={listToolbarRef}>
               <button type="button" className={`list-filter-toggle${filterPanelOpen ? " active" : ""}`} onClick={() => setFilterPanelOpen((open) => !open)} aria-expanded={filterPanelOpen} aria-haspopup="menu" aria-label={t("mail.listFilter.menuLabel")} data-tooltip={t("mail.listFilter.menuLabel")}><ListFilter size={16} /></button>
@@ -3564,6 +3590,12 @@ const emptyMessageList = useMemo(() => (query.trim()
           <div className={`list-toolbar-frame${selectionMode ? " selection-on" : ""}`}>
             <div className="list-toolbar list-status-bar">
               <span className={recentlyReadVisibleCount ? "unread-retention-note" : ""} aria-live={recentlyReadVisibleCount ? "polite" : undefined}>{listToolbarStatus}</span>
+              {query.trim() && (
+                <span className="search-scope-switch" role="radiogroup" aria-label={t("mail.search.scopeLabel")}>
+                  <button type="button" role="radio" aria-checked={searchScope === "view"} onClick={() => setSearchScope("view")}>{t("mail.search.scopeCurrent")}</button>
+                  <button type="button" role="radio" aria-checked={searchScope === "all"} onClick={() => setSearchScope("all")}>{t("mail.search.scopeAll")}</button>
+                </span>
+              )}
             </div>
             <div className="list-toolbar selection-toolbar" aria-hidden={!selectionMode}>
               <button className="selection-select-all" type="button" onClick={selectAllVisibleMessages} disabled={!filteredMessages.length}>{selectAllPaged ? t("mail.selection.selectAllMatching", { count: currentMessageTotal }) : t("mail.selection.selectAll")}</button>
