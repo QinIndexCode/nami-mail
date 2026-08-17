@@ -45,7 +45,7 @@ import {
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
 import { CustomAvatar } from "./SenderAvatar";
-import { ApiError, api, type BatchJobCreatePayload, type BatchJobQuery, type BatchJobSnapshot } from "./api";
+import { ApiError, api, type BatchJobCreatePayload, type BatchJobQuery, type BatchJobSnapshot, type MoveTarget } from "./api";
 import { calendarCache, contactsCache, templatesCache } from "./dialogPrefetch";
 import DatePicker from "./DatePicker";
 import { canPreviewAttachment } from "./attachmentPreview";
@@ -298,10 +298,25 @@ function demoMessageTotal(messages: readonly Message[], accounts: readonly Accou
   }).length;
 }
 
-function demoMoveDestination(accounts: readonly Account[], accountId: string, target: "archive" | "trash"): string {
-  const specialUses = target === "archive" ? ["\\Archive", "\\All"] : ["\\Trash"];
+const moveTargetSpecialUses: Record<MoveTarget, string[]> = {
+  archive: ["\\Archive", "\\All"],
+  trash: ["\\Trash"],
+  junk: ["\\Junk"],
+  inbox: ["\\Inbox"],
+};
+
+// The confirmation toasts differ per action; spam actions reuse the same
+// success wording whether they came from the reader menu or the batch bar.
+function moveActionKey(target: MoveTarget, selection: boolean): string {
+  if (selection) {
+    return target === "archive" ? "mail.selection.archived" : target === "trash" ? "mail.selection.trashed" : "mail.selection.reportedSpam";
+  }
+  return target === "archive" ? "mail.action.archived" : target === "trash" ? "mail.action.trashed" : target === "junk" ? "mail.action.reportedSpam" : "mail.action.recoveredFromSpam";
+}
+
+function demoMoveDestination(accounts: readonly Account[], accountId: string, target: MoveTarget): string {
   const folders = accounts.find((account) => account.id === accountId)?.folders ?? [];
-  for (const specialUse of specialUses) {
+  for (const specialUse of moveTargetSpecialUses[target]) {
     const folder = folders.find((item) => item.specialUse === specialUse);
     if (folder) return folder.path;
   }
@@ -585,7 +600,7 @@ export default function App() {
   const [submissions, setSubmissions] = useState<OutboundSubmission[]>([]);
   const [submissionLoading, setSubmissionLoading] = useState(true);
   const [submissionLoadError, setSubmissionLoadError] = useState<string | null>(null);
-  const [messageAction, setMessageAction] = useState<"archive" | "trash" | null>(null);
+  const [messageAction, setMessageAction] = useState<MoveTarget | null>(null);
   const [messageFlagging, setMessageFlagging] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -1576,6 +1591,11 @@ await refreshSubmissions(nextAccounts, { silent: true });
   const selected = filteredMessages.find((message) => message.id === selectedId) ?? null;
   const selectedThread = selected ? threadById.get(selected.id) ?? null : null;
   const selectedIsArchived = selected ? isArchivedMessage(selected, accounts) : false;
+  // The "not spam" recovery action only applies while reading inside the
+  // account's SPECIAL-USE Junk folder.
+  const selectedIsInJunk = selected
+    ? accounts.find((account) => account.id === selected.accountId)?.folders.some((folder) => folder.specialUse === "\\Junk" && folder.path === selected.mailbox) ?? false
+    : false;
   const selectedMovePending = selected ? selected.movePending === true || pendingArchiveMoves.some((move) => move.id === selected.id) : false;
   const selectedMoveLocationUnverified = selected?.moveLocationUnverified === true;
   const selectedRemoteActionsBlocked = selectedMovePending || selectedMoveLocationUnverified;
@@ -2115,7 +2135,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     });
   }, [accounts, openCompose, safeHtml, selected]);
 
-  const moveSelectedMessage = async (target: "archive" | "trash") => {
+  const moveSelectedMessage = async (target: MoveTarget) => {
     if (!selected || selectedRemoteActionsBlocked || (target === "archive" && selectedIsArchived)) return;
     // A second write while the account has an operation in flight is queued
     // server-side (the request waits for the account write slot); surface
@@ -2258,7 +2278,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           ? t("mail.action.movedLocationUnverified")
           : move.refreshPending
           ? t("mail.action.moveRefreshing")
-          : target === "archive" ? t("mail.action.archived") : t("mail.action.trashed"),
+          : t(moveActionKey(target, false)),
         move.refreshPending || move.locationUnverified ? "info" : "success",
       );
       if (!isDemo && !move.refreshPending) void load({ silent: true });
@@ -2484,13 +2504,13 @@ const emptyMessageList = useMemo(() => (query.trim()
     searchInputRef.current?.focus();
   }, []);
 
-  const batchMoveMessages = async (target: "archive" | "trash") => {
+  const batchMoveMessages = async (target: MoveTarget) => {
     const ids = [...selectedMessageIds];
     if (!ids.length && !selectAllPaged) return;
     if (batchBusy) showToast(t("mail.action.queued"), "info");
     // Predicate scope: server moves every matching id behind a job.
     if (selectionJobQuery) {
-      startBatchJob({ kind: "move", target, query: selectionJobQuery }, { successKey: target === "archive" ? "mail.selection.archived" : "mail.selection.trashed", exitOnSuccess: true });
+      startBatchJob({ kind: "move", target, query: selectionJobQuery }, { successKey: moveActionKey(target, true), exitOnSuccess: true });
       return;
     }
     setBatchBusy(true);
@@ -2618,7 +2638,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
         }
       }
-      if (!settleFailed) showToast(t(target === "archive" ? "mail.selection.archived" : "mail.selection.trashed", { count: ids.length }));
+      if (!settleFailed) showToast(t(moveActionKey(target, true), { count: ids.length }));
     } catch (error) {
       showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
     } finally {
@@ -2693,7 +2713,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     }
   }, [isDemo, load, messageAction, messageFlagging, selectedRemoteActionsBlocked, showToast, t]);
 
-  const quickMoveMessage = useCallback(async (message: Message, target: "archive" | "trash") => {
+  const quickMoveMessage = useCallback(async (message: Message, target: MoveTarget) => {
     // The server queues a second write behind the in-flight one; surface that
     // instead of silently dropping the click.
     if (batchBusy || messageAction !== null || messageFlagging) showToast(t("mail.action.queued"), "info");
@@ -2775,7 +2795,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           return;
         }
       }
-      showToast(target === "archive" ? t("mail.action.archived") : t("mail.action.trashed"));
+      showToast(t(moveActionKey(target, false)));
     } catch (error) {
       void load({ silent: true });
       showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
@@ -3502,6 +3522,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                 <IconButton label={t("mail.action.unstar")} className="selection-action" onClick={() => void batchUpdateFlags({ flagged: false }, "mail.selection.unstarred")} disabled={!selectedMessageIds.size}><Star size={15} fill="none" /></IconButton>
                 <span className="toolbar-divider" aria-hidden="true" />
                 <IconButton label={t("mail.action.archive")} className="selection-action" onClick={() => void batchMoveMessages("archive")} disabled={!selectedMessageIds.size}><Archive size={15} /></IconButton>
+                <IconButton label={t("mail.action.reportSpam")} className="selection-action" onClick={() => void batchMoveMessages("junk")} disabled={!selectedMessageIds.size}><ShieldCheck size={15} /></IconButton>
                 <IconButton label={t("mail.action.moveToTrash")} className="selection-action selection-action-danger" onClick={() => void batchMoveMessages("trash")} disabled={!selectedMessageIds.size}><Trash2 size={15} /></IconButton>
               </div>
               <button className="selection-done" type="button" onClick={exitSelectionMode} disabled={batchBusy}>{t("mail.selection.done")}</button>
@@ -3579,6 +3600,12 @@ const emptyMessageList = useMemo(() => (query.trim()
                         <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openReplyAll(); }}><ReplyAll size={16} />{t("mail.action.replyAll")}</button>
                         <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openForward(); }}><Forward size={16} />{t("mail.action.forward")}</button>
                         <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked || selectedIsArchived} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />{t("mail.action.archive")}</button>
+                        {!selectedIsInJunk && (
+                          <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("junk"); }}><ShieldCheck size={16} />{t("mail.action.reportSpam")}</button>
+                        )}
+                        {selectedIsInJunk && (
+                          <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("inbox"); }}><Inbox size={16} />{t("mail.action.notSpam")}</button>
+                        )}
                         <button type="button" role="menuitem" className="reader-more-danger" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("trash"); }}><Trash2 size={16} />{t("mail.action.moveToTrash")}</button>
                       </div>
                     )}

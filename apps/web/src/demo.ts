@@ -16,6 +16,7 @@ export const demoAccounts: Account[] = [
     folders: [
       { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 4, unseen: 3 },
       { path: "Archive", name: "归档", specialUse: "\\Archive", total: 0, unseen: 0 },
+      { path: "Junk", name: "垃圾邮件", specialUse: "\\Junk", total: 0, unseen: 0 },
       { path: "Sent Messages", name: "已发送", specialUse: "\\Sent", total: 0, unseen: 0 },
       { path: "Drafts", name: "草稿", specialUse: "\\Drafts", total: 0, unseen: 0 },
     ],

@@ -1614,7 +1614,7 @@ export async function markMessageSeen(
   await updateMessageFlags(db, masterKey, messageId, { seen }, accessTokenProvider, agentEvents);
 }
 
-export type MessageMoveTarget = "archive" | "trash";
+export type MessageMoveTarget = "archive" | "trash" | "junk" | "inbox";
 
 const moveTargets: Record<MessageMoveTarget, { specialUses: string[]; unavailableMessage: string }> = {
   archive: {
@@ -1626,6 +1626,18 @@ const moveTargets: Record<MessageMoveTarget, { specialUses: string[]; unavailabl
   trash: {
     specialUses: ["\\Trash"],
     unavailableMessage: "这个邮箱没有提供可用的废纸篓文件夹。",
+  },
+  junk: {
+    // The provider's canonical spam folder; some providers expose it under a
+    // localized path, so resolve by SPECIAL-USE only.
+    specialUses: ["\\Junk"],
+    unavailableMessage: "这个邮箱没有提供可用的垃圾邮件文件夹。",
+  },
+  inbox: {
+    // The "not spam" recovery path restores a misclassified message to the
+    // real INBOX regardless of the account's folder naming.
+    specialUses: ["\\Inbox"],
+    unavailableMessage: "这个邮箱没有提供可用的收件箱。",
   },
 };
 
@@ -1656,8 +1668,9 @@ function updateFolderCountsForMove(
   `).run(unseen, message.account_id, message.mailbox);
 
   // Gmail's \All already contains the message before archive removes its
-  // Inbox label. Physical archive and trash folders gain a new membership.
-  if (!destinationAlreadyCached && (destination.special_use === "\\Archive" || destination.special_use === "\\Trash")) {
+  // Inbox label. Physical archive, trash, junk, and inbox folders gain a new
+  // membership (the last one when a misclassified Junk message is recovered).
+  if (!destinationAlreadyCached && (destination.special_use === "\\Archive" || destination.special_use === "\\Trash" || destination.special_use === "\\Junk" || destination.special_use === "\\Inbox")) {
     db.prepare(`
       UPDATE folders
       SET total = total + 1, unseen = unseen + ?

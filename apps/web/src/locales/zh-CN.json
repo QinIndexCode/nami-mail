@@ -1838,6 +1838,11 @@
     "mail.expandAccounts": "展开所有账户",
     "mail.collapseAccounts": "收起账户列表",
     "settings.avatars.custom.choose": "选择图片…",
-    "settings.avatars.custom.clear": "移除"
+    "settings.avatars.custom.clear": "移除",
+    "mail.action.reportSpam": "举报垃圾邮件",
+    "mail.action.notSpam": "这不是垃圾邮件",
+    "mail.action.reportedSpam": "已标记为垃圾邮件",
+    "mail.action.recoveredFromSpam": "已移回收件箱",
+    "mail.selection.reportedSpam": "{count} 封邮件已标记为垃圾邮件"
   }
 }

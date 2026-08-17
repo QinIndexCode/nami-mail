@@ -1838,6 +1838,11 @@
     "mail.expandAccounts": "Show all accounts",
     "mail.collapseAccounts": "Collapse account list",
     "settings.avatars.custom.choose": "Choose image…",
-    "settings.avatars.custom.clear": "Remove"
+    "settings.avatars.custom.clear": "Remove",
+    "mail.action.reportSpam": "Report spam",
+    "mail.action.notSpam": "Not spam",
+    "mail.action.reportedSpam": "Marked as spam",
+    "mail.action.recoveredFromSpam": "Restored to inbox",
+    "mail.selection.reportedSpam": "{count} message(s) marked as spam"
   }
 }
