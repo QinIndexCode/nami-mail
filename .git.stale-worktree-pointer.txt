@@ -1,1 +1,0 @@
-gitdir: D:/MyCode/nami-workspace/nami-mail/.git/worktrees/nami-mail-agent
