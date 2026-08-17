@@ -1206,8 +1206,12 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
 
   app.post<{ Params: { id: string } }>("/api/agent/providers/:id/check", async (request, reply) => {
     if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    // The renderer gives up after 30s; stop the probe as soon as the client
+    // disconnects instead of letting it ride out the provider timeout.
+    const controller = new AbortController();
+    request.raw.once("aborted", () => controller.abort());
     try {
-      return await agentService.checkProvider(request.params.id);
+      return await agentService.checkProvider(request.params.id, controller.signal);
     } catch (error) {
       return agentFailure(reply, error);
     }

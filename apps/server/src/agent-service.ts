@@ -1034,7 +1034,10 @@ export class AgentService {
   async checkProvider(id: string, signal?: AbortSignal): Promise<AgentProviderSummary> {
     const configuration = this.requireProvider(id);
     const fingerprint = providerConnectionFingerprint(configuration);
-    const health = await this.providerForConfiguration(configuration).healthCheck({ signal, timeoutMs: configuration.timeoutMs });
+    // A connection probe only needs to confirm the service answers; cap the
+    // wait like the MCP check does so a dead endpoint reports back quickly
+    // instead of riding out the configured (up to 2 min) request timeout.
+    const health = await this.providerForConfiguration(configuration).healthCheck({ signal, timeoutMs: Math.min(configuration.timeoutMs, 15_000) });
     if (signal?.aborted) throw new AgentServiceError("CANCELLED", "模型连接检查已取消。", 499, true);
     return this.providers.saveHealth(configuration.id, fingerprint, health);
   }

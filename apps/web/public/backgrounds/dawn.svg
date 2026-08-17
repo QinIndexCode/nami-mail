@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <defs>
+    <linearGradient id="dawn" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f3b7a4"/>
+      <stop offset="0.45" stop-color="#eec59b"/>
+      <stop offset="0.75" stop-color="#e0a86f"/>
+      <stop offset="1" stop-color="#c48d5c"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.3" r="0.42">
+      <stop offset="0" stop-color="#ffd9a3" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#ffd9a3" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#dawn)"/>
+  <rect width="1600" height="1000" fill="url(#sun)"/>
+  <ellipse cx="800" cy="700" rx="560" ry="120" fill="#f6c98e" opacity="0.4" filter="url(#soft)"/>
+  <ellipse cx="240" cy="240" rx="340" ry="90" fill="#fbd9c4" opacity="0.35" filter="url(#soft)"/>
+  <ellipse cx="1400" cy="180" rx="300" ry="80" fill="#f7c9ae" opacity="0.3" filter="url(#soft)"/>
+</svg>

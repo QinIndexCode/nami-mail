@@ -4,7 +4,7 @@
 --lightningcss-dark: ;
 color-scheme:light;
 font-synthesis:none;
---canvas:#ececef;
+--canvas:#ececef;--bg-canvas-tint:#d9dce2;--bg-vignette:rgba(20,27,44,.22);
 --body-glow:#ffffffb3;
 --frame:#f8f8f9eb;
 --panel:#ffffffdb;
@@ -35,6 +35,8 @@ font-synthesis:none;
 --scrim-nested:#05050785;
 --scrim-alert:#05050794;
 --scrim-drawer:#0505078a;
+--scrim-global:70%;
+--scrim-region:10%;
 --radius-sm:8px;
 --radius-md:12px;
 --radius-lg:20px;
@@ -48,7 +50,7 @@ font-family:Inter,-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,sans-
 --lightningcss-light: ;
 --lightningcss-dark:initial;
 color-scheme:dark;
---canvas:#050506;
+--canvas:#050506;--bg-canvas-tint:#050506;--bg-vignette:transparent;
 --body-glow:#fff0;
 --frame:#0e0e0ff0;
 --panel:#141416e0;
@@ -169,6 +171,31 @@ position:absolute;
 inset:-2%;
 transform:scale(1.015)
 }
+.workspace-canvas.background-active
+{
+--canvas:var(--bg-canvas-tint)
+}
+/* Single uniform scrim over the background art. Panels themselves are
+   transparent (see below), so the backdrop never changes between the mail
+   and Agent workspaces — fading a panel only fades its content. The
+   middle display region carries a thin accent scrim on top so the
+   sidebars and tool rail read as transparent edges around a soft band. */
+.workspace-canvas.background-active::before
+{
+content:"";
+background:color-mix(in srgb, var(--panel-solid) var(--scrim-global), transparent);
+z-index:1;
+pointer-events:none;
+position:absolute;
+inset:0
+}
+.workspace-background::after
+{
+content:"";
+position:absolute;
+inset:0;
+background:radial-gradient(115% 100% at 50% 32%,transparent 52%,var(--bg-vignette) 100%)
+}
 .workspace-canvas>.app-frame
 {
 z-index:1;
@@ -190,19 +217,19 @@ background:color-mix(in srgb, var(--panel-muted) 82%, transparent)
 }
 .workspace-canvas.background-active .sidebar
 {
-background:color-mix(in srgb, var(--panel-muted) 80%, transparent)
+background:0 0
 }
-.workspace-canvas.background-active .message-column
+.workspace-canvas.background-active .mail-workspace,.workspace-canvas.background-active .agent-main-panel
 {
-background:color-mix(in srgb, var(--panel) 84%, transparent)
+background:color-mix(in srgb, var(--panel-solid) var(--scrim-region), transparent)
 }
-.workspace-canvas.background-active .reader-column
+.workspace-canvas.background-active .message-column,.workspace-canvas.background-active .reader-column
 {
-background:color-mix(in srgb, var(--panel-solid) 78%, transparent)
+background:0 0
 }
 .workspace-canvas.background-active .icon-rail
 {
-background:color-mix(in srgb, var(--panel-muted) 80%, transparent)
+background:0 0
 }
 .workspace-canvas.background-active .agent-workspace
 {
@@ -210,19 +237,88 @@ background:0 0
 }
 .workspace-canvas.background-active .agent-workspace-loading
 {
-background:color-mix(in srgb, var(--panel-solid) 84%, transparent)
+background:color-mix(in srgb, var(--panel-solid) var(--scrim-region), transparent)
 }
 .workspace-canvas.background-active .agent-conversation-sidebar
 {
-background:color-mix(in srgb, var(--panel-muted) 80%, transparent)
-}
-.workspace-canvas.background-active .agent-main-panel
-{
-background:color-mix(in srgb, var(--panel-solid) 84%, transparent)
+background:0 0
 }
 .workspace-canvas.background-active .agent-workspace-header,.workspace-canvas.background-active .agent-composer-region
 {
 background:0 0
+}
+/* Controls adapt to the art: frosted glass — a translucent tint over a
+   strong blur — instead of solid theme surfaces, so buttons and inputs
+   never read as flat white/black chips on top of the background. */
+.workspace-canvas.background-active .secondary-button,.workspace-canvas.background-active .agent-launch-button
+{
+border-color:color-mix(in srgb, var(--line-strong) 72%, transparent);
+background:color-mix(in srgb, var(--panel-solid) 34%, transparent);
+-webkit-backdrop-filter:blur(16px) saturate(150%);
+backdrop-filter:blur(16px) saturate(150%)
+}
+.workspace-canvas.background-active .secondary-button:hover:not(:disabled)
+{
+background:color-mix(in srgb, var(--panel-solid) 46%, transparent)
+}
+.workspace-canvas.background-active .agent-launch-button:hover:not(:disabled)
+{
+border-color:color-mix(in srgb, var(--focus-ring) 70%, transparent);
+background:color-mix(in srgb, var(--panel-solid) 46%, transparent)
+}
+.workspace-canvas.background-active .agent-composer
+{
+border-color:color-mix(in srgb, var(--line-strong) 74%, transparent);
+background:color-mix(in srgb, var(--panel-solid) 26%, transparent);
+-webkit-backdrop-filter:blur(22px) saturate(150%);
+backdrop-filter:blur(22px) saturate(150%)
+}
+.workspace-canvas.background-active .agent-composer:focus-within
+{
+border-color:var(--focus-ring);
+box-shadow:0 0 0 3px var(--focus-ring-subtle)
+}
+.workspace-canvas.background-active .search-wrap,.workspace-canvas.background-active .agent-sidebar-search,.workspace-canvas.background-active .agent-conversation-heading input
+{
+background:color-mix(in srgb, var(--panel-solid) 28%, transparent);
+-webkit-backdrop-filter:blur(20px) saturate(150%);
+backdrop-filter:blur(20px) saturate(150%)
+}
+.workspace-canvas.background-active .agent-conversation-heading input
+{
+border-color:color-mix(in srgb, var(--focus-ring) 60%, transparent)
+}
+.workspace-canvas.background-active .auto-reply-toast
+{
+background:color-mix(in srgb, var(--panel-solid) 46%, transparent);
+-webkit-backdrop-filter:blur(18px) saturate(150%);
+backdrop-filter:blur(18px) saturate(150%)
+}
+.workspace-canvas.background-active .agent-mode-switch,.workspace-canvas.background-active .agent-scope-switch
+{
+border-color:color-mix(in srgb, var(--line-strong) 72%, transparent);
+background:color-mix(in srgb, var(--panel-solid) 34%, transparent);
+-webkit-backdrop-filter:blur(16px) saturate(150%);
+backdrop-filter:blur(16px) saturate(150%)
+}
+.workspace-canvas.background-active .setting-range input[type=range]::-webkit-slider-runnable-track,.workspace-canvas.background-active .setting-range input[type=range]::-moz-range-track
+{
+border-color:color-mix(in srgb, var(--line-strong) 70%, transparent);
+background:color-mix(in srgb, var(--line) 36%, transparent)
+}
+.workspace-canvas.background-active .setting-range input[type=range]::-webkit-slider-thumb
+{
+border-color:color-mix(in srgb, var(--panel-solid) 84%, transparent);
+background:color-mix(in srgb, var(--text) 82%, transparent)
+}
+.workspace-canvas.background-active .setting-range input[type=range]::-moz-range-progress
+{
+background:color-mix(in srgb, var(--text) 76%, transparent)
+}
+.workspace-canvas.background-active .setting-range input[type=range]::-moz-range-thumb
+{
+border-color:color-mix(in srgb, var(--panel-solid) 84%, transparent);
+background:color-mix(in srgb, var(--text) 82%, transparent)
 }
 .window-bar
 {
@@ -877,6 +973,13 @@ border-radius:7px;
 flex:none;
 width:26px;
 height:26px
+}
+.column-header .search-wrap:not(.expanded)
+{
+border-color:#0000;
+background:0 0;
+-webkit-backdrop-filter:none;
+backdrop-filter:none
 }
 .column-header .search-wrap input
 {
@@ -1541,6 +1644,13 @@ font-size:11px
 width:29px;
 height:29px;
 font-size:9px
+}
+.account-avatar img,.sender-avatar img
+{
+width:100%;
+height:100%;
+object-fit:cover;
+border-radius:50%
 }
 .message-copy
 {
@@ -7793,6 +7903,85 @@ font-size:16px;
 font-weight:700;
 display:grid
 }
+.avatar-editor
+{
+width:42px;
+height:42px;
+flex:none;
+position:relative
+}
+.avatar-editor-disc
+{
+background:color-mix(in srgb, var(--focus-ring) 14%, var(--panel-muted));
+width:100%;
+height:100%;
+color:var(--text-soft);
+border-radius:50%;
+overflow:hidden;
+place-items:center;
+display:grid
+}
+.avatar-editor-image
+{
+width:100%;
+height:100%;
+object-fit:cover;
+display:block
+}
+.avatar-editor-letter
+{
+font-size:16px;
+font-weight:700
+}
+.avatar-editor-choose
+{
+background:rgba(0,0,0,.42);
+width:100%;
+height:100%;
+color:#fff;
+border:0;
+border-radius:50%;
+opacity:0;
+place-items:center;
+cursor:pointer;
+transition:opacity .15s;
+display:grid;
+position:absolute;
+inset:0
+}
+.avatar-editor:hover .avatar-editor-choose,.avatar-editor:focus-within .avatar-editor-choose,.avatar-editor-choose:focus-visible
+{
+opacity:1
+}
+.avatar-editor-choose:disabled
+{
+cursor:default
+}
+.avatar-editor-clear
+{
+background:var(--danger);
+width:18px;
+height:18px;
+color:#fff;
+border:0;
+border-radius:50%;
+opacity:0;
+place-items:center;
+cursor:pointer;
+transition:opacity .15s;
+display:grid;
+position:absolute;
+right:-3px;
+top:-3px
+}
+.avatar-editor:hover .avatar-editor-clear,.avatar-editor:focus-within .avatar-editor-clear
+{
+opacity:1
+}
+.avatar-editor-clear:disabled
+{
+cursor:default
+}
 .contact-editor-title
 {
 overflow-wrap:anywhere;
@@ -8062,6 +8251,7 @@ font-size:11px
 .settings-body>.form-status
 {
 z-index:3;
+background:var(--panel-solid);
 box-shadow:0 7px 16px color-mix(in srgb, var(--panel-solid) 72%, transparent);
 border-left:0;
 border-right:0;
@@ -15127,49 +15317,25 @@ box-shadow:0 0 0 5px #0000
 }
 
 }
-@keyframes block-out-left
+@keyframes switch-fade-out
 {
 to
 {
-opacity:0;
-transform:translate(-100%)
+opacity:0
 }
 
 }
-@keyframes block-out-right
+@keyframes switch-fade-in
 {
-to
+from
 {
-opacity:0;
-transform:translate(100%)
+opacity:0
 }
 
-}
-@keyframes block-in-left
-{
-0%
-{
-opacity:0;
-transform:translate(-100%)
-}
-
-}
-@keyframes block-in-right
-{
-0%
-{
-opacity:0;
-transform:translate(100%)
-}
-
-}
-.mail-shell[data-agent-phase=mail-leaving],.mail-shell[data-agent-phase=agent-entering],.mail-shell[data-agent-phase=agent-leaving],.mail-shell[data-agent-phase=mail-entering]
-{
-overflow:hidden
 }
 .mail-shell[data-agent-phase=mail-leaving] .sidebar,.mail-shell[data-agent-phase=mail-leaving] .mail-workspace
 {
-animation:.3s cubic-bezier(.22,.8,.24,1) both block-out-left
+animation:.24s cubic-bezier(.22,.8,.24,1) both switch-fade-out
 }
 .mail-shell[data-agent-phase=mail-leaving] .mail-workspace
 {
@@ -15177,7 +15343,7 @@ animation-delay:60ms
 }
 .mail-shell[data-agent-phase=mail-entering] .sidebar,.mail-shell[data-agent-phase=mail-entering] .mail-workspace
 {
-animation:.3s cubic-bezier(.22,.8,.24,1) both block-in-left
+animation:.24s cubic-bezier(.22,.8,.24,1) both switch-fade-in
 }
 .mail-shell[data-agent-phase=mail-entering] .mail-workspace
 {
@@ -15185,7 +15351,7 @@ animation-delay:60ms
 }
 .mail-shell[data-agent-phase=agent-entering] .agent-workspace .agent-conversation-sidebar,.mail-shell[data-agent-phase=agent-entering] .agent-workspace .agent-main-panel
 {
-animation:.3s cubic-bezier(.22,.8,.24,1) both block-in-right
+animation:.24s cubic-bezier(.22,.8,.24,1) both switch-fade-in
 }
 .mail-shell[data-agent-phase=agent-entering] .agent-workspace .agent-main-panel
 {
@@ -15193,7 +15359,7 @@ animation-delay:80ms
 }
 .mail-shell[data-agent-phase=agent-leaving] .agent-workspace .agent-conversation-sidebar,.mail-shell[data-agent-phase=agent-leaving] .agent-workspace .agent-main-panel
 {
-animation:.3s cubic-bezier(.22,.8,.24,1) both block-out-right
+animation:.24s cubic-bezier(.22,.8,.24,1) both switch-fade-out
 }
 .mail-shell[data-agent-phase=agent-leaving] .agent-workspace .agent-main-panel
 {

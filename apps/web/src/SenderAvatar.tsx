@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useCustomAvatar } from "./avatarStore";
 
 export function initials(name: string, address: string): string {
   const value = name.trim() || address.split("@")[0] || "?";
@@ -94,15 +95,19 @@ type SenderAvatarProps = {
 };
 
 /**
- * Sender avatar: falls back to colored initials (Gmail/QQ/163/custom domains
- * uniformly) and, when the user enabled it, tries Gravatar (md5(email)) first
- * so any provider's sender with a Gravatar shows a real photo. The hash is sent
- * to a third party only when gravatarEnabled is true.
+ * Sender avatar: a locally configured picture wins, then (when enabled)
+ * Gravatar, then colored initials (Gmail/QQ/163/custom domains uniformly).
+ * Gravatar sends the md5(email) to a third party only when gravatarEnabled
+ * is true; locally stored avatars never leave the machine.
  */
 export function SenderAvatar({ name, address, tone, size, gravatarEnabled }: SenderAvatarProps) {
   const [failed, setFailed] = useState(false);
   const email = address.trim().toLowerCase();
+  const customAvatar = useCustomAvatar(email);
   const className = `sender-avatar${size ? ` ${size}` : ""} tone-${tone}`;
+  if (customAvatar) {
+    return <span className={className}><img src={customAvatar} alt="" /></span>;
+  }
   const showGravatar = gravatarEnabled && !failed && !missingGravatarEmails.has(email);
   if (!showGravatar) {
     return <span className={className}>{initials(name, address)}</span>;
@@ -118,4 +123,28 @@ export function SenderAvatar({ name, address, tone, size, gravatarEnabled }: Sen
       />
     </span>
   );
+}
+
+type CustomAvatarProps = {
+  name: string;
+  address: string;
+  /** 0-3, drives the fallback letter background tone (stable per address). */
+  tone: number;
+  size?: "small" | "large";
+  /** Base element class; defaults to the sender-avatar style. */
+  className?: string;
+};
+
+/**
+ * Avatar for an address without Gravatar resolution: shows the locally
+ * configured picture when one exists (own accounts included), colored
+ * initials otherwise.
+ */
+export function CustomAvatar({ name, address, tone, size, className }: CustomAvatarProps) {
+  const customAvatar = useCustomAvatar(address);
+  const classes = `${className ?? "sender-avatar"}${size ? ` ${size}` : ""} tone-${tone}`;
+  if (!customAvatar) {
+    return <span className={classes}>{initials(name, address)}</span>;
+  }
+  return <span className={classes}><img src={customAvatar} alt="" /></span>;
 }

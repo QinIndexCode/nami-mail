@@ -8,6 +8,8 @@ import { useDismissTransition } from "./useDismissTransition";
 import { contactsCache } from "./dialogPrefetch";
 import { useStablePagedListHeight } from "./useStablePagedListHeight";
 import type { Contact, ContactInput } from "./types";
+import { getAvatar, setAvatar } from "./avatarStore";
+import { AvatarEditor } from "./AvatarEditor";
 
 export type ContactsSectionProps = {
   demoMode?: boolean;
@@ -22,6 +24,10 @@ type ContactDraft = {
   notes: string;
   /** Source marker of the row being edited (create drafts are manual). */
   autoCollected: boolean;
+  /** Locally stored avatar for the contact's email (never sent to the service). */
+  avatarDataUrl: string | null;
+  /** Email the row had when editing started; stale avatar keys are cleared on rename. */
+  originalEmail?: string;
 };
 
 type Notice = { kind: "success" | "error"; message: string } | null;
@@ -52,7 +58,7 @@ export function orderContactsBySource(contacts: Contact[]): Contact[] {
 }
 
 function emptyDraft(): ContactDraft {
-  return { email: "", name: "", notes: "", autoCollected: false };
+  return { email: "", name: "", notes: "", autoCollected: false, avatarDataUrl: null };
 }
 
 export default function ContactsSection({ demoMode = false, initialContacts }: ContactsSectionProps) {
@@ -268,6 +274,10 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
         setNotice({ kind: "success", message: t("settings.contacts.saved") });
       }
       contactsCache.refresh();
+      setAvatar(email, draft.avatarDataUrl);
+      if (draft.originalEmail && draft.originalEmail.toLowerCase() !== email) {
+        setAvatar(draft.originalEmail, null);
+      }
       setDraft(null);
     } catch (error) {
       setNotice({
@@ -299,7 +309,7 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
   const startEdit = (contact: Contact) => {
     resetEditorClosing();
     setArmedDeleteId(null);
-    setDraft({ id: contact.id, email: contact.email, name: contact.name, notes: contact.notes, autoCollected: contact.autoCollected });
+    setDraft({ id: contact.id, email: contact.email, name: contact.name, notes: contact.notes, autoCollected: contact.autoCollected, avatarDataUrl: getAvatar(contact.email), originalEmail: contact.email });
   };
 
   const pageStart = showToolbar ? (clampedPage - 1) * CONTACTS_PER_PAGE : 0;
@@ -482,7 +492,7 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
           <section ref={editorPanel} className={`contact-editor-modal${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")} aria-labelledby="contact-editor-title" tabIndex={-1}>
             <div className="contact-editor" role="form" aria-label={draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")}>
               <div className="contact-editor-head">
-                <span className="contact-editor-avatar" aria-hidden="true">{(draft.name.trim() || draft.email.trim()).slice(0, 1).toUpperCase() || "?"}</span>
+                <AvatarEditor name={draft.name} address={draft.email} current={draft.avatarDataUrl} disabled={busy} onChange={(dataUrl) => setDraft({ ...draft, avatarDataUrl: dataUrl })} />
                 <div>
                   <span className="eyebrow">{draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")}</span>
                   <h3 id="contact-editor-title" className="contact-editor-title">{draft.name.trim() || draft.email || t("settings.contacts.title")}</h3>
