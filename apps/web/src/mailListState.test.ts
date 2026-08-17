@@ -326,6 +326,33 @@ describe("mail list state", () => {
     expect(nextMessageTotalForMove(4, true, false)).toBe(3);
   });
 
+  it("matches the server Attachments view by the attachment flag alone", () => {
+    const withAttachment = { ...unreadMessage, hasAttachments: true };
+
+    expect(matchesServerMessageQuery(withAttachment, accounts, {
+      accountId: "all", folder: "", search: "", messageView: "attachments",
+    })).toBe(true);
+    expect(matchesServerMessageQuery(unreadMessage, accounts, {
+      accountId: "all", folder: "", search: "", messageView: "attachments",
+    })).toBe(false);
+
+    // The view crosses folders the way starred does: an archived message with
+    // a file still matches without any folder bound.
+    expect(matchesServerMessageQuery({ ...withAttachment, mailbox: "Archive" }, accounts, {
+      accountId: "all", folder: "", search: "", messageView: "attachments",
+    })).toBe(true);
+
+    // Account scoping still applies, mirroring the server.
+    expect(matchesServerMessageQuery(withAttachment, accounts, {
+      accountId: "missing-account", folder: "", search: "", messageView: "attachments",
+    })).toBe(false);
+
+    // A file does not leak the message into inbox-derived views.
+    expect(matchesServerMessageQuery(withAttachment, accounts, {
+      accountId: "all", folder: "", search: "", messageView: "unread",
+    })).toBe(true);
+  });
+
   it("retains a pending archive move through an empty response and replaces its display snapshot only with the same local record", () => {
     const pendingSnapshot = { ...unreadMessage, mailbox: "Archive", uid: 44, messageId: "<archive@example.com>" };
     const pending = [{ id: unreadMessage.id, accountId: unreadMessage.accountId, destination: "Archive", snapshot: pendingSnapshot }];

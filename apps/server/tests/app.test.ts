@@ -1217,6 +1217,54 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(stats.json()).toMatchObject({ accounts: 1, messages: 2, unread: 1 });
   });
 
+  it("lists messages with attachments across every folder and account", async () => {
+    const now = new Date().toISOString();
+    const insertAccount = db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertAccount.run("account-1", "demo@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
+    insertAccount.run("account-2", "two@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox", 3, 0);
+    const insertMessage = db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertMessage.run("attach-inbox", "account-1", "INBOX", 1, "Pdf attached", "Demo", "demo@example.com", "[]", now, "attach", "attach", "", "[]", 1, 10, now);
+    insertMessage.run("attach-archive", "account-1", "Archive", 2, "Tarball attached", "Demo", "demo@example.com", "[]", now, "attach", "attach", "", "[]", 1, 10, now);
+    insertMessage.run("attach-other", "account-2", "INBOX", 1, "Sheet attached", "Demo", "two@example.com", "[]", now, "attach", "attach", "", "[]", 1, 10, now);
+    insertMessage.run("plain-inbox", "account-1", "INBOX", 3, "No attachment", "Demo", "demo@example.com", "[]", now, "plain", "plain", "", "[]", 0, 10, now);
+    indexMessageFts(db, "attach-archive", { subject: "Tarball attached", fromName: "Demo", fromAddress: "demo@example.com", textBody: "attach" });
+
+    // The view replaces the unified-inbox fallback: no accountId bound means
+    // every account, and no folder means every folder.
+    const all = await app.inject({ method: "GET", url: "/api/messages?hasAttachments=1" });
+    expect(all.statusCode).toBe(200);
+    expect(all.json().total).toBe(3);
+    expect(new Set(all.json().items.map((message: { id: string }) => message.id)))
+      .toEqual(new Set(["attach-inbox", "attach-archive", "attach-other"]));
+
+    const scoped = await app.inject({ method: "GET", url: "/api/messages?accountId=account-1&hasAttachments=1" });
+    expect(scoped.json()).toMatchObject({ total: 2 });
+    expect(new Set(scoped.json().items.map((message: { id: string }) => message.id)))
+      .toEqual(new Set(["attach-inbox", "attach-archive"]));
+
+    const folderScoped = await app.inject({ method: "GET", url: "/api/messages?accountId=account-1&folder=Archive&hasAttachments=1" });
+    expect(folderScoped.json()).toMatchObject({ total: 1 });
+    expect(folderScoped.json().items[0]).toMatchObject({ id: "attach-archive", hasAttachments: true });
+
+    // The view composes with the FTS search join like any other filter.
+    const searched = await app.inject({ method: "GET", url: "/api/messages?hasAttachments=1&q=Tarball" });
+    expect(searched.json()).toMatchObject({ total: 1 });
+    expect(searched.json().items[0].id).toBe("attach-archive");
+  });
+
   it("lists direct Archive mail and only confirmed Gmail All Mail archives", async () => {
     const now = new Date().toISOString();
     const insertAccount = db.prepare(`

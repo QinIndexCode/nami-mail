@@ -284,6 +284,7 @@ const batchJobQuerySchema = z.object({
   unread: z.boolean().optional(),
   archived: z.boolean().optional(),
   snoozed: z.boolean().optional(),
+  hasAttachments: z.boolean().optional(),
   scope: z.literal("all").optional(),
 }).strict();
 
@@ -2261,7 +2262,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
-  app.get<{ Querystring: { accountId?: string; folder?: string; q?: string; page?: string; pageSize?: string; starred?: string; unread?: string; archived?: string; snoozed?: string; scope?: string } }>(
+  app.get<{ Querystring: { accountId?: string; folder?: string; q?: string; page?: string; pageSize?: string; starred?: string; unread?: string; archived?: string; snoozed?: string; hasAttachments?: string; scope?: string } }>(
     "/api/messages",
     async (request, reply) => {
       const page = Math.max(1, Number.parseInt(request.query.page ?? "1", 10) || 1);
@@ -2290,6 +2291,10 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         const nowIso = new Date().toISOString();
         filters.push("m.snoozed_until IS NOT NULL AND m.snoozed_until > ?");
         params.push(nowIso);
+      } else if (!globalSearch && request.query.hasAttachments === "1") {
+        // The Attachments view replaces the inbox fallback: every folder of
+        // the bound account (all accounts when none is bound) participates.
+        filters.push("m.has_attachments = 1");
       } else if (!globalSearch) {
         filters.push(inboxMessageFilter);
         // Snoozed messages are hidden from the unified inbox until due.
