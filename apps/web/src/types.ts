@@ -378,6 +378,10 @@ export type AppSettings = {
   refreshIntervalSeconds: 30 | 60 | 180 | 300;
   realtimePushEnabled: boolean;
   closeBehavior: CloseBehavior;
+  /** Desktop only: open Nami Mail at login. Browser mode ignores it. */
+  launchAtStartup: boolean;
+  /** Desktop only: global shortcut that focuses the mail window from anywhere. */
+  globalShortcutEnabled: boolean;
   agentToolRoundLimit: number;
   listDensity: ListDensity;
   avatarGravatarEnabled: boolean;
@@ -391,7 +395,7 @@ export type AppSettings = {
 
 export type AppSettingsPatch = Partial<Pick<
   AppSettings,
-  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "realtimePushEnabled" | "closeBehavior" | "agentToolRoundLimit" | "listDensity" | "avatarGravatarEnabled" | "agentAccessLevel" | "agentCliAccessLevel" | "agentMcpAccessLevel" | "autoReply"
+  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "realtimePushEnabled" | "closeBehavior" | "launchAtStartup" | "globalShortcutEnabled" | "agentToolRoundLimit" | "listDensity" | "avatarGravatarEnabled" | "agentAccessLevel" | "agentCliAccessLevel" | "agentMcpAccessLevel" | "autoReply"
 >>;
 
 export const defaultAppSettings: AppSettings = {
@@ -405,6 +409,8 @@ export const defaultAppSettings: AppSettings = {
   refreshIntervalSeconds: 60,
   realtimePushEnabled: true,
   closeBehavior: "ask",
+  launchAtStartup: false,
+  globalShortcutEnabled: false,
   agentToolRoundLimit: 30,
   listDensity: "comfortable",
   avatarGravatarEnabled: false,

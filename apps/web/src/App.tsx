@@ -748,6 +748,12 @@ export default function App() {
     setSettings(normalizedSettings);
     setLocale(normalizedSettings.locale);
     if (!isDemo) saveLocalePreference(normalizedSettings.locale);
+    // Desktop-only behaviors live in the host process. Pushing on every
+    // settings snapshot keeps optimistic and server-reconciled changes in
+    // sync; in a browser the bridge is absent and these calls are no-ops.
+    const bridge = desktopBridge();
+    bridge?.setLaunchAtStartup?.(normalizedSettings.launchAtStartup);
+    bridge?.setGlobalShortcutEnabled?.(normalizedSettings.globalShortcutEnabled);
   }, [setLocale]);
   const clearUnreadViewRecentlyRead = useCallback(() => {
     const next = new Set<string>();
@@ -1192,6 +1198,13 @@ await refreshSubmissions(nextAccounts, { silent: true });
     if (!bridge || isDemo) return undefined;
     return bridge.onSettingsChanged(() => void loadSettings());
   }, [loadSettings]);
+  useEffect(() => {
+    if (!isDesktop || isDemo) return;
+    // The OS badge reflects the total unread count across accounts; the
+    // host clears it when the count reaches zero (badge handlers no-op in
+    // a browser, where the bridge does not exist).
+    desktopBridge()?.setUnreadBadge?.(stats.unread);
+  }, [stats.unread]);
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query), 250);
     return () => window.clearTimeout(timer);

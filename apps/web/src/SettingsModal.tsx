@@ -141,6 +141,8 @@ const restoreDefaultsPatch: AppSettingsPatch = {
   refreshIntervalSeconds: defaultAppSettings.refreshIntervalSeconds,
   realtimePushEnabled: defaultAppSettings.realtimePushEnabled,
   closeBehavior: defaultAppSettings.closeBehavior,
+  launchAtStartup: defaultAppSettings.launchAtStartup,
+  globalShortcutEnabled: defaultAppSettings.globalShortcutEnabled,
   agentToolRoundLimit: defaultAppSettings.agentToolRoundLimit,
   listDensity: defaultAppSettings.listDensity,
   avatarGravatarEnabled: defaultAppSettings.avatarGravatarEnabled,
@@ -1348,6 +1350,20 @@ export default function SettingsModal({
                     </button>
                   ))}
                 </div>
+                <Switch
+                  checked={currentSettings.launchAtStartup}
+                  disabled={controlsBusy}
+                  label={t("settings.launchAtStartup.label")}
+                  description={t("settings.launchAtStartup.description")}
+                  onChange={() => void applyOptimisticSettings({ launchAtStartup: !currentSettings.launchAtStartup }, null)}
+                />
+                <Switch
+                  checked={currentSettings.globalShortcutEnabled}
+                  disabled={controlsBusy}
+                  label={t("settings.shortcut.label")}
+                  description={t("settings.shortcut.description")}
+                  onChange={() => void applyOptimisticSettings({ globalShortcutEnabled: !currentSettings.globalShortcutEnabled }, null)}
+                />
                 {updateStatus && updatePresentation && (
                   <div className="setting-row update-setting-row">
                     <div>

@@ -51,6 +51,14 @@ describe("settings model provider entry", () => {
     expect(markup).toContain(zh("settings.agent.externalGuide.copy"));
     expect(markup).toContain('class="external-guide-code"');
   });
+
+  it("keeps the desktop-only behavior toggles out of browser mode", () => {
+    const markup = renderSettings(false);
+
+    expect(markup).not.toContain('data-settings-nav="desktop"');
+    expect(markup).not.toContain(zh("settings.launchAtStartup.label"));
+    expect(markup).not.toContain(zh("settings.shortcut.label"));
+  });
 });
 
 describe("settings Escape handling", () => {

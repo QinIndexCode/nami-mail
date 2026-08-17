@@ -65,6 +65,21 @@ describe("app settings migrations", () => {
       expect(columns.some((column) => column.name === "translation_configuration_version")).toBe(true);
       expect(columns.some((column) => column.name === "realtime_push_enabled")).toBe(true);
       expect(getAppSettings(migrated).realtimePushEnabled).toBe(true);
+      expect(columns.some((column) => column.name === "launch_at_startup")).toBe(true);
+      expect(columns.some((column) => column.name === "global_shortcut_enabled")).toBe(true);
+      expect(getAppSettings(migrated).launchAtStartup).toBe(false);
+      expect(getAppSettings(migrated).globalShortcutEnabled).toBe(false);
+    expect(getAppSettings(migrated).launchAtStartup).toBe(false);
+      expect(getAppSettings(migrated).globalShortcutEnabled).toBe(false);
+
+      expect(updateAppSettings(migrated, { launchAtStartup: true, globalShortcutEnabled: true })).toMatchObject({
+        launchAtStartup: true,
+        globalShortcutEnabled: true,
+      });
+      expect(getAppSettings(migrated)).toMatchObject({ launchAtStartup: true, globalShortcutEnabled: true });
+      expect(updateAppSettings(migrated, { launchAtStartup: false })).toMatchObject({ launchAtStartup: false });
+      expect(getAppSettings(migrated)).toMatchObject({ launchAtStartup: false, globalShortcutEnabled: true });
+      expect((migrated.prepare("SELECT launch_at_startup FROM app_settings WHERE id = 1").get() as { launch_at_startup: number }).launch_at_startup).toBe(0);
     } finally {
       migrated.close();
     }

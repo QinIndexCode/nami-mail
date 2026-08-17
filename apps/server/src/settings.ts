@@ -37,6 +37,10 @@ export type AppSettings = {
   /** Live IMAP IDLE watcher: new inbox mail triggers an immediate sync instead of waiting for the next poll. */
   realtimePushEnabled: boolean;
   closeBehavior: CloseBehavior;
+  /** Desktop only: register Nami Mail as a login item. Browser mode ignores it. */
+  launchAtStartup: boolean;
+  /** Desktop only: global shortcut that focuses the mail window from anywhere. */
+  globalShortcutEnabled: boolean;
   agentToolRoundLimit: number;
   listDensity: ListDensity;
   avatarGravatarEnabled: boolean;
@@ -63,6 +67,8 @@ const defaults: Omit<AppSettings, "updatedAt"> = {
   refreshIntervalSeconds: 60,
   realtimePushEnabled: true,
   closeBehavior: "ask",
+  launchAtStartup: false,
+  globalShortcutEnabled: false,
   agentToolRoundLimit: 30,
   listDensity: "comfortable",
   avatarGravatarEnabled: false,
@@ -84,6 +90,8 @@ type SettingsRow = {
   refresh_interval_seconds: number;
   realtime_push_enabled: number;
   close_behavior: CloseBehavior;
+  launch_at_startup: number;
+  global_shortcut_enabled: number;
   agent_tool_round_limit: number;
   list_density: ListDensity;
   avatar_gravatar_enabled: number;
@@ -110,11 +118,13 @@ function ensureSettingsRow(db: DatabaseHandle): void {
     INSERT OR IGNORE INTO app_settings (
       id, theme, locale, background_preset, background_intensity,
       notifications_enabled, notify_when_focused, notification_sound,
-      refresh_interval_seconds, realtime_push_enabled, close_behavior, agent_tool_round_limit,
+      refresh_interval_seconds, realtime_push_enabled, close_behavior, launch_at_startup, global_shortcut_enabled,
+      agent_tool_round_limit,
       list_density, avatar_gravatar_enabled, agent_access_level, agent_cli_access_level, agent_mcp_access_level,
       custom_background_filename, updated_at
     ) VALUES (1, @theme, @locale, @backgroundPreset, @backgroundIntensity, @notificationsEnabled,
       @notifyWhenFocused, @notificationSound, @refreshIntervalSeconds, @realtimePushEnabled, @closeBehavior,
+      @launchAtStartup, @globalShortcutEnabled,
       @agentToolRoundLimit, @listDensity, @avatarGravatarEnabled, @agentAccessLevel, @agentCliAccessLevel, @agentMcpAccessLevel,
       NULL, @updatedAt)
   `).run({
@@ -122,6 +132,8 @@ function ensureSettingsRow(db: DatabaseHandle): void {
     notificationsEnabled: defaults.notificationsEnabled ? 1 : 0,
     notifyWhenFocused: defaults.notifyWhenFocused ? 1 : 0,
     realtimePushEnabled: defaults.realtimePushEnabled ? 1 : 0,
+    launchAtStartup: defaults.launchAtStartup ? 1 : 0,
+    globalShortcutEnabled: defaults.globalShortcutEnabled ? 1 : 0,
     avatarGravatarEnabled: defaults.avatarGravatarEnabled ? 1 : 0,
     updatedAt: new Date().toISOString(),
   });
@@ -139,6 +151,8 @@ function rowToSettings(row: SettingsRow): AppSettings {
     refreshIntervalSeconds: row.refresh_interval_seconds as AppSettings["refreshIntervalSeconds"],
     realtimePushEnabled: Boolean(row.realtime_push_enabled ?? 1),
     closeBehavior: row.close_behavior,
+    launchAtStartup: Boolean(row.launch_at_startup ?? 0),
+    globalShortcutEnabled: Boolean(row.global_shortcut_enabled ?? 0),
     agentToolRoundLimit: row.agent_tool_round_limit,
     listDensity: row.list_density,
     avatarGravatarEnabled: Boolean(row.avatar_gravatar_enabled),
@@ -183,6 +197,8 @@ export function updateAppSettings(db: DatabaseHandle, patch: AppSettingsPatch): 
       refresh_interval_seconds = @refreshIntervalSeconds,
       realtime_push_enabled = @realtimePushEnabled,
       close_behavior = @closeBehavior,
+      launch_at_startup = @launchAtStartup,
+      global_shortcut_enabled = @globalShortcutEnabled,
       agent_tool_round_limit = @agentToolRoundLimit,
       list_density = @listDensity,
       avatar_gravatar_enabled = @avatarGravatarEnabled,
@@ -198,6 +214,8 @@ export function updateAppSettings(db: DatabaseHandle, patch: AppSettingsPatch): 
     notificationsEnabled: next.notificationsEnabled ? 1 : 0,
     notifyWhenFocused: next.notifyWhenFocused ? 1 : 0,
     realtimePushEnabled: next.realtimePushEnabled ? 1 : 0,
+    launchAtStartup: next.launchAtStartup ? 1 : 0,
+    globalShortcutEnabled: next.globalShortcutEnabled ? 1 : 0,
     avatarGravatarEnabled: next.avatarGravatarEnabled ? 1 : 0,
     autoReplyConfig: JSON.stringify(next.autoReply),
   });

@@ -1849,6 +1849,10 @@
     "mail.action.exportStarted": "Export of {filename} started",
     "mail.action.exportDemoUnavailable": "Original messages cannot be exported in demo mode.",
     "mail.action.printDemoUnavailable": "Printing is not available in demo mode.",
-    "mail.error.exportEml": "Failed to export message"
+    "mail.error.exportEml": "Failed to export message",
+    "settings.launchAtStartup.label": "Launch at startup",
+    "settings.launchAtStartup.description": "Start Nami Mail automatically when you sign in to your computer.",
+    "settings.shortcut.label": "Global shortcut",
+    "settings.shortcut.description": "Press Ctrl+Shift+M (Cmd+Shift+M on Mac) to bring up the mail window from anywhere."
   }
 }

@@ -214,6 +214,8 @@ CREATE TABLE IF NOT EXISTS app_settings (
   refresh_interval_seconds INTEGER NOT NULL DEFAULT 60 CHECK (refresh_interval_seconds IN (30, 60, 180, 300)),
   realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1)),
   close_behavior TEXT NOT NULL DEFAULT 'ask' CHECK (close_behavior IN ('ask', 'tray', 'quit')),
+  launch_at_startup INTEGER NOT NULL DEFAULT 0 CHECK (launch_at_startup IN (0, 1)),
+  global_shortcut_enabled INTEGER NOT NULL DEFAULT 0 CHECK (global_shortcut_enabled IN (0, 1)),
   locale TEXT NOT NULL DEFAULT 'zh-CN',
   translation_configuration TEXT,
   translation_configuration_version INTEGER NOT NULL DEFAULT 0,
@@ -409,6 +411,17 @@ export function openDatabase(databasePath: string): DatabaseHandle {
   // Migration: add realtime_push_enabled column for existing databases
   try {
     db.prepare("ALTER TABLE app_settings ADD COLUMN realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1))").run();
+  } catch {
+    // Column already exists
+  }
+  // Migration: add desktop behavior columns for existing databases
+  try {
+    db.prepare("ALTER TABLE app_settings ADD COLUMN launch_at_startup INTEGER NOT NULL DEFAULT 0 CHECK (launch_at_startup IN (0, 1))").run();
+  } catch {
+    // Column already exists
+  }
+  try {
+    db.prepare("ALTER TABLE app_settings ADD COLUMN global_shortcut_enabled INTEGER NOT NULL DEFAULT 0 CHECK (global_shortcut_enabled IN (0, 1))").run();
   } catch {
     // Column already exists
   }
