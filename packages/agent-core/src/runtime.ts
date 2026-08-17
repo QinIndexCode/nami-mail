@@ -146,6 +146,9 @@ export class AgentRuntime {
       }));
     }
     const executionAccountIds = request.executionAccountIds ?? [];
+    const resolution = this.dependencies.tools.resolve(request.call, executionAccountIds);
+    if (!resolution.ok) return failureResult(request.call, resolution.error);
+
     const callerSelectedAccountIds = request.caller.accountScope.mode === "selected"
       ? request.caller.accountScope.accountIds
       : undefined;
@@ -154,24 +157,33 @@ export class AgentRuntime {
       || callerSelectedAccountIds
         && executionAccountIds.some((accountId) => !callerSelectedAccountIds.includes(accountId))
     ) {
-      return failureResult(request.call, createAgentError({
+      const error = createAgentError({
         code: "SCOPE_DENIED",
         message: "The execution account scope is outside the caller authorization.",
-      }));
+      });
+      // Scope denials are authorization decisions: record them like every
+      // other denial so a missing audit line cannot hide repeated attempts.
+      await this.appendAudit("denied", request, resolution, error);
+      return failureResult(request.call, error);
     }
-    const resolution = this.dependencies.tools.resolve(request.call, executionAccountIds);
-    if (!resolution.ok) return failureResult(request.call, resolution.error);
-
     const permission = this.dependencies.permissions.evaluate({
       caller: request.caller,
       tool: resolution.tool.descriptor,
       accountIds: resolution.accountIds,
     });
-    if (permission.status === "denied") return failureResult(request.call, permission.error);
+    if (permission.status === "denied") {
+      await this.appendAudit("denied", request, resolution, permission.error);
+      return failureResult(request.call, permission.error);
+    }
 
     if (permission.status === "confirmation_required") {
       const confirmationResult = await this.resolveConfirmation(request, resolution);
-      if ("status" in confirmationResult) return confirmationResult;
+      if ("status" in confirmationResult) {
+        if (confirmationResult.status === "denied") {
+          await this.appendAudit("denied", request, resolution, confirmationResult.error);
+        }
+        return confirmationResult;
+      }
     }
 
     if (resolution.tool.descriptor.executionMode === "high-risk") {

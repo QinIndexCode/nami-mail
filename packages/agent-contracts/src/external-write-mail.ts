@@ -36,7 +36,7 @@ export const outboundSubmissionStatuses = [
 export const draftRecipientInputSchema = z.object({
   name: z.string().trim().min(1).max(externalMailWriteBounds.recipientNameCharacters).optional(),
   address: z.string().trim().email().max(externalMailWriteBounds.recipientAddressCharacters),
-});
+}).strict();
 
 const outboundAttachmentTokenSchema = z.string().regex(/^out_[0-9a-f-]{36}$/);
 const outboundAttachmentTokensSchema = z.array(outboundAttachmentTokenSchema).max(10).optional();
@@ -65,11 +65,11 @@ function validateDraftRecipients(
   }
 }
 
-export const externalDraftCreateInputSchema = z.object(draftMutationInputShape).superRefine(validateDraftRecipients);
+export const externalDraftCreateInputSchema = z.object(draftMutationInputShape).strict().superRefine(validateDraftRecipients);
 export const externalDraftUpdateInputSchema = z.object({
   ...draftMutationInputShape,
   draftId: draftIdentifierSchema,
-}).superRefine(validateDraftRecipients);
+}).strict().superRefine(validateDraftRecipients);
 export const externalDraftDeleteInputSchema = z.object({
   accountId: accountIdSchema,
   draftId: draftIdentifierSchema,
@@ -83,7 +83,7 @@ export const externalSetFlagInputSchema = z.object({
   flag: z.enum(["seen", "flagged"]),
   value: z.boolean(),
 }).strict();
-export const externalSendMailInputSchema = z.object(draftMutationInputShape);
+export const externalSendMailInputSchema = z.object(draftMutationInputShape).strict();
 export const externalReplyMailInputSchema = z.object({
   accountId: accountIdSchema,
   messageId: messageIdSchema,
