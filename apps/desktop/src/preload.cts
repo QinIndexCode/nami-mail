@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { agentConfirmationIpcChannel } from "./agent/confirmation-channel.cjs";
 
 type NativeNotification = {
   title: string;
@@ -80,7 +81,6 @@ const updateSnapshotKeys = new Set([
 ]);
 const updateSnapshotArgumentKeys = new Set(["installStage", "cleanupComplete"]);
 const updateInstallResultKeys = new Set(["accepted", "snapshot"]);
-const agentConfirmationIpcChannel = "nami:resolve-agent-confirmation";
 const agentConfirmationIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const agentConfirmationDecisions = ["approve", "reject"] as const;
 const agentConfirmationResultKeys = new Set(["ok"]);

@@ -6,6 +6,7 @@ import {
   createAgentFailureEnvelope,
   createAgentSuccessEnvelope,
   getExternalReadMailContract,
+  getExternalWriteMailContract,
   providerHealthSchema,
   type AgentResponseEnvelope,
   type AgentError,
@@ -1361,9 +1362,28 @@ export class AgentService {
     }
 
     // Write path — only the confirm-every-write and full-access levels. The
-    // tool is resolved before the access-level gate so that tools outside the
-    // External Mail v1 surface stay NOT_SUPPORTED at every level, while
-    // published write tools at read-only are PERMISSION_DENIED.
+    // versioned External Mail v1 contract gates the surface: unknown tools are
+    // NOT_SUPPORTED at every level, and published write tools whose input does
+    // not match the documented shape are TOOL_INPUT_INVALID, exactly like the
+    // read path. The access-level gate below stays separate so read-only
+    // callers of a valid write tool get PERMISSION_DENIED.
+    const writeContract = getExternalWriteMailContract(toolName);
+    if (!writeContract) {
+      return fail(createAgentError({
+        code: "NOT_SUPPORTED",
+        message: "This mail tool is not part of the external Nami Mail interface.",
+      }));
+    }
+    const parsedWriteInput = writeContract.inputSchema.safeParse(input.input);
+    if (!parsedWriteInput.success) {
+      const issueMessages = parsedWriteInput.error.issues
+        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+        .join("; ");
+      return fail(createAgentError({
+        code: "TOOL_INPUT_INVALID",
+        message: `The ${toolName} input does not match its schema. Issues: ${issueMessages}. Check the tool description for the accepted parameters.`,
+      }));
+    }
     const executionAccountIds = caller.accountScope.mode === "all"
       ? this.activeAccountIds()
       : caller.accountScope.mode === "selected"
@@ -1378,7 +1398,7 @@ export class AgentService {
     const call: ToolCall = {
       id: `external-tool-${randomUUID()}`,
       toolName,
-      input: input.input,
+      input: parsedWriteInput.data,
       requestedAt: now(),
     };
     const resolution = this.tools.resolve(call, executionAccountIds);
@@ -1464,7 +1484,7 @@ export class AgentService {
         }));
       }
       if (approved.result.status !== "succeeded") return fail(approved.result.error);
-      const approvedOutput = resolution.tool.outputSchema.safeParse(approved.result.output);
+      const approvedOutput = writeContract.outputSchema.safeParse(approved.result.output);
       if (!approvedOutput.success || !isBrokerJsonValue(approvedOutput.data)) {
         return fail(createAgentError({
           code: "TOOL_EXECUTION_FAILED",
@@ -1478,7 +1498,7 @@ export class AgentService {
       });
     }
     if (invocation.result.status !== "succeeded") return fail(invocation.result.error);
-    const parsedOutput = resolution.tool.outputSchema.safeParse(invocation.result.output);
+    const parsedOutput = writeContract.outputSchema.safeParse(invocation.result.output);
     if (!parsedOutput.success || !isBrokerJsonValue(parsedOutput.data)) {
       return fail(createAgentError({
         code: "TOOL_EXECUTION_FAILED",
