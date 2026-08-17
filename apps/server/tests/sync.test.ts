@@ -1511,6 +1511,16 @@ describe("IMAP message flag updates", () => {
         sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run("pending-move", "account-1", "INBOX", -42, "Archive", "Pending move", "Demo", "demo@example.com", "[]", now, "", "", "", "[]", 0, 0, now);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, pending_move_destination, pending_move_state, pending_move_special_use,
+        subject, from_name, from_address, to_json, sent_at, snippet, text_body, html_body,
+        flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "stale-intent", "account-1", "INBOX", 2, "Archive", "intent", "\\Archive",
+      "Stale intent", "Demo", "demo@example.com", "[]", now, "", "", "", "[]", 0, 0, now,
+    );
     Object.assign(client, {
       mailbox: { exists: 1, uidValidity: 200n },
       list: vi.fn(async () => [inbox]),
@@ -1523,6 +1533,10 @@ describe("IMAP message flag updates", () => {
 
     expect(db.prepare("SELECT id FROM messages WHERE id = ?").get("message-1")).toBeUndefined();
     expect(db.prepare("SELECT id FROM messages WHERE id = ?").get("stale-reused-uid")).toBeUndefined();
+    // The reset destroys the UID epoch the intent was verified against; the
+    // intent row is dropped with the rest of the folder cache instead of being
+    // stranded under a negative placeholder it can never recover from.
+    expect(db.prepare("SELECT id FROM messages WHERE id = ?").get("stale-intent")).toBeUndefined();
     expect(db.prepare("SELECT mailbox, uid, pending_move_destination FROM messages WHERE id = ?").get("pending-move"))
       .toEqual({ mailbox: "INBOX", uid: -42, pending_move_destination: "Archive" });
     const replacementRow = db.prepare("SELECT * FROM messages WHERE account_id = ? AND mailbox = ? AND uid = ?")
@@ -1535,6 +1549,65 @@ describe("IMAP message flag updates", () => {
     });
     expect(db.prepare("SELECT uid_validity FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
       .toEqual({ uid_validity: "200" });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the local cache when LIST returns no folders", async () => {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, path) DO UPDATE SET
+        name = excluded.name,
+        special_use = excluded.special_use,
+        total = excluded.total,
+        unseen = excluded.unseen,
+        uid_validity = excluded.uid_validity
+    `)
+      .run("account-1", "INBOX", "Inbox", "\\Inbox", 2, 1, "100");
+    Object.assign(client, {
+      list: vi.fn(async () => []),
+    });
+    client.getMailboxLock.mockImplementation(async () => lock);
+
+    // An empty LIST is a provider/connection artifact, never proof that all
+    // folders vanished: the previous folder set and every cached message must
+    // survive until the next pass recovers.
+    await expect(syncAccount(db, Buffer.alloc(32, 7), "account-1", 20)).resolves.toMatchObject({ synced: 0, folders: 0 });
+
+    expect(db.prepare("SELECT total, unseen, uid_validity FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
+      .toEqual({ total: 2, unseen: 1, uid_validity: "100" });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE account_id = ?").get("account-1"))
+      .not.toEqual({ count: 0 });
+  });
+
+  it("retains previous folder counts when STATUS is denied", async () => {
+    db.prepare(`
+      INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, path) DO UPDATE SET
+        name = excluded.name,
+        special_use = excluded.special_use,
+        total = excluded.total,
+        unseen = excluded.unseen,
+        uid_validity = excluded.uid_validity
+    `)
+      .run("account-1", "INBOX", "Inbox", "\\Inbox", 7, 3, "100");
+    const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
+    const fetch = vi.fn(async function* () {});
+    Object.assign(client, {
+      mailbox: { exists: 1, uidValidity: 100n },
+      list: vi.fn(async () => [inbox]),
+      status: vi.fn(async () => {
+        throw new Error("STATUS not permitted for virtual folder");
+      }),
+      fetch,
+    });
+    client.getMailboxLock.mockImplementation(async () => lock);
+
+    await expect(syncAccount(db, Buffer.alloc(32, 7), "account-1", 20)).resolves.toMatchObject({ synced: 0, folders: 1 });
+
+    // A failed STATUS must not clobber the last known counts into zero (which
+    // would trip unread badges) until the next successful STATUS.
+    expect(db.prepare("SELECT total, unseen, uid_validity FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
+      .toEqual({ total: 7, unseen: 3, uid_validity: "100" });
   });
 });

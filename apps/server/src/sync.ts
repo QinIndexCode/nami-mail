@@ -402,11 +402,13 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     const folders = (await client.list())
       .filter(isSelectableFolder)
       .sort((a, b) => folderPriority(a) - folderPriority(b) || a.name.localeCompare(b.name));
-    const previousFolderUidValidities = new Map(
-      (db.prepare("SELECT path, uid_validity FROM folders WHERE account_id = ?").all(accountId) as Array<{
+    const previousFolderState = new Map(
+      (db.prepare("SELECT path, uid_validity, total, unseen FROM folders WHERE account_id = ?").all(accountId) as Array<{
         path: string;
         uid_validity: string | null;
-      }>).map((folder) => [folder.path, folder.uid_validity]),
+        total: number;
+        unseen: number;
+      }>).map((folder) => [folder.path, folder]),
     );
     const upsertFolder = db.prepare(`
       INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity)
@@ -434,16 +436,20 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       } catch {
         // Some providers do not permit STATUS for every virtual folder.
       }
+      const previous = previousFolderState.get(folder.path);
       folderRows.push({
         path: folder.path,
         name: folder.name || folder.path,
         specialUse: folder.specialUse ?? null,
-        total: status.messages ?? 0,
-        unseen: status.unseen ?? 0,
+        // STATUS can be denied for virtual folders; falling back to zero would
+        // clobber the last known counts (and trip unread badges) until the
+        // next successful STATUS. Keep the previous observation instead.
+        total: status.messages ?? previous?.total ?? 0,
+        unseen: status.unseen ?? previous?.unseen ?? 0,
         // Do not accept a status-only UIDVALIDITY observation. It must be
         // confirmed by the successful mailbox SELECT below before old cache
         // rows can be considered part of the same UID epoch.
-        uidValidity: previousFolderUidValidities.get(folder.path) ?? null,
+        uidValidity: previous?.uid_validity ?? null,
       });
     }
 
@@ -456,42 +462,48 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       all_mail_archived: number | null;
     };
     const activeFolderPaths = folderRows.map((folder) => folder.path);
-    const inactiveFolderClause = activeFolderPaths.length
-      ? ` AND mailbox NOT IN (${activeFolderPaths.map(() => "?").join(", ")})`
-      : "";
-    const listMessagesInRemovedFolders = db.prepare(`
-      SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
-      FROM messages
-      WHERE account_id = ?${inactiveFolderClause}
-        AND COALESCE(pending_move_destination, '') = ''
-    `);
-    const deleteMessagesInRemovedFolders = db.prepare(`
-      DELETE FROM messages
-      WHERE account_id = ?${inactiveFolderClause}
-        AND COALESCE(pending_move_destination, '') = ''
-    `);
+    if (activeFolderPaths.length === 0) {
+      // An empty LIST is a provider/connection artifact, not proof that every
+      // folder vanished. Treating it as removal would delete the whole local
+      // cache. Keep the previous folder set untouched and let the next pass
+      // recover, like every other transient provider failure.
+      console.warn(`IMAP LIST returned no folders for account ${accountId}; skipping folder-removal pass`);
+    } else {
+      const inactiveFolderClause = ` AND mailbox NOT IN (${activeFolderPaths.map(() => "?").join(", ")})`;
+      const listMessagesInRemovedFolders = db.prepare(`
+        SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
+        FROM messages
+        WHERE account_id = ?${inactiveFolderClause}
+          AND COALESCE(pending_move_destination, '') = ''
+      `);
+      const deleteMessagesInRemovedFolders = db.prepare(`
+        DELETE FROM messages
+        WHERE account_id = ?${inactiveFolderClause}
+          AND COALESCE(pending_move_destination, '') = ''
+      `);
 
-    db.transaction(() => {
-      const removedMessages = listMessagesInRemovedFolders.all(
-        accountId,
-        ...activeFolderPaths,
-      ) as RemovedMessage[];
-      deleteMessagesInRemovedFolders.run(accountId, ...activeFolderPaths);
-      if (agentEvents && agentLease) {
-        for (const removed of removedMessages) {
-          agentEvents.messageDeletedWithinTransaction(agentLease, removed.id, {
-            reason: "folder-removed",
-            mailbox: removed.mailbox,
-            uid: removed.uid,
-            remoteIdLookup: removed.remote_id_lookup,
-            flagsJson: removed.flags_json,
-            allMailArchived: removed.all_mail_archived,
-          });
+      db.transaction(() => {
+        const removedMessages = listMessagesInRemovedFolders.all(
+          accountId,
+          ...activeFolderPaths,
+        ) as RemovedMessage[];
+        deleteMessagesInRemovedFolders.run(accountId, ...activeFolderPaths);
+        if (agentEvents && agentLease) {
+          for (const removed of removedMessages) {
+            agentEvents.messageDeletedWithinTransaction(agentLease, removed.id, {
+              reason: "folder-removed",
+              mailbox: removed.mailbox,
+              uid: removed.uid,
+              remoteIdLookup: removed.remote_id_lookup,
+              flagsJson: removed.flags_json,
+              allMailArchived: removed.all_mail_archived,
+            });
+          }
         }
-      }
-      db.prepare("DELETE FROM folders WHERE account_id = ?").run(accountId);
-      for (const folder of folderRows) upsertFolder.run({ accountId, ...folder });
-    })();
+        db.prepare("DELETE FROM folders WHERE account_id = ?").run(accountId);
+        for (const folder of folderRows) upsertFolder.run({ accountId, ...folder });
+      })();
+    }
 
     const upsert = db.prepare(`
       INSERT INTO messages (
@@ -579,10 +591,6 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           pending_move_candidate_uid = NULL,
           pending_move_special_use = NULL
       WHERE account_id = ? AND mailbox = ? AND uid = ? AND pending_move_state = 'intent'
-    `);
-    const detachPendingMoveIntentFromResetMailbox = db.prepare(`
-      UPDATE messages SET uid = ?
-      WHERE id = ? AND pending_move_state = 'intent'
     `);
     const clearPendingCandidateUid = db.prepare(`
       UPDATE messages
@@ -829,7 +837,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         lock = await client.getMailboxLock(folder.path);
         const mailbox = client.mailbox && typeof client.mailbox !== "boolean" ? client.mailbox : undefined;
         const currentUidValidity = uidValidityValue(mailbox?.uidValidity);
-        const previousUidValidity = previousFolderUidValidities.get(folder.path);
+        const previousUidValidity = previousFolderState.get(folder.path)?.uid_validity ?? undefined;
         const pendingMoveTouchesFolder = Boolean(folderHasPendingMove.get(accountId, folder.path, folder.path));
         const intentRows = pendingMoveIntents.all(accountId, folder.path) as Array<{
           id: string;
@@ -847,6 +855,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         if (intentUids.length) {
           const inspectedSourceUids = new Set<number>();
           for await (const source of client.fetch(intentUids, { uid: true }, { uid: true })) {
+            if (signal?.aborted) throw new SyncAbortedError();
             if (!source.uid) continue;
             inspectedSourceUids.add(source.uid);
             const intent = intentByUid.get(source.uid);
@@ -870,13 +879,31 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
             // UID reuse after a server rebuild can otherwise leave a different
             // message paired with an old cached body or attachment list.
             db.transaction(() => {
-              const pendingIntents = pendingMoveIntents.all(accountId, folder.path) as Array<{ id: string; uid: number }>;
-              for (const pendingIntent of pendingIntents) {
-                // The old UID epoch no longer proves source membership. Retain
-                // the intent under a local placeholder so a new server UID
-                // cannot overwrite its encrypted cache row.
-                const localPendingUid = pendingMoveUid(db, accountId, folder.path, pendingIntent.uid);
-                detachPendingMoveIntentFromResetMailbox.run(localPendingUid, pendingIntent.id);
+              // A reset destroys the UID epoch the intent was verified
+              // against. Under a local negative placeholder the intent can no
+              // longer re-enter the sync lifecycle (every recovery path
+              // requires uid > 0), leaving a ghost row that also permanently
+              // blocks the user's next move attempt on that message. The reset
+              // already deletes every other cache row of this folder, so drop
+              // uncertain intents with it; firmly confirmed moves reconcile by
+              // identity against the new epoch and survive.
+              const resetIntentRows = db.prepare(`
+                SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
+                FROM messages
+                WHERE account_id = ? AND mailbox = ? AND pending_move_state = 'intent'
+              `).all(accountId, folder.path) as Array<{
+                id: string;
+                mailbox: string;
+                uid: number;
+                remote_id_lookup: string | null;
+                flags_json: string;
+                all_mail_archived: number | null;
+              }>;
+              if (resetIntentRows.length) {
+                db.prepare(`
+                  DELETE FROM messages
+                  WHERE account_id = ? AND mailbox = ? AND pending_move_state = 'intent'
+                `).run(accountId, folder.path);
               }
               const resetRows = db.prepare(`
                 SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
@@ -893,10 +920,10 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
               deleteFolderMessages.run(accountId, folder.path);
               updateFolderUidValidity.run(currentUidValidity, accountId, folder.path);
               if (agentEvents && agentLease) {
-                for (const removed of resetRows) {
+                for (const removed of [...resetRows, ...resetIntentRows]) {
                   agentEvents.messageDeletedWithinTransaction(agentLease, removed.id, {
                     reason: "folder-uid-validity-reset",
-                    mailbox: removed.mailbox,
+                    mailbox: folder.path,
                     uid: removed.uid,
                     remoteIdLookup: removed.remote_id_lookup,
                     flagsJson: removed.flags_json,
@@ -925,6 +952,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
             flags: true,
             labels: isAllMailFolder(folder),
           }, { uid: true })) {
+            if (signal?.aborted) throw new SyncAbortedError();
             if (!candidate.uid) continue;
             inspectedCandidates.add(candidate.uid);
             const reconciliation = reconcilePendingRemoteMessage(folder, candidate);
@@ -957,6 +985,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           flags: true,
           labels: isAllMailFolder(folder) || autoReplyActive,
         })) {
+          if (signal?.aborted) throw new SyncAbortedError();
           if (!message.uid) continue;
           const flagsJson = JSON.stringify([...(message.flags ?? [])]);
           const remoteLookup = remoteIdLookup(masterKey, accountId, message.emailId);
@@ -1026,6 +1055,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           },
           { uid: true },
         )) {
+          if (signal?.aborted) throw new SyncAbortedError();
           if (!message.uid) continue;
           const parsed = message.source ? await simpleParser(message.source) : null;
           const from = addressValues(parsed?.from)[0] ?? {
@@ -1144,6 +1174,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         }
         if (sameUidValidity && !pendingMoveTouchesFolder) await reconcileRemoteDeletionBatch(folder, currentUidValidity);
       } catch (error) {
+        if (error instanceof SyncAbortedError) throw error;
         failedFolders += 1;
         firstFolderError ??= error;
       } finally {
@@ -1157,16 +1188,22 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     // those exact observations locally so a completed remote MOVE does not
     // remain pending until the next account sync.
     if (sourceMembershipAbsentIntentIds.size > 0) {
-      for (const deferred of deferredPendingRemoteMessages) {
-        const remoteLookup = remoteIdLookup(masterKey, accountId, deferred.message.emailId);
-        if (!remoteLookup) continue;
-        const pendingRows = findPendingMoves.all(accountId, deferred.folder.path, remoteLookup) as MessageStorageRow[];
-        const pending = pendingRows.length === 1 ? pendingRows[0] : undefined;
-        // A deferred item is already an exact HMAC match from its first
-        // observation. Re-check its still-pending intent here so absence from
-        // one source folder can never reconcile another pending move.
-        if (!pending || pending.pending_move_state !== "intent" || !sourceMembershipAbsentIntentIds.has(pending.id)) continue;
-        reconcilePendingRemoteMessage(deferred.folder, deferred.message);
+      try {
+        for (const deferred of deferredPendingRemoteMessages) {
+          const remoteLookup = remoteIdLookup(masterKey, accountId, deferred.message.emailId);
+          if (!remoteLookup) continue;
+          const pendingRows = findPendingMoves.all(accountId, deferred.folder.path, remoteLookup) as MessageStorageRow[];
+          const pending = pendingRows.length === 1 ? pendingRows[0] : undefined;
+          // A deferred item is already an exact HMAC match from its first
+          // observation. Re-check its still-pending intent here so absence from
+          // one source folder can never reconcile another pending move.
+          if (!pending || pending.pending_move_state !== "intent" || !sourceMembershipAbsentIntentIds.has(pending.id)) continue;
+          reconcilePendingRemoteMessage(deferred.folder, deferred.message);
+        }
+      } catch (error) {
+        // Replay is a local-only refinement after the folder passes already
+        // succeeded; a failure here must not fail the whole sync pass.
+        console.warn(`Pending move replay failed for account ${accountId}:`, error);
       }
     }
 
@@ -1186,7 +1223,13 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     }
     // The provider's Sent folder is the strongest confirmation available to
     // IMAP/SMTP accounts after an interrupted or merely SMTP-accepted send.
-    confirmSubmissionsInSent(db, masterKey, accountId);
+    try {
+      confirmSubmissionsInSent(db, masterKey, accountId);
+    } catch (error) {
+      // The pass itself already succeeded; a Sent verification failure must
+      // not surface as a failed sync (it would mask the healthy update above).
+      console.warn(`Sent-folder submission verification failed for account ${accountId}:`, error);
+    }
     pendingRuleTargets = newInboxMessages;
     pendingAutoReplyTargets = newInboxMessages.map((message) => message.id);
     return { synced, folders: folders.length, failedFolders, newInboxMessages };
