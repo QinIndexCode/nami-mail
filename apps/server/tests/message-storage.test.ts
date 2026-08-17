@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import {
   MAX_ENCRYPTED_SEARCH_CANDIDATES,
+  encryptMessagePayload,
   messagePayloadForRow,
   messagePayloadMatchesQuery,
   migrateMessageStorage,
@@ -94,6 +95,31 @@ describe("encrypted message storage", () => {
     const replacement = encrypted.endsWith("A") ? "B" : "A";
     row.encrypted_payload = `${encrypted.slice(0, -1)}${replacement}`;
     expect(() => messagePayloadForRow(row, key)).toThrow();
+    db.close();
+  });
+
+  it("serves repeated payload reads from the in-process cache and invalidates on re-encryption", () => {
+    const db = openDatabase(":memory:");
+    const key = randomBytes(32);
+    insertAccount(db);
+    insertLegacyMessage(db, "cache-canary");
+    migrateMessageStorage(db, key);
+    const row = db.prepare("SELECT * FROM messages WHERE id = 'message-1'").get() as MessageStorageRow;
+
+    const first = messagePayloadForRow(row, key);
+    const second = messagePayloadForRow(row, key);
+    expect(second).toBe(first);
+    expect(second.subject).toBe("Subject cache-canary");
+
+    // Any re-encryption produces a new ciphertext, so the fingerprint part of
+    // the cache key must force a fresh decrypt instead of a stale hit.
+    const reencrypted = {
+      ...row,
+      encrypted_payload: encryptMessagePayload(key, row.id, row.account_id, first),
+    } as MessageStorageRow;
+    const refreshed = messagePayloadForRow(reencrypted, key);
+    expect(refreshed).not.toBe(first);
+    expect(refreshed.subject).toBe(first.subject);
     db.close();
   });
 
