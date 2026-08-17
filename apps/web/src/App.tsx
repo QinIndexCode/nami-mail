@@ -209,6 +209,45 @@ function isCompactMailLayout(): boolean {
   return window.matchMedia("(max-width: 620px)").matches;
 }
 
+// Owns its own 500 ms tick and expiry so a live countdown does not re-render
+// the whole mailbox (list, reader, dialogs) while an account alert is up.
+function AccountHealthBanner({
+  until,
+  issueCount,
+  problemTitle,
+  onShowReasons,
+  onExpire,
+}: {
+  until: number;
+  issueCount: number;
+  problemTitle: string;
+  onShowReasons: () => void;
+  onExpire: () => void;
+}) {
+  const { t } = useI18n();
+  const [now, setNow] = useState(() => Date.now());
+  const expiredRef = useRef(false);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const current = Date.now();
+      setNow(current);
+      if (!expiredRef.current && current >= until) {
+        expiredRef.current = true;
+        onExpire();
+      }
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [until, onExpire]);
+  return (
+    <div className="account-health-banner" role="status">
+      <CircleAlert size={17} />
+      <span><strong>{t("mail.accountAttention", { count: issueCount })}</strong><small>{problemTitle}</small><em className="account-health-countdown">{t("mail.accountAttentionCountdown", { seconds: Math.max(1, Math.ceil((until - now) / 1000)) })}</em></span>
+      <button type="button" onClick={onShowReasons}>{t("mail.viewReason")}</button>
+      <button type="button" className="account-health-dismiss" aria-label={t("mail.accountHealthDismiss")} onClick={onExpire}><X size={14} /></button>
+    </div>
+  );
+}
+
 function buildMessageQuery({
   accountId,
   folder,
@@ -567,7 +606,6 @@ export default function App() {
   // set changes and auto-dismisses after a few seconds with a visible
   // countdown. The sidebar status dot stays red/green until the account heals.
   const [healthAlert, setHealthAlert] = useState<{ until: number } | null>(null);
-  const [healthTick, setHealthTick] = useState(() => Date.now());
   const prevHealthFingerprintRef = useRef("");
   const [autoReplyNotices, setAutoReplyNotices] = useState<DesktopAutoReplyNotice[]>([]);
   const [fatalError, setFatalError] = useState<MailErrorPresentation | null>(null);
@@ -1622,18 +1660,10 @@ await refreshSubmissions(nextAccounts, { silent: true });
       setHealthAlert(null);
       return;
     }
+    // The banner owns its ticking countdown; this only (re)arms the deadline
+    // so a persistent problem does not nag again until its alert window ends.
     setHealthAlert({ until: Date.now() + ACCOUNT_HEALTH_ALERT_MS });
-    setHealthTick(Date.now());
   }, [healthFingerprint]);
-  useEffect(() => {
-    if (!healthAlert) return;
-    const timer = window.setInterval(() => {
-      const now = Date.now();
-      setHealthTick(now);
-      if (now >= healthAlert.until) setHealthAlert(null);
-    }, 500);
-    return () => window.clearInterval(timer);
-  }, [healthAlert]);
   const safeHtml = useMemo(
     () => selected?.htmlBody ? sanitizeMailHtml(selected.htmlBody, theme === "dark") : "",
     [selected?.htmlBody, theme],
@@ -3440,13 +3470,14 @@ await refreshSubmissions(nextAccounts, { silent: true });
             <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={selectionMode ? t("mail.selection.done") : t("mail.selection.select")} className={selectionMode ? "selection-toggle active" : "selection-toggle"} onClick={toggleSelectionMode} disabled={!accounts.length}><SquareCheckBig size={17} /></IconButton><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? openCompose() : setAddOpen(true)}><PenLine size={17} /></IconButton>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton><button ref={agentLaunchButtonRef} className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button></div>
           </header>
 
-          {healthAlert && (
-            <div className="account-health-banner" role="status">
-              <CircleAlert size={17} />
-              <span><strong>{t("mail.accountAttention", { count: accountsNeedingAttention.length })}</strong><small>{primaryAccountNeedingAttention && primaryAccountIssue ? t("mail.accountProblem", { email: primaryAccountNeedingAttention.email, title: primaryAccountIssue.title }) : t("mail.otherAccountsAvailable")}</small><em className="account-health-countdown">{t("mail.accountAttentionCountdown", { seconds: Math.max(1, Math.ceil((healthAlert.until - healthTick) / 1000)) })}</em></span>
-              <button type="button" onClick={() => { setAccountsOpen(true); setHealthAlert(null); }}>{t("mail.viewReason")}</button>
-              <button type="button" className="account-health-dismiss" aria-label={t("mail.accountHealthDismiss")} onClick={() => setHealthAlert(null)}><X size={14} /></button>
-            </div>
+          {healthAlert && healthAlert.until > Date.now() && (
+            <AccountHealthBanner
+              until={healthAlert.until}
+              issueCount={accountsNeedingAttention.length}
+              problemTitle={primaryAccountNeedingAttention && primaryAccountIssue ? t("mail.accountProblem", { email: primaryAccountNeedingAttention.email, title: primaryAccountIssue.title }) : t("mail.otherAccountsAvailable")}
+              onShowReasons={() => { setAccountsOpen(true); setHealthAlert(null); }}
+              onExpire={() => setHealthAlert(null)}
+            />
           )}
 
           <div className={`list-toolbar-frame${selectionMode ? " selection-on" : ""}`}>
