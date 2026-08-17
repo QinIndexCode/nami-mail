@@ -298,21 +298,6 @@ const batchJobCreateSchema = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 
-/** Runs an IMAP-touching operation across many messages, returning per-message outcome counts. */
-async function runBatchMessageOperation<T>(ids: readonly string[], operate: (id: string) => Promise<T>): Promise<{ updated: number; failed: number }> {
-  let updated = 0;
-  let failed = 0;
-  for (const id of ids) {
-    try {
-      await operate(id);
-      updated += 1;
-    } catch {
-      failed += 1;
-    }
-  }
-  return { updated, failed };
-}
-
 const interfaceLocaleSchema = z.string().trim().max(32)
   .refine((value) => Boolean(supportedLocale(value)), { message: "Unsupported interface language." })
   .transform((value) => supportedLocale(value)!);
