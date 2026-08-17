@@ -15203,6 +15203,17 @@ font-size:10px;
 line-height:1.55;
 overflow-y:auto
 }
+.auto-reply-toast-error
+{
+color:var(--danger);
+border:1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+background:color-mix(in srgb, var(--danger) 9%, transparent);
+border-radius:7px;
+margin:6px 0 0;
+padding:6px 9px;
+font-size:11px;
+line-height:1.45
+}
 .auto-reply-toast-footer
 {
 align-items:center;

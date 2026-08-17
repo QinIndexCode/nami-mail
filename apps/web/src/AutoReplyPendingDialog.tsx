@@ -95,6 +95,7 @@ export function AutoReplyPendingCard({
 export default function AutoReplyPendingDialog({ accounts, onClose, fallbackFocusRef }: AutoReplyPendingDialogProps) {
   const { t } = useI18n();
   const dialogRef = useRef<HTMLElement>(null);
+  const refreshInFlightRef = useRef(false);
   const [items, setItems] = useState<AutoReplyPendingSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -110,6 +111,10 @@ export default function AutoReplyPendingDialog({ accounts, onClose, fallbackFocu
   const { closing, requestClose } = useDismissTransition(onClose);
 
   const refresh = useCallback(async () => {
+    // A refresh that outlives the poll interval races its successor; the
+    // slower response would then overwrite fresher items. Skip while running.
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     setError(null);
     setRefreshing(true);
     try {
@@ -120,6 +125,7 @@ export default function AutoReplyPendingDialog({ accounts, onClose, fallbackFocu
         ? requestError.message
         : t("autoReply.pending.loadError"));
     } finally {
+      refreshInFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }

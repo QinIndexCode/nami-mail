@@ -569,7 +569,6 @@ export default function App() {
   /** Whether the header search box is expanded (icon-only when collapsed). */
   const [searchOpen, setSearchOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [, setLoadingMore] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
@@ -599,7 +598,6 @@ export default function App() {
   const [readerMoreOpen, setReaderMoreOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [snoozeCustomUntil, setSnoozeCustomUntil] = useState("");
-  const [, setSnoozeBusy] = useState(false);
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [toast, setToast] = useState<ToastNotice>(null);
   // Account-health banner is transient: it appears when the unhealthy-account
@@ -1526,7 +1524,6 @@ await refreshSubmissions(nextAccounts, { silent: true });
   const loadMore = async () => {
     if (loading || loadingMoreRef.current || loadedServerMessageCount >= currentMessageTotal) return;
     loadingMoreRef.current = true;
-    setLoadingMore(true);
     const requestId = loadRequestRef.current;
     try {
       const nextQuery = buildMessageQuery({
@@ -1554,7 +1551,6 @@ await refreshSubmissions(nextAccounts, { silent: true });
       if (requestId === loadRequestRef.current) showToast(mailErrorToastMessage(error, undefined, t), "error");
     } finally {
       loadingMoreRef.current = false;
-      setLoadingMore(false);
     }
   };
 
@@ -1625,17 +1621,17 @@ await refreshSubmissions(nextAccounts, { silent: true });
   const sentFolder = selectedAccountRecord?.folders.find((folder) => folder.specialUse === "\\Sent");
   const draftsFolder = selectedAccountRecord?.folders.find((folder) => folder.specialUse === "\\Drafts");
   const selectedFolderRecord = selectedAccountRecord?.folders.find((folder) => folder.path === selectedFolder);
-  const emptyMessageList = query.trim()
+const emptyMessageList = useMemo(() => (query.trim()
     ? { title: t("mail.empty.searchTitle"), description: t("mail.empty.searchDescription"), canClearSearch: true }
     : view === "unread"
       ? { title: t("mail.empty.unreadTitle"), description: t("mail.empty.unreadDescription"), canClearSearch: false }
     : view === "starred"
       ? { title: t("mail.empty.starredTitle"), description: t("mail.empty.starredDescription"), canClearSearch: false }
-      : view === "archived"
-        ? { title: t("mail.empty.archiveTitle"), description: t("mail.empty.archiveDescription"), canClearSearch: false }
-      : selectedFolderRecord
-          ? { title: t("mail.empty.folderTitle", { folder: selectedFolderRecord.name }), description: t("mail.empty.folderDescription"), canClearSearch: false }
-          : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false };
+    : view === "archived"
+      ? { title: t("mail.empty.archiveTitle"), description: t("mail.empty.archiveDescription"), canClearSearch: false }
+    : selectedFolderRecord
+        ? { title: t("mail.empty.folderTitle", { folder: selectedFolderRecord.name }), description: t("mail.empty.folderDescription"), canClearSearch: false }
+        : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false }), [query, selectedFolderRecord, t, view]);
   const accountIssues = useMemo(() => {
     const issues = new Map<string, MailErrorPresentation>();
     for (const account of accounts) {
@@ -2482,6 +2478,12 @@ await refreshSubmissions(nextAccounts, { silent: true });
     }
   };
 
+  const clearSearch = useCallback(() => {
+    setQuery("");
+    setDebouncedQuery("");
+    searchInputRef.current?.focus();
+  }, []);
+
   const batchMoveMessages = async (target: "archive" | "trash") => {
     const ids = [...selectedMessageIds];
     if (!ids.length && !selectAllPaged) return;
@@ -2495,6 +2497,9 @@ await refreshSubmissions(nextAccounts, { silent: true });
     // The selection leaves the list and the toolbar immediately; failures are
     // rolled back (re-inserted and re-selected) once the server responds.
     exitSelectionMode();
+    // Set when the inner settle throws so the success toast below cannot
+    // overwrite the error toast on the shared toast slot.
+    let settleFailed = false;
     try {
       if (isDemo) {
         setMessages((items) => {
@@ -2605,6 +2610,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
           // A mid-stream failure leaves earlier chunks moved server-side; roll
           // back only the unprocessed remainder plus any recorded failures,
           // then let a reload settle the rest.
+          settleFailed = true;
           const unreconciled = new Set(ids.slice(processed));
           for (const id of failedIds) unreconciled.add(id);
           rollback(unreconciled);
@@ -2612,7 +2618,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
           showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
         }
       }
-      showToast(t(target === "archive" ? "mail.selection.archived" : "mail.selection.trashed", { count: ids.length }));
+      if (!settleFailed) showToast(t(target === "archive" ? "mail.selection.archived" : "mail.selection.trashed", { count: ids.length }));
     } catch (error) {
       showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
     } finally {
@@ -2664,7 +2670,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     }
   };
 
-  const quickToggleStar = async (message: Message) => {
+  const quickToggleStar = useCallback(async (message: Message) => {
     if (selectedRemoteActionsBlocked) return;
     if (messageFlagging || messageAction) showToast(t("mail.action.queued"), "info");
     const nextFlagged = !message.flagged;
@@ -2685,9 +2691,9 @@ await refreshSubmissions(nextAccounts, { silent: true });
     } finally {
       setMessageFlagging(false);
     }
-  };
+  }, [isDemo, load, messageAction, messageFlagging, selectedRemoteActionsBlocked, showToast, t]);
 
-  const quickMoveMessage = async (message: Message, target: "archive" | "trash") => {
+  const quickMoveMessage = useCallback(async (message: Message, target: "archive" | "trash") => {
     // The server queues a second write behind the in-flight one; surface that
     // instead of silently dropping the click.
     if (batchBusy || messageAction !== null || messageFlagging) showToast(t("mail.action.queued"), "info");
@@ -2776,7 +2782,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     } finally {
       setMessageAction(null);
     }
-  };
+  }, [accounts, batchBusy, filteredMessages, isDemo, load, messageAction, messageFlagging, messages, query, selectedAccount, selectedFolder, showToast, stats, t, view]);
 
   const snoozeOptions = useMemo(() => [
     { key: "inOneHour", label: t("mail.snooze.inOneHour"), compute: () => new Date(Date.now() + 60 * 60_000) },
@@ -2842,7 +2848,6 @@ await refreshSubmissions(nextAccounts, { silent: true });
   const setSelectedSnoozed = async (untilIso: string) => {
     if (!selected || selectedRemoteActionsBlocked) return;
     const previousUntil = selected.snoozedUntil ?? null;
-    setSnoozeBusy(true);
     setSnoozeOpen(false);
     setSnoozeCustomUntil("");
     // Optimistic: apply the local snooze before the provider round-trip; a
@@ -2854,15 +2859,12 @@ await refreshSubmissions(nextAccounts, { silent: true });
     } catch (error) {
       applyLocalSnooze(selected.id, previousUntil, untilIso);
       showToast(mailErrorToastMessage(error, t("mail.error.snooze"), t), "error");
-    } finally {
-      setSnoozeBusy(false);
     }
   };
 
   const clearSelectedSnooze = async () => {
     if (!selected) return;
     const previousUntil = selected.snoozedUntil ?? null;
-    setSnoozeBusy(true);
     setSnoozeOpen(false);
     // Optimistic: the row leaves the snoozed view (and the reader closes)
     // immediately; a failure restores both.
@@ -2875,8 +2877,6 @@ await refreshSubmissions(nextAccounts, { silent: true });
       applyLocalSnooze(selected.id, previousUntil, null);
       if (viewRef.current === "snoozed") setSelectedId(selected.id);
       showToast(mailErrorToastMessage(error, t("mail.error.snooze"), t), "error");
-    } finally {
-      setSnoozeBusy(false);
     }
   };
 
@@ -3113,7 +3113,13 @@ await refreshSubmissions(nextAccounts, { silent: true });
     if (isDemo || desktopBridge()) return undefined;
     let known = new Set<string>();
     let disposed = false;
+    let inFlight = false;
     const poll = async () => {
+      // A poll that outlives the 20s interval would race its successor: the
+      // stale response could re-add already-known notices or prune notices the
+      // fresher response just surfaced. Skip while one is still running.
+      if (inFlight) return;
+      inFlight = true;
       try {
         const { items } = await api.autoReplyPending();
         if (disposed) return;
@@ -3148,6 +3154,8 @@ await refreshSubmissions(nextAccounts, { silent: true });
         setAutoReplyNotices((current) => current.filter((item) => item.kind === "sent" || nextKnown.has(item.confirmationId)));
       } catch {
         // Polling failures are silent; the review dialog surfaces errors.
+      } finally {
+        inFlight = false;
       }
     };
     void poll();
@@ -3518,12 +3526,12 @@ await refreshSubmissions(nextAccounts, { silent: true });
             messageButtonRefs={messageButtonRefs}
             onReconnect={load}
             onAddAccount={() => setAddOpen(true)}
-            onClearSearch={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}
-            onOpenMessage={(message) => { void openMessage(message); }}
+            onClearSearch={clearSearch}
+            onOpenMessage={openMessage}
             onToggleSelected={toggleMessageSelected}
             onSelectRange={selectMessageRange}
-            onQuickToggleStar={(message) => { void quickToggleStar(message); }}
-            onQuickMoveMessage={(message, target) => { void quickMoveMessage(message, target); }}
+            onQuickToggleStar={quickToggleStar}
+            onQuickMoveMessage={quickMoveMessage}
           />
         </section>
 
