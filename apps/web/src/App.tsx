@@ -3721,6 +3721,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                   </section>
                 )}
                 {selectedMoveLocationUnverified && <section className="move-location-notice" role="status"><CircleAlert size={18} /><div><strong>{t("mail.moveLocationUnverified.title")}</strong><p>{t("mail.moveLocationUnverified.description")}</p></div></section>}
+                <div className="reader-split">
                 <article className="mail-reader">
                 <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people"><CustomAvatar name={selected.from.name} address={selected.from.address} tone={accountTone(selected.from.address)} size="large" /><div className="mail-people-copy"><strong>{selected.from.name || selected.from.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={selected.from.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div><time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
                 {verificationCodes.length > 0 && (
@@ -3786,6 +3787,8 @@ const emptyMessageList = useMemo(() => (query.trim()
                 )}
                 <footer className="quick-reply"><CustomAvatar name={selected.accountEmail} address={selected.accountEmail} tone={accountTone(selected.accountEmail)} size="small" /><button onClick={openReply}>{t("mail.reader.replyTo", { sender: selected.from.name || selected.from.address })}</button></footer>
               </article>
+              {attachmentPreview && <Suspense fallback={null}><AttachmentPreviewModal messageId={attachmentPreview.message.id} attachment={attachmentPreview.attachment} onClose={() => setAttachmentPreview(null)} /></Suspense>}
+              </div>
             </>
           ) : (
             <div className="reader-empty"><div className="reader-orb"><Mail size={32} /></div><h2>{t("mail.reader.emptyTitle")}</h2><p>{t("mail.reader.emptyDescription")}</p></div>
@@ -3830,7 +3833,6 @@ const emptyMessageList = useMemo(() => (query.trim()
       {calendarOpen && <Suspense fallback={null}><CalendarDialog demoMode={isDemo} onClose={() => setCalendarOpen(false)} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {accountsOpen && <Suspense fallback={null}><AccountsDialog accounts={accounts} demoMode={isDemo} onClose={() => setAccountsOpen(false)} onAccountRemoved={removeAccountFromView} onAccountSignatureChanged={updateAccountSignatureInState} onAccountSync={retryAccountSync} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {sendingStatusOpen && <Suspense fallback={null}><SendingStatusModal accounts={accounts} submissions={submissions} loading={submissionLoading} loadError={submissionLoadError} onClose={() => setSendingStatusOpen(false)} onRefresh={() => refreshSubmissions(accounts)} onSyncAccount={async (accountId) => { await retryAccountSync(accountId); }} onCreateNewMessage={(draft) => { setSendingStatusOpen(false); openCompose(draft); }} onCancelScheduled={cancelScheduledSubmission} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      {attachmentPreview && <Suspense fallback={null}><AttachmentPreviewModal messageId={attachmentPreview.message.id} attachment={attachmentPreview.attachment} onClose={() => setAttachmentPreview(null)} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       <Suspense fallback={null}><TranslationTermsDialog open={translationTermsOpen} onAccept={acceptTranslationTerms} onDecline={declineTranslationTerms} /></Suspense>
       <Suspense fallback={null}><StartupUpdatePrompt
         snapshot={desktopUpdateStatus}
