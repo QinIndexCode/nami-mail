@@ -52,7 +52,7 @@ import { canPreviewAttachment } from "./attachmentPreview";
 import { presentAttachment } from "./attachmentPresentation";
 import { AttachmentFileIcon, FolderNavigationIcon, formatFileSize, isoFromDatetimeLocal, IconButton, type ComposeDraft, type ToastKind } from "./mailUi";
 import { desktopBridge, type DesktopAutoReplyNotice, type DesktopUpdateSnapshot } from "./desktop";
-import { demoAccounts, demoMessageTranslation, demoMessages, demoProviders, demoStats, demoSubmissions } from "./demo";
+import { demoDataSnapshot, ensureDemoLoaded } from "./demo-loader";
 import { accountHealthIssue, mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
 import { buildForwardDraft, buildReplyDraft, buildReplyQuote } from "./mailActions";
 import { ComposeModal } from "./ComposeModal";
@@ -731,7 +731,7 @@ export default function App() {
     const requestId = ++submissionLoadRequestRef.current;
     if (!silent) setSubmissionLoading(true);
     if (isDemo || targetAccounts.length === 0) {
-      setSubmissions(isDemo ? sortSubmissions(demoSubmissions) : []);
+      setSubmissions(isDemo ? sortSubmissions((await ensureDemoLoaded()).demoSubmissions) : []);
       setSubmissionLoadError(null);
       setSubmissionLoading(false);
       return;
@@ -876,22 +876,23 @@ export default function App() {
       if (!silent) setLoading(true);
       setFatalError(null);
       if (isDemo) {
+        const demo = await ensureDemoLoaded();
         const demoTotal = demoMessageTotal(
-          demoLoadedRef.current && messagesRef.current.length ? messagesRef.current : demoMessages,
-          demoAccounts,
+          demoLoadedRef.current && messagesRef.current.length ? messagesRef.current : demo.demoMessages,
+          demo.demoAccounts,
           { accountId, folder, search, messageView },
         );
         if (!demoLoadedRef.current) {
           demoLoadedRef.current = true;
-          setAccounts(demoAccounts);
-          setProviders(demoProviders);
-          setMessages(demoMessages);
+          setAccounts(demo.demoAccounts);
+          setProviders(demo.demoProviders);
+          setMessages(demo.demoMessages);
           setMessagePage(1);
-          setStats(demoStats);
+          setStats(demo.demoStats);
         }
         setMessageTotal(demoTotal);
         setMessagePage(1);
-        setSubmissions(sortSubmissions(demoSubmissions));
+        setSubmissions(sortSubmissions(demo.demoSubmissions));
         setSubmissionLoadError(null);
         setSubmissionLoading(false);
       } else {
@@ -1448,14 +1449,20 @@ await refreshSubmissions(nextAccounts, { silent: true });
       ? messages.filter((message) => !message.seen || !unreadViewRecentlyReadIds.has(message.id)).length
       : messages.length;
   }, [filteredMessages, messages, unreadViewRecentlyReadIds, view]);
-  const currentMessageTotal = useMemo(() => isDemo
-    ? demoMessageTotal(messages, demoAccounts, {
-      accountId: selectedAccount,
-      folder: selectedFolder,
-      search: debouncedQuery,
-      messageView: view,
-    })
-    : messageTotal, [debouncedQuery, messageTotal, messages, selectedAccount, selectedFolder, view]);
+  const currentMessageTotal = useMemo(() => {
+    if (!isDemo) return messageTotal;
+    // Before the first demo load settles the dataset is still empty, which
+    // already yields a zero total; prefer 0 over a null snapshot crash.
+    const demo = demoDataSnapshot();
+    return demo
+      ? demoMessageTotal(messages, demo.demoAccounts, {
+        accountId: selectedAccount,
+        folder: selectedFolder,
+        search: debouncedQuery,
+        messageView: view,
+      })
+      : 0;
+  }, [debouncedQuery, messageTotal, messages, selectedAccount, selectedFolder, view]);
   const recentlyReadVisibleCount = useMemo(() => view === "unread"
     ? filteredMessages.filter((message) => message.seen && unreadViewRecentlyReadIds.has(message.id)).length
     : 0, [filteredMessages, unreadViewRecentlyReadIds, view]);
@@ -1703,7 +1710,8 @@ await refreshSubmissions(nextAccounts, { silent: true });
         }
       }
       if (isDemo) {
-        const result = demoMessageTranslation(selected, targetLocale);
+        const demo = await ensureDemoLoaded();
+        const result = demo.demoMessageTranslation(selected, targetLocale);
         if (requestId !== translationRequestIdRef.current) return;
         setTranslationSession({
           messageId,
@@ -2991,7 +2999,8 @@ await refreshSubmissions(nextAccounts, { silent: true });
 
   const openNotifiedMessage = useCallback(async (messageId: string) => {
     if (isDemo) {
-      const message = demoMessages.find((item) => item.id === messageId);
+      const demo = await ensureDemoLoaded();
+      const message = demo.demoMessages.find((item) => item.id === messageId);
       if (message) await openMessage(message);
       return;
     }
@@ -3123,23 +3132,26 @@ await refreshSubmissions(nextAccounts, { silent: true });
   // preview shows the pending-draft review card without a live agent.
   useEffect(() => {
     if (!isDemo) return;
-    const now = Date.now();
-    setAutoReplyNotices([
-      {
-        kind: "pending",
-        confirmationId: "demo-auto-reply-confirmation",
-        requestId: "demo-auto-reply-request",
-        accountId: demoAccounts[0]?.id ?? "personal",
-        messageId: "demo-auto-reply-message",
-        subject: "季度数据回顾与本周同步",
-        fromName: "Lena Chen",
-        fromAddress: "lena.chen@example.com",
-        sensitive: false,
-        createdAt: new Date(now).toISOString(),
-        expiresAt: new Date(now + 20 * 60 * 1000).toISOString(),
-        replyPreview: "收到，我会在本周内完成数据回顾并同步给你。谢谢！",
-      },
-    ]);
+    void (async () => {
+      const demo = await ensureDemoLoaded();
+      const now = Date.now();
+      setAutoReplyNotices([
+        {
+          kind: "pending",
+          confirmationId: "demo-auto-reply-confirmation",
+          requestId: "demo-auto-reply-request",
+          accountId: demo.demoAccounts[0]?.id ?? "personal",
+          messageId: "demo-auto-reply-message",
+          subject: "季度数据回顾与本周同步",
+          fromName: "Lena Chen",
+          fromAddress: "lena.chen@example.com",
+          sensitive: false,
+          createdAt: new Date(now).toISOString(),
+          expiresAt: new Date(now + 20 * 60 * 1000).toISOString(),
+          replyPreview: "收到，我会在本周内完成数据回顾并同步给你。谢谢！",
+        },
+      ]);
+    })();
   }, []);
 
   useEffect(() => {
