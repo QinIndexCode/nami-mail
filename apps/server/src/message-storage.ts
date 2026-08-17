@@ -80,6 +80,7 @@ export type MessageStorageRow = Record<string, unknown> & {
   uid: number;
   encrypted_payload?: string | null;
   payload_version?: number | null;
+  payload_metadata_ready?: number | null;
 };
 
 function pendingMoveDestinationValue(row: unknown): string | null {

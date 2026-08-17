@@ -100,6 +100,11 @@ CREATE TABLE IF NOT EXISTS messages (
   flags_json TEXT NOT NULL DEFAULT '[]',
   has_attachments INTEGER NOT NULL DEFAULT 0,
   attachments_json TEXT,
+  -- 1 = the encrypted payload was written with complete attachment/Cc/References
+  -- metadata. NULL (legacy rows, appended drafts) means a later sync must
+  -- hydrate the row once; the column makes that decision without decrypting
+  -- every cached row on each sync.
+  payload_metadata_ready INTEGER,
   encrypted_payload TEXT,
   payload_version INTEGER NOT NULL DEFAULT 0,
   size INTEGER NOT NULL DEFAULT 0,
@@ -447,6 +452,11 @@ function migrateDatabase(db: DatabaseHandle): void {
     // SQLite only supports additive migrations here. Keeping legacy rows NULL
     // lets the next sync refresh them once instead of pretending metadata exists.
     db.exec("ALTER TABLE messages ADD COLUMN attachments_json TEXT");
+  }
+  if (!messageColumns.some((column) => column.name === "payload_metadata_ready")) {
+    // Legacy rows keep NULL so the next sync hydrates their missing metadata
+    // exactly once, matching the pre-column decrypt-and-check behavior.
+    db.exec("ALTER TABLE messages ADD COLUMN payload_metadata_ready INTEGER");
   }
   if (!messageColumns.some((column) => column.name === "cc_json")) {
     // Keep legacy rows NULL so the next normal sync can hydrate their Cc

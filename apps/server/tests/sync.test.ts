@@ -13,6 +13,7 @@ import {
   PENDING_MOVE_RECONCILIATION_ERROR,
   hasPendingMove,
   hasUnverifiedMoveLocation,
+  encryptMessagePayload,
   messagePayloadForRow,
   migrateMessageStorage,
   type MessageStorageRow,
@@ -1344,6 +1345,123 @@ describe("IMAP message flag updates", () => {
     expect(payload.inReplyTo).toBe("<parent@example.com>");
     expect(payload.references).toEqual(["<root@example.com>", "<parent@example.com>"]);
     expect(payload.cc).toEqual([{ name: "Carol", address: "carol@example.com" }]);
+  });
+
+  it("hydrates a legacy metadata-less row once and then stops re-fetching its source", async () => {
+    const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
+    const source = Buffer.from([
+      "From: Alice <alice@example.com>",
+      "To: Demo <demo@example.com>",
+      "Message-ID: <legacy@example.com>",
+      "Subject: Legacy row",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Legacy body",
+    ].join("\r\n"));
+    const legacyPayload = {
+      messageId: null,
+      subject: "Legacy row",
+      fromName: "",
+      fromAddress: "alice@example.com",
+      to: [],
+      cc: null,
+      inReplyTo: null,
+      references: null,
+      snippet: "",
+      textBody: "",
+      htmlBody: "",
+      attachments: null,
+    };
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, sent_at, flags_json, has_attachments, size,
+        encrypted_payload, payload_version, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("legacy-1", "account-1", "INBOX", 99, new Date().toISOString(), "[]", 0, 0,
+      encryptMessagePayload(masterKey, "legacy-1", "account-1", legacyPayload), 1, new Date().toISOString());
+    const fetch = vi.fn(async function* (_range: unknown, query: { source?: boolean }) {
+      if (query.source) {
+        yield {
+          uid: 99,
+          flags: new Set<string>(),
+          internalDate: new Date("2026-07-20T03:04:05.000Z"),
+          size: source.length,
+          source,
+        };
+        return;
+      }
+      yield { uid: 99, flags: new Set<string>() };
+    });
+    Object.assign(client, {
+      mailbox: { exists: 100 },
+      list: vi.fn(async () => [inbox]),
+      status: vi.fn(async () => ({ messages: 100, unseen: 0 })),
+      fetch,
+    });
+
+    await syncAccount(db, masterKey, "account-1", 20);
+
+    const hydrated = db.prepare(`
+      SELECT payload_metadata_ready, encrypted_payload FROM messages WHERE id = ?
+    `).get("legacy-1") as { payload_metadata_ready: number | null; encrypted_payload: string };
+    expect(hydrated.payload_metadata_ready).toBe(1);
+    const payload = messagePayloadForRow(
+      db.prepare("SELECT * FROM messages WHERE id = ?").get("legacy-1") as MessageStorageRow,
+      masterKey,
+    );
+    expect(payload.attachments).toEqual([]);
+    expect(payload.cc).toEqual([]);
+    expect(payload.references).toEqual([]);
+
+    // A second sync answers the hydration question from the column alone and
+    // must not fetch the source again. The row is cached, so nothing is new.
+    fetch.mockClear();
+    const second = await syncAccount(db, masterKey, "account-1", 20);
+    expect(second).toMatchObject({ synced: 0, folders: 1, failedFolders: 0 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]?.[1]).not.toHaveProperty("source");
+  });
+
+  it("skips the metadata refresh pass for rows written with complete metadata", async () => {
+    const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
+    const completePayload = {
+      messageId: "<complete@example.com>",
+      subject: "Complete row",
+      fromName: "Alice",
+      fromAddress: "alice@example.com",
+      to: [{ name: "", address: "demo@example.com" }],
+      cc: [],
+      inReplyTo: null,
+      references: [],
+      snippet: "Complete body",
+      textBody: "Complete body",
+      htmlBody: "",
+      attachments: [],
+    };
+    const encrypted = encryptMessagePayload(masterKey, "complete-1", "account-1", completePayload);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, sent_at, flags_json, has_attachments, size,
+        encrypted_payload, payload_version, payload_metadata_ready, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("complete-1", "account-1", "INBOX", 99, new Date().toISOString(), "[]", 0, 0, encrypted, 1, 1, new Date().toISOString());
+    const fetch = vi.fn(async function* (_range: unknown, _query: { source?: boolean }) {
+      yield { uid: 99, flags: new Set<string>() };
+    });
+    Object.assign(client, {
+      mailbox: { exists: 100 },
+      list: vi.fn(async () => [inbox]),
+      status: vi.fn(async () => ({ messages: 100, unseen: 0 })),
+      fetch,
+    });
+
+    await syncAccount(db, masterKey, "account-1", 20);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]?.[1]).not.toHaveProperty("source");
+    const row = db.prepare("SELECT * FROM messages WHERE id = ?").get("complete-1") as MessageStorageRow;
+    expect(row.encrypted_payload).toBe(encrypted);
+    expect(row.payload_metadata_ready).toBe(1);
   });
 
   it("invalidates a folder cache and re-fetches when IMAP UIDVALIDITY changes", async () => {
