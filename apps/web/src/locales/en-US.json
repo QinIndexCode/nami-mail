@@ -1843,6 +1843,12 @@
     "mail.action.notSpam": "Not spam",
     "mail.action.reportedSpam": "Marked as spam",
     "mail.action.recoveredFromSpam": "Restored to inbox",
-    "mail.selection.reportedSpam": "{count} message(s) marked as spam"
+    "mail.selection.reportedSpam": "{count} message(s) marked as spam",
+    "mail.action.exportEml": "Export EML",
+    "mail.action.print": "Print",
+    "mail.action.exportStarted": "Export of {filename} started",
+    "mail.action.exportDemoUnavailable": "Original messages cannot be exported in demo mode.",
+    "mail.action.printDemoUnavailable": "Printing is not available in demo mode.",
+    "mail.error.exportEml": "Failed to export message"
   }
 }

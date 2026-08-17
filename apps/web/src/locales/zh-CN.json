@@ -1843,6 +1843,12 @@
     "mail.action.notSpam": "这不是垃圾邮件",
     "mail.action.reportedSpam": "已标记为垃圾邮件",
     "mail.action.recoveredFromSpam": "已移回收件箱",
-    "mail.selection.reportedSpam": "{count} 封邮件已标记为垃圾邮件"
+    "mail.selection.reportedSpam": "{count} 封邮件已标记为垃圾邮件",
+    "mail.action.exportEml": "导出 EML 文件",
+    "mail.action.print": "打印",
+    "mail.action.exportStarted": "已开始导出 {filename}",
+    "mail.action.exportDemoUnavailable": "演示模式下无法导出原始邮件。",
+    "mail.action.printDemoUnavailable": "演示模式下无法打印。",
+    "mail.error.exportEml": "导出邮件失败"
   }
 }

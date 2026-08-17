@@ -42,6 +42,7 @@ import {
   Users,
   Trash2,
   X,
+  Printer,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
 import { CustomAvatar } from "./SenderAvatar";
@@ -2945,6 +2946,45 @@ const emptyMessageList = useMemo(() => (query.trim()
     }
   };
 
+  const exportSelectedEml = async () => {
+    if (!selected) return;
+    if (selectedMovePending || selected.movePending) {
+      showToast(t("mail.action.moveRefreshing"), "info");
+      return;
+    }
+    if (selectedMoveLocationUnverified) {
+      showToast(t("mail.action.locationUnverified"), "info");
+      return;
+    }
+    if (isDemo) {
+      showToast(t("mail.action.exportDemoUnavailable"), "info");
+      return;
+    }
+    try {
+      const { blob, filename } = await api.downloadMessageEml(selected.id);
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1_000);
+      showToast(t("mail.action.exportStarted", { filename }));
+    } catch (error) {
+      showToast(mailErrorToastMessage(error, t("mail.error.exportEml"), t), "error");
+    }
+  };
+
+  const printSelectedMessage = () => {
+    if (!selected) return;
+    if (isDemo) {
+      showToast(t("mail.action.printDemoUnavailable"), "info");
+      return;
+    }
+    window.print();
+  };
+
   const openAttachmentPreview = (message: Message, attachment: MessageAttachment) => {
     if (pendingArchiveMovesRef.current.some((move) => move.id === message.id) || message.movePending) {
       showToast(t("mail.action.moveRefreshing"), "info");
@@ -3600,6 +3640,8 @@ const emptyMessageList = useMemo(() => (query.trim()
                         <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openReplyAll(); }}><ReplyAll size={16} />{t("mail.action.replyAll")}</button>
                         <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openForward(); }}><Forward size={16} />{t("mail.action.forward")}</button>
                         <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked || selectedIsArchived} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />{t("mail.action.archive")}</button>
+                        <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void exportSelectedEml(); }}><Download size={16} />{t("mail.action.exportEml")}</button>
+                        <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); printSelectedMessage(); }}><Printer size={16} />{t("mail.action.print")}</button>
                         {!selectedIsInJunk && (
                           <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("junk"); }}><ShieldCheck size={16} />{t("mail.action.reportSpam")}</button>
                         )}

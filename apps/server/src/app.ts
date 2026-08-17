@@ -19,6 +19,7 @@ import {
   type AccountCredentialIdentity,
 } from "./account-credentials.js";
 import { downloadMessageAttachment } from "./attachments.js";
+import { downloadMessageSource } from "./mail-source.js";
 import { emitAccountSynced, emitSettingsChanged } from "./events.js";
 import { config } from "./config.js";
 import { discardDraft, saveDraft } from "./drafts.js";
@@ -771,6 +772,7 @@ function attachmentActionErrorMessage(error: unknown): string {
     "Attachment not found. Sync this message again.",
     "Attachment part is invalid.",
     "Attachment is no longer available in this mailbox. Sync this message again.",
+    "Message is no longer available in this mailbox. Sync this message again.",
     "Account not found.",
     "Attachment download did not return a readable stream.",
     PENDING_MOVE_RECONCILIATION_ERROR,
@@ -783,7 +785,7 @@ function attachmentErrorStatus(error: unknown): number {
   const message = error instanceof Error ? error.message : "";
   if (message === "Attachment part is invalid.") return 400;
   if (message === "Message not found." || message === "Attachment not found. Sync this message again.") return 404;
-  if (message === "Attachment is no longer available in this mailbox. Sync this message again.") return 409;
+  if (message === "Attachment is no longer available in this mailbox. Sync this message again." || message === "Message is no longer available in this mailbox. Sync this message again.") return 409;
   return 422;
 }
 
@@ -2836,6 +2838,26 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         .header("X-Content-Type-Options", "nosniff")
         .header("Cache-Control", "no-store");
       return reply.send(download.content);
+    } catch (error) {
+      const failure = mailFailure(error);
+      const statusCode = failure.body.code === "unknown" ? attachmentErrorStatus(error) : failure.statusCode;
+      return reply.code(statusCode).send(mailFailureBody(failure, attachmentActionErrorMessage(error)));
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/api/messages/:id/eml", async (request, reply) => {
+    const messageId = z.string().uuid().safeParse(request.params.id);
+    if (!messageId.success) return reply.code(400).send({ ok: false, message: "邮件标识无效。" });
+    try {
+      const download = await downloadMessageSource(context.db, context.masterKey, messageId.data, context.oauthService);
+      const subject = download.subject.replace(/[\r\n]+/g, " ").trim().slice(0, 80);
+      const filename = `${subject || "message"}.eml`;
+      reply
+        .type("message/rfc822")
+        .header("Content-Disposition", `attachment; filename*=UTF-8''${contentDispositionFilename(filename)}`)
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Cache-Control", "no-store");
+      return reply.send(download.source);
     } catch (error) {
       const failure = mailFailure(error);
       const statusCode = failure.body.code === "unknown" ? attachmentErrorStatus(error) : failure.statusCode;
