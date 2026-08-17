@@ -241,29 +241,19 @@ const payloadCache = new Map<string, { payload: MessagePayload; bytes: number }>
 let payloadCacheBytes = 0;
 
 function payloadByteEstimate(payload: MessagePayload): number {
-  let bytes = 256;
-  bytes += payload.subject.length + payload.fromName.length + payload.fromAddress.length;
-  bytes += payload.snippet.length + payload.textBody.length + payload.htmlBody.length;
-  if (payload.messageId) bytes += payload.messageId.length;
-  if (payload.inReplyTo) bytes += payload.inReplyTo.length;
-  bytes += payload.to.reduce((sum, entry) => sum + entry.name.length + entry.address.length, 0);
-  bytes += (payload.cc ?? []).reduce((sum, entry) => sum + entry.name.length + entry.address.length, 0);
-  bytes += (payload.references ?? []).reduce((sum, ref) => sum + ref.length, 0);
-  bytes += (payload.attachments ?? []).reduce(
-    (sum, item) => sum + item.filename.length + item.contentType.length + 64,
-    0,
-  );
-  if (payload.headers) {
-    const headers = payload.headers;
-    bytes += headers.autoSubmitted.length + headers.listUnsubscribe.length
-      + headers.precedence.length + headers.returnPath.length
-      + headers.labels.reduce((sum, label) => sum + label.length, 0);
-  }
-  return bytes;
+  // The payload is a plain JSON-shaped object, so the UTF-8 byte length of
+  // its serialized form bounds retained memory closely enough for eviction.
+  // (A naive character-count sum would undercount CJK bodies by up to 2x and
+  // ignore Map/entry overhead.)
+  return Buffer.byteLength(JSON.stringify(payload), "utf8") + 64;
 }
 
 function cachePayload(key: string, payload: MessagePayload): void {
   const bytes = payloadByteEstimate(payload);
+  // A single payload larger than the whole budget would evict the entire
+  // cache on every fill; keep it uncached instead (a cache miss decrypts the
+  // same way a fresh read would).
+  if (bytes > PAYLOAD_CACHE_MAX_BYTES) return;
   while (payloadCache.size >= PAYLOAD_CACHE_MAX_ENTRIES || payloadCacheBytes + bytes > PAYLOAD_CACHE_MAX_BYTES) {
     const oldestKey = payloadCache.keys().next().value as string | undefined;
     if (!oldestKey) break;
