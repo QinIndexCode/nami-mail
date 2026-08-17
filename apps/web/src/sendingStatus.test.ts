@@ -80,6 +80,9 @@ describe("sending status presentation", () => {
   });
 
   it("keeps a bounded client refresh active while Sent-folder verification can still change the record", async () => {
+    // This test dynamically imports the whole App entry for one pure helper;
+    // under full-suite transform load that import can exceed the default
+    // 5s per-test budget even though the assertions themselves are instant.
     vi.stubGlobal("window", { location: { search: "" } });
     vi.stubGlobal("__NAMI_APP_VERSION__", "0.1.0");
     const { submissionStatusNeedsRefresh } = await import("./App");
@@ -91,5 +94,5 @@ describe("sending status presentation", () => {
     expect(submissionStatusNeedsRefresh("failed")).toBe(false);
 
     vi.unstubAllGlobals();
-  });
+  }, 20_000);
 });
