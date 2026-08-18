@@ -978,15 +978,34 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         // A limit of 0 syncs the whole mailbox (Gmail-style, no cap); any
         // positive value fetches only the newest `messageLimit` messages.
         const start = messageLimit > 0 ? Math.max(1, exists - messageLimit + 1) : 1;
+        // The rolling window must be anchored in UID space: sequence numbers
+        // renumber whenever the remote mailbox changes between the SELECT
+        // above and this FETCH, which silently shifts a sequence-based window
+        // and defeats the messageLimit cap. Probe the newest UID once (one
+        // tiny round-trip) and fetch the trailing window by UID like every
+        // other fetch site in this file.
+        let latestUid = 0;
+        for await (const probe of client.fetch("*", { uid: true }, { uid: true })) {
+          if (typeof probe.uid === "number" && probe.uid > 0) {
+            latestUid = probe.uid;
+            break;
+          }
+        }
+        // exists > 0 guarantees at least one message, so the probe normally
+        // resolves. Falling back to the sequence-based floor keeps a
+        // pathological server from starving this sync entirely.
+        const windowFloor = latestUid > 0
+          ? `${messageLimit > 0 ? Math.max(1, latestUid - messageLimit + 1) : 1}:*`
+          : `${start}:*`;
         const newUids: number[] = [];
         const attachmentMetadataRefreshUids: number[] = [];
         const hydratedMessageIds = new Map<number, string>();
 
-        for await (const message of client.fetch(`${start}:*`, {
+        for await (const message of client.fetch(windowFloor, {
           uid: true,
           flags: true,
           labels: isAllMailFolder(folder) || autoReplyActive,
-        })) {
+        }, { uid: true })) {
           if (signal?.aborted) throw new SyncAbortedError();
           if (!message.uid) continue;
           const flagsJson = JSON.stringify([...(message.flags ?? [])]);

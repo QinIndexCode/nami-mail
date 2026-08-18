@@ -1205,7 +1205,56 @@ describe("IMAP message flag updates", () => {
       { uid: 11, remote_id_lookup: expect.stringMatching(/^h1\./), all_mail_archived: 0 },
     ]);
     expect(rows.map((row) => row.remote_id_lookup).join("\n")).not.toContain("gmail-");
-    expect(fetch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ labels: true }));
+    // The window fetch (call #2, after the UID probe) is the labels-bearing one.
+    const windowCall = fetch.mock.calls.find(([range]) => typeof range === "string" && /^\d+:\*$/.test(range));
+    expect(windowCall?.[1]).toMatchObject({ labels: true });
+  });
+
+  it("anchors the rolling window in UID space off the mailbox's newest UID", async () => {
+    const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
+    // Sparse mailbox: 9,500 messages exist, but deletions left the newest
+    // UID at 10,000. A sequence-based floor (9,500 - 20 + 1 = 9,481) would
+    // slice the wrong window; the UID-anchored floor must win.
+    const windowUids = [9981, 9982, 9983, 10000];
+    const fetch = vi.fn(async function* (range: unknown, query: { source?: unknown }) {
+      if (range === "*") {
+        // The UID probe resolves the mailbox's newest UID.
+        yield { uid: 10000, emailId: "probe-latest", flags: new Set<string>() };
+        return;
+      }
+      if (query.source) {
+        for (const uid of windowUids) {
+          const source = Buffer.from(`Subject: Window ${uid}\r\n\r\nBody ${uid}`);
+          yield {
+            uid,
+            emailId: `window-${uid}`,
+            flags: new Set<string>(),
+            internalDate: new Date("2026-07-22T00:00:00.000Z"),
+            size: source.length,
+            source,
+          };
+        }
+        return;
+      }
+      expect(range).toBe("9981:*");
+      for (const uid of windowUids) {
+        yield { uid, emailId: `window-${uid}`, flags: new Set<string>() };
+      }
+    });
+    Object.assign(client, {
+      mailbox: { exists: 9_500, uidValidity: 1n },
+      list: vi.fn(async () => [inbox]),
+      status: vi.fn(async () => ({ messages: 9_500, unseen: 0 })),
+      fetch,
+    });
+
+    await expect(syncAccount(db, masterKey, "account-1", 20)).resolves.toMatchObject({ folders: 1 });
+
+    expect(fetch).toHaveBeenCalledWith("*", { uid: true }, { uid: true });
+    expect(fetch).toHaveBeenCalledWith("9981:*", expect.objectContaining({ uid: true, flags: true }), { uid: true });
+    const rows = db.prepare("SELECT uid FROM messages WHERE account_id = ? AND mailbox = ? AND uid >= 9000 ORDER BY uid")
+      .all("account-1", "INBOX") as Array<{ uid: number }>;
+    expect(rows.map((row) => row.uid)).toEqual(windowUids.slice().sort((a, b) => a - b));
   });
 
   it("verifies a sent submission only after an exact Message-ID match in the provider Sent mailbox", async () => {
@@ -1447,11 +1496,12 @@ describe("IMAP message flag updates", () => {
 
     // A second sync answers the hydration question from the column alone and
     // must not fetch the source again. The row is cached, so nothing is new.
+    // Call 1 is the UID probe, call 2 the metadata-only window.
     fetch.mockClear();
     const second = await syncAccount(db, masterKey, "account-1", 20);
     expect(second).toMatchObject({ synced: 0, folders: 1, failedFolders: 0 });
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0]?.[1]).not.toHaveProperty("source");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.every(([, query]) => !(query as { source?: unknown }).source)).toBe(true);
   });
 
   it("skips the metadata refresh pass for rows written with complete metadata", async () => {
@@ -1489,8 +1539,10 @@ describe("IMAP message flag updates", () => {
 
     await syncAccount(db, masterKey, "account-1", 20);
 
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0]?.[1]).not.toHaveProperty("source");
+    // UID probe + metadata-only window; the complete row must not trigger a
+    // source fetch in either call.
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.every(([, query]) => !(query as { source?: unknown }).source)).toBe(true);
     const row = db.prepare("SELECT * FROM messages WHERE id = ?").get("complete-1") as MessageStorageRow;
     expect(row.encrypted_payload).toBe(encrypted);
     expect(row.payload_metadata_ready).toBe(1);
@@ -1581,7 +1633,9 @@ describe("IMAP message flag updates", () => {
     });
     expect(db.prepare("SELECT uid_validity FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
       .toEqual({ uid_validity: "200" });
-    expect(fetch).toHaveBeenCalledTimes(3);
+    // UID probe + window + source re-hydration of the reused UID.
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(fetch.mock.calls.some(([, query]) => Boolean((query as { source?: unknown }).source))).toBe(true);
   });
 
   it("keeps the local cache when LIST returns no folders", async () => {
