@@ -1,5 +1,5 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { Archive, Eye, EyeOff, Layers3, Mail, MousePointerClick, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
 import type { MessageListQuery } from "./mailListState";
 import { useI18n } from "./i18n";
@@ -88,6 +88,64 @@ export function clampContextMenuPosition(
   };
 }
 
+type MessageListRowProps = {
+  message: Message;
+  index: number;
+  virtualStart: number;
+  selected: boolean;
+  unread: boolean;
+  selectionMode: boolean;
+  multiSelected: boolean;
+  recentlyReadInUnread: boolean;
+  threadSize: number;
+  gravatarEnabled: boolean;
+  buttonRefs: RefObject<Map<string, HTMLButtonElement>>;
+  rowVirtualizer: Virtualizer<HTMLDivElement, Element>;
+  onRowClick: (message: Message, index: number, event: MouseEvent<HTMLButtonElement>) => void;
+  onOpenContextMenu: (message: Message, x: number, y: number) => void;
+  onQuickToggleStar: (message: Message) => void;
+  onQuickMoveMessage: (message: Message, target: "archive" | "trash") => void;
+};
+
+/**
+ * One virtualized mail row. Memoized so virtualizer-driven list re-renders
+ * (scroll frames, overscan changes) skip rows whose visible state is
+ * unchanged; the button ref callback is useCallback-stable per message id, so
+ * React never detaches/reattaches — and re-measures — a row on a plain list
+ * re-render.
+ */
+export const MessageListRow = memo(function MessageListRow(props: MessageListRowProps): React.JSX.Element {
+  const { locale, t } = useI18n();
+  const { message, index, virtualStart, selected, unread, selectionMode, multiSelected, recentlyReadInUnread, threadSize, gravatarEnabled, buttonRefs, rowVirtualizer, onRowClick, onOpenContextMenu, onQuickToggleStar, onQuickMoveMessage } = props;
+  const buttonRefCallback = useCallback((node: HTMLButtonElement | null) => {
+    rowVirtualizer.measureElement(node);
+    if (node) buttonRefs.current.set(message.id, node);
+    else buttonRefs.current.delete(message.id);
+  }, [rowVirtualizer, buttonRefs, message.id]);
+  const className = `message-item ${selected ? "selected" : ""} ${unread ? "unread" : ""} ${selectionMode ? "selection-mode" : ""} ${multiSelected ? "multi-selected" : ""} ${recentlyReadInUnread ? "recently-read-in-unread" : ""}`;
+  return (
+    <div className="message-list-row" style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualStart}px)` }}>
+      <button data-index={index} ref={buttonRefCallback} className={className} onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
+        <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
+        {selectionMode && <span className={`selection-checkbox ${multiSelected ? "checked" : ""}`} aria-hidden="true" />}
+        <SenderAvatar name={message.from.name} address={message.from.address} tone={accountTone(message.from.address)} gravatarEnabled={gravatarEnabled} />
+        <span className="message-copy">
+          <span className="message-meta"><strong>{message.from.name || message.from.address}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
+          <span className="message-subject">{message.subject}</span>
+          <span className="message-snippet">{message.snippet}</span>
+          <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
+        </span>
+        {!message.seen && <span className="unread-dot" />}
+      </button>
+      <span className="row-quick-actions">
+        <button type="button" aria-label={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} data-tooltip={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} className={message.flagged ? "row-quick-action active-star" : "row-quick-action"} onClick={() => onQuickToggleStar(message)}><Star size={15} fill={message.flagged ? "currentColor" : "none"} /></button>
+        <button type="button" aria-label={t("mail.action.archive")} data-tooltip={t("mail.action.archive")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "archive")}><Archive size={15} /></button>
+        <button type="button" aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "trash")}><Trash2 size={15} /></button>
+      </span>
+    </div>
+  );
+});
+
 /**
  * The virtualized message list. The virtualizer lives here instead of App.tsx:
  * each scroll frame updates its internal state and re-renders this component
@@ -167,6 +225,40 @@ function MessageList(props: MessageListProps): React.JSX.Element {
     anchorIndexRef.current = null;
   }
 
+  // Row clicks resolve against the latest list/selection closures, but the
+  // row itself is memoized: the latest handlers live behind this ref (same
+  // "latest value" pattern as sseHandlersRef in App.tsx) and the row-level
+  // callbacks below are stable, so a selection change re-renders only the
+  // two rows whose boolean props actually flipped.
+  const rowActionHandlersRef = useRef({ messages, selectionMode, onSelectRange, onToggleSelected, onOpenMessage, anchorIndexRef });
+  rowActionHandlersRef.current = { messages, selectionMode, onSelectRange, onToggleSelected, onOpenMessage, anchorIndexRef };
+
+  const handleRowClick = useCallback((message: Message, index: number, event: MouseEvent<HTMLButtonElement>) => {
+    const current = rowActionHandlersRef.current;
+    if (event.shiftKey && current.anchorIndexRef.current !== null) {
+      const from = Math.min(current.anchorIndexRef.current, index);
+      const to = Math.max(current.anchorIndexRef.current, index);
+      current.onSelectRange(current.messages.slice(from, to + 1).map((row) => row.id));
+      current.anchorIndexRef.current = index;
+      return;
+    }
+    if (event.shiftKey || event.metaKey || event.ctrlKey) {
+      current.onToggleSelected(message.id);
+      current.anchorIndexRef.current = index;
+      return;
+    }
+    if (current.selectionMode) {
+      current.onToggleSelected(message.id);
+      current.anchorIndexRef.current = index;
+    } else {
+      current.onOpenMessage(message);
+    }
+  }, []);
+
+  const handleOpenContextMenu = useCallback((message: Message, x: number, y: number) => {
+    setContextMenu({ message, x, y });
+  }, []);
+
   // Rows are measured lazily (their height varies with snippet line count and
   // density); estimateSize only seeds the initial layout.
   const rowVirtualizer = useVirtualizer({
@@ -213,49 +305,25 @@ function MessageList(props: MessageListProps): React.JSX.Element {
             const message = messages[virtualItem.index];
             const threadSize = threadById.get(message.id)?.length ?? 1;
             return (
-            <div
+            <MessageListRow
               key={virtualItem.key}
-              className="message-list-row"
-              style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualItem.start}px)` }}
-            >
-              <button data-index={virtualItem.index} ref={(node) => { rowVirtualizer.measureElement(node); if (node) messageButtonRefs.current.set(message.id, node); else messageButtonRefs.current.delete(message.id); }} className={`message-item ${selectedId === message.id ? "selected" : ""} ${message.seen ? "" : "unread"} ${selectionMode ? "selection-mode" : ""} ${selectionMode && selectedMessageIds.has(message.id) ? "multi-selected" : ""} ${view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id) ? "recently-read-in-unread" : ""}`} onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) setContextMenu({ message, x: event.clientX, y: event.clientY }); }} onClick={(event) => {
-                        const index = virtualItem.index;
-                        if (event.shiftKey && anchorIndexRef.current !== null) {
-                          const from = Math.min(anchorIndexRef.current, index);
-                          const to = Math.max(anchorIndexRef.current, index);
-                          onSelectRange(messages.slice(from, to + 1).map((row) => row.id));
-                          anchorIndexRef.current = index;
-                          return;
-                        }
-                        if (event.shiftKey || event.metaKey || event.ctrlKey) {
-                          onToggleSelected(message.id);
-                          anchorIndexRef.current = index;
-                          return;
-                        }
-                        if (selectionMode) {
-                          onToggleSelected(message.id);
-                          anchorIndexRef.current = index;
-                        } else {
-                          onOpenMessage(message);
-                        }
-                      }}>
-                    <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
-                    {selectionMode && <span className={`selection-checkbox ${selectedMessageIds.has(message.id) ? "checked" : ""}`} aria-hidden="true" />}
-                    <SenderAvatar name={message.from.name} address={message.from.address} tone={accountTone(message.from.address)} gravatarEnabled={avatarGravatarEnabled} />
-                    <span className="message-copy">
-                      <span className="message-meta"><strong>{message.from.name || message.from.address}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
-                      <span className="message-subject">{message.subject}</span>
-                      <span className="message-snippet">{message.snippet}</span>
-                      <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
-                    </span>
-                    {!message.seen && <span className="unread-dot" />}
-                  </button>
-                    <span className="row-quick-actions">
-                      <button type="button" aria-label={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} data-tooltip={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} className={message.flagged ? "row-quick-action active-star" : "row-quick-action"} onClick={() => onQuickToggleStar(message)}><Star size={15} fill={message.flagged ? "currentColor" : "none"} /></button>
-                      <button type="button" aria-label={t("mail.action.archive")} data-tooltip={t("mail.action.archive")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "archive")}><Archive size={15} /></button>
-                      <button type="button" aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "trash")}><Trash2 size={15} /></button>
-                    </span>
-            </div>
+              message={message}
+              index={virtualItem.index}
+              virtualStart={virtualItem.start}
+              selected={selectedId === message.id}
+              unread={!message.seen}
+              selectionMode={selectionMode}
+              multiSelected={selectionMode && selectedMessageIds.has(message.id)}
+              recentlyReadInUnread={view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id)}
+              threadSize={threadSize}
+              gravatarEnabled={avatarGravatarEnabled}
+              buttonRefs={messageButtonRefs}
+              rowVirtualizer={rowVirtualizer}
+              onRowClick={handleRowClick}
+              onOpenContextMenu={handleOpenContextMenu}
+              onQuickToggleStar={onQuickToggleStar}
+              onQuickMoveMessage={onQuickMoveMessage}
+            />
           );
           })}
         </div>
