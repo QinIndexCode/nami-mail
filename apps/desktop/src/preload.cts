@@ -359,6 +359,16 @@ if (contextBridge && ipcRenderer) {
       ipcRenderer.on("nami:open-message", wrapped);
       return () => ipcRenderer.removeListener("nami:open-message", wrapped);
     },
+    onComposeNew: (listener: () => void) => {
+      const wrapped = () => listener();
+      ipcRenderer.on("nami:compose-new", wrapped);
+      return () => ipcRenderer.removeListener("nami:compose-new", wrapped);
+    },
+    onOpenInbox: (listener: () => void) => {
+      const wrapped = () => listener();
+      ipcRenderer.on("nami:open-inbox", wrapped);
+      return () => ipcRenderer.removeListener("nami:open-inbox", wrapped);
+    },
     onSettingsChanged: (listener: () => void) => {
       const wrapped = () => listener();
       ipcRenderer.on("nami:settings-changed", wrapped);

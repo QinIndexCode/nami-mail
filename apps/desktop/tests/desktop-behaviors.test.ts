@@ -4,7 +4,9 @@ import {
   applyGlobalShortcut,
   applyLaunchAtStartup,
   applyUnreadBadge,
+  buildTrayMenuTemplate,
   normalizeUnreadBadgeCount,
+  resolveTrayVisibilityAction,
 } from "../src/desktop-behaviors.mts";
 
 function callRecorder<T extends (...args: never[]) => unknown>(): { calls: Parameters<T>[]; fn: (...args: Parameters<T>) => void } {
@@ -150,4 +152,39 @@ test("global shortcut leaves an already-unregistered accelerator alone when disa
   const result = applyGlobalShortcut(api, false, accelerator, listener);
   assert.equal(result, true);
   assert.equal(unregistered.calls.length, 0);
+});
+
+const trayLabels = {
+  show: "Show Nami Mail",
+  hide: "Hide to tray",
+  newMail: "New mail",
+  inbox: "Open inbox",
+  quit: "Quit Nami Mail",
+};
+
+test("tray menu leads with the visibility toggle whose label follows the window state", () => {
+  const visibleTemplate = buildTrayMenuTemplate(trayLabels, true);
+  assert.equal(visibleTemplate[0].type, "item");
+  assert.equal(visibleTemplate[0].type === "item" && visibleTemplate[0].label, trayLabels.hide);
+  assert.deepEqual(visibleTemplate[0].type === "item" && visibleTemplate[0].action, { kind: "toggle-window" });
+
+  const hiddenTemplate = buildTrayMenuTemplate(trayLabels, false);
+  assert.equal(hiddenTemplate[0].type === "item" && hiddenTemplate[0].label, trayLabels.show);
+});
+
+test("tray menu offers compose and inbox between the toggle and quit separators", () => {
+  const template = buildTrayMenuTemplate(trayLabels, false);
+  assert.deepEqual(
+    template.map((item) => (item.type === "item" ? item.action.kind : item.type)),
+    ["toggle-window", "separator", "compose-new", "open-inbox", "separator", "quit"],
+  );
+  assert.equal(template[0].type === "item" && template[0].label, "Show Nami Mail");
+  assert.equal(template[2].type === "item" && template[2].label, "New mail");
+  assert.equal(template[3].type === "item" && template[3].label, "Open inbox");
+  assert.equal(template[5].type === "item" && template[5].label, "Quit Nami Mail");
+});
+
+test("resolveTrayVisibilityAction hides a visible window and shows a hidden one", () => {
+  assert.equal(resolveTrayVisibilityAction(true), "hide");
+  assert.equal(resolveTrayVisibilityAction(false), "show");
 });

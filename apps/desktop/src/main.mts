@@ -21,9 +21,11 @@ import {
   applyLaunchAtStartup as applyLaunchAtStartupPolicy,
   applyUnreadBadge as applyUnreadBadgePolicy,
   BADGE_OVERLAY_DATA_URL,
+  buildTrayMenuTemplate,
   FOCUS_GLOBAL_SHORTCUT_ACCELERATOR,
   type GlobalShortcutApi,
   type LaunchAtStartupApi,
+  type TrayMenuAction,
   type UnreadBadgeApi,
 } from "./desktop-behaviors.mjs";
 import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
@@ -677,11 +679,43 @@ function nativeCopy(key: NativeCopyKey, values?: NativeTranslationValues): strin
 
 function refreshTrayMenu(targetTray: Tray): void {
   targetTray.setToolTip(nativeCopy("trayTooltip"));
-  targetTray.setContextMenu(Menu.buildFromTemplate([
-    { label: nativeCopy("trayOpen"), click: focusMainWindow },
-    { type: "separator" },
-    { label: nativeCopy("trayQuit"), click: () => app.quit() },
-  ]));
+  const template = buildTrayMenuTemplate(
+    {
+      hide: nativeCopy("trayHide"),
+      show: nativeCopy("trayShow"),
+      newMail: nativeCopy("trayNewMail"),
+      inbox: nativeCopy("trayInbox"),
+      quit: nativeCopy("trayQuit"),
+    },
+    mainWindow?.isVisible() ?? false,
+  );
+  targetTray.setContextMenu(Menu.buildFromTemplate(template.map((item) => {
+    if (item.type === "separator") return { type: "separator" as const };
+    return { label: item.label, click: () => runTrayAction(item.action) };
+  })));
+}
+
+function runTrayAction(action: TrayMenuAction): void {
+  switch (action.kind) {
+    case "toggle-window": {
+      // Both branches refresh the menu (hide via ensureTray, show via
+      // focusMainWindow), so the visibility label stays accurate.
+      if (mainWindow?.isVisible()) hideMainWindowToTray();
+      else focusMainWindow();
+      break;
+    }
+    case "compose-new":
+      focusMainWindow();
+      mainWindow?.webContents.send("nami:compose-new");
+      break;
+    case "open-inbox":
+      focusMainWindow();
+      mainWindow?.webContents.send("nami:open-inbox");
+      break;
+    case "quit":
+      app.quit();
+      break;
+  }
 }
 
 function ensureTray(): Tray {

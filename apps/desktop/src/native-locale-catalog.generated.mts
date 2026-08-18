@@ -4,7 +4,10 @@ export const defaultNativeLocale = "zh-CN" as const;
 export const nativeLocaleCatalog = {
   "en-US": {
     "trayTooltip": "Nami Mail",
-    "trayOpen": "Open Nami Mail",
+    "trayShow": "Show Nami Mail",
+    "trayHide": "Hide to tray",
+    "trayNewMail": "New mail",
+    "trayInbox": "Open inbox",
     "trayQuit": "Quit Nami Mail",
     "trayFailureTitle": "Unable to minimize to tray",
     "trayFailureMessage": "Nami Mail could not create a system tray icon. The window will stay open. Restart Nami Mail and try again.",
@@ -33,7 +36,10 @@ export const nativeLocaleCatalog = {
   },
   "zh-CN": {
     "trayTooltip": "Nami Mail",
-    "trayOpen": "打开 Nami Mail",
+    "trayShow": "显示 Nami Mail",
+    "trayHide": "隐藏到托盘",
+    "trayNewMail": "新建邮件",
+    "trayInbox": "打开收件箱",
     "trayQuit": "退出 Nami Mail",
     "trayFailureTitle": "无法最小化到托盘",
     "trayFailureMessage": "系统托盘图标创建失败，窗口将保持打开。请重新启动 Nami Mail 后再试。",
