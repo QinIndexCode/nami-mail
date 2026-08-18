@@ -79,6 +79,7 @@
   },
   "devDependencies": {
     "@electron/asar": "^4.2.1",
+    "@electron/fuses": "^1.8.0",
     "@electron/rebuild": "^4.2.0",
     "@playwright/test": "^1.62.1",
     "concurrently": "^10.0.4",
@@ -128,6 +129,16 @@
       "package.json"
     ],
     "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "loadBrowserProcessSpecificV8Snapshot": false,
+      "grantFileProtocolExtraPrivileges": false
+    },
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
       "node_modules/sharp/**/*",
