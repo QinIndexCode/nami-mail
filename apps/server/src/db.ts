@@ -466,6 +466,12 @@ function migrateDatabase(db: DatabaseHandle): void {
     // lets the next sync refresh them once instead of pretending metadata exists.
     db.exec("ALTER TABLE messages ADD COLUMN attachments_json TEXT");
   }
+  if (!messageColumns.some((column) => column.name === "attachment_kinds_json")) {
+    // Deduplicated attachment-kind set as JSON text, kept in sync with the
+    // stored metadata (see ensureAttachmentKinds). Default '[]' keeps the
+    // column indexable for every row, including drafts and legacy rows.
+    db.exec("ALTER TABLE messages ADD COLUMN attachment_kinds_json TEXT NOT NULL DEFAULT '[]'");
+  }
   if (!messageColumns.some((column) => column.name === "payload_metadata_ready")) {
     // Legacy rows keep NULL so the next sync hydrates their missing metadata
     // exactly once, matching the pre-column decrypt-and-check behavior.

@@ -1,4 +1,5 @@
 import { ftsLikeEscape } from "./message-search.js";
+import type { AttachmentKind } from "./attachment-kind.js";
 
 // Authoritative WHERE filter fragments for the message list view. Shared by
 // GET /api/messages and the batch-job query resolver so "select all matching
@@ -59,6 +60,15 @@ export type MessageListFilterQuery = {
   // selected account (all accounts when no accountId is bound). Replaces the
   // unified-inbox fallback, so it never needs a folder.
   hasAttachments?: boolean;
+  // Attachment-kind segmentation: only messages whose stored attachments
+  // include the selected kind. Refines any view, including global search.
+  attachmentKind?: AttachmentKind;
+  // Exclusive date bounds over the effective sent time, as ISO-UTC instants
+  // ("after" is inclusive, "before" exclusive). The renderer converts local
+  // calendar dates to UTC before sending, so the comparison is pure string
+  // ordering against the stored COALESCE(sent_at, created_at) timestamps.
+  after?: string;
+  before?: string;
   // "all" searches every account and mailbox (any view). Only meaningful
   // together with q; without q it is ignored, so a client can never turn the
   // list into an unbounded full-database dump by accident.
@@ -114,6 +124,22 @@ export function buildMessageListSql(query: MessageListFilterQuery): MessageListS
   }
   if (!globalSearch && query.unread) {
     filters.push("m.flags_json NOT LIKE '%\\\\Seen%'");
+  }
+  // Kind and date refinements apply to every mode, including global search:
+  // they narrow the candidate set, they never widen it.
+  if (query.attachmentKind) {
+    // The stored column is JSON text; the kind token is quoted so a kind can
+    // never match another kind's substring by accident.
+    filters.push("m.attachment_kinds_json LIKE ?");
+    params.push(`%"${query.attachmentKind}"%`);
+  }
+  if (query.after) {
+    filters.push("COALESCE(m.sent_at, m.created_at) >= ?");
+    params.push(query.after);
+  }
+  if (query.before) {
+    filters.push("COALESCE(m.sent_at, m.created_at) < ?");
+    params.push(query.before);
   }
   if (search) {
     const pattern = `%${ftsLikeEscape(search)}%`;

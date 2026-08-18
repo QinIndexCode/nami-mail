@@ -50,7 +50,7 @@ import { ApiError, api, type BatchJobCreatePayload, type BatchJobQuery, type Bat
 import { calendarCache, contactsCache, templatesCache } from "./dialogPrefetch";
 import DatePicker from "./DatePicker";
 import { canPreviewAttachment } from "./attachmentPreview";
-import { presentAttachment } from "./attachmentPresentation";
+import { attachmentKinds, presentAttachment, type AttachmentKind } from "./attachmentPresentation";
 import { AttachmentFileIcon, FolderNavigationIcon, formatFileSize, isoFromDatetimeLocal, IconButton, type ComposeDraft, type ToastKind } from "./mailUi";
 import { parseMailtoUrl } from "./mailtoLink";
 import { desktopBridge, type DesktopAutoReplyNotice, type DesktopUpdateSnapshot } from "./desktop";
@@ -256,6 +256,9 @@ function buildMessageQuery({
   search,
   messageView,
   searchScope,
+  attachmentKind,
+  after,
+  before,
   page = 1,
 }: {
   accountId: string;
@@ -263,6 +266,9 @@ function buildMessageQuery({
   search: string;
   messageView: MailView;
   searchScope: "view" | "all";
+  attachmentKind?: AttachmentKind;
+  after?: string;
+  before?: string;
   page?: number;
 }): string {
   const query = new URLSearchParams({ pageSize: "100" });
@@ -277,6 +283,11 @@ function buildMessageQuery({
     if (messageView === "snoozed") query.set("snoozed", "1");
     if (messageView === "attachments") query.set("hasAttachments", "1");
   }
+  // Kind and date refinements survive the global-search switch too; the
+  // server applies them on top of the FTS candidate set.
+  if (attachmentKind) query.set("attachmentKind", attachmentKind);
+  if (after) query.set("after", after);
+  if (before) query.set("before", before);
   if (search.trim()) {
     query.set("q", search.trim());
     if (globalSearch) query.set("scope", "all");
@@ -290,12 +301,18 @@ function demoMessageTotal(messages: readonly Message[], accounts: readonly Accou
   search,
   messageView,
   searchScope,
+  attachmentKind,
+  after,
+  before,
 }: {
   accountId: string;
   folder: string;
   search: string;
   messageView: MailView;
   searchScope: "view" | "all";
+  attachmentKind?: AttachmentKind;
+  after?: string;
+  before?: string;
 }): number {
   const normalizedQuery = search.trim().toLowerCase();
   return messages.filter((message) => {
@@ -309,8 +326,18 @@ function demoMessageTotal(messages: readonly Message[], accounts: readonly Accou
       if (messageView === "snoozed" && !isSnoozedMessage(message)) return false;
       if (messageView === "attachments" && !message.hasAttachments) return false;
     }
-    if (!normalizedQuery) return true;
-    return `${message.subject} ${message.from.name} ${message.from.address} ${message.snippet}`.toLowerCase().includes(normalizedQuery);
+    if (attachmentKind
+      && !message.attachments.some((item) => presentAttachment(item.filename, item.contentType).kind === attachmentKind)) {
+      return false;
+    }
+    if (after || before) {
+      const sentTime = new Date(message.sentAt).getTime();
+      if (!Number.isFinite(sentTime)) return false;
+      if (after && sentTime < new Date(after).getTime()) return false;
+      if (before && sentTime >= new Date(before).getTime()) return false;
+    }
+    if (normalizedQuery && !`${message.subject} ${message.from.name} ${message.from.address} ${message.snippet}`.toLowerCase().includes(normalizedQuery)) return false;
+    return true;
   }).length;
 }
 
@@ -625,6 +652,23 @@ export default function App() {
   const [selectAllPaged, setSelectAllPaged] = useState(false);
   const [batchJob, setBatchJob] = useState<BatchJobSnapshot | null>(null);
   const [batchBusy, setBatchBusy] = useState(false);
+  const [attachmentKindFilter, setAttachmentKindFilter] = useState<AttachmentKind | undefined>(undefined);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  // Local calendar dates become exclusive UTC instants for the server query:
+  // "after" starts at the from-date's local midnight and "before" runs one
+  // day past the to-date. Calendar arithmetic via setDate keeps both bounds
+  // DST-proof and rolls over month/year boundaries.
+  const dateBounds = useMemo(() => {
+    const after = dateFrom ? new Date(`${dateFrom}T00:00:00`).toISOString() : undefined;
+    let before: string | undefined;
+    if (dateTo) {
+      const endExclusive = new Date(`${dateTo}T00:00:00`);
+      endExclusive.setDate(endExclusive.getDate() + 1);
+      before = endExclusive.toISOString();
+    }
+    return { after, before };
+  }, [dateFrom, dateTo]);
   const [attachmentDownloads, setAttachmentDownloads] = useState<Record<string, AttachmentDownloadState>>({});
   const [attachmentPreview, setAttachmentPreview] = useState<{ message: Message; attachment: MessageAttachment } | null>(null);
   const [recipientDetailsOpen, setRecipientDetailsOpen] = useState(false);
@@ -957,7 +1001,7 @@ export default function App() {
         const demoTotal = demoMessageTotal(
           demoLoadedRef.current && messagesRef.current.length ? messagesRef.current : demo.demoMessages,
           demo.demoAccounts,
-          { accountId, folder, search, messageView, searchScope: scope },
+          { accountId, folder, search, messageView, searchScope: scope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before },
         );
         if (!demoLoadedRef.current) {
           demoLoadedRef.current = true;
@@ -973,7 +1017,7 @@ export default function App() {
         setSubmissionLoadError(null);
         setSubmissionLoading(false);
       } else {
-        const messageQuery = buildMessageQuery({ accountId, folder, search, messageView, searchScope: scope });
+        const messageQuery = buildMessageQuery({ accountId, folder, search, messageView, searchScope: scope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before });
         const [nextAccounts, nextProviders, messagePage, nextStats] = await Promise.all([
           api.accounts(),
           api.providers(),
@@ -1076,7 +1120,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     captureScrollAnchor();
     const requestId = ++loadRequestRef.current;
     try {
-      const messageQuery = buildMessageQuery({ accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view, searchScope });
+      const messageQuery = buildMessageQuery({ accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view, searchScope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before });
       const [nextAccounts, nextProviders, firstPage, nextStats] = await Promise.all([
         api.accounts(),
         api.providers(),
@@ -1088,7 +1132,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         firstPage.items,
         pendingArchiveMovesRef.current,
         nextAccounts,
-        { accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view, searchScope },
+        { accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view, searchScope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before },
       );
       const current = messagesRef.current;
       const currentIds = new Set(current.map((item) => item.id));
@@ -1124,7 +1168,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     } catch {
       // Silent refresh must never disturb the current list; the next tick retries.
     }
-  }, [captureScrollAnchor, debouncedQuery, refreshSubmissions, searchScope, selectedAccount, selectedFolder, view]);
+  }, [captureScrollAnchor, attachmentKindFilter, dateBounds, debouncedQuery, refreshSubmissions, searchScope, selectedAccount, selectedFolder, view]);
 
   const loadSettings = useCallback(async () => {
     if (isDemo) return;
@@ -1477,7 +1521,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     const base = messages.filter((message) => matchesServerMessageQuery(
       message,
       accounts,
-      { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view, searchScope },
+      { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view, searchScope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before },
       unreadViewRecentlyReadIds,
     ) && (!filterAttachments || message.hasAttachments));
     return sortMessages(base, sortOrder, {
@@ -1485,7 +1529,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
       accountEmails: new Set(accounts.map((account) => account.email.toLowerCase())),
       now: Date.now(),
     });
-  }, [accounts, filterAttachments, messages, query, selectedAccount, selectedFolder, sortOrder, unreadViewRecentlyReadIds, view]);
+  }, [accounts, attachmentKindFilter, dateBounds, filterAttachments, messages, query, selectedAccount, selectedFolder, sortOrder, unreadViewRecentlyReadIds, view]);
 
   const threadGroups = useMemo(() => groupMessagesByThread(filteredMessages), [filteredMessages]);
   const threadById = useMemo(() => {
@@ -1545,9 +1589,12 @@ await refreshSubmissions(nextAccounts, { silent: true });
         search: debouncedQuery,
         messageView: view,
         searchScope,
+        attachmentKind: attachmentKindFilter,
+        after: dateBounds.after,
+        before: dateBounds.before,
       })
       : 0;
-  }, [debouncedQuery, messageTotal, messages, searchScope, selectedAccount, selectedFolder, view]);
+  }, [attachmentKindFilter, dateBounds, debouncedQuery, messageTotal, messages, searchScope, selectedAccount, selectedFolder, view]);
   const recentlyReadVisibleCount = useMemo(() => view === "unread"
     ? filteredMessages.filter((message) => message.seen && unreadViewRecentlyReadIds.has(message.id)).length
     : 0, [filteredMessages, unreadViewRecentlyReadIds, view]);
@@ -1583,6 +1630,9 @@ await refreshSubmissions(nextAccounts, { silent: true });
         search: debouncedQuery,
         messageView: view,
         searchScope,
+        attachmentKind: attachmentKindFilter,
+        after: dateBounds.after,
+        before: dateBounds.before,
         page: messagePage + 1,
       });
       const nextPage = await api.messages(nextQuery);
@@ -1591,7 +1641,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         nextPage.items,
         pendingArchiveMovesRef.current,
         accounts,
-        { accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view, searchScope },
+        { accountId: selectedAccount, folder: selectedFolder, search: debouncedQuery, messageView: view, searchScope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before },
       );
       setMessages((items) => {
         const existingIds = new Set(items.map((item) => item.id));
@@ -2193,6 +2243,9 @@ const emptyMessageList = useMemo(() => (query.trim()
         search: debouncedQuery,
         messageView: view,
         searchScope,
+        attachmentKind: attachmentKindFilter,
+        after: dateBounds.after,
+        before: dateBounds.before,
       };
       const destination = demoMoveDestination(accounts, selected.accountId, target);
       // Optimistic: predict the destination with the same folder resolution
@@ -2412,8 +2465,15 @@ const emptyMessageList = useMemo(() => (query.trim()
     if (!selectAllPaged || isDemo) return null;
     if (searchScope === "all" && debouncedQuery.trim()) {
       // Global search selection: no account/folder/view restriction, the
-      // server matches the same FTS candidate set the list shows.
-      return { q: debouncedQuery.trim(), scope: "all" };
+      // server matches the same FTS candidate set the list shows. Kind and
+      // date refinements still narrow the selection like the visible list.
+      return {
+        q: debouncedQuery.trim(),
+        scope: "all",
+        attachmentKind: attachmentKindFilter,
+        after: dateBounds.after,
+        before: dateBounds.before,
+      };
     }
     return {
       accountId: selectedAccount === "all" ? undefined : selectedAccount,
@@ -2424,8 +2484,11 @@ const emptyMessageList = useMemo(() => (query.trim()
       starred: view === "starred" ? true : undefined,
       snoozed: view === "snoozed" ? true : undefined,
       hasAttachments: view === "attachments" ? true : undefined,
+      attachmentKind: attachmentKindFilter,
+      after: dateBounds.after,
+      before: dateBounds.before,
     };
-  }, [debouncedQuery, searchScope, selectAllPaged, selectedAccount, selectedFolder, view]);
+  }, [attachmentKindFilter, dateBounds, debouncedQuery, searchScope, selectAllPaged, selectedAccount, selectedFolder, view]);
 
   // Polls a server-side batch job until it settles, then shows the real
   // outcome with an undo action. The toolbar stays interactive throughout;
@@ -2803,7 +2866,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           : null;
         if (optimisticSnapshot) {
           const wasIncluded = filteredMessages.some((item) => item.id === message.id);
-          const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view, searchScope });
+          const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view, searchScope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before });
           if (wasIncluded !== remainsIncluded) {
             setMessageTotal((total) => nextMessageTotalForMove(total, wasIncluded, remainsIncluded));
           }
@@ -2832,7 +2895,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           }
           if (loadRequestRef.current === requestAtStart && optimisticSnapshot) {
             const wasIncluded = filteredMessages.some((item) => item.id === message.id);
-            const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view, searchScope });
+            const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, { accountId: selectedAccount, folder: selectedFolder, search: query, messageView: view, searchScope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before });
             if (wasIncluded !== remainsIncluded) {
               setMessageTotal((total) => nextMessageTotalForMove(total, remainsIncluded, wasIncluded));
             }
@@ -3589,7 +3652,7 @@ const emptyMessageList = useMemo(() => (query.trim()
             <div className="list-filter-wrap" ref={listToolbarRef}>
               <button type="button" className={`list-filter-toggle${filterPanelOpen ? " active" : ""}`} onClick={() => setFilterPanelOpen((open) => !open)} aria-expanded={filterPanelOpen} aria-haspopup="menu" aria-label={t("mail.listFilter.menuLabel")} data-tooltip={t("mail.listFilter.menuLabel")}><ListFilter size={16} /></button>
               {filterPanelOpen && (
-                <div className="list-filter-panel" role="menu" aria-label={t("mail.listFilter.menuLabel")}>
+                <div className="list-filter-panel wide" role="menu" aria-label={t("mail.listFilter.menuLabel")}>
                   <div className="list-filter-group" role="group" aria-label={t("mail.sort.label")}>
                     <span className="list-filter-heading">{t("mail.sort.label")}</span>
                     <button type="button" role="menuitemradio" aria-checked={sortOrder === "newest"} className={`list-filter-option${sortOrder === "newest" ? " active" : ""}`} onClick={() => setSortOrder("newest")}><span>{t("mail.sort.newest")}</span>{sortOrder === "newest" && <Check size={13} className="list-filter-option-check" />}</button>
@@ -3603,6 +3666,25 @@ const emptyMessageList = useMemo(() => (query.trim()
                     <span className="list-filter-heading">{t("mail.filter.label")}</span>
                     <button type="button" role="menuitemradio" aria-checked={!filterAttachments} className={`list-filter-option${!filterAttachments ? " active" : ""}`} onClick={() => setFilterAttachments(false)}><span>{t("mail.filter.all")}</span>{!filterAttachments && <Check size={13} className="list-filter-option-check" />}</button>
                     <button type="button" role="menuitemradio" aria-checked={filterAttachments} className={`list-filter-option${filterAttachments ? " active" : ""}`} onClick={() => setFilterAttachments(true)}><span>{t("mail.filter.attachments")}</span>{filterAttachments && <Check size={13} className="list-filter-option-check" />}</button>
+                  </div>
+                  <div className="list-filter-divider" role="separator" />
+                  <div className="list-filter-group" role="group" aria-label={t("mail.filter.attachmentKind")}>
+                    <span className="list-filter-heading">{t("mail.filter.attachmentKind")}</span>
+                    <div className="kind-chip-row" role="radiogroup" aria-label={t("mail.filter.attachmentKind")}>
+                      <button type="button" role="radio" aria-checked={attachmentKindFilter === undefined} className={`kind-chip${attachmentKindFilter === undefined ? " active" : ""}`} onClick={() => setAttachmentKindFilter(undefined)}>{t("mail.filter.anyKind")}</button>
+                      {attachmentKinds.map((kind) => (
+                        <button key={kind} type="button" role="radio" aria-checked={attachmentKindFilter === kind} className={`kind-chip${attachmentKindFilter === kind ? " active" : ""}`} onClick={() => setAttachmentKindFilter(attachmentKindFilter === kind ? undefined : kind)}>{t(`attachment.${kind}`)}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="list-filter-divider" role="separator" />
+                  <div className="list-filter-group" role="group" aria-label={t("mail.filter.dateRange")}>
+                    <span className="list-filter-heading">{t("mail.filter.dateRange")}</span>
+                    <div className="date-range-row">
+                      <DatePicker key={`filter-from-${filterPanelOpen}`} mode="date" value={dateFrom} onChange={setDateFrom} className="date-range-picker" placeholder={t("mail.filter.fromDate")} aria-label={t("mail.filter.fromDate")} maxDate={dateTo || undefined} />
+                      <DatePicker key={`filter-to-${filterPanelOpen}`} mode="date" value={dateTo} onChange={setDateTo} className="date-range-picker" placeholder={t("mail.filter.toDate")} aria-label={t("mail.filter.toDate")} minDate={dateFrom || undefined} />
+                      {(dateFrom || dateTo) && <IconButton label={t("mail.filter.clearDates")} className="date-range-clear" onClick={() => { setDateFrom(""); setDateTo(""); }}><X size={13} /></IconButton>}
+                    </div>
                   </div>
                 </div>
               )}

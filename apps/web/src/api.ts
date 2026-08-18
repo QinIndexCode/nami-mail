@@ -72,6 +72,11 @@ export type BatchJobQuery = {
   snoozed?: boolean;
   /** Matches the server's hasAttachments: the Attachments view across folders. */
   hasAttachments?: boolean;
+  /** Attachment-kind segmentation, mirroring the list filter. */
+  attachmentKind?: string;
+  /** Sent-date bounds as UTC instants ("after" inclusive, "before" exclusive). */
+  after?: string;
+  before?: string;
   /** Matches the server's scope=all: search every account and mailbox. */
   scope?: "all";
 };

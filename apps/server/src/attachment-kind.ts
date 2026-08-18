@@ -1,20 +1,16 @@
-import { translate, type Translate } from "./i18n";
+// Attachment-kind classification, mirrored from the renderer's
+// attachmentPresentation.ts so the SQL kind filter and the in-app preview
+// badges always agree. The map is duplicated on purpose: the server filter
+// must decide a page query from indexed columns without decrypting payloads,
+// while the renderer keeps its presentation labels and preview tooling.
 
 export type AttachmentKind = "archive" | "code" | "document" | "image" | "media" | "pdf" | "spreadsheet" | "text" | "other";
 
-/** Every kind in presentation order, for filter segments and pickers. */
-export const attachmentKinds: readonly AttachmentKind[] = [
+export const ATTACHMENT_KINDS: readonly AttachmentKind[] = [
   "archive", "code", "document", "image", "media", "pdf", "spreadsheet", "text", "other",
 ];
 
-export type AttachmentPresentation = {
-  kind: AttachmentKind;
-  label: string;
-};
-
-/** Programming-language and config source extensions (single source of truth).
- * Shared with the text preview and the agent-side file reader so a code file is
- * classified, previewable and readable in one place. */
+/** Programming-language and config source extensions (see the renderer copy). */
 export const codeTextExtensions = new Set([
   "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx",
   "py", "pyw", "go", "rs", "c", "h", "cc", "cpp", "cxx", "hpp", "hh",
@@ -105,31 +101,32 @@ const extensionKinds: Record<string, AttachmentKind> = {
   ...Object.fromEntries([...codeTextExtensions].map((extension) => [extension, "code" as const])),
 };
 
-function presentAttachmentKind(kind: AttachmentKind, t: Translate, extension = ""): AttachmentPresentation {
-  if (kind === "other") {
-    return { kind, label: extension && extension.length <= 5 ? extension.toUpperCase() : t("attachment.file") };
-  }
-  return { kind, label: t(`attachment.${kind}`) };
-}
-
-const defaultTranslate: Translate = (key, values) => translate("zh-CN", key, values);
-
-export function presentAttachment(filename: string, contentType: string, t: Translate = defaultTranslate): AttachmentPresentation {
-  const extension = filename.trim().toLowerCase().match(/\.([a-z0-9]{1,8})$/)?.[1] ?? "";
+/** Classifies an attachment from its filename and stored MIME type. */
+export function classifyAttachmentKind(filename: string, contentType: string): AttachmentKind {
+  const extension = filename.trim().toLowerCase().match(/\.([a-z0-9]{1,8})$/)?.at(1) ?? "";
   const byExtension = extensionKinds[extension];
-  if (byExtension) return presentAttachmentKind(byExtension, t, extension);
+  if (byExtension) return byExtension;
 
   const mime = contentType.trim().toLowerCase();
-  if (mime === "application/pdf") return presentAttachmentKind("pdf", t, extension);
-  if (mime.startsWith("image/")) return presentAttachmentKind("image", t, extension);
-  if (mime.startsWith("audio/") || mime.startsWith("video/")) return presentAttachmentKind("media", t, extension);
-  if (/zip|compressed|archive|tar|rar/.test(mime)) return presentAttachmentKind("archive", t, extension);
-  if (/spreadsheet|excel|csv/.test(mime)) return presentAttachmentKind("spreadsheet", t, extension);
+  if (mime === "application/pdf") return "pdf";
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/") || mime.startsWith("video/")) return "media";
+  if (/zip|compressed|archive|tar|rar/.test(mime)) return "archive";
+  if (/spreadsheet|excel|csv/.test(mime)) return "spreadsheet";
   if (mime.startsWith("text/")) {
-    // text/javascript and application/x-* source formats are code, plain text stays text.
-    if (/javascript|typescript|json|xml|yaml|graphql/.test(mime)) return presentAttachmentKind("code", t, extension);
-    return presentAttachmentKind("text", t, extension);
+    if (/javascript|typescript|json|xml|yaml|graphql/.test(mime)) return "code";
+    return "text";
   }
-  if (/document|word|presentation|powerpoint/.test(mime)) return presentAttachmentKind("document", t, extension);
-  return presentAttachmentKind("other", t, extension);
+  if (/document|word|presentation|powerpoint/.test(mime)) return "document";
+  return "other";
+}
+
+/**
+ * Serializes the deduplicated kind set of the given attachments as a JSON
+ * array (the `attachment_kinds_json` column). An empty list serializes to
+ * '[]' so LIKE filters never match placeholder rows.
+ */
+export function attachmentKindsJson(attachments: readonly { filename: string; contentType: string }[]): string {
+  const kinds = [...new Set(attachments.map((attachment) => classifyAttachmentKind(attachment.filename, attachment.contentType)))];
+  return JSON.stringify(kinds);
 }

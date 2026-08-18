@@ -1,5 +1,6 @@
 import type { DatabaseHandle } from "./db.js";
 import { decryptTextEnvelope, deriveEncryptionKey, encryptTextEnvelope } from "./crypto.js";
+import { attachmentKindsJson } from "./attachment-kind.js";
 
 export const MESSAGE_PAYLOAD_VERSION = 1;
 export const MAX_ENCRYPTED_SEARCH_CANDIDATES = 5_000;
@@ -7,6 +8,7 @@ export const PENDING_MOVE_RECONCILIATION_ERROR = "邮件正在同步移动后的
 export const MOVE_LOCATION_UNVERIFIED_ERROR = "邮件已移动，但邮箱服务器未提供可验证的新位置。请刷新目标文件夹后再修改邮件或下载附件。";
 
 const MESSAGE_MIGRATION_ID = "message-payload-v1";
+const ATTACHMENT_KINDS_MIGRATION_ID = "attachment-kinds-v1";
 const messageKeyPurpose = "message-payload-v1";
 
 export type StoredAddress = { name: string; address: string };
@@ -392,4 +394,36 @@ export function migrateMessageStorage(db: DatabaseHandle, masterKey: Buffer): { 
   `).run(MESSAGE_MIGRATION_ID, new Date().toISOString());
   if (vacuumed) db.pragma("wal_checkpoint(TRUNCATE)");
   return { migrated: rows.length, vacuumed };
+}
+
+/**
+ * Backfills the attachment-kind search column for rows written before the
+ * column existed. Rows inserted after this migration carry the kinds via the
+ * sync/draft paths, so this pass is a one-time decrypt sweep (the same cost
+ * profile as the FTS rebuild). Runs after `migrateMessageStorage`, which
+ * guarantees every row holds a decryptable payload.
+ */
+export function ensureAttachmentKinds(db: DatabaseHandle, masterKey: Buffer): { backfilled: number } {
+  const marker = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?").get(ATTACHMENT_KINDS_MIGRATION_ID);
+  if (marker) return { backfilled: 0 };
+  const rows = db.prepare("SELECT * FROM messages").all() as MessageStorageRow[];
+  const update = db.prepare("UPDATE messages SET attachment_kinds_json = ? WHERE id = ?");
+  let backfilled = 0;
+  db.transaction(() => {
+    for (const row of rows) {
+      let payload: MessagePayload;
+      try {
+        payload = messagePayloadForRow(row, masterKey);
+      } catch {
+        continue; // Unreadable payloads cannot be classified either.
+      }
+      update.run(attachmentKindsJson(payload.attachments ?? []), row.id);
+      backfilled += 1;
+    }
+    db.prepare(`
+      INSERT INTO data_migrations (id, completed_at) VALUES (?, ?)
+      ON CONFLICT(id) DO UPDATE SET completed_at = excluded.completed_at
+    `).run(ATTACHMENT_KINDS_MIGRATION_ID, new Date().toISOString());
+  })();
+  return { backfilled };
 }

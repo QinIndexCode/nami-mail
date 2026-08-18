@@ -1,4 +1,5 @@
 import type { Account, Message, Stats } from "./types";
+import { presentAttachment, type AttachmentKind } from "./attachmentPresentation";
 
 export type SidebarBadgeCounts = {
   inbox: number;
@@ -18,6 +19,11 @@ export type MessageListQuery = {
   // "all" mirrors the server's scope=all global search: every account and
   // mailbox participates and the account/folder/view checks are skipped.
   searchScope?: "view" | "all";
+  /** Attachment-kind segmentation: only messages carrying the selected kind. */
+  attachmentKind?: AttachmentKind;
+  /** Sent-date bounds as UTC instants ("after" inclusive, "before" exclusive). */
+  after?: string;
+  before?: string;
 };
 
 export type PendingArchiveMove = {
@@ -149,10 +155,26 @@ export function matchesServerMessageQuery(
   }
 
   const needle = query.search.trim().toLowerCase();
-  if (!needle) return true;
-  return `${message.subject} ${message.from.name} ${message.from.address} ${message.textBody} ${message.snippet}`
+  if (needle && !`${message.subject} ${message.from.name} ${message.from.address} ${message.textBody} ${message.snippet}`
     .toLowerCase()
-    .includes(needle);
+    .includes(needle)) {
+    return false;
+  }
+  // Kind and date refinements mirror the server's SQL filters: they apply to
+  // every mode (including global search) and only ever narrow the set. The
+  // kind is re-derived from the attachment metadata with the same rules the
+  // server used at sync time, so local snapshots agree with the server page.
+  if (query.attachmentKind
+    && !message.attachments.some((attachment) => presentAttachment(attachment.filename, attachment.contentType).kind === query.attachmentKind)) {
+    return false;
+  }
+  if (query.after || query.before) {
+    const sentTime = new Date(message.sentAt).getTime();
+    if (!Number.isFinite(sentTime)) return false;
+    if (query.after && sentTime < new Date(query.after).getTime()) return false;
+    if (query.before && sentTime >= new Date(query.before).getTime()) return false;
+  }
+  return true;
 }
 
 function hasExactPendingArchiveDestination(pending: PendingArchiveMove, serverMessage: Message): boolean {
