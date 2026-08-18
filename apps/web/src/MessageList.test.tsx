@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
@@ -225,5 +227,45 @@ describe("message list context menu", () => {
     const html = renderList({ selectionMode: true });
     rightClickRow(html, 0, 300, 120);
     expect(html.querySelector(".context-menu")).toBeNull();
+  });
+});
+
+describe("row quick actions reveal", () => {
+  const stylesheet = readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+
+  it("reveals the quick actions on a row-level hover (they are siblings of the row button, not descendants)", () => {
+    // The quick actions live next to the message button (buttons cannot nest),
+    // so a `.message-item:hover .row-quick-actions` descendant rule can never
+    // match; the reveal must key off the wrapping row.
+    expect(stylesheet).toContain(".message-list-row:hover .row-quick-actions");
+    expect(stylesheet).not.toContain(".message-item:hover .row-quick-actions");
+  });
+
+  it("keeps the quick actions reachable by keyboard focus on the row button", () => {
+    expect(stylesheet).toContain(".message-item:focus-visible+.row-quick-actions");
+  });
+
+  it("hides the quick actions in selection mode", () => {
+    expect(stylesheet).toContain(".message-item.selection-mode+.row-quick-actions");
+  });
+
+  it("styles the quick actions with the app-wide IconButton language (10px radius, border feedback, .16s transitions)", () => {
+    // The reader uses 32px buttons with border-radius:10px, a transparent
+    // 1px border that lights up on hover, and .16s transitions; the row
+    // buttons must follow the same language instead of the old 50% circle.
+    expect(stylesheet).toContain(".row-quick-action\n{\nwidth:30px;\nheight:30px;");
+    expect(stylesheet).toContain("border-radius:10px;");
+    expect(stylesheet).toContain("border:1px solid #0000;");
+    expect(stylesheet).toContain(".row-quick-action:hover\n{\nborder-color:var(--line);");
+    expect(stylesheet).toContain("transition:background .16s,color .16s,border-color .16s");
+    // Scope the "no circle" check to the base .row-quick-action block (other
+    // unrelated components legitimately use 50% radii elsewhere).
+    const baseBlock = stylesheet.match(/\.row-quick-action\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(baseBlock).toContain("border-radius:10px;");
+    expect(baseBlock).not.toContain("50%");
+  });
+
+  it("accents the star button on flagged messages like the reader's active-star", () => {
+    expect(stylesheet).toContain(".row-quick-action.active-star\n{\ncolor:var(--warning);");
   });
 });
