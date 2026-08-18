@@ -10,6 +10,7 @@ const githubOwnerPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const githubRepositoryPattern = /^[A-Za-z0-9_.-]+$/;
 const sha512Base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const manifestMaximumBytes = 16 * 1024;
+const githubReleaseMaximumBytes = 64 * 1024;
 const githubReleaseRequestTimeoutMs = 15_000;
 const githubArchiveDownloadTimeoutMs = 5 * 60_000;
 
@@ -206,12 +207,41 @@ function githubHeaders(): Record<string, string> {
   };
 }
 
-async function readResponseText(response: Response, maximumBytes = manifestMaximumBytes): Promise<string> {
-  const text = await response.text();
-  if (Buffer.byteLength(text, "utf8") > maximumBytes) {
-    throw new GitHubZipUpdateError("UPDATE_MANIFEST_TOO_LARGE", "GitHub update metadata exceeds the allowed size.");
+async function readResponseText(response: Response, maximumBytes = manifestMaximumBytes, errorCode = "UPDATE_MANIFEST_TOO_LARGE"): Promise<string> {
+  // Pre-check the declared length so an oversized body is rejected before any
+  // of it is buffered; the streaming loop below then enforces the cap on the
+  // actual bytes so a lying or absent header cannot bypass it.
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maximumBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new GitHubZipUpdateError(errorCode, "GitHub update metadata exceeds the allowed size.");
   }
-  return text;
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > maximumBytes) {
+      throw new GitHubZipUpdateError(errorCode, "GitHub update metadata exceeds the allowed size.");
+    }
+    return text;
+  }
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      received += value.byteLength;
+      if (received > maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new GitHubZipUpdateError(errorCode, "GitHub update metadata exceeds the allowed size.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function githubResponseError(response: Response, fallbackCode: string): Promise<GitHubZipUpdateError> {
@@ -302,7 +332,14 @@ export async function discoverGitHubZipUpdate(options: {
 
   const releaseResponse = await fetchGithubUpdate(fetchImpl, githubApiUrl(options.source), { headers: githubHeaders(), redirect: "error" }, githubReleaseRequestTimeoutMs, "release lookup");
   if (!releaseResponse.ok) throw await githubResponseError(releaseResponse, "GITHUB_RELEASE_REQUEST_FAILED");
-  const release = parseRelease(await releaseResponse.json());
+  const releaseText = await readResponseText(releaseResponse, githubReleaseMaximumBytes, "GITHUB_RELEASE_INVALID");
+  let releaseRaw: unknown;
+  try {
+    releaseRaw = JSON.parse(releaseText);
+  } catch {
+    throw new GitHubZipUpdateError("GITHUB_RELEASE_INVALID", "GitHub returned malformed update release metadata.");
+  }
+  const release = parseRelease(releaseRaw);
   if (release.draft || release.prerelease || !release.tag_name.startsWith("v")) {
     throw new GitHubZipUpdateError("GITHUB_RELEASE_INVALID", "GitHub has no published stable Nami Mail update release.");
   }

@@ -1005,6 +1005,24 @@ function isCurrentRenderer(event: Electron.IpcMainEvent | Electron.IpcMainInvoke
   );
 }
 
+// The renderer is a trusted local UI, but an unhandled permission request
+// defaults to granted in Electron. Deny everything outside this short
+// allowlist so compromised or misbehaving content cannot reach cameras,
+// microphones, geolocation or other device surfaces through the session.
+// clipboard-sanitized-write backs the "copy" affordances in the UI;
+// notifications lets the web-side notification path request permission, while
+// the mail client itself uses the native main-process Notification API.
+const rendererPermissionAllowlist = new Set(["clipboard-sanitized-write", "notifications"]);
+
+function installRendererPermissionPolicy(): void {
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(rendererPermissionAllowlist.has(permission));
+  });
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    return rendererPermissionAllowlist.has(permission);
+  });
+}
+
 function checkForUpdatesAfterExternalTrigger(): void {
   void desktopUpdater?.checkAfterExternalTrigger();
 }
@@ -2088,6 +2106,7 @@ async function boot(): Promise<void> {
   desktopAgentBrokerRecoveryGate = "accepting";
   await writeDesktopSmokeProgress("waiting-for-electron-ready");
   await app.whenReady();
+  installRendererPermissionPolicy();
   await writeDesktopSmokeProgress("electron-ready");
   appIcon = loadDesktopIcon();
   // Windows/Linux register the mailto protocol with the OS; macOS receives
@@ -2282,8 +2301,12 @@ if (desktopCliArguments !== undefined) {
   ipcMain.handle("nami:show-item-in-folder", (event, filePath: unknown) => {
     if (!isCurrentRenderer(event)) return;
     if (typeof filePath !== "string" || !filePath.trim()) return;
+    // Reveal only an existing absolute local path. The renderer strings must
+    // not point Explorer at arbitrary locations or network shares.
+    const resolved = path.resolve(filePath);
+    if (!path.isAbsolute(resolved) || resolved.startsWith("\\\\") || !existsSync(resolved)) return;
     try {
-      shell.showItemInFolder(filePath);
+      shell.showItemInFolder(resolved);
     } catch (error) {
       console.warn("Nami Mail could not show item in folder", error);
     }
