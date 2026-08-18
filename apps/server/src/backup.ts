@@ -1,5 +1,5 @@
 import type { DatabaseHandle } from "./db.js";
-import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
+import { friendlyMailError, imapClientForAccount, mailErrorCode, type AccountAccessTokenProvider, type MailErrorCode } from "./mail.js";
 import { moveActionBlockedError, type MessageStorageRow } from "./message-storage.js";
 import type { AccountRecord } from "./types.js";
 
@@ -8,6 +8,13 @@ import type { AccountRecord } from "./types.js";
 // per-message EML export fetches on demand), so the backup behaves the same
 // way: one IMAP connection per (account, mailbox) group, opened once and
 // reused for every message in that folder.
+
+// UIDs are fetched in chunks: one batched FETCH command per chunk instead of
+// a sequential round trip per message, while keeping a single command bounded
+// for very large folders.
+const BACKUP_FETCH_CHUNK_SIZE = 100;
+
+const messageGoneReason = "Message is no longer available in this mailbox. Sync this message again.";
 
 export type BackupMessageEntry = {
   /** Archive path inside the zip, e.g. "emails/0001_quarterly-report.eml". */
@@ -18,6 +25,8 @@ export type BackupMessageEntry = {
 
 export type BackupFailure = {
   messageId: string;
+  /** Classified mail taxonomy code for the failure. */
+  code: MailErrorCode;
   reason: string;
 };
 
@@ -93,33 +102,60 @@ export async function collectMailBackup(
       await client.connect();
       connected = true;
       lock = await client.getMailboxLock(group.mailbox);
-      for (const message of group.messages) {
-        index += 1;
-        const blocked = moveActionBlockedError(message);
-        if (blocked) {
-          report.failed.push({ messageId: message.id, reason: blocked });
-          continue;
-        }
-        try {
-          const remote = await client.fetchOne(message.uid, { uid: true, source: true }, { uid: true });
-          if (!remote || remote.uid !== message.uid || !Buffer.isBuffer(remote.source)) {
-            throw new Error("Message is no longer available in this mailbox. Sync this message again.");
+      for (let chunkStart = 0; chunkStart < group.messages.length; chunkStart += BACKUP_FETCH_CHUNK_SIZE) {
+        const chunk = group.messages.slice(chunkStart, chunkStart + BACKUP_FETCH_CHUNK_SIZE);
+        const pending: Array<{ message: MessageStorageRow; index: number }> = [];
+        for (const message of chunk) {
+          index += 1;
+          const blocked = moveActionBlockedError(message);
+          if (blocked) {
+            report.failed.push({ messageId: message.id, code: "unknown", reason: blocked });
+            continue;
           }
-          options.emit?.({
-            path: backupEntryName(typeof message.subject === "string" ? message.subject : "", index),
-            source: remote.source,
-          });
-          report.exported += 1;
+          pending.push({ message, index });
+        }
+        if (pending.length === 0) continue;
+        const sourceByUid = new Map<number, Buffer>();
+        let fetchError: unknown;
+        try {
+          const remoteMessages = client.fetch(pending.map((entry) => entry.message.uid), { uid: true, source: true }, { uid: true });
+          for await (const remote of remoteMessages) {
+            if (remote.uid !== undefined && Buffer.isBuffer(remote.source)) sourceByUid.set(remote.uid, remote.source);
+          }
         } catch (error) {
-          report.failed.push({ messageId: message.id, reason: error instanceof Error ? error.message : String(error) });
+          // A failed batch does not abort the folder: messages already
+          // streamed in this chunk are still exported, the rest fail with the
+          // same error instead of aborting the whole backup run.
+          fetchError = error;
+        }
+        for (const entry of pending) {
+          const source = sourceByUid.get(entry.message.uid);
+          if (source) {
+            options.emit?.({
+              path: backupEntryName(typeof entry.message.subject === "string" ? entry.message.subject : "", entry.index),
+              source,
+            });
+            report.exported += 1;
+            continue;
+          }
+          report.failed.push({
+            messageId: entry.message.id,
+            code: fetchError ? mailErrorCode(fetchError) : "unknown",
+            reason: fetchError ? (fetchError instanceof Error ? fetchError.message : String(fetchError)) : messageGoneReason,
+          });
         }
       }
     } catch (error) {
       // A folder that cannot be connected blocks every message in it, but the
-      // remaining folders still get their chance.
+      // remaining folders still get their chance. The account row records the
+      // classified error code so the UI distinguishes transport and protocol
+      // causes instead of only a generic backup failure.
+      const code = mailErrorCode(error);
+      db.prepare("UPDATE accounts SET status = ?, last_error = ?, last_error_code = ? WHERE id = ?")
+        .run("error", friendlyMailError(error), code, group.account.id);
       for (const message of group.messages) {
         index += 1;
-        report.failed.push({ messageId: message.id, reason: error instanceof Error ? error.message : String(error) });
+        report.failed.push({ messageId: message.id, code, reason: error instanceof Error ? error.message : String(error) });
       }
     } finally {
       try {

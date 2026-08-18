@@ -65,7 +65,12 @@ function makeClient(sourceByUid: Record<number, Buffer>) {
     usable: true,
     connect: vi.fn(async () => undefined),
     getMailboxLock: vi.fn(async () => lock),
-    fetchOne: vi.fn(async (uid: number) => ({ uid, source: sourceByUid[uid] })),
+    fetch: vi.fn(async function* fetch(uids: number[]) {
+      for (const uid of uids) {
+        const source = sourceByUid[uid];
+        if (source) yield { uid, source };
+      }
+    }),
     logout: vi.fn(async () => undefined),
   };
 }
@@ -122,6 +127,8 @@ describe("collectMailBackup", () => {
     expect(client.connect).toHaveBeenCalledTimes(2);
     expect(client.getMailboxLock).toHaveBeenCalledWith("INBOX");
     expect(client.getMailboxLock).toHaveBeenCalledWith("Archive");
+    expect(client.fetch).toHaveBeenCalledWith(expect.arrayContaining([11, 12]), expect.objectContaining({ source: true }), expect.objectContaining({ uid: true }));
+    expect(client.fetch).toHaveBeenCalledWith([31], expect.objectContaining({ source: true }), expect.objectContaining({ uid: true }));
     expect(new Set(entries.map((entry) => entry.path))).toEqual(
       new Set(["emails/0001_Vacation photos.eml", "emails/0002_退款  订单 #42.eml", "emails/0003_Quarterly  report 2026.eml"]),
     );
@@ -132,30 +139,38 @@ describe("collectMailBackup", () => {
     insertMessage(db, { id: "message-1", accountId: "account-1", mailbox: "INBOX", uid: 11, subject: subjectA, sentAt: now });
     insertMessage(db, { id: "message-2", accountId: "account-1", mailbox: "INBOX", uid: 12, subject: subjectB, sentAt: now });
     const client = makeClient({ 12: Buffer.from("ok") });
-    client.fetchOne.mockImplementation(async (uid: number) => (uid === 11 ? { uid: 99, source: Buffer.from("stale") } : { uid, source: Buffer.from("ok") }));
+    client.fetch.mockImplementation(async function* fetch(uids: number[]) {
+      for (const uid of uids) {
+        yield uid === 11 ? { uid: 99, source: Buffer.from("stale") } : { uid, source: Buffer.from("ok") };
+      }
+    });
     imapClientForAccount.mockReturnValue(client);
 
     const report = await collectMailBackup(db, Buffer.alloc(32, 21));
 
     expect(report.exported).toBe(1);
     expect(report.failed).toHaveLength(1);
-    expect(report.failed[0]).toMatchObject({ messageId: "message-1" });
+    expect(report.failed[0]).toMatchObject({ messageId: "message-1", code: "unknown" });
   });
 
-  it("fails every message in a group whose connection cannot be opened", async () => {
+  it("fails every message in a group whose connection cannot be opened and records the classified code", async () => {
     insertMessage(db, { id: "message-1", accountId: "account-1", mailbox: "AAA-broken", uid: 11, subject: subjectA, sentAt: now });
     insertMessage(db, { id: "message-2", accountId: "account-1", mailbox: "ZZZ-healthy", uid: 31, subject: subjectC, sentAt: "2026-08-09T22:00:00.000Z" });
     const broken = makeClient({});
     broken.connect.mockRejectedValue(new Error("connection refused"));
-    const healthy = makeClient({});
-    healthy.fetchOne.mockImplementation(async (uid: number) => ({ uid, source: Buffer.from("ok") }));
+    const healthy = makeClient({ 31: Buffer.from("ok") });
     imapClientForAccount.mockImplementationOnce(() => broken).mockReturnValue(healthy);
 
     const report = await collectMailBackup(db, Buffer.alloc(32, 21));
 
     expect(report.exported).toBe(1);
     expect(report.failed.map((failure) => failure.messageId)).toEqual(["message-1"]);
+    expect(report.failed[0]).toMatchObject({ code: "connection_refused" });
     expect(report.failed[0].reason).toContain("connection refused");
+    expect(db.prepare("SELECT status, last_error, last_error_code FROM accounts WHERE id = ?").get("account-1")).toMatchObject({
+      status: "error",
+      last_error_code: "connection_refused",
+    });
   });
 
   it("skips messages with an unconfirmed pending move", async () => {
@@ -172,7 +187,26 @@ describe("collectMailBackup", () => {
     expect(report.exported).toBe(1);
     expect(report.failed).toHaveLength(1);
     expect(report.failed[0].messageId).toBe("message-1");
-    expect(client.fetchOne).not.toHaveBeenCalledWith(11, expect.anything(), expect.anything());
+    expect(client.fetch).not.toHaveBeenCalledWith(expect.arrayContaining([11]), expect.anything(), expect.anything());
+  });
+
+  it("splits very large folders into bounded batched fetches", async () => {
+    const source = Buffer.from("From: one@example.com\r\n\r\nHi");
+    for (let uid = 1; uid <= 101; uid += 1) {
+      insertMessage(db, {
+        id: `message-${uid}`, accountId: "account-1", mailbox: "INBOX", uid,
+        subject: `Subject ${uid}`, sentAt: now,
+      });
+    }
+    const client = makeClient(Object.fromEntries(Array.from({ length: 101 }, (_, offset) => [offset + 1, source])));
+    imapClientForAccount.mockReturnValue(client);
+
+    const report = await collectMailBackup(db, Buffer.alloc(32, 21));
+
+    expect(report).toMatchObject({ exported: 101, failed: [] });
+    expect(client.fetch).toHaveBeenCalledTimes(2);
+    expect(client.fetch.mock.calls[0][0]).toHaveLength(100);
+    expect(client.fetch.mock.calls[1][0]).toEqual([101]);
   });
 
   it("serves a streaming zip over /api/backup without flattening the server", async () => {
