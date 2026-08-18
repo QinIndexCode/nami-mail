@@ -29,8 +29,9 @@
   ],
   "scripts": {
     "postinstall": "node scripts/ensure-electron-runtime.mjs",
-    "dev": "concurrently -k -n api,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:server:watch\" \"npm:dev:web\"",
     "dev:server": "npm --workspace @nami/server run dev",
+    "dev:server:watch": "node scripts/dev-server-watch.mjs",
     "dev:web": "npm --workspace @nami/web run dev",
     "build:brand": "node scripts/build-brand-assets.mjs",
     "build:brand:check": "node scripts/build-brand-assets.mjs --check",
