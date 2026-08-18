@@ -390,6 +390,11 @@ AFTER DELETE ON messages BEGIN
 END;
 `;
 
+// Schema version understood by this build. Raised whenever migrateDatabase
+// starts reshaping existing tables, so fresh databases can be stamped and an
+// older build can refuse a database a newer build already migrated.
+export const SCHEMA_VERSION = 1;
+
 export function openDatabase(databasePath: string): DatabaseHandle {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const db = new SqliteDatabase(databasePath);
@@ -398,34 +403,28 @@ export function openDatabase(databasePath: string): DatabaseHandle {
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
   db.exec(schema);
-  // Migration: add agent_tool_round_limit column for existing databases
-  try {
-    db.prepare("ALTER TABLE app_settings ADD COLUMN agent_tool_round_limit INTEGER NOT NULL DEFAULT 30 CHECK (agent_tool_round_limit BETWEEN 1 AND 50)").run();
-  } catch {
-    // Column already exists
-  }
-  // Migration: the Agent tool round limit default moved from 15 to 30. Rows
-  // still holding the old default (never explicitly configured) follow along;
-  // values the user set on purpose are left untouched.
-  db.exec("UPDATE app_settings SET agent_tool_round_limit = 30 WHERE agent_tool_round_limit = 15");
-  // Migration: add realtime_push_enabled column for existing databases
-  try {
-    db.prepare("ALTER TABLE app_settings ADD COLUMN realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1))").run();
-  } catch {
-    // Column already exists
-  }
-  // Migration: add desktop behavior columns for existing databases
-  try {
-    db.prepare("ALTER TABLE app_settings ADD COLUMN launch_at_startup INTEGER NOT NULL DEFAULT 0 CHECK (launch_at_startup IN (0, 1))").run();
-  } catch {
-    // Column already exists
-  }
-  try {
-    db.prepare("ALTER TABLE app_settings ADD COLUMN global_shortcut_enabled INTEGER NOT NULL DEFAULT 0 CHECK (global_shortcut_enabled IN (0, 1))").run();
-  } catch {
-    // Column already exists
+  // schema_meta.schema_version records the newest app build that has opened
+  // the file. Checking it before any migration runs keeps an old build from
+  // altering tables a newer build already reshaped.
+  db.exec("CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  const readSchemaVersion = db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'");
+  const writeSchemaVersion = db.prepare(
+    "INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?) "
+    + "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  );
+  const currentSchemaVersion = Number(readSchemaVersion.pluck().get() ?? "0");
+  if (currentSchemaVersion > SCHEMA_VERSION) {
+    db.close();
+    throw new Error(
+      "This Nami Mail database was created by a newer application build (schema v"
+      + currentSchemaVersion + " > v" + SCHEMA_VERSION
+      + "). Please update Nami Mail before opening it.",
+    );
   }
   migrateDatabase(db);
+  if (currentSchemaVersion < SCHEMA_VERSION) {
+    writeSchemaVersion.run(String(SCHEMA_VERSION));
+  }
   return db;
 }
 
@@ -585,6 +584,22 @@ function migrateDatabase(db: DatabaseHandle): void {
   }
   if (!settingsColumns.some((column) => column.name === "auto_reply_config")) {
     db.exec("ALTER TABLE app_settings ADD COLUMN auto_reply_config TEXT");
+  }
+  if (!settingsColumns.some((column) => column.name === "agent_tool_round_limit")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN agent_tool_round_limit INTEGER NOT NULL DEFAULT 30 CHECK (agent_tool_round_limit BETWEEN 1 AND 50)");
+  }
+  // The Agent tool round limit default moved from 15 to 30. Rows still holding
+  // the old default (never explicitly configured) follow along; values the
+  // user set on purpose are left untouched.
+  db.prepare("UPDATE app_settings SET agent_tool_round_limit = 30 WHERE agent_tool_round_limit = 15").run();
+  if (!settingsColumns.some((column) => column.name === "realtime_push_enabled")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1))");
+  }
+  if (!settingsColumns.some((column) => column.name === "launch_at_startup")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN launch_at_startup INTEGER NOT NULL DEFAULT 0 CHECK (launch_at_startup IN (0, 1))");
+  }
+  if (!settingsColumns.some((column) => column.name === "global_shortcut_enabled")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN global_shortcut_enabled INTEGER NOT NULL DEFAULT 0 CHECK (global_shortcut_enabled IN (0, 1))");
   }
   // Three-level permission model: the retired `draft-only` value maps to the
   // conservative read-only level so an existing user is never silently granted
