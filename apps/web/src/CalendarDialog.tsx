@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   CalendarDays,
   Check,
@@ -269,19 +269,19 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
   useDialogFocus(true, dialogRef, { fallbackFocusRef, suspended: Boolean(editor || pendingDelete || pendingBulkDelete) });
   useDialogFocus(Boolean(editor), editorDialog, { fallbackFocusRef: dialogRef });
   useDialogFocus(Boolean(pendingDelete || pendingBulkDelete), confirmationDialog, { fallbackFocusRef: dialogRef });
-  const { closing, requestClose } = useDismissTransition(() => {
+  const { closing, requestClose } = useDismissTransition(useCallback(() => {
     onClose();
-  });
-  const { closing: editorClosing, requestClose: requestEditorClose, reset: resetEditorClosing } = useDismissTransition(() => setEditor(null));
-  const { closing: confirmClosing, requestClose: requestConfirmClose, reset: resetConfirmClosing } = useDismissTransition(() => {
+  }, [onClose]));
+  const { closing: editorClosing, requestClose: requestEditorClose, reset: resetEditorClosing } = useDismissTransition(useCallback(() => setEditor(null), []));
+  const { closing: confirmClosing, requestClose: requestConfirmClose, reset: resetConfirmClosing } = useDismissTransition(useCallback(() => {
     setPendingDelete(null);
     setPendingBulkDelete(false);
-  });
+  }, []));
 
-  const guardedRequestClose = () => {
+  const guardedRequestClose = useCallback(() => {
     if (busy) return;
     requestClose();
-  };
+  }, [busy, requestClose]);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -304,7 +304,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     };
     window.addEventListener("keydown", closeOnEscape, true);
     return () => window.removeEventListener("keydown", closeOnEscape, true);
-  });
+  }, [pendingDelete, pendingBulkDelete, editor, jumpOpen, requestConfirmClose, requestEditorClose, guardedRequestClose]);
 
   // Close the month/year jump panel on any click outside it.
   useEffect(() => {
