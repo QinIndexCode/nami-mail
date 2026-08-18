@@ -1404,6 +1404,10 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const stopDelivery = () => { deliveryStopped = true; };
     request.raw.once("aborted", stopDelivery);
     reply.raw.once("close", stopDelivery);
+    // A reset connection surfaces here as an error event; without a listener
+    // it would take the whole process down instead of just this stream.
+    request.raw.on("error", stopDelivery);
+    reply.raw.on("error", stopDelivery);
     const responseSocket = reply.raw.socket;
     responseSocket?.once("close", stopDelivery);
     reply.hijack();
@@ -1432,6 +1436,8 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     } finally {
       request.raw.removeListener("aborted", stopDelivery);
       reply.raw.removeListener("close", stopDelivery);
+      request.raw.removeListener("error", stopDelivery);
+      reply.raw.removeListener("error", stopDelivery);
       responseSocket?.removeListener("close", stopDelivery);
       if (!reply.raw.destroyed) reply.raw.end();
     }
@@ -1643,6 +1649,10 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const stopDelivery = () => { deliveryStopped = true; };
     request.raw.once("aborted", stopDelivery);
     reply.raw.once("close", stopDelivery);
+    // A reset connection surfaces here as an error event; without a listener
+    // it would take the whole process down instead of just this stream.
+    request.raw.on("error", stopDelivery);
+    reply.raw.on("error", stopDelivery);
     const responseSocket = reply.raw.socket;
     responseSocket?.once("close", stopDelivery);
     reply.hijack();
@@ -1679,6 +1689,8 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       clearInterval(heartbeat);
       request.raw.removeListener("aborted", stopDelivery);
       reply.raw.removeListener("close", stopDelivery);
+      request.raw.removeListener("error", stopDelivery);
+      reply.raw.removeListener("error", stopDelivery);
       responseSocket?.removeListener("close", stopDelivery);
       responseSocket?.removeListener("close", cleanup);
       if (!reply.raw.destroyed) reply.raw.end();
