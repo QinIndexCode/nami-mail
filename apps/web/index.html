@@ -2,6 +2,15 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Apply the stored locale to the document language before React mounts,
+      // so the splash screen and initial paint honor the user's preference.
+      // Keep the key in sync with localePreferenceStorageKey (localePreference.ts).
+      try {
+        var preferred = localStorage.getItem("nami-mail.locale-preference");
+        if (preferred) document.documentElement.lang = preferred;
+      } catch (error) {}
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f4f4f5" />
     <meta name="color-scheme" content="light dark" />
