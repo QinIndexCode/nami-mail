@@ -52,6 +52,7 @@ import DatePicker from "./DatePicker";
 import { canPreviewAttachment } from "./attachmentPreview";
 import { presentAttachment } from "./attachmentPresentation";
 import { AttachmentFileIcon, FolderNavigationIcon, formatFileSize, isoFromDatetimeLocal, IconButton, type ComposeDraft, type ToastKind } from "./mailUi";
+import { parseMailtoUrl } from "./mailtoLink";
 import { desktopBridge, type DesktopAutoReplyNotice, type DesktopUpdateSnapshot } from "./desktop";
 import { demoDataSnapshot, ensureDemoLoaded } from "./demo-loader";
 import { accountHealthIssue, mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
@@ -3199,8 +3200,8 @@ const emptyMessageList = useMemo(() => (query.trim()
     const unsubscribeOpenMessage = bridge.onOpenMessage((messageId) => {
       void openNotifiedMessage(messageId);
     });
-    const unsubscribeComposeNew = bridge.onComposeNew?.(() => {
-      openCompose();
+    const unsubscribeComposeNew = bridge.onComposeNew?.((mailtoUrl) => {
+      openCompose(parseMailtoUrl(mailtoUrl ?? "") ?? {});
     });
     const unsubscribeOpenInbox = bridge.onOpenInbox?.(() => {
       chooseView("inbox");
@@ -3227,6 +3228,24 @@ const emptyMessageList = useMemo(() => (query.trim()
       unsubscribeConfirmationResult?.();
     };
   }, [chooseView, openCompose, openNotifiedMessage, settings.notificationSound, showToast, silentRefresh, t]);
+
+  // A mailto link anywhere in the document (sidebar, message body, agent
+  // answer) opens a pre-filled compose window instead of the OS default
+  // client. Modified clicks and already-handled links pass through untouched.
+  useEffect(() => {
+    const handleMailtoClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (!(event.target instanceof Element)) return;
+      const anchor = event.target.closest<HTMLAnchorElement>("a[href]");
+      if (!anchor) return;
+      const href = anchor.getAttribute("href") ?? "";
+      if (!href.toLowerCase().startsWith("mailto:")) return;
+      event.preventDefault();
+      openCompose(parseMailtoUrl(href) ?? {});
+    };
+    document.addEventListener("click", handleMailtoClick);
+    return () => document.removeEventListener("click", handleMailtoClick);
+  }, [openCompose]);
 
   // Plain web sessions have no desktop bridge to push auto-reply events, so
   // poll the pending list and surface newly drafted replies as toasts. The

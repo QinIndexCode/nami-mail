@@ -22,6 +22,7 @@ import {
   applyUnreadBadge as applyUnreadBadgePolicy,
   BADGE_OVERLAY_DATA_URL,
   buildTrayMenuTemplate,
+  extractMailtoUrl,
   FOCUS_GLOBAL_SHORTCUT_ACCELERATOR,
   type GlobalShortcutApi,
   type LaunchAtStartupApi,
@@ -325,6 +326,8 @@ let localApiAccessToken: string | undefined;
 let desktopUpdater: DesktopUpdater | undefined;
 let rendererCacheCleanup: RendererCacheCleanupResult | undefined;
 let localApiCachePolicyInstalled = false;
+/** A mailto URL received (macOS open-url) before the window existed. */
+let pendingMailtoUrl: string | undefined;
 const desktopSmokeDiagnostics: string[] = [];
 let desktopSmokeResult: Record<string, unknown> | undefined;
 let singleInstanceSmokeResult: DesktopSingleInstanceSmokeResult | undefined;
@@ -1857,6 +1860,16 @@ async function createMainWindow(): Promise<void> {
   const appUrl = new URL(localServer.url);
   appUrl.searchParams.set("desktop", "1");
   if (isDesktopSmoke) appUrl.searchParams.set("desktopSmoke", "1");
+  // A cold start or a pre-window open-url hand-off queues one mailto compose.
+  // did-finish-load fires after the renderer bundle ran, so the web app's
+  // subscription is already registered by the time the event is sent.
+  const coldMailtoUrl = pendingMailtoUrl ?? extractMailtoUrl(process.argv);
+  pendingMailtoUrl = undefined;
+  if (coldMailtoUrl) {
+    mainWindow.webContents.once("did-finish-load", () => {
+      mainWindow?.webContents.send("nami:compose-new", coldMailtoUrl);
+    });
+  }
   await mainWindow.loadURL(appUrl.toString());
 }
 
@@ -2077,6 +2090,20 @@ async function boot(): Promise<void> {
   await app.whenReady();
   await writeDesktopSmokeProgress("electron-ready");
   appIcon = loadDesktopIcon();
+  // Windows/Linux register the mailto protocol with the OS; macOS receives
+  // open-url events instead (the packaged Info.plist declares the scheme).
+  if (process.platform !== "darwin") {
+    try {
+      if (app.isPackaged) {
+        app.setAsDefaultProtocolClient("mailto", process.execPath);
+      } else {
+        app.setAsDefaultProtocolClient("mailto", process.execPath, [path.resolve(app.getAppPath())]);
+      }
+    } catch {
+      // Registration can fail in locked-down development shells; the window
+      // still handles mailto arguments handed to a new instance.
+    }
+  }
   await loadDesktopLocalConfiguration();
   configureLocalService();
   await writeDesktopSmokeProgress("configuration-loaded");
@@ -2306,6 +2333,19 @@ if (desktopCliArguments !== undefined) {
   });
   app.on("second-instance", (_event, commandLine) => {
     void recordSingleInstanceSmokeActivation(commandLine);
+    const mailtoUrl = extractMailtoUrl(commandLine);
+    if (mailtoUrl) {
+      desktopHostMode = "gui";
+      void (async () => {
+        if (!mainWindow && localServer) {
+          await createMainWindow();
+          await startDesktopUpdaterIfNeeded();
+        }
+        focusMainWindow();
+        mainWindow?.webContents.send("nami:compose-new", mailtoUrl);
+      })();
+      return;
+    }
     const pairingRequests = readAgentPairingRequestIds(commandLine);
     if (pairingRequests.length) {
       desktopHostMode = "gui";
@@ -2334,6 +2374,18 @@ if (desktopCliArguments !== undefined) {
   });
   app.on("window-all-closed", () => {
     if (desktopHostMode === "gui") app.quit();
+  });
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    const mailtoUrl = extractMailtoUrl([url]);
+    if (!mailtoUrl) return;
+    if (mainWindow) {
+      focusMainWindow();
+      mainWindow.webContents.send("nami:compose-new", mailtoUrl);
+    } else {
+      // macOS can deliver open-url before `ready`; createMainWindow drains it.
+      pendingMailtoUrl = mailtoUrl;
+    }
   });
   app.on("before-quit", (event) => {
     desktopAgentBrokerRecoveryGate = "closed";

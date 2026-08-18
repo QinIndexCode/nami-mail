@@ -5,6 +5,7 @@ import {
   applyLaunchAtStartup,
   applyUnreadBadge,
   buildTrayMenuTemplate,
+  extractMailtoUrl,
   normalizeUnreadBadgeCount,
   resolveTrayVisibilityAction,
 } from "../src/desktop-behaviors.mts";
@@ -187,4 +188,25 @@ test("tray menu offers compose and inbox between the toggle and quit separators"
 test("resolveTrayVisibilityAction hides a visible window and shows a hidden one", () => {
   assert.equal(resolveTrayVisibilityAction(true), "hide");
   assert.equal(resolveTrayVisibilityAction(false), "show");
+});
+
+test("extractMailtoUrl returns the first mailto argument", () => {
+  assert.equal(
+    extractMailtoUrl(["nami.exe", "mailto:user@example.com?subject=Hi"]),
+    "mailto:user@example.com?subject=Hi",
+  );
+  assert.equal(
+    extractMailtoUrl(["nami.exe", "--flag", "mailto:?to=a@x.com", "plain"]),
+    "mailto:?to=a@x.com",
+  );
+});
+
+test("extractMailtoUrl accepts a quoted token and a scheme in any case", () => {
+  assert.equal(extractMailtoUrl([`"MAILTO:user@example.com"`]), "MAILTO:user@example.com");
+});
+
+test("extractMailtoUrl rejects non-mailto tokens and undecodable URLs", () => {
+  assert.equal(extractMailtoUrl(["nami.exe", "https://example.com", "mailto:"]), undefined);
+  assert.equal(extractMailtoUrl(["nami.exe", "mailto:not a url with spaces and percent %zz"]), undefined);
+  assert.equal(extractMailtoUrl([]), undefined);
 });

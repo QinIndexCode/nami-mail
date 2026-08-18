@@ -359,8 +359,10 @@ if (contextBridge && ipcRenderer) {
       ipcRenderer.on("nami:open-message", wrapped);
       return () => ipcRenderer.removeListener("nami:open-message", wrapped);
     },
-    onComposeNew: (listener: () => void) => {
-      const wrapped = () => listener();
+    onComposeNew: (listener: (mailtoUrl?: string) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, mailtoUrl?: unknown) => {
+        listener(typeof mailtoUrl === "string" ? mailtoUrl : undefined);
+      };
       ipcRenderer.on("nami:compose-new", wrapped);
       return () => ipcRenderer.removeListener("nami:compose-new", wrapped);
     },
