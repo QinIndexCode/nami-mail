@@ -43,6 +43,7 @@ import {
   Trash2,
   X,
   Printer,
+  UserRound,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
 import { CustomAvatar } from "./SenderAvatar";
@@ -53,6 +54,8 @@ import { canPreviewAttachment } from "./attachmentPreview";
 import { attachmentKinds, presentAttachment, type AttachmentKind } from "./attachmentPresentation";
 import { AttachmentFileIcon, FolderNavigationIcon, formatFileSize, isoFromDatetimeLocal, IconButton, type ComposeDraft, type ToastKind } from "./mailUi";
 import { parseMailtoUrl } from "./mailtoLink";
+import { attachmentsZipFilename, buildAttachmentsZipBlob, triggerBlobDownload } from "./attachmentZip";
+import { calendarEventIcs, exportDownloadFilename, vCardText } from "./contactExport";
 import { desktopBridge, type DesktopAutoReplyNotice, type DesktopUpdateSnapshot } from "./desktop";
 import { demoDataSnapshot, ensureDemoLoaded } from "./demo-loader";
 import { accountHealthIssue, mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
@@ -670,6 +673,7 @@ export default function App() {
     return { after, before };
   }, [dateFrom, dateTo]);
   const [attachmentDownloads, setAttachmentDownloads] = useState<Record<string, AttachmentDownloadState>>({});
+  const [zipAllPhase, setZipAllPhase] = useState<"idle" | "zipping">("idle");
   const [attachmentPreview, setAttachmentPreview] = useState<{ message: Message; attachment: MessageAttachment } | null>(null);
   const [recipientDetailsOpen, setRecipientDetailsOpen] = useState(false);
   const [readerMoreOpen, setReaderMoreOpen] = useState(false);
@@ -3029,14 +3033,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     setAttachmentDownloads((current) => ({ ...current, [downloadKey]: { phase: "downloading" } }));
     try {
       const blob = await api.downloadAttachment(message.id, attachment.partId);
-      const downloadUrl = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = downloadUrl;
-      link.download = attachment.filename;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1_000);
+      triggerBlobDownload(blob, attachment.filename);
       setAttachmentDownloads((current) => ({ ...current, [downloadKey]: { phase: "ready" } }));
       window.setTimeout(() => {
         setAttachmentDownloads((current) => {
@@ -3051,6 +3048,33 @@ const emptyMessageList = useMemo(() => (query.trim()
       const detail = mailErrorMessage(error, t("mail.error.downloadAttachment"), t);
       setAttachmentDownloads((current) => ({ ...current, [downloadKey]: { phase: "error", detail } }));
       showToast(mailErrorToastMessage(error, t("mail.error.downloadAttachment"), t), "error");
+    }
+  };
+
+  const zipAllAttachments = async () => {
+    if (!selected) return;
+    if (selectedMovePending || selected.movePending) {
+      showToast(t("mail.action.moveRefreshing"), "info");
+      return;
+    }
+    if (selected.moveLocationUnverified) {
+      showToast(t("mail.action.locationUnverified"), "info");
+      return;
+    }
+    if (isDemo) {
+      showToast(t("mail.attachment.demoUnavailable"), "info");
+      return;
+    }
+    if (zipAllPhase === "zipping") return;
+    setZipAllPhase("zipping");
+    try {
+      const blob = await buildAttachmentsZipBlob(visibleAttachments, (partId) => api.downloadAttachment(selected.id, partId));
+      triggerBlobDownload(blob, attachmentsZipFilename(selected.subject));
+      showToast(t("mail.attachment.zipStarted", { count: visibleAttachments.length }));
+    } catch (error) {
+      showToast(mailErrorToastMessage(error, t("mail.error.zipAttachments"), t), "error");
+    } finally {
+      setZipAllPhase("idle");
     }
   };
 
@@ -3070,14 +3094,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     }
     try {
       const { blob, filename } = await api.downloadMessageEml(selected.id);
-      const downloadUrl = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = downloadUrl;
-      link.download = filename;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1_000);
+      triggerBlobDownload(blob, filename);
       showToast(t("mail.action.exportStarted", { filename }));
     } catch (error) {
       showToast(mailErrorToastMessage(error, t("mail.error.exportEml"), t), "error");
@@ -3091,6 +3108,29 @@ const emptyMessageList = useMemo(() => (query.trim()
       return;
     }
     window.print();
+  };
+
+  const exportContactVcf = () => {
+    if (!selected) return;
+    const card = vCardText(selected.from.name, selected.from.address);
+    triggerBlobDownload(new Blob([card], { type: "text/vcard" }), exportDownloadFilename(selected.from.name, "contact", "vcf"));
+    showToast(t("mail.action.exportStarted", { filename: exportDownloadFilename(selected.from.name, "contact", "vcf") }));
+  };
+
+  const exportCalendarIcs = () => {
+    if (!selected) return;
+    const start = new Date(selected.sentAt);
+    const end = new Date(start.getTime() + 60 * 60 * 1000);
+    const ics = calendarEventIcs({
+      summary: selected.subject || "(no subject)",
+      description: selected.from.address,
+      start,
+      end,
+      uid: `${selected.id}@nami-mail`,
+    });
+    const filename = exportDownloadFilename(selected.subject, "event", "ics");
+    triggerBlobDownload(new Blob([ics], { type: "text/calendar" }), filename);
+    showToast(t("mail.action.exportStarted", { filename }));
   };
 
   const openAttachmentPreview = (message: Message, attachment: MessageAttachment) => {
@@ -3801,6 +3841,8 @@ const emptyMessageList = useMemo(() => (query.trim()
                         <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openForward(); }}><Forward size={16} />{t("mail.action.forward")}</button>
                         <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked || selectedIsArchived} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />{t("mail.action.archive")}</button>
                         <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void exportSelectedEml(); }}><Download size={16} />{t("mail.action.exportEml")}</button>
+                        <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportContactVcf(); }}><UserRound size={16} />{t("mail.action.saveVcf")}</button>
+                        <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportCalendarIcs(); }}><CalendarClock size={16} />{t("mail.action.exportIcs")}</button>
                         <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); printSelectedMessage(); }}><Printer size={16} />{t("mail.action.print")}</button>
                         {!selectedIsInJunk && (
                           <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("junk"); }}><ShieldCheck size={16} />{t("mail.action.reportSpam")}</button>
@@ -3866,7 +3908,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                 </div>
                 {visibleAttachments.length > 0 && (
                   <section className="attachment-list" aria-label={t("mail.attachment.aria", { count: visibleAttachments.length })}>
-                    <div className="attachment-list-heading"><Paperclip size={15} /><span>{t("compose.attachments")}</span><small>{t("mail.attachment.fileCount", { count: visibleAttachments.length })}</small></div>
+                    <div className="attachment-list-heading"><Paperclip size={15} /><span>{t("compose.attachments")}</span><small>{t("mail.attachment.fileCount", { count: visibleAttachments.length })}</small><span className="attachment-heading-actions"><IconButton label={t("mail.attachment.downloadAllZip")} disabled={zipAllPhase === "zipping" || selectedMovePending || selected.movePending || selected.moveLocationUnverified} onClick={() => void zipAllAttachments()}>{zipAllPhase === "zipping" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}</IconButton></span></div>
                     {visibleAttachments.map((attachment) => {
                       const presentation = presentAttachment(attachment.filename, attachment.contentType, t);
                       const downloadKey = `${selected.id}:${attachment.partId}`;

@@ -2871,6 +2871,12 @@ color:var(--text-faint);
 margin-left:auto;
 font-size:11px
 }
+.attachment-heading-actions
+{
+display:flex;
+align-items:center;
+margin-left:2px
+}
 .attachment-card
 {
 border:1px solid var(--line);
