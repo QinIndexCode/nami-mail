@@ -172,6 +172,16 @@ export function submissionStatusNeedsRefresh(status: OutboundSubmission["deliver
   return submissionStatusesNeedingRefresh.has(status);
 }
 
+// The periodic poll is a fallback, not a co-driver: while the push stream is
+// healthy every inbound event already refreshes the mailbox, so a tick inside
+// the same window would re-fetch the same data. A tick is only due once a full
+// interval has passed without any SSE event — lastSseEventAt doubles as the
+// stall detector, so a stream that dies silently falls back to the poll
+// cadence instead of leaving the UI stale.
+export function shouldPollTick(lastSseEventAtMs: number, nowMs: number, intervalMs: number): boolean {
+  return nowMs - lastSseEventAtMs >= intervalMs;
+}
+
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 const isDesktop = new URLSearchParams(window.location.search).get("desktop") === "1";
 const isDesktopSmoke = new URLSearchParams(window.location.search).get("desktopSmoke") === "1";
@@ -1306,7 +1316,16 @@ await refreshSubmissions(nextAccounts, { silent: true });
   }, [query]);
   useEffect(() => {
     if (isDemo) return;
-    const timer = window.setInterval(() => void silentRefresh(), settings.refreshIntervalSeconds * 1000);
+    const intervalMs = settings.refreshIntervalSeconds * 1000;
+    const timer = window.setInterval(() => {
+      // Skip the tick while the push stream is delivering events — those
+      // handlers already refresh the mailbox, so polling again would repeat
+      // the same fetches. When no event has arrived for a full interval the
+      // tick fires again, which also covers a stream that died silently
+      // (lastSseEventAt is the last event's timestamp, not the connect time).
+      if (!shouldPollTick(lastSseEventAtRef.current, Date.now(), intervalMs)) return;
+      void silentRefresh();
+    }, intervalMs);
     return () => window.clearInterval(timer);
   }, [silentRefresh, settings.refreshIntervalSeconds]);
   // Real-time push: the server broadcasts over GET /api/events when the IDLE
@@ -1327,8 +1346,13 @@ await refreshSubmissions(nextAccounts, { silent: true });
       mailSynced: () => undefined,
       settingsChanged: () => undefined,
     });
+    // Timestamp of the most recent inbound SSE event; the periodic poll skips
+    // its tick while this stays fresh (see shouldPollTick) and resumes once a
+    // full interval passes without one, so a dead stream never stalls the UI.
+    const lastSseEventAtRef = useRef(0);
     useEffect(() => {
       sseHandlersRef.current.mailReceived = (event: MessageEvent<string>) => {
+        lastSseEventAtRef.current = Date.now();
         void silentRefresh();
         if (desktopBridge()) return;
         let payload: { count: number; messages: Array<{ subject?: string; fromName?: string; fromAddress?: string }> };
@@ -1348,10 +1372,10 @@ await refreshSubmissions(nextAccounts, { silent: true });
       // A finished sync pass refreshes the sidebar freshness immediately; the
       // account list is re-fetched inside silentRefresh so "尚未同步" never
       // lingers until the next poll tick.
-      sseHandlersRef.current.mailSynced = () => { void silentRefresh(); };
+      sseHandlersRef.current.mailSynced = () => { lastSseEventAtRef.current = Date.now(); void silentRefresh(); };
       // The Agent settings tool changed app settings — re-fetch and apply them
       // so the running UI reflects the change immediately.
-      sseHandlersRef.current.settingsChanged = () => { void loadSettings(); };
+      sseHandlersRef.current.settingsChanged = () => { lastSseEventAtRef.current = Date.now(); void loadSettings(); };
     });
 
     useEffect(() => {
