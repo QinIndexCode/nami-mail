@@ -20,6 +20,21 @@ function normalizedSubject(subject: string): string {
     .trim();
 }
 
+/** Orders a conversation by sent time, oldest to newest (stable for ties). */
+export function sortThreadByTimeline(messages: readonly Message[]): Message[] {
+  return [...messages].sort((a, b) => new Date(a.sentAt).getTime() - new Date(b.sentAt).getTime());
+}
+
+/** Whether the thread strip should render collapsed: only long conversations,
+ *  and only while the open message sits at an endpoint of the timeline, so
+ *  collapsing never hides the message being read. */
+export function shouldCollapseThread(messages: readonly Message[] | null, selectedId: string, pref: boolean): boolean {
+  if (!messages || messages.length <= 4 || !pref) return false;
+  const first = messages[0]!.id;
+  const last = messages[messages.length - 1]!.id;
+  return selectedId === first || selectedId === last;
+}
+
 /**
  * Groups messages into conversations. Messages connected by RFC reference
  * chains (messageId / inReplyTo / references) are unioned first, which also
@@ -91,7 +106,7 @@ export function groupMessagesByThread(messages: readonly Message[]): ThreadGroup
 
   return [...groupsByRoot.values()]
     .map((group) => {
-      const sorted = [...group].sort((a, b) => new Date(a.sentAt).getTime() - new Date(b.sentAt).getTime());
+      const sorted = sortThreadByTimeline(group);
       return { key: sorted[0]!.id, messages: sorted };
     })
     .sort((a, b) => {
