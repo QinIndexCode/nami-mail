@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ListResponse } from "imapflow";
 import { simpleParser, type AddressObject } from "mailparser";
 import { attachmentMetadataFromParsedMail } from "./attachments.js";
+import { attachmentKindsJson } from "./attachment-kind.js";
 import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import type { DatabaseHandle } from "./db.js";
 import { deriveEncryptionKey } from "./crypto.js";
@@ -509,11 +510,11 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       INSERT INTO messages (
         id, account_id, mailbox, uid, remote_id_lookup, all_mail_archived, message_id, subject, from_name, from_address,
         to_json, cc_json, in_reply_to, references_json, sent_at, snippet, text_body, html_body, flags_json,
-        has_attachments, attachments_json, payload_metadata_ready, encrypted_payload, payload_version, size, created_at
+        has_attachments, attachments_json, attachment_kinds_json, payload_metadata_ready, encrypted_payload, payload_version, size, created_at
       ) VALUES (
         @id, @accountId, @mailbox, @uid, @remoteIdLookup, @allMailArchived, @messageId, @subject, @fromName, @fromAddress,
         @toJson, @ccJson, @inReplyTo, @referencesJson, @sentAt, @snippet, @textBody, @htmlBody, @flagsJson,
-        @hasAttachments, @attachmentsJson, @payloadMetadataReady, @encryptedPayload, @payloadVersion, @size, @createdAt
+        @hasAttachments, @attachmentsJson, @attachmentKindsJson, @payloadMetadataReady, @encryptedPayload, @payloadVersion, @size, @createdAt
       )
       ON CONFLICT(account_id, mailbox, uid) DO UPDATE SET
         remote_id_lookup = COALESCE(excluded.remote_id_lookup, messages.remote_id_lookup),
@@ -533,6 +534,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         flags_json = excluded.flags_json,
         has_attachments = excluded.has_attachments,
         attachments_json = excluded.attachments_json,
+        attachment_kinds_json = excluded.attachment_kinds_json,
         payload_metadata_ready = excluded.payload_metadata_ready,
         encrypted_payload = excluded.encrypted_payload,
         payload_version = excluded.payload_version,
@@ -1114,6 +1116,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
               sentAt: sentAtIso,
               flagsJson,
               hasAttachments,
+              attachmentKindsJson: attachmentKindsJson(attachments),
               size,
               payloadMetadataReady: 1,
               createdAt: new Date().toISOString(),

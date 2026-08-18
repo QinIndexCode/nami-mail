@@ -28,6 +28,7 @@ import {
   messagePayloadById,
   messagePayloadForRow,
   migrateMessageStorage,
+  ensureAttachmentKinds,
   hasPendingMove,
   hasUnverifiedMoveLocation,
   pendingMoveDestination,
@@ -39,6 +40,7 @@ import { ensureMessageFtsIndex, ftsLikeEscape } from "./message-search.js";
 import { createBatchJob, getBatchJobSnapshot, undoBatchJob } from "./batch-jobs.js";
 import { createOperationQueue } from "./operation-queue.js";
 import { archivedMessageFilter, effectiveMailboxExpression, inboxMessageFilter } from "./message-filters.js";
+import { ATTACHMENT_KINDS, type AttachmentKind } from "./attachment-kind.js";
 import {
   MAX_OUTBOUND_ATTACHMENT_COUNT,
   MAX_OUTBOUND_ATTACHMENT_BYTES,
@@ -285,6 +287,13 @@ const batchJobQuerySchema = z.object({
   archived: z.boolean().optional(),
   snoozed: z.boolean().optional(),
   hasAttachments: z.boolean().optional(),
+  attachmentKind: z.enum(ATTACHMENT_KINDS as unknown as [AttachmentKind, ...AttachmentKind[]]).optional(),
+  // Date bounds are normalized to UTC instants so the resolver can compare
+  // them directly against the stored sent timestamps.
+  after: z.string().refine((value) => !Number.isNaN(Date.parse(value)), { message: "Invalid after date." })
+    .transform((value) => new Date(value).toISOString()).optional(),
+  before: z.string().refine((value) => !Number.isNaN(Date.parse(value)), { message: "Invalid before date." })
+    .transform((value) => new Date(value).toISOString()).optional(),
   scope: z.literal("all").optional(),
 }).strict();
 
@@ -552,6 +561,22 @@ function completedThreadingHeaders(message: { inReplyTo?: string; references?: s
 
 function validationMessage(error: z.ZodError): string {
   return error.issues[0]?.message ?? "请求参数无效。";
+}
+
+/**
+ * Normalizes a list-endpoint date-bound query value to a UTC instant.
+ * Returns undefined for an absent value and null when the value cannot be
+ * parsed, so the caller can reject the request with a 400.
+ */
+function parseListDateBound(value: string | undefined): string | undefined | null {
+  if (value === undefined || value === "") return undefined;
+  const time = Date.parse(value);
+  if (Number.isNaN(time)) return null;
+  return new Date(time).toISOString();
+}
+
+function isValidAttachmentKind(value: string | undefined): value is AttachmentKind {
+  return value !== undefined && (ATTACHMENT_KINDS as readonly string[]).includes(value);
 }
 
 function oauthProviderFor(provider: Pick<ProviderPreset, "family">): "google" | "microsoft" | undefined {
@@ -1004,6 +1029,7 @@ function hasMatchingLocalApiAccessToken(value: string | string[] | undefined, ex
 
 export async function buildApp(context: RuntimeContext, options: BuildAppOptions = {}): Promise<FastifyInstance> {
   migrateMessageStorage(context.db, context.masterKey);
+  ensureAttachmentKinds(context.db, context.masterKey);
   ensureMessageFtsIndex(context.db, context.masterKey);
   migrateOutboundAttachments(context.db, outboundAttachmentDirectory(context), context.masterKey);
   migrateOutboundSubmissionStorage(context.db, context.masterKey);
@@ -2262,7 +2288,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
-  app.get<{ Querystring: { accountId?: string; folder?: string; q?: string; page?: string; pageSize?: string; starred?: string; unread?: string; archived?: string; snoozed?: string; hasAttachments?: string; scope?: string } }>(
+  app.get<{ Querystring: { accountId?: string; folder?: string; q?: string; page?: string; pageSize?: string; starred?: string; unread?: string; archived?: string; snoozed?: string; hasAttachments?: string; attachmentKind?: string; after?: string; before?: string; scope?: string } }>(
     "/api/messages",
     async (request, reply) => {
       const page = Math.max(1, Number.parseInt(request.query.page ?? "1", 10) || 1);
@@ -2272,6 +2298,14 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       // view. It is search-only: without q every restriction below applies as
       // usual, so the parameter can never widen a normal list request.
       const globalSearch = request.query.scope === "all" && Boolean(query);
+      if (request.query.attachmentKind !== undefined && !isValidAttachmentKind(request.query.attachmentKind)) {
+        return reply.code(400).send({ ok: false, message: "无效的附件类型。" });
+      }
+      const afterBound = parseListDateBound(request.query.after);
+      const beforeBound = parseListDateBound(request.query.before);
+      if (afterBound === null || beforeBound === null) {
+        return reply.code(400).send({ ok: false, message: "无效的日期范围。" });
+      }
       const filters: string[] = [];
       const params: unknown[] = [];
       if (!globalSearch && request.query.accountId) {
@@ -2303,6 +2337,20 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       }
       if (!globalSearch && request.query.unread === "1") {
         filters.push("m.flags_json NOT LIKE '%\\\\Seen%'");
+      }
+      if (request.query.attachmentKind) {
+        // The kind column is JSON text; the quoted token prevents one kind
+        // from matching another kind's substring.
+        filters.push("m.attachment_kinds_json LIKE ?");
+        params.push(`%"${request.query.attachmentKind}"%`);
+      }
+      if (afterBound) {
+        filters.push("COALESCE(m.sent_at, m.created_at) >= ?");
+        params.push(afterBound);
+      }
+      if (beforeBound) {
+        filters.push("COALESCE(m.sent_at, m.created_at) < ?");
+        params.push(beforeBound);
       }
       const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
       if (query) {

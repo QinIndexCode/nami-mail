@@ -1309,6 +1309,80 @@ background:var(--line);
 height:1px;
 margin:2px 6px
 }
+/* The extended filter groups (attachment kind segments, date range) need
+more room than the compact sort column; the pickers also keep their popovers
+inside the viewport width. */
+.list-filter-panel.wide
+{
+width:min(320px,calc(100vw - 24px))
+}
+.kind-chip-row
+{
+flex-wrap:wrap;
+gap:4px;
+align-items:center;
+padding:2px 6px 6px;
+display:flex
+}
+.kind-chip
+{
+min-height:24px;
+color:var(--text-soft);
+cursor:pointer;
+background:0 0;
+border:1px solid var(--line);
+border-radius:999px;
+padding:2px 9px;
+font-size:10px;
+transition:background .14s,color .14s,border-color .14s
+}
+.kind-chip:hover
+{
+background:var(--hover);
+color:var(--text)
+}
+.kind-chip.active
+{
+background:var(--selected);
+border-color:var(--focus-ring);
+color:var(--text)
+}
+.date-range-row
+{
+gap:6px;
+align-items:center;
+padding:2px 6px 6px;
+display:flex
+}
+.date-range-row .date-range-picker
+{
+flex:1;
+min-width:0
+}
+.date-range-row .date-range-picker .date-picker-trigger
+{
+padding:6px 8px;
+font-size:10px
+}
+.date-range-clear
+{
+width:26px;
+height:26px;
+color:var(--text-soft);
+cursor:pointer;
+background:0 0;
+border:0;
+border-radius:7px;
+flex:none;
+place-items:center;
+padding:0;
+display:grid
+}
+.date-range-clear:hover
+{
+background:var(--hover);
+color:var(--text)
+}
 .unread-retention-note
 {
 color:var(--text-soft);

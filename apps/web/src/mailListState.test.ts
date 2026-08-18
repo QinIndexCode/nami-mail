@@ -480,3 +480,95 @@ describe("mail list state", () => {
     expect(applyMessageMoveConfirmation(moved, "message-other", 7)).toEqual(moved);
   });
 });
+
+describe("kind and date refinements mirror the server filters", () => {
+  const photoMail = {
+    ...unreadMessage,
+    hasAttachments: true,
+    attachments: [{ partId: "a1", filename: "vacation.png", contentType: "image/png", size: 100, related: false, disposition: "attachment" as const }],
+  };
+  const pdfMail = {
+    ...unreadMessage,
+    id: "message-2",
+    hasAttachments: true,
+    attachments: [{ partId: "a2", filename: "report.pdf", contentType: "application/pdf", size: 100, related: false, disposition: "attachment" as const }],
+  };
+  const mixedMail = {
+    ...unreadMessage,
+    id: "message-3",
+    hasAttachments: true,
+    attachments: [
+      { partId: "a3", filename: "photo.jpg", contentType: "image/jpeg", size: 100, related: false, disposition: "attachment" as const },
+      { partId: "a4", filename: "budget.xlsx", contentType: "application/octet-stream", size: 100, related: false, disposition: "attachment" as const },
+    ],
+  };
+  const sentMidJuly = "2026-07-15T00:00:00.000Z";
+  const sentEndJuly = "2026-07-31T00:00:00.000Z";
+
+  it("keeps only messages whose attachments include the selected kind", () => {
+    expect(matchesServerMessageQuery(pdfMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", attachmentKind: "pdf",
+    })).toBe(true);
+    expect(matchesServerMessageQuery(photoMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", attachmentKind: "pdf",
+    })).toBe(false);
+    expect(matchesServerMessageQuery(mixedMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", attachmentKind: "image",
+    })).toBe(true);
+    // Kinds are re-derived from the local metadata (server side the SQL reads
+    // the stored column), so an attachmentless message can never match either.
+    expect(matchesServerMessageQuery(unreadMessage, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", attachmentKind: "image",
+    })).toBe(false);
+  });
+
+  it("derives the kind through the same MIME fallback as the server", () => {
+    const blobMail = {
+      ...unreadMessage,
+      hasAttachments: true,
+      attachments: [{ partId: "a5", filename: "payload.bin", contentType: "application/pdf", size: 100, related: false, disposition: "attachment" as const }],
+    };
+    expect(matchesServerMessageQuery(blobMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", attachmentKind: "pdf",
+    })).toBe(true);
+  });
+
+  it("applies after inclusively and before exclusively", () => {
+    const midMail = { ...unreadMessage, sentAt: sentMidJuly };
+    const endMail = { ...unreadMessage, sentAt: sentEndJuly };
+    const afterBound = "2026-07-15T00:00:00.000Z";
+    const beforeBound = "2026-07-31T00:00:00.000Z";
+
+    expect(matchesServerMessageQuery(midMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", after: afterBound,
+    })).toBe(true);
+    expect(matchesServerMessageQuery(endMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", after: afterBound, before: beforeBound,
+    })).toBe(false);
+    expect(matchesServerMessageQuery(midMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", before: beforeBound,
+    })).toBe(true);
+  });
+
+  it("combines needle, kind, and date the way the server ANDs them", () => {
+    const matching = { ...pdfMail, sentAt: sentMidJuly, subject: "quarterly needle", snippet: "needle" };
+    expect(matchesServerMessageQuery(matching, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "needle", messageView: "inbox",
+      attachmentKind: "pdf", after: sentMidJuly, before: sentEndJuly,
+    })).toBe(true);
+    // Same needle and window, wrong kind.
+    expect(matchesServerMessageQuery({ ...matching, attachments: photoMail.attachments }, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "needle", messageView: "inbox",
+      attachmentKind: "pdf", after: sentMidJuly, before: sentEndJuly,
+    })).toBe(false);
+  });
+
+  it("refines the attachments view by kind instead of replacing it", () => {
+    expect(matchesServerMessageQuery(photoMail, accounts, {
+      accountId: "all", folder: "", search: "", messageView: "attachments", attachmentKind: "image",
+    })).toBe(true);
+    expect(matchesServerMessageQuery(pdfMail, accounts, {
+      accountId: "all", folder: "", search: "", messageView: "attachments", attachmentKind: "image",
+    })).toBe(false);
+  });
+});
