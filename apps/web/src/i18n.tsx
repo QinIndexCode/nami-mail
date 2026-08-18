@@ -263,6 +263,7 @@ export function I18nProvider({ children }: PropsWithChildren) {
 
   useLayoutEffect(() => {
     document.documentElement.lang = resolvedLocale;
+    document.title = translate(resolvedLocale, "app.name");
   }, [resolvedLocale]);
 
   const setLocale = useCallback((nextLocale: string) => setActiveLocale(resolveLocale(nextLocale)), []);
