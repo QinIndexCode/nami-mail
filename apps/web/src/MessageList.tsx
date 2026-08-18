@@ -1,6 +1,6 @@
-import { memo, useRef, type RefObject } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Archive, Layers3, Mail, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
+import { Archive, Eye, EyeOff, Layers3, Mail, MousePointerClick, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
 import type { MessageListQuery } from "./mailListState";
 import { useI18n } from "./i18n";
 import type { MailErrorPresentation } from "./errorPresentation";
@@ -65,8 +65,28 @@ type MessageListProps = {
    *  row (Shift+click). The list owns the anchor; App merges the ids. */
   onSelectRange: (ids: string[]) => void;
   onQuickToggleStar: (message: Message) => void;
+  onQuickToggleSeen: (message: Message) => void;
   onQuickMoveMessage: (message: Message, target: "archive" | "trash") => void;
 };
+
+export type ContextMenuPosition = { x: number; y: number };
+
+/** Clamps a pointer position so a menu of the given size stays fully on
+ *  screen with a small gutter, even when the pointer is near an edge. */
+export function clampContextMenuPosition(
+  x: number,
+  y: number,
+  menuWidth: number,
+  menuHeight: number,
+  viewportWidth = window.innerWidth,
+  viewportHeight = window.innerHeight,
+): ContextMenuPosition {
+  const gutter = 8;
+  return {
+    x: Math.max(gutter, Math.min(x, Math.max(gutter, viewportWidth - menuWidth - gutter))),
+    y: Math.max(gutter, Math.min(y, Math.max(gutter, viewportHeight - menuHeight - gutter))),
+  };
+}
 
 /**
  * The virtualized message list. The virtualizer lives here instead of App.tsx:
@@ -100,8 +120,37 @@ function MessageList(props: MessageListProps): React.JSX.Element {
     onToggleSelected,
     onSelectRange,
     onQuickToggleStar,
+    onQuickToggleSeen,
     onQuickMoveMessage,
   } = props;
+
+  // Right-click context menu: opened at the pointer position, clamped to the
+  // viewport once measured, closed by the backdrop, Escape or a list scroll.
+  const [contextMenu, setContextMenu] = useState<{ message: Message; x: number; y: number } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    const menu = contextMenu;
+    if (!menu) return;
+    const node = contextMenuRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    setContextMenu((current) => {
+      if (!current) return current;
+      const position = clampContextMenuPosition(current.x, current.y, rect.width, rect.height);
+      return position.x === current.x && position.y === current.y ? current : { ...current, ...position };
+    });
+  }, [contextMenu]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setContextMenu(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [contextMenu]);
 
   // Gmail-style range selection: the anchor is the last row touched by a
   // selection click; Shift+click extends the selection from it. Reset it when
@@ -129,7 +178,8 @@ function MessageList(props: MessageListProps): React.JSX.Element {
   });
 
   return (
-    <div className="message-list" ref={messageListRef}>
+    <>
+      <div className="message-list" ref={messageListRef} onScroll={() => { if (contextMenu) setContextMenu(null); }}>
       {loading && (
         <div className="message-skeleton-list" role="status" aria-label={t("mail.loading")} data-density={listDensity}>
           {Array.from({ length: 6 }, (_, index) => (
@@ -168,7 +218,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
               className="message-list-row"
               style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualItem.start}px)` }}
             >
-              <button data-index={virtualItem.index} ref={(node) => { rowVirtualizer.measureElement(node); if (node) messageButtonRefs.current.set(message.id, node); else messageButtonRefs.current.delete(message.id); }} className={`message-item ${selectedId === message.id ? "selected" : ""} ${message.seen ? "" : "unread"} ${selectionMode ? "selection-mode" : ""} ${selectionMode && selectedMessageIds.has(message.id) ? "multi-selected" : ""} ${view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id) ? "recently-read-in-unread" : ""}`} onClick={(event) => {
+              <button data-index={virtualItem.index} ref={(node) => { rowVirtualizer.measureElement(node); if (node) messageButtonRefs.current.set(message.id, node); else messageButtonRefs.current.delete(message.id); }} className={`message-item ${selectedId === message.id ? "selected" : ""} ${message.seen ? "" : "unread"} ${selectionMode ? "selection-mode" : ""} ${selectionMode && selectedMessageIds.has(message.id) ? "multi-selected" : ""} ${view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id) ? "recently-read-in-unread" : ""}`} onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) setContextMenu({ message, x: event.clientX, y: event.clientY }); }} onClick={(event) => {
                         const index = virtualItem.index;
                         if (event.shiftKey && anchorIndexRef.current !== null) {
                           const from = Math.min(anchorIndexRef.current, index);
@@ -206,11 +256,35 @@ function MessageList(props: MessageListProps): React.JSX.Element {
                       <button type="button" aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "trash")}><Trash2 size={14} /></button>
                     </span>
             </div>
-            );
+          );
           })}
         </div>
       )}
-    </div>
+      </div>
+      {contextMenu && (
+        <>
+          <div className="context-menu-backdrop" onClick={() => setContextMenu(null)} onContextMenu={(event) => { event.preventDefault(); setContextMenu(null); }} />
+          <div ref={contextMenuRef} className="context-menu" role="menu" aria-label={t("mail.contextMenu.label")} style={{ left: contextMenu.x, top: contextMenu.y }}>
+            <button type="button" role="menuitem" className="context-menu-item" onClick={() => { const target = contextMenu.message; setContextMenu(null); onOpenMessage(target); }}>
+              <MousePointerClick size={15} /><span>{t("mail.action.open")}</span>
+            </button>
+            <button type="button" role="menuitem" className="context-menu-item" onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickToggleSeen(target); }}>
+              {contextMenu.message.seen ? <EyeOff size={15} /> : <Eye size={15} />}<span>{t(contextMenu.message.seen ? "mail.action.markUnread" : "mail.action.markRead")}</span>
+            </button>
+            <button type="button" role="menuitem" className="context-menu-item" onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickToggleStar(target); }}>
+              <Star size={15} fill={contextMenu.message.flagged ? "currentColor" : "none"} /><span>{t(contextMenu.message.flagged ? "mail.action.unstar" : "mail.action.star")}</span>
+            </button>
+            <button type="button" role="menuitem" className="context-menu-item" onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickMoveMessage(target, "archive"); }}>
+              <Archive size={15} /><span>{t("mail.action.archive")}</span>
+            </button>
+            <div className="context-menu-divider" role="separator" />
+            <button type="button" role="menuitem" className="context-menu-item danger" onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickMoveMessage(target, "trash"); }}>
+              <Trash2 size={15} /><span>{t("mail.action.moveToTrash")}</span>
+            </button>
+          </div>
+        </>
+      )}
+    </>
   );
 }
 

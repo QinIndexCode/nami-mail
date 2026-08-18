@@ -62,7 +62,7 @@ import { accountHealthIssue, mailErrorMessage, mailErrorToastMessage, presentMai
 import { buildForwardDraft, buildReplyDraft, buildReplyQuote } from "./mailActions";
 import { ComposeModal } from "./ComposeModal";
 import { sortMessages } from "./mailImportance";
-import { groupMessagesByThread } from "./threads";
+import { groupMessagesByThread, shouldCollapseThread, sortThreadByTimeline } from "./threads";
 import { mailBackgroundColor, mailReaderSurface, mailSurfaceForBackground, shouldResetMailForeground, type MailSurface } from "./mailHtmlTheme";
 import {
   applyBatchSeenChange as applyBatchSeenChangeState,
@@ -1680,7 +1680,13 @@ await refreshSubmissions(nextAccounts, { silent: true });
   }, [currentMessageTotal, filteredMessages.length, loadedServerMessageCount, loading]);
 
   const selected = filteredMessages.find((message) => message.id === selectedId) ?? null;
-  const selectedThread = selected ? threadById.get(selected.id) ?? null : null;
+  const selectedThread = selected ? sortThreadByTimeline(threadById.get(selected.id) ?? []) : null;
+  // Long conversations collapse to their first and last message in the strip;
+  // the middle becomes one expand control. Collapsing never hides the open
+  // message, so reading an interior message shows the whole thread instead.
+  const [threadCollapsedPref, setThreadCollapsedPref] = useState(true);
+  const threadCollapsible = (selectedThread?.length ?? 0) > 4;
+  const threadCollapsed = threadCollapsible && selected !== null && shouldCollapseThread(selectedThread, selected.id, threadCollapsedPref);
   const selectedIsArchived = selected ? isArchivedMessage(selected, accounts) : false;
   // The "not spam" recovery action only applies while reading inside the
   // account's SPECIAL-USE Junk folder.
@@ -2826,6 +2832,29 @@ const emptyMessageList = useMemo(() => (query.trim()
     }
   }, [isDemo, load, messageAction, messageFlagging, selectedRemoteActionsBlocked, showToast, t]);
 
+  const quickToggleSeen = useCallback(async (message: Message) => {
+    if (selectedRemoteActionsBlocked) return;
+    // The seen queue allows one in-flight mutation per message; a second
+    // click on the same row while the first is still pending is ignored.
+    if (seenMutationIdsRef.current.has(message.id)) return;
+    if (messageFlagging || messageAction) showToast(t("mail.action.queued"), "info");
+    const nextSeen = !message.seen;
+    seenMutationIdsRef.current.add(message.id);
+    updateUnreadViewRecentlyRead(message, nextSeen);
+    applyLocalSeenChange(message, nextSeen);
+    try {
+      if (!isDemo) await api.updateMessageFlags(message.id, { seen: nextSeen });
+      showToast(nextSeen ? t("mail.action.markedRead") : t("mail.action.markedUnread"));
+    } catch (error) {
+      const changedMessage = { ...message, seen: nextSeen, flags: nextSeen ? [...new Set([...message.flags, "\\Seen"])] : message.flags.filter((flag) => flag !== "\\Seen") };
+      updateUnreadViewRecentlyRead(changedMessage, message.seen);
+      applyLocalSeenChange(changedMessage, message.seen);
+      showToast(mailErrorToastMessage(error, t("mail.error.updateRead"), t), "error");
+    } finally {
+      seenMutationIdsRef.current.delete(message.id);
+    }
+  }, [applyLocalSeenChange, isDemo, messageAction, messageFlagging, selectedRemoteActionsBlocked, showToast, t, updateUnreadViewRecentlyRead]);
+
   const quickMoveMessage = useCallback(async (message: Message, target: MoveTarget) => {
     // The server queues a second write behind the in-flight one; surface that
     // instead of silently dropping the click.
@@ -3792,6 +3821,7 @@ const emptyMessageList = useMemo(() => (query.trim()
             onToggleSelected={toggleMessageSelected}
             onSelectRange={selectMessageRange}
             onQuickToggleStar={quickToggleStar}
+            onQuickToggleSeen={quickToggleSeen}
             onQuickMoveMessage={quickMoveMessage}
           />
         </section>
@@ -3861,14 +3891,35 @@ const emptyMessageList = useMemo(() => (query.trim()
                   <section className="thread-strip" aria-label={t("mail.thread.label")}>
                     <span className="thread-strip-caption">{t("mail.thread.label")}</span>
                     <div className="thread-strip-messages">
-                      {selectedThread.map((threadMessage) => (
-                        <button key={threadMessage.id} type="button" className={`thread-strip-item ${threadMessage.id === selected.id ? "active" : ""}`} onClick={() => void openMessage(threadMessage)}>
-                          <CustomAvatar name={threadMessage.from.name} address={threadMessage.from.address} tone={accountTone(threadMessage.from.address)} size="small" />
-                          <span className="thread-strip-copy"><strong>{threadMessage.from.name || threadMessage.from.address}</strong><time>{formatMessageTime(threadMessage.sentAt, locale)}</time></span>
-                          {!threadMessage.seen && <span className="unread-dot" aria-hidden="true" />}
-                        </button>
-                      ))}
+                      {threadCollapsed
+                        ? (<>
+                            <button key={selectedThread[0]!.id} type="button" className={`thread-strip-item ${selectedThread[0]!.id === selected.id ? "active" : ""}`} onClick={() => void openMessage(selectedThread[0]!)}>
+                              <CustomAvatar name={selectedThread[0]!.from.name} address={selectedThread[0]!.from.address} tone={accountTone(selectedThread[0]!.from.address)} size="small" />
+                              <span className="thread-strip-copy"><strong>{selectedThread[0]!.from.name || selectedThread[0]!.from.address}</strong><time>{formatMessageTime(selectedThread[0]!.sentAt, locale)}</time></span>
+                              {!selectedThread[0]!.seen && <span className="unread-dot" aria-hidden="true" />}
+                            </button>
+                            <button type="button" className="thread-strip-fold" onClick={() => setThreadCollapsedPref(false)} aria-label={t("mail.thread.expand", { count: selectedThread.length - 2 })} data-tooltip={t("mail.thread.expand", { count: selectedThread.length - 2 })}>
+                              <MoreHorizontal size={15} /><span>{t("mail.thread.folded", { count: selectedThread.length - 2 })}</span>
+                            </button>
+                            <button key={selectedThread[selectedThread.length - 1]!.id} type="button" className={`thread-strip-item ${selectedThread[selectedThread.length - 1]!.id === selected.id ? "active" : ""}`} onClick={() => void openMessage(selectedThread[selectedThread.length - 1]!)}>
+                              <CustomAvatar name={selectedThread[selectedThread.length - 1]!.from.name} address={selectedThread[selectedThread.length - 1]!.from.address} tone={accountTone(selectedThread[selectedThread.length - 1]!.from.address)} size="small" />
+                              <span className="thread-strip-copy"><strong>{selectedThread[selectedThread.length - 1]!.from.name || selectedThread[selectedThread.length - 1]!.from.address}</strong><time>{formatMessageTime(selectedThread[selectedThread.length - 1]!.sentAt, locale)}</time></span>
+                              {!selectedThread[selectedThread.length - 1]!.seen && <span className="unread-dot" aria-hidden="true" />}
+                            </button>
+                          </>)
+                        : selectedThread.map((threadMessage) => (
+                            <button key={threadMessage.id} type="button" className={`thread-strip-item ${threadMessage.id === selected.id ? "active" : ""}`} onClick={() => void openMessage(threadMessage)}>
+                              <CustomAvatar name={threadMessage.from.name} address={threadMessage.from.address} tone={accountTone(threadMessage.from.address)} size="small" />
+                              <span className="thread-strip-copy"><strong>{threadMessage.from.name || threadMessage.from.address}</strong><time>{formatMessageTime(threadMessage.sentAt, locale)}</time></span>
+                              {!threadMessage.seen && <span className="unread-dot" aria-hidden="true" />}
+                            </button>
+                          ))}
                     </div>
+                    {threadCollapsible && (
+                      <button type="button" className={`thread-strip-toggle${threadCollapsed ? "" : " expanded"}`} onClick={() => setThreadCollapsedPref((value) => !value)} aria-expanded={!threadCollapsed}>
+                        {t(threadCollapsed ? "mail.thread.expandAll" : "mail.thread.collapse", { count: selectedThread.length })}
+                      </button>
+                    )}
                   </section>
                 )}
                 {selectedMoveLocationUnverified && <section className="move-location-notice" role="status"><CircleAlert size={18} /><div><strong>{t("mail.moveLocationUnverified.title")}</strong><p>{t("mail.moveLocationUnverified.description")}</p></div></section>}

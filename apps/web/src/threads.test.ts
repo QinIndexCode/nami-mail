@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupMessagesByThread } from "./threads";
+import { groupMessagesByThread, shouldCollapseThread, sortThreadByTimeline } from "./threads";
 import type { Message } from "./types";
 
 function message(overrides: Partial<Message> & { id: string }): Message {
@@ -97,5 +97,63 @@ describe("message threading", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]!.messages.map((item) => item.id)).toEqual(["old", "mid", "young"]);
     expect(groups[0]!.key).toBe("old");
+  });
+});
+
+describe("sortThreadByTimeline", () => {
+  it("orders a conversation oldest to newest regardless of input order", () => {
+    const sorted = sortThreadByTimeline([
+      message({ id: "young", sentAt: "2026-07-22T09:00:00.000Z" }),
+      message({ id: "old", sentAt: "2026-07-20T09:00:00.000Z" }),
+      message({ id: "mid", sentAt: "2026-07-21T09:00:00.000Z" }),
+    ]);
+    expect(sorted.map((item) => item.id)).toEqual(["old", "mid", "young"]);
+  });
+
+  it("is stable for messages with the same sent time", () => {
+    const sorted = sortThreadByTimeline([
+      message({ id: "first", sentAt: "2026-07-21T09:00:00.000Z" }),
+      message({ id: "second", sentAt: "2026-07-21T09:00:00.000Z" }),
+      message({ id: "third", sentAt: "2026-07-21T09:00:00.000Z" }),
+    ]);
+    expect(sorted.map((item) => item.id)).toEqual(["first", "second", "third"]);
+  });
+
+  it("does not mutate the input array", () => {
+    const input = [
+      message({ id: "young", sentAt: "2026-07-22T09:00:00.000Z" }),
+      message({ id: "old", sentAt: "2026-07-20T09:00:00.000Z" }),
+    ];
+    const sorted = sortThreadByTimeline(input);
+    expect(input.map((item) => item.id)).toEqual(["young", "old"]);
+    expect(sorted.map((item) => item.id)).toEqual(["old", "young"]);
+  });
+});
+
+describe("shouldCollapseThread", () => {
+  const longConversation = [
+    message({ id: "oldest", sentAt: "2026-07-20T09:00:00.000Z" }),
+    message({ id: "second", sentAt: "2026-07-21T09:00:00.000Z" }),
+    message({ id: "third", sentAt: "2026-07-22T09:00:00.000Z" }),
+    message({ id: "fourth", sentAt: "2026-07-23T09:00:00.000Z" }),
+    message({ id: "newest", sentAt: "2026-07-24T09:00:00.000Z" }),
+  ];
+
+  it("collapses a long conversation when an endpoint message is open", () => {
+    expect(shouldCollapseThread(longConversation, "oldest", true)).toBe(true);
+    expect(shouldCollapseThread(longConversation, "newest", true)).toBe(true);
+  });
+
+  it("keeps the whole thread visible when the open message is in the middle", () => {
+    expect(shouldCollapseThread(longConversation, "third", true)).toBe(false);
+  });
+
+  it("does not collapse short conversations or when the user expanded the thread", () => {
+    expect(shouldCollapseThread(longConversation.slice(0, 4), "oldest", true)).toBe(false);
+    expect(shouldCollapseThread(longConversation, "oldest", false)).toBe(false);
+  });
+
+  it("never collapses when there is no selected thread", () => {
+    expect(shouldCollapseThread(null, "oldest", true)).toBe(false);
   });
 });
