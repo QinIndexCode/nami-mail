@@ -12,6 +12,9 @@ const EXIT_DURATION_MS = 240;
 type AutoReplyToastStackProps = {
   notices: readonly DesktopAutoReplyNotice[];
   onDismiss: (notice: DesktopAutoReplyNotice) => void;
+  /** While a modal dialog is open the stack moves behind the scrim so it can
+   *  never intercept clicks aimed at the dialog (e.g. the compose card). */
+  behindModal?: boolean;
 };
 
 /**
@@ -144,9 +147,9 @@ function AutoReplyToastItem({
   );
 }
 
-export function AutoReplyToastStack({ notices, onDismiss }: AutoReplyToastStackProps) {
+export function AutoReplyToastStack({ notices, onDismiss, behindModal = false }: AutoReplyToastStackProps) {
   return (
-    <div className="auto-reply-toast-stack" role="status" aria-live="polite">
+    <div className={`auto-reply-toast-stack${behindModal ? " behind-modal" : ""}`} role="status" aria-live="polite">
       {notices.map((notice) => (
         <AutoReplyToastItem
           key={autoReplyNoticeKey(notice)}

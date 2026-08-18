@@ -44,6 +44,8 @@ test.describe("Nami Mail demo smoke", () => {
     await bootDemo(page);
     const total = await page.locator(".message-item").count();
 
+    // The header search is an icon toggle: expand it before typing.
+    await page.locator(".search-toggle").click();
     await page.locator("#mail-search").fill("林澈");
     await expect(page.locator(".message-item")).toHaveCount(1);
 
@@ -85,6 +87,8 @@ test.describe("Nami Mail demo smoke", () => {
 
     await page.locator(".agent-launch-button").first().click();
     await expect(page.locator(".agent-workspace")).toBeVisible();
-    await expect(page.locator(".agent-empty-state, .agent-configure-provider-button").first()).toBeVisible();
+    // Demo mode boots with a prebuilt sample conversation so the transcript
+    // styling can be reviewed without a backend; assert that conversation.
+    await expect(page.locator(".agent-workspace")).toContainText("季度回顾会议准备");
   });
 });

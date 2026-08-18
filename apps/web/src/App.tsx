@@ -31,6 +31,7 @@ import {
   RefreshCw,
   Reply,
   ReplyAll,
+  RotateCcw,
   Search,
   Send,
   Settings,
@@ -56,13 +57,15 @@ import { AttachmentFileIcon, FolderNavigationIcon, formatFileSize, isoFromDateti
 import { parseMailtoUrl } from "./mailtoLink";
 import { attachmentsZipFilename, buildAttachmentsZipBlob, triggerBlobDownload } from "./attachmentZip";
 import { calendarEventIcs, exportDownloadFilename, vCardText } from "./contactExport";
-import { desktopBridge, type DesktopAutoReplyNotice, type DesktopUpdateSnapshot } from "./desktop";
+import { desktopBridge, type DesktopAutoReplyNotice, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
+import { resolveUpdateFooter, type UpdateFooterAction } from "./updateFooter";
 import { demoDataSnapshot, ensureDemoLoaded } from "./demo-loader";
 import { accountHealthIssue, mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
 import { buildForwardDraft, buildReplyDraft, buildReplyQuote } from "./mailActions";
 import { ComposeModal } from "./ComposeModal";
 import { sortMessages } from "./mailImportance";
 import { groupMessagesByThread, shouldCollapseThread, sortThreadByTimeline } from "./threads";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { mailBackgroundColor, mailReaderSurface, mailSurfaceForBackground, shouldResetMailForeground, type MailSurface } from "./mailHtmlTheme";
 import {
   applyBatchSeenChange as applyBatchSeenChangeState,
@@ -690,6 +693,7 @@ export default function App() {
   const [fatalError, setFatalError] = useState<MailErrorPresentation | null>(null);
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateSnapshot | null>(null);
   const [updatePromptOpen, setUpdatePromptOpen] = useState(false);
+  const [updateFooterBusy, setUpdateFooterBusy] = useState(false);
   const [preloadedAgentBootstrap, setPreloadedAgentBootstrap] = useState<AgentBootstrap | null>(null);
   const splashAnimationDoneRef = useRef(false);
   const splashDataDoneRef = useRef(false);
@@ -1243,7 +1247,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
   }, [dismissSplash]);
   useEffect(() => {
     const bridge = desktopBridge();
-    if (!bridge || isDemo) return undefined;
+    if (!bridge) return undefined;
     let active = true;
     let receivedUpdateEvent = false;
     const removeListener = bridge.onUpdateStatus((snapshot) => {
@@ -1260,6 +1264,30 @@ await refreshSubmissions(nextAccounts, { silent: true });
       removeListener();
     };
   }, []);
+
+  const runUpdateFooterAction = useCallback(async (action: UpdateFooterAction) => {
+    const bridge = desktopBridge();
+    if (!bridge || updateFooterBusy) return;
+    setUpdateFooterBusy(true);
+    try {
+      if (action.kind === "download") {
+        const snapshot = await bridge.downloadUpdate();
+        if (snapshot) setDesktopUpdateStatus(snapshot);
+      } else if (action.kind === "install") {
+        const result = await bridge.installUpdate();
+        setDesktopUpdateStatus((current) => result.snapshot ?? current);
+        if (!result.accepted && !result.snapshot) showToast(t("update.prompt.error.notReady"), "error");
+      } else {
+        const snapshot = await bridge.checkForUpdates();
+        if (snapshot) setDesktopUpdateStatus(snapshot);
+      }
+    } catch (error) {
+      showToast(updateBridgeErrorMessage(error, t("update.prompt.error.action"), t), "error");
+    } finally {
+      setUpdateFooterBusy(false);
+    }
+  }, [updateFooterBusy, showToast, t]);
+  const updateFooterAction = resolveUpdateFooter(desktopUpdateStatus);
   useEffect(() => {
     const bridge = desktopBridge();
     if (!bridge || isDemo) return undefined;
@@ -3708,7 +3736,22 @@ const emptyMessageList = useMemo(() => (query.trim()
 
           <div className="sidebar-footer">
             <div><ShieldCheck size={16} /><span><strong>{t("app.localEncryption")}</strong><small>{t("app.credentialsLocal")}</small></span></div>
-            <div className="sidebar-footer-actions"><span className="version">v{__NAMI_APP_VERSION__}</span></div>
+            <div className="sidebar-footer-actions">
+              <span className="version">v{__NAMI_APP_VERSION__}</span>
+              {updateFooterAction && (
+                <button type="button" className="update-footer-button" disabled={updateFooterBusy || updateFooterAction.kind === "downloading"} onClick={() => void runUpdateFooterAction(updateFooterAction)}>
+                  {updateFooterAction.kind === "downloading" ? (
+                    <><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("update.footer.downloading", { percent: updateFooterAction.percent })}</>
+                  ) : updateFooterAction.kind === "install" ? (
+                    <><RotateCcw size={13} aria-hidden="true" />{t("update.footer.ready")}</>
+                  ) : updateFooterAction.kind === "retry" ? (
+                    <><CircleAlert size={13} aria-hidden="true" />{t("update.footer.retry")}</>
+                  ) : (
+                    <><Download size={13} aria-hidden="true" />{t("update.footer.available", { version: desktopUpdateStatus?.targetVersion ?? "" })}</>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
         </aside>
 
@@ -3828,7 +3871,7 @@ const emptyMessageList = useMemo(() => (query.trim()
 
         <section className={`reader-column ${selected ? "has-message" : ""}`}>
           {selected ? (
-            <>
+            <ErrorBoundary key={selected.id} t={t} area={t("mail.readerArea")}>
               <header className="reader-toolbar">
                 <IconButton label={t("mail.reader.backToList")} className="reader-back" onClick={() => closeReader(true)}><ArrowLeft size={18} /></IconButton>
                 <div className="reader-actions">
@@ -3991,7 +4034,7 @@ const emptyMessageList = useMemo(() => (query.trim()
               </article>
               {attachmentPreview && <Suspense fallback={null}><AttachmentPreviewModal messageId={attachmentPreview.message.id} attachment={attachmentPreview.attachment} onClose={() => setAttachmentPreview(null)} /></Suspense>}
               </div>
-            </>
+            </ErrorBoundary>
           ) : (
             <div className="reader-empty"><div className="reader-orb"><Mail size={32} /></div><h2>{t("mail.reader.emptyTitle")}</h2><p>{t("mail.reader.emptyDescription")}</p></div>
           )}
@@ -4044,7 +4087,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       /></Suspense>
       {mobileSidebar && <button className="mobile-scrim" aria-label={t("navigation.closeMenu")} onClick={() => setMobileSidebar(false)} />}
       {toast && <div className={`toast ${toast.kind}`} role={toast.kind === "error" || toast.kind === "warning" ? "alert" : "status"} aria-atomic="true"><span className="toast-icon" aria-hidden="true">{toast.kind === "error" || toast.kind === "warning" ? <CircleAlert size={17} /> : toast.kind === "info" ? <Sparkles size={17} /> : <Check size={17} />}</span><span className="toast-message">{toast.message}</span>{toast.action && <button className="toast-action" type="button" onClick={() => { setToast(null); toast.action?.run(); }}>{toast.action.label}</button>}<button className="toast-dismiss" type="button" aria-label={t("common.closeNotification")} data-tooltip={t("common.closeNotification")} onClick={() => setToast(null)}><X size={16} /></button></div>}
-      {autoReplyNotices.length > 0 && <AutoReplyToastStack notices={autoReplyNotices} onDismiss={(notice) => setAutoReplyNotices((items) => items.filter((item) => autoReplyNoticeKey(item) !== autoReplyNoticeKey(notice)))} />}
+      {autoReplyNotices.length > 0 && <AutoReplyToastStack behindModal={addOpen || composeOpen || settingsOpen || contactsOpen || templatesOpen || calendarOpen || accountsOpen || sendingStatusOpen} notices={autoReplyNotices} onDismiss={(notice) => setAutoReplyNotices((items) => items.filter((item) => autoReplyNoticeKey(item) !== autoReplyNoticeKey(notice)))} />}
       </div>
     </div>
   );

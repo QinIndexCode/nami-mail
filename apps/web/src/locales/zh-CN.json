@@ -10,6 +10,10 @@
     "app.localMailSpace": "你的本地邮件空间",
     "app.switchDark": "切换为深色主题",
     "app.switchLight": "切换为浅色主题",
+    "app.crash.title": "界面出现异常",
+    "app.crash.message": "某个区域未能正常显示，其余界面不受影响。重新加载后即可恢复。",
+    "app.crash.messageArea": "{area}未能正常显示，其余界面不受影响。重新加载后即可恢复。",
+    "app.crash.reload": "重新加载",
     "language.title": "语言",
     "language.description": "选择 Nami Mail 的界面语言",
     "language.label": "界面语言",
@@ -1191,6 +1195,10 @@
     "update.prompt.snooze.oneWeek": "1 周后",
     "update.prompt.snooze.thirtyDays": "30 天后",
     "update.prompt.snooze.remindMe": "设置提醒",
+    "update.footer.available": "v{version} 可更新",
+    "update.footer.downloading": "下载中 {percent}%",
+    "update.footer.ready": "更新就绪 · 重启",
+    "update.footer.retry": "更新失败 · 重试",
     "error.operationIncomplete": "操作未完成",
     "error.retry": "请重试",
     "error.fullKnown": "{title}：{message} {guidance}",
@@ -1881,6 +1889,7 @@
     "settings.launchAtStartup.label": "开机自启动",
     "settings.launchAtStartup.description": "登录系统时自动启动 Nami Mail。",
     "settings.shortcut.label": "全局快捷键",
-    "settings.shortcut.description": "按下 Ctrl+Shift+M（Mac 为 ⌘+Shift+M）可随时唤起邮件窗口。"
+    "settings.shortcut.description": "按下 Ctrl+Shift+M（Mac 为 ⌘+Shift+M）可随时唤起邮件窗口。",
+    "mail.readerArea": "邮件阅读区"
   }
 }

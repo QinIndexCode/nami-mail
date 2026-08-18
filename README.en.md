@@ -33,7 +33,7 @@ Nami Mail is a local-first, multi-account desktop mail client for Windows. It br
 - **External Mail v1**: A paired, local, read-only CLI and MCP interface for scripts and AI assistants. It exposes six tools — accounts, folders, message lists, message detail, threads, and attachment metadata — through a Windows named-pipe Broker restricted to the current user.
 - **NamiMail Agent**: An embedded AI workspace with local retrieval, source citations, and OpenAI-compatible or Ollama provider support. It can read mail and manage drafts within an explicit account scope.
 - **Mail translation**: Optional free translation (Google/MyMemory) and AI-powered translation with streaming output. The first launch shows a terms-and-privacy dialog covering the entire app.
-- **UI improvements**: Loading progress bar, refined scrollbar styles, quote formatting in Agent conversations, and theme-aware visual polish.
+- **UI improvements**: Skeleton loading states for lists and panels, refined scrollbar styles, quote formatting in Agent conversations, and theme-aware visual polish.
 
 See the [release notes](docs/releases/v0.3.0.en.md) and [changelog](CHANGELOG.en.md) for details.
 
