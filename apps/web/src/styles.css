@@ -11964,23 +11964,29 @@ cursor:default
 .agent-composer-permission
 {
 min-height:28px;
-color:var(--text-faint);
+color:var(--text-soft);
 cursor:pointer;
-background:0 0;
-border:0;
-border-radius:7px;
+background:var(--panel-muted);
+border:1px solid var(--line);
+border-radius:8px;
 align-items:center;
 gap:5px;
-padding:0 6px;
+padding:0 8px;
 font-size:11px;
 font-weight:550;
-transition:background .16s,color .16s;
+transition:background .16s,color .16s,border-color .16s,box-shadow .16s;
 display:inline-flex
 }
 .agent-composer-permission:hover,.agent-composer-permission[aria-expanded=true]
 {
-background:var(--hover);
+background:var(--panel-solid);
+border-color:var(--line-strong);
 color:var(--text)
+}
+.agent-composer-permission:focus-visible
+{
+outline:2px solid var(--focus-ring);
+outline-offset:1px
 }
 .agent-composer-permission svg
 {
@@ -12005,23 +12011,29 @@ position:relative
 {
 max-width:190px;
 min-height:28px;
-color:var(--text-faint);
+color:var(--text-soft);
 cursor:pointer;
-background:0 0;
-border:0;
-border-radius:7px;
+background:var(--panel-muted);
+border:1px solid var(--line);
+border-radius:8px;
 align-items:center;
-gap:4px;
-padding:0 6px 0 8px;
+gap:5px;
+padding:0 8px;
 font-size:11px;
 font-weight:550;
-transition:background .14s,color .14s;
+transition:background .14s,color .14s,border-color .14s;
 display:inline-flex
 }
 .agent-composer-model:hover:not(:disabled),.agent-composer-model[aria-expanded=true]:not(:disabled)
 {
-background:var(--hover);
+background:var(--panel-solid);
+border-color:var(--line-strong);
 color:var(--text)
+}
+.agent-composer-model:focus-visible
+{
+outline:2px solid var(--focus-ring);
+outline-offset:1px
 }
 .agent-composer-model:disabled
 {
@@ -12050,21 +12062,31 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 opacity:0;
 pointer-events:none;
-border-radius:10px;
-grid-template-rows:0fr;
+border-radius:11px;
 width:max-content;
 min-width:100%;
 max-width:min(320px,100vw - 32px);
-transition:grid-template-rows .22s cubic-bezier(.2,.8,.2,1),opacity .16s,transform .22s cubic-bezier(.2,.8,.2,1);
-display:grid;
+max-height:min(46vh,340px);
+overflow-y:auto;
+transition:opacity .18s ease,transform .22s cubic-bezier(.2,.8,.2,1);
+display:flex;
+flex-direction:column;
 position:absolute;
-bottom:calc(100% + 6px);
-transform:translateY(4px);
-box-shadow:0 12px 26px #17171b17,0 2px 6px #17171b0d
+bottom:calc(100% + 8px);
+transform:translateY(8px) scale(.97);
+transform-origin:bottom center;
+box-shadow:0 12px 26px #17171b17,0 2px 6px #17171b0d;
+scrollbar-width:none
 }
 :root[data-theme=dark] .agent-popover
 {
 box-shadow:0 14px 30px #0000005c,0 2px 6px #00000038
+}
+.agent-popover::-webkit-scrollbar
+{
+display:none;
+width:0;
+height:0
 }
 .agent-popover.anchor-left
 {
@@ -12078,8 +12100,7 @@ right:0
 {
 opacity:1;
 pointer-events:auto;
-grid-template-rows:1fr;
-transform:translateY(0)
+transform:translateY(0) scale(1)
 }
 .agent-popover-inner
 {
@@ -12087,8 +12108,7 @@ flex-direction:column;
 gap:2px;
 min-height:0;
 padding:5px;
-display:flex;
-overflow:hidden
+display:flex
 }
 .agent-popover-option
 {
@@ -12172,22 +12192,15 @@ margin-left:auto
 {
 align-items:center
 }
-.agent-model-vision
+.agent-model-option-name
 {
-display:inline-flex;
-align-items:center;
-gap:3px;
-margin-left:6px;
-padding:1px 5px;
-border:1px solid color-mix(in srgb, #8b5cf6 40%, var(--line));
-border-radius:7px;
-background:color-mix(in srgb, #8b5cf6 10%, var(--panel-muted));
-color:color-mix(in srgb, #8b5cf6 82%, var(--text));
-font-size:10px;
+text-overflow:ellipsis;
+white-space:nowrap;
+min-width:0;
+font-size:11px;
 font-weight:600;
-line-height:1.4;
-vertical-align:middle;
-white-space:nowrap
+color:var(--text);
+overflow:hidden
 }
 .agent-popover-divider
 {
