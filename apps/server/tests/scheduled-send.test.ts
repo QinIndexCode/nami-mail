@@ -219,6 +219,34 @@ describe("scheduled send submission", () => {
       expect.objectContaining({ message: "SMTP rejected RCPT TO" }),
     );
   });
+
+  it("submits a due burst with bounded concurrency instead of serializing", async () => {
+    const due = new Date(Date.now() - 60_000).toISOString();
+    for (let i = 0; i < 6; i += 1) schedule(`Burst ${i}`, due);
+
+    let active = 0;
+    let peak = 0;
+    send.mockImplementation(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      return { messageId: "<sent@nami.local>" };
+    });
+
+    const outcome = await submitDueScheduledSubmissions(db, masterKey, {
+      outboundAttachmentDirectory: directory,
+      scheduleSentVerification: vi.fn(),
+    });
+
+    // All four workers enter their first SMTP call before any of them
+    // finishes, so the observed overlap equals the pool cap; a serialized
+    // implementation would never see more than one in flight.
+    expect(peak).toBe(4);
+    expect(outcome).toEqual({ submitted: 6, failed: 0 });
+    const statuses = db.prepare("SELECT status FROM outbound_submissions ORDER BY send_at").all() as Array<{ status: string }>;
+    expect(statuses.map((row) => row.status)).toEqual(["submitted", "submitted", "submitted", "submitted", "submitted", "submitted"]);
+  });
 });
 
 describe("scheduled send API routes", () => {

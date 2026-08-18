@@ -61,7 +61,11 @@ export const config = {
   masterKeyPath: resolveFromRoot(process.env.MASTER_KEY_PATH?.trim() || "./data/master.key"),
   // Per-account mailbox sync cap: 0 syncs the whole mailbox like Gmail's web
   // client (no limit), a positive value fetches only the newest N messages.
-  syncMessageLimit: integerEnv("SYNC_MESSAGE_LIMIT", 0, 0, 100_000),
+  // The default matches the documented initial-sync cache (the README
+  // promises "the newest 200 messages per folder") so a first connection
+  // does not silently pull a multi-GB mailbox; set 0 or a larger value for
+  // mailboxes that need the full history.
+  syncMessageLimit: integerEnv("SYNC_MESSAGE_LIMIT", 200, 0, 100_000),
   logLevel: process.env.LOG_LEVEL?.trim() || "info",
   webDistPath: resolveFromRoot(process.env.WEB_DIST_PATH?.trim() || "./apps/web/dist"),
   // Set only by the Electron host; browser development intentionally runs

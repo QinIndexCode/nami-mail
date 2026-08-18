@@ -49,3 +49,36 @@ describe("config loopback guards", () => {
     }
   });
 });
+
+describe("sync message limit config", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // config evaluates its env read once at import time, so each case reloads
+  // the module with the desired environment.
+  async function loadConfig() {
+    vi.resetModules();
+    const { config } = await import("../src/config.js");
+    return config;
+  }
+
+  it("defaults to the newest 200 messages per folder without an override", async () => {
+    vi.stubEnv("SYNC_MESSAGE_LIMIT", "");
+    await expect(loadConfig()).resolves.toMatchObject({ syncMessageLimit: 200 });
+  });
+
+  it("honors an explicit SYNC_MESSAGE_LIMIT override", async () => {
+    vi.stubEnv("SYNC_MESSAGE_LIMIT", "0");
+    await expect(loadConfig()).resolves.toMatchObject({ syncMessageLimit: 0 });
+    vi.stubEnv("SYNC_MESSAGE_LIMIT", "5000");
+    await expect(loadConfig()).resolves.toMatchObject({ syncMessageLimit: 5000 });
+  });
+
+  it("clamps out-of-range values to the supported range", async () => {
+    vi.stubEnv("SYNC_MESSAGE_LIMIT", "999999999");
+    await expect(loadConfig()).resolves.toMatchObject({ syncMessageLimit: 100_000 });
+    vi.stubEnv("SYNC_MESSAGE_LIMIT", "-5");
+    await expect(loadConfig()).resolves.toMatchObject({ syncMessageLimit: 0 });
+  });
+});

@@ -56,6 +56,13 @@ function threadingHeaders(message: { inReplyTo?: string; references?: string[] }
   };
 }
 
+// Bounded pool for due sends. Each submission spends most of its time inside
+// an SMTP conversation, so a backlog that accumulated while the app was
+// closed would otherwise serialize into N sequential round trips; a fixed
+// cap keeps the client, the outbox directory, and the SMTP server from being
+// hammered all at once.
+const SCHEDULED_SEND_CONCURRENCY = 4;
+
 /**
  * Submits scheduled sends whose time has arrived through the same SMTP
  * pipeline as the interactive send route. The durable submission keeps the
@@ -77,13 +84,13 @@ export async function submitDueScheduledSubmissions(
 
   let submitted = 0;
   let failed = 0;
-  for (const row of due) {
+  const submitOne = async (row: { id: string }): Promise<void> => {
     const submission = submissionForId(db, masterKey, row.id);
-    if (!submission) continue;
+    if (!submission) return;
     const account = accountById(db, submission.accountId);
-    if (!account) continue;
+    if (!account) return;
     const request = submissionRequestForId(db, masterKey, row.id);
-    if (!request) continue;
+    if (!request) return;
     try {
       const attachments = resolveOutboundAttachments(
         db,
@@ -94,7 +101,7 @@ export async function submitDueScheduledSubmissions(
       );
       linkOutboundAttachmentsToSubmission(db, account.id, row.id, request.attachmentTokens);
       const attempt = startSubmission(db, masterKey, row.id);
-      if (!attempt.shouldAttempt) continue;
+      if (!attempt.shouldAttempt) return;
       const result = await sendMail(account, masterKey, {
         to: request.to,
         cc: request.cc,
@@ -144,7 +151,20 @@ export async function submitDueScheduledSubmissions(
         // Reporting must not break the remaining scheduled sends.
       }
     }
-  }
+  };
+
+  // Each worker claims the next due row; the claim and the synchronous DB
+  // transitions run on the same thread, so the cursor advance is atomic and
+  // a row can never be processed twice even though the SMTP calls overlap.
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(SCHEDULED_SEND_CONCURRENCY, due.length) }, async () => {
+    while (cursor < due.length) {
+      const row = due[cursor]!;
+      cursor += 1;
+      await submitOne(row);
+    }
+  });
+  await Promise.all(workers);
   return { submitted, failed };
 }
 
