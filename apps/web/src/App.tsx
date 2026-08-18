@@ -868,7 +868,7 @@ export default function App() {
     const requestId = ++submissionLoadRequestRef.current;
     if (!silent) setSubmissionLoading(true);
     if (isDemo || targetAccounts.length === 0) {
-      setSubmissions(isDemo ? sortSubmissions((await ensureDemoLoaded()).demoSubmissions) : []);
+      setSubmissions(isDemo ? sortSubmissions((await ensureDemoLoaded()).createDemoSubmissions(locale)) : []);
       setSubmissionLoadError(null);
       setSubmissionLoading(false);
       return;
@@ -898,7 +898,7 @@ export default function App() {
       })
       : null);
     setSubmissionLoading(false);
-  }, [t]);
+  }, [locale, t]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1018,12 +1018,12 @@ export default function App() {
         const demo = await ensureDemoLoaded();
         const demoTotal = demoMessageTotal(
           demoLoadedRef.current && messagesRef.current.length ? messagesRef.current : demo.demoMessages,
-          demo.demoAccounts,
+          demo.createDemoAccounts(locale),
           { accountId, folder, search, messageView, searchScope: scope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before },
         );
         if (!demoLoadedRef.current) {
           demoLoadedRef.current = true;
-          setAccounts(demo.demoAccounts);
+          setAccounts(demo.createDemoAccounts(locale));
           setProviders(demo.demoProviders);
           setMessages(demo.demoMessages);
           setMessagePage(1);
@@ -1031,7 +1031,7 @@ export default function App() {
         }
         setMessageTotal(demoTotal);
         setMessagePage(1);
-        setSubmissions(sortSubmissions(demo.demoSubmissions));
+        setSubmissions(sortSubmissions(demo.createDemoSubmissions(locale)));
         setSubmissionLoadError(null);
         setSubmissionLoading(false);
       } else {
@@ -1096,7 +1096,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         }
       }
     }
-  }, [selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, searchScope, t, view]);
+  }, [locale, selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, searchScope, t, view]);
 
   /**
    * Silent periodic refresh that preserves pagination progress: only the first
@@ -1639,7 +1639,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     // already yields a zero total; prefer 0 over a null snapshot crash.
     const demo = demoDataSnapshot();
     return demo
-      ? demoMessageTotal(messages, demo.demoAccounts, {
+      ? demoMessageTotal(messages, demo.createDemoAccounts(locale), {
         accountId: selectedAccount,
         folder: selectedFolder,
         search: debouncedQuery,
@@ -1650,7 +1650,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         before: dateBounds.before,
       })
       : 0;
-  }, [attachmentKindFilter, dateBounds, debouncedQuery, messageTotal, messages, searchScope, selectedAccount, selectedFolder, view]);
+  }, [attachmentKindFilter, dateBounds, debouncedQuery, locale, messageTotal, messages, searchScope, selectedAccount, selectedFolder, view]);
   const recentlyReadVisibleCount = useMemo(() => view === "unread"
     ? filteredMessages.filter((message) => message.seen && unreadViewRecentlyReadIds.has(message.id)).length
     : 0, [filteredMessages, unreadViewRecentlyReadIds, view]);
@@ -3491,6 +3491,19 @@ const emptyMessageList = useMemo(() => (query.trim()
     };
   }, []);
 
+  // Demo copy is seeded per locale; a language switch re-seeds accounts and
+  // submissions so folder names, signatures and subjects follow the UI.
+  useEffect(() => {
+    if (!isDemo || !demoLoadedRef.current) return;
+    void (async () => {
+      const demo = await ensureDemoLoaded();
+      setAccounts(demo.createDemoAccounts(locale));
+      setMessages(demo.demoMessages);
+      setStats(demo.demoStats);
+      setSubmissions(sortSubmissions(demo.createDemoSubmissions(locale)));
+    })();
+  }, [locale]);
+
   // Demo mode surfaces a realistic auto-reply confirmation so the product
   // preview shows the pending-draft review card without a live agent.
   useEffect(() => {
@@ -3503,7 +3516,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           kind: "pending",
           confirmationId: "demo-auto-reply-confirmation",
           requestId: "demo-auto-reply-request",
-          accountId: demo.demoAccounts[0]?.id ?? "personal",
+          accountId: demo.createDemoAccounts(locale)[0]?.id ?? "personal",
           messageId: "demo-auto-reply-message",
           subject: "季度数据回顾与本周同步",
           fromName: "Lena Chen",
@@ -3515,7 +3528,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         },
       ]);
     })();
-  }, []);
+  }, [locale]);
 
   useEffect(() => {
     if (!isDesktopSmoke) return;
