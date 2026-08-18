@@ -1,94 +1,116 @@
 import type { Account, Message, OutboundSubmission, ProviderInfo, Stats } from "./types";
+import { translate } from "./i18n";
 import { demoProviderCatalog } from "./demoProviderCatalog";
 
 export const demoProviders: ProviderInfo[] = demoProviderCatalog;
-export const demoAccounts: Account[] = [
-  {
-    id: "personal",
-    email: "hello@icloud.com",
-    provider: "icloud",
-    providerName: "iCloud Mail",
-    status: "connected",
-    lastError: null,
-    lastSyncedAt: new Date().toISOString(),
-    signature: "——\n林晓\nNami Studio · 设计师",
-    createdAt: new Date().toISOString(),
-    folders: [
-      { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 4, unseen: 3 },
-      { path: "Archive", name: "归档", specialUse: "\\Archive", total: 0, unseen: 0 },
-      { path: "Junk", name: "垃圾邮件", specialUse: "\\Junk", total: 0, unseen: 0 },
-      { path: "Sent Messages", name: "已发送", specialUse: "\\Sent", total: 0, unseen: 0 },
-      { path: "Drafts", name: "草稿", specialUse: "\\Drafts", total: 0, unseen: 0 },
-    ],
-  },
-  {
-    id: "work",
-    email: "studio@gmail.com",
-    provider: "gmail",
-    providerName: "Gmail",
-    status: "connected",
-    lastError: null,
-    lastSyncedAt: new Date(Date.now() - 62_000).toISOString(),
-    signature: "",
-    createdAt: new Date().toISOString(),
-    folders: [
-      { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 7, unseen: 0 },
-      { path: "[Gmail]/All Mail", name: "所有邮件", specialUse: "\\All", total: 0, unseen: 0 },
-    ],
-  },
-];
+
+const DEMO_FOLDER_KEYS: Record<string, string> = {
+  INBOX: "demo.folder.inbox",
+  Archive: "demo.folder.archive",
+  Junk: "demo.folder.junk",
+  "Sent Messages": "demo.folder.sent",
+  Drafts: "demo.folder.drafts",
+  "[Gmail]/All Mail": "demo.folder.allMail",
+};
+
+/** Translates demo copy, keeping the established literal when a locale pack entry is missing. */
+function demoTranslate(locale: string, key: string, fallback: string): string {
+  const resolved = translate(locale, key);
+  return resolved === key ? fallback : resolved;
+}
+
+export function createDemoAccounts(locale: string): Account[] {
+  const folderName = (path: string, fallback: string) => demoTranslate(locale, DEMO_FOLDER_KEYS[path] ?? "", fallback);
+  return [
+    {
+      id: "personal",
+      email: "hello@icloud.com",
+      provider: "icloud",
+      providerName: "iCloud Mail",
+      status: "connected",
+      lastError: null,
+      lastSyncedAt: new Date().toISOString(),
+      signature: demoTranslate(locale, "demo.signature.personal", "——\n林晓\nNami Studio · 设计师"),
+      createdAt: new Date().toISOString(),
+      folders: [
+        { path: "INBOX", name: folderName("INBOX", "收件箱"), specialUse: "\\Inbox", total: 4, unseen: 3 },
+        { path: "Archive", name: folderName("Archive", "归档"), specialUse: "\\Archive", total: 0, unseen: 0 },
+        { path: "Junk", name: folderName("Junk", "垃圾邮件"), specialUse: "\\Junk", total: 0, unseen: 0 },
+        { path: "Sent Messages", name: folderName("Sent Messages", "已发送"), specialUse: "\\Sent", total: 0, unseen: 0 },
+        { path: "Drafts", name: folderName("Drafts", "草稿"), specialUse: "\\Drafts", total: 0, unseen: 0 },
+      ],
+    },
+    {
+      id: "work",
+      email: "studio@gmail.com",
+      provider: "gmail",
+      providerName: "Gmail",
+      status: "connected",
+      lastError: null,
+      lastSyncedAt: new Date(Date.now() - 62_000).toISOString(),
+      signature: "",
+      createdAt: new Date().toISOString(),
+      folders: [
+        { path: "INBOX", name: folderName("INBOX", "收件箱"), specialUse: "\\Inbox", total: 7, unseen: 0 },
+        { path: "[Gmail]/All Mail", name: folderName("[Gmail]/All Mail", "所有邮件"), specialUse: "\\All", total: 0, unseen: 0 },
+      ],
+    },
+  ];
+}
 
 const now = Date.now();
-export const demoSubmissions: OutboundSubmission[] = [
-  {
-    id: "demo-submission-unknown",
-    accountId: "work",
-    messageId: "<demo-unknown-7f31c52a@mailer.example>",
-    subject: "合作提案最终确认",
-    recipients: ["reviewer@example.com", "ops@example.test", "legal@example.test", "archive@example.com"],
-    deliveryStatus: "unknown_delivery",
-    sendAt: null,
-    errorCode: "connection_failed",
-    errorMessage: "发送连接在等待最终响应时中断，服务端是否接受邮件暂时无法确认。",
-    postSubmitWarning: null,
-    submittedAt: null,
-    confirmedAt: null,
-    createdAt: new Date(now - 17 * 60_000).toISOString(),
-    updatedAt: new Date(now - 16 * 60_000).toISOString(),
-  },
-  {
-    id: "demo-submission-submitting",
-    accountId: "personal",
-    messageId: "<demo-submitting-3ae8901b@mailer.example>",
-    subject: "周末行程与预订信息",
-    recipients: ["friend@example.com"],
-    deliveryStatus: "submitting",
-    sendAt: null,
-    errorCode: null,
-    errorMessage: null,
-    postSubmitWarning: null,
-    submittedAt: null,
-    confirmedAt: null,
-    createdAt: new Date(now - 42_000).toISOString(),
-    updatedAt: new Date(now - 18_000).toISOString(),
-  },
-  {
-    id: "demo-submission-confirmed",
-    accountId: "personal",
-    messageId: "<demo-confirmed-91d2bc40@mailer.example>",
-    subject: "照片下载链接",
-    recipients: ["studio@example.com", "editor@example.test"],
-    deliveryStatus: "confirmed",
-    sendAt: null,
-    errorCode: null,
-    errorMessage: null,
-    postSubmitWarning: null,
-    submittedAt: new Date(now - 3 * 60 * 60_000).toISOString(),
-    confirmedAt: new Date(now - 2.9 * 60 * 60_000).toISOString(),
-    createdAt: new Date(now - 3 * 60 * 60_000).toISOString(),
-    updatedAt: new Date(now - 2.9 * 60 * 60_000).toISOString(),
-  },
-];
+export function createDemoSubmissions(locale: string): OutboundSubmission[] {
+  return [
+    {
+      id: "demo-submission-unknown",
+      accountId: "work",
+      messageId: "<demo-unknown-7f31c52a@mailer.example>",
+      subject: demoTranslate(locale, "demo.submission.subject.unknown_delivery", "合作提案最终确认"),
+      recipients: ["reviewer@example.com", "ops@example.test", "legal@example.test", "archive@example.com"],
+      deliveryStatus: "unknown_delivery",
+      sendAt: null,
+      errorCode: "connection_failed",
+      errorMessage: demoTranslate(locale, "demo.submission.error.connectionFailed", "发送连接在等待最终响应时中断，服务端是否接受邮件暂时无法确认。"),
+      postSubmitWarning: null,
+      submittedAt: null,
+      confirmedAt: null,
+      createdAt: new Date(now - 17 * 60_000).toISOString(),
+      updatedAt: new Date(now - 16 * 60_000).toISOString(),
+    },
+    {
+      id: "demo-submission-submitting",
+      accountId: "personal",
+      messageId: "<demo-submitting-3ae8901b@mailer.example>",
+      subject: demoTranslate(locale, "demo.submission.subject.submitting", "周末行程与预订信息"),
+      recipients: ["friend@example.com"],
+      deliveryStatus: "submitting",
+      sendAt: null,
+      errorCode: null,
+      errorMessage: null,
+      postSubmitWarning: null,
+      submittedAt: null,
+      confirmedAt: null,
+      createdAt: new Date(now - 42_000).toISOString(),
+      updatedAt: new Date(now - 18_000).toISOString(),
+    },
+    {
+      id: "demo-submission-confirmed",
+      accountId: "personal",
+      messageId: "<demo-confirmed-91d2bc40@mailer.example>",
+      subject: demoTranslate(locale, "demo.submission.subject.confirmed", "照片下载链接"),
+      recipients: ["studio@example.com", "editor@example.test"],
+      deliveryStatus: "confirmed",
+      sendAt: null,
+      errorCode: null,
+      errorMessage: null,
+      postSubmitWarning: null,
+      submittedAt: new Date(now - 3 * 60 * 60_000).toISOString(),
+      confirmedAt: new Date(now - 2.9 * 60 * 60_000).toISOString(),
+      createdAt: new Date(now - 3 * 60 * 60_000).toISOString(),
+      updatedAt: new Date(now - 2.9 * 60 * 60_000).toISOString(),
+    },
+  ];
+}
 
 export const demoMessages: Message[] = [
   {

@@ -1,4 +1,5 @@
-import { hasTranslation, resolveLocale, translate, type Translate } from "./i18n";
+import { hasTranslation, translate, type Translate } from "./i18n";
+import { providerCopyKeys } from "./providerCopy";
 import type { MailServerPreset, ProviderInfo } from "./types";
 
 export const CUSTOM_IMAP_PROVIDER_ID = "__custom_imap__";
@@ -173,38 +174,61 @@ function genericSetupSteps(providerName: string, method: string | undefined, t: 
 }
 
 /**
- * Keeps server-delivered provider data intact for the default Chinese UI.
- * Other locales receive translated, credential-safe guidance instead of raw
- * Chinese provider prose, while endpoint values and official help links stay exact.
+ * Resolves one provider copy field. Specific keys from `providerCopyKeys`
+ * are translated when the locale pack carries them; otherwise the raw
+ * server-delivered value (already locale-aware for custom providers) is kept.
+ */
+function resolveCopyField(
+  locale: string,
+  t: Translate,
+  specificKey: string | undefined,
+  fallback: string | undefined,
+): string | undefined {
+  return specificKey && hasTranslation(locale, specificKey) ? t(specificKey) : fallback;
+}
+
+/** Resolves setup steps field by field, falling back per step into the catalog copy. */
+function resolveCopySteps(
+  locale: string,
+  t: Translate,
+  specificKeys: readonly string[] | undefined,
+  fallback: readonly string[] | undefined,
+): string[] | undefined {
+  if (!specificKeys?.length) return fallback ? [...fallback] : undefined;
+  const resolved = specificKeys.map((key) => (hasTranslation(locale, key) ? t(key) : undefined));
+  if (!resolved.some((value) => value !== undefined)) return fallback ? [...fallback] : undefined;
+  return resolved.map((value, index) => value ?? fallback?.[index] ?? specificKeys[index]);
+}
+
+/**
+ * Localizes provider guidance in the active locale. Catalog copy is authored
+ * in the locale packs (per preset id) so every locale gets specific,
+ * credential-safe instructions; endpoint values and official help links
+ * always come from the server catalog unchanged.
  */
 export function localizedProviderOnboarding(
   provider: ProviderOnboardingSource,
   locale: string,
   t: Translate,
 ): LocalizedProviderOnboarding {
-  if (resolveLocale(locale) === defaultLocale) {
-    return {
-      name: provider.name,
-      credentialLabel: provider.credentialLabel ?? provider.credentialName,
-      credentialName: provider.credentialName,
-      credentialHint: provider.credentialHint,
-      setupSteps: provider.setupSteps,
-      helpText: provider.helpText,
-      caveat: provider.caveat,
-      helpLabel: provider.helpLabel,
-    };
-  }
-
+  const copy = providerCopyKeys[provider.id];
   const name = providerDisplayName(provider, locale, t);
-  const credential = providerAuthLabel(provider.recommendedAuthMethod, t);
+  const credentialLabel = resolveCopyField(locale, t, copy?.credentialLabel, provider.credentialLabel ?? provider.credentialName)
+    ?? providerAuthLabel(provider.recommendedAuthMethod, t);
+  const credentialName = resolveCopyField(locale, t, copy?.credentialName, provider.credentialName) ?? credentialLabel;
   return {
     name,
-    credentialLabel: credential,
-    credentialName: credential,
-    credentialHint: t("provider.generic.credentialHint", { credential }),
-    setupSteps: genericSetupSteps(name, provider.recommendedAuthMethod, t),
-    helpText: t("provider.generic.helpText", { provider: name }),
-    caveat: provider.caveat ? t("provider.generic.caveat") : undefined,
-    helpLabel: provider.helpUrl ? t("provider.generic.helpLink", { provider: name }) : provider.helpLabel,
+    credentialLabel,
+    credentialName,
+    credentialHint: resolveCopyField(locale, t, copy?.credentialHint, provider.credentialHint)
+      ?? t("provider.generic.credentialHint", { credential: credentialName }),
+    setupSteps: resolveCopySteps(locale, t, copy?.setupSteps, provider.setupSteps)
+      ?? genericSetupSteps(name, provider.recommendedAuthMethod, t),
+    helpText: resolveCopyField(locale, t, copy?.helpText, provider.helpText)
+      ?? t("provider.generic.helpText", { provider: name }),
+    caveat: provider.caveat ? resolveCopyField(locale, t, copy?.caveat, provider.caveat) : undefined,
+    helpLabel: provider.helpUrl
+      ? resolveCopyField(locale, t, copy?.helpLabel, provider.helpLabel ?? t("provider.generic.helpLink", { provider: name }))
+      : provider.helpLabel,
   };
 }
