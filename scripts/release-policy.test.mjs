@@ -85,6 +85,20 @@ test("Windows packaging reuses a local Electron distribution only when its execu
     undefined,
     "The package manifest must not force CI runners to use a local Electron directory.",
   );
+  assert.deepEqual(
+    packageManifest.build.electronFuses,
+    {
+      runAsNode: false,
+      enableCookieEncryption: true,
+      enableNodeOptionsEnvironmentVariable: false,
+      enableNodeCliInspectArguments: false,
+      enableEmbeddedAsarIntegrityValidation: true,
+      onlyLoadAppFromAsar: true,
+      loadBrowserProcessSpecificV8Snapshot: false,
+      grantFileProtocolExtraPrivileges: false,
+    },
+    "The packaged Electron executable must keep the hardened fuse configuration.",
+  );
   const packageScript = await fs.readFile(path.join(projectRoot, "scripts", "package-win.mjs"), "utf8");
   assert.match(packageScript, /resolveLocalWindowsElectronDist\(projectRoot\)/);
   assert.match(packageScript, /--config\.electronDist=\$\{localElectronDist\}/);
@@ -111,6 +125,13 @@ test("Windows packaging reuses a local Electron distribution only when its execu
     /const installerSmokeSupervisorTimeoutMs = 1_080_000;[\s\S]*?timeout: installerSmokeSupervisorTimeoutMs,/,
     "The package smoke must leave the installer smoke enough time to return its own diagnostic.",
   );
+  assert.match(packageSmokeScript, /getCurrentFuseWire\(packagedExecutable\)/);
+  assert.match(
+    packageSmokeScript,
+    /\[FuseV1Options\.RunAsNode, fuseWireDisable\][\s\S]*\[FuseV1Options\.LoadBrowserProcessSpecificV8Snapshot, fuseWireDisable\][\s\S]*\[FuseV1Options\.GrantFileProtocolExtraPrivileges, fuseWireDisable\]/,
+    "The package smoke must assert the hardened fuse wire on the packaged executable.",
+  );
+  assert.doesNotMatch(packageSmokeScript, /import[^;]*\bFuseState\b/, "FuseState is not exported by @electron/fuses and must not be imported.");
 
   const installerSmokeScript = await fs.readFile(path.join(projectRoot, "scripts", "smoke-installer.mjs"), "utf8");
   assert.match(

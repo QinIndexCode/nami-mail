@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import * as asar from "@electron/asar";
+import { FuseV1Options, getCurrentFuseWire } from "@electron/fuses";
 import * as yaml from "js-yaml";
 import {
   assertWindowsSignatureMatchesExpectedIdentity,
@@ -129,6 +130,29 @@ const installerPath = resolveExactInstaller(expectedInstallerOverride ?? path.jo
 
 packageSmokeStage = "package-inspection";
 await fs.access(archivePath);
+await fs.access(packagedExecutable);
+const packagedFuses = await getCurrentFuseWire(packagedExecutable);
+// @electron/fuses stores each switch as a FuseState byte (DISABLE=48, ENABLE=49)
+// and does not re-export the enum from its index entry, so mirror the bytes here.
+const fuseWireDisable = 48;
+const fuseWireEnable = 49;
+const expectedFuseStates = [
+  [FuseV1Options.RunAsNode, fuseWireDisable],
+  [FuseV1Options.EnableCookieEncryption, fuseWireEnable],
+  [FuseV1Options.EnableNodeOptionsEnvironmentVariable, fuseWireDisable],
+  [FuseV1Options.EnableNodeCliInspectArguments, fuseWireDisable],
+  [FuseV1Options.EnableEmbeddedAsarIntegrityValidation, fuseWireEnable],
+  [FuseV1Options.OnlyLoadAppFromAsar, fuseWireEnable],
+  [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot, fuseWireDisable],
+  [FuseV1Options.GrantFileProtocolExtraPrivileges, fuseWireDisable],
+];
+for (const [fuse, expected] of expectedFuseStates) {
+  assert.equal(
+    packagedFuses[fuse],
+    expected,
+    `The packaged Electron executable must keep the ${FuseV1Options[fuse]} fuse ${expected === fuseWireEnable ? "enabled" : "disabled"}.`,
+  );
+}
 const packagedIconPath = path.join(releaseDirectory, "win-unpacked", "resources", "icon.ico");
 await fs.access(packagedIconPath);
 assert.deepEqual(
