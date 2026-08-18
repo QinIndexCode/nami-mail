@@ -124,3 +124,30 @@ export function buildTrayMenuTemplate(labels: TrayMenuLabels, windowVisible: boo
     { type: "item", label: labels.quit, action: { kind: "quit" } },
   ];
 }
+
+/**
+ * The mailto protocol hand-off comes from three places: the command line of a
+ * cold start, the second-instance command line of a warm start, and (on
+ * macOS) the open-url event. All of them arrive as an argv-style token list,
+ * so one extractor covers every path.
+ */
+export function extractMailtoUrl(args: readonly string[]): string | undefined {
+  for (const token of args) {
+    // Windows may wrap the argument in quotes; strip them before decoding.
+    const candidate = String(token).replace(/^"|"$/g, "");
+    if (!candidate.toLowerCase().startsWith("mailto:")) continue;
+    // A bare "mailto:" carries no address or parameters; nothing to compose.
+    if (candidate.length <= "mailto:".length) continue;
+    if (candidate.length > 8192) continue;
+    try {
+      if (new URL(candidate).protocol.toLowerCase() !== "mailto:") continue;
+      // The URL parser accepts permissive opaque paths, so additionally
+      // require valid percent-encoding to keep corrupted tokens out.
+      decodeURIComponent(candidate);
+    } catch {
+      continue;
+    }
+    return candidate;
+  }
+  return undefined;
+}

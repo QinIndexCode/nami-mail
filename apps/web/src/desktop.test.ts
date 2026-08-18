@@ -163,7 +163,7 @@ describe("desktop Agent confirmation bridge", () => {
 
 describe("desktop tray command bridge", () => {
   it("passes the tray's compose and inbox subscriptions straight through", () => {
-    const rawSubscriptions: Record<string, (() => void) | undefined> = {};
+    const rawSubscriptions: Record<string, ((mailtoUrl?: string) => void) | undefined> = {};
     const rawBridge: DesktopBridge = {
       notify: async () => ({ shown: false }),
       copyVerificationCode: async () => ({ copied: false }),
@@ -197,12 +197,12 @@ describe("desktop tray command bridge", () => {
     try {
       const bridge = desktopBridge();
       const commanded: string[] = [];
-      bridge?.onComposeNew?.(() => commanded.push("compose"));
+      bridge?.onComposeNew?.((mailtoUrl) => commanded.push(`compose:${mailtoUrl ?? ""}`));
       bridge?.onOpenInbox?.(() => commanded.push("inbox"));
       rawSubscriptions.compose?.();
-      rawSubscriptions.compose?.();
+      rawSubscriptions.compose?.("mailto:user@example.com?subject=Hi");
       rawSubscriptions.inbox?.();
-      expect(commanded).toEqual(["compose", "compose", "inbox"]);
+      expect(commanded).toEqual(["compose:", "compose:mailto:user@example.com?subject=Hi", "inbox"]);
     } finally {
       if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
       else Reflect.deleteProperty(globalThis, "window");
