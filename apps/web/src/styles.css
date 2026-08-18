@@ -1607,7 +1607,7 @@ gap:10px;
 width:calc(100% - 16px);
 margin:0 8px 3px;
 padding:12px 10px;
-transition:background .16s,border-color .16s,box-shadow .16s,padding-left .18s cubic-bezier(.2,.8,.2,1);
+transition:background .16s,border-color .16s,box-shadow .16s,padding .18s cubic-bezier(.2,.8,.2,1);
 display:flex;
 position:relative
 }
@@ -1627,7 +1627,8 @@ transform:none
 }
 .message-list-row:hover .message-item
 {
-background:var(--hover)
+background:var(--hover);
+padding-right:114px
 }
 .message-item.selected
 {
@@ -1933,6 +1934,14 @@ height:26px
 .message-item.selection-mode+.row-quick-actions,.message-item.recently-read-in-unread+.row-quick-actions
 {
 display:none
+}
+:root[data-density=compact] .message-list-row:hover .message-item
+{
+padding-right:102px
+}
+.message-list-row:hover .message-item.selection-mode,.message-list-row:hover .message-item.recently-read-in-unread
+{
+padding-right:10px
 }
 :root[data-density=compact] .message-item
 {

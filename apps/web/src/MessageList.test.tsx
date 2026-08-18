@@ -268,4 +268,16 @@ describe("row quick actions reveal", () => {
   it("accents the star button on flagged messages like the reader's active-star", () => {
     expect(stylesheet).toContain(".row-quick-action.active-star\n{\ncolor:var(--warning);");
   });
+
+  it("gives the quick actions room by shrinking the row text on hover (ellipsis moves left, no overlap)", () => {
+    // The actions are absolutely positioned on the row's right edge; on hover
+    // the message button widens its right padding so subject/snippet ellipsize
+    // before the icons instead of running underneath them.
+    const hoverItem = stylesheet.match(/\.message-list-row:hover \.message-item\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(hoverItem).toContain("padding-right:114px");
+    expect(stylesheet).toContain(":root[data-density=compact] .message-list-row:hover .message-item\n{\npadding-right:102px");
+    expect(stylesheet).toContain(".message-list-row:hover .message-item.selection-mode,.message-list-row:hover .message-item.recently-read-in-unread\n{\npadding-right:10px");
+    // Padding changes animate with the same cubic-bezier as the row highlight.
+    expect(stylesheet).toContain("padding .18s cubic-bezier(.2,.8,.2,1)");
+  });
 });
