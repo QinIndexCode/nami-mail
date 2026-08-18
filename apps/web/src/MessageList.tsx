@@ -251,9 +251,9 @@ function MessageList(props: MessageListProps): React.JSX.Element {
                     {!message.seen && <span className="unread-dot" />}
                   </button>
                     <span className="row-quick-actions">
-                      <button type="button" aria-label={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} data-tooltip={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} className="row-quick-action" onClick={() => onQuickToggleStar(message)}><Star size={14} fill={message.flagged ? "currentColor" : "none"} /></button>
-                      <button type="button" aria-label={t("mail.action.archive")} data-tooltip={t("mail.action.archive")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "archive")}><Archive size={14} /></button>
-                      <button type="button" aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "trash")}><Trash2 size={14} /></button>
+                      <button type="button" aria-label={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} data-tooltip={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} className={message.flagged ? "row-quick-action active-star" : "row-quick-action"} onClick={() => onQuickToggleStar(message)}><Star size={15} fill={message.flagged ? "currentColor" : "none"} /></button>
+                      <button type="button" aria-label={t("mail.action.archive")} data-tooltip={t("mail.action.archive")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "archive")}><Archive size={15} /></button>
+                      <button type="button" aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "trash")}><Trash2 size={15} /></button>
                     </span>
             </div>
           );
