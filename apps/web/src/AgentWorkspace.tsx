@@ -14,7 +14,6 @@ import {
   FileDown,
   FileText,
   FolderSearch,
-  Image as ImageIcon,
   KeyRound,
   LoaderCircle,
   MessageCircle,
@@ -4017,8 +4016,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                               if (!isCurrent && active) setConversationProviders((prev) => ({ ...prev, [active.id]: provider.id }));
                               setModelPickerOpen(false);
                             }}>
-                              <strong>{provider.model}</strong>
-                              {provider.vision && <span className="agent-model-vision" title={t("agent.provider.supportsVision")}><ImageIcon size={11} aria-hidden="true" /><span>{t("agent.provider.supportsVision")}</span></span>}
+                              <span className="agent-model-option-name">{provider.model}</span>
                               {isCurrent && <Check size={13} className="agent-popover-option-check" />}
                             </button>
                           );
