@@ -436,6 +436,34 @@ it("keeps an Agent stream running after the client closes its response", async (
     }
   });
 
+  it("rejects non-loopback peers when no local API token is configured", async () => {
+    const unprotectedApp = await buildApp({
+      db,
+      masterKey: Buffer.alloc(32, 7),
+      backgroundDirectory,
+    });
+    try {
+      const loopback = await unprotectedApp.inject({ method: "GET", url: "/api/accounts" });
+      const ipv4Mapped = await unprotectedApp.inject({
+        method: "GET",
+        url: "/api/accounts",
+        remoteAddress: "::ffff:127.0.0.1",
+      });
+      const lan = await unprotectedApp.inject({
+        method: "GET",
+        url: "/api/accounts",
+        remoteAddress: "10.0.0.7",
+      });
+
+      expect(loopback.statusCode).toBe(200);
+      expect(ipv4Mapped.statusCode).toBe(200);
+      expect(lan.statusCode).toBe(401);
+      expect(lan.json()).toMatchObject({ ok: false, code: "local_api_unauthorized" });
+    } finally {
+      await unprotectedApp.close();
+    }
+  });
+
   it("starts with no accounts and never exposes credentials", async () => {
     const response = await app.inject({ method: "GET", url: "/api/accounts" });
     expect(response.statusCode).toBe(200);

@@ -17,9 +17,44 @@ function optionalEnv(name: string): string | undefined {
   return value || undefined;
 }
 
+/**
+ * The local service must never answer outside this machine: it hosts
+ * mailbox contents, sends mail, and derives account secrets. Only loopback
+ * bind hosts are accepted; anything else is a misconfiguration that would
+ * put the whole local API on the network.
+ */
+export function isLoopbackHost(value: string): boolean {
+  const host = value.trim().toLowerCase();
+  if (host === "localhost" || host === "::1" || host === "::ffff:127.0.0.1") return true;
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) {
+    return host.split(".").every((octet) => Number(octet) <= 255);
+  }
+  return false;
+}
+
+/** True for loopback socket peer addresses, including Node's IPv4-mapped forms. */
+export function isLoopbackRemoteAddress(value: string | undefined): boolean {
+  if (!value) return true; // injected requests and abstract sockets carry no peer address
+  const remote = value.trim().toLowerCase();
+  if (remote === "::1" || remote === "::ffff:127.0.0.1" || remote === "::ffff:7f00:1") return true;
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(remote)) {
+    return remote.split(".").every((octet) => Number(octet) <= 255);
+  }
+  return false;
+}
+
+const hostValue = process.env.HOST?.trim() || "127.0.0.1";
+if (!isLoopbackHost(hostValue)) {
+  throw new Error(
+    `Refusing to bind Nami Mail's local service to non-loopback host "${hostValue}". `
+    + "The local API exposes mailbox data and send capability and must stay reachable "
+    + "only from this machine; set HOST to 127.0.0.1, ::1, or localhost.",
+  );
+}
+
 export const config = {
   projectRoot,
-  host: process.env.HOST?.trim() || "127.0.0.1",
+  host: hostValue,
   // Port 0 lets the desktop host ask Windows for a free loopback port.
   port: integerEnv("PORT", 3187, 0, 65535),
   databasePath: resolveFromRoot(process.env.DATABASE_PATH?.trim() || "./data/nami-mail.db"),
