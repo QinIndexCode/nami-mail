@@ -122,6 +122,12 @@ export type ServerRuntimeOptions = {
    * empty list.
    */
   listExternalPairings?: () => readonly ExternalPairingSummary[] | Promise<readonly ExternalPairingSummary[]>;
+  /**
+   * Desktop-only loopback capability, passed explicitly instead of through
+   * process.env so spawned child processes can never inherit it. Browser
+   * development hosts omit it and fall back to the unset-token loopback rule.
+   */
+  localApiAccessToken?: string;
 };
 
 export type SyncScheduler = {
@@ -512,7 +518,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       ...(options.listExternalPairings ? { listExternalPairings: options.listExternalPairings } : {}),
     };
     const fastify = await buildApp(runtimeContext, {
-      localApiAccessToken: config.localApiAccessToken,
+      localApiAccessToken: options.localApiAccessToken?.trim() || config.localApiAccessToken || undefined,
       translationAbortSignal: translationAbortController.signal,
     });
     app = fastify;

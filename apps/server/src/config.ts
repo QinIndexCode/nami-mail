@@ -68,8 +68,10 @@ export const config = {
   syncMessageLimit: integerEnv("SYNC_MESSAGE_LIMIT", 200, 0, 100_000),
   logLevel: process.env.LOG_LEVEL?.trim() || "info",
   webDistPath: resolveFromRoot(process.env.WEB_DIST_PATH?.trim() || "./apps/web/dist"),
-  // Set only by the Electron host; browser development intentionally runs
-  // without this process-local capability.
+  // Standalone runs may still set it explicitly in the environment. The
+  // Electron host no longer uses this channel: it passes the capability
+  // directly to startServer so child processes never inherit it from the
+  // desktop main process.
   localApiAccessToken: optionalEnv("NAMI_MAIL_LOCAL_API_TOKEN"),
   googleOAuthClientId: optionalEnv("NAMI_MAIL_GOOGLE_OAUTH_CLIENT_ID"),
   microsoftOAuthClientId: optionalEnv("NAMI_MAIL_MICROSOFT_OAUTH_CLIENT_ID"),

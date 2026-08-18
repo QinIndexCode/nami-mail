@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { updateInstallResultPath } from "./update-install-result.mjs";
+import { minimalSpawnEnvironment } from "./spawn-environment.mjs";
 
 const execFileAsync = promisify(execFile);
 const thumbprintPattern = /^[A-F0-9]{40}$/;
@@ -71,7 +72,7 @@ export async function readTrustedWindowsSigner(executablePath: string): Promise<
   ].join("; ");
   try {
     const { stdout } = await execFileAsync(powershellPath(), ["-NoProfile", "-NonInteractive", "-Command", command], {
-      env: { ...process.env, NAMI_MAIL_SIGNATURE_TARGET: executablePath },
+      env: { ...minimalSpawnEnvironment(), NAMI_MAIL_SIGNATURE_TARGET: executablePath },
       windowsHide: true,
       timeout: 15_000,
       maxBuffer: 32 * 1024,
@@ -379,6 +380,7 @@ export async function launchZipUpdateInstaller(plan: ZipUpdateInstallerPlan): Pr
       resultPath,
     ], {
       detached: true,
+      env: minimalSpawnEnvironment(),
       stdio: "ignore",
       windowsHide: true,
     });
