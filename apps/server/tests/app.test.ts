@@ -989,6 +989,62 @@ it("keeps an Agent stream running after the client closes its response", async (
     return { now, insertMessage };
   }
 
+  it("routes batch flag updates through the durable operation queue per account", async () => {
+    imapClientForAccount.mockReturnValue(readyMailClient());
+    const { now, insertMessage } = seedJobAccount("flag-batch-a");
+    const { insertMessage: insertMessageB } = seedJobAccount("flag-batch-b");
+    insertMessage.run("flag-a-1", "flag-batch-a", "INBOX", 51, "Batch A", "Demo", "demo@example.com", "[]", now, "a", "a", "", "[]", 0, 10, now);
+    insertMessageB.run("flag-b-1", "flag-batch-b", "INBOX", 52, "Batch B", "Demo", "demo@example.com", "[]", now, "b", "b", "", "[]", 0, 10, now);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/batch/flags",
+      payload: { ids: ["flag-a-1", "flag-b-1"], patch: { seen: true } },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      updated: 2,
+      failed: 0,
+      changedIds: expect.arrayContaining(["flag-a-1", "flag-b-1"]),
+    });
+
+    // The route must record one durable operation row per affected account
+    // (kind "flags", settled by the queue executor) instead of bypassing the
+    // queue: a shutdown mid-batch would otherwise lose the writes.
+    const rows = db
+      .prepare("SELECT kind, status, payload_json FROM operation_queue WHERE account_id IN (?, ?) ORDER BY account_id")
+      .all("flag-batch-a", "flag-batch-b") as Array<{ kind: string; status: string; payload_json: string }>;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.kind).toBe("flags");
+      expect(row.status).toBe("completed");
+      expect(JSON.parse(row.payload_json)).toEqual({ ids: expect.any(Array), patch: { seen: true } });
+    }
+    const flagged = JSON.parse(
+      (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("flag-a-1") as { flags_json: string }).flags_json,
+    );
+    expect(flagged).toContain("\\Seen");
+  });
+
+  it("counts every message as failed for batch flags when the provider is unreachable", async () => {
+    imapClientForAccount.mockReturnValue(undefined as never);
+    const { now, insertMessage } = seedJobAccount("flag-batch-dead");
+    insertMessage.run("flag-dead-1", "flag-batch-dead", "INBOX", 61, "Stuck", "Demo", "demo@example.com", "[]", now, "s", "s", "", "[]", 0, 10, now);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/batch/flags",
+      payload: { ids: ["flag-dead-1"], patch: { seen: true } },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, updated: 0, failed: 1, changedIds: [] });
+    const stale = JSON.parse(
+      (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("flag-dead-1") as { flags_json: string }).flags_json,
+    );
+    expect(stale).toEqual([]);
+  });
+
   async function waitForJob(jobId: string, tries = 120) {
     for (let attempt = 0; attempt < tries; attempt += 1) {
       const response = await app.inject({ method: "GET", url: `/api/batch-jobs/${jobId}` });
