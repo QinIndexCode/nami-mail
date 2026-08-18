@@ -23,7 +23,7 @@ import { downloadMessageAttachment } from "./attachments.js";
 import { collectMailBackup } from "./backup.js";
 import { downloadMessageSource } from "./mail-source.js";
 import { emitAccountSynced, emitSettingsChanged } from "./events.js";
-import { config } from "./config.js";
+import { config, isLoopbackRemoteAddress } from "./config.js";
 import { discardDraft, saveDraft } from "./drafts.js";
 import { friendlyMailError, mailErrorHttpStatus, safeMailError, sendMail, testAccountConnection } from "./mail.js";
 import {
@@ -1170,8 +1170,16 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   });
 
   app.addHook("onRequest", async (request, reply) => {
-    if (!localApiAccessToken || !requiresLocalApiAccessToken(request)) return;
-    if (hasMatchingLocalApiAccessToken(request.headers[localApiAccessHeader], localApiAccessToken)) return;
+    if (!requiresLocalApiAccessToken(request)) return;
+    if (localApiAccessToken) {
+      if (hasMatchingLocalApiAccessToken(request.headers[localApiAccessHeader], localApiAccessToken)) return;
+    } else if (isLoopbackRemoteAddress(request.socket.remoteAddress)) {
+      // Browser development runs without a token; a loopback peer is still
+      // this machine, which is the documented trust boundary. Any other
+      // source is rejected so a non-loopback bind misconfiguration cannot
+      // silently expose mailbox data or send capability on the network.
+      return;
+    }
     return reply.code(401).send({
       ok: false,
       code: "local_api_unauthorized",
