@@ -1133,8 +1133,15 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     return batchMoveMessages(context.db, context.masterKey, ids, target, context.oauthService, context.agentMailEvents);
   });
   operationQueue.registerRunner("flags", async (payload) => {
-    const { messageId, patch } = payload as { messageId: string; patch: MessageFlagsPatch };
-    await updateMessageFlags(context.db, context.masterKey, messageId, patch, context.oauthService, context.agentMailEvents);
+    // One executor serves both payload shapes: a single-message patch
+    // (PATCH /api/messages/:id) and an account-scoped batch (the batch flags
+    // route groups ids per account before enqueueing).
+    const { messageId, ids, patch } = payload as { messageId?: string; ids?: string[]; patch: MessageFlagsPatch };
+    if (Array.isArray(ids)) {
+      return updateMessageFlagsBatch(context.db, context.masterKey, ids, patch, context.oauthService, context.agentMailEvents);
+    }
+    await updateMessageFlags(context.db, context.masterKey, messageId as string, patch, context.oauthService, context.agentMailEvents);
+    return { updated: 0, failed: 0, changedIds: [] };
   });
   void operationQueue.resumePending().then((resumed) => {
     if (resumed) app.log.warn({ resumed }, "Resumed interrupted write operations");
@@ -3012,15 +3019,37 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const parsed = batchMessageFlagsPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
     try {
-      const result = await updateMessageFlagsBatch(
-        context.db,
-        context.masterKey,
-        parsed.data.ids,
-        parsed.data.patch,
-        context.oauthService,
-        context.agentMailEvents,
-      );
-      return { ok: true, ...result };
+      // Enqueue one durable operation per affected account, mirroring the
+      // batch move route: each row waits for that account's write slot, so a
+      // batch issued while another move or flag update is in flight queues
+      // instead of racing it.
+      const rows = context.db
+        .prepare(`SELECT id, account_id FROM messages WHERE id IN (${parsed.data.ids.map(() => "?").join(", ")})`)
+        .all(...parsed.data.ids) as Array<{ id: string; account_id: string }>;
+      const idsByAccount = new Map<string, string[]>();
+      for (const row of rows) {
+        const list = idsByAccount.get(row.account_id);
+        if (list) list.push(row.id);
+        else idsByAccount.set(row.account_id, [row.id]);
+      }
+      const knownIds = new Set(rows.map((row) => row.id));
+      let failed = 0;
+      for (const id of parsed.data.ids) {
+        if (!knownIds.has(id)) failed += 1;
+      }
+      let updated = 0;
+      const changedIds: string[] = [];
+      for (const [accountId, accountIds] of idsByAccount) {
+        const outcome = await operationQueue.enqueueAndRun<{ updated: number; failed: number; changedIds: string[] }>(
+          [accountId],
+          "flags",
+          { ids: accountIds, patch: parsed.data.patch },
+        );
+        updated += outcome.updated;
+        failed += outcome.failed;
+        changedIds.push(...outcome.changedIds);
+      }
+      return { ok: true, updated, failed, changedIds };
     } catch (error) {
       request.log.error({ error }, "Batch flag update failed");
       return reply.code(500).send({ ok: false, message: "批量更新标志失败。" });
