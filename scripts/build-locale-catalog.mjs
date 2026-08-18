@@ -22,7 +22,10 @@ const callbackKeys = {
 };
 const nativeCopyKeys = {
   trayTooltip: "native.tray.tooltip",
-  trayOpen: "native.tray.open",
+  trayShow: "native.tray.show",
+  trayHide: "native.tray.hide",
+  trayNewMail: "native.tray.newMail",
+  trayInbox: "native.tray.inbox",
   trayQuit: "native.tray.quit",
   trayFailureTitle: "native.tray.failure.title",
   trayFailureMessage: "native.tray.failure.message",

@@ -161,6 +161,55 @@ describe("desktop Agent confirmation bridge", () => {
   });
 });
 
+describe("desktop tray command bridge", () => {
+  it("passes the tray's compose and inbox subscriptions straight through", () => {
+    const rawSubscriptions: Record<string, (() => void) | undefined> = {};
+    const rawBridge: DesktopBridge = {
+      notify: async () => ({ shown: false }),
+      copyVerificationCode: async () => ({ copied: false }),
+      getUpdateStatus: async () => undefined,
+      checkForUpdates: async () => structuredSnapshot,
+      downloadUpdate: async () => structuredSnapshot,
+      skipUpdate: async () => structuredSnapshot,
+      snoozeUpdate: async () => structuredSnapshot,
+      installUpdate: async () => ({ accepted: false }),
+      setCustomNotificationSoundReady: () => undefined,
+      onNewMail: () => () => undefined,
+      onOpenMessage: () => () => undefined,
+      onSettingsChanged: () => () => undefined,
+      onUpdateStatus: () => () => undefined,
+      onComposeNew: (listener) => {
+        rawSubscriptions.compose = listener;
+        return () => {
+          rawSubscriptions.compose = undefined;
+        };
+      },
+      onOpenInbox: (listener) => {
+        rawSubscriptions.inbox = listener;
+        return () => {
+          rawSubscriptions.inbox = undefined;
+        };
+      },
+    };
+    const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { namiDesktop: rawBridge } });
+
+    try {
+      const bridge = desktopBridge();
+      const commanded: string[] = [];
+      bridge?.onComposeNew?.(() => commanded.push("compose"));
+      bridge?.onOpenInbox?.(() => commanded.push("inbox"));
+      rawSubscriptions.compose?.();
+      rawSubscriptions.compose?.();
+      rawSubscriptions.inbox?.();
+      expect(commanded).toEqual(["compose", "compose", "inbox"]);
+    } finally {
+      if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
+  });
+});
+
 describe("desktop update bridge errors", () => {
   it("keeps TLS, network, and integrity recovery paths distinct", () => {
     expect(updateBridgeErrorMessage(new Error("CERT_HAS_EXPIRED"), "fallback")).toBe(zh("update.error.tls"));

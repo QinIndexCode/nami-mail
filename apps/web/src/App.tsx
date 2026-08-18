@@ -3148,6 +3148,16 @@ const emptyMessageList = useMemo(() => (query.trim()
     }
   }, [load, openMessage, showToast, t]);
 
+  const chooseView = useCallback((next: MailView) => {
+    viewRef.current = next;
+    clearUnreadViewRecentlyRead();
+    setView(next);
+    setSelectedFolder("");
+    setSelectedId(null);
+    setRecipientDetailsOpen(false);
+    setMobileSidebar(false);
+  }, [clearUnreadViewRecentlyRead]);
+
   useEffect(() => {
     const unlockAudio = () => {
       void primeNotificationSound().then(reportCustomNotificationSoundAvailability, reportCustomNotificationSoundAvailability);
@@ -3189,6 +3199,12 @@ const emptyMessageList = useMemo(() => (query.trim()
     const unsubscribeOpenMessage = bridge.onOpenMessage((messageId) => {
       void openNotifiedMessage(messageId);
     });
+    const unsubscribeComposeNew = bridge.onComposeNew?.(() => {
+      openCompose();
+    });
+    const unsubscribeOpenInbox = bridge.onOpenInbox?.(() => {
+      chooseView("inbox");
+    });
     const unsubscribeAutoReply = bridge.onAutoReply?.((notice) => {
       setAutoReplyNotices((items) => {
         const key = autoReplyNoticeKey(notice);
@@ -3205,10 +3221,12 @@ const emptyMessageList = useMemo(() => (query.trim()
     return () => {
       unsubscribeNewMail();
       unsubscribeOpenMessage();
+      unsubscribeComposeNew?.();
+      unsubscribeOpenInbox?.();
       unsubscribeAutoReply?.();
       unsubscribeConfirmationResult?.();
     };
-  }, [openNotifiedMessage, settings.notificationSound, showToast, silentRefresh, t]);
+  }, [chooseView, openCompose, openNotifiedMessage, settings.notificationSound, showToast, silentRefresh, t]);
 
   // Plain web sessions have no desktop bridge to push auto-reply events, so
   // poll the pending list and surface newly drafted replies as toasts. The
@@ -3437,16 +3455,6 @@ const emptyMessageList = useMemo(() => (query.trim()
       }
     }
   }, [load]);
-
-  const chooseView = (next: MailView) => {
-    viewRef.current = next;
-    clearUnreadViewRecentlyRead();
-    setView(next);
-    setSelectedFolder("");
-    setSelectedId(null);
-    setRecipientDetailsOpen(false);
-    setMobileSidebar(false);
-  };
 
   const chooseFolder = (path: string) => {
     viewRef.current = "inbox";

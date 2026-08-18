@@ -80,3 +80,47 @@ export function applyGlobalShortcut(
   }
   return true;
 }
+
+/**
+ * System tray menu policy: the tray offers window visibility, the two most
+ * frequent mail actions, and quit. The menu template stays a pure value so
+ * main.mts only maps labels and actions onto Electron's Menu types.
+ */
+export type TrayMenuAction =
+  | { kind: "toggle-window" }
+  | { kind: "compose-new" }
+  | { kind: "open-inbox" }
+  | { kind: "quit" };
+
+export type TrayMenuItem =
+  | { type: "separator" }
+  | { type: "item"; label: string; action: TrayMenuAction };
+
+export type TrayMenuLabels = {
+  /** Shown while the window is visible; clicking hides it to the tray. */
+  hide: string;
+  /** Shown while the window is hidden; clicking restores and focuses it. */
+  show: string;
+  newMail: string;
+  inbox: string;
+  quit: string;
+};
+
+export function resolveTrayVisibilityAction(windowVisible: boolean): "show" | "hide" {
+  return windowVisible ? "hide" : "show";
+}
+
+export function buildTrayMenuTemplate(labels: TrayMenuLabels, windowVisible: boolean): TrayMenuItem[] {
+  return [
+    {
+      type: "item",
+      label: windowVisible ? labels.hide : labels.show,
+      action: { kind: "toggle-window" },
+    },
+    { type: "separator" },
+    { type: "item", label: labels.newMail, action: { kind: "compose-new" } },
+    { type: "item", label: labels.inbox, action: { kind: "open-inbox" } },
+    { type: "separator" },
+    { type: "item", label: labels.quit, action: { kind: "quit" } },
+  ];
+}

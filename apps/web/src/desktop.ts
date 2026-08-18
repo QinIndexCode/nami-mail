@@ -350,6 +350,10 @@ export type DesktopBridge = {
   onNewMail: (listener: (payload: DesktopMailNotice) => void) => () => void;
   onAutoReply?: (listener: (notice: DesktopAutoReplyNotice) => void) => () => void;
   onOpenMessage: (listener: (id: string) => void) => () => void;
+  /** Desktop only: the tray's "new mail" entry asks the web app to compose. */
+  onComposeNew?: (listener: () => void) => () => void;
+  /** Desktop only: the tray's "inbox" entry asks the web app to open the inbox view. */
+  onOpenInbox?: (listener: () => void) => () => void;
   onSettingsChanged: (listener: () => void) => () => void;
   onUpdateStatus: (listener: (snapshot: DesktopUpdateSnapshot) => void) => () => void;
 };
