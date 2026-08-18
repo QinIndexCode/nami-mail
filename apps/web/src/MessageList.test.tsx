@@ -281,3 +281,25 @@ describe("row quick actions reveal", () => {
     expect(stylesheet).toContain("padding .18s cubic-bezier(.2,.8,.2,1)");
   });
 });
+
+describe("mail reader title wrapping", () => {
+  const stylesheet = readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+
+  it("wraps unbroken subject lines inside the title column on narrow windows", () => {
+    // A subject with no spaces (a URL, a token, a long ID) must break inside
+    // the word instead of forcing the .mail-reader column to widen or scroll
+    // horizontally; the rule lives in the same block as the other title
+    // typography.
+    expect(stylesheet).toContain(
+      ".mail-title h2\n{\nletter-spacing:0;\nfont-variant-numeric:lining-nums;\nmax-width:720px;\nmargin:0;\nfont-family:Georgia,Songti SC,serif;\nfont-size:32px;\nfont-weight:400;\nline-height:1.24;\noverflow-wrap:anywhere\n}",
+    );
+  });
+
+  it("keeps the recipient line ellipsized instead of wrapping", () => {
+    // The sender copy next to the avatar truncates with an ellipsis; only the
+    // title breaks, so a long unbroken address still cannot widen the header.
+    const senderBlock = stylesheet.match(/\.mail-people strong\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(senderBlock).toContain("white-space:nowrap");
+    expect(senderBlock).toContain("text-overflow:ellipsis");
+  });
+});
