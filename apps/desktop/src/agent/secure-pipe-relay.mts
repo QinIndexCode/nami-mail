@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { agentDesktopError } from "./contracts.mjs";
+import { minimalSpawnEnvironment } from "../spawn-environment.mjs";
 
 const pipeNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const windowsSidPattern = /^S-1-(?:0|1|2|3|5|15|16|18)-(?:\d+-){1,14}\d+$/;
@@ -171,6 +172,7 @@ export class WindowsSidDaclPipeRelay {
           "-RequestReadTimeoutMilliseconds",
           String(requestReadTimeoutMs),
         ], {
+          env: minimalSpawnEnvironment(),
           windowsHide: true,
           shell: false,
           stdio: ["pipe", "pipe", "pipe"],

@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { desktopLocalConfigurationFiles } from "./local-configuration.mjs";
+import { minimalSpawnEnvironment } from "./spawn-environment.mjs";
 import {
   clearLegacyRendererMailCache,
   isLocalApiRequestUrl,
@@ -99,6 +100,7 @@ type ServerRuntimeModule = {
     onNewInboxMessages?: (messages: NewMailPayload[]) => void;
     onAutoReplyEvent?: (event: DesktopAutoReplyEvent) => void;
     masterKey?: Buffer;
+    localApiAccessToken?: string;
     desktopConfirmation?: DesktopConfirmationRuntimeOptions;
     externalConfirmation?: ExternalConfirmationRuntimeOptions;
     listExternalPairings?: () => Promise<ExternalPairingSummary[]>;
@@ -333,7 +335,6 @@ let desktopSmokeResult: Record<string, unknown> | undefined;
 let singleInstanceSmokeResult: DesktopSingleInstanceSmokeResult | undefined;
 const appUserModelId = app.isPackaged ? "com.nami.mail" : "com.nami.mail.dev";
 const localApiAccessHeader = "x-nami-api-token";
-const localApiAccessTokenEnvironmentName = "NAMI_MAIL_LOCAL_API_TOKEN";
 // Desktop-only behaviors (badge, login item, global shortcut) live in
 // desktop-behaviors.mjs; the platform-specific Electron wiring is applied
 // through adapters here so the policy layer stays unit-testable.
@@ -404,6 +405,7 @@ function launchNamiMail(argumentsList: readonly string[]): Promise<void> {
       child = nodeSpawn(process.execPath, argumentsForExecutable, {
         // The CLI exits after launching; its independently managed host must survive it.
         detached: process.platform === "win32" && argumentsList.length === 1 && argumentsList[0] === "--agent-host",
+        env: minimalSpawnEnvironment(),
         shell: false,
         stdio: "ignore",
         windowsHide: true,
@@ -575,8 +577,10 @@ async function loadDesktopLocalConfiguration(): Promise<void> {
 
 function configureLocalService(): void {
   const dataDirectory = path.join(app.getPath("userData"), "data");
-  // This is a process-only capability. It is never written to userData or
-  // appended to the renderer URL, and is regenerated on every launch.
+  // This is a process-only capability. It is never written to userData,
+  // appended to the renderer URL, or placed in process.env (child processes
+  // run with a filtered environment and must not inherit it), and it is
+  // regenerated on every launch.
   localApiAccessToken = randomBytes(32).toString("base64url");
   process.env.HOST = "127.0.0.1";
   // Let Windows allocate an ephemeral loopback port. The installed app never
@@ -587,13 +591,9 @@ function configureLocalService(): void {
   // Do not inherit or create a plaintext desktop MASTER_KEY_PATH fallback.
   delete process.env.MASTER_KEY_PATH;
   process.env.WEB_DIST_PATH = path.join(app.getAppPath(), "apps", "web", "dist");
-  process.env[localApiAccessTokenEnvironmentName] = localApiAccessToken;
 }
 
 function clearLocalApiAccessToken(): void {
-  if (process.env[localApiAccessTokenEnvironmentName] === localApiAccessToken) {
-    delete process.env[localApiAccessTokenEnvironmentName];
-  }
   localApiAccessToken = undefined;
 }
 
@@ -957,7 +957,7 @@ function resolveChromePath(): Promise<string | null> {
     if (existsSync(candidate)) return Promise.resolve(candidate);
   }
   return new Promise((resolve) => {
-    exec('reg query "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe" /ve', (error, stdout) => {
+    exec('reg query "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe" /ve', { env: minimalSpawnEnvironment() }, (error, stdout) => {
       if (error || !stdout) {
         resolve(null);
         return;
@@ -977,7 +977,7 @@ async function openInBrowser(url: string): Promise<void> {
   if (process.platform === "win32") {
     if (cachedSystemBrowser === undefined) cachedSystemBrowser = await resolveChromePath();
     if (cachedSystemBrowser !== null) {
-      const child = nodeSpawn(cachedSystemBrowser, [url], { detached: true, stdio: "ignore" });
+      const child = nodeSpawn(cachedSystemBrowser, [url], { detached: true, env: minimalSpawnEnvironment(), stdio: "ignore" });
       child.unref();
       return;
     }
@@ -1163,7 +1163,7 @@ function playCustomNotificationSound(sound: "soft" | "bright"): void {
   } else {
     command = `aplay '${safePath}' 2>/dev/null || paplay '${safePath}' 2>/dev/null`;
   }
-  exec(command, () => undefined);
+  exec(command, { env: minimalSpawnEnvironment() }, () => undefined);
 }
 
 function showNativeNotification(payload: NativeNotificationPayload, onClick?: () => void): boolean {
@@ -2121,6 +2121,7 @@ async function boot(): Promise<void> {
     try {
       localServer = await runtime.startServer({
         masterKey: desktopMasterKey.key,
+        localApiAccessToken,
         onNewInboxMessages: notifyNewMail,
         onAutoReplyEvent: notifyAutoReplyEvent,
         desktopConfirmation: {
