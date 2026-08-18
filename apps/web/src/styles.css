@@ -223,7 +223,7 @@ background:0 0
 {
 background:color-mix(in srgb, var(--panel-solid) var(--scrim-region), transparent)
 }
-.workspace-canvas.background-active .message-column,.workspace-canvas.background-active .reader-column
+.workspace-canvas.background-active .message-column,.workspace-canvas.background-active .reader-column,.workspace-canvas.background-active .attachment-preview-drawer
 {
 background:0 0
 }
