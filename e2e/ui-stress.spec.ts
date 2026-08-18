@@ -1,14 +1,19 @@
 /**
- * UI stress spec �?measures the mail list at scale against a seeded local
+ * UI stress spec — measures the mail list at scale against a seeded local
  * server (see scripts/ui-stress/seed-data.mjs + run-stress.mjs).
  *
  * One long serial test so the 20k-item list is loaded exactly once and shared
  * across phases:
- *   1. Initial inbox render at 20k          �?first paint, API timings, DOM cost
- *   2. Scroll pagination to the last page   �?200 sequential page fetches
- *   3. Batch mark-read of all 20k           �?chunked PATCHes against a dead IMAP
- *   4. Batch move (archive) of all 20k      �?capped server schema vs selection
- *   5. Small selection move                 �?100-item archive fast-fail
+ *   1. Initial inbox render at 20k          — first paint, API timings, DOM cost
+ *   2. Infinite-scroll pagination to the end — 200 sequential page fetches
+ *   3. Batch mark-read of all 20k           — server-side predicate job
+ *   4. Batch move (archive) of all 20k      — predicate job, exits selection
+ *   5. Small selection move                 — in-viewport rows archive
+ *
+ * The message list is virtualized (@tanstack/react-virtual), so DOM row count
+ * is the viewport window (rows + overscan), never the loaded total; progress
+ * signals used below are the header total, the selection counter, and the
+ * fetch sampler in window.__pf.
  *
  * Results are merged into data/ui-stress/results-spec.json by the runner.
  */
@@ -56,13 +61,18 @@ function installSampler(page: Page): void {
   page.addInitScript(() => {
     const pf = { frames: [], longTasks: [], requests: [], lastFetchEnd: 0, marks: [], toasts: [] };
     window.__pf = pf;
-    let lastToastText = "";
+    let lastToastSeen = false;
     function sampleToast() {
       const el = document.querySelector(".toast");
-      const text = el?.textContent?.trim() ?? "";
-      if (text && text !== lastToastText) {
-        pf.toasts.push({ text, kind: el?.className ?? "", t: performance.now() });
-        lastToastText = text;
+      if (el) {
+        // Record each time the toast slot fills, even if the text repeats
+        // (consecutive failures can share the same message).
+        if (!lastToastSeen) {
+          pf.toasts.push({ text: el.textContent?.trim() ?? "", kind: el.className ?? "", t: performance.now() });
+          lastToastSeen = true;
+        }
+      } else {
+        lastToastSeen = false;
       }
     }
     requestAnimationFrame(function loop(timestamp) {
@@ -189,49 +199,60 @@ async function collectPf(page: Page): Promise<PfState> {
 async function bootInbox(page: Page): Promise<void> {
   await page.goto("/");
   await expect(page.locator(".compose-button")).toBeVisible({ timeout: 120_000 });
-  await expect(page.locator(".message-item")).toHaveCount(100, { timeout: 120_000 });
+  // The header total reflects the server count once the initial page lands;
+  // the DOM holds only the virtualized viewport window of rows.
+  await expect(page.locator(".message-item").first()).toBeVisible({ timeout: 120_000 });
+  await expect(page.locator(".message-count")).toHaveText(String(TOTAL), { timeout: 60_000 });
 }
 
+/** Scroll to the bottom until every server page has been fetched. Boot loads
+ *  page 1 (sometimes 2 via preload), so targetPages-1 scrolls fill the rest;
+ *  an iteration that times out at the physical bottom of the virtual list is
+ *  already done (nothing left to fetch), not a stall — break instead of
+ *  burning a 60s retry. Each near-bottom scroll fires the app's load-more
+ *  listener, which appends one page; the fetch sampler in window.__pf is the
+ *  completion signal because the virtualized DOM row count never changes. */
 async function loadAllPages(page: Page): Promise<{ elapsedMs: number; pages: number; resets: number }> {
-  const footer = page.locator(".list-footer .secondary-button");
+  const list = page.locator(".message-list");
   const start = Date.now();
   let pages = 0;
   let resets = 0;
-  const maxPages = Number.parseInt(process.env.STRESS_MAX_PAGES ?? "0", 10) || 0;
-  const pageCap = maxPages > 0 ? maxPages : TOTAL;
-  while ((await footer.count()) > 0 && pages < pageCap) {
-    const t0 = Date.now();
-    await expect(footer).toBeVisible({ timeout: 60_000 });
-    await footer.scrollIntoViewIfNeeded();
-    const previous = await page.locator(".message-item").count();
-    const t1 = Date.now();
-    await footer.click();
-    pages += 1;
-    const t2 = Date.now();
-    await page.waitForFunction(
-      (previousCount) => {
-        const count = document.querySelectorAll(".message-item").length;
-        return count > previousCount || count < previousCount;
-      },
-      previous,
-      { timeout: 60_000 },
+  const targetPages = Math.ceil(TOTAL / 100);
+  while (pages < targetPages - 1) {
+    const requestsBefore = await page.evaluate(
+      () => window.__pf.requests.filter((r) => r.url.startsWith("/api/messages")).length,
     );
-    const t3 = Date.now();
-    const after = await page.locator(".message-item").count();
-    if (after < previous) {
+    await list.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    try {
+      await page.waitForFunction(
+        (prev) => window.__pf.requests.filter((r) => r.url.startsWith("/api/messages")).length > prev,
+        requestsBefore,
+        { timeout: 60_000 },
+      );
+    } catch {
+      const atBottom = await list.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 5);
+      if (atBottom) break;
       resets += 1;
-      console.warn(`[stress] page ${pages}: list reset to ${after} (was ${previous}) — silent refresh or reload`);
+      console.warn(`[stress] page ${pages + 1}: no load-more request after scrolling to bottom`);
     }
-    console.log(`[stress] page ${pages}: pre-click ${t1 - t0}ms, click ${t2 - t1}ms, settle ${t3 - t2}ms, items ${after}`);
+    pages += 1;
+    if (pages % 25 === 0) console.log(`[stress] pages ${pages}/${targetPages - 1}`);
   }
   return { elapsedMs: Date.now() - start, pages, resets };
 }
 
-async function waitForBatchDone(page: Page, timeoutMs = 900_000): Promise<void> {
+/** Wait for the shared toast slot to show a fresh message (batch job done).
+ *  `toastsBefore` must be captured *before* the triggering click: the server
+ *  can answer fast enough (PATCH failure ~20ms) that the toast appears and
+ *  the sampler records it before this function is even called, so comparing
+ *  against a snapshot taken after the click would wait forever. */
+async function waitForToast(page: Page, toastsBefore: number, timeoutMs = 600_000): Promise<void> {
   await page.waitForFunction(
-    () => !document.querySelector(".selection-action")?.hasAttribute("disabled"),
-    undefined,
-    { timeout: timeoutMs },
+    (prev) => window.__pf.toasts.length > prev,
+    toastsBefore,
+    { timeout: timeoutMs, polling: 250 },
   );
 }
 
@@ -251,15 +272,13 @@ test("20k stress: initial render, scroll pagination, batch mark-read, batch move
   // ---- Phase 1: initial inbox render at 20k -------------------------------
   await test.step("initial inbox render at 20k", async () => {
     await bootInbox(page);
-    await expect(page.locator(".message-count")).toHaveText(String(TOTAL), { timeout: 60_000 });
     await expect(page.locator(".sidebar-count").nth(1)).toHaveText(String(UNREAD), { timeout: 60_000 });
     await waitForIdle(page, 2_500, 120_000);
 
     const pf = await collectPf(page);
-    const messagesRequests = requestSummary(pf.requests, "/api/messages");
     results.initialRender = {
       jank: jankSummary(pf),
-      messagesRequests,
+      messagesRequests: requestSummary(pf.requests, "/api/messages"),
       statsRequests: requestSummary(pf.requests, "/api/stats"),
       accountsRequests: requestSummary(pf.requests, "/api/accounts"),
       domMessageItems: await page.evaluate(() => document.querySelectorAll(".message-item").length),
@@ -269,23 +288,23 @@ console.log("[stress] initial render", JSON.stringify(results.initialRender, nul
     persist();
   });
 
-  // ---- Phase 2: scroll pagination to the last page ------------------------
+  // ---- Phase 2: infinite scroll to the last page --------------------------
   let batchJankWindow: { from: number; to: number } = { from: 0, to: 0 };
-  await test.step("scroll pagination loads all 20k", async () => {
+  await test.step("infinite scroll loads all 20k", async () => {
 const start = Date.now();
     const pfBefore = await collectPf(page);
     const pagination = await loadAllPages(page);
     const pfAfter = await collectPf(page);
-    // The periodic silent refresh can reset the accumulated list back to page
-    // 1; when it does, the loop records the reset and keeps going, so no count
-    // assertion is made here — the data tells whether the end was reached.
-    const finalCount = await page.locator(".message-item").count();
     batchJankWindow = { from: pfBefore.frames[pfBefore.frames.length - 1] ?? 0, to: pfAfter.frames[pfAfter.frames.length - 1] ?? Number.POSITIVE_INFINITY };
 
     const pf = await collectPf(page);
     results.scrollPagination = {
       elapsedMs: Date.now() - start,
       pages: pagination.pages,
+      resets: pagination.resets,
+      virtualViewportHeight: await page.evaluate(
+        () => document.querySelector<HTMLElement>(".message-list-viewport")?.style.height ?? null,
+      ),
       requests: requestSummary(pf.requests, "/api/messages"),
       jank: jankSummary(pf, batchJankWindow.from, batchJankWindow.to),
       domMessageItems: await page.evaluate(() => document.querySelectorAll(".message-item").length),
@@ -295,99 +314,112 @@ console.log("[stress] scroll pagination", JSON.stringify(results.scrollPaginatio
     persist();
   });
 
-  // ---- Phase 3: batch mark-read of everything loaded -----------------------
+  // ---- Phase 3: batch mark-read of everything ------------------------------
 await test.step("batch mark-read of 20k", async () => {
+    await dismissToastIfPresent(page);
     await page.locator(".selection-toggle").click();
+    await expect(page.locator(".list-toolbar-frame")).toHaveClass(/selection-on/, { timeout: 30_000 });
     await page.locator(".selection-select-all").click();
-    const loadedCount = await page.locator(".message-item").count();
-    await expect(page.locator(".selection-count")).toContainText(String(loadedCount), { timeout: 60_000 });
+    // Two-step select-all upgrades to the whole matching view (predicate job);
+    // the counter then shows the server total.
+    await expect(page.locator(".selection-count")).toContainText(String(TOTAL), { timeout: 60_000 });
 
     const t0 = Date.now();
+    const toastsBefore = await page.evaluate(() => window.__pf.toasts.length);
     await page.locator(".selection-action").first().click();
-    await waitForBatchDone(page);
+    await waitForToast(page, toastsBefore, 600_000);
     const elapsedMs = Date.now() - t0;
     await waitForIdle(page, 3_000, 300_000);
 
     const pf = await collectPf(page);
-    const flagsRequests = requestSummary(pf.requests, "/api/messages/batch/flags");
-    const toast = pf.toasts[pf.toasts.length - 1];
+    const lastToast = pf.toasts[pf.toasts.length - 1];
     results.batchMarkRead = {
       elapsedMs,
-      flagsRequests,
-      apiRequestsTotalMs: flagsRequests.totalMs,
-      toastText: toast?.text ?? null,
-      toastKind: toast?.kind ?? null,
+      flagsRequests: requestSummary(pf.requests, "/api/messages/batch/flags"),
+      jobRequests: requestSummary(pf.requests, "/api/batch-jobs"),
+      apiRequestsTotalMs: requestSummary(pf.requests, "/api/messages").totalMs,
+      toastText: lastToast?.text ?? null,
+      toastKind: lastToast?.kind ?? null,
       unreadBadgeAfter: await page.locator(".sidebar-count").nth(1).textContent(),
-      unreadRowsAfter: await page.locator(".message-item.unread").count(),
-      selectedCountAfter: await page.locator(".selection-count").textContent(),
       jank: jankSummary(pf),
     };
     console.log("[stress] batch mark-read", JSON.stringify(results.batchMarkRead, null, 1));
     persist();
 
-    // Remote flags were never persisted (dead IMAP); the UI must have reverted
-    // to the server-authoritative unread state after the reload.
-    await expect(page.locator(".sidebar-count").nth(1)).toHaveText(String(UNREAD), { timeout: 120_000 });
-    if (results.batchMarkRead.toastKind) {
-      expect(String(results.batchMarkRead.toastKind)).toContain("error");
-    } else {
+    // The job updates the server DB directly; the badge after the silent
+    // reload reflects server truth (recorded above, not asserted — a dead
+    // IMAP in the seed means no external sync happens).
+    if (!results.batchMarkRead.toastKind) {
       console.warn("[stress] phase 3: no toast captured for batch mark-read");
     }
   });
 
-// ---- Phase 4: batch move (archive) of everything loaded ------------------
-  await test.step("batch archive of 20k (server schema cap)", async () => {
+// ---- Phase 4: batch move (archive) of everything --------------------------
+  await test.step("batch archive of 20k (server job)", async () => {
     await dismissToastIfPresent(page);
+    // Flags job never exits selection mode; the move job does (or rolls back
+    // into it when the seed account rejects).
+    await expect(page.locator(".list-toolbar-frame")).toHaveClass(/selection-on/, { timeout: 30_000 });
     const t0 = Date.now();
+    const toastsBefore = await page.evaluate(() => window.__pf.toasts.length);
     await page.locator(".selection-action").nth(4).click();
-    await waitForBatchDone(page, 300_000);
+    await waitForToast(page, toastsBefore, 600_000);
     const elapsedMs = Date.now() - t0;
     await waitForIdle(page, 3_000, 300_000);
 
     const pf = await collectPf(page);
-    const moveRequests = requestSummary(pf.requests, "/api/messages/batch/move");
-    const toast = pf.toasts[pf.toasts.length - 1];
+    const lastToast = pf.toasts[pf.toasts.length - 1];
     results.batchMove20k = {
       elapsedMs,
-      moveRequests,
-      toastText: toast?.text ?? null,
-      toastKind: toast?.kind ?? null,
+      jobRequests: requestSummary(pf.requests, "/api/batch-jobs"),
+      toastText: lastToast?.text ?? null,
+      toastKind: lastToast?.kind ?? null,
       jank: jankSummary(pf),
     };
 console.log("[stress] batch archive 20k", JSON.stringify(results.batchMove20k, null, 1));
     persist();
   });
 
-// ---- Phase 5: small (100-item) selection archive -------------------------
-  await test.step("100-item selection archive", async () => {
+// ---- Phase 5: small (in-viewport) selection archive -----------------------
+  await test.step("in-viewport selection archive", async () => {
     await dismissToastIfPresent(page);
-    // Phase 4's move always exits selection mode in its finally (even on
-    // failure), so the toolbar must be gone here; re-enter selection.
-    await expect(page.locator(".selection-toolbar")).toHaveCount(0, { timeout: 30_000 });
+    // Phase 4's move exits selection mode when it succeeds, but rolls back
+    // into it (failed ids re-selected) when the server rejects — the seed
+    // account always rejects. Normalize by exiting explicitly so the
+    // hand-picked rows below start from a clean slate.
+    const frame = page.locator(".list-toolbar-frame");
+    if (await frame.evaluate((el) => el.classList.contains("selection-on"))) {
+      await page.locator(".selection-done").click({ timeout: 30_000 });
+    }
+    await expect(frame).not.toHaveClass(/selection-on/, { timeout: 30_000 });
     console.log("[stress] phase 5: re-enter selection mode");
     await page.locator(".selection-toggle").click({ timeout: 60_000 });
-    await expect(page.locator(".selection-toolbar")).toHaveCount(1, { timeout: 30_000 });
+    await expect(frame).toHaveClass(/selection-on/, { timeout: 30_000 });
     const items = page.locator(".message-item");
+    const visible = await items.count();
     const clickStart = Date.now();
-    for (let i = 0; i < 100; i += 1) {
-      await items.nth(i).click({ timeout: 60_000 });
-      if (i % 25 === 24) console.log(`[stress] phase 5: ${i + 1}/100 items selected`);
+    for (let i = 0; i < visible; i += 1) {
+      await items.nth(i).click({ timeout: 30_000 });
+      if (i % 10 === 9) console.log(`[stress] phase 5: ${i + 1}/${visible} items selected`);
     }
     const selectionMs = Date.now() - clickStart;
-    await expect(page.locator(".selection-count")).toContainText("100", { timeout: 60_000 });
+    await expect(page.locator(".selection-count")).toContainText(String(visible), { timeout: 60_000 });
 
     const t0 = Date.now();
+    const toastsBefore = await page.evaluate(() => window.__pf.toasts.length);
     await page.locator(".selection-action").nth(4).click();
-    await waitForBatchDone(page, 300_000);
+    await waitForToast(page, toastsBefore, 300_000);
     const elapsedMs = Date.now() - t0;
 
     const pf = await collectPf(page);
-    const toast = pf.toasts[pf.toasts.length - 1];
+    const lastToast = pf.toasts[pf.toasts.length - 1];
     results.smallMove = {
-      selection100ClicksMs: selectionMs,
+      selectedRows: visible,
+      selectionMs,
       elapsedMs,
-      toastText: toast?.text ?? null,
-      toastKind: toast?.kind ?? null,
+      moveRequests: requestSummary(pf.requests, "/api/messages/batch/move"),
+      toastText: lastToast?.text ?? null,
+      toastKind: lastToast?.kind ?? null,
       jank: jankSummary(pf),
     };
 console.log("[stress] small move", JSON.stringify(results.smallMove, null, 1));
@@ -402,4 +434,3 @@ console.log("[stress] small move", JSON.stringify(results.smallMove, null, 1));
   fs.mkdirSync(resultsDir, { recursive: true });
   fs.writeFileSync(path.join(resultsDir, "results-spec.json"), JSON.stringify(results, null, 2));
 });
-

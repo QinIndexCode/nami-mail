@@ -33,7 +33,7 @@ Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端。它�
 - **External Mail v1**：面向已配对本机脚本和 AI 助手的配对、本机、只读 CLI 与 MCP 接口。它通过仅当前 Windows 用户可访问的命名管道 Broker 暴露六项工具——账户、文件夹、邮件列表、邮件详情、线程和附件元数据。
 - **NamiMail Agent**：嵌入式 AI 工作区，支持本地检索、来源引用和 OpenAI 兼容或 Ollama Provider。它在明确的账户范围内读取邮件和管理草稿。
 - **邮件翻译**：可选的免费翻译（Google/MyMemory）和 AI 翻译，支持流式输出与取消。首次启动显示覆盖整个应用的使用条款与隐私协议弹窗。
-- **界面改进**：加载进度条、精简滚动条样式、Agent 对话引用格式优化，以及主题感知的视觉细节打磨。
+- **界面改进**：列表与各面板采用骨架屏加载态、精简滚动条样式、Agent 对话引用格式优化，以及主题感知的视觉细节打磨。
 
 详见 [Release Notes](docs/releases/v0.3.0.zh-CN.md) 和 [变更日志](CHANGELOG.zh-CN.md)。
 

@@ -239,6 +239,11 @@ if (rows.length) insertMany(rows);
 
 const unreadCount = db.prepare("SELECT COUNT(*) AS count FROM messages WHERE flags_json NOT LIKE '%\\\\Seen%'").get().count;
 const totalCount = db.prepare("SELECT COUNT(*) AS count FROM messages").get().count;
+// Fold the (hundreds of MB) WAL back into the main database: the stress
+// runner boots the server immediately after seeding, and SQLite would
+// otherwise replay the whole WAL on open, blowing past the server start
+// timeout on cold disks.
+db.pragma("wal_checkpoint(TRUNCATE)");
 db.close();
 masterKey.fill(0);
 

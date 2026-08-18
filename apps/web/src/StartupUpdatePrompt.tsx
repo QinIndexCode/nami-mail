@@ -70,7 +70,13 @@ export default function StartupUpdatePrompt({
   const frozenSnapshotRef = useRef<DesktopUpdateSnapshot | null>(null);
   const [closing, setClosing] = useState(false);
   const { requestClose } = useDismissTransition(() => {
-    setOpenVersion((current) => current === frozenSnapshotRef.current?.targetVersion ? null : current);
+    // Clear the open version unconditionally: once the exit animation is
+    // over, the dialog stays closed until the updater broadcasts a fresh
+    // promptable snapshot (the effect below reopens it). A conditional clear
+    // keyed to the frozen snapshot's target version would keep a dialog whose
+    // snapshot resolved to a *different* target (e.g. install → up-to-date)
+    // in a close/reopen loop.
+    setOpenVersion(null);
     setRequestError(null);
     setClosing(false);
     frozenSnapshotRef.current = null;

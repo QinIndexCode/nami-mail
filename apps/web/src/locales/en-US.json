@@ -10,6 +10,10 @@
     "app.localMailSpace": "Your local mail space",
     "app.switchDark": "Switch to dark theme",
     "app.switchLight": "Switch to light theme",
+    "app.crash.title": "Something went wrong",
+    "app.crash.message": "One area failed to render; the rest of the app is unaffected. Reloading restores it.",
+    "app.crash.messageArea": "{area} failed to render; the rest of the app is unaffected. Reloading restores it.",
+    "app.crash.reload": "Reload",
     "language.title": "Language",
     "language.description": "Choose the interface language for Nami Mail",
     "language.label": "Interface language",
@@ -1191,6 +1195,10 @@
     "update.prompt.snooze.oneWeek": "In 1 week",
     "update.prompt.snooze.thirtyDays": "In 30 days",
     "update.prompt.snooze.remindMe": "Set reminder",
+    "update.footer.available": "v{version} available",
+    "update.footer.downloading": "Downloading {percent}%",
+    "update.footer.ready": "Restart to update",
+    "update.footer.retry": "Retry update",
     "error.operationIncomplete": "The operation was not completed",
     "error.retry": "Try again",
     "error.fullKnown": "{title}: {message} {guidance}",
@@ -1881,6 +1889,7 @@
     "settings.launchAtStartup.label": "Launch at startup",
     "settings.launchAtStartup.description": "Start Nami Mail automatically when you sign in to your computer.",
     "settings.shortcut.label": "Global shortcut",
-    "settings.shortcut.description": "Press Ctrl+Shift+M (Cmd+Shift+M on Mac) to bring up the mail window from anywhere."
+    "settings.shortcut.description": "Press Ctrl+Shift+M (Cmd+Shift+M on Mac) to bring up the mail window from anywhere.",
+    "mail.readerArea": "The message reader"
   }
 }

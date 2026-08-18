@@ -42,7 +42,9 @@ function portInUse(port) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function waitForServer() {
-  const deadline = Date.now() + 30_000;
+  // The 20k seed database is ~600MB; opening it (plus FTS index warm-up)
+  // can take a while on a busy or cold disk, so allow two minutes.
+  const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${PORT}/api/stats`);

@@ -865,6 +865,33 @@ font-size:8px
 {
 gap:2px!important
 }
+.update-footer-button
+{
+color:var(--button-text);
+border:1px solid color-mix(in srgb, var(--button-text) 40%, transparent);
+border-radius:999px;
+background:color-mix(in srgb, var(--button-text) 10%, transparent);
+align-items:center;
+gap:4px;
+padding:2px 8px;
+font-size:9px;
+font-weight:600;
+cursor:pointer;
+display:inline-flex;
+max-width:140px;
+overflow:hidden;
+white-space:nowrap;
+text-overflow:ellipsis
+}
+.update-footer-button:hover:not(:disabled)
+{
+border-color:var(--button-text)
+}
+.update-footer-button:disabled
+{
+opacity:.55;
+cursor:default
+}
 .version
 {
 color:var(--text-faint);
@@ -15408,6 +15435,10 @@ width:min(380px,100vw - 28px);
 display:flex;
 position:fixed
 }
+.auto-reply-toast-stack.behind-modal
+{
+z-index:29
+}
 .auto-reply-toast
 {
 pointer-events:auto;
@@ -16214,4 +16245,49 @@ overflow:visible
 max-width:none;
 margin:0
 }
+}
+
+/* Render-error fallback: keeps a broken subtree from blanking the app. */
+.error-boundary-fallback
+{
+padding:48px 24px;
+gap:8px;
+flex-direction:column;
+align-items:center;
+justify-content:center;
+text-align:center;
+color:var(--text-soft);
+display:flex
+}
+.error-boundary-fallback strong
+{
+color:var(--text);
+font-size:14px
+}
+.error-boundary-fallback p
+{
+margin:0;
+font-size:12px
+}
+.error-boundary-fallback button
+{
+margin-top:10px;
+padding:7px 18px;
+color:var(--text);
+cursor:pointer;
+background:var(--hover);
+border:1px solid var(--line);
+border-radius:10px;
+font-size:12px;
+transition:background .16s,color .16s,border-color .16s
+}
+.error-boundary-fallback button:hover
+{
+border-color:var(--line-strong);
+background:var(--selected);
+color:var(--text)
+}
+.error-boundary-fallback .lucide-triangle-alert
+{
+color:var(--warning)
 }
