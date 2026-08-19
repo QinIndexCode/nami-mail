@@ -7,7 +7,7 @@ import {
   ExternalLink,
   LoaderCircle,
   Mail,
-  MailCog,
+  Mailbox,
   Plus,
   ShieldCheck,
   Wand2,
@@ -823,7 +823,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
                 onClick={() => selectProvider(CUSTOM_IMAP_PROVIDER_ID)}
                 disabled={busy || accountAdded}
               >
-                <span className="provider-choice-mark" aria-hidden="true"><MailCog size={15} /></span>
+                <span className="provider-choice-mark" aria-hidden="true"><Mailbox size={15} /></span>
                 <span className="provider-choice-copy">
                   <strong>{t("account.provider.custom_name")}</strong>
                   <small>{t("account.provider.custom_description")}</small>
