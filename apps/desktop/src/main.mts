@@ -38,6 +38,8 @@ import {
   getSingleInstanceSmokeResult,
   initializeDesktopSmoke,
   inspectDesktopClosePrompt,
+  inspectDesktopChipOverlapSweep,
+  inspectDesktopDeepDiagnostic,
   inspectDesktopLifecycle,
   inspectDesktopLocalApiSmoke,
   inspectDesktopSettingsSync,
@@ -1281,7 +1283,12 @@ async function createMainWindow(): Promise<void> {
   // macOS native traffic lights leave a leading slot, other platforms draw
   // their own maximize/restore/close buttons.
   appUrl.searchParams.set("platform", process.platform);
-  if (isDesktopSmoke) appUrl.searchParams.set("desktopSmoke", "1");
+  if (isDesktopSmoke) {
+    appUrl.searchParams.set("desktopSmoke", "1");
+    // Demo mode fills the mail list with real message rows so the smoke can
+    // measure scroll/layout cost on the actual list instead of an empty one.
+    appUrl.searchParams.set("demo", "1");
+  }
   // A cold start or a pre-window open-url hand-off queues one mailto compose.
   // did-finish-load fires after the renderer bundle ran, so the web app's
   // subscription is already registered by the time the event is sent.
@@ -1504,24 +1511,23 @@ async function boot(): Promise<void> {
       desktopMasterKey.key.fill(0);
     }
     if (desktopHostMode === "gui") {
-      // The external Agent interface is optional for the mail client. A Broker
-      // failure (for example, Windows PowerShell 5.1 unavailable) must not
-      // prevent the window or the local mail service from starting; pairing
-      // and external CLI/MCP simply stay unavailable until the Broker is
-      // healthy again.
-      try {
-        await startDesktopAgentBroker();
-      } catch (error) {
+      // The external Agent broker only serves pairing and CLI/MCP bridges,
+      // none of which the first paint needs: start it alongside the window
+      // instead of blocking the startup path on its PowerShell handshake.
+      // GUI mode tolerates failure (diagnostic only); the initial pairing
+      // requests below still wait for the broker either way.
+      const brokerReady = startDesktopAgentBroker().catch((error) => {
         noteDesktopSmokeDiagnostic(`Desktop Agent Broker unavailable: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      });
+      await createMainWindow();
+      await writeDesktopSmokeProgress("window-loaded");
+      await brokerReady;
+      scheduleAgentPairingRequests(initialPairingRequestIds);
+      void warnExternalPairingScopeDrift().catch(() => undefined);
     } else {
       await startDesktopAgentBroker();
     }
-    void warnExternalPairingScopeDrift().catch(() => undefined);
     if (desktopHostMode === "gui") {
-      await createMainWindow();
-      await writeDesktopSmokeProgress("window-loaded");
-      scheduleAgentPairingRequests(initialPairingRequestIds);
       const desktopUpdate = await startDesktopUpdaterIfNeeded();
       if (smokeResultPath) await writeDesktopSmokeProgress("notification-probe");
       const desktopNotificationTest = smokeResultPath ? await waitForDesktopSmokeNotification() : undefined;
@@ -1702,6 +1708,11 @@ async function boot(): Promise<void> {
         : await mainWindow.webContents.executeJavaScript("Boolean(document.querySelector('.window-controls') || document.querySelector('.window-control-slot'))").catch(() => true);
       await writeDesktopSmokeProgress("wallpaper-probe");
       const desktopWallpaper = smokeResultPath ? await inspectDesktopWallpaper() : undefined;
+      await writeDesktopSmokeProgress("deep-diagnostic-probe");
+      const desktopDeepDiagnostic = smokeResultPath ? await inspectDesktopDeepDiagnostic() : undefined;
+      const desktopChipOverlapSweep = smokeResultPath && process.env.NAMI_CHIP_OVERLAP_PROBE === "1"
+        ? await inspectDesktopChipOverlapSweep()
+        : null;
       await writeDesktopSmokeProgress("settings-ui-probe");
       const desktopSettingsUi = smokeResultPath ? await inspectDesktopSettingsUi() : undefined;
       await writeDesktopSmokeProgress("settings-sync-probe");
@@ -1721,6 +1732,8 @@ async function boot(): Promise<void> {
         desktopWindowBarLayout,
         desktopWindowControls,
         desktopWallpaper,
+        desktopDeepDiagnostic,
+        desktopChipOverlapSweep,
         desktopSettingsUi,
         desktopSettingsSync,
         desktopClosePrompt,

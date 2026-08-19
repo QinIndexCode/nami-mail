@@ -87,6 +87,92 @@ export type DesktopLifecycleSmokeResult = {
   error?: string;
 };
 
+// Deep runtime diagnostic: rail/wallpaper surface facts, main-window
+// responsiveness, and the agent hand-off state — all measured in the live
+// renderer so regressions are visible as numbers instead of screenshots.
+export type DesktopDeepDiagnosticResult = {
+  rail: {
+    className: string;
+    rect: { x: number; y: number; w: number; h: number; right: number; bottom: number };
+    backgroundColor: string;
+    backgroundAlpha: number;
+    backgroundImage: string;
+    position: string;
+    gridColumn: string;
+    gridRow: string;
+  } | null;
+  canvas: { className: string; backgroundColor: string; backgroundImage: string } | null;
+  wallpaper: {
+    rect: { x: number; y: number; w: number; h: number; right: number; bottom: number };
+    opacity: string;
+    backgroundImage: string;
+    backgroundSize: string;
+    backgroundPosition: string;
+  } | null;
+  variables: {
+    scrimGlobal: string;
+    scrimRegion: string;
+    panelSolid: string;
+    panelMuted: string;
+    frame: string;
+    bgCanvasTint: string;
+    bgVignette: string;
+  };
+  navigation: {
+    domContentLoadedMs: number;
+    loadMs: number;
+    rendererStartedMs: number;
+  } | null;
+  idle: {
+    longtasks: Array<{ start: number; duration: number }>;
+    mutations: number;
+    animationCount: number;
+    animationNames: string;
+    timerMaxGapMs: number;
+    timerSampleMs: number;
+  };
+  scroll: {
+    rowCount: number;
+    frameCostMs: number[];
+    maxScroll: number;
+    clientHeight: number;
+    note?: string;
+  } | null;
+  agent: {
+    launchButtonPresent: boolean;
+    phase: string | null;
+    agentRevealed: boolean;
+    agentRect: { x: number; y: number; w: number; h: number; right: number; bottom: number } | null;
+    agentScrollHeight: number | null;
+    agentClientHeight: number | null;
+    agentChildren: Array<{ className: string; h: number; w: number; display: string }> | null;
+    backdropFilter: string | null;
+    background: string | null;
+    shellChildren: Array<{ className: string; display: string; h: number }> | null;
+    contentEl: { className: string; h: number; display: string } | null;
+    railAfterOpen: { rect: { x: number; y: number; w: number; h: number; right: number; bottom: number }; gridColumn: string; gridRow: string } | null;
+    workspacePosition: string | null;
+    citationsAnchorClearance: number | null;
+    agentContextChip: {
+      rect: { x: number; y: number; w: number; h: number; right: number; bottom: number };
+      tag: string;
+      ariaLabel: string;
+      subject: string;
+      railClearance: number;
+      panelClearance: number;
+    } | null;
+    afterOpenPerf: {
+      longtasks: Array<{ start: number; duration: number }>;
+      mutations: number;
+      animationCount: number;
+      animationNames: string;
+      timerMaxGapMs: number;
+      timerSampleMs: number;
+    };
+  };
+  error?: string;
+};
+
 export type DesktopClosePromptScenarioSmokeResult = {
   eventPrevented: boolean;
   simulatedNativeDialogCalls: number;
@@ -154,6 +240,10 @@ export type DesktopSmokeHost = {
 };
 
 let smokeHost: DesktopSmokeHost | undefined;
+// Module import time lands inside the Electron boot path (before the app
+// ready event), so progress timestamps measure the real startup journey.
+const desktopSmokeProcessStartedAt = Date.now();
+const desktopSmokeTimeline: Array<{ stage: string; elapsedMs: number }> = [];
 let closePromptSmokeSession: ClosePromptSmokeSession | undefined;
 let desktopSmokeResult: Record<string, unknown> | undefined;
 let singleInstanceSmokeResult: DesktopSingleInstanceSmokeResult | undefined;
@@ -434,6 +524,309 @@ export async function inspectDesktopWallpaper(): Promise<DesktopWallpaperSmokeRe
   }
 }
 
+export async function inspectDesktopDeepDiagnostic(): Promise<DesktopDeepDiagnosticResult> {
+  const host = requireHost();
+  const targetWindow = host.getMainWindow();
+  const fallback: DesktopDeepDiagnosticResult = {
+    rail: null,
+    canvas: null,
+    wallpaper: null,
+    variables: { scrimGlobal: "", scrimRegion: "", panelSolid: "", panelMuted: "", frame: "", bgCanvasTint: "", bgVignette: "" },
+    navigation: null,
+    idle: { longtasks: [], mutations: 0, animationCount: 0, animationNames: "", timerMaxGapMs: 0, timerSampleMs: 0 },
+    scroll: null,
+    agent: {
+      launchButtonPresent: false,
+      phase: null,
+      agentRevealed: false,
+      agentRect: null,
+      agentScrollHeight: null,
+      agentClientHeight: null,
+      agentChildren: null,
+      backdropFilter: null,
+      background: null,
+      railAfterOpen: null,
+      workspacePosition: null,
+      citationsAnchorClearance: null,
+      shellChildren: null,
+      contentEl: null,
+      agentContextChip: null,
+      afterOpenPerf: { longtasks: [], mutations: 0, animationCount: 0, animationNames: "", timerMaxGapMs: 0, timerSampleMs: 0 },
+    },
+  };
+  if (!targetWindow) return fallback;
+  try {
+    const result = await targetWindow.webContents.executeJavaScript(`
+      (async () => {
+        const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        const rgbAlpha = (color) => {
+          const rgba = color.match(/^rgba\\(([^)]+)\\)$/);
+          if (rgba) return Number(rgba[1].split(",")[3] ?? 1);
+          const slash = color.match(/\\/\\s*([0-9.]+)\\)$/);
+          if (slash) return Number(slash[1]);
+          return /^rgb\\(/i.test(color) ? 1 : 0;
+        };
+        const rect = (el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), right: Math.round(r.right), bottom: Math.round(r.bottom) }; };
+        const samplePerf = (ms) => new Promise((resolve) => {
+          const longtasks = [];
+          let observer;
+          try {
+            observer = new PerformanceObserver((list) => { for (const e of list.getEntries()) longtasks.push({ start: Math.round(e.startTime), duration: Math.round(e.duration) }); });
+            observer.observe({ entryTypes: ["longtask"] });
+          } catch { observer = undefined; }
+          let mutations = 0;
+          const mo = new MutationObserver(() => { mutations += 1; });
+          mo.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+          const delays = [];
+          const interval = setInterval(() => { delays.push(performance.now()); }, 50);
+          setTimeout(() => {
+            clearInterval(interval);
+            mo.disconnect();
+            if (observer) observer.disconnect();
+            const gaps = [];
+            for (let i = 1; i < delays.length; i += 1) gaps.push(Math.round(delays[i] - delays[i - 1]));
+            gaps.shift();
+            const maxGap = gaps.length ? Math.max(...gaps) : 0;
+            const anims = document.getAnimations();
+            const names = anims.slice(0, 12).map((a) => {
+              const t = (a.effect && a.effect.target);
+              const name = t ? getComputedStyle(t).animationName : "?";
+              return name + (a.playState === "running" ? ":run" : ":idle");
+            }).join(",");
+            resolve({ longtasks, mutations, animationCount: anims.length, animationNames: names, timerMaxGapMs: maxGap, timerSampleMs: ms });
+          }, ms);
+        });
+        const out = {};
+        const rail = document.querySelector(".icon-rail");
+        const canvas = document.querySelector(".workspace-canvas");
+        const wallpaper = document.querySelector(".workspace-background");
+        const shell = document.querySelector(".mail-shell");
+        out.rail = rail ? { className: rail.className, rect: rect(rail), backgroundColor: getComputedStyle(rail).backgroundColor, backgroundAlpha: rgbAlpha(getComputedStyle(rail).backgroundColor), backgroundImage: getComputedStyle(rail).backgroundImage, position: getComputedStyle(rail).position, gridColumn: getComputedStyle(rail).gridColumn, gridRow: getComputedStyle(rail).gridRow } : null;
+        out.canvas = canvas ? { className: canvas.className, backgroundColor: getComputedStyle(canvas).backgroundColor, backgroundImage: getComputedStyle(canvas).backgroundImage.slice(0, 200) } : null;
+        out.wallpaper = wallpaper ? { rect: rect(wallpaper), opacity: getComputedStyle(wallpaper).opacity, backgroundImage: getComputedStyle(wallpaper).backgroundImage.slice(0, 140), backgroundSize: getComputedStyle(wallpaper).backgroundSize, backgroundPosition: getComputedStyle(wallpaper).backgroundPosition } : null;
+        out.variables = { scrimGlobal: cssVar("--scrim-global"), scrimRegion: cssVar("--scrim-region"), panelSolid: cssVar("--panel-solid"), panelMuted: cssVar("--panel-muted"), frame: cssVar("--frame"), bgCanvasTint: cssVar("--bg-canvas-tint"), bgVignette: cssVar("--bg-vignette") };
+        const nav = performance.getEntriesByType("navigation")[0];
+        out.navigation = nav ? { domContentLoadedMs: Math.round(nav.domContentLoadedEventEnd), loadMs: Math.round(nav.loadEventEnd), rendererStartedMs: Math.round(performance.timeOrigin) } : null;
+        out.idle = await samplePerf(2200);
+        // Select the first demo message so the Agent workspace renders its
+        // reference-mail chip (currentMessage) and the chip geometry can be
+        // checked against the icon rail.
+        const firstMessageRow = document.querySelector(".message-list .message-item");
+        if (firstMessageRow instanceof HTMLElement) firstMessageRow.click();
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        // Force real layout cycles on the demo mail list: each scrollTop
+        // mutation plus a layout read measures what one scroll frame costs
+        // the main thread when rows are present. Three passes average out
+        // scheduling noise; a single cost near the 16.7ms frame budget means
+        // the list itself is the jank source.
+        const scrollable = document.querySelector(".message-list");
+        if (scrollable instanceof HTMLElement) {
+          const rowCount = scrollable.querySelectorAll(".message-list-row").length;
+          if (rowCount > 0 && scrollable.scrollHeight > scrollable.clientHeight) {
+            const maxScroll = scrollable.scrollHeight - scrollable.clientHeight;
+            const frameCostMs = [];
+            for (let pass = 0; pass < 3; pass += 1) {
+              const start = performance.now();
+              for (let step = 0; step < 24; step += 1) {
+                scrollable.scrollTop = (step % 2) * maxScroll;
+                void scrollable.offsetHeight;
+              }
+              frameCostMs.push(Math.round(((performance.now() - start) / 24) * 10) / 10);
+            }
+            out.scroll = { rowCount, frameCostMs, maxScroll, clientHeight: scrollable.clientHeight };
+          } else {
+            out.scroll = { rowCount, frameCostMs: [], maxScroll: 0, clientHeight: scrollable.clientHeight, note: rowCount === 0 ? "empty-list" : "not-scrollable" };
+          }
+        }
+        const launch = document.querySelector(".agent-launch-button");
+        out.agent = { launchButtonPresent: Boolean(launch) };
+        if (launch) launch.click();
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const agentWs = document.querySelector(".agent-workspace");
+        out.agent.phase = shell ? shell.getAttribute("data-agent-phase") : null;
+        out.agent.agentRevealed = agentWs ? Boolean(agentWs.getClientRects().length) : false;
+        out.agent.agentRect = agentWs ? rect(agentWs) : null;
+        out.agent.agentScrollHeight = agentWs ? agentWs.scrollHeight : null;
+        out.agent.agentClientHeight = agentWs ? agentWs.clientHeight : null;
+        out.agent.agentChildren = agentWs ? Array.from(agentWs.children).map((c) => ({ className: c.className, h: Math.round(c.getBoundingClientRect().height), w: Math.round(c.getBoundingClientRect().width), display: getComputedStyle(c).display })) : null;
+        out.agent.backdropFilter = agentWs ? getComputedStyle(agentWs).backdropFilter : null;
+        out.agent.background = agentWs ? getComputedStyle(agentWs).backgroundColor : null;
+        out.agent.shellChildren = shell ? Array.from(shell.children).map((c) => ({ className: c.className, display: getComputedStyle(c).display, h: Math.round(c.getBoundingClientRect().height) })) : null;
+        const stream = agentWs ? agentWs.querySelector("[class*='message'], [class*='conversation'], [class*='thread']") : null;
+        out.agent.contentEl = stream ? { className: stream.className, h: Math.round(stream.getBoundingClientRect().height), display: getComputedStyle(stream).display } : null;
+        out.agent.railAfterOpen = rail ? { rect: rect(rail), gridColumn: getComputedStyle(rail).gridColumn, gridRow: getComputedStyle(rail).gridRow } : null;
+        // The absolutely-positioned citations sidebar (right:14px) must anchor
+        // to the workspace, not to the canvas: with position:static on the
+        // workspace its containing block is the full canvas, putting it under
+        // the rail. Assert the workspace is the positioned ancestor and that a
+        // right:14px child would land clear of the rail.
+        out.agent.workspacePosition = agentWs ? getComputedStyle(agentWs).position : null;
+        out.agent.citationsAnchorClearance = agentWs && rail ? Math.round(rail.getBoundingClientRect().left - (agentWs.getBoundingClientRect().right - 14)) : null;
+        const chip = document.querySelector(".agent-current-context");
+        const mainPanel = agentWs ? agentWs.querySelector(".agent-main-panel") : null;
+        out.agent.agentContextChip = chip instanceof HTMLElement && mainPanel instanceof HTMLElement && rail instanceof HTMLElement ? {
+          rect: rect(chip),
+          tag: chip.tagName,
+          ariaLabel: chip.getAttribute("aria-label") ?? "",
+          subject: (chip.querySelector("span")?.textContent ?? "").slice(0, 60),
+          railClearance: Math.round(rail.getBoundingClientRect().left - chip.getBoundingClientRect().right),
+          panelClearance: Math.round(mainPanel.getBoundingClientRect().right - chip.getBoundingClientRect().right),
+        } : null;
+        out.agent.afterOpenPerf = await samplePerf(1600);
+        return out;
+      })()
+    `) as DesktopDeepDiagnosticResult;
+    return result;
+  } catch (error) {
+    return { ...fallback, error: desktopSmokeError(error) };
+  }
+}
+
+/**
+ * Temporary reference-mail chip vs rail overlap sweep. Gated behind
+ * NAMI_CHIP_OVERLAP_PROBE so the normal smoke run keeps its exact probe
+ * sequence; the app is driven through several window widths in both the
+ * desktop and the browser layout and every sample records the chip's and
+ * the rail's geometry. scripts/check-chip-overlap.mjs prints the table.
+ */
+export async function inspectDesktopChipOverlapSweep(): Promise<Record<string, unknown> | null> {
+  if (process.env.NAMI_CHIP_OVERLAP_PROBE !== "1") return null;
+  const host = requireHost();
+  const targetWindow = host.getMainWindow();
+  if (!targetWindow) return { error: "no-window" };
+  const sweepWidths = [1440, 1280, 1100, 1024, 940, 860, 800, 760, 700];
+  const desktopUrl = targetWindow.webContents.getURL();
+  const samples: Record<string, unknown>[] = [];
+  const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const cleanup = async () => {
+    try {
+      if (!targetWindow.webContents.isDestroyed()) await targetWindow.loadURL(desktopUrl).catch(() => undefined);
+      targetWindow.setSize(1440, 922);
+      await settle(1200);
+    } catch {
+      // Best-effort restore; the sweep data is already in the report.
+    }
+  };
+  const measureScript = `
+    (() => {
+      const rect = (el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), right: Math.round(r.right), bottom: Math.round(r.bottom) }; };
+      const rail = document.querySelector(".icon-rail");
+      const chip = document.querySelector(".agent-current-context");
+      const workspace = document.querySelector(".agent-workspace");
+      const panel = workspace ? workspace.querySelector(":scope > .agent-main-panel") : null;
+      const strip = panel ? panel.querySelector(":scope > .agent-context-strip") : null;
+      const header = panel ? panel.querySelector(":scope > .agent-workspace-header") : null;
+      const sidebar = workspace ? workspace.querySelector(":scope > .agent-conversation-sidebar") : null;
+      const railEntry = rail ? { rect: rect(rail), display: getComputedStyle(rail).display } : null;
+      const workspacePosition = workspace ? getComputedStyle(workspace).position : null;
+      // A right:14px citation anchor inside the workspace must clear the rail
+      // (it lands 14px before the workspace's right edge). If the workspace
+      // were not the positioned ancestor, the anchor would resolve against
+      // the canvas and end up under the rail.
+      const citationsAnchor = workspace && rail ? Math.round(rail.getBoundingClientRect().left - (workspace.getBoundingClientRect().right - 14)) : null;
+      const boxInfo = (el) => el ? { rect: rect(el), display: getComputedStyle(el).display, position: getComputedStyle(el).position, width: getComputedStyle(el).width, minWidth: getComputedStyle(el).minWidth, maxWidth: getComputedStyle(el).maxWidth, paddingLeft: getComputedStyle(el).paddingLeft, paddingRight: getComputedStyle(el).paddingRight, gridColumn: getComputedStyle(el).gridColumn, children: Array.from(el.children).map((c) => ({ className: String(c.className).slice(0, 40), rect: rect(c) })) } : null;
+      const chipEntry = chip ? {
+        rect: rect(chip),
+        position: getComputedStyle(chip).position,
+        maxWidth: getComputedStyle(chip).maxWidth,
+        marginLeft: getComputedStyle(chip).marginLeft,
+        subjectLength: (chip.querySelector("span")?.textContent ?? "").length,
+        subject: (chip.querySelector("span")?.textContent ?? "").slice(0, 40),
+      } : null;
+      let overlap = null;
+      if (chip && rail && getComputedStyle(rail).display !== "none") {
+        const cr = chip.getBoundingClientRect();
+        const rr = rail.getBoundingClientRect();
+        const horizontal = Math.max(0, Math.min(cr.right, rr.right) - Math.max(cr.left, rr.left));
+        const vertical = Math.max(0, Math.min(cr.bottom, rr.bottom) - Math.max(cr.top, rr.top));
+        overlap = { horizontalOverlapPx: Math.round(horizontal), verticalOverlapPx: Math.round(vertical), overlapping: horizontal > 0 && vertical > 0, clearancePx: Math.round(rr.left - cr.right) };
+      }
+      return {
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        pageScrollWidth: document.documentElement.scrollWidth,
+        agentOpen: Boolean(workspace && workspace.getClientRects().length),
+        workspace: workspace ? rect(workspace) : null,
+        workspacePosition,
+        citationsAnchor,
+        panelBox: boxInfo(panel),
+        stripBox: boxInfo(strip),
+        headerBox: boxInfo(header),
+        sidebar: sidebar ? rect(sidebar) : null,
+        chip: chipEntry,
+        rail: railEntry,
+        overlap,
+      };
+    })()
+  `;
+  const selectLongestSubjectRowScript = `
+    (() => {
+      const rows = Array.from(document.querySelectorAll(".message-list .message-item"));
+      let best = null;
+      let bestLength = -1;
+      for (const row of rows) {
+        const subject = row.querySelector(".message-subject");
+        const text = subject instanceof HTMLElement ? subject.textContent ?? "" : "";
+        if (text.length > bestLength) { bestLength = text.length; best = row; }
+      }
+      if (best instanceof HTMLElement) best.click();
+    })()
+  `;
+  const openAgentIfNeeded = async () => {
+    const alreadyOpen = await targetWindow.webContents
+      .executeJavaScript("Boolean(document.querySelector('.agent-workspace')?.getClientRects().length)")
+      .catch(() => false);
+    if (!alreadyOpen) {
+      await targetWindow.webContents.executeJavaScript("document.querySelector('.agent-launch-button')?.click()").catch(() => undefined);
+      await settle(1200);
+    }
+  };
+  const sample = async (mode: string, width: number) => {
+    targetWindow.setSize(width, 922);
+    await settle(550);
+    const geometry = await targetWindow.webContents.executeJavaScript(measureScript).catch((error) => ({ error: desktopSmokeError(error) }));
+    samples.push({ mode, width, ...geometry });
+  };
+  try {
+    // Longest subject first (the mail list is still visible), then open the
+    // Agent workspace so the chip renders the worst-case subject length.
+    await targetWindow.webContents.executeJavaScript(selectLongestSubjectRowScript);
+    await settle(500);
+    await openAgentIfNeeded();
+    for (const width of sweepWidths) await sample("desktop", width);
+    // Same sweep in the browser layout: reload without the desktop markers.
+    const browserUrl = new URL(desktopUrl);
+    browserUrl.searchParams.delete("desktop");
+    browserUrl.searchParams.delete("platform");
+    browserUrl.searchParams.delete("desktopSmoke");
+    await targetWindow.loadURL(browserUrl.toString());
+    await settle(1200);
+    await targetWindow.webContents.executeJavaScript(selectLongestSubjectRowScript);
+    await settle(500);
+    await openAgentIfNeeded();
+    for (const width of sweepWidths) await sample("browser", width);
+  } catch (error) {
+    await cleanup();
+    return { samples, desktopUrl, error: desktopSmokeError(error) };
+  }
+  await cleanup();
+  const overlapping = samples.filter((sample) => {
+    const overlap = sample.overlap as { overlapping?: boolean } | null | undefined;
+    return overlap?.overlapping === true;
+  });
+  const browserUrl = new URL(desktopUrl);
+  browserUrl.searchParams.delete("desktop");
+  browserUrl.searchParams.delete("platform");
+  browserUrl.searchParams.delete("desktopSmoke");
+  return {
+    samples,
+    overlappingCount: overlapping.length,
+    overlappingWidths: overlapping.map((sample) => `${sample.mode}@${String(sample.width)}`),
+    desktopUrl,
+    browserUrl: browserUrl.toString(),
+  };
+}
+
 export async function inspectDesktopSettingsUi(): Promise<DesktopSettingsUiSmokeResult> {
   const host = requireHost();
   const fallback: DesktopSettingsUiSmokeResult = {
@@ -673,8 +1066,18 @@ export async function inspectDesktopSettingsSync(): Promise<DesktopSettingsSyncS
   };
 
   try {
+    const isDemoRender = await targetWindow.webContents.executeJavaScript("new URLSearchParams(window.location.search).get('demo') === '1'");
     const initialCloseBehavior = await waitForCloseBehavior("ask", true);
     await host.rememberCloseBehavior("tray");
+    if (isDemoRender) {
+      // Demo mode never re-fetches settings from the local service (the web
+      // app's loadSettings is a no-op there), so an open dialog cannot reflect
+      // a native write by design. Guard the server-side write itself instead.
+      const nativeTray = service.getSettings().closeBehavior === "tray" ? "tray" : "";
+      await host.rememberCloseBehavior("ask");
+      const nativeRestored = service.getSettings().closeBehavior === "ask" ? "ask" : "";
+      return { initialCloseBehavior, updatedCloseBehavior: nativeTray, restoredCloseBehavior: nativeRestored };
+    }
     const updatedCloseBehavior = await waitForCloseBehavior("tray");
 
     // Simulate a setting changed outside React, then use the same focus path
@@ -810,17 +1213,19 @@ export function inspectDesktopLifecycle(): DesktopLifecycleSmokeResult {
 export async function writeSmokeResult(result: Record<string, unknown>): Promise<void> {
   const host = requireHost();
   if (!host.smokeResultPath) return;
-  desktopSmokeResult = result;
+  desktopSmokeResult = { ...result, desktopStartupTimeline: desktopSmokeTimeline };
   await fs.mkdir(path.dirname(host.smokeResultPath), { recursive: true });
-  await fs.writeFile(host.smokeResultPath, JSON.stringify(result), "utf8");
+  await fs.writeFile(host.smokeResultPath, JSON.stringify(desktopSmokeResult), "utf8");
 }
 
 export async function writeDesktopSmokeProgress(stage: string): Promise<void> {
   const host = requireHost();
   if (!host.isDesktopSmoke || !host.smokeProgressPath) return;
+  const elapsedMs = Date.now() - desktopSmokeProcessStartedAt;
+  desktopSmokeTimeline.push({ stage, elapsedMs });
   try {
     await fs.mkdir(path.dirname(host.smokeProgressPath), { recursive: true });
-    await fs.writeFile(host.smokeProgressPath, JSON.stringify({ stage, checkedAt: new Date().toISOString() }), "utf8");
+    await fs.writeFile(host.smokeProgressPath, JSON.stringify({ stage, checkedAt: new Date().toISOString(), elapsedMs }), "utf8");
   } catch {
     desktopSmokeDiagnostics.push("Desktop smoke progress could not be written.");
   }

@@ -1468,6 +1468,7 @@
     "agent.permission.fullAccess.feature2": "No per-step confirmation prompts",
     "agent.permission.fullAccess.feature3": "Higher risk to your mail data — enable with care",
     "agent.context.currentMessage": "Current message",
+    "agent.context.openInMail": "Open in mail",
     "agent.empty.title": "Get grounded help from your mail",
     "agent.empty.description": "Choose a scope, then ask a question. Answers identify the mail sources they use.",
     "agent.suggestion.today": "Summarize the mail I need to handle today",
