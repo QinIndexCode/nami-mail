@@ -43,8 +43,10 @@ jobs:
       - run: node --test scripts/release-policy.test.mjs
       - run: node --test scripts/build-locale-catalog.test.mjs
       # Script-level invariants: watchdog restart backoff, kill-safe packaging
-      # trust injection, and dev ports pinned to the server PORT default.
+      # trust injection, dev ports pinned to the server PORT default, and the
+      # docs-to-wiki page mapping.
       - run: node --test scripts/dev-server-backoff.test.mjs scripts/package-win-trust.test.mjs scripts/dev-port-sync.test.mjs
+      - run: node --test scripts/wiki-sync.test.mjs
       - run: node scripts/build-locale-catalog.mjs --check
       - run: npm run lint
       - run: npm run typecheck
