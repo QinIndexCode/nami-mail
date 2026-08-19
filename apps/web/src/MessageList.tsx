@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
-import { Archive, Eye, EyeOff, Layers3, Mail, MousePointerClick, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
+import { Archive, Layers3, Mail, MailOpen, MousePointerClick, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
 import type { MessageListQuery } from "./mailListState";
 import { useI18n } from "./i18n";
 import type { MailErrorPresentation } from "./errorPresentation";
@@ -337,7 +337,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
               <MousePointerClick size={15} /><span>{t("mail.action.open")}</span>
             </button>
             <button type="button" role="menuitem" className="context-menu-item" onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickToggleSeen(target); }}>
-              {contextMenu.message.seen ? <EyeOff size={15} /> : <Eye size={15} />}<span>{t(contextMenu.message.seen ? "mail.action.markUnread" : "mail.action.markRead")}</span>
+              {contextMenu.message.seen ? <Mail size={15} /> : <MailOpen size={15} />}<span>{t(contextMenu.message.seen ? "mail.action.markUnread" : "mail.action.markRead")}</span>
             </button>
             <button type="button" role="menuitem" className="context-menu-item" onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickToggleStar(target); }}>
               <Star size={15} fill={contextMenu.message.flagged ? "currentColor" : "none"} /><span>{t(contextMenu.message.flagged ? "mail.action.unstar" : "mail.action.star")}</span>

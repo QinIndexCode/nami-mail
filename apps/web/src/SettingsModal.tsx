@@ -6,6 +6,7 @@ import {
   Check,
   CircleHelp,
   Clock3,
+  CloudCog,
   Copy,
   Download,
   Eye,
@@ -19,9 +20,9 @@ import {
   MessageSquareReply,
   MessageSquareX,
   Minimize2,
+  Monitor,
   Moon,
   Palette,
-  Server,
   Power,
   RefreshCw,
   RotateCcw,
@@ -29,6 +30,7 @@ import {
   SkipForward,
   Sun,
   Trash2,
+  Undo2,
   Upload,
   Volume2,
   VolumeX,
@@ -314,7 +316,7 @@ function Switch({
 function ThemeIcon({ value }: { value: AppTheme }) {
   if (value === "light") return <Sun size={17} />;
   if (value === "dark") return <Moon size={17} />;
-  return <Laptop size={17} />;
+  return <Monitor size={17} />;
 }
 
 function NumberStepper({ value, min, max, onChange, disabled, decreaseLabel = "Decrease", increaseLabel = "Increase" }: {
@@ -1792,7 +1794,7 @@ export default function SettingsModal({
                             disabled={controlsBusy || (provider.id === "custom" && !provider.endpoint)}
                             onClick={() => setTranslationPrimary(provider.id)}
                           >
-                            {provider.builtin ? <Globe size={14} /> : <Server size={14} />}
+                            {provider.builtin ? <Globe size={14} /> : <CloudCog size={14} />}
                             <span>{t(`settings.translation.provider.${provider.id}`)}</span>
                             {translationPrimary === provider.id && <Check size={13} className="translation-provider-check" />}
                           </button>
@@ -1812,7 +1814,7 @@ export default function SettingsModal({
                             disabled={controlsBusy || provider.id === translationPrimary || (provider.id === "custom" && !provider.endpoint)}
                             onClick={() => setTranslationBackup(provider.id)}
                           >
-                            {provider.builtin ? <Globe size={14} /> : <Server size={14} />}
+                            {provider.builtin ? <Globe size={14} /> : <CloudCog size={14} />}
                             <span>{t(`settings.translation.provider.${provider.id}`)}</span>
                             {translationBackup === provider.id && <Check size={13} className="translation-provider-check" />}
                           </button>
@@ -1912,7 +1914,7 @@ export default function SettingsModal({
 
         <footer className="settings-footer">
           <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("restore-defaults"); }}>
-            {busyAction === "restore-defaults" ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />}{t("settings.defaults.restore")}
+            {busyAction === "restore-defaults" ? <LoaderCircle className="spin" size={15} /> : <Undo2 size={15} />}{t("settings.defaults.restore")}
           </button>
           <button className="primary-button" type="button" disabled={controlsBusy} onClick={requestClose}>{t("settings.done")}</button>
         </footer>

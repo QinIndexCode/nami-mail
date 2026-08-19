@@ -14,13 +14,16 @@ import {
   FileDown,
   FileText,
   FolderSearch,
+  HardDrive,
   KeyRound,
   LoaderCircle,
+  Mail,
   MessageCircle,
   MessageCirclePlus,
   PanelLeftClose,
   Pencil,
   Plus,
+  Quote,
   Reply,
   Search,
   SquareCheck,
@@ -1490,7 +1493,7 @@ function AgentProviderSettings({
               <section className="agent-provider-catalog" aria-label={t("agent.providers.title")}>
             <div className="agent-provider-catalog-header"><span>{t("agent.providers.available")}</span><button className="agent-provider-new" type="button" disabled={saving} onClick={() => selectProvider(null)}><Plus size={15} />{t("agent.providers.new")}</button></div>
             {loading && <div className="agent-provider-loading" role="status"><LoaderCircle className="spin" size={16} />{t("agent.providers.loading")}</div>}
-            {!loading && !providers.length && <div className="agent-provider-empty"><Server size={18} /><strong>{t("agent.providers.empty")}</strong></div>}
+            {!loading && !providers.length && <div className="agent-provider-empty"><Bot size={18} /><strong>{t("agent.providers.empty")}</strong></div>}
             <div className="agent-provider-list">
               {providers.map((provider) => {
                 const active = provider.id === selectedProviderId;
@@ -1501,7 +1504,7 @@ function AgentProviderSettings({
                     <button className={`agent-provider-list-item ${active ? "active" : ""}`} type="button" aria-pressed={active} disabled={saving} onClick={() => selectProvider(provider)}>
                       <span className={`agent-provider-state ${state}`} aria-hidden="true" />
                       <span><strong>{provider.label}</strong><span className="agent-provider-list-meta">{provider.model && <em className="model" title={provider.model}>{provider.model}</em>}{provider.id === defaultProviderId && <em className="default">{t("agent.providers.status.default")}</em>}</span></span>
-                      {provider.cloud ? <Cloud size={14} aria-label={t("agent.providers.status.cloud")} /> : <Server size={14} aria-label={t("agent.providers.status.local")} />}
+                      {provider.cloud ? <Cloud size={14} aria-label={t("agent.providers.status.cloud")} /> : <HardDrive size={14} aria-label={t("agent.providers.status.local")} />}
                     </button>
                     <button className={`agent-provider-list-delete${pending ? " pending" : ""}`} type="button" disabled={saving} aria-label={pending ? t("agent.providers.deleteConfirm") : t("agent.providers.delete")} data-tooltip={pending ? t("agent.providers.deleteConfirm") : t("agent.providers.delete")} onClick={() => void deleteProviderById(provider.id)}>
                       {pending ? <Check size={14} /> : <Trash2 size={14} />}
@@ -3713,7 +3716,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             <button type="button" className={mode === "chat" ? "active" : ""} aria-pressed={mode === "chat"} onClick={() => setMode("chat")}><MessageCircle size={14} />{t("agent.mode.chat")}</button>
           </div>
           {selectedProvider?.cloud && !selectedProvider.cloudContentConsent && <span className="agent-privacy-notice"><ShieldAlert size={14} />{t("agent.provider.consentRequired")}</span>}
-          {currentMessage && <span className="agent-current-context"><FileText size={14} />{currentMessage.subject || t("agent.context.currentMessage")}</span>}
+          {currentMessage && <span className="agent-current-context"><Mail size={14} />{currentMessage.subject || t("agent.context.currentMessage")}</span>}
         </div>
 
         <div className="agent-transcript-wrap">
@@ -3782,7 +3785,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
           {contextMenu && (
             <div className="agent-context-menu" ref={contextMenuRef} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onClick={(e) => e.stopPropagation()}>
               <button type="button" role="menuitem" onClick={() => { void copyToClipboard(contextMenu.text); setContextMenu(null); }}><Copy size={14} /><span>{t("agent.message.copy")}</span></button>
-              <button type="button" role="menuitem" onClick={() => { setQuoteContext(contextMenu.text); setContextMenu(null); window.requestAnimationFrame(() => composerRef.current?.focus()); }}><ArrowUp size={14} /><span>{t("agent.message.followUp")}</span></button>
+              <button type="button" role="menuitem" onClick={() => { setQuoteContext(contextMenu.text); setContextMenu(null); window.requestAnimationFrame(() => composerRef.current?.focus()); }}><Quote size={14} /><span>{t("agent.message.followUp")}</span></button>
             </div>
           )}
         </div>
