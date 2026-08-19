@@ -20,15 +20,16 @@ import { nativeText, type NativeCopyKey, type NativeTranslationValues } from "./
 import {
   applyGlobalShortcut as applyGlobalShortcutPolicy,
   applyLaunchAtStartup as applyLaunchAtStartupPolicy,
-  applyUnreadBadge as applyUnreadBadgePolicy,
-  BADGE_OVERLAY_DATA_URL,
+  applyTrayBadge as applyTrayBadgePolicy,
   buildTrayMenuTemplate,
   extractMailtoUrl,
   FOCUS_GLOBAL_SHORTCUT_ACCELERATOR,
+  nextTrayBadge,
   type GlobalShortcutApi,
   type LaunchAtStartupApi,
+  type TrayBadgeEvent,
+  type TrayIconApi,
   type TrayMenuAction,
-  type UnreadBadgeApi,
 } from "./desktop-behaviors.mjs";
 import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
 import {
@@ -238,16 +239,9 @@ let localApiCachePolicyInstalled = false;
 let pendingMailtoUrl: string | undefined;
 const appUserModelId = app.isPackaged ? "com.nami.mail" : "com.nami.mail.dev";
 const localApiAccessHeader = "x-nami-api-token";
-// Desktop-only behaviors (badge, login item, global shortcut) live in
+// Desktop-only behaviors (tray badge, login item, global shortcut) live in
 // desktop-behaviors.mjs; the platform-specific Electron wiring is applied
 // through adapters here so the policy layer stays unit-testable.
-const unreadBadgeApi: UnreadBadgeApi = {
-  platform: process.platform,
-  setBadgeCount: (count) => app.setBadgeCount(count),
-  setOverlayIcon: (overlay, description) => mainWindow?.setOverlayIcon(overlay as NativeImage | null, description),
-  createOverlayIcon: () => nativeImage.createFromDataURL(BADGE_OVERLAY_DATA_URL),
-  overlayDescription: () => nativeCopy("trayTooltip"),
-};
 const launchAtStartupApi: LaunchAtStartupApi = {
   platform: process.platform,
   setLoginItemSettings: (options) => app.setLoginItemSettings(options),
@@ -517,15 +511,43 @@ function clearLocalApiAccessToken(): void {
   localApiAccessToken = undefined;
 }
 
-function applyUnreadBadge(count: number): void {
+function applyTrayBadge(event: TrayBadgeEvent): void {
   try {
-    applyUnreadBadgePolicy(unreadBadgeApi, count);
+    applyTrayBadgePolicy(trayIconApi, nextTrayBadge(event));
   } catch (error) {
-    // Badge APIs vary by desktop session; a failure must not take the mail
-    // client down with it.
-    console.warn("Nami Mail could not update its unread badge", error);
+    // Tray icon APIs vary by desktop session; a failure must not take the
+    // mail client down with it.
+    console.warn("Nami Mail could not update its tray icon", error);
   }
 }
+
+function setTrayIcon(icon: NativeImage | undefined): void {
+  if (!tray || tray.isDestroyed() || !icon) return;
+  tray.setImage(icon);
+}
+
+let trayBadgeIcon: NativeImage | undefined;
+
+function loadTrayBadgeIcon(): NativeImage | undefined {
+  if (trayBadgeIcon) return trayBadgeIcon;
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, "tray-badge-icon.png")
+    : path.join(app.getAppPath(), "build", "tray-badge-icon.png");
+  const icon = nativeImage.createFromPath(iconPath);
+  if (icon.isEmpty()) {
+    // Older installs do not ship the badge variant; the tray then keeps the
+    // plain icon and the new-mail dot is simply not shown.
+    console.warn(`Nami Mail tray badge icon could not be loaded: ${iconPath}`);
+    return undefined;
+  }
+  trayBadgeIcon = icon;
+  return icon;
+}
+
+const trayIconApi: TrayIconApi = {
+  setBadgeIcon: () => setTrayIcon(loadTrayBadgeIcon()),
+  setPlainIcon: () => setTrayIcon(appIcon ?? loadDesktopIcon()),
+};
 
 function applyLaunchAtStartup(enabled: boolean): void {
   try {
@@ -1126,6 +1148,10 @@ function notifyNewMail(messages: NewMailPayload[]): void {
   if (!settings) return;
   const first = messages[0];
   if (!first) return;
+  // The tray dot marks "new mail while away" independently of the alert
+  // settings: it lights only when the window is not focused and clears as
+  // soon as the window is focused again.
+  applyTrayBadge({ type: "new-mail", windowFocused: mainWindow?.isFocused() ?? false });
   // The renderer still needs a new-mail event to refresh its local list when
   // alerts are disabled. shouldAlert only controls user-facing interruption.
   const shouldAlert = settings.notificationsEnabled && (!mainWindow?.isFocused() || settings.notifyWhenFocused);
@@ -1227,6 +1253,10 @@ async function createMainWindow(): Promise<void> {
   mainWindow.on("closed", () => {
     mainWindow = undefined;
   });
+  // Focusing the window clears the tray "new mail" dot; every restore path
+  // (notification click, tray click, global shortcut) ends in focusMainWindow,
+  // which shows and focuses the window and thus fires this event.
+  mainWindow.on("focus", () => applyTrayBadge({ type: "window-focused" }));
 
   const appUrl = new URL(localServer.url);
   appUrl.searchParams.set("desktop", "1");
@@ -1605,10 +1635,6 @@ if (desktopCliArguments !== undefined) {
     } catch (error) {
       console.warn("Nami Mail could not show item in folder", error);
     }
-  });
-  ipcMain.on("nami:set-unread-badge", (event, count: unknown) => {
-    if (!isCurrentRenderer(event)) return;
-    applyUnreadBadge(typeof count === "number" ? count : 0);
   });
   ipcMain.on("nami:set-launch-at-startup", (event, enabled: unknown) => {
     if (!isCurrentRenderer(event) || typeof enabled !== "boolean") return;

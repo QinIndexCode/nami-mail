@@ -1,8 +1,9 @@
 /**
  * Desktop-only behaviors owned by the main process but driven by the
- * renderer settings (and by the total unread count the renderer reports):
+ * renderer settings (and by new-mail events arriving from the sync service):
  *
- * - the OS badge / taskbar overlay mirrors the unread count,
+ * - the tray icon swaps to a badge-dot variant while new mail arrived and
+ *   the window is not focused, and clears as soon as the window is focused,
  * - the login item registers Nami Mail at system sign-in,
  * - the global shortcut focuses the mail window from any application.
  *
@@ -12,35 +13,32 @@
 
 export const FOCUS_GLOBAL_SHORTCUT_ACCELERATOR = "CommandOrControl+Shift+M";
 
-// 16x16 red dot rendered ahead of time so the Windows taskbar overlay needs
-// no runtime image generation. macOS/Linux instead use the native badge API.
-export const BADGE_OVERLAY_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAWUlEQVR42mN4aKXHQAlmoJUBJUB8Goh/QvFpqBhBA5Sgiv/jwKehanAagE8zsiFYDSghQjMMl2Az4DQJBpzGZsBPEgz4SRMDKPYCxYFIcTRSJSFRnJTpnxsBQfO5WDWa9GwAAAAASUVORK5CYII=";
+/**
+ * Tray "new mail" dot. The badge reflects presence, not the unread count: it
+ * lights up when a new-mail batch arrives while the window is not focused and
+ * goes off the moment the window is focused again. All platforms share the
+ * same rule and the same presentation (a swapped-in tray icon), so the policy
+ * is a plain boolean over a single event.
+ */
+export type TrayBadgeEvent =
+  | { type: "new-mail"; windowFocused: boolean }
+  | { type: "window-focused" };
 
-export type UnreadBadgeApi = {
-  platform: NodeJS.Platform;
-  setBadgeCount: (count: number) => void;
-  setOverlayIcon: (overlay: unknown | null, description: string) => void;
-  /** Creates the overlay image only when a badge should be visible. */
-  createOverlayIcon: () => unknown;
-  overlayDescription: () => string;
-};
-
-export function normalizeUnreadBadgeCount(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
-  return value > 0 ? Math.floor(value) : 0;
+export function nextTrayBadge(event: TrayBadgeEvent): boolean {
+  if (event.type === "window-focused") return false;
+  return !event.windowFocused;
 }
 
-export function applyUnreadBadge(api: UnreadBadgeApi, count: number): void {
-  const safeCount = normalizeUnreadBadgeCount(count);
-  if (api.platform === "darwin" || api.platform === "linux") {
-    // macOS dock and Linux launcher expose the native badge count.
-    api.setBadgeCount(safeCount);
-    return;
-  }
-  if (api.platform === "win32") {
-    // Windows has no badge API; the taskbar overlay dot is the equivalent.
-    api.setOverlayIcon(safeCount > 0 ? api.createOverlayIcon() : null, safeCount > 0 ? api.overlayDescription() : "");
-  }
+export type TrayIconApi = {
+  /** Swaps the tray to the icon with the white dot. */
+  setBadgeIcon: () => void;
+  /** Swaps the tray back to the plain application icon. */
+  setPlainIcon: () => void;
+};
+
+export function applyTrayBadge(api: TrayIconApi, visible: boolean): void {
+  if (visible) api.setBadgeIcon();
+  else api.setPlainIcon();
 }
 
 export type LaunchAtStartupApi = {

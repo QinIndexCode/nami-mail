@@ -333,8 +333,6 @@ export type DesktopBridge = {
   copyVerificationCode: (code: string) => Promise<{ copied: boolean }>;
   showItemInFolder?: (path: string) => Promise<void>;
   quit?: () => void;
-  /** Desktop only: reports the total unread count so the OS can badge the app icon. */
-  setUnreadBadge?: (count: number) => void;
   /** Desktop only: registers/unregisters Nami Mail as a login item. */
   setLaunchAtStartup?: (enabled: boolean) => void;
   /** Desktop only: enables/disables the global window-focus shortcut. */

@@ -105,6 +105,10 @@
         "to": "icon.ico"
       },
       {
+        "from": "build/tray-badge-icon.png",
+        "to": "tray-badge-icon.png"
+      },
+      {
         "from": "build/nami-update-trust.json",
         "to": "nami-update-trust.json"
       },

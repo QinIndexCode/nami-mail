@@ -3,10 +3,10 @@ import test from "node:test";
 import {
   applyGlobalShortcut,
   applyLaunchAtStartup,
-  applyUnreadBadge,
+  applyTrayBadge,
   buildTrayMenuTemplate,
   extractMailtoUrl,
-  normalizeUnreadBadgeCount,
+  nextTrayBadge,
   resolveTrayVisibilityAction,
 } from "../src/desktop-behaviors.mts";
 
@@ -18,68 +18,27 @@ function callRecorder<T extends (...args: never[]) => unknown>(): { calls: Param
   };
 }
 
-function fakeUnreadBadgeApi(platform: NodeJS.Platform) {
-  const badgeCount = callRecorder<(...args: [number]) => void>();
-  const overlay = callRecorder<(...args: [unknown | null, string]) => void>();
-  const icon = callRecorder<(...args: []) => void>();
-  const description = callRecorder<(...args: []) => void>();
-  return {
-    api: {
-      platform,
-      setBadgeCount: badgeCount.fn,
-      setOverlayIcon: overlay.fn,
-      createOverlayIcon: () => { icon.fn(); return { kind: "overlay-icon" }; },
-      overlayDescription: () => { description.fn(); return "Nami Mail"; },
-    },
-    badgeCount,
-    overlay,
-    icon,
-    description,
-  };
-}
-
-test("normalizeUnreadBadgeCount drops non-finite and non-positive values to zero", () => {
-  assert.equal(normalizeUnreadBadgeCount(undefined), 0);
-  assert.equal(normalizeUnreadBadgeCount(null), 0);
-  assert.equal(normalizeUnreadBadgeCount("3"), 0);
-  assert.equal(normalizeUnreadBadgeCount(Number.NaN), 0);
-  assert.equal(normalizeUnreadBadgeCount(Number.POSITIVE_INFINITY), 0);
-  assert.equal(normalizeUnreadBadgeCount(-2), 0);
-  assert.equal(normalizeUnreadBadgeCount(0), 0);
+test("tray badge lights up on new mail only while the window is not focused", () => {
+  assert.equal(nextTrayBadge({ type: "new-mail", windowFocused: false }), true);
+  assert.equal(nextTrayBadge({ type: "new-mail", windowFocused: true }), false);
 });
 
-test("normalizeUnreadBadgeCount floors positive fractional counts", () => {
-  assert.equal(normalizeUnreadBadgeCount(3), 3);
-  assert.equal(normalizeUnreadBadgeCount(3.9), 3);
-  assert.equal(normalizeUnreadBadgeCount(0.5), 0);
+test("tray badge clears when the window is focused", () => {
+  assert.equal(nextTrayBadge({ type: "window-focused" }), false);
 });
 
-test("unread badge uses the native badge count on macOS", () => {
-  const { api, badgeCount, icon } = fakeUnreadBadgeApi("darwin");
-  applyUnreadBadge(api, 4);
-  assert.deepEqual(badgeCount.calls, [[4]]);
-  assert.equal(icon.calls.length, 0);
-});
+test("applyTrayBadge swaps to the badge icon when visible and back when not", () => {
+  const setBadgeIcon = callRecorder<(...args: []) => void>();
+  const setPlainIcon = callRecorder<(...args: []) => void>();
+  const api = { setBadgeIcon: setBadgeIcon.fn, setPlainIcon: setPlainIcon.fn };
 
-test("unread badge uses the native badge count on Linux", () => {
-  const { api, badgeCount } = fakeUnreadBadgeApi("linux");
-  applyUnreadBadge(api, 0);
-  assert.deepEqual(badgeCount.calls, [[0]]);
-});
+  applyTrayBadge(api, true);
+  assert.equal(setBadgeIcon.calls.length, 1);
+  assert.equal(setPlainIcon.calls.length, 0);
 
-test("unread badge shows the taskbar overlay dot on Windows when unread mail exists", () => {
-  const { api, overlay, icon, description } = fakeUnreadBadgeApi("win32");
-  applyUnreadBadge(api, 7.8);
-  assert.equal(icon.calls.length, 1);
-  assert.deepEqual(overlay.calls, [[{ kind: "overlay-icon" }, "Nami Mail"]]);
-  assert.equal(description.calls.length, 1);
-});
-
-test("unread badge clears the taskbar overlay on Windows when unread mail is gone", () => {
-  const { api, overlay, icon } = fakeUnreadBadgeApi("win32");
-  applyUnreadBadge(api, 0);
-  assert.equal(icon.calls.length, 0);
-  assert.deepEqual(overlay.calls, [[null, ""]]);
+  applyTrayBadge(api, false);
+  assert.equal(setBadgeIcon.calls.length, 1);
+  assert.equal(setPlainIcon.calls.length, 1);
 });
 
 for (const platform of ["darwin", "win32"]) {

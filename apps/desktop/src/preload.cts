@@ -322,10 +322,6 @@ if (contextBridge && ipcRenderer) {
     notify: (payload: NativeNotification) => ipcRenderer.invoke("nami:notify", payload),
     copyVerificationCode: (code: string) => ipcRenderer.invoke("nami:copy-verification-code", code),
     showItemInFolder: (path: string) => ipcRenderer.invoke("nami:show-item-in-folder", path),
-    setUnreadBadge: (count: number) => {
-      if (typeof count !== "number" || !Number.isFinite(count)) return;
-      ipcRenderer.send("nami:set-unread-badge", Math.max(0, Math.floor(count)));
-    },
     setLaunchAtStartup: (enabled: boolean) => {
       if (typeof enabled !== "boolean") return;
       ipcRenderer.send("nami:set-launch-at-startup", enabled);

@@ -118,6 +118,75 @@ async function renderAppIcon(mark, size) {
     .toBuffer();
 }
 
+// The tray swaps to this icon while "new mail arrived but the window is not
+// focused": it is the exact 16px app-icon frame (the same one the ICO carries,
+// rendered by renderAppIcon) with a small white dot in the top-right corner.
+// Nothing else may differ between the two, because the main process shows it
+// as the same tray slot while switching.
+const trayIconSize = 16;
+const trayDotCenterX = 11.5;
+const trayDotCenterY = 4.5;
+const trayDotRadius = 2.5;
+
+function assertWhiteDotBadge(plainPixels, badgedPixels) {
+  assert.equal(plainPixels.length, badgedPixels.length);
+  const channels = 4;
+  // Antialiasing blends the dot's edge, so let the diff extend one pixel
+  // beyond the circle; everything else must stay byte-identical.
+  const tolerance = trayDotRadius + 1;
+  let differingPixels = 0;
+  for (let y = 0; y < trayIconSize; y++) {
+    for (let x = 0; x < trayIconSize; x++) {
+      const offset = (y * trayIconSize + x) * channels;
+      const plain = plainPixels.subarray(offset, offset + channels);
+      const badged = badgedPixels.subarray(offset, offset + channels);
+      if (plain.equals(badged)) continue;
+      differingPixels++;
+      const distance = Math.hypot(x + 0.5 - trayDotCenterX, y + 0.5 - trayDotCenterY);
+      assert.ok(distance <= tolerance, `Badge dot differs outside its circle at (${x}, ${y}).`);
+      // The white dot only brightens pixels (including fully transparent ones
+      // under the rounded corner); any darker or more transparent pixel means
+      // the dot changed the icon beyond its intended shape.
+      assert.ok(
+        badged[0] >= plain[0] && badged[1] >= plain[1] && badged[2] >= plain[2] && badged[3] >= plain[3],
+        `Badge dot darkens pixel (${x}, ${y}): ${[...plain]} -> ${[...badged]}.`,
+      );
+    }
+  }
+  assert.ok(differingPixels > 0, "Tray badge icon contains no white dot.");
+  const centerOffset = (Math.floor(trayDotCenterY) * trayIconSize + Math.floor(trayDotCenterX)) * channels;
+  const center = badgedPixels.subarray(centerOffset, centerOffset + channels);
+  assert.ok(
+    center[0] >= 200 && center[1] >= 200 && center[2] >= 200 && center[3] >= 200,
+    `Tray badge dot center is not solid white: ${[...center]}.`,
+  );
+}
+
+async function renderTrayBadgeIcon(plainTrayFrame) {
+  // The composite pipeline re-encodes semi-transparent pixels with a small
+  // rounding shift anywhere in the image, so the reference must pass through
+  // the same decode -> composite -> encode path (with an empty overlay) or
+  // the icon's corner antialiasing would be mistaken for a diff.
+  const reference = Buffer.from(
+    `<svg width="${trayIconSize}" height="${trayIconSize}" xmlns="http://www.w3.org/2000/svg"></svg>`,
+  );
+  const dot = Buffer.from(
+    `<svg width="${trayIconSize}" height="${trayIconSize}" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="${trayDotCenterX}" cy="${trayDotCenterY}" r="${trayDotRadius}" fill="#ffffff" fill-opacity="0.95"/>
+    </svg>`,
+  );
+  const [referenceImage, badged] = await Promise.all([
+    sharp(plainTrayFrame).composite([{ input: reference, left: 0, top: 0 }]).png({ compressionLevel: 9 }).toBuffer(),
+    sharp(plainTrayFrame).composite([{ input: dot, left: 0, top: 0 }]).png({ compressionLevel: 9 }).toBuffer(),
+  ]);
+  const [referencePixels, badgedPixels] = await Promise.all([
+    sharp(referenceImage).raw().toBuffer(),
+    sharp(badged).raw().toBuffer(),
+  ]);
+  assertWhiteDotBadge(referencePixels, badgedPixels);
+  return badged;
+}
+
 // NSIS assisted-installer bitmaps. The wizard paints the sidebar on the left
 // of the welcome/directory pages and the header strip at the top of every
 // page; electron-builder picks these files up by their default names
@@ -289,6 +358,12 @@ const iconFrames = await Promise.all(iconSizes.map(async (size) => ({
 })));
 const ico = encodeIco(iconFrames);
 const icoEntries = inspectIco(ico);
+// The tray badge icon must composite from the very frame the ICO carries at
+// the tray size, so the swapped-in image matches the app icon pixel for pixel
+// apart from the dot.
+const trayFrame = iconFrames.find(({ size }) => size === trayIconSize);
+assert.ok(trayFrame, "Missing tray-size icon frame.");
+const trayBadgeIcon = await renderTrayBadgeIcon(trayFrame.png);
 
 assert.deepEqual(icoEntries.map(({ width }) => width), iconSizes);
 assert.ok(icoEntries.every(({ width, height, bitDepth, byteLength, offset }) => (
@@ -311,6 +386,7 @@ for (const [name, image, expectedSize] of [
 const outputs = [
   [path.join(projectRoot, "build", "icon.png"), fullSizeIcon],
   [path.join(projectRoot, "build", "icon.ico"), ico],
+  [path.join(projectRoot, "build", "tray-badge-icon.png"), trayBadgeIcon],
   [path.join(projectRoot, "apps", "web", "public", "favicon.ico"), ico],
   [path.join(webBrandDirectory, "mark-light.png"), lightWebMark],
   [path.join(webBrandDirectory, "mark-dark.png"), darkWebMark],
