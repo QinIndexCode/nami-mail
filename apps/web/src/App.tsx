@@ -1306,13 +1306,6 @@ await refreshSubmissions(nextAccounts, { silent: true });
     return bridge.onSettingsChanged(() => void loadSettings());
   }, [loadSettings]);
   useEffect(() => {
-    if (!isDesktop || isDemo) return;
-    // The OS badge reflects the total unread count across accounts; the
-    // host clears it when the count reaches zero (badge handlers no-op in
-    // a browser, where the bridge does not exist).
-    desktopBridge()?.setUnreadBadge?.(stats.unread);
-  }, [stats.unread]);
-  useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query), 250);
     return () => window.clearTimeout(timer);
   }, [query]);

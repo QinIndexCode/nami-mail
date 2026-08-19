@@ -48,7 +48,6 @@ async function installStub(page: Page, initialStatus: StubSnapshot): Promise<voi
     let status = start;
     w.namiDesktop = {
       setCustomNotificationSoundReady: () => undefined,
-      setUnreadBadge: () => undefined,
       copyVerificationCode: async () => ({ copied: true }),
       notify: async () => ({ shown: true }),
       onSettingsChanged: () => () => undefined,
