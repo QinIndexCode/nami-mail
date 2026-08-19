@@ -1,0 +1,65 @@
+name: Sync Wiki
+
+# Maintains the GitHub Wiki from the docs/ directory: generates a flat
+# two-language page tree (scripts/wiki-sync.mjs), merges it into the
+# <owner>/<repo>.wiki clone, and commits only real changes. The default
+# GITHUB_TOKEN can push to the wiki of its own repository, so no secret is
+# needed. The merge keeps hand-written wiki pages and only removes pages a
+# previous sync generated (tracked in .wiki-sync.json).
+#
+# The wiki must be enabled in repository settings. If the wiki repository has
+# never been created (no page exists yet), the checkout step fails with a
+# clear error; create any page in the wiki UI once, then re-run this workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "scripts/wiki-sync.mjs"
+      - "scripts/wiki-sync.test.mjs"
+      - ".github/workflows/wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wiki
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # v4.2.2; pin the action implementation for untrusted pull-request code.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      # v4.4.0; pin the action implementation for untrusted pull-request code.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.14.0
+      - name: Generate wiki tree
+        run: node scripts/wiki-sync.mjs --out "$RUNNER_TEMP/wiki-tree"
+      # The wiki is a separate git repository owned by the same account; the
+      # default token has push access to it alongside the main repository.
+      - name: Checkout wiki
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ github.repository }}.wiki
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: wiki
+      - name: Merge generated tree
+        run: node scripts/wiki-sync.mjs --sync --tree "$RUNNER_TEMP/wiki-tree" --wiki wiki
+      - name: Commit and push
+        run: |
+          cd wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "Wiki is up to date; nothing to commit."
+            exit 0
+          fi
+          git add -A
+          git commit -m "docs: sync wiki from docs/ (${{ github.sha }})"
+          git push
