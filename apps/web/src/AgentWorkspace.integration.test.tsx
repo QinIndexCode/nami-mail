@@ -313,6 +313,37 @@ describe("AgentWorkspace conversation switching", () => {
     expect(container.querySelector(".agent-thinking")).toBeNull();
   });
 
+  it("a mid-run composer shows only the stop button and swaps it for the send button while it has input", async () => {
+    window.localStorage.clear();
+    const ghostBootstrap: AgentBootstrap = {
+      ...h.bootstrap,
+      conversations: [
+        { id: "conv-g", title: "Ghost", preview: "", updatedAt: "2026-08-10T00:00:00.000Z" },
+      ],
+    };
+    await renderWorkspace(ghostBootstrap);
+    expect(headingFor()).toContain("Ghost");
+
+    // A run in flight with an empty composer exposes exactly one affordance.
+    expect(container.querySelectorAll(".agent-send-button")).toHaveLength(1);
+    expect(container.querySelector(".agent-send-button.stop")).not.toBeNull();
+
+    // Typing turns the sole affordance into the send button.
+    setComposer("follow up");
+    await flush();
+    expect(container.querySelector(".agent-send-button.stop")).toBeNull();
+    const send = container.querySelector<HTMLButtonElement>(".agent-send-button");
+    expect(send).not.toBeNull();
+    // A ghost run cannot take a second message, so the send stays gated.
+    expect(send?.disabled).toBe(true);
+
+    // Clearing the input restores the stop affordance.
+    setComposer("");
+    await flush();
+    expect(container.querySelectorAll(".agent-send-button")).toHaveLength(1);
+    expect(container.querySelector(".agent-send-button.stop")).not.toBeNull();
+  });
+
   it("optimistic switch: the UI jumps immediately and renders the record once the fetch lands", async () => {
     await renderWorkspace();
     expect(headingFor()).toContain("Conversation A");

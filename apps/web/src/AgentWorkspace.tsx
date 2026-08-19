@@ -4061,8 +4061,8 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                     )}
                   </div>
                 )}
-                {(streaming || ghostConversationId === active?.id) && <button className="agent-send-button stop" type="button" onClick={ghostConversationId === active?.id ? stopGhostRun : stopStreaming} aria-label={t("agent.composer.stop")} data-tooltip={t("agent.composer.stop")}><Square size={12} fill="currentColor" /></button>}
-                <button className="agent-send-button" type="button" disabled={sendDisabled || ghostConversationId === active?.id} onClick={() => void sendMessage()} aria-label={t("agent.composer.send")} data-tooltip={t("agent.composer.send")}><ArrowUp size={16} strokeWidth={2.5} /></button>
+                {(streaming || ghostConversationId === active?.id) && !composer.trim() && <button className="agent-send-button stop" type="button" onClick={ghostConversationId === active?.id ? stopGhostRun : stopStreaming} aria-label={t("agent.composer.stop")} data-tooltip={t("agent.composer.stop")}><Square size={12} fill="currentColor" /></button>}
+                {(!(streaming || ghostConversationId === active?.id) || Boolean(composer.trim())) && <button className="agent-send-button" type="button" disabled={sendDisabled || ghostConversationId === active?.id} onClick={() => void sendMessage()} aria-label={t("agent.composer.send")} data-tooltip={t("agent.composer.send")}><ArrowUp size={16} strokeWidth={2.5} /></button>}
               </div>
             </div>
           </div>
