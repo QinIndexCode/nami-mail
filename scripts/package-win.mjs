@@ -20,6 +20,12 @@ import {
   writeEd25519UpdateTrust,
 } from "./github-update-assets.mjs";
 import { resolveLocalWindowsElectronDist } from "./electron-dist.mjs";
+import {
+  beginTrustInjection,
+  healTrustInjection,
+  resolveTrustPaths,
+  restoreTrustInjection,
+} from "./package-win-trust.mjs";
 
 if (process.platform !== "win32") {
   throw new Error("Windows installer packaging can only run on Windows.");
@@ -67,7 +73,13 @@ const npmCli = process.env.npm_execpath
   ?? path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
 const electronBuilderCli = path.join(projectRoot, "node_modules", "electron-builder", "cli.js");
 const localElectronDist = await resolveLocalWindowsElectronDist(projectRoot);
-const trustConfigPath = path.join(projectRoot, "build", "nami-update-trust.json");
+const { trustConfigPath, sidecarPath } = resolveTrustPaths(projectRoot);
+
+// A previous run killed between injection and restore leaves the injected
+// key in the tracked trust file; heal that state before capturing the
+// pre-injection contents so the restore sidecar records the true original.
+await healTrustInjection({ trustConfigPath, sidecarPath });
+
 const originalTrustConfig = await fs.readFile(trustConfigPath).catch((error) => {
   if (error?.code === "ENOENT") return undefined;
   throw error;
@@ -107,13 +119,26 @@ function run(command, args, environment = process.env) {
 }
 
 async function restoreTrustConfig() {
-  if (originalTrustConfig) await fs.writeFile(trustConfigPath, originalTrustConfig);
-  else await fs.rm(trustConfigPath, { force: true });
+  await restoreTrustInjection({ trustConfigPath, sidecarPath });
 }
+
+async function restoreTrustForExit(exitCode) {
+  try {
+    await restoreTrustInjection({ trustConfigPath, sidecarPath });
+  } catch (error) {
+    console.error(`[package-win] failed to restore the update trust config during exit: ${error.message}`);
+  }
+  process.exit(exitCode);
+}
+process.once("SIGINT", () => void restoreTrustForExit(130));
+process.once("SIGTERM", () => void restoreTrustForExit(143));
 
 await fs.access(npmCli);
 await fs.access(electronBuilderCli);
-if (ed25519SigningKey) await writeEd25519UpdateTrust(trustConfigPath, ed25519SigningKey);
+if (ed25519SigningKey) {
+  await beginTrustInjection({ trustConfigPath, sidecarPath, originalTrustConfig });
+  await writeEd25519UpdateTrust(trustConfigPath, ed25519SigningKey);
+}
 
 try {
   await run(process.execPath, [npmCli, "run", "build"], cleanEnvironment);
