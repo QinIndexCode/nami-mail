@@ -35,6 +35,7 @@ jobs:
       - run: npm run build:brand:check
       - run: node --test scripts/release-policy.test.mjs
       - run: node --test scripts/build-locale-catalog.test.mjs
+      - run: node --test scripts/dev-server-backoff.test.mjs scripts/package-win-trust.test.mjs scripts/dev-port-sync.test.mjs
       - run: node scripts/build-locale-catalog.mjs --check
       - run: npm run lint
       - run: npm run typecheck
