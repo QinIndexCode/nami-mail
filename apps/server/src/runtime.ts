@@ -59,7 +59,7 @@ import { ServerEventBus, emitAccountSynced, emitSettingsChanged } from "./events
 import { createIdleWatcher, type IdleWatcher } from "./idle.js";
 import { OAuthService } from "./oauth.js";
 import { cleanupExpiredOutboundAttachments, outboundAttachmentDirectory } from "./outbound-attachments.js";
-import { getAppSettings, updateAppSettings, type AppSettings, type AppSettingsPatch } from "./settings.js";
+import { getAppSettings, getSyncMessageLimit, updateAppSettings, type AppSettings, type AppSettingsPatch } from "./settings.js";
 import { submitDueScheduledSubmissions } from "./scheduled-send.js";
 import { releaseDueSnoozedMessages } from "./snooze.js";
 import { syncAccount, scheduleSentSubmissionVerification, type NewInboxMessage } from "./sync.js";
@@ -346,7 +346,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       masterKey: runtimeMasterKey,
       oauthService,
       agentMailEvents,
-      syncMessageLimit: config.syncMessageLimit,
+      syncMessageLimit: getSyncMessageLimit(database),
       outboundAttachmentDirectory: outboundAttachmentDirectory({}),
     });
     agentService = new AgentService({
@@ -426,7 +426,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
           database,
           runtimeMasterKey,
           account.id,
-          config.syncMessageLimit,
+          getSyncMessageLimit(database),
           oauthService,
           agentMailEvents,
         )),
@@ -484,7 +484,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       onChange: (accountId) => {
         void (async () => {
           try {
-            const result = await syncAccount(database, runtimeMasterKey, accountId, config.syncMessageLimit, oauthService, agentMailEvents);
+            const result = await syncAccount(database, runtimeMasterKey, accountId, getSyncMessageLimit(database), oauthService, agentMailEvents);
             if (result.newInboxMessages.length) {
               if (options.onNewInboxMessages) {
                 await options.onNewInboxMessages(result.newInboxMessages);

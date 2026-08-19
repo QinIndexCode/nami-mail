@@ -6,6 +6,7 @@ export const BACKGROUND_PRESETS = ["none", "paper", "mist", "coast", "dawn", "ni
 export const NOTIFICATION_SOUNDS = ["system", "soft", "bright", "none"] as const;
 export const CLOSE_BEHAVIORS = ["ask", "tray", "quit"] as const;
 export const LIST_DENSITIES = ["comfortable", "compact"] as const;
+export const SYNC_MESSAGE_LIMIT_OPTIONS = [0, 200, 500, 1000, 2000, 5000] as const;
 export const AGENT_ACCESS_LEVELS = ["read-only", "send-confirmed", "full-access"] as const;
 
 export type BackgroundPreset = (typeof BACKGROUND_PRESETS)[number];
@@ -13,6 +14,7 @@ export type NotificationSound = (typeof NOTIFICATION_SOUNDS)[number];
 export type CloseBehavior = (typeof CLOSE_BEHAVIORS)[number];
 export type AppTheme = "system" | "light" | "dark";
 export type ListDensity = (typeof LIST_DENSITIES)[number];
+export type SyncMessageLimit = (typeof SYNC_MESSAGE_LIMIT_OPTIONS)[number];
 export type AgentAccessLevel = (typeof AGENT_ACCESS_LEVELS)[number];
 
 const DEFAULT_AUTO_REPLY: AutoReplyConfig = {
@@ -36,6 +38,8 @@ export type AppSettings = {
   refreshIntervalSeconds: 30 | 60 | 180 | 300;
   /** Live IMAP IDLE watcher: new inbox mail triggers an immediate sync instead of waiting for the next poll. */
   realtimePushEnabled: boolean;
+  /** Per-folder mailbox sync cap: 0 syncs the whole mailbox (Gmail-style, no cap); a positive value fetches only the newest N messages per folder. */
+  syncMessageLimit: SyncMessageLimit;
   closeBehavior: CloseBehavior;
   /** Desktop only: register Nami Mail as a login item. Browser mode ignores it. */
   launchAtStartup: boolean;
@@ -66,6 +70,7 @@ const defaults: Omit<AppSettings, "updatedAt"> = {
   notificationSound: "soft",
   refreshIntervalSeconds: 60,
   realtimePushEnabled: true,
+  syncMessageLimit: 2000,
   closeBehavior: "ask",
   launchAtStartup: false,
   globalShortcutEnabled: false,
@@ -89,6 +94,7 @@ type SettingsRow = {
   notification_sound: NotificationSound;
   refresh_interval_seconds: number;
   realtime_push_enabled: number;
+  sync_message_limit: number;
   close_behavior: CloseBehavior;
   launch_at_startup: number;
   global_shortcut_enabled: number;
@@ -119,13 +125,14 @@ function ensureSettingsRow(db: DatabaseHandle): void {
       id, theme, locale, background_preset, background_intensity,
       notifications_enabled, notify_when_focused, notification_sound,
       refresh_interval_seconds, realtime_push_enabled, close_behavior, launch_at_startup, global_shortcut_enabled,
+      sync_message_limit,
       agent_tool_round_limit,
       list_density, avatar_gravatar_enabled, agent_access_level, agent_cli_access_level, agent_mcp_access_level,
       custom_background_filename, updated_at
     ) VALUES (1, @theme, @locale, @backgroundPreset, @backgroundIntensity, @notificationsEnabled,
       @notifyWhenFocused, @notificationSound, @refreshIntervalSeconds, @realtimePushEnabled, @closeBehavior,
       @launchAtStartup, @globalShortcutEnabled,
-      @agentToolRoundLimit, @listDensity, @avatarGravatarEnabled, @agentAccessLevel, @agentCliAccessLevel, @agentMcpAccessLevel,
+      @syncMessageLimit, @agentToolRoundLimit, @listDensity, @avatarGravatarEnabled, @agentAccessLevel, @agentCliAccessLevel, @agentMcpAccessLevel,
       NULL, @updatedAt)
   `).run({
     ...defaults,
@@ -150,6 +157,7 @@ function rowToSettings(row: SettingsRow): AppSettings {
     notificationSound: row.notification_sound,
     refreshIntervalSeconds: row.refresh_interval_seconds as AppSettings["refreshIntervalSeconds"],
     realtimePushEnabled: Boolean(row.realtime_push_enabled ?? 1),
+    syncMessageLimit: row.sync_message_limit as SyncMessageLimit,
     closeBehavior: row.close_behavior,
     launchAtStartup: Boolean(row.launch_at_startup ?? 0),
     globalShortcutEnabled: Boolean(row.global_shortcut_enabled ?? 0),
@@ -199,6 +207,7 @@ export function updateAppSettings(db: DatabaseHandle, patch: AppSettingsPatch): 
       close_behavior = @closeBehavior,
       launch_at_startup = @launchAtStartup,
       global_shortcut_enabled = @globalShortcutEnabled,
+      sync_message_limit = @syncMessageLimit,
       agent_tool_round_limit = @agentToolRoundLimit,
       list_density = @listDensity,
       avatar_gravatar_enabled = @avatarGravatarEnabled,
@@ -221,4 +230,17 @@ export function updateAppSettings(db: DatabaseHandle, patch: AppSettingsPatch): 
   });
 
   return next;
+}
+
+/**
+ * The one place every sync path reads its per-folder message cap from: an
+ * explicitly set SYNC_MESSAGE_LIMIT environment variable wins over the UI
+ * setting, which wins over the packaged default. The environment keeps its
+ * historical range (0..100000) so scripts/dev setups can raise the cap beyond
+ * the UI ladder without touching the database.
+ */
+export function getSyncMessageLimit(db: DatabaseHandle): number {
+  const parsed = Number.parseInt(process.env.SYNC_MESSAGE_LIMIT ?? "", 10);
+  if (Number.isFinite(parsed)) return Math.min(100_000, Math.max(0, parsed));
+  return getAppSettings(db).syncMessageLimit;
 }

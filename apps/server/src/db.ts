@@ -213,6 +213,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
   notification_sound TEXT NOT NULL DEFAULT 'soft' CHECK (notification_sound IN ('system', 'soft', 'bright', 'none')),
   refresh_interval_seconds INTEGER NOT NULL DEFAULT 60 CHECK (refresh_interval_seconds IN (30, 60, 180, 300)),
   realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1)),
+  sync_message_limit INTEGER NOT NULL DEFAULT 2000 CHECK (sync_message_limit IN (0, 200, 500, 1000, 2000, 5000)),
   close_behavior TEXT NOT NULL DEFAULT 'ask' CHECK (close_behavior IN ('ask', 'tray', 'quit')),
   launch_at_startup INTEGER NOT NULL DEFAULT 0 CHECK (launch_at_startup IN (0, 1)),
   global_shortcut_enabled INTEGER NOT NULL DEFAULT 0 CHECK (global_shortcut_enabled IN (0, 1)),
@@ -592,6 +593,13 @@ function migrateDatabase(db: DatabaseHandle): void {
   // the old default (never explicitly configured) follow along; values the
   // user set on purpose are left untouched.
   db.prepare("UPDATE app_settings SET agent_tool_round_limit = 30 WHERE agent_tool_round_limit = 15").run();
+  if (!settingsColumns.some((column) => column.name === "sync_message_limit")) {
+    // Per-folder mailbox sync cap: 0 = whole mailbox (Gmail-style, no cap).
+    // The CHECK mirrors the UI picker ladder in settings.ts. The default never
+    // existed in the database before (the old 200 lived in the environment), so
+    // the ALTER's DEFAULT covers every upgrading row without a follow-up update.
+    db.exec("ALTER TABLE app_settings ADD COLUMN sync_message_limit INTEGER NOT NULL DEFAULT 2000 CHECK (sync_message_limit IN (0, 200, 500, 1000, 2000, 5000))");
+  }
   if (!settingsColumns.some((column) => column.name === "realtime_push_enabled")) {
     db.exec("ALTER TABLE app_settings ADD COLUMN realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1))");
   }

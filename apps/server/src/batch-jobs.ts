@@ -11,7 +11,7 @@ import {
 } from "./sync.js";
 import { AgentMailStateEvents } from "./agent/mail-state-events.js";
 import { OAuthService } from "./oauth.js";
-import { config } from "./config.js";
+import { getSyncMessageLimit } from "./settings.js";
 
 // In-memory batch jobs for predicate-scoped ("select all matching this view")
 // operations. Jobs resolve the affected message ids server-side so a 20 000
@@ -194,7 +194,7 @@ async function runJob(record: BatchJobRecord, deps: BatchJobDeps): Promise<void>
           // The provider could not confirm a batch MOVE outcome (no UIDPLUS or
           // a lost response). Reconcile in the background so the cache shows
           // the verified destination instead of a stale local snapshot.
-          void syncAccount(deps.db, deps.masterKey, accountId, config.syncMessageLimit, deps.oauthService, deps.agentMailEvents)
+          void syncAccount(deps.db, deps.masterKey, accountId, getSyncMessageLimit(deps.db), deps.oauthService, deps.agentMailEvents)
             .catch(() => console.warn(`Batch job ${record.id}: background move reconciliation failed for account ${accountId}`));
         }
         record.done += chunk.length;

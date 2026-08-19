@@ -61,11 +61,11 @@ export const config = {
   masterKeyPath: resolveFromRoot(process.env.MASTER_KEY_PATH?.trim() || "./data/master.key"),
   // Per-account mailbox sync cap: 0 syncs the whole mailbox like Gmail's web
   // client (no limit), a positive value fetches only the newest N messages.
-  // The default matches the documented initial-sync cache (the README
-  // promises "the newest 200 messages per folder") so a first connection
-  // does not silently pull a multi-GB mailbox; set 0 or a larger value for
-  // mailboxes that need the full history.
-  syncMessageLimit: integerEnv("SYNC_MESSAGE_LIMIT", 200, 0, 100_000),
+  // This environment variable is an override for the user-facing setting: when
+  // set explicitly it wins over the UI value (see getSyncMessageLimit in
+  // settings.ts), otherwise the default mirrors the packaged setting default so
+  // a first connection does not silently pull a multi-GB mailbox.
+  syncMessageLimit: integerEnv("SYNC_MESSAGE_LIMIT", 2000, 0, 100_000),
   logLevel: process.env.LOG_LEVEL?.trim() || "info",
   webDistPath: resolveFromRoot(process.env.WEB_DIST_PATH?.trim() || "./apps/web/dist"),
   // Standalone runs may still set it explicitly in the environment. The

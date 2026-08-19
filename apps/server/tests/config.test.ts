@@ -63,9 +63,9 @@ describe("sync message limit config", () => {
     return config;
   }
 
-  it("defaults to the newest 200 messages per folder without an override", async () => {
+  it("defaults to the newest 2000 messages per folder without an override", async () => {
     vi.stubEnv("SYNC_MESSAGE_LIMIT", "");
-    await expect(loadConfig()).resolves.toMatchObject({ syncMessageLimit: 200 });
+    await expect(loadConfig()).resolves.toMatchObject({ syncMessageLimit: 2000 });
   });
 
   it("honors an explicit SYNC_MESSAGE_LIMIT override", async () => {

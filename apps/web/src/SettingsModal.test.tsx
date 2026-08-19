@@ -61,6 +61,36 @@ describe("settings model provider entry", () => {
   });
 });
 
+describe("settings per-folder sync limit picker", () => {
+  it("renders the sync cap picker in the sync section with the default selected", () => {
+    const markup = renderSettings(false);
+
+    expect(markup).toContain('data-settings-nav="sync"');
+    expect(markup).toContain('id="sync-message-limit"');
+    expect(markup).toContain(`aria-label="${zh("settings.sync.limit.label")}"`);
+    expect(markup).toContain(zh("settings.sync.limit.description"));
+    // The dropdown is a custom combobox; its trigger renders the selected label.
+    expect(markup).toContain('class="themed-select-value">2000');
+  });
+
+  it("renders the \"all\" label when the persisted value is 0", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider>
+        <SettingsModal
+          settings={{ ...defaultAppSettings, syncMessageLimit: 0 }}
+          accounts={[]}
+          demoMode={false}
+          onClose={() => undefined}
+          onSettingsChange={() => undefined}
+          onOpenAgentProviderSettings={() => undefined}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain(`class="themed-select-value">${zh("settings.sync.limit.all")}`);
+  });
+});
+
 describe("settings Escape handling", () => {
   it("leaves Escape to an expanded themed select when capture retargets the key event", () => {
     const combobox = {};

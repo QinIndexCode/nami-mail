@@ -163,7 +163,9 @@ import {
   NOTIFICATION_SOUNDS,
   LIST_DENSITIES,
   AGENT_ACCESS_LEVELS,
+  SYNC_MESSAGE_LIMIT_OPTIONS,
   getAppSettings,
+  getSyncMessageLimit,
   updateAppSettings,
   type AppSettings,
   type AppSettingsPatch,
@@ -346,6 +348,7 @@ const settingsPatchSchema = z.object({
   notificationSound: z.enum(NOTIFICATION_SOUNDS).optional(),
   refreshIntervalSeconds: z.union([z.literal(30), z.literal(60), z.literal(180), z.literal(300)]).optional(),
   realtimePushEnabled: z.boolean().optional(),
+  syncMessageLimit: z.union(SYNC_MESSAGE_LIMIT_OPTIONS.map((value) => z.literal(value))).optional(),
   closeBehavior: z.enum(CLOSE_BEHAVIORS).optional(),
   launchAtStartup: z.boolean().optional(),
   globalShortcutEnabled: z.boolean().optional(),
@@ -744,7 +747,7 @@ function startOAuthInitialSync(app: FastifyInstance, context: RuntimeContext, ac
     context.db,
     context.masterKey,
     accountId,
-    config.syncMessageLimit,
+    getSyncMessageLimit(context.db),
     context.oauthService,
     context.agentMailEvents,
   )
@@ -888,6 +891,7 @@ function publicSettings(context: RuntimeContext, settings: AppSettings) {
     notificationSound: settings.notificationSound,
     refreshIntervalSeconds: settings.refreshIntervalSeconds,
     realtimePushEnabled: settings.realtimePushEnabled,
+    syncMessageLimit: settings.syncMessageLimit,
     closeBehavior: settings.closeBehavior,
     launchAtStartup: settings.launchAtStartup,
     globalShortcutEnabled: settings.globalShortcutEnabled,
@@ -1041,7 +1045,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       masterKey: context.masterKey,
       oauthService: context.oauthService,
       agentMailEvents: context.agentMailEvents,
-      syncMessageLimit: config.syncMessageLimit,
+      syncMessageLimit: getSyncMessageLimit(context.db),
       outboundAttachmentDirectory: outboundAttachmentDirectory(context),
     })
     : undefined;
@@ -2102,7 +2106,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       context.db,
       context.masterKey,
       id,
-      config.syncMessageLimit,
+      getSyncMessageLimit(context.db),
       context.oauthService,
       context.agentMailEvents,
     )
@@ -2217,7 +2221,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       context.db,
       context.masterKey,
       id,
-      config.syncMessageLimit,
+      getSyncMessageLimit(context.db),
       context.oauthService,
       context.agentMailEvents,
     )
@@ -2298,7 +2302,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         context.db,
         context.masterKey,
         accountId,
-        config.syncMessageLimit,
+        getSyncMessageLimit(context.db),
         context.oauthService,
         context.agentMailEvents,
         syncController.signal,
@@ -3100,7 +3104,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
           context.db,
           context.masterKey,
           accountId,
-          config.syncMessageLimit,
+          getSyncMessageLimit(context.db),
           context.oauthService,
           context.agentMailEvents,
         )
@@ -3193,7 +3197,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
           context.db,
           context.masterKey,
           accountId,
-          config.syncMessageLimit,
+          getSyncMessageLimit(context.db),
           context.oauthService,
           context.agentMailEvents,
         )
