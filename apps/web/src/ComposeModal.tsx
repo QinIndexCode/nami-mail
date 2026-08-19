@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
-import { CalendarClock, Clock, FileText, LoaderCircle, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
+import { CalendarClock, FilePenLine, LayoutTemplate, LoaderCircle, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { presentAttachment } from "./attachmentPresentation";
 import { summarizeComposeAttachments } from "./attachmentWorkflow";
@@ -524,12 +524,12 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
           </div>
           <label className="compose-row" htmlFor="compose-cc"><span>{t("compose.cc")}</span><input id="compose-cc" type="text" value={cc} onChange={(event) => setCc(event.target.value)} placeholder={t("compose.ccPlaceholder")} disabled={busy || discarding} /></label>
           <label className="compose-row" htmlFor="compose-subject"><span>{t("compose.subject")}</span><input id="compose-subject" type="text" value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={t("compose.subjectPlaceholder")} disabled={busy || discarding} /></label>
-          <label className="compose-row compose-schedule-row" htmlFor="compose-schedule"><span><Clock size={14} />{t("compose.schedule")}</span><span className="compose-schedule-field"><CalendarClock size={15} className="compose-schedule-icon" /><DatePicker mode="datetime" value={sendAtLocal} onChange={setSendAtLocal} disabled={busy || discarding} aria-label={t("compose.schedule")} />{sendAtLocal ? <button className="compose-schedule-clear" type="button" onClick={() => setSendAtLocal("")} disabled={busy || discarding} aria-label={t("compose.schedule.clear")}><X size={15} /></button> : null}</span></label>
+          <label className="compose-row compose-schedule-row" htmlFor="compose-schedule"><span><CalendarClock size={14} />{t("compose.schedule")}</span><span className="compose-schedule-field"><CalendarClock size={15} className="compose-schedule-icon" /><DatePicker mode="datetime" value={sendAtLocal} onChange={setSendAtLocal} disabled={busy || discarding} aria-label={t("compose.schedule")} />{sendAtLocal ? <button className="compose-schedule-clear" type="button" onClick={() => setSendAtLocal("")} disabled={busy || discarding} aria-label={t("compose.schedule.clear")}><X size={15} /></button> : null}</span></label>
           <div className="compose-schedule-quick" role="group" aria-label={t("compose.schedule.quickLabel")}>
             {scheduleOptions.map((option) => (
               <button key={option.key} type="button" className={`schedule-chip${sendAtLocal === datetimeLocalFromDate(option.compute()) ? " active" : ""}`} onClick={() => setSendAtLocal(datetimeLocalFromDate(option.compute()))} disabled={busy || discarding}>{option.label}</button>
             ))}
-            <button className="secondary-button compose-template-toggle" type="button" disabled={busy || discarding} onClick={toggleTemplatePicker}><FileText size={15} />{t("compose.templates")}</button>{templatePickerOpen && (
+            <button className="secondary-button compose-template-toggle" type="button" disabled={busy || discarding} onClick={toggleTemplatePicker}><LayoutTemplate size={15} />{t("compose.templates")}</button>{templatePickerOpen && (
               <div className="compose-template-picker" role="listbox" aria-label={t("compose.templates")}>
                 {isDemo ? (
                   <p className="compose-template-empty" role="status">{t("compose.templates.demoUnavailable")}</p>
@@ -579,7 +579,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
           {deliveryNotice && <div className="form-status warning" role="status"><LoaderCircle className="spin" size={17} />{deliveryNotice}</div>}
           {error && <div id="compose-error" className="form-status error" role="alert"><X size={17} />{error}</div>}
           <footer className="compose-footer">
-            <button className="secondary-button" type="button" disabled={busy || uploading || discarding || hasPendingUploads || !accountId} onClick={() => void saveDraft()}>{busy ? <LoaderCircle className="spin" size={17} /> : <FileText size={17} />}{t("compose.saveDraft")}</button>
+            <button className="secondary-button" type="button" disabled={busy || uploading || discarding || hasPendingUploads || !accountId} onClick={() => void saveDraft()}>{busy ? <LoaderCircle className="spin" size={17} /> : <FilePenLine size={17} />}{t("compose.saveDraft")}</button>
             <button className="primary-button" type="submit" disabled={busy || uploading || discarding || hasPendingUploads || !accountId}>{busy ? <LoaderCircle className="spin" size={17} /> : scheduled ? <CalendarClock size={17} /> : <Send size={17} />}{busy ? t("compose.sending") : scheduled ? t("compose.scheduleSend") : t("compose.send")}</button>
           </footer>
         </form>

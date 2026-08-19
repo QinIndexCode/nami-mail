@@ -1,5 +1,5 @@
 import { type ReactNode, type RefObject } from "react";
-import { Archive, FileArchive, FileAudio, FileCode2, FileImage, FileSpreadsheet, FileText, Folder, Inbox, Send, Trash2 } from "lucide-react";
+import { Archive, FileArchive, FileAudio, FileCode2, FileImage, FilePenLine, FileSpreadsheet, FileText, Folder, Inbox, Send, Trash2 } from "lucide-react";
 import type { AttachmentKind } from "./attachmentPresentation";
 import type { OutboundAttachment } from "./types";
 
@@ -76,7 +76,7 @@ export function FolderNavigationIcon({ specialUse }: { specialUse: string | null
       : specialUse === "\\Sent"
         ? <Send size={15} />
         : specialUse === "\\Drafts"
-          ? <FileText size={15} />
+          ? <FilePenLine size={15} />
           : specialUse === "\\Trash"
             ? <Trash2 size={15} />
             : <Folder size={15} />;

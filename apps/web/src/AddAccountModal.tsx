@@ -5,12 +5,12 @@ import {
   CircleAlert,
   Copy,
   ExternalLink,
-  KeyRound,
   LoaderCircle,
   Mail,
+  MailCog,
   Plus,
-  Server,
   ShieldCheck,
+  Wand2,
   X,
 } from "lucide-react";
 import { api } from "./api";
@@ -823,7 +823,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
                 onClick={() => selectProvider(CUSTOM_IMAP_PROVIDER_ID)}
                 disabled={busy || accountAdded}
               >
-                <span className="provider-choice-mark" aria-hidden="true"><Server size={15} /></span>
+                <span className="provider-choice-mark" aria-hidden="true"><MailCog size={15} /></span>
                 <span className="provider-choice-copy">
                   <strong>{t("account.provider.custom_name")}</strong>
                   <small>{t("account.provider.custom_description")}</small>
@@ -922,7 +922,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
           {guideAvailable && !accountAdded && guideProvider && (
             <>
               <button className="guide-toggle" type="button" aria-expanded={showGuide} onClick={() => setShowGuide((value) => !value)} disabled={busy}>
-                <KeyRound size={15} />
+                <Wand2 size={15} />
                 <span>{guideIsPreview
                   ? t("account.guide.toggle_preview", { provider: guideProviderName })
                   : t("account.guide.toggle", { provider: guideProviderName })}</span>

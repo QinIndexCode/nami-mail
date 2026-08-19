@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight, FileText, LoaderCircle, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, LayoutTemplate, LoaderCircle, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { mailErrorMessage } from "./errorPresentation";
@@ -169,7 +169,7 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
     return (
       <section className="settings-section" aria-labelledby="templates-settings">
         <div className="settings-section-title">
-          <FileText size={16} />
+          <LayoutTemplate size={16} />
           <div><span>{t("settings.templates.title")}</span><p id="templates-settings">{t("settings.templates.description")}</p></div>
         </div>
         <p className="settings-empty" role="status">{t("settings.templates.demoUnavailable")}</p>
@@ -249,7 +249,7 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
     <>
       <section className="settings-section" aria-labelledby="templates-settings">
         <div className="settings-section-title">
-          <FileText size={16} />
+          <LayoutTemplate size={16} />
           <div><span>{t("settings.templates.title")}</span><p id="templates-settings">{t("settings.templates.description")}</p></div>
         </div>
 
@@ -328,7 +328,7 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
                           </label>
                         )}
                         <div className="template-head">
-                          <span className="template-icon" aria-hidden="true"><FileText size={16} /></span>
+                          <span className="template-icon" aria-hidden="true"><LayoutTemplate size={16} /></span>
                           <div className="template-copy">
                             <strong>{template.name}{template.builtin && <em className="template-builtin-badge">{t("settings.templates.builtinBadge")}</em>}</strong>
                             {template.subject && <small className="template-subject">{template.subject}</small>}

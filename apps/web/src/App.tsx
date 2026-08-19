@@ -5,7 +5,8 @@ import {
   Archive,
   ArrowLeft,
   AtSign,
-  CalendarClock,
+  Calendar,
+  CalendarArrowDown,
   Check,
   ChevronDown,
   CircleAlert,
@@ -13,10 +14,11 @@ import {
   Copy,
   Download,
   Eye,
-  FileText,
+  FilePenLine,
   Forward,
   Inbox,
   Layers3,
+  LayoutTemplate,
   ListChecks,
   ListFilter,
   LoaderCircle,
@@ -3727,7 +3729,7 @@ const emptyMessageList = useMemo(() => (query.trim()
             <button aria-pressed={view === "archived"} className={view === "archived" ? "active" : ""} onClick={() => chooseView("archived")}><Archive size={18} /><span>{t("mail.action.archive")}</span></button>
             <button aria-pressed={view === "snoozed"} className={view === "snoozed" ? "active" : ""} onClick={() => chooseView("snoozed")}><Clock size={18} /><span>{t("mail.snoozed")}</span></button>
             <button aria-pressed={view === "attachments"} className={view === "attachments" ? "active" : ""} onClick={() => chooseView("attachments")}><Paperclip size={18} /><span>{t("mail.attachments")}</span></button>
-            <button className={selectedFolder === draftsFolder?.path ? "active" : ""} disabled={!draftsFolder} onClick={() => draftsFolder && chooseFolder(draftsFolder.path)}><FileText size={18} /><span>{t("mail.drafts")}</span></button>
+            <button className={selectedFolder === draftsFolder?.path ? "active" : ""} disabled={!draftsFolder} onClick={() => draftsFolder && chooseFolder(draftsFolder.path)}><FilePenLine size={18} /><span>{t("mail.drafts")}</span></button>
             <button className={selectedFolder === sentFolder?.path ? "active" : ""} disabled={!sentFolder} onClick={() => sentFolder && chooseFolder(sentFolder.path)}><Send size={18} /><span>{t("mail.sent")}</span></button>
           </nav>
 
@@ -3952,7 +3954,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                         <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked || selectedIsArchived} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />{t("mail.action.archive")}</button>
                         <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void exportSelectedEml(); }}><Download size={16} />{t("mail.action.exportEml")}</button>
                         <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportContactVcf(); }}><UserRound size={16} />{t("mail.action.saveVcf")}</button>
-                        <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportCalendarIcs(); }}><CalendarClock size={16} />{t("mail.action.exportIcs")}</button>
+                        <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportCalendarIcs(); }}><CalendarArrowDown size={16} />{t("mail.action.exportIcs")}</button>
                         <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); printSelectedMessage(); }}><Printer size={16} />{t("mail.action.print")}</button>
                         {!selectedIsInJunk && (
                           <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("junk"); }}><ShieldCheck size={16} />{t("mail.action.reportSpam")}</button>
@@ -4100,9 +4102,9 @@ const emptyMessageList = useMemo(() => (query.trim()
           <IconButton label={t("settings.title")} onClick={() => { setMobileSidebar(false); setSettingsOpen(true); }}><Settings size={18} /></IconButton>
           <IconButton label={t("sending.title")} className={submissionAttentionCount ? "attention" : ""} onClick={() => { setMobileSidebar(false); setSendingStatusOpen(true); void refreshSubmissions(accounts, { silent: true }); }}><ListChecks size={18} />{submissionOutstandingCount > 0 && <span className="rail-badge" aria-hidden="true">{submissionOutstandingCount}</span>}</IconButton>
           <span className="icon-rail-divider" aria-hidden="true" />
-          <IconButton label={t("calendar.title")} onClick={() => { setMobileSidebar(false); setCalendarOpen(true); if (!isDemo) calendarCache.warm(); }}><CalendarClock size={18} /></IconButton>
+          <IconButton label={t("calendar.title")} onClick={() => { setMobileSidebar(false); setCalendarOpen(true); if (!isDemo) calendarCache.warm(); }}><Calendar size={18} /></IconButton>
           <IconButton label={t("settings.contacts.title")} onClick={() => { setMobileSidebar(false); setContactsOpen(true); if (!isDemo) contactsCache.warm(); }}><Users size={18} /></IconButton>
-          <IconButton label={t("settings.templates.title")} onClick={() => { setMobileSidebar(false); setTemplatesOpen(true); if (!isDemo) templatesCache.warm(); }}><FileText size={18} /></IconButton>
+          <IconButton label={t("settings.templates.title")} onClick={() => { setMobileSidebar(false); setTemplatesOpen(true); if (!isDemo) templatesCache.warm(); }}><LayoutTemplate size={18} /></IconButton>
           <IconButton label={t("settings.account.title")} onClick={() => { setMobileSidebar(false); setAccountsOpen(true); }}><AtSign size={18} /></IconButton>
         </aside>
       </main>
