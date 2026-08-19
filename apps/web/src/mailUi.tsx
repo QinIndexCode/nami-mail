@@ -1,5 +1,5 @@
 import { type ReactNode, type RefObject } from "react";
-import { Archive, FileArchive, FileAudio, FileCode2, FileImage, FilePenLine, FileSpreadsheet, FileText, Folder, Inbox, Send, Trash2 } from "lucide-react";
+import { Archive, FileArchive, FileAudio, FileCode2, FileImage, FilePenLine, FileSpreadsheet, FileText, Flag, Folder, Inbox, MailWarning, Mails, SendHorizontal, Star, Trash2 } from "lucide-react";
 import type { AttachmentKind } from "./attachmentPresentation";
 import type { OutboundAttachment } from "./types";
 
@@ -68,17 +68,28 @@ export function AttachmentFileIcon({ kind }: { kind: AttachmentKind }) {
   return <span className={`attachment-file-icon kind-${kind}`} aria-hidden="true">{icon}</span>;
 }
 
-export function FolderNavigationIcon({ specialUse }: { specialUse: string | null }) {
+export function FolderNavigationIcon({ specialUse, name }: { specialUse: string | null; name?: string }) {
+  // Gmail marks [Gmail]/重要 without any special-use attribute; fall back on
+  // the folder name so important folders keep their own icon.
+  const looksImportant = name !== undefined && (name.includes("重要") || name.toLowerCase().includes("important"));
   const icon = specialUse === "\\Inbox"
     ? <Inbox size={15} />
-    : specialUse === "\\Archive" || specialUse === "\\All"
+    : specialUse === "\\Archive"
       ? <Archive size={15} />
-      : specialUse === "\\Sent"
-        ? <Send size={15} />
-        : specialUse === "\\Drafts"
-          ? <FilePenLine size={15} />
-          : specialUse === "\\Trash"
-            ? <Trash2 size={15} />
-            : <Folder size={15} />;
+      : specialUse === "\\All"
+        ? <Mails size={15} />
+        : specialUse === "\\Sent"
+          ? <SendHorizontal size={15} />
+          : specialUse === "\\Drafts"
+            ? <FilePenLine size={15} />
+            : specialUse === "\\Trash"
+              ? <Trash2 size={15} />
+              : specialUse === "\\Junk" || specialUse === "\\Spam"
+                ? <MailWarning size={15} />
+                : specialUse === "\\Flagged"
+                  ? <Star size={15} />
+                  : specialUse === "\\Important" || looksImportant
+                    ? <Flag size={15} />
+                    : <Folder size={15} />;
   return <span aria-hidden="true">{icon}</span>;
 }

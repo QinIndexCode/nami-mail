@@ -3767,7 +3767,7 @@ const emptyMessageList = useMemo(() => (query.trim()
               <>
                 <span className="folder-title">{t("mail.folders")}</span>
                 {selectedAccountRecord.folders.map((folder) => (
-                  <button key={folder.path} className={selectedFolder === folder.path ? "active" : ""} aria-pressed={selectedFolder === folder.path} onClick={() => chooseFolder(folder.path)}><FolderNavigationIcon specialUse={folder.specialUse} /><span>{folder.name}</span><em>{folder.unseen || ""}</em></button>
+                  <button key={folder.path} className={selectedFolder === folder.path ? "active" : ""} aria-pressed={selectedFolder === folder.path} onClick={() => chooseFolder(folder.path)}><FolderNavigationIcon specialUse={folder.specialUse} name={folder.name} /><span>{folder.name}</span><em>{folder.unseen || ""}</em></button>
                 ))}
               </>
             )}
