@@ -11618,6 +11618,33 @@ font-family:DM Mono,monospace;
 font-size:10px;
 font-style:normal
 }
+.agent-revoke-notice.error
+{
+border:1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
+background:color-mix(in srgb, var(--danger) 9%, var(--panel-muted));
+color:color-mix(in srgb, var(--danger) 75%, var(--text))
+}
+.agent-revoke-notice.error > svg
+{
+color:var(--danger);
+flex:none
+}
+.agent-revoke-notice.error .agent-revoke-dismiss
+{
+border:0;
+background:transparent;
+color:var(--text-soft);
+cursor:pointer;
+padding:2px;
+margin-left:auto;
+border-radius:4px;
+display:flex
+}
+.agent-revoke-notice.error .agent-revoke-dismiss:hover
+{
+background:var(--hover);
+color:var(--text)
+}
 .agent-message-quote
 {
 border:1px solid color-mix(in srgb, var(--focus-ring) 25%, var(--line));

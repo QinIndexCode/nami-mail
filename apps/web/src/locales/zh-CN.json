@@ -1477,6 +1477,8 @@
     "agent.message.revoke": "撤回",
     "agent.message.revokeConfirm": "确认撤回？",
     "agent.message.revokeFailed": "撤回失败，已恢复该消息",
+    "agent.message.revokeFailedNotFound": "消息已不存在，撤回未生效",
+    "agent.message.revokeFailedService": "撤回未生效：本地服务未响应，消息已恢复",
     "agent.message.revoked": "已撤回",
     "agent.message.revokeNotice": "已撤回信息",
     "agent.message.resend": "重新发送并编辑",

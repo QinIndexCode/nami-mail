@@ -41,3 +41,4 @@ build/namimail-path.ps1
 build/nsis-plugin/
 build/x86-unicode/
 build/nami-update-trust.json.package-win-original
+.zcode/

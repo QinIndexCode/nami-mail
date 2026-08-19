@@ -366,6 +366,15 @@ export type AgentServiceOptions = {
    */
   modelRetryBackoffMs?: readonly number[];
   /**
+   * Wall-clock cap for a single agent run. Every bounded wait — provider
+   * timeouts, retries, a five-minute confirmation wait, first-turn title
+   * generation — fits inside it; the watchdog only fires on a run stuck in a
+   * wait that never observes the abort signal. A stuck run must not hold the
+   * conversation's activeRuns slot forever, otherwise every later send is
+   * refused with CONFLICT. Optional; defaults to 20 minutes.
+   */
+  runDeadlineMs?: number;
+  /**
    * Used by the settings tool to decide whether a "custom" background preset is
    * actually selectable (a custom image file must already exist). Optional;
    * when absent the tool always reports no custom background.
@@ -637,6 +646,42 @@ function delayWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
       resolve();
     }, ms);
     signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+const defaultRunDeadlineMs = 20 * 60_000;
+
+/**
+ * Internal marker used by the run watchdog: the run exceeded its wall-clock
+ * deadline. Unlike a user cancel, a deadline-aborted run still persists its
+ * error turn so the conversation never ends with an orphan user message.
+ */
+class RunTimeoutError extends Error {
+  constructor() {
+    super("Agent run deadline exceeded");
+    this.name = "RunTimeoutError";
+  }
+}
+
+/** Await a promise unless the signal aborts first, then reject with the run's
+ *  CANCELLED error. Lets waits that do not observe a signal themselves (the
+ *  RAG drain) respond to cancellation instead of hanging the activeRuns slot
+ *  until its watchdog fires. */
+async function awaitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw new AgentServiceError("CANCELLED", "Agent 生成已停止。", 409, true);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new AgentServiceError("CANCELLED", "Agent 生成已停止。", 409, true));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
   });
 }
 
@@ -1650,9 +1695,17 @@ export class AgentService {
       at,
     } satisfies ConversationRevoke);
     if (revoked && target.role === "user") {
-      const followStart = state.messages.findIndex((message) => message.id === messageId) + 1;
-      for (let index = followStart; index < state.messages.length; index++) {
-        const follow = state.messages[index]!;
+      // Cascade over the persisted snapshot plus the run's in-flight assistant
+      // (not appended yet): a revoke that lands mid-stream must also retract
+      // the reply being built, otherwise it persists unmarked and leaks back
+      // into the model context as an orphan reply on the next turn.
+      const inFlight = this.activeRuns.get(conversationId)?.inFlight;
+      const cascaded = inFlight && inFlight.role === "assistant"
+        ? [...state.messages, inFlight]
+        : state.messages;
+      const followStart = cascaded.findIndex((message) => message.id === messageId) + 1;
+      for (let index = followStart; index < cascaded.length; index++) {
+        const follow = cascaded[index]!;
         if (follow.role === "user") break;
         this.conversations.append(conversationId, state.leases, "revoke", {
           type: "conversation-revoke",
@@ -1876,6 +1929,13 @@ export class AgentService {
       providerContent = composeAttachmentContent(input.content.trim(), input.attachments);
     }
     const controller = new AbortController();
+    // Run watchdog: caps how long one run may hold the conversation slot.
+    // Every bounded wait (provider timeouts, retries, confirmation, title
+    // generation) fits inside the deadline, so it only fires on a genuinely
+    // stuck run — which must not leave activeRuns occupied forever, otherwise
+    // every later send in this conversation is refused with CONFLICT.
+    const deadlineTimer = setTimeout(() => controller.abort(new RunTimeoutError()), this.options.runDeadlineMs ?? defaultRunDeadlineMs);
+    deadlineTimer.unref?.();
     const lifecycleTasks: AccountTask[] = [];
     let unlinkAbortSignals: () => void = () => {};
     try {
@@ -1883,6 +1943,7 @@ export class AgentService {
       unlinkAbortSignals = linkAbortSignals(controller, [requestSignal, ...lifecycleTasks.map((task) => task.signal)]);
       this.activeRuns.set(conversationId, { controller, inFlight: null });
     } catch (error) {
+      clearTimeout(deadlineTimer);
       unlinkAbortSignals();
       for (const task of lifecycleTasks) task.release();
       yield this.errorEvent(error);
@@ -1985,7 +2046,10 @@ export class AgentService {
         toolActivities = [...toolActivities.filter((activity) => activity.id !== activityId), runningActivity];
         yield { type: "tool", activity: runningActivity };
         syncInFlight();
-        await this.rag.drainOnce();
+        // The drain does not observe a signal itself; race it so a cancel or
+        // the run watchdog can break a stuck drain instead of hanging the
+        // activeRuns slot forever (every later send would be refused).
+        await awaitWithSignal(this.rag.drainOnce(), controller.signal);
         this.assertRunCurrent(lifecycleTasks, controller.signal);
         ragResults.push(...await this.rag.search(
           state.metadata.scope.accountIds,
@@ -2347,8 +2411,13 @@ export class AgentService {
         }
       }
     } catch (error) {
-      terminal = controller.signal.aborted ? "cancelled" : "error";
-      const agentError = stableUserFacingError(this.asAgentError(error));
+      // A watchdog abort terminates with an error turn (not "cancelled") so
+      // the conversation records why the reply never arrived.
+      const deadlineExceeded = controller.signal.aborted && controller.signal.reason instanceof RunTimeoutError;
+      terminal = deadlineExceeded || !controller.signal.aborted ? "error" : "cancelled";
+      const agentError: AgentMessageError = deadlineExceeded
+        ? { code: "RUN_TIMEOUT", message: "Agent 运行超过时限已自动终止，请重试。", retryable: true }
+        : stableUserFacingError(this.asAgentError(error));
       assistantError = agentError;
       yield { type: "error", error: agentError };
       yield { type: "completed", reason: terminal };
@@ -2370,16 +2439,29 @@ export class AgentService {
         ...(assistantError ? { error: assistantError } : {}),
       };
       try {
-        this.assertRunCurrent(lifecycleTasks, controller.signal);
+        // A deadline-aborted run still persists its error turn; every other
+        // abort shape (user cancel, stale generation) must not write a late
+        // turn — assertRunCurrent throws CANCELLED/ACCOUNT_STALE for those.
+        if (!(controller.signal.aborted && controller.signal.reason instanceof RunTimeoutError)) {
+          this.assertRunCurrent(lifecycleTasks, controller.signal);
+        }
         this.conversations.append(conversationId, state.leases, "turn", {
           type: "conversation-turn",
           message: assistant,
           mailContextIncluded,
         } satisfies ConversationTurn);
         this.updateSummaryEntry(conversationId, { preview: shortPreview(assistant.content), updatedAt: now() });
-      } catch {
-        // A deletion fence can make the durable conversation unavailable while
-        // a stream is finishing. Never revive or retry a revoked account key.
+      } catch (error) {
+        // A deletion fence makes the durable conversation unavailable while a
+        // stream is finishing; a user cancel (CANCELLED) intentionally writes
+        // no late turn. Both are expected, so never revive or retry them —
+        // any other failure is logged so a "user turn without a reply" state
+        // stays traceable instead of being silently dropped.
+        const expected = (error instanceof Error && error.message === "Conversation is unavailable.")
+          || (error instanceof AgentServiceError && error.code === "CANCELLED");
+        if (!expected) {
+          console.error(`[agent] failed to persist the assistant turn for conversation ${conversationId}:`, error);
+        }
       }
       for (const summary of suggestions) {
         try {
@@ -2413,6 +2495,7 @@ export class AgentService {
       }
       unlinkAbortSignals();
       for (const task of lifecycleTasks) task.release();
+      clearTimeout(deadlineTimer);
       if (this.activeRuns.get(conversationId)?.controller === controller) this.activeRuns.delete(conversationId);
     }
   }
@@ -2873,6 +2956,10 @@ export class AgentService {
       // Revoked turns are retracted by the user: never feed them back to the
       // model, otherwise a follow-up would leak the withdrawn content.
       .filter((message) => !message.revoked)
+      // An error turn that produced no readable reply only pollutes the
+      // prompt; some providers also reject empty assistant messages outright,
+      // which turns a transient failure into a permanent send loop.
+      .filter((message) => !(message.state === "error" && !(message.content?.trim())))
       .filter((message) => allowMailContext || !message.mailContextIncluded)
       .slice(-14)
       .map((message) => {

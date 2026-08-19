@@ -237,6 +237,16 @@ const REVOKED_STORAGE_KEY = "nami.agent.revokedByConversation";
 /** How long the "已撤回信息" notice stays above the composer before fading. */
 const REVOKE_NOTICE_SECONDS = 10;
 
+/** Categorized copy for a failed revoke. Network/service failures and stale
+ *  targets get specific messages; anything else falls back to the generic one. */
+function revokeFailureMessage(error: unknown, t: Translate): string {
+  if (error instanceof ApiError) {
+    if (error.code === "local_service_unavailable") return t("agent.message.revokeFailedService");
+    if (error.code === "NOT_FOUND") return t("agent.message.revokeFailedNotFound");
+  }
+  return t("agent.message.revokeFailed");
+}
+
 function readRevokedIds(conversationId: string): Set<string> {
   try {
     const raw = window.localStorage.getItem(REVOKED_STORAGE_KEY);
@@ -3010,6 +3020,9 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       }
       syncBackgroundRuns();
       for (const id of deleted) {
+        // A deleted conversation must not keep its revoked-id marks: recreating
+        // a conversation with the same id would start with messages hidden.
+        writeRevokedIds(id, new Set());
         const session = sessionStreamsRef.current.get(id);
         if (session) {
           session.controller.abort();
@@ -3271,6 +3284,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     setConfirmationErrors({});
     // Sending a new message dismisses the revoke notice immediately.
     setRevokeNoticeUntil(null);
+    setRevokeFailed(null);
     setActive((current) => current && current.id === conversation!.id
       ? {
         ...current,
@@ -3572,6 +3586,10 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   // the notice itself; this just records the deadline.
   const [revokeNoticeUntil, setRevokeNoticeUntil] = useState<number | null>(null);
   const revokeNoticeActive = revokeNoticeUntil !== null;
+  /** Revoke failed: a categorized error bar above the composer. Separate from
+   *  the transcript-level loadError panel so the two failure classes read
+   *  distinctly. Cleared on send or dismiss. */
+  const [revokeFailed, setRevokeFailed] = useState<string | null>(null);
 /** Message ids whose revoke/unrevoke request is still in flight. Duplicate
  *  clicks are ignored while pending (idempotent server endpoint). */
   const pendingRevokeIdsRef = useRef<ReadonlySet<string>>(new Set());
@@ -3616,6 +3634,8 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     // can be edited and resent; the assistant reply has no text to recover and
     // stays revoked. A small "已撤回信息" notice (with a countdown) shows above
     // the composer and clears as soon as the user sends a new message.
+    const refillText = revokeTarget?.role === "user" ? revokeTarget.content : "";
+    const composerBeforeRefill = composerRef.current?.value ?? "";
     if (revokeTarget?.role === "user" && revokeTarget.content) {
       setComposer(revokeTarget.content);
       window.requestAnimationFrame(() => composerRef.current?.focus());
@@ -3623,7 +3643,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     setRevokeNoticeUntil(Date.now() + REVOKE_NOTICE_SECONDS * 1000);
     // Server reconciliation: idempotent, duplicates ignored while in flight.
     pendingRevokeIdsRef.current = new Set(pendingRevokeIdsRef.current).add(messageId);
-    void api.revokeAgentMessage(conversationId, messageId, true).catch(() => {
+    void api.revokeAgentMessage(conversationId, messageId, true).catch((error) => {
       // Roll back the optimistic marks so the transcript matches the server.
       setActive((current) => {
         if (!current) return current;
@@ -3632,7 +3652,13 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
         writeRevokedIds(current.id, revokedIds);
         return { ...current, messages: current.messages.map((message) => (revokedSet.has(message.id) ? { ...message, revoked: false } : message)) };
       });
-      setLoadError(t("agent.message.revokeFailed"));
+      // Undo the composer refill unless the user has already typed over it:
+      // a lingering refilled message resent later is how duplicates appeared.
+      if (refillText && composerRef.current?.value === refillText) {
+        setComposer(composerBeforeRefill);
+      }
+      setRevokeNoticeUntil(null);
+      setRevokeFailed(revokeFailureMessage(error, t));
     }).finally(() => {
       const next = new Set(pendingRevokeIdsRef.current);
       next.delete(messageId);
@@ -3864,6 +3890,13 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             </div>
           )}
           {revokeNoticeActive && <RevokeNotice until={revokeNoticeUntil!} onExpire={() => setRevokeNoticeUntil(null)} />}
+          {revokeFailed && (
+            <div className="agent-revoke-notice error" role="alert">
+              <CircleAlert size={14} />
+              <span>{revokeFailed}</span>
+              <button type="button" className="agent-revoke-dismiss" onClick={() => setRevokeFailed(null)} aria-label={t("common.dismiss")}><X size={12} /></button>
+            </div>
+          )}
           {pendingConfirmation && <AgentConfirmationCard
             confirmation={pendingConfirmation}
             desktopConfirmationAvailable={desktopConfirmationAvailable}
