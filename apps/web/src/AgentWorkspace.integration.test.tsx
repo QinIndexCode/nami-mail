@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { AgentBootstrap, AgentConversation, AgentProviderSummary } from "./agentTypes";
+import type { Message } from "./types";
 
 // React 19 requires the act() environment flag when not running through
 // @testing-library/react, and jsdom lacks matchMedia.
@@ -104,7 +105,7 @@ const h = vi.hoisted(() => {
       },
     ],
   };
-  return { provider, bootstrap, convA, convB, convGhost };
+  return { provider, bootstrap, convA, convB, convGhost, onOpenMessage: vi.fn() };
 });
 
 vi.mock("./api", () => ({
@@ -179,6 +180,29 @@ const clickSend = () => {
 
 const headingFor = (): string | null => container.querySelector(".agent-conversation-title h1")?.textContent ?? null;
 
+const referenceMessage: Message = {
+  id: "msg-ref-1",
+  accountId: "account-1",
+  accountEmail: "me@example.com",
+  providerName: "demo",
+  mailbox: "INBOX",
+  uid: 1,
+  subject: "Reference email subject",
+  from: { name: "Alice", address: "alice@example.com" },
+  to: [],
+  cc: [],
+  sentAt: "2026-08-10T00:00:00.000Z",
+  snippet: "",
+  textBody: "",
+  htmlBody: "",
+  flags: [],
+  seen: true,
+  flagged: false,
+  hasAttachments: false,
+  attachments: [],
+  size: 0,
+};
+
 describe("AgentWorkspace conversation switching", () => {
   beforeEach(() => {
     window.scrollTo = () => undefined;
@@ -212,16 +236,16 @@ describe("AgentWorkspace conversation switching", () => {
     vi.clearAllMocks();
   });
 
-  const renderWorkspace = async (bootstrap: AgentBootstrap = h.bootstrap) => {
+  const renderWorkspace = async (bootstrap: AgentBootstrap = h.bootstrap, currentMessage?: Message) => {
     await act(async () => {
       root.render(
         <I18nProvider>
           <AgentWorkspace
             accounts={[]}
             messages={[]}
-            currentMessage={undefined}
+            currentMessage={currentMessage}
             onClose={() => undefined}
-            onOpenMessage={() => undefined}
+            onOpenMessage={h.onOpenMessage}
             demoMode={false}
             preloadedBootstrap={bootstrap}
             agentAccessLevel="send-confirmed"
@@ -280,6 +304,31 @@ describe("AgentWorkspace conversation switching", () => {
     await flush();
 
     expect(api.cancelAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("shows the reference mail chip as a header button and opens that message on click", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage);
+
+    const chip = container.querySelector<HTMLButtonElement>(".agent-current-context");
+    expect(chip).not.toBeNull();
+    expect(chip?.tagName).toBe("BUTTON");
+    expect(chip?.textContent).toContain("Reference email subject");
+    expect(chip?.getAttribute("aria-label")).toBeTruthy();
+    // The chip lives in the workspace header, left of the scope switch,
+    // where it cannot collide with the icon rail.
+    const actions = container.querySelector<HTMLElement>(".agent-header-actions");
+    expect(actions).not.toBeNull();
+    expect(actions?.contains(chip)).toBe(true);
+    expect(chip?.closest(".agent-context-strip")).toBeNull();
+    const scopeSwitch = container.querySelector<HTMLElement>(".agent-scope-switch");
+    expect(scopeSwitch).not.toBeNull();
+    const actionChildren = actions ? Array.from(actions.children) : [];
+    expect(actionChildren.indexOf(scopeSwitch!)).toBeGreaterThan(actionChildren.indexOf(chip!));
+
+    act(() => {
+      chip?.click();
+    });
+    expect(h.onOpenMessage).toHaveBeenCalledWith("msg-ref-1");
   });
 
   it("a run being picked up after a reopen shows a thinking row and a stop that cancels server-side", async () => {

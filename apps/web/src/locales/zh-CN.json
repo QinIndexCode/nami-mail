@@ -1468,6 +1468,7 @@
     "agent.permission.fullAccess.feature2": "不再请求逐项确认",
     "agent.permission.fullAccess.feature3": "邮件数据面临较高风险，请谨慎开启",
     "agent.context.currentMessage": "当前邮件",
+    "agent.context.openInMail": "在邮件中打开",
     "agent.empty.title": "从邮件中获得有根据的帮助",
     "agent.empty.description": "选择范围后提问。回答会标出实际使用的邮件来源。",
     "agent.suggestion.today": "总结今天需要处理的邮件",

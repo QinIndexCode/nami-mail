@@ -29,6 +29,7 @@ import {
   SquareCheck,
   SquareSlash,
   ArrowUp,
+  ArrowUpRight,
   ChevronDown,
   ChevronUp,
   Server,
@@ -3724,6 +3725,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             ) : <div className="agent-conversation-title"><span className="eyebrow">{t("agent.eyebrow")}</span><span className="agent-title-line"><h1 title={active?.title}>{active?.title ?? t("agent.conversation.newTitle")}</h1>{active && <button className="icon-button" type="button" aria-label={t("agent.conversation.rename")} data-tooltip={t("agent.conversation.rename")} onClick={() => { setDraftTitle(active.title); setRenaming(true); }}><Pencil size={15} /></button>}</span></div>}
           </div>
           <div className="agent-header-actions">
+            {currentMessage && <button type="button" className="agent-current-context" aria-label={t("agent.context.openInMail")} title={currentMessage.subject || t("agent.context.currentMessage")} onClick={() => onOpenMessage(currentMessage.id)}><Mail size={13} /><span>{currentMessage.subject || t("agent.context.currentMessage")}</span><ArrowUpRight className="agent-current-context-open" size={11} aria-hidden="true" /></button>}
             <div className="agent-scope-switch" role="group" aria-label={t("agent.scope.label")} data-scope={scopeMode}>
               <span className="agent-scope-thumb" aria-hidden="true" />
               {scopeOptions.map((option) => <button key={option.mode} type="button" className={scopeMode === option.mode ? "active" : ""} aria-pressed={scopeMode === option.mode} disabled={option.disabled} data-tooltip={option.title} onClick={() => setScopeMode(option.mode)}>{option.label}</button>)}
@@ -3742,7 +3744,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             <button type="button" className={mode === "chat" ? "active" : ""} aria-pressed={mode === "chat"} onClick={() => setMode("chat")}><MessageCircle size={14} />{t("agent.mode.chat")}</button>
           </div>
           {selectedProvider?.cloud && !selectedProvider.cloudContentConsent && <span className="agent-privacy-notice"><ShieldAlert size={14} />{t("agent.provider.consentRequired")}</span>}
-          {currentMessage && <span className="agent-current-context"><Mail size={14} />{currentMessage.subject || t("agent.context.currentMessage")}</span>}
         </div>
 
         <div className="agent-transcript-wrap">

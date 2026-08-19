@@ -306,7 +306,7 @@ try {
   const rendererUrl = new URL(renderer.rendererUrl);
   assert.deepEqual(
     [...rendererUrl.searchParams.entries()].sort(([left], [right]) => left.localeCompare(right)),
-    [["desktop", "1"], ["desktopSmoke", "1"], ["platform", process.platform]],
+    [["demo", "1"], ["desktop", "1"], ["desktopSmoke", "1"], ["platform", process.platform]],
     "The desktop renderer URL must not expose a local API capability.",
   );
   const runtimePort = Number.parseInt(rendererUrl.port, 10);
@@ -364,7 +364,7 @@ try {
   );
   const railBorderLeftColor = renderer.desktopWindowBarLayout?.railBorderLeftColor ?? "";
   assert.notEqual(railBorderLeftColor, "rgba(0, 0, 0, 0)", "The rail's edge line must draw below the header, not stop at the floating controls.");
-  assert.match(renderer.desktopWindowBarLayout?.railBackgroundColor ?? "", /rgba\(25, 25, 27/, "The rail must keep its panel surface next to the header.");
+  assert.equal(renderer.desktopWindowBarLayout?.railBackgroundColor, "rgba(0, 0, 0, 0)", "The rail must stay transparent over the wallpaper like the other panels.");
   assert.ok(
     Math.abs((renderer.desktopWindowBarLayout?.railTop ?? -1) - (renderer.desktopWindowBarLayout?.columnHeaderHeight ?? -1)) < 1,
     "The rail must start at the column header's bottom edge without a computed offset.",
@@ -410,6 +410,77 @@ try {
   assert.ok(renderer.desktopWallpaper?.sidebarPanelOpacity < 0.8, "The sidebar must remain translucent so wallpaper is visible across the desktop workspace.");
   assert.ok(renderer.desktopWallpaper?.messagePanelOpacity < 0.8, "The message list must remain translucent so wallpaper is visible across the desktop workspace.");
   assert.ok(renderer.desktopWallpaper?.readerPanelOpacity < 0.8, "The reader must remain translucent so wallpaper is visible inside the desktop workspace.");
+  // -- Agent workspace visibility (regression: the workspace used to render
+  // inside the hidden mail-workspace div and came up as an empty 0x0 frame).
+  assert.equal(renderer.desktopDeepDiagnostic?.agent?.launchButtonPresent, true, "The Agent launch button must be present in the workspace.");
+  assert.equal(renderer.desktopDeepDiagnostic?.agent?.agentRevealed, true, "The Agent workspace must be visible after opening.");
+  const agentRect = renderer.desktopDeepDiagnostic?.agent?.agentRect;
+  if (agentRect != null) {
+    const windowWidth = renderer.desktopWindowBarLayout?.windowWidth;
+    if (windowWidth != null) {
+      assert.ok(
+        Math.abs(agentRect.w - (windowWidth - 56)) < 2,
+        `The Agent workspace must fill the shell beside the 56px rail (${agentRect.w}px vs ${windowWidth - 56}px).`,
+      );
+    }
+    assert.ok(agentRect.w > 800 && agentRect.h > 500, `The Agent workspace must have real geometry after opening (${agentRect.w}x${agentRect.h}).`);
+  }
+  const agentChildren = renderer.desktopDeepDiagnostic?.agent?.agentChildren ?? [];
+  assert.ok(agentChildren.length >= 2, "The Agent workspace must contain its conversation sidebar and main panel.");
+  assert.ok(agentChildren.every((c) => c.w > 0 && c.h > 0), "The Agent panels must not be zero-sized.");
+  const agentShellChild = (renderer.desktopDeepDiagnostic?.agent?.shellChildren ?? []).find(
+    (c) => typeof c.className === "string" && c.className.includes("agent-workspace"),
+  );
+  assert.ok(
+    agentShellChild !== undefined && agentShellChild.display !== "none" && agentShellChild.h > 500,
+    "The Agent workspace must be a direct shell child rendered at full height.",
+  );
+  const railAfterOpen = renderer.desktopDeepDiagnostic?.agent?.railAfterOpen;
+  if (railAfterOpen != null) {
+    assert.equal(railAfterOpen.gridColumn, "2", "The rail must move to the second column when the Agent workspace is open.");
+    assert.equal(railAfterOpen.gridRow, "2", "The rail must stay on the second row below the floating bar when the Agent workspace is open.");
+    assert.ok(railAfterOpen.rect.h > 500, "The rail must keep its full height beside the Agent workspace.");
+  }
+  const contextChip = renderer.desktopDeepDiagnostic?.agent?.agentContextChip;
+  if (contextChip != null) {
+    assert.equal(contextChip.tag, "BUTTON", "The reference mail chip must be a clickable button.");
+    assert.ok(contextChip.ariaLabel.length > 0, "The reference mail chip must carry an accessible label.");
+    assert.ok(contextChip.railClearance > 0, `The reference mail chip must stay clear of the icon rail (clearance ${contextChip.railClearance}px).`);
+    assert.ok(contextChip.panelClearance > 0, `The reference mail chip must stay inside the agent main panel (clearance ${contextChip.panelClearance}px).`);
+  }
+  const workspacePosition = renderer.desktopDeepDiagnostic?.agent?.workspacePosition;
+  if (workspacePosition != null) {
+    assert.equal(workspacePosition, "relative", "The Agent workspace must stay a positioned ancestor for its absolutely-positioned children (citations sidebar).");
+  }
+  const citationsAnchorClearance = renderer.desktopDeepDiagnostic?.agent?.citationsAnchorClearance ?? null;
+  if (citationsAnchorClearance != null) {
+    assert.ok(citationsAnchorClearance > 0, `A right:14px citation anchor inside the workspace must clear the rail (clearance ${citationsAnchorClearance}px).`);
+  }
+  // -- Main-thread responsiveness (regression: reported jank on the mail and
+  // Agent screens). Hidden smoke windows throttle rAF but not timers, so the
+  // timer-gap metric still catches event-loop stalls.
+  assert.equal(renderer.desktopDeepDiagnostic?.idle?.longtasks?.length ?? 0, 0, "The idle mail workspace must not run long tasks on the main thread.");
+  assert.ok((renderer.desktopDeepDiagnostic?.idle?.timerMaxGapMs ?? 0) < 200, "The idle renderer event loop must stay responsive (max timer gap < 200ms).");
+  assert.ok((renderer.desktopDeepDiagnostic?.agent?.afterOpenPerf?.longtasks?.length ?? 99) <= 1, "Opening the Agent workspace must not flood the main thread with long tasks.");
+  // -- Mail-list scroll cost (regression: reported jank when scrolling the
+  // message list). Each forced layout cycle is one scroll frame's main-thread
+  // cost; staying far below the 16.7ms budget keeps scrolling responsive.
+  const scrollProbe = renderer.desktopDeepDiagnostic?.scroll;
+  if (scrollProbe != null && scrollProbe.note === undefined) {
+    assert.ok(scrollProbe.rowCount > 0, "The smoke mail list must carry demo rows for the scroll probe.");
+    assert.ok(
+      Math.max(...(scrollProbe.frameCostMs ?? [])) < 12,
+      `Scroll frames must stay far below the frame budget (max ${Math.max(...(scrollProbe.frameCostMs ?? []))}ms vs 16.7ms budget).`,
+    );
+  }
+  // -- Startup window: the first paint must not regress (measured 1618ms
+  // before the window/broker parallelism; 1041ms after; the report carries
+  // the exact timeline for the record).
+  const windowLoadedStage = (renderer.desktopStartupTimeline ?? []).find((stage) => stage.stage === "window-loaded");
+  assert.ok(
+    windowLoadedStage !== undefined && windowLoadedStage.elapsedMs < 1150,
+    `The window must reach its loaded state during startup (${windowLoadedStage?.elapsedMs ?? "missing"}ms vs 1150ms baseline).`,
+  );
   assert.equal(renderer.desktopSettingsUi?.settingsOpened, true, renderer.desktopSettingsUi?.error ?? "The settings dialog did not open.");
   assert.equal(renderer.desktopSettingsUi?.brandName, "Nami Mail", "The sidebar must use the full product name.");
   assert.equal(renderer.desktopSettingsUi?.lightBrandMarkLoaded, true, "The light-theme brand mark must load.");
