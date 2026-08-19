@@ -133,7 +133,7 @@ vi.mock("./api", () => ({
 }));
 
 // Imported after the mock so the component binds to the mocked module.
-import { api } from "./api";
+import { ApiError, api } from "./api";
 import { I18nProvider } from "./i18n";
 import AgentWorkspace from "./AgentWorkspace";
 
@@ -535,5 +535,164 @@ describe("AgentWorkspace conversation switching", () => {
 
     // createConversation clears the active conversation → welcome empty state.
     expect(container.querySelector(".agent-empty-state")).not.toBeNull();
+  });
+
+  // --- Revoke flows ---------------------------------------------------------
+
+  // Later tests replace the agentConversation mock outright; restore the
+  // default implementation so these tests see a settled transcript.
+  const resetConversationMock = () => {
+    vi.mocked(api.agentConversation).mockImplementation(async (id: string) =>
+      id === "conv-a" ? h.convA : id === "conv-g" ? h.convGhost : h.convB);
+  };
+
+  const recallFor = (text: string) => {
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".agent-message"))
+      .find((item) => item.textContent?.includes(text));
+    if (!row) throw new Error(`message row for "${text}" not found`);
+    const button = row.querySelector<HTMLButtonElement>(".agent-corner-button.recall");
+    if (!button) throw new Error(`recall button for "${text}" not found`);
+    return button;
+  };
+
+  const composerValue = () => container.querySelector<HTMLTextAreaElement>(".agent-composer textarea")!.value;
+
+  // Transcript text only: jsdom folds the composer textarea's value into
+  // container.textContent, which would false-positive revoke assertions.
+  const transcriptText = () =>
+    Array.from(container.querySelectorAll<HTMLElement>(".agent-message"))
+      .map((row) => row.textContent ?? "")
+      .join("\n");
+
+  const revokeMark = (conversationId: string): string[] => {
+    const raw = window.localStorage.getItem("nami.agent.revokedByConversation");
+    if (!raw) return [];
+    return (JSON.parse(raw) as Record<string, string[]>)[conversationId] ?? [];
+  };
+
+  it("revoke succeeds: the message hides immediately, the composer refills, and the mark persists", async () => {
+    resetConversationMock();
+    await renderWorkspace();
+    clickRow("Conversation A");
+    await flush();
+    expect(transcriptText()).toContain("earlier question");
+
+    act(() => { recallFor("earlier question").click(); });
+    await flush();
+    act(() => { recallFor("earlier question").click(); });
+    await flush();
+
+    expect(api.revokeAgentMessage).toHaveBeenCalledWith("conv-a", "user-a-1", true);
+    // Optimistic: the revoked user message and its cascaded assistant reply
+    // vanish from the transcript.
+    expect(transcriptText()).not.toContain("earlier question");
+    expect(transcriptText()).not.toContain("earlier answer");
+    // The text is back in the composer and the success notice is up.
+    expect(composerValue()).toBe("earlier question");
+    expect(container.querySelector(".agent-revoke-notice")).not.toBeNull();
+    expect(container.querySelector(".agent-revoke-notice.error")).toBeNull();
+    // The marks survive the session in localStorage.
+    expect(revokeMark("conv-a").sort()).toEqual(["assistant-a-1", "user-a-1"]);
+  });
+
+  it("revoke failure rolls the transcript back, restores the composer, and shows the error bar without touching loadError", async () => {
+    resetConversationMock();
+    await renderWorkspace();
+    clickRow("Conversation A");
+    await flush();
+
+    // A draft the user already had before attempting the revoke.
+    setComposer("my draft in progress");
+    let rejectRevoke!: (error: Error) => void;
+    vi.mocked(api.revokeAgentMessage).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { rejectRevoke = reject; }),
+    );
+
+    act(() => { recallFor("earlier question").click(); });
+    await flush();
+    act(() => { recallFor("earlier question").click(); });
+    await flush();
+
+    // Optimistic state while the request is in flight.
+    expect(transcriptText()).not.toContain("earlier question");
+    expect(composerValue()).toBe("earlier question");
+
+    // The server rejects the revoke.
+    act(() => { rejectRevoke(new ApiError("service down", "local_service_unavailable")); });
+    await flush();
+
+    // Both messages are back on the transcript.
+    expect(transcriptText()).toContain("earlier question");
+    expect(transcriptText()).toContain("earlier answer");
+    // The composer holds the user's pre-revoke draft, not the refilled text.
+    expect(composerValue()).toBe("my draft in progress");
+    // A dedicated error bar (categorized copy) replaced the success notice;
+    // the transcript-level loadError panel is untouched.
+    const errorBar = container.querySelector<HTMLElement>(".agent-revoke-notice.error");
+    expect(errorBar).not.toBeNull();
+    expect(errorBar!.textContent).toContain("撤回未生效");
+    expect(container.querySelector(".agent-revoke-notice:not(.error)")).toBeNull();
+    expect(container.querySelector(".agent-error-panel")).toBeNull();
+    // No revoked mark was left behind.
+    expect(revokeMark("conv-a")).toEqual([]);
+  });
+
+  it("revoke failure keeps the user's own edits over the refilled text", async () => {
+    resetConversationMock();
+    await renderWorkspace();
+    clickRow("Conversation A");
+    await flush();
+
+    let rejectRevoke!: (error: Error) => void;
+    vi.mocked(api.revokeAgentMessage).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { rejectRevoke = reject; }),
+    );
+    act(() => { recallFor("earlier question").click(); });
+    await flush();
+    act(() => { recallFor("earlier question").click(); });
+    await flush();
+    expect(composerValue()).toBe("earlier question");
+
+    // The user edits the refilled text before the failure lands.
+    setComposer("earlier question but edited");
+    act(() => { rejectRevoke(new ApiError("gone", "NOT_FOUND")); });
+    await flush();
+
+    expect(composerValue()).toBe("earlier question but edited");
+    expect(container.querySelector(".agent-revoke-notice.error")?.textContent).toContain("消息已不存在");
+    expect(transcriptText()).toContain("earlier question");
+  });
+
+  it("deleting a conversation clears its revoked-id marks", async () => {
+    // Pre-seed marks exactly as a successful revoke would have written them
+    // (going through the UI would also start the notice countdown timer).
+    window.localStorage.setItem("nami.agent.revokedByConversation", JSON.stringify({ "conv-a": ["user-a-1", "assistant-a-1"] }));
+    resetConversationMock();
+    await renderWorkspace();
+    clickRow("Conversation A");
+    await flush();
+    expect(revokeMark("conv-a").length).toBe(2);
+
+    // Delete the conversation through the row context menu.
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".agent-conversation-row"))
+      .find((item) => item.textContent?.includes("Conversation A"))!;
+    act(() => {
+      row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
+    });
+    await flush();
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await flush();
+    act(() => {
+      container.querySelector<HTMLButtonElement>(".confirmation-actions .danger-button")!.click();
+    });
+    await flush();
+
+    expect(api.deleteAgentConversation).toHaveBeenCalledWith("conv-a");
+    // Recreating a conversation under the same id must not resurrect hidden
+    // messages, so the marks are gone with the conversation.
+    expect(revokeMark("conv-a")).toEqual([]);
   });
 });

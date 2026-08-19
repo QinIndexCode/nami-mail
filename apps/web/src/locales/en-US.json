@@ -1477,6 +1477,8 @@
     "agent.message.revoke": "Revoke",
     "agent.message.revokeConfirm": "Confirm revoke?",
     "agent.message.revokeFailed": "Revoke failed, message restored",
+    "agent.message.revokeFailedNotFound": "Message no longer exists, revoke not applied",
+    "agent.message.revokeFailedService": "Revoke not applied: local service unreachable, message restored",
     "agent.message.revoked": "Revoked",
     "agent.message.revokeNotice": "Message revoked",
     "agent.message.resend": "Edit and resend",
