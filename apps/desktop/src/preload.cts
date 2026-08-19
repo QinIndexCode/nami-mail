@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { agentConfirmationIpcChannel } from "./agent/confirmation-channel.cjs";
+
+// The sandboxed preload cannot require sibling modules outside the packaged
+// asar, so the channel name is declared here and pinned to the canonical
+// value in agent/confirmation-channel.cts by tests/preload-channel-sync.test.ts.
+const agentConfirmationIpcChannel = "nami:resolve-agent-confirmation";
 
 type NativeNotification = {
   title: string;

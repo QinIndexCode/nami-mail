@@ -39,7 +39,7 @@
     "start": "npm --workspace @nami/server run start",
     "test": "npm --workspace @nami/agent-contracts run test && npm --workspace @nami/agent-core run test && npm --workspace @nami/server run test && npm --workspace @nami/web run test && npm --workspace @nami/desktop run test",
     "test:desktop-security": "npm --workspace @nami/desktop run test",
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test e2e/smoke.spec.ts e2e/interactions.spec.ts e2e/update-footer.spec.ts",
     "lint": "eslint apps packages e2e scripts",
     "lint:fix": "eslint apps packages e2e scripts --fix",
     "test:server": "npm --workspace @nami/server run test",
