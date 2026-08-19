@@ -306,7 +306,7 @@ try {
   const rendererUrl = new URL(renderer.rendererUrl);
   assert.deepEqual(
     [...rendererUrl.searchParams.entries()].sort(([left], [right]) => left.localeCompare(right)),
-    [["desktop", "1"], ["desktopSmoke", "1"]],
+    [["desktop", "1"], ["desktopSmoke", "1"], ["platform", process.platform]],
     "The desktop renderer URL must not expose a local API capability.",
   );
   const runtimePort = Number.parseInt(rendererUrl.port, 10);
@@ -337,7 +337,8 @@ try {
   assert.equal(rendererAfterSingleInstance.desktopSingleInstance?.restored, true, "A second launch must restore the existing Nami Mail window.");
   assert.equal(rendererAfterSingleInstance.desktopSingleInstance?.serviceUrl, primaryServiceUrl, "A second launch must reuse the primary local service.");
   report.desktopSingleInstance = rendererAfterSingleInstance.desktopSingleInstance;
-  assert.equal(renderer.simulatedWebFrameVisible, false, "The desktop renderer must not include the Web macOS demonstration frame.");
+  assert.equal(renderer.desktopWindowBar, true, "The desktop renderer must draw the app-owned window bar.");
+  assert.equal(renderer.desktopWindowControls, true, "The frameless window bar must carry its own controls (or the macOS traffic-light slot).");
   assert.equal(renderer.desktopWallpaper?.present, true, "The desktop workspace must render the configured wallpaper layer.");
   assert.equal(renderer.desktopWallpaper?.coversWorkspace, true, "The wallpaper layer must cover the full desktop workspace.");
   assert.ok(Math.abs((renderer.desktopWallpaper?.opacity ?? 0) - 0.68) < 0.02, "The default wallpaper must reach its configured visible opacity.");
