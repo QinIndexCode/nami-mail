@@ -213,7 +213,7 @@ background:0 0
 }
 .workspace-canvas.background-active .window-bar
 {
-background:color-mix(in srgb, var(--panel-muted) 82%, transparent)
+background:0 0
 }
 .workspace-canvas.background-active .sidebar
 {
@@ -322,8 +322,7 @@ background:color-mix(in srgb, var(--text) 82%, transparent)
 }
 .window-bar
 {
-border-bottom:1px solid var(--line);
-background:var(--panel-muted);
+background:color-mix(in srgb, var(--panel-muted) 82%, transparent);
 -webkit-user-select:none;
 user-select:none;
 grid-template-columns:1fr auto 1fr;
