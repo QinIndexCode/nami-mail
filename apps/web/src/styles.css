@@ -231,6 +231,12 @@ background:0 0
 {
 background:0 0
 }
+/* The desktop rail keeps its panel surface over wallpapers too, so the
+   right edge stays an identifiable control strip instead of vanishing. */
+.workspace-canvas.background-active .desktop-app .icon-rail
+{
+background:var(--panel-muted)
+}
 .workspace-canvas.background-active .agent-workspace
 {
 background:0 0
@@ -332,6 +338,124 @@ padding:0 12px;
 display:grid;
 -webkit-app-region:drag
 }
+/* In the desktop shell the window bar no longer occupies its own 42px row:
+   the sidebar, the column header and the rail move up to the window's top
+   edge and the bar floats over them as the frameless drag strip. Every
+   interactive element it overlaps opts out of the drag region. */
+.desktop-app .window-bar
+{
+top:0;
+right:0;
+left:0;
+z-index:40;
+height:12px;
+position:absolute
+}
+/* The shell gains a second row: the header row spans the whole right side
+   (everything right of the sidebar) and the rail only occupies the lower
+   row, so it starts below the header without any computed offset. */
+.desktop-app .mail-shell
+{
+height:100%;
+grid-template-rows:66px minmax(0,1fr)
+}
+.desktop-app .sidebar
+{
+grid-column:1;
+grid-row:1 / 3;
+padding-top:15px
+}
+.desktop-app .mail-workspace
+{
+grid-column:2;
+grid-row:1 / 3
+}
+.desktop-app .icon-rail
+{
+grid-column:3;
+grid-row:2;
+background:var(--panel-muted)
+}
+.desktop-app .mail-shell.has-agent-open .agent-workspace,.desktop-app .mail-shell.has-agent-open .agent-workspace-loading
+{
+grid-column:1;
+grid-row:1 / 3
+}
+.desktop-app .mail-shell.has-agent-open .icon-rail
+{
+grid-column:2;
+grid-row:2
+}
+/* The window controls float right of the columns, centered on the same
+   line as the header icons, instead of living inside the drag strip. */
+.desktop-app .window-actions
+{
+top:17px;
+right:12px;
+position:absolute
+}
+.desktop-app .column-header .search-wrap,.desktop-app .column-header .list-filter-wrap,.desktop-app .reader-toolbar,.desktop-app .agent-workspace-header,.desktop-app .icon-rail .icon-button,.desktop-app .icon-rail .icon-rail-divider
+{
+-webkit-app-region:no-drag
+}
+/* The header row spans the whole right side (everything right of the
+   sidebar): the list header extends across the rail's top strip, so the
+   rail can simply live on the row below without any computed offset. */
+.desktop-app .column-header
+{
+width:calc(100% + 56px);
+padding-right:144px
+}
+.desktop-app .reader-toolbar
+{
+padding-right:144px
+}
+.desktop-app .agent-workspace-header
+{
+padding-right:88px
+}
+/* macOS keeps the native traffic lights in the same row as the sidebar
+   brand, so the shell keeps its single row and the rail starts at the
+   window's top edge as usual. */
+.desktop-app[data-platform=darwin] .window-bar
+{
+height:42px;
+position:static
+}
+.desktop-app[data-platform=darwin] .window-actions
+{
+right:auto;
+top:auto;
+position:static
+}
+.desktop-app[data-platform=darwin] .mail-shell
+{
+height:calc(100% - 42px);
+grid-template-rows:none
+}
+.desktop-app[data-platform=darwin] .sidebar,.desktop-app[data-platform=darwin] .message-column,.desktop-app[data-platform=darwin] .mail-workspace,.desktop-app[data-platform=darwin] .icon-rail,.desktop-app[data-platform=darwin] .mail-shell.has-agent-open .agent-workspace,.desktop-app[data-platform=darwin] .mail-shell.has-agent-open .agent-workspace-loading
+{
+grid-column:auto;
+grid-row:auto
+}
+.desktop-app[data-platform=darwin] .sidebar
+{
+padding-top:20px
+}
+.desktop-app[data-platform=darwin] .column-header,.desktop-app[data-platform=darwin] .reader-toolbar,.desktop-app[data-platform=darwin] .agent-workspace-header
+{
+padding-right:18px
+}
+.desktop-app[data-platform=darwin] .column-header
+{
+width:auto
+}
+.desktop-app[data-platform=darwin] .icon-rail
+{
+background:var(--panel-muted);
+padding-top:12px;
+border-left-color:var(--line)
+}
 .window-title
 {
 color:var(--text-soft);
@@ -358,7 +482,7 @@ width:78px
 .window-controls
 {
 align-items:center;
-gap:2px;
+gap:12px;
 display:flex;
 -webkit-app-region:no-drag
 }
@@ -399,7 +523,7 @@ display:grid
 {
 grid-template-columns:minmax(0,1fr) 56px
 }
-.mail-shell.has-agent-open>.sidebar,.mail-shell.has-agent-open .message-column,.mail-shell.has-agent-open .reader-column
+.mail-shell.has-agent-open>.sidebar,.mail-shell.has-agent-open .message-column,.mail-shell.has-agent-open .reader-column,.mail-shell.has-agent-open .mail-workspace
 {
 display:none
 }
@@ -408,12 +532,6 @@ display:none
 z-index:auto;
 flex:1;
 position:static
-}
-.desktop-app .mail-shell
-{
-/* The window bar is part of the desktop layout too; leaving it 100% would
-   push the mail shell under the frameless drag region. */
-height:calc(100% - 42px)
 }
 .sidebar,.mail-workspace,.message-column,.reader-column,.icon-rail
 {

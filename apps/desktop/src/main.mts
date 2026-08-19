@@ -1549,6 +1549,154 @@ async function boot(): Promise<void> {
               hasBottomSeparator: Number.parseFloat(barStyle.borderBottomWidth) > 0,
             };
           })()`).catch(() => null);
+      const desktopWindowBarLayout = !smokeResultPath || !mainWindow
+        ? undefined
+        : await mainWindow.webContents.executeJavaScript(`(() => {
+            const bar = document.querySelector(".window-bar");
+            const shell = document.querySelector(".mail-shell");
+            if (!bar || !shell) return null;
+            const sidebar = document.querySelector(".sidebar");
+            const columnHeader = document.querySelector(".column-header");
+            const searchWrap = document.querySelector(".search-wrap");
+            const listFilterWrap = document.querySelector(".list-filter-wrap");
+            const headerActions = document.querySelector(".header-actions");
+            const agentHeader = document.querySelector(".agent-workspace-header");
+            const agentActions = document.querySelector(".agent-header-actions");
+            const controls = document.querySelector(".window-controls");
+            const rail = document.querySelector(".icon-rail");
+            const railButton = document.querySelector(".icon-rail .icon-button");
+            const overlaps = (a, b) => a && b && !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+            const controlsRect = controls ? controls.getBoundingClientRect() : null;
+            const railStyle = rail ? getComputedStyle(rail) : null;
+            return {
+              // The window bar floats over the columns instead of owning a
+              // 42px row, so the sidebar and the column header reach the top
+              // edge and nothing sits empty above the app content.
+              barPosition: getComputedStyle(bar).position,
+              barHeight: bar.getBoundingClientRect().height,
+              shellTop: shell.getBoundingClientRect().top,
+              sidebarTop: sidebar ? sidebar.getBoundingClientRect().top : null,
+              sidebarHeight: sidebar ? sidebar.getBoundingClientRect().height : null,
+              sidebarGridRow: sidebar ? getComputedStyle(sidebar).gridRow : null,
+              messageColumnGridRow: (() => {
+                const column = document.querySelector(".message-column");
+                return column ? getComputedStyle(column).gridRow : null;
+              })(),
+              railGridRow: railStyle ? railStyle.gridRow : null,
+              shellDisplay: getComputedStyle(shell).display,
+              messageColumnCandidates: Array.from(document.querySelectorAll(".message-column")).map((column) => {
+                const match = getComputedStyle(column);
+                return {
+                  parent: column.parentElement?.className ?? column.parentElement?.tagName ?? null,
+                  height: column.getBoundingClientRect().height,
+                  gridRow: match.gridRow,
+                  gridColumn: match.gridColumn,
+                  display: match.display,
+                  position: match.position,
+                  alignSelf: match.alignSelf,
+                  heightStyle: match.height,
+                };
+              }),
+              shellChildren: Array.from(shell.children).map((child) => {
+                const match = getComputedStyle(child);
+                return {
+                  className: child.className,
+                  tag: child.tagName,
+                  height: child.getBoundingClientRect().height,
+                  gridRow: match.gridRow,
+                  gridColumn: match.gridColumn,
+                  display: match.display,
+                  position: match.position,
+                };
+              }),
+              columnHeaderTop: columnHeader ? columnHeader.getBoundingClientRect().top : null,
+              // The header keeps its compact height and its first row sits
+              // inside the floating bar zone instead of being pushed down.
+              columnHeaderHeight: columnHeader ? columnHeader.getBoundingClientRect().height : null,
+              columnActiveTop: searchWrap ? searchWrap.getBoundingClientRect().top : listFilterWrap ? listFilterWrap.getBoundingClientRect().top : null,
+              // Interactive elements under the floating bar still receive
+              // clicks instead of the window drag.
+              searchWrapDragRegion: searchWrap ? getComputedStyle(searchWrap).getPropertyValue("-webkit-app-region") : null,
+              // The right-hand columns make room for the window controls, so
+              // they never sit on top of each other in the corner.
+              searchClearOfControls: searchWrap ? !overlaps(searchWrap.getBoundingClientRect(), controlsRect) : true,
+              searchClearOfControlsList: listFilterWrap ? !overlaps(listFilterWrap.getBoundingClientRect(), controlsRect) : true,
+              railButtonClearOfControls: railButton ? !overlaps(railButton.getBoundingClientRect(), controlsRect) : true,
+              railButtonTop: railButton ? railButton.getBoundingClientRect().top : null,
+              // The agent workspace header also shifts right of the window
+              // controls instead of losing its title row height.
+              agentHeaderActionsClearOfControls: agentActions ? !overlaps(agentActions.getBoundingClientRect(), controlsRect) : true,
+              // The rail's separator line starts below the floating bar, so
+              // it never crosses the window controls' background.
+              railBorderLeftColor: railStyle ? railStyle.borderLeftColor : null,
+              railBackgroundColor: railStyle ? railStyle.backgroundColor : null,
+              railTop: rail ? rail.getBoundingClientRect().top : null,
+              // The header row must end flush at the window's right edge and
+              // the rail must start exactly on the header's bottom edge —
+              // no overhang past the window, no gap between the two.
+              windowWidth: document.documentElement.clientWidth,
+              documentWidth: document.documentElement.scrollWidth,
+              shellRight: shell.getBoundingClientRect().right,
+              headerRight: columnHeader ? columnHeader.getBoundingClientRect().right : null,
+              headerBottom: columnHeader ? columnHeader.getBoundingClientRect().bottom : null,
+              railMarginTop: railStyle ? railStyle.marginTop : null,
+              railPosition: railStyle ? railStyle.position : null,
+              junctionGap: columnHeader && rail ? rail.getBoundingClientRect().top - columnHeader.getBoundingClientRect().bottom : null,
+              railBottom: rail ? rail.getBoundingClientRect().bottom : null,
+              shellBottom: shell.getBoundingClientRect().bottom,
+              // The header must never be flex-crushed by its parent column:
+              // report the column's fit state and every child's geometry so
+              // an overflow source is visible in the smoke report.
+              messageColumn: (() => {
+                const column = document.querySelector(".message-column");
+                if (!column) return null;
+                const columnStyle = getComputedStyle(column);
+                return {
+                  height: column.getBoundingClientRect().height,
+                  scrollHeight: column.scrollHeight,
+                  clientHeight: column.clientHeight,
+                  overflowY: columnStyle.overflowY,
+                  headerFlexShrink: (() => {
+                    const header = document.querySelector(".column-header");
+                    if (!header) return null;
+                    const headerStyle = getComputedStyle(header);
+                    return {
+                      flexShrink: headerStyle.flexShrink,
+                      flexBasis: headerStyle.flexBasis,
+                      minHeight: headerStyle.minHeight,
+                      height: headerStyle.height,
+                    };
+                  })(),
+                  children: Array.from(column.children).map((child) => {
+                    const style = getComputedStyle(child);
+                    return {
+                      className: child.className,
+                      tag: child.tagName,
+                      height: child.getBoundingClientRect().height,
+                      flexShrink: style.flexShrink,
+                      flexGrow: style.flexGrow,
+                      flexBasis: style.flexBasis,
+                      minHeight: style.minHeight,
+                    };
+                  }),
+                };
+              })(),
+              // The window controls, the column header's first row and the
+              // sidebar brand all rest on one shared vertical line, so the
+              // drag strip does not visually separate the top edge.
+              controlsCenter: controls ? controls.getBoundingClientRect().top + controls.getBoundingClientRect().height / 2 : null,
+              columnRowCenter: searchWrap ? searchWrap.getBoundingClientRect().top + searchWrap.getBoundingClientRect().height / 2 : null,
+              sidebarBrandCenter: (() => { const mark = document.querySelector(".brand-mark"); return mark ? mark.getBoundingClientRect().top + mark.getBoundingClientRect().height / 2 : null; })(),
+              // The header's right-most control sits one header gap away
+              // from the window controls instead of leaving a wide hole.
+              headerActionsGapToControls: (() => {
+                if (!controls) return null;
+                const wraps = [searchWrap, listFilterWrap, headerActions].filter(Boolean);
+                const rightmost = wraps.reduce((maxRight, wrap) => Math.max(maxRight, wrap.getBoundingClientRect().right), Number.NEGATIVE_INFINITY);
+                return Number.isFinite(rightmost) ? controls.getBoundingClientRect().left - rightmost : null;
+              })(),
+            };
+          })()`).catch(() => null);
       const desktopWindowControls = !smokeResultPath || !mainWindow
         ? undefined
         : await mainWindow.webContents.executeJavaScript("Boolean(document.querySelector('.window-controls') || document.querySelector('.window-control-slot'))").catch(() => true);
@@ -1570,6 +1718,7 @@ async function boot(): Promise<void> {
         title: mainWindow?.getTitle(),
         desktopWindowBar,
         desktopWindowBarBlend,
+        desktopWindowBarLayout,
         desktopWindowControls,
         desktopWallpaper,
         desktopSettingsUi,

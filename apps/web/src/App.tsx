@@ -3692,7 +3692,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           aria-hidden="true"
         />
       )}
-      <div className={`app-frame${isDesktop ? " desktop-app" : ""}`}>
+      <div className={`app-frame${isDesktop ? " desktop-app" : ""}`} data-platform={desktopPlatform}>
       <WindowBar t={t} theme={theme} onToggleTheme={toggleTheme} platform={desktopPlatform} isDesktop={isDesktop} />
 
       <main className={`mail-shell${selected ? " has-open-message" : ""}${agentOpen ? " has-agent-open" : ""}`} data-agent-phase={agentPhase}>
