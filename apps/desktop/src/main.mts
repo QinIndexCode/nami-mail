@@ -1499,6 +1499,7 @@ async function inspectDesktopSettingsUi(): Promise<DesktopSettingsUiSmokeResult>
 
         const settings = await waitFor(() => document.querySelector('.settings-modal'));
         if (!(settings instanceof HTMLElement)) throw new Error('Settings dialog did not open.');
+        const lastMissing = [];
         const completeSettings = await waitFor(() => {
           const settingsBackdrop = settings.parentElement;
           const lightBrandMark = document.querySelector('.brand-mark-light');
@@ -1508,21 +1509,36 @@ async function inspectDesktopSettingsUi(): Promise<DesktopSettingsUiSmokeResult>
           const updateRow = settings.querySelector('.update-setting-row');
           const input = settings.querySelector('input[type="file"]');
           const uploadButton = settings.querySelector('.background-actions .secondary-button');
-          if (
-            !(settingsBackdrop instanceof HTMLElement)
-            || !(lightBrandMark instanceof HTMLImageElement)
-            || !(darkBrandMark instanceof HTMLImageElement)
-            || !(title instanceof HTMLElement)
-            || !(editable instanceof HTMLInputElement)
-            || !(updateRow instanceof HTMLElement)
-            || !(input instanceof HTMLInputElement)
-            || !(uploadButton instanceof HTMLButtonElement)
-          ) {
-            return null;
-          }
+          lastMissing.length = 0;
+          if (!(settingsBackdrop instanceof HTMLElement)) lastMissing.push('settings backdrop');
+          if (!(lightBrandMark instanceof HTMLImageElement)) lastMissing.push('.brand-mark-light');
+          if (!(darkBrandMark instanceof HTMLImageElement)) lastMissing.push('.brand-mark-dark');
+          if (!(title instanceof HTMLElement)) lastMissing.push('#settings-title');
+          if (!(editable instanceof HTMLInputElement)) lastMissing.push('input[type="range"]');
+          if (!(updateRow instanceof HTMLElement)) lastMissing.push('.update-setting-row');
+          if (!(input instanceof HTMLInputElement)) lastMissing.push('input[type="file"]');
+          if (!(uploadButton instanceof HTMLButtonElement)) lastMissing.push('.background-actions .secondary-button');
+          if (lastMissing.length > 0) return null;
           return { settingsBackdrop, lightBrandMark, darkBrandMark, title, editable, updateRow, input, uploadButton };
         });
-        if (!completeSettings) throw new Error('Settings controls were not rendered after waiting for the desktop update status.');
+        if (!completeSettings) {
+          let updateBridgeEvidence = 'unavailable';
+          try {
+            const rawBridge = window.namiDesktop;
+            if (rawBridge && typeof rawBridge.getUpdateStatus === 'function') {
+              updateBridgeEvidence = JSON.stringify(await rawBridge.getUpdateStatus() ?? null);
+            } else {
+              updateBridgeEvidence = String(typeof rawBridge);
+            }
+          } catch (error) {
+            updateBridgeEvidence = 'error: ' + (error instanceof Error ? error.message : String(error));
+          }
+          throw new Error(
+            'Settings controls were not rendered after waiting for the desktop update status. Missing: '
+            + lastMissing.join(', ')
+            + ' | update bridge: ' + updateBridgeEvidence,
+          );
+        }
         const { settingsBackdrop, lightBrandMark, darkBrandMark, title, editable, updateRow, input, uploadButton } = completeSettings;
         const brandName = document.querySelector('.brand-row strong')?.textContent?.trim() ?? '';
 

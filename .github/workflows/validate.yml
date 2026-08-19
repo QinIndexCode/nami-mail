@@ -19,7 +19,7 @@ jobs:
   validate:
     name: validate
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     permissions:
       contents: read
     steps:
@@ -43,9 +43,16 @@ jobs:
       - run: node --test scripts/release-policy.test.mjs
       - run: node --test scripts/build-locale-catalog.test.mjs
       - run: node scripts/build-locale-catalog.mjs --check
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test
       - run: npm run test:desktop-security
       - run: npm run smoke:runtime
+      # The e2e suite drives the web app in demo mode from a Vite dev server.
+      - run: npx playwright install chromium
+      - run: npm run test:e2e
+      # Desktop smoke reuses the build step above, so only verify the Electron
+      # ABI and then launch the bundled app under its own smoke harness.
+      - run: npm run verify:electron-sqlite && node scripts/smoke-desktop.mjs
       - run: npm audit --omit=dev --audit-level=high

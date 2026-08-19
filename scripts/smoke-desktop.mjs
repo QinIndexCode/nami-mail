@@ -50,7 +50,9 @@ for (const name of [
 const execFileAsync = promisify(execFile);
 const reportPath = path.join(projectRoot, "output", "desktop-smoke.json");
 const diagnosticReportPath = path.join(projectRoot, "output", "desktop-smoke-diagnostic.json");
-const gracefulExitTimeoutMs = 10_000;
+// The app quits on its own 8s after the smoke result is written, then shuts
+// the local server down under its own 8s bound; allow both plus margin.
+const gracefulExitTimeoutMs = 25_000;
 const forcedExitTimeoutMs = 10_000;
 const smokeResultTimeoutMs = 90_000;
 const smokeResultPollIntervalMs = 200;

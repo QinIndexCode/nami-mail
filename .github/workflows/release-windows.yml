@@ -15,7 +15,7 @@ concurrency:
 jobs:
   validate:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     permissions:
       contents: read
     steps:
@@ -36,11 +36,15 @@ jobs:
       - run: node --test scripts/release-policy.test.mjs
       - run: node --test scripts/build-locale-catalog.test.mjs
       - run: node scripts/build-locale-catalog.mjs --check
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test
       - run: npm run test:desktop-security
       - run: npm run smoke:runtime
+      - run: npx playwright install chromium
+      - run: npm run test:e2e
+      - run: npm run verify:electron-sqlite && node scripts/smoke-desktop.mjs
       - run: npm audit --omit=dev --audit-level=high
 
   release:

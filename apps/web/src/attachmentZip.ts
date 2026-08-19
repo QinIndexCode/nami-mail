@@ -12,6 +12,7 @@ export function attachmentZipEntryName(filename: string, index: number): string 
   const cleaned = filename
     .replace(/[\r\n\t]/g, " ")
     .replace(/[\\/:*?"<>|]/g, " ")
+    // eslint-disable-next-line no-control-regex -- strips C0 controls from entry names
     .replace(/[\u0000-\u001f\u007f]/g, "")
     .trim()
     .slice(0, 80)
@@ -24,6 +25,7 @@ export function attachmentsZipFilename(subject: string): string {
   const cleaned = subject
     .replace(/[\r\n\t]/g, " ")
     .replace(/[\\/:*?"<>|]/g, " ")
+    // eslint-disable-next-line no-control-regex -- strips C0 controls from zip names
     .replace(/[\u0000-\u001f\u007f]/g, "")
     .trim()
     .slice(0, 60)

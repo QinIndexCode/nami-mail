@@ -91,6 +91,7 @@ export function exportDownloadFilename(text: string, fallback: string, extension
   const cleaned = text
     .replace(/[\r\n\t]/g, " ")
     .replace(/[\\/:*?"<>|]/g, " ")
+    // eslint-disable-next-line no-control-regex -- strips C0 controls from export names
     .replace(/[\u0000-\u001f\u007f]/g, "")
     .trim()
     .slice(0, 60)
