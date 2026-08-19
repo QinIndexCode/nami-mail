@@ -50,6 +50,7 @@ import {
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
 import { CustomAvatar } from "./SenderAvatar";
+import { WindowBar } from "./WindowBar";
 import { ApiError, api, type BatchJobCreatePayload, type BatchJobQuery, type BatchJobSnapshot, type MoveTarget } from "./api";
 import { calendarCache, contactsCache, templatesCache } from "./dialogPrefetch";
 import DatePicker from "./DatePicker";
@@ -187,6 +188,10 @@ export function shouldPollTick(lastSseEventAtMs: number, nowMs: number, interval
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 const isDesktop = new URLSearchParams(window.location.search).get("desktop") === "1";
 const isDesktopSmoke = new URLSearchParams(window.location.search).get("desktopSmoke") === "1";
+// The desktop shell injects its host platform ("win32" | "darwin" | "linux")
+// so the window bar can pick the frameless layout (own controls vs. the
+// macOS traffic-light slot).
+const desktopPlatform = new URLSearchParams(window.location.search).get("platform") ?? undefined;
 
 // Mirrors MAX_TRANSLATION_TEXT_LENGTH in the local server so the reader rejects
 // oversized messages before any mail content is sent to a translation provider.
@@ -3688,12 +3693,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         />
       )}
       <div className={`app-frame${isDesktop ? " desktop-app" : ""}`}>
-      {!isDesktop && (
-        <div className="window-bar">
-          <span className="window-title">Nami Mail</span>
-          <div className="window-actions"><span className="local-pill"><span /> {t("app.localEncryption")}</span><IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton></div>
-        </div>
-      )}
+      <WindowBar t={t} theme={theme} onToggleTheme={toggleTheme} platform={desktopPlatform} isDesktop={isDesktop} />
 
       <main className={`mail-shell${selected ? " has-open-message" : ""}${agentOpen ? " has-agent-open" : ""}`} data-agent-phase={agentPhase}>
         <aside

@@ -5,6 +5,16 @@ import { contextBridge, ipcRenderer } from "electron";
 // value in agent/confirmation-channel.cts by tests/preload-channel-sync.test.ts.
 const agentConfirmationIpcChannel = "nami:resolve-agent-confirmation";
 
+// The frameless window draws its own controls in the renderer; these channels
+// are pinned to the handlers in main.mts by tests/preload-channel-sync.test.ts.
+const windowControlChannels = {
+  minimize: "nami:window-minimize",
+  maximizeToggle: "nami:window-maximize-toggle",
+  close: "nami:window-close",
+  isMaximized: "nami:window-is-maximized",
+  maximizedChanged: "nami:window-maximized-changed",
+} as const;
+
 type NativeNotification = {
   title: string;
   body: string;
@@ -383,6 +393,17 @@ if (contextBridge && ipcRenderer) {
       };
       ipcRenderer.on("nami:update-status", wrapped);
       return () => ipcRenderer.removeListener("nami:update-status", wrapped);
+    },
+    minimizeWindow: () => ipcRenderer.send(windowControlChannels.minimize),
+    toggleMaximizeWindow: () => ipcRenderer.send(windowControlChannels.maximizeToggle),
+    closeWindow: () => ipcRenderer.send(windowControlChannels.close),
+    isWindowMaximized: (): Promise<boolean> => ipcRenderer.invoke(windowControlChannels.isMaximized),
+    onMaximizedChange: (listener: (maximized: boolean) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, maximized: unknown) => {
+        listener(maximized === true);
+      };
+      ipcRenderer.on(windowControlChannels.maximizedChanged, wrapped);
+      return () => ipcRenderer.removeListener(windowControlChannels.maximizedChanged, wrapped);
     },
   });
 }

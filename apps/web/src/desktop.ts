@@ -354,6 +354,12 @@ export type DesktopBridge = {
   onOpenInbox?: (listener: () => void) => () => void;
   onSettingsChanged: (listener: () => void) => () => void;
   onUpdateStatus: (listener: (snapshot: DesktopUpdateSnapshot) => void) => () => void;
+  /** Desktop only: window-bar controls for the frameless window. */
+  minimizeWindow?: () => void;
+  toggleMaximizeWindow?: () => void;
+  closeWindow?: () => void;
+  isWindowMaximized?: () => Promise<boolean>;
+  onMaximizedChange?: (listener: (maximized: boolean) => void) => () => void;
 };
 
 type RawDesktopBridge = Omit<DesktopBridge, "onAgentConfirmationResult" | "onAutoReply"> & {

@@ -1203,16 +1203,29 @@ function notifyAutoReplyEvent(event: DesktopAutoReplyEvent): void {
 async function createMainWindow(): Promise<void> {
   if (!localServer) throw new Error("Nami Mail local service was not started.");
 
+  // Windows/Linux draw their own window bar (the web app's WindowBar with
+  // minimize/maximize/close buttons), so the OS frame is dropped. macOS keeps
+  // the native traffic lights behind a hidden title bar; the renderer reserves
+  // a leading slot for them and draws no controls.
+  const frameless = process.platform !== "darwin";
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
-    minWidth: 360,
+    // The minimum size tracks the desktop layout, not the OS frame: below
+    // 820px the web app switches to the drawer-style responsive layout, so
+    // 840 keeps the three-pane mail view (sidebar + list + rail) reachable
+    // at all times; 520 leaves room for a usable message list (header row
+    // plus roughly six rows) with the rail and status strip.
+    minWidth: 840,
     minHeight: 520,
     show: false,
     title: "Nami Mail",
     icon: appIcon,
     backgroundColor: "#ececef",
     autoHideMenuBar: true,
+    ...(frameless
+      ? { frame: false }
+      : { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 12, y: 12 } }),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -1253,6 +1266,10 @@ async function createMainWindow(): Promise<void> {
   mainWindow.on("closed", () => {
     mainWindow = undefined;
   });
+  // The frameless window has no OS caption buttons, so the renderer tracks the
+  // maximize state itself to swap the maximize/restore glyphs.
+  mainWindow.on("maximize", () => mainWindow?.webContents.send("nami:window-maximized-changed", true));
+  mainWindow.on("unmaximize", () => mainWindow?.webContents.send("nami:window-maximized-changed", false));
   // Focusing the window clears the tray "new mail" dot; every restore path
   // (notification click, tray click, global shortcut) ends in focusMainWindow,
   // which shows and focuses the window and thus fires this event.
@@ -1260,6 +1277,10 @@ async function createMainWindow(): Promise<void> {
 
   const appUrl = new URL(localServer.url);
   appUrl.searchParams.set("desktop", "1");
+  // The renderer needs the host platform to pick the window-bar layout: the
+  // macOS native traffic lights leave a leading slot, other platforms draw
+  // their own maximize/restore/close buttons.
+  appUrl.searchParams.set("platform", process.platform);
   if (isDesktopSmoke) appUrl.searchParams.set("desktopSmoke", "1");
   // A cold start or a pre-window open-url hand-off queues one mailto compose.
   // did-finish-load fires after the renderer bundle ran, so the web app's
@@ -1504,11 +1525,14 @@ async function boot(): Promise<void> {
       const desktopUpdate = await startDesktopUpdaterIfNeeded();
       if (smokeResultPath) await writeDesktopSmokeProgress("notification-probe");
       const desktopNotificationTest = smokeResultPath ? await waitForDesktopSmokeNotification() : undefined;
-      const simulatedWebFrameVisible = !smokeResultPath
+      const desktopWindowBar = !smokeResultPath
         ? undefined
         : !mainWindow
           ? true
           : await mainWindow.webContents.executeJavaScript("Boolean(document.querySelector('.window-bar'))").catch(() => true);
+      const desktopWindowControls = !smokeResultPath || !mainWindow
+        ? undefined
+        : await mainWindow.webContents.executeJavaScript("Boolean(document.querySelector('.window-controls') || document.querySelector('.window-control-slot'))").catch(() => true);
       await writeDesktopSmokeProgress("wallpaper-probe");
       const desktopWallpaper = smokeResultPath ? await inspectDesktopWallpaper() : undefined;
       await writeDesktopSmokeProgress("settings-ui-probe");
@@ -1525,7 +1549,8 @@ async function boot(): Promise<void> {
       await writeSmokeResult({
         rendererUrl: mainWindow?.webContents.getURL(),
         title: mainWindow?.getTitle(),
-        simulatedWebFrameVisible,
+        desktopWindowBar,
+        desktopWindowControls,
         desktopWallpaper,
         desktopSettingsUi,
         desktopSettingsSync,
@@ -1598,6 +1623,27 @@ if (desktopCliArguments !== undefined) {
   ipcMain.on("nami:quit", (event) => {
     if (!isCurrentRenderer(event)) return;
     app.quit();
+  });
+  ipcMain.on("nami:window-minimize", (event) => {
+    if (!isCurrentRenderer(event)) return;
+    mainWindow?.minimize();
+  });
+  ipcMain.on("nami:window-maximize-toggle", (event) => {
+    if (!isCurrentRenderer(event)) return;
+    const window = mainWindow;
+    if (!window) return;
+    if (window.isMaximized()) window.unmaximize();
+    else window.maximize();
+  });
+  ipcMain.on("nami:window-close", (event) => {
+    if (!isCurrentRenderer(event)) return;
+    // Route through the normal close handler so the configured close behavior
+    // (ask, tray, or quit) applies instead of an unconditional app.quit().
+    mainWindow?.close();
+  });
+  ipcMain.handle("nami:window-is-maximized", (event) => {
+    if (!isCurrentRenderer(event)) return false;
+    return mainWindow?.isMaximized() ?? false;
   });
   ipcMain.on("nami:update-network-online", (event) => {
     if (!isCurrentRenderer(event)) return;
