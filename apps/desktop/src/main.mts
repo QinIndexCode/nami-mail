@@ -1530,6 +1530,25 @@ async function boot(): Promise<void> {
         : !mainWindow
           ? true
           : await mainWindow.webContents.executeJavaScript("Boolean(document.querySelector('.window-bar'))").catch(() => true);
+      const desktopWindowBarBlend = !smokeResultPath || !mainWindow
+        ? undefined
+        : await mainWindow.webContents.executeJavaScript(`(() => {
+            const bar = document.querySelector(".window-bar");
+            const sidebar = document.querySelector(".sidebar");
+            if (!bar || !sidebar) return null;
+            const barStyle = getComputedStyle(bar);
+            const sidebarStyle = getComputedStyle(sidebar);
+            return {
+              // The window bar must share the sidebar's translucent surface
+              // instead of drawing its own opaque strip over the workspace
+              // backdrop (or the plain frame without one).
+              backgroundColor: barStyle.backgroundColor,
+              sidebarBackgroundColor: sidebarStyle.backgroundColor,
+              borderBottomWidth: barStyle.borderBottomWidth,
+              matchesSidebar: barStyle.backgroundColor === sidebarStyle.backgroundColor,
+              hasBottomSeparator: Number.parseFloat(barStyle.borderBottomWidth) > 0,
+            };
+          })()`).catch(() => null);
       const desktopWindowControls = !smokeResultPath || !mainWindow
         ? undefined
         : await mainWindow.webContents.executeJavaScript("Boolean(document.querySelector('.window-controls') || document.querySelector('.window-control-slot'))").catch(() => true);
@@ -1550,6 +1569,7 @@ async function boot(): Promise<void> {
         rendererUrl: mainWindow?.webContents.getURL(),
         title: mainWindow?.getTitle(),
         desktopWindowBar,
+        desktopWindowBarBlend,
         desktopWindowControls,
         desktopWallpaper,
         desktopSettingsUi,

@@ -338,6 +338,8 @@ try {
   assert.equal(rendererAfterSingleInstance.desktopSingleInstance?.serviceUrl, primaryServiceUrl, "A second launch must reuse the primary local service.");
   report.desktopSingleInstance = rendererAfterSingleInstance.desktopSingleInstance;
   assert.equal(renderer.desktopWindowBar, true, "The desktop renderer must draw the app-owned window bar.");
+  assert.equal(renderer.desktopWindowBarBlend?.matchesSidebar, true, "The window bar must share the sidebar's translucent surface instead of drawing an opaque strip.");
+  assert.equal(renderer.desktopWindowBarBlend?.hasBottomSeparator, false, "The window bar must not be framed as a standalone strip by a bottom border.");
   assert.equal(renderer.desktopWindowControls, true, "The frameless window bar must carry its own controls (or the macOS traffic-light slot).");
   assert.equal(renderer.desktopWallpaper?.present, true, "The desktop workspace must render the configured wallpaper layer.");
   assert.equal(renderer.desktopWallpaper?.coversWorkspace, true, "The wallpaper layer must cover the full desktop workspace.");
