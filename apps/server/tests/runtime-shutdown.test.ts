@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
     translationTimeoutMs: 25_000,
   },
   getAppSettings: vi.fn(),
+  getSyncMessageLimit: vi.fn(() => 10),
   loadOrCreateMasterKey: vi.fn(),
   migrateAccountCredentialStorage: vi.fn(),
   migrateKnownProviderUsernameCredentials: vi.fn(),
@@ -67,6 +68,7 @@ vi.mock("../src/outbound-attachments.js", () => ({
 }));
 vi.mock("../src/settings.js", () => ({
   getAppSettings: mocks.getAppSettings,
+  getSyncMessageLimit: mocks.getSyncMessageLimit,
   updateAppSettings: mocks.updateAppSettings,
 }));
 vi.mock("../src/sync.js", () => ({ syncAccount: mocks.syncAccount }));

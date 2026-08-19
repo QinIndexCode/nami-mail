@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { autoReplyConfigPatchSchema } from "@nami/agent-contracts";
 import { openDatabase } from "../src/db.js";
-import { getAppSettings, updateAppSettings } from "../src/settings.js";
+import { getAppSettings, getSyncMessageLimit, updateAppSettings } from "../src/settings.js";
 
 describe("app settings migrations", () => {
   const temporaryDirectories: string[] = [];
@@ -173,6 +173,56 @@ describe("app settings migrations", () => {
       expect(getAppSettings(migrated)).toMatchObject({ avatarGravatarEnabled: false });
     } finally {
       migrated.close();
+    }
+  });
+
+  it("defaults the per-folder sync cap to 2000, migrates older databases, and persists the picker ladder", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nami-mail-settings-sync-limit-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "nami-mail.db");
+    const legacy = new Database(databasePath);
+    legacy.prepare("CREATE TABLE app_settings (id INTEGER PRIMARY KEY CHECK (id = 1), theme TEXT NOT NULL DEFAULT 'system', background_preset TEXT NOT NULL DEFAULT 'coast', background_intensity INTEGER NOT NULL DEFAULT 68, notifications_enabled INTEGER NOT NULL DEFAULT 1, notify_when_focused INTEGER NOT NULL DEFAULT 0, notification_sound TEXT NOT NULL DEFAULT 'soft', refresh_interval_seconds INTEGER NOT NULL DEFAULT 60, custom_background_filename TEXT, updated_at TEXT NOT NULL)").run();
+    legacy.prepare("INSERT INTO app_settings (id, theme, background_preset, background_intensity, notifications_enabled, notify_when_focused, notification_sound, refresh_interval_seconds, custom_background_filename, updated_at) VALUES (1, 'system', 'coast', 68, 1, 0, 'soft', 60, NULL, '2026-08-15T00:00:00.000Z')").run();
+    legacy.close();
+
+    const migrated = openDatabase(databasePath);
+    try {
+      expect(getAppSettings(migrated).syncMessageLimit).toBe(2000);
+      expect((migrated.prepare("SELECT sync_message_limit FROM app_settings WHERE id = 1").get() as { sync_message_limit: number }).sync_message_limit).toBe(2000);
+
+      expect(updateAppSettings(migrated, { syncMessageLimit: 0 })).toMatchObject({ syncMessageLimit: 0 });
+      expect(getAppSettings(migrated)).toMatchObject({ syncMessageLimit: 0 });
+      expect((migrated.prepare("SELECT sync_message_limit FROM app_settings WHERE id = 1").get() as { sync_message_limit: number }).sync_message_limit).toBe(0);
+
+      expect(updateAppSettings(migrated, { syncMessageLimit: 5000 })).toMatchObject({ syncMessageLimit: 5000 });
+      expect(getAppSettings(migrated)).toMatchObject({ syncMessageLimit: 5000 });
+    } finally {
+      migrated.close();
+    }
+  });
+
+  it("lets an explicitly set SYNC_MESSAGE_LIMIT environment variable override the UI setting", () => {
+    const previous = process.env.SYNC_MESSAGE_LIMIT;
+    try {
+      const db = openDatabase(":memory:");
+      try {
+        delete process.env.SYNC_MESSAGE_LIMIT;
+        expect(getSyncMessageLimit(db)).toBe(getAppSettings(db).syncMessageLimit);
+
+        process.env.SYNC_MESSAGE_LIMIT = "0";
+        expect(getSyncMessageLimit(db)).toBe(0);
+
+        process.env.SYNC_MESSAGE_LIMIT = "5000";
+        expect(getSyncMessageLimit(db)).toBe(5000);
+
+        process.env.SYNC_MESSAGE_LIMIT = "not-a-number";
+        expect(getSyncMessageLimit(db)).toBe(getAppSettings(db).syncMessageLimit);
+      } finally {
+        db.close();
+      }
+    } finally {
+      if (previous === undefined) delete process.env.SYNC_MESSAGE_LIMIT;
+      else process.env.SYNC_MESSAGE_LIMIT = previous;
     }
   });
 });

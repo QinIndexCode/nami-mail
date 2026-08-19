@@ -1451,6 +1451,23 @@ export default function SettingsModal({
                   <option value={300}>{t("settings.sync.refresh.fiveMinutes")}</option>
                 </ThemedSelect>
               </label>
+              <label className="setting-select-row" htmlFor="sync-message-limit">
+                <span><strong>{t("settings.sync.limit.label")}</strong><small>{t("settings.sync.limit.description")}</small></span>
+                <ThemedSelect
+                  id="sync-message-limit"
+                  value={currentSettings.syncMessageLimit}
+                  aria-label={t("settings.sync.limit.label")}
+                  disabled={controlsBusy}
+                  onValueChange={(value) => void applyOptimisticSettings({ syncMessageLimit: Number(value) as AppSettings["syncMessageLimit"] }, null)}
+                >
+                  <option value={0}>{t("settings.sync.limit.all")}</option>
+                  <option value={200}>200</option>
+                  <option value={500}>500</option>
+                  <option value={1000}>1000</option>
+                  <option value={2000}>2000</option>
+                  <option value={5000}>5000</option>
+                </ThemedSelect>
+              </label>
               <Switch
                 checked={currentSettings.realtimePushEnabled}
                 disabled={controlsBusy}

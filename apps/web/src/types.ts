@@ -377,6 +377,8 @@ export type AppSettings = {
   notificationSound: NotificationSound;
   refreshIntervalSeconds: 30 | 60 | 180 | 300;
   realtimePushEnabled: boolean;
+  /** Per-folder mailbox sync cap: 0 syncs the whole mailbox (Gmail-style, no cap). */
+  syncMessageLimit: 0 | 200 | 500 | 1000 | 2000 | 5000;
   closeBehavior: CloseBehavior;
   /** Desktop only: open Nami Mail at login. Browser mode ignores it. */
   launchAtStartup: boolean;
@@ -395,7 +397,7 @@ export type AppSettings = {
 
 export type AppSettingsPatch = Partial<Pick<
   AppSettings,
-  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "realtimePushEnabled" | "closeBehavior" | "launchAtStartup" | "globalShortcutEnabled" | "agentToolRoundLimit" | "listDensity" | "avatarGravatarEnabled" | "agentAccessLevel" | "agentCliAccessLevel" | "agentMcpAccessLevel" | "autoReply"
+  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "realtimePushEnabled" | "syncMessageLimit" | "closeBehavior" | "launchAtStartup" | "globalShortcutEnabled" | "agentToolRoundLimit" | "listDensity" | "avatarGravatarEnabled" | "agentAccessLevel" | "agentCliAccessLevel" | "agentMcpAccessLevel" | "autoReply"
 >>;
 
 export const defaultAppSettings: AppSettings = {
@@ -408,6 +410,7 @@ export const defaultAppSettings: AppSettings = {
   notificationSound: "soft",
   refreshIntervalSeconds: 60,
   realtimePushEnabled: true,
+  syncMessageLimit: 2000,
   closeBehavior: "ask",
   launchAtStartup: false,
   globalShortcutEnabled: false,
