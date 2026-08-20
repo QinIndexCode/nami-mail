@@ -49,6 +49,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const [sendAtLocal, setSendAtLocal] = useState("");
   const [toSuggestions, setToSuggestions] = useState<Contact[]>([]);
   const [toSuggestionsOpen, setToSuggestionsOpen] = useState(false);
+  const [toSuggestionIndex, setToSuggestionIndex] = useState(0);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [composeTemplates, setComposeTemplates] = useState<MailTemplate[] | null>(null);
   const [templateLoadBusy, setTemplateLoadBusy] = useState(false);
@@ -101,6 +102,9 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     setToSuggestionsOpen(false);
     toSearchRef.current += 1;
   };
+  // The highlighted suggestion drives aria-activedescendant; it clamps as the
+  // matched list can shrink while the menu stays open.
+  const suggestedIndex = toSuggestions.length > 0 ? Math.min(toSuggestionIndex, toSuggestions.length - 1) : 0;
   // Template quick-reply: templates are a local encrypted store, so the
   // picker loads only on first open and never sends template text anywhere.
   const loadComposeTemplates = async () => {
@@ -223,6 +227,10 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
       setDiscarding(false);
     }
   };
+
+  useEffect(() => {
+    if (!toSuggestionsOpen) setToSuggestionIndex(0);
+  }, [toSuggestionsOpen]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -511,11 +519,26 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             }
           }} disabled={busy || uploading || discarding}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}</ThemedSelect></label>
           <div className="compose-row compose-to-row">
-            <label htmlFor="compose-to"><span>{t("compose.to")}</span><input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => { setTo(event.target.value); searchContacts(event.target.value); }} onKeyDown={(event) => { if (event.key === "Escape") setToSuggestionsOpen(false); }} placeholder="email@example.com" disabled={busy || discarding} /></label>
+            <label htmlFor="compose-to"><span>{t("compose.to")}</span><input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => { setTo(event.target.value); searchContacts(event.target.value); }} onKeyDown={(event) => {
+              if (event.key === "Escape") { setToSuggestionsOpen(false); return; }
+              if ((event.key === "ArrowDown" || event.key === "ArrowUp")) {
+                if (!toSuggestionsOpen || toSuggestions.length === 0) return;
+                event.preventDefault();
+                const delta = event.key === "ArrowDown" ? 1 : -1;
+                setToSuggestionIndex((index) => (index + delta + toSuggestions.length) % toSuggestions.length);
+                return;
+              }
+              // While the suggestions are open, Enter applies the highlighted
+              // contact instead of submitting the compose form.
+              if (event.key === "Enter" && toSuggestionsOpen && toSuggestions.length > 0) {
+                const active = toSuggestions[suggestedIndex];
+                if (active) { event.preventDefault(); applyRecipientSuggestion(active); }
+              }
+            }} placeholder="email@example.com" disabled={busy || discarding} aria-autocomplete="list" aria-expanded={toSuggestionsOpen} aria-controls={toSuggestionsOpen ? "compose-contact-suggestions" : undefined} aria-activedescendant={toSuggestionsOpen && toSuggestions.length > 0 ? `compose-contact-suggestion-${suggestedIndex}` : undefined} /></label>
             {toSuggestionsOpen && (
-              <div className="compose-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
-                {toSuggestions.map((contact) => (
-                  <button key={contact.id} type="button" role="option" onMouseDown={(event) => event.preventDefault()} onClick={() => applyRecipientSuggestion(contact)}>
+              <div className="compose-contact-suggestions" id="compose-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
+                {toSuggestions.map((contact, index) => (
+                  <button key={contact.id} type="button" role="option" id={`compose-contact-suggestion-${index}`} aria-selected={index === suggestedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => applyRecipientSuggestion(contact)}>
                     <span>{contact.name || contact.email}</span><small>{contact.name ? contact.email : ""}</small>
                   </button>
                 ))}
@@ -529,8 +552,8 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             {scheduleOptions.map((option) => (
               <button key={option.key} type="button" className={`schedule-chip${sendAtLocal === datetimeLocalFromDate(option.compute()) ? " active" : ""}`} onClick={() => setSendAtLocal(datetimeLocalFromDate(option.compute()))} disabled={busy || discarding}>{option.label}</button>
             ))}
-            <button className="secondary-button compose-template-toggle" type="button" disabled={busy || discarding} onClick={toggleTemplatePicker}><LayoutTemplate size={15} />{t("compose.templates")}</button>{templatePickerOpen && (
-              <div className="compose-template-picker" role="listbox" aria-label={t("compose.templates")}>
+            <button className="secondary-button compose-template-toggle" type="button" disabled={busy || discarding} onClick={toggleTemplatePicker} aria-expanded={templatePickerOpen} aria-controls={templatePickerOpen ? "compose-template-picker" : undefined} aria-haspopup="listbox"><LayoutTemplate size={15} />{t("compose.templates")}</button>{templatePickerOpen && (
+              <div className="compose-template-picker" id="compose-template-picker" role="listbox" aria-label={t("compose.templates")}>
                 {isDemo ? (
                   <p className="compose-template-empty" role="status">{t("compose.templates.demoUnavailable")}</p>
                 ) : templateLoadBusy ? (
@@ -546,9 +569,9 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
                   <p className="compose-template-empty" role="status">{t("compose.templates.empty")}</p>
                 ) : (
                   <ul className="compose-template-list">
-                    {composeTemplates?.map((template) => (
+                    {composeTemplates?.map((template, index) => (
                       <li key={template.id}>
-                        <button type="button" role="option" onClick={() => applyTemplate(template)}>
+                        <button type="button" role="option" id={`compose-template-option-${index}`} onClick={() => applyTemplate(template)}>
                           <span>{template.name}</span>
                           {template.subject && <small>{template.subject}</small>}
                         </button>

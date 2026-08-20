@@ -230,6 +230,31 @@ describe("message list context menu", () => {
   });
 });
 
+describe("message list range selection", () => {
+  it("toggles the row and plants the anchor on a single shift+click", () => {
+    const onToggleSelected = vi.fn();
+    const html = renderList({ onToggleSelected });
+    const row = html.querySelectorAll<HTMLButtonElement>(".message-item")[0]!;
+    act(() => {
+      row.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    });
+    expect(onToggleSelected).toHaveBeenCalledWith("m-1");
+  });
+
+  it("reports the span to onSelectRange when a later shift+click extends it", () => {
+    const onToggleSelected = vi.fn();
+    const onSelectRange = vi.fn();
+    const html = renderList({ onToggleSelected, onSelectRange });
+    const rows = html.querySelectorAll<HTMLButtonElement>(".message-item");
+    act(() => {
+      rows[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+      rows[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    });
+    expect(onToggleSelected).toHaveBeenCalledWith("m-1");
+    expect(onSelectRange).toHaveBeenCalledWith(["m-1", "m-2"]);
+  });
+});
+
 describe("row quick actions reveal", () => {
   const stylesheet = readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
 
@@ -301,5 +326,18 @@ describe("mail reader title wrapping", () => {
     const senderBlock = stylesheet.match(/\.mail-people strong\s*\{[^}]*\}/)?.[0] ?? "";
     expect(senderBlock).toContain("white-space:nowrap");
     expect(senderBlock).toContain("text-overflow:ellipsis");
+  });
+
+  it("fades the outline for pointer focus but restores it for keyboard focus", () => {
+    // The title h2 is the keyboard focus landing spot of the compact layout
+    // (j/k navigation); it must show the shared focus ring on :focus-visible
+    // while pointer clicks keep the outline-less look.
+    const pointerBlock = stylesheet.match(/\.mail-title h2:focus:not\(:focus-visible\)\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(pointerBlock).toContain("outline:none");
+    const keyboardBlock = stylesheet.match(/\.mail-title h2:focus-visible\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(keyboardBlock).toContain("outline:2px solid var(--focus-ring)");
+    expect(keyboardBlock).toContain("outline-offset:2px");
+    // Guard against regressing to a single bare outline:none rule on focus.
+    expect(stylesheet).not.toMatch(/\.mail-title h2:focus\s*\{\s*outline:none\s*\}/);
   });
 });

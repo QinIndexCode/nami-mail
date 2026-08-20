@@ -498,6 +498,10 @@ describe("AgentWorkspace conversation switching", () => {
     const rows = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-mention-item"));
     expect(rows.length).toBe(1);
     expect(rows[0]?.getAttribute("aria-selected")).toBe("true");
+    // The combobox anchors the textarea to the highlighted option.
+    expect(rows[0]?.getAttribute("id")).toBe("agent-mention-menu-item-0");
+    expect(container.querySelector<HTMLTextAreaElement>(".agent-composer textarea")?.getAttribute("aria-activedescendant"))
+      .toBe("agent-mention-menu-item-0");
 
     act(() => {
       container.querySelector<HTMLTextAreaElement>(".agent-composer textarea")!
@@ -507,6 +511,53 @@ describe("AgentWorkspace conversation switching", () => {
     const chips = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-reference-chips .agent-reference-chip-open"));
     expect(chips.map((chip) => chip.textContent).join("|")).toContain("Team offsite");
     expect(container.querySelector(".agent-mention-menu")).toBeNull();
+  });
+
+  it("drives the slash menu with aria-activedescendant and keeps ids unique", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
+
+    setComposer("/");
+    await flush();
+    const menu = container.querySelector<HTMLElement>(".agent-slash-menu");
+    expect(menu).not.toBeNull();
+    const rows = Array.from(menu?.querySelectorAll<HTMLButtonElement>(".agent-slash-item") ?? []);
+    expect(rows.length).toBeGreaterThan(0);
+    const textarea = container.querySelector<HTMLTextAreaElement>(".agent-composer textarea");
+    expect(textarea?.getAttribute("aria-activedescendant")).toBe("agent-slash-menu-item-0");
+    expect(rows[0]?.getAttribute("id")).toBe("agent-slash-menu-item-0");
+    expect(new Set(rows.map((row) => row.getAttribute("id"))).size).toBe(rows.length);
+
+    act(() => {
+      textarea!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    });
+    await flush();
+    expect(textarea?.getAttribute("aria-activedescendant")).toBe("agent-slash-menu-item-1");
+    expect(rows[1]?.getAttribute("aria-selected")).toBe("true");
+
+    act(() => {
+      textarea!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await flush();
+    expect(container.querySelector(".agent-slash-menu")).toBeNull();
+    expect(textarea?.getAttribute("aria-activedescendant")).toBeNull();
+  });
+
+  it("drives the mention menu with aria-activedescendant", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
+
+    setComposer("/@");
+    await settleMentionDebounce();
+    const textarea = container.querySelector<HTMLTextAreaElement>(".agent-composer textarea");
+    const rows = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-mention-item"));
+    expect(rows.length).toBeGreaterThan(1);
+    expect(textarea?.getAttribute("aria-activedescendant")).toBe("agent-mention-menu-item-0");
+
+    act(() => {
+      textarea!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    });
+    await flush();
+    expect(textarea?.getAttribute("aria-activedescendant")).toBe("agent-mention-menu-item-1");
+    expect(rows[1]?.getAttribute("aria-selected")).toBe("true");
   });
 
   it("dedupes references and rejects a ninth mail with a cap notice", async () => {

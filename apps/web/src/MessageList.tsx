@@ -125,7 +125,7 @@ export const MessageListRow = memo(function MessageListRow(props: MessageListRow
   const className = `message-item ${selected ? "selected" : ""} ${unread ? "unread" : ""} ${selectionMode ? "selection-mode" : ""} ${multiSelected ? "multi-selected" : ""} ${recentlyReadInUnread ? "recently-read-in-unread" : ""}`;
   return (
     <div className="message-list-row" style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualStart}px)` }}>
-      <button data-index={index} ref={buttonRefCallback} className={className} onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
+      <button data-index={index} ref={buttonRefCallback} className={className} aria-pressed={selectionMode ? multiSelected : undefined} onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
         <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
         {selectionMode && <span className={`selection-checkbox ${multiSelected ? "checked" : ""}`} aria-hidden="true" />}
         <SenderAvatar name={message.from.name} address={message.from.address} tone={accountTone(message.from.address)} gravatarEnabled={gravatarEnabled} />

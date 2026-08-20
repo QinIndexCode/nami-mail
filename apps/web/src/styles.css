@@ -2407,9 +2407,14 @@ font-weight:400;
 line-height:1.24;
 overflow-wrap:anywhere
 }
-.mail-title h2:focus
+.mail-title h2:focus:not(:focus-visible)
 {
 outline:none
+}
+.mail-title h2:focus-visible
+{
+outline:2px solid var(--focus-ring);
+outline-offset:2px
 }
 .mail-people
 {

@@ -4144,6 +4144,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                   event.preventDefault();
                   const delta = event.key === "ArrowDown" ? 1 : -1;
                   setSlashIndex((index) => (index + delta + slashMenu.length) % slashMenu.length);
+                  requestAnimationFrame(() => document.getElementById("agent-slash-menu")?.querySelector(".selected")?.scrollIntoView({ block: "nearest" }));
                   return;
                 }
                 if (event.key === "Tab" || event.key === "Enter") {
@@ -4170,6 +4171,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                   if (mentionItems.length === 0) return;
                   const delta = event.key === "ArrowDown" ? 1 : -1;
                   setMentionIndex((index) => (index + delta + mentionItems.length) % mentionItems.length);
+                  requestAnimationFrame(() => document.getElementById("agent-mention-menu")?.querySelector(".selected")?.scrollIntoView({ block: "nearest" }));
                   return;
                 }
                 if (event.key === "Tab" || event.key === "Enter") {
@@ -4191,13 +4193,14 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                 event.preventDefault();
                 void sendMessage();
               }
-            }} placeholder={t("agent.composer.placeholder")} disabled={composerDisabled} rows={1} aria-expanded={(slashMenu !== null && slashMenu.length > 0) || mentionOpen} aria-controls={slashMenu !== null && slashMenu.length > 0 ? "agent-slash-menu" : mentionOpen ? "agent-mention-menu" : undefined} />
+            }} placeholder={t("agent.composer.placeholder")} disabled={composerDisabled} rows={1} aria-expanded={(slashMenu !== null && slashMenu.length > 0) || mentionOpen} aria-controls={slashMenu !== null && slashMenu.length > 0 ? "agent-slash-menu" : mentionOpen ? "agent-mention-menu" : undefined} aria-activedescendant={slashMenu !== null && slashMenu.length > 0 ? (activeSlashIndex >= 0 ? `agent-slash-menu-item-${activeSlashIndex}` : undefined) : mentionOpen && mentionItems.length > 0 ? (activeMentionIndex >= 0 ? `agent-mention-menu-item-${activeMentionIndex}` : undefined) : undefined} />
             {slashMenu && slashMenu.length > 0 && (
               <div className="agent-slash-menu" id="agent-slash-menu" role="listbox" aria-label={t("agent.commands.label")}>
                 {slashMenu.map((item, index) => (
                   <button
                     type="button"
                     role="option"
+                    id={`agent-slash-menu-item-${index}`}
                     aria-selected={index === activeSlashIndex}
                     key={item.kind === "sub" ? `${item.command.id}.${item.sub.name}` : item.command.id}
                     className={`agent-slash-item${item.kind === "sub" ? " agent-slash-item-sub" : ""}${index === activeSlashIndex ? " selected" : ""}`}
@@ -4224,6 +4227,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                     <button
                       type="button"
                       role="option"
+                      id={`agent-mention-menu-item-${index}`}
                       aria-selected={index === activeMentionIndex}
                       key={item.id}
                       className={`agent-mention-item${index === activeMentionIndex ? " selected" : ""}`}

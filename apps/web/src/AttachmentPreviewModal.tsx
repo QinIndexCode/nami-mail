@@ -90,8 +90,22 @@ export default function AttachmentPreviewModal({
   // The preview is a non-modal in-flow pane next to the message (a Gmail-style
   // reading pane), so focus simply lands on the drawer itself and the reader
   // stays interactive; no trap is installed.
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const hadAttachmentRef = useRef(false);
   useEffect(() => {
-    if (!attachment) return undefined;
+    if (!attachment) {
+      if (hadAttachmentRef.current) {
+        hadAttachmentRef.current = false;
+        const target = previousFocusRef.current;
+        previousFocusRef.current = null;
+        if (target?.isConnected) window.requestAnimationFrame(() => target.focus());
+      }
+      return undefined;
+    }
+    if (!hadAttachmentRef.current) {
+      hadAttachmentRef.current = true;
+      previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
     dialogRef.current?.focus();
     return undefined;
   }, [attachment]);
