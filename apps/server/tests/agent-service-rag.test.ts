@@ -270,7 +270,7 @@ describe("Agent service RAG scope", () => {
     masterKey = undefined;
   });
 
-  it("passes the fixed message scope to retrieval without inferring thread membership", async () => {
+  it("passes the fixed account scope to retrieval without inferring thread membership", async () => {
     db = openDatabase(":memory:");
     masterKey = randomBytes(32);
     insertAccount(db);
@@ -290,7 +290,7 @@ describe("Agent service RAG scope", () => {
     });
     const conversation = service.createConversation({
       providerId: provider.id,
-      scope: { mode: "current_message", accountIds: ["account-1"], messageIds: ["message-1"] },
+      scope: { mode: "selected_account", accountIds: ["account-1"], messageIds: [] },
     });
     const internals = service as unknown as {
       rag: AgentRagWorker;
@@ -325,7 +325,6 @@ describe("Agent service RAG scope", () => {
       providerId: provider.id,
       mode: "agent",
       scope: conversation.scope,
-      context: { currentMessageId: "message-1" },
     })) {
       // Exhaust the stream so the service reaches RAG retrieval and persists its final state.
     }
@@ -335,7 +334,6 @@ describe("Agent service RAG scope", () => {
       "Summarize this message",
       6,
       expect.any(AbortSignal),
-      ["message-1"],
     );
     expect(providerMessages[0]?.filter((message) => message.role === "system")).toHaveLength(1);
     // Retrieval results ride along as an assistant-side context block — never a
@@ -379,7 +377,7 @@ describe("Agent service lifecycle fence", () => {
     });
     const conversation = service.createConversation({
       providerId: provider.id,
-      scope: { mode: "current_message", accountIds: ["account-1"], messageIds: ["message-1"] },
+      scope: { mode: "selected_account", accountIds: ["account-1"], messageIds: [] },
     });
     const internals = service as unknown as {
       rag: AgentRagWorker;
@@ -399,7 +397,6 @@ describe("Agent service lifecycle fence", () => {
       providerId: provider.id,
       mode: "agent",
       scope: conversation.scope,
-      context: { currentMessageId: "message-1" },
     })) events.push(event);
 
     expect(providerStream).not.toHaveBeenCalled();

@@ -892,7 +892,7 @@ describe("AgentService model tool loop", () => {
       insertMessage(value.db);
       const conversation = value.service.createConversation({
         providerId: value.provider.id,
-        scope: { mode: "current_message", accountIds: ["account-1"], messageIds: ["message-1"] },
+        scope: { mode: "selected_account", accountIds: ["account-1"], messageIds: [] },
       });
       const { invokeTool, iterator, providerRequests } = startDraftConfirmationRun(value, conversation, {
         currentMessageId: "renderer-controlled-message",
@@ -915,22 +915,18 @@ describe("AgentService model tool loop", () => {
         requestId: string;
         call: object;
         executionAccountIds: string[];
-        allowedMessageIds?: string[];
       };
       const replay = invokeTool.mock.calls[1]?.[0] as {
         requestId: string;
         call: object;
         executionAccountIds: string[];
-        allowedMessageIds?: string[];
         confirmationId?: string;
       };
       expect(replay).toMatchObject({
         requestId: first.requestId,
         executionAccountIds: ["account-1"],
-        allowedMessageIds: ["message-1"],
         confirmationId: pending.confirmationId,
       });
-      expect(first.allowedMessageIds).toEqual(["message-1"]);
       expect(replay.call).toBe(first.call);
       expect(events).toContainEqual(expect.objectContaining({
         type: "confirmation",

@@ -346,6 +346,95 @@ it("keeps an Agent stream running after the client closes its response", async (
     }
   });
 
+  it("accepts referenced mail with the turn, persists it, and rejects more than eight references", async () => {
+    const serviceMasterKey = Buffer.alloc(32, 7);
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, 'custom', 'Demo', 'encrypted', 'imap.example.test', 993, 1,
+        'smtp.example.test', 465, 1, 'email', 'connected', ?)
+    `).run("agent-refs", "refs@example.test", now);
+    applyAgentStoreSchema(db, "2026-08-10T00:00:00.000Z");
+    const lifecycle = new AccountLifecycleStore(db, serviceMasterKey);
+    const sourceEvents = new AgentSourceEventOutbox(db, serviceMasterKey, lifecycle);
+    const agentService = new AgentService({ db, masterKey: serviceMasterKey, lifecycle, sourceEvents });
+    try {
+      const provider = agentService.createProvider({
+        label: "Local test provider",
+        kind: "ollama",
+        endpoint: "http://127.0.0.1:11434/v1",
+        model: "test-model",
+        timeoutMs: 30_000,
+        allowCloudMailContent: false,
+        makeDefault: true,
+      });
+      const conversation = agentService.createConversation({
+        providerId: provider.id,
+        scope: { mode: "selected_account", accountIds: ["agent-refs"], messageIds: [] },
+      });
+      const internals = agentService as unknown as {
+        runtime: { streamChat: (input: unknown) => AsyncIterable<unknown> };
+      };
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+        yield { type: "completed", reason: "stop" };
+      });
+
+      const streamingApp = await buildApp({ db, masterKey: serviceMasterKey, backgroundDirectory, agentService });
+      try {
+        const references = [
+          { id: "message-ref-a", subject: "Quarterly report" },
+          { id: "message-ref-b" },
+        ];
+        const post = await streamingApp.inject({
+          method: "POST",
+          url: `/api/agent/conversations/${conversation.id}/messages`,
+          payload: {
+            content: "Summarize the referenced mail",
+            providerId: provider.id,
+            mode: "agent",
+            scope: conversation.scope,
+            context: {},
+            references,
+          },
+        });
+        expect(post.statusCode).toBe(200);
+
+        const deadline = Date.now() + 10_000;
+        let persisted: { references?: Array<{ id: string; subject?: string }> } | undefined;
+        while (Date.now() < deadline) {
+          const snapshot = await streamingApp.inject({ method: "GET", url: `/api/agent/conversations/${conversation.id}` });
+          persisted = snapshot.json().messages.find((message: { role: string }) => message.role === "user");
+          if (persisted?.references) break;
+          await new Promise<void>((resolve) => setTimeout(resolve, 150));
+        }
+        expect(persisted?.references).toEqual(references);
+        expect(persisted?.content).toBe("Summarize the referenced mail");
+
+        const tooMany = await streamingApp.inject({
+          method: "POST",
+          url: `/api/agent/conversations/${conversation.id}/messages`,
+          payload: {
+            content: "Too many",
+            providerId: provider.id,
+            mode: "agent",
+            scope: conversation.scope,
+            context: {},
+            references: Array.from({ length: 9 }, (_, index) => ({ id: `ref-${index}` })),
+          },
+        });
+        expect(tooMany.statusCode).toBe(400);
+      } finally {
+        await streamingApp.close();
+      }
+    } finally {
+      agentService.close();
+      vi.restoreAllMocks();
+    }
+  });
+
   it("rejects agent messages with unknown attachment keys", async () => {
     const serviceMasterKey = Buffer.alloc(32, 7);
     const now = new Date().toISOString();
