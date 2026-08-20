@@ -29,6 +29,12 @@ import {
   expandAgentSlashCommand,
   type AgentSlashCommand,
 } from "@nami/agent-contracts";
+import {
+  type AgentCitation,
+  type AgentConfirmation,
+  type AgentToolActivity,
+  type AgentUiStreamEvent,
+} from "@nami/agent-contracts";
 import { AgentRuntime, createPermissionEngine, createToolRegistry, type ToolRegistry } from "@nami/agent-core";
 import type { DatabaseHandle } from "./db.js";
 import { getAppSettings, type AgentAccessLevel, type AppSettings } from "./settings.js";
@@ -180,35 +186,6 @@ export type AgentConversationSummary = {
   updatedAt: string;
 };
 
-export type AgentCitation = {
-  id: string;
-  messageId: string;
-  accountId: string;
-  subject: string;
-  sender: string;
-  sentAt: string;
-  excerpt: string;
-  confidence?: number;
-};
-
-export type AgentToolActivity = {
-  id: string;
-  toolName: string;
-  title: string;
-  state: "running" | "completed" | "failed" | "awaiting_confirmation";
-  summary?: string;
-  error?: { code: string; message: string; retryable?: boolean };
-};
-
-export type AgentConfirmation = {
-  id: string;
-  title: string;
-  summary: string;
-  fields: Array<{ label: string; value: string }>;
-  expiresAt: string;
-  state: "pending" | "approved" | "rejected" | "expired";
-};
-
 export type AgentMessage = {
   id: string;
   role: "user" | "assistant" | "system";
@@ -309,16 +286,7 @@ export type ExternalAgentToolInvocation = {
   input: unknown;
 };
 
-export type AgentUiStreamEvent =
-  | { type: "status"; message?: string }
-  | { type: "text_delta"; delta: string }
-  | { type: "citation"; citation: AgentCitation }
-  | { type: "tool"; activity: AgentToolActivity }
-  | { type: "confirmation"; confirmation: AgentConfirmation }
-  | { type: "memory_suggestion"; summary: string }
-  | { type: "title"; title: string }
-  | { type: "error"; error: { code: string; message: string; suggestion?: string; retryable?: boolean } }
-  | { type: "completed"; reason: "stop" | "length" | "cancelled" | "error" };
+export type { AgentUiStreamEvent } from "@nami/agent-contracts";
 
 type AgentCompletionReason = Extract<AgentUiStreamEvent, { type: "completed" }>["reason"];
 type AgentMessageError = NonNullable<AgentMessage["error"]>;

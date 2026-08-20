@@ -1,3 +1,4 @@
+import { agentUiStreamEventSchema } from "@nami/agent-contracts";
 import type {
   AgentBootstrap,
   AgentConversation,
@@ -245,9 +246,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 function parseAgentEvent(value: unknown): AgentStreamEvent | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const event = value as { type?: unknown };
-  return typeof event.type === "string" ? value as AgentStreamEvent : null;
+  const parsed = agentUiStreamEventSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 async function consumeAgentStream(response: Response, onEvent: (event: AgentStreamEvent) => void): Promise<void> {
@@ -256,7 +256,8 @@ async function consumeAgentStream(response: Response, onEvent: (event: AgentStre
     const body = await response.json().catch(() => ({})) as { events?: unknown[] };
     for (const value of body.events ?? []) {
       const event = parseAgentEvent(value);
-      if (event) onEvent(event);
+      if (!event) throw new ApiError("The Agent returned an unrecognized streaming event.", "agent_stream_invalid");
+      onEvent(event);
     }
     return;
   }
@@ -269,12 +270,15 @@ async function consumeAgentStream(response: Response, onEvent: (event: AgentStre
     if (!payloadLines.length) return;
     const payload = payloadLines.join("\n");
     payloadLines = [];
+    let parsed: unknown;
     try {
-      const event = parseAgentEvent(JSON.parse(payload));
-      if (event) onEvent(event);
+      parsed = JSON.parse(payload);
     } catch {
       throw new ApiError("The Agent returned an unrecognized streaming event.", "agent_stream_invalid");
     }
+    const event = parseAgentEvent(parsed);
+    if (!event) throw new ApiError("The Agent returned an unrecognized streaming event.", "agent_stream_invalid");
+    onEvent(event);
   };
   while (true) {
     const next = await reader.read();

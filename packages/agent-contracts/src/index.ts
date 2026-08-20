@@ -16,3 +16,4 @@ export * from "./provider.js";
 export * from "./source-events.js";
 export * from "./stream.js";
 export * from "./tool.js";
+export * from "./ui-stream.js";

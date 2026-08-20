@@ -223,3 +223,66 @@ describe("api transport errors", () => {
     expect(init.body).toBeUndefined();
   });
 });
+
+describe("agent stream seam validation", () => {
+  const request = {
+    content: "Summarize my inbox",
+    providerId: "provider-1",
+    mode: "agent" as const,
+    scope: { mode: "all_accounts" as const, accountIds: [], messageIds: [] },
+  };
+
+  it("delivers events parsed by the UI stream schema", async () => {
+    const events = [
+      { type: "status", message: "Preparing context" },
+      { type: "text_delta", delta: "Hello" },
+      { type: "title", title: "Inbox summary" },
+      { type: "completed", reason: "stop" },
+    ];
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ events }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const received: string[] = [];
+    await api.streamAgentMessage("conversation-1", request, (event) => received.push(event.type));
+    expect(received).toEqual(["status", "text_delta", "title", "completed"]);
+  });
+
+  it("rejects an event that breaks the schema with agent_stream_invalid", async () => {
+    const events = [
+      { type: "status" },
+      { type: "completed", reason: "banana" },
+    ];
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ events }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.streamAgentMessage("conversation-1", request, () => {})).rejects.toMatchObject({
+      name: "ApiError",
+      code: "agent_stream_invalid",
+    });
+  });
+
+  it("validates along the SSE path and surfaces the same error", async () => {
+    const body = [
+      "data: " + JSON.stringify({ type: "text_delta", delta: "Hi" }),
+      "",
+      "data: " + JSON.stringify({ type: "unknown_variant" }),
+      "",
+    ].join("\n");
+    const fetchMock = vi.fn().mockResolvedValue(new Response(body, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.streamAgentMessage("conversation-1", request, () => {})).rejects.toMatchObject({
+      name: "ApiError",
+      code: "agent_stream_invalid",
+    });
+  });
+});

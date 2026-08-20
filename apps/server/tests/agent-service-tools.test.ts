@@ -3,7 +3,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { externalReadMailContracts, externalWriteMailContracts, type CallerContext, type ProviderChatRequest } from "@nami/agent-contracts";
+import { agentUiStreamEventSchema, externalReadMailContracts, externalWriteMailContracts, type CallerContext, type ProviderChatRequest } from "@nami/agent-contracts";
 import { AgentService } from "../src/agent-service.js";
 import type { MailApplicationContext, MailApplicationService, MailListQuery } from "../src/agent/mail-application-service.js";
 import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
@@ -1049,6 +1049,29 @@ describe("AgentService model tool loop", () => {
       expect(value.mail.createDraft).not.toHaveBeenCalled();
       expect(events).not.toContainEqual(expect.objectContaining({ type: "confirmation" }));
       expect(events).toContainEqual({ type: "completed", reason: "cancelled" });
+    } finally {
+      await closeFixture(value);
+    }
+  });
+
+  it("yields only UI stream events that satisfy the wire schema", async () => {
+    const value = fixture();
+    try {
+      const internals = internalRuntime(value.service);
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+        yield { type: "status", phase: "model", message: "Drafting the reply", eventId: "e1", requestId: "r1", sequence: 0, emittedAt: timestamp };
+        yield { type: "text_delta", delta: "Hello ", eventId: "e2", requestId: "r1", sequence: 1, emittedAt: timestamp };
+        yield { type: "text_delta", delta: "world", eventId: "e3", requestId: "r1", sequence: 2, emittedAt: timestamp };
+        yield { type: "completed", reason: "stop", eventId: "e4", requestId: "r1", sequence: 3, emittedAt: timestamp };
+      });
+
+      const events = await streamWithAgent(value.service, value.conversation, value.provider.id);
+
+      expect(events).not.toEqual([]);
+      for (const event of events) {
+        expect(agentUiStreamEventSchema.safeParse(event).success, JSON.stringify(event)).toBe(true);
+      }
+      expect(events.at(-1)).toEqual({ type: "completed", reason: "stop" });
     } finally {
       await closeFixture(value);
     }
