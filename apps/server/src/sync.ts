@@ -379,9 +379,9 @@ export async function syncAccount(
   accessTokenProvider?: AccountAccessTokenProvider,
   agentEvents?: AgentMailEventSink,
   signal?: AbortSignal,
-): Promise<{ synced: number; folders: number; failedFolders: number; newInboxMessages: NewInboxMessage[] }> {
+): Promise<{ synced: number; folders: number; failedFolders: number; limitReached: boolean; newInboxMessages: NewInboxMessage[] }> {
   if (running.has(accountId) || movingAccounts.has(accountId)) {
-    return { synced: 0, folders: 0, failedFolders: 0, newInboxMessages: [] };
+    return { synced: 0, folders: 0, failedFolders: 0, limitReached: false, newInboxMessages: [] };
   }
   const account = accountById(db, accountId);
   if (!account) throw new Error("Account not found.");
@@ -707,6 +707,9 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     let synced = 0;
     let failedFolders = 0;
     let firstFolderError: unknown;
+    // Any folder whose remote size exceeds the effective per-folder cap skips
+    // older mail; the pass stays healthy, but the UI should tell the user.
+    let limitReached = false;
     const newInboxMessages: NewInboxMessage[] = [];
 
     const sourceMembershipAbsentIntentIds = new Set<string>();
@@ -939,6 +942,9 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           }
         }
         const exists = mailbox?.exists ?? 0;
+        // `exists` is the remote size; a positive cap means only the newest
+        // `messageLimit` messages were fetched, so older mail was skipped.
+        if (messageLimit > 0 && exists > messageLimit) limitReached = true;
         // A no-UIDPLUS move may already have an exact cached destination
         // outside the rolling sync window. Probe that UID first rather than
         // waiting for it to become one of the newest messages.
@@ -1232,16 +1238,17 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     if (folders.length > 0 && failedFolders === folders.length) throw firstFolderError;
 
     const syncedAt = new Date().toISOString();
+    const syncWarningCode = limitReached ? "sync_limit" : null;
     if (failedFolders > 0) {
       // A partial pass has fresh data, but it is not a healthy account state:
       // retain a safe, actionable diagnostic until every folder succeeds.
       db.prepare(`
-        UPDATE accounts SET status = 'degraded', last_error = ?, last_error_code = 'partial_sync', last_synced_at = ? WHERE id = ?
-      `).run(partialSyncMessage(failedFolders), syncedAt, accountId);
+        UPDATE accounts SET status = 'degraded', last_error = ?, last_error_code = 'partial_sync', last_sync_warning_code = ?, last_synced_at = ? WHERE id = ?
+      `).run(partialSyncMessage(failedFolders), syncWarningCode, syncedAt, accountId);
     } else {
       db.prepare(`
-        UPDATE accounts SET status = 'connected', last_error = NULL, last_error_code = NULL, last_synced_at = ? WHERE id = ?
-      `).run(syncedAt, accountId);
+        UPDATE accounts SET status = 'connected', last_error = NULL, last_error_code = NULL, last_sync_warning_code = ?, last_synced_at = ? WHERE id = ?
+      `).run(syncWarningCode, syncedAt, accountId);
     }
     // The provider's Sent folder is the strongest confirmation available to
     // IMAP/SMTP accounts after an interrupted or merely SMTP-accepted send.
@@ -1254,7 +1261,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     }
     pendingRuleTargets = newInboxMessages;
     pendingAutoReplyTargets = newInboxMessages.map((message) => message.id);
-    return { synced, folders: folders.length, failedFolders, newInboxMessages };
+    return { synced, folders: folders.length, failedFolders, limitReached, newInboxMessages };
   } catch (error) {
     if (error instanceof SyncAbortedError) throw error;
     // Do not retain raw provider/socket errors. They can include opaque server

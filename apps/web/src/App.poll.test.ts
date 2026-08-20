@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { shouldPollTick } from "./App";
+import { accountShowsFreshness, accountStatusDotClass, shouldPollTick } from "./App";
 
 describe("shouldPollTick", () => {
   const intervalMs = 60_000;
@@ -21,5 +21,38 @@ describe("shouldPollTick", () => {
     const lastEvent = 5_000_000;
     expect(shouldPollTick(lastEvent, lastEvent + intervalMs, intervalMs)).toBe(true);
     expect(shouldPollTick(lastEvent, lastEvent + intervalMs + 5_000, intervalMs)).toBe(true);
+  });
+});
+
+describe("accountStatusDotClass", () => {
+  const presentation = (severity: "error" | "warning") =>
+    ({ kind: "sync", severity, title: "t", message: "m", guidance: "g", retryable: false }) as const;
+
+  it("keeps the raw status when there is no issue", () => {
+    expect(accountStatusDotClass(undefined, "connected")).toBe("connected");
+    expect(accountStatusDotClass(undefined, "degraded")).toBe("degraded");
+  });
+
+  it("uses the warning state for sync-cap warnings", () => {
+    expect(accountStatusDotClass(presentation("warning"), "connected")).toBe("warning");
+  });
+
+  it("forces the error state for real issues regardless of status", () => {
+    expect(accountStatusDotClass(presentation("error"), "connected")).toBe("error");
+    expect(accountStatusDotClass(presentation("error"), "degraded")).toBe("error");
+  });
+});
+
+describe("accountShowsFreshness", () => {
+  const presentation = (severity: "error" | "warning") =>
+    ({ kind: "sync", severity, title: "t", message: "m", guidance: "g", retryable: false }) as const;
+
+  it("keeps the freshness line for healthy accounts and warnings", () => {
+    expect(accountShowsFreshness(undefined)).toBe(true);
+    expect(accountShowsFreshness(presentation("warning"))).toBe(true);
+  });
+
+  it("hands the subtitle to real issues only", () => {
+    expect(accountShowsFreshness(presentation("error"))).toBe(false);
   });
 });

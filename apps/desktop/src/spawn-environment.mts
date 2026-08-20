@@ -18,6 +18,8 @@ const MINIMAL_SPAWN_ENVIRONMENT_KEYS = [
   // Unix desktop sessions (browser opening, sound playback).
   "USER", "LOGNAME", "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XDG_CURRENT_DESKTOP",
   "DBUS_SESSION_BUS_ADDRESS", "SHELL",
+  // The per-folder sync cap survives self-relaunch and update flows.
+  "SYNC_MESSAGE_LIMIT",
 ] as const;
 
 export function minimalSpawnEnvironment(

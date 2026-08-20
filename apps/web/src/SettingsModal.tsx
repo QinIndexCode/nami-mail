@@ -1468,6 +1468,9 @@ export default function SettingsModal({
                   <option value={5000}>5000</option>
                 </ThemedSelect>
               </label>
+              {currentSettings.effectiveSyncMessageLimit != null && currentSettings.effectiveSyncMessageLimit !== currentSettings.syncMessageLimit && (
+                <p className="settings-note" role="status">{t("settings.sync.limit.effectiveHint", { limit: currentSettings.effectiveSyncMessageLimit })}</p>
+              )}
               <Switch
                 checked={currentSettings.realtimePushEnabled}
                 disabled={controlsBusy}

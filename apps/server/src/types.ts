@@ -45,6 +45,7 @@ export type AccountRecord = {
   status: string;
   last_error: string | null;
   last_error_code: string | null;
+  last_sync_warning_code: string | null;
   last_synced_at: string | null;
   created_at: string;
 };
@@ -108,6 +109,7 @@ export function publicAccount(row: AccountRecord) {
     status: row.status,
     lastError: row.last_error,
     lastErrorCode: row.last_error_code,
+    lastSyncWarningCode: row.last_sync_warning_code,
     lastSyncedAt: row.last_synced_at,
     signature: row.signature,
     createdAt: row.created_at,

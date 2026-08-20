@@ -16,6 +16,11 @@ export type MailReceivedEvent = {
 export type MailSyncedEvent = {
   accountId: string;
   lastSyncedAt: string;
+  /**
+   * Non-fatal condition noted on this pass (e.g. 'sync_limit' when the
+   * per-folder cap discarded older mail), or null when the pass was clean.
+   */
+  warningCode: string | null;
 };
 
 export type SettingsChangedEvent = {
@@ -69,9 +74,11 @@ export class ServerEventBus {
  */
 export function emitAccountSynced(db: DatabaseHandle, bus: ServerEventBus | undefined, accountId: string): void {
   if (!bus) return;
-  const row = db.prepare("SELECT last_synced_at FROM accounts WHERE id = ?").get(accountId) as { last_synced_at: string | null } | undefined;
+  const row = db.prepare("SELECT last_synced_at, last_sync_warning_code FROM accounts WHERE id = ?").get(accountId) as
+    | { last_synced_at: string | null; last_sync_warning_code: string | null }
+    | undefined;
   if (row?.last_synced_at) {
-    bus.emit({ type: "mail.synced", payload: { accountId, lastSyncedAt: row.last_synced_at } });
+    bus.emit({ type: "mail.synced", payload: { accountId, lastSyncedAt: row.last_synced_at, warningCode: row.last_sync_warning_code } });
   }
 }
 

@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS accounts (
   status TEXT NOT NULL DEFAULT 'connected',
   last_error TEXT,
   last_error_code TEXT,
+  -- A non-fatal condition noted on the most recent successful sync, e.g.
+  -- 'sync_limit' when the per-folder message cap discarded older mail.
+  -- NULL means the last pass had nothing to report.
+  last_sync_warning_code TEXT,
   last_synced_at TEXT,
   created_at TEXT NOT NULL
 );
@@ -444,6 +448,7 @@ function migrateDatabase(db: DatabaseHandle): void {
   addAccountColumn("smtp_username", "smtp_username TEXT");
   addAccountColumn("signature", "signature TEXT NOT NULL DEFAULT ''");
   addAccountColumn("last_error_code", "last_error_code TEXT");
+  addAccountColumn("last_sync_warning_code", "last_sync_warning_code TEXT");
   addAccountColumn("credential_crypto_version", "credential_crypto_version INTEGER NOT NULL DEFAULT 0");
   // Old rows represented a non-TLS transport as secure=false. Nami Mail has
   // never supported plaintext authentication, so migrate that legacy state to

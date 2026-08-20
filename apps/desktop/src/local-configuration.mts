@@ -7,6 +7,8 @@ export const installedDesktopConfigurationEnvironmentNames = [
   "NAMI_MAIL_OAUTH_FLOW_TTL_SECONDS",
   "NAMI_MAIL_TRANSLATION_ENDPOINT",
   "NAMI_MAIL_TRANSLATION_TIMEOUT_MS",
+  // The server's built-in per-folder sync cap can be overridden per install.
+  "SYNC_MESSAGE_LIMIT",
 ] as const;
 
 export const developmentDesktopConfigurationEnvironmentNames = [
