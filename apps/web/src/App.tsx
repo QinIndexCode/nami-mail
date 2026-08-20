@@ -63,7 +63,9 @@ import { calendarEventIcs, exportDownloadFilename, vCardText } from "./contactEx
 import { desktopBridge, type DesktopAutoReplyNotice, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
 import { resolveUpdateFooter, type UpdateFooterAction } from "./updateFooter";
 import { demoDataSnapshot, ensureDemoLoaded } from "./demo-loader";
-import { accountHealthIssue, mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
+import { mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
+import { AccountHealthBanner, accountShowsFreshness, accountStatusDotClass, useAccountHealth } from "./accountHealth";
+import { useRealtimeSync } from "./realtimeSync";
 import { buildForwardDraft, buildReplyDraft, buildReplyQuote } from "./mailActions";
 import { ComposeModal } from "./ComposeModal";
 import { sortMessages } from "./mailImportance";
@@ -91,7 +93,7 @@ import {
   type MessageListSortOrder,
   type PendingArchiveMove,
 } from "./mailListState";
-import { sortSubmissions } from "./sendingStatus";
+import { sortSubmissions, submissionStatusNeedsRefresh } from "./sendingStatus";
 import { providerDisplayName } from "./providerOnboarding";
 import { canPlayCustomNotificationSound, playNotificationSound, primeNotificationSound } from "./sounds";
 import { saveLocalePreference } from "./localePreference";
@@ -165,38 +167,6 @@ function retainedTranslationContent(state: TranslationPanelState): TranslationCo
   return state.phase === "loading" || state.phase === "error" ? state.previous : undefined;
 }
 
-const submissionStatusesNeedingRefresh = new Set<OutboundSubmission["deliveryStatus"]>([
-  "submitting",
-  "submitted",
-  "unknown_delivery",
-]);
-
-export function submissionStatusNeedsRefresh(status: OutboundSubmission["deliveryStatus"]): boolean {
-  return submissionStatusesNeedingRefresh.has(status);
-}
-
-// The periodic poll is a fallback, not a co-driver: while the push stream is
-// healthy every inbound event already refreshes the mailbox, so a tick inside
-// the same window would re-fetch the same data. A tick is only due once a full
-// interval has passed without any SSE event — lastSseEventAt doubles as the
-// stall detector, so a stream that dies silently falls back to the poll
-// cadence instead of leaving the UI stale.
-export function shouldPollTick(lastSseEventAtMs: number, nowMs: number, intervalMs: number): boolean {
-  return nowMs - lastSseEventAtMs >= intervalMs;
-}
-
-// Sidebar account row: a sync-cap warning keeps the third (amber) dot state;
-// real issues force the error dot regardless of the account status field.
-export function accountStatusDotClass(issue: MailErrorPresentation | undefined, status: Account["status"]): "warning" | "error" | Account["status"] {
-  return issue ? (issue.severity === "warning" ? "warning" : "error") : status;
-}
-
-// A warning does not take over the subtitle — sync still ran, only the
-// freshness line stays; real issues replace it with their title.
-export function accountShowsFreshness(issue: MailErrorPresentation | undefined): boolean {
-  return !issue || issue.severity === "warning";
-}
-
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 const isDesktop = new URLSearchParams(window.location.search).get("desktop") === "1";
 const isDesktopSmoke = new URLSearchParams(window.location.search).get("desktopSmoke") === "1";
@@ -208,8 +178,6 @@ const desktopPlatform = new URLSearchParams(window.location.search).get("platfor
 // Mirrors MAX_TRANSLATION_TEXT_LENGTH in the local server so the reader rejects
 // oversized messages before any mail content is sent to a translation provider.
 const MAX_LLM_TRANSLATION_TEXT_LENGTH = 50_000;
-// Account-health banner lifetime; it shows a visible auto-dismiss countdown.
-const ACCOUNT_HEALTH_ALERT_MS = 8_000;
 
 function formatMessageTime(value: string, locale: string): string {
   const date = new Date(value);
@@ -244,45 +212,6 @@ function formatSyncFreshness(value: string | null, t: Translate): string {
 
 function isCompactMailLayout(): boolean {
   return window.matchMedia("(max-width: 620px)").matches;
-}
-
-// Owns its own 500 ms tick and expiry so a live countdown does not re-render
-// the whole mailbox (list, reader, dialogs) while an account alert is up.
-function AccountHealthBanner({
-  until,
-  issueCount,
-  problemTitle,
-  onShowReasons,
-  onExpire,
-}: {
-  until: number;
-  issueCount: number;
-  problemTitle: string;
-  onShowReasons: () => void;
-  onExpire: () => void;
-}) {
-  const { t } = useI18n();
-  const [now, setNow] = useState(() => Date.now());
-  const expiredRef = useRef(false);
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      const current = Date.now();
-      setNow(current);
-      if (!expiredRef.current && current >= until) {
-        expiredRef.current = true;
-        onExpire();
-      }
-    }, 500);
-    return () => window.clearInterval(timer);
-  }, [until, onExpire]);
-  return (
-    <div className="account-health-banner" role="status">
-      <CircleAlert size={17} />
-      <span><strong>{t("mail.accountAttention", { count: issueCount })}</strong><small>{problemTitle}</small><em className="account-health-countdown">{t("mail.accountAttentionCountdown", { seconds: Math.max(1, Math.ceil((until - now) / 1000)) })}</em></span>
-      <button type="button" onClick={onShowReasons}>{t("mail.viewReason")}</button>
-      <button type="button" className="account-health-dismiss" aria-label={t("mail.accountHealthDismiss")} onClick={onExpire}><X size={14} /></button>
-    </div>
-  );
 }
 
 function buildMessageQuery({
@@ -713,11 +642,6 @@ export default function App() {
   const [snoozeCustomUntil, setSnoozeCustomUntil] = useState("");
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [toast, setToast] = useState<ToastNotice>(null);
-  // Account-health banner is transient: it appears when the unhealthy-account
-  // set changes and auto-dismisses after a few seconds with a visible
-  // countdown. The sidebar status dot stays red/green until the account heals.
-  const [healthAlert, setHealthAlert] = useState<{ until: number } | null>(null);
-  const prevHealthFingerprintRef = useRef("");
   const [autoReplyNotices, setAutoReplyNotices] = useState<DesktopAutoReplyNotice[]>([]);
   const [fatalError, setFatalError] = useState<MailErrorPresentation | null>(null);
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateSnapshot | null>(null);
@@ -1326,112 +1250,16 @@ await refreshSubmissions(nextAccounts, { silent: true });
     const timer = window.setTimeout(() => setDebouncedQuery(query), 250);
     return () => window.clearTimeout(timer);
   }, [query]);
-  useEffect(() => {
-    if (isDemo) return;
-    const intervalMs = settings.refreshIntervalSeconds * 1000;
-    const timer = window.setInterval(() => {
-      // Skip the tick while the push stream is delivering events — those
-      // handlers already refresh the mailbox, so polling again would repeat
-      // the same fetches. When no event has arrived for a full interval the
-      // tick fires again, which also covers a stream that died silently
-      // (lastSseEventAt is the last event's timestamp, not the connect time).
-      if (!shouldPollTick(lastSseEventAtRef.current, Date.now(), intervalMs)) return;
-      void silentRefresh();
-    }, intervalMs);
-    return () => window.clearInterval(timer);
-  }, [silentRefresh, settings.refreshIntervalSeconds]);
-  // Real-time push: the server broadcasts over GET /api/events when the IDLE
-  // watcher (or a poll pass) finds new inbox mail. Refresh immediately so
-  // verification codes never wait for the next poll tick. The desktop
-  // renderer gets its own notification through the IPC bridge, so only the
-  // browser fallback shows an in-app toast here.
-  //
-  // The EventSource connection must survive sidebar view/folder switches:
-  // binding it to silentRefresh would re-create it on every selection change
-  // and drop any event in flight (the server log showed reconnect storms
-  // during switches). The SSE effect therefore only depends on the push
-  // toggle; the latest closures are reached through sseHandlersRef, which is
-  // re-pointed on every render so a mail.received is never handled with
-  // stale view/folder state.
-  const sseHandlersRef = useRef<{ mailReceived: (event: MessageEvent<string>) => void; mailSynced: () => void; settingsChanged: () => void }>({
-      mailReceived: () => undefined,
-      mailSynced: () => undefined,
-      settingsChanged: () => undefined,
-    });
-    // Timestamp of the most recent inbound SSE event; the periodic poll skips
-    // its tick while this stays fresh (see shouldPollTick) and resumes once a
-    // full interval passes without one, so a dead stream never stalls the UI.
-    const lastSseEventAtRef = useRef(0);
-    useEffect(() => {
-      sseHandlersRef.current.mailReceived = (event: MessageEvent<string>) => {
-        lastSseEventAtRef.current = Date.now();
-        void silentRefresh();
-        if (desktopBridge()) return;
-        let payload: { count: number; messages: Array<{ subject?: string; fromName?: string; fromAddress?: string }> };
-        try {
-          const parsed = JSON.parse(event.data) as { type?: unknown; payload?: { count?: unknown; messages?: unknown } };
-          if (parsed.type !== "mail.received" || !parsed.payload || typeof parsed.payload.count !== "number") return;
-          payload = parsed.payload as typeof payload;
-        } catch {
-          return;
-        }
-        if (payload.count < 1) return;
-        const first = payload.messages[0];
-        showToast(payload.count === 1
-          ? t("mail.notification.singleToast", { sender: first?.fromName || first?.fromAddress || t("mail.notification.newContact") })
-          : t("mail.notification.multipleToast", { count: payload.count }));
-      };
-      // A finished sync pass refreshes the sidebar freshness immediately; the
-      // account list is re-fetched inside silentRefresh so "尚未同步" never
-      // lingers until the next poll tick.
-      sseHandlersRef.current.mailSynced = () => { lastSseEventAtRef.current = Date.now(); void silentRefresh(); };
-      // The Agent settings tool changed app settings — re-fetch and apply them
-      // so the running UI reflects the change immediately.
-      sseHandlersRef.current.settingsChanged = () => { lastSseEventAtRef.current = Date.now(); void loadSettings(); };
-    });
-
-    useEffect(() => {
-      if (isDemo || !settings.realtimePushEnabled) return undefined;
-      let closed = false;
-      let source: EventSource | null = null;
-      let retryTimer = 0;
-      let attempt = 0;
-      // After repeated consecutive failures — e.g. the events endpoint returns
-      // 404 when the server has no event bus — stop reconnecting and fall back
-      // to the periodic poll instead of hammering a dead endpoint forever.
-      const maxReconnectAttempts = 10;
-
-      const handleMailReceived = (event: MessageEvent<string>) => sseHandlersRef.current.mailReceived(event);
-      const handleMailSynced = () => sseHandlersRef.current.mailSynced();
-      const handleSettingsChanged = () => sseHandlersRef.current.settingsChanged();
-
-      const connect = () => {
-        source?.close();
-        const next = new EventSource("/api/events");
-        source = next;
-        next.addEventListener("mail.received", handleMailReceived);
-        next.addEventListener("mail.synced", handleMailSynced);
-        next.addEventListener("settings.changed", handleSettingsChanged);
-        next.onopen = () => { attempt = 0; };
-        next.onerror = () => {
-          if (closed || next !== source) return;
-          // EventSource would auto-reconnect and hammer a dead endpoint; close
-          // and retry with capped exponential backoff instead.
-          next.close();
-          if (attempt >= maxReconnectAttempts) return;
-          const delay = Math.min(1_000 * 2 ** attempt, 30_000);
-          attempt += 1;
-          retryTimer = window.setTimeout(() => { if (!closed) connect(); }, delay);
-        };
-      };
-
-      connect();
-      return () => {
-        closed = true;
-        window.clearTimeout(retryTimer);
-        source?.close();
-      };
-    }, [settings.realtimePushEnabled]);
+  useRealtimeSync({
+    enabled: !isDemo,
+    pushEnabled: settings.realtimePushEnabled,
+    refreshIntervalSeconds: settings.refreshIntervalSeconds,
+    isDesktop: Boolean(desktopBridge()),
+    t,
+    showToast,
+    onRefresh: silentRefresh,
+    onSettingsChanged: loadSettings,
+  });
   // Defensive: a read/unread toggle whose request hangs would otherwise leave
   // its id in the in-flight set, pinning the optimistic seen state on top of
   // every later poll. Dropping it on unmount means a fresh mount starts from
@@ -1815,34 +1643,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     : selectedFolderRecord
         ? { title: t("mail.empty.folderTitle", { folder: selectedFolderRecord.name }), description: t("mail.empty.folderDescription"), canClearSearch: false }
         : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false }), [query, selectedFolderRecord, t, view]);
-  const accountIssues = useMemo(() => {
-    const issues = new Map<string, MailErrorPresentation>();
-    for (const account of accounts) {
-      const issue = accountHealthIssue(account, t);
-      if (issue) issues.set(account.id, issue);
-    }
-    return issues;
-  }, [accounts, t]);
-  const accountsNeedingAttention = accounts.filter((account) => accountIssues.has(account.id));
-  const primaryAccountNeedingAttention = accountsNeedingAttention[0];
-  const primaryAccountIssue = primaryAccountNeedingAttention ? accountIssues.get(primaryAccountNeedingAttention.id) : undefined;
-  // A banner is raised only when the unhealthy-account set actually changes;
-  // a persistent issue fires once, then the countdown closes it without the
-  // banner nagging on every poll tick.
-  const healthFingerprint = accountsNeedingAttention
-    .map((account) => `${account.id}:${accountIssues.get(account.id)?.title ?? ""}`)
-    .join("|");
-  useEffect(() => {
-    if (healthFingerprint === prevHealthFingerprintRef.current) return;
-    prevHealthFingerprintRef.current = healthFingerprint;
-    if (!healthFingerprint) {
-      setHealthAlert(null);
-      return;
-    }
-    // The banner owns its ticking countdown; this only (re)arms the deadline
-    // so a persistent problem does not nag again until its alert window ends.
-    setHealthAlert({ until: Date.now() + ACCOUNT_HEALTH_ALERT_MS });
-  }, [healthFingerprint]);
+  const { issues: accountIssues, accountsNeedingAttention, primaryAccountNeedingAttention, primaryAccountIssue, healthAlert, dismissHealthAlert } = useAccountHealth(accounts, t);
   const safeHtml = useMemo(
     () => selected?.htmlBody ? sanitizeMailHtml(selected.htmlBody, theme === "dark") : "",
     [selected?.htmlBody, theme],
@@ -3853,8 +3654,8 @@ const emptyMessageList = useMemo(() => (query.trim()
               until={healthAlert.until}
               issueCount={accountsNeedingAttention.length}
               problemTitle={primaryAccountNeedingAttention && primaryAccountIssue ? t("mail.accountProblem", { email: primaryAccountNeedingAttention.email, title: primaryAccountIssue.title }) : t("mail.otherAccountsAvailable")}
-              onShowReasons={() => { setAccountsOpen(true); setHealthAlert(null); }}
-              onExpire={() => setHealthAlert(null)}
+              onShowReasons={() => { setAccountsOpen(true); dismissHealthAlert(); }}
+              onExpire={dismissHealthAlert}
             />
           )}
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { translate } from "./i18n";
 import type { OutboundSubmission } from "./types";
 import {
@@ -7,6 +7,7 @@ import {
   recipientSummary,
   sortSubmissions,
   submissionMessageIdSuffix,
+  submissionStatusNeedsRefresh,
   submissionStatusPresentation,
 } from "./sendingStatus";
 
@@ -79,20 +80,11 @@ describe("sending status presentation", () => {
     })).resolves.toMatchObject({ deliveryStatus: "submitting" });
   });
 
-  it("keeps a bounded client refresh active while Sent-folder verification can still change the record", async () => {
-    // This test dynamically imports the whole App entry for one pure helper;
-    // under full-suite transform load that import can exceed the default
-    // 5s per-test budget even though the assertions themselves are instant.
-    vi.stubGlobal("window", { location: { search: "" } });
-    vi.stubGlobal("__NAMI_APP_VERSION__", "0.1.0");
-    const { submissionStatusNeedsRefresh } = await import("./App");
-
+  it("keeps a bounded client refresh active while Sent-folder verification can still change the record", () => {
     expect(submissionStatusNeedsRefresh("submitting")).toBe(true);
     expect(submissionStatusNeedsRefresh("submitted")).toBe(true);
     expect(submissionStatusNeedsRefresh("unknown_delivery")).toBe(true);
     expect(submissionStatusNeedsRefresh("confirmed")).toBe(false);
     expect(submissionStatusNeedsRefresh("failed")).toBe(false);
-
-    vi.unstubAllGlobals();
-  }, 20_000);
+  });
 });
