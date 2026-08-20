@@ -82,7 +82,7 @@ export type AgentMcpServerInput = {
   enabled: boolean;
 };
 
-export type AgentScopeMode = "all_accounts" | "selected_account" | "current_message";
+export type AgentScopeMode = "all_accounts" | "selected_account";
 
 export type AgentConversationScope = {
   mode: AgentScopeMode;
@@ -185,9 +185,6 @@ export type AgentMessageRequest = {
   providerId: string;
   mode: "agent" | "chat";
   scope: AgentConversationScope;
-  context: {
-    currentMessageId?: string;
-  };
   quote?: string;
   /** Files uploaded by the user; token is present when usable as a mail attachment. */
   attachments?: AgentMessageAttachment[];

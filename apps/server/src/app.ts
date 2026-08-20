@@ -406,9 +406,11 @@ const agentMessageSchema = z.object({
   providerId: z.string().trim().min(1).max(128),
   mode: z.enum(["agent", "chat"]),
   scope: agentScopeSchema,
+  // Historical field kept optional for old clients; the current UI no longer
+  // sends it (references carry the user-chosen mail context instead).
   context: z.object({
     currentMessageId: z.string().trim().min(1).max(128).optional(),
-  }).strict(),
+  }).strict().optional(),
   quote: z.string().trim().max(1_000).optional(),
   attachments: z.array(z.object({
     name: z.string().trim().min(1).max(768),

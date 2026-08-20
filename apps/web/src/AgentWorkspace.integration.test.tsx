@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { AgentBootstrap, AgentConversation, AgentProviderSummary } from "./agentTypes";
-import type { Message } from "./types";
+import type { Account, Message } from "./types";
 
 // React 19 requires the act() environment flag when not running through
 // @testing-library/react, and jsdom lacks matchMedia.
@@ -105,7 +105,18 @@ const h = vi.hoisted(() => {
       },
     ],
   };
-  return { provider, bootstrap, convA, convB, convGhost, onOpenMessage: vi.fn() };
+  // A conversation pinned to a single account (the shape a reopen must
+  // restore through the header picker).
+  const convScoped: AgentConversation = {
+    id: "conv-scoped",
+    title: "Scoped",
+    preview: "",
+    updatedAt: "2026-08-10T00:00:00.000Z",
+    providerId: "provider-1",
+    scope: { mode: "selected_account", accountIds: ["account-2"], messageIds: [] },
+    messages: [],
+  };
+  return { provider, bootstrap, convA, convB, convGhost, convScoped, onOpenMessage: vi.fn() };
 });
 
 vi.mock("./api", () => ({
@@ -118,7 +129,7 @@ vi.mock("./api", () => ({
   },
   api: {
     agentBootstrap: vi.fn(async () => h.bootstrap),
-    agentConversation: vi.fn(async (id: string) => (id === "conv-a" ? h.convA : id === "conv-g" ? h.convGhost : h.convB)),
+    agentConversation: vi.fn(async (id: string) => (id === "conv-a" ? h.convA : id === "conv-g" ? h.convGhost : id === "conv-scoped" ? h.convScoped : h.convB)),
     streamAgentMessage: vi.fn(async () => new Promise(() => undefined)),
     cancelAgentRun: vi.fn(async () => ({ ok: true })),
     createAgentConversation: vi.fn(async () => h.convB),
@@ -203,6 +214,25 @@ const referenceMessage: Message = {
   size: 0,
 };
 
+const accountOne: Account = {
+  id: "account-1",
+  email: "me@example.com",
+  provider: "demo",
+  providerName: "Demo",
+  status: "connected",
+  lastError: null,
+  lastSyncedAt: null,
+  signature: "",
+  createdAt: "2026-07-27T00:00:00.000Z",
+  folders: [],
+};
+
+const accountTwo: Account = {
+  ...accountOne,
+  id: "account-2",
+  email: "work@example.com",
+};
+
 describe("AgentWorkspace conversation switching", () => {
   beforeEach(() => {
     window.scrollTo = () => undefined;
@@ -236,12 +266,12 @@ describe("AgentWorkspace conversation switching", () => {
     vi.clearAllMocks();
   });
 
-  const renderWorkspace = async (bootstrap: AgentBootstrap = h.bootstrap, currentMessage?: Message) => {
+  const renderWorkspace = async (bootstrap: AgentBootstrap = h.bootstrap, currentMessage?: Message, accounts: Account[] = []) => {
     await act(async () => {
       root.render(
         <I18nProvider>
           <AgentWorkspace
-            accounts={[]}
+            accounts={accounts}
             messages={[]}
             currentMessage={currentMessage}
             onClose={() => undefined}
@@ -306,29 +336,126 @@ describe("AgentWorkspace conversation switching", () => {
     expect(api.cancelAgentRun).not.toHaveBeenCalled();
   });
 
-  it("shows the reference mail chip as a header button and opens that message on click", async () => {
-    await renderWorkspace(h.bootstrap, referenceMessage);
+  it("defaults the scope picker to the entering message's account and keeps the mail chip", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
 
     const chip = container.querySelector<HTMLButtonElement>(".agent-current-context");
     expect(chip).not.toBeNull();
     expect(chip?.tagName).toBe("BUTTON");
     expect(chip?.textContent).toContain("Reference email subject");
     expect(chip?.getAttribute("aria-label")).toBeTruthy();
-    // The chip lives in the workspace header, left of the scope switch,
-    // where it cannot collide with the icon rail.
+    // The mail chip and the scope picker live in the workspace header, chip
+    // first, where neither can collide with the icon rail.
     const actions = container.querySelector<HTMLElement>(".agent-header-actions");
     expect(actions).not.toBeNull();
     expect(actions?.contains(chip)).toBe(true);
     expect(chip?.closest(".agent-context-strip")).toBeNull();
-    const scopeSwitch = container.querySelector<HTMLElement>(".agent-scope-switch");
-    expect(scopeSwitch).not.toBeNull();
+
+    const picker = container.querySelector<HTMLButtonElement>(".agent-scope-picker");
+    expect(picker).not.toBeNull();
+    expect(picker?.tagName).toBe("BUTTON");
+    expect(picker?.textContent).toContain("me@example.com");
+    expect(picker?.getAttribute("aria-expanded")).toBe("false");
+    const pickerWrap = container.querySelector<HTMLElement>(".agent-scope-picker-wrap");
+    expect(pickerWrap).not.toBeNull();
     const actionChildren = actions ? Array.from(actions.children) : [];
-    expect(actionChildren.indexOf(scopeSwitch!)).toBeGreaterThan(actionChildren.indexOf(chip!));
+    expect(actionChildren.indexOf(pickerWrap!)).toBeGreaterThan(actionChildren.indexOf(chip!));
 
     act(() => {
       chip?.click();
     });
     expect(h.onOpenMessage).toHaveBeenCalledWith("msg-ref-1");
+  });
+
+  it("switching the scope picker account forks a new conversation scoped to that account", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
+
+    const picker = container.querySelector<HTMLButtonElement>(".agent-scope-picker");
+    act(() => {
+      picker?.click();
+    });
+    await flush();
+
+    // The popover lists both accounts (current one checked) plus all accounts.
+    const options = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-scope-option"));
+    expect(options).toHaveLength(3);
+    expect(options.map((option) => option.textContent)).toContain("work@example.com");
+    expect(options[0]?.getAttribute("aria-checked")).toBe("true");
+
+    act(() => {
+      options[1]!.click();
+    });
+    await flush();
+    expect(picker?.textContent).toContain("work@example.com");
+
+    // The active conversation is scoped to all accounts, so sending forks a
+    // new conversation carrying the picked account's scope.
+    setComposer("what about my work inbox?");
+    clickSend();
+    await flush();
+    expect(api.createAgentConversation).toHaveBeenCalledWith({
+      providerId: "provider-1",
+      scope: { mode: "selected_account", accountIds: ["account-2"], messageIds: [] },
+    });
+    const payload = vi.mocked(api.streamAgentMessage).mock.calls.at(-1)?.[1];
+    expect(payload?.scope).toEqual({ mode: "selected_account", accountIds: ["account-2"], messageIds: [] });
+    // The dead currentMessageId context field no longer rides the wire.
+    expect("context" in (payload ?? {})).toBe(false);
+  });
+
+  it("defaults to the first account without a message and switches to all accounts", async () => {
+    const freshBootstrap: AgentBootstrap = { ...h.bootstrap, conversations: [] };
+    await renderWorkspace(freshBootstrap, undefined, [accountOne, accountTwo]);
+
+    const picker = container.querySelector<HTMLButtonElement>(".agent-scope-picker");
+    expect(picker?.textContent).toContain("me@example.com");
+
+    act(() => {
+      picker?.click();
+    });
+    await flush();
+    const options = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-scope-option"));
+    expect(options).toHaveLength(3);
+    act(() => {
+      options.at(-1)!.click();
+    });
+    await flush();
+    // The trigger now shows the all-accounts label instead of an account email.
+    expect(picker?.textContent).not.toContain("me@example.com");
+    expect(picker?.textContent).not.toContain("work@example.com");
+    expect(picker?.textContent?.length).toBeGreaterThan(0);
+
+    setComposer("summarize everything");
+    clickSend();
+    await flush();
+    expect(api.createAgentConversation).toHaveBeenCalledWith({
+      providerId: "provider-1",
+      scope: { mode: "all_accounts", accountIds: ["account-1", "account-2"], messageIds: [] },
+    });
+  });
+
+  it("maps the loaded conversation's stored scope on reopen without an entering message", async () => {
+    const scopedBootstrap: AgentBootstrap = {
+      ...h.bootstrap,
+      conversations: [{ id: "conv-scoped", title: "Scoped", preview: "", updatedAt: "2026-08-10T00:00:00.000Z" }],
+    };
+    await renderWorkspace(scopedBootstrap, undefined, [accountOne, accountTwo]);
+
+    // No entering message: the loaded conversation's scope governs the picker.
+    const picker = container.querySelector<HTMLButtonElement>(".agent-scope-picker");
+    expect(picker?.textContent).toContain("work@example.com");
+  });
+
+  it("entering from a message pins its account even when a conversation is loaded", async () => {
+    const scopedBootstrap: AgentBootstrap = {
+      ...h.bootstrap,
+      conversations: [{ id: "conv-scoped", title: "Scoped", preview: "", updatedAt: "2026-08-10T00:00:00.000Z" }],
+    };
+    await renderWorkspace(scopedBootstrap, referenceMessage, [accountOne, accountTwo]);
+
+    // The conversation shell's stored scope must not override the entry default.
+    const picker = container.querySelector<HTMLButtonElement>(".agent-scope-picker");
+    expect(picker?.textContent).toContain("me@example.com");
   });
 
   it("a run being picked up after a reopen shows a thinking row and a stop that cancels server-side", async () => {

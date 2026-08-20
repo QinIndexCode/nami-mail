@@ -38,6 +38,7 @@ import {
   Square,
   Trash2,
   Undo2,
+  UsersRound,
   Wrench,
   X,
   Zap,
@@ -63,11 +64,10 @@ import type {
   AgentProviderKind,
   AgentProviderList,
   AgentProviderSummary,
-  AgentScopeMode,
   AgentStreamEvent,
   AgentToolActivity,
 } from "./agentTypes";
-import { agentScopeFor, sameAgentScope } from "./agentContext";
+import { agentScopeFor, sameAgentScope, scopeTargetForConversation, type AgentScopeTarget } from "./agentContext";
 import { isSupportedFile, processFile, type ProcessedFile } from "./fileProcessor";
 import ThemedSelect from "./ThemedSelect";
 import type { Account, AgentAccessLevel, Message } from "./types";
@@ -1902,7 +1902,18 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const [pendingMemorySuggestions, setPendingMemorySuggestions] = useState<string[]>([]);
   const [mode, setMode] = useState<AgentMode>("agent");
   const [providerId, setProviderId] = useState("");
-  const [scopeMode, setScopeMode] = useState<AgentScopeMode>(currentMessage ? "current_message" : "all_accounts");
+  // The header scope picker's selection: the account the agent searches (a
+  // concrete account, or "all"). Entering from a mail message defaults to that
+  // message's account; otherwise the first connected account is used.
+  const [scopeTarget, setScopeTarget] = useState<AgentScopeTarget>(currentMessage?.accountId ?? accounts[0]?.id ?? "all");
+  /**
+   * Snapshot of the entry context. Entering from a mail message pins the
+   * initial scope to that message's account — the auto-loaded conversation
+   * must not remap it (it usually predates the entry and would wipe the
+   * default). Without an entering message the loaded conversation's stored
+   * scope maps instead, so a reopen restores the conversation's boundary.
+   */
+  const enteringFromMessageRef = useRef(Boolean(currentMessage));
   const [streaming, setStreaming] = useState(false);
   /** Live provider status text shown in the in-flight assistant's thinking line. */
   const [streamStatus, setStreamStatus] = useState<string | null>(null);
@@ -1933,6 +1944,10 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   /** Anchors the model picker popover so an outside click closes it. */
   const modelPickerRef = useRef<HTMLDivElement>(null);
+  /** Whether the header account (scope) picker popover is open. */
+  const [scopePickerOpen, setScopePickerOpen] = useState(false);
+  /** Anchors the scope picker popover so an outside click closes it. */
+  const scopePickerRef = useRef<HTMLDivElement>(null);
   /** Per-conversation model overrides chosen in this session (conversationId → providerId). */
   const [conversationProviders, setConversationProviders] = useState<Record<string, string>>(() => {
     try {
@@ -2095,7 +2110,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   useDialogFocus(true, workspaceRef, { restoreFocusRef, suspended: agentSettingsPane !== null || Boolean(pendingAccessLevel) });
   useDialogFocus(Boolean(pendingAccessLevel), accessConfirmRef, { restoreFocusRef: workspaceRef });
 
-  const scope = useMemo(() => agentScopeFor(scopeMode, currentMessage, accounts), [accounts, currentMessage, scopeMode]);
+  const scope = useMemo(() => agentScopeFor(scopeTarget, accounts), [accounts, scopeTarget]);
   const providers = useMemo(() => bootstrap?.providers ?? [], [bootstrap]);
   const configuredProviders = useMemo(() => providers.filter((provider) => provider.configured), [providers]);
   const selectedProvider = configuredProviders.find((provider) => provider.id === providerId)
@@ -2195,7 +2210,9 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             : conversation.providerId && value.providers.some((provider) => provider.id === conversation.providerId && provider.configured)
               ? conversation.providerId
               : configuredProviderId(value.providers, value.defaultProviderId));
-          setScopeMode(conversation.scope.mode);
+          if (!enteringFromMessageRef.current) {
+            setScopeTarget(scopeTargetForConversation(conversation.scope, accounts));
+          }
         } catch {
           // Background load of the first conversation failed — user can retry by clicking it.
         }
@@ -2206,14 +2223,14 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     } finally {
       setLoading(false);
     }
-  }, [demoMode, preloadedBootstrap, t]);
+  }, [accounts, demoMode, preloadedBootstrap, t]);
 
   useEffect(() => { void loadBootstrap(); }, [loadBootstrap]);
 
-  // Close the permission and model pickers when the user clicks anywhere
-  // outside them or presses Escape.
+  // Close the permission, model, and scope pickers when the user clicks
+  // anywhere outside them or presses Escape.
   useEffect(() => {
-    if (!permissionOpen && !modelPickerOpen) return;
+    if (!permissionOpen && !modelPickerOpen && !scopePickerOpen) return;
     const onPointerDown = (event: PointerEvent) => {
       if (permissionRef.current && !permissionRef.current.contains(event.target as Node)) {
         setPermissionOpen(false);
@@ -2221,11 +2238,15 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       if (modelPickerRef.current && !modelPickerRef.current.contains(event.target as Node)) {
         setModelPickerOpen(false);
       }
+      if (scopePickerRef.current && !scopePickerRef.current.contains(event.target as Node)) {
+        setScopePickerOpen(false);
+      }
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setPermissionOpen(false);
         setModelPickerOpen(false);
+        setScopePickerOpen(false);
       }
     };
     document.addEventListener("pointerdown", onPointerDown);
@@ -2234,7 +2255,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [permissionOpen, modelPickerOpen]);
+  }, [permissionOpen, modelPickerOpen, scopePickerOpen]);
   useEffect(() => {
     if (demoMode || providerSettingsRequestId === 0) return;
     setAgentSettingsPane("providers");
@@ -2739,15 +2760,14 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       setGhostConversationId((current) => (current === targetId ? null : current));
     };
   }, [active?.id, pollLastMessageId, conversationSearch, demoMode, refreshConversations, streaming]);
-  // The message-scoped modes (selected_account / current_message) derive their
-  // accountIds and messageIds from the currently selected message.
-  // When that message is cleared, fall back to all_accounts so the composer
-  // does not silently operate on a stale or empty scope.
+  // A scope target that points at a deleted account must not leave the
+  // composer silently scoped to nothing; fall back to the first account, or to
+  // all accounts when none are left.
   useEffect(() => {
-    if (!currentMessage && scopeMode !== "all_accounts") {
-      setScopeMode("all_accounts");
-    }
-  }, [currentMessage, scopeMode]);
+    if (scopeTarget === "all") return;
+    if (accounts.some((account) => account.id === scopeTarget)) return;
+    setScopeTarget(accounts[0]?.id ?? "all");
+  }, [accounts, scopeTarget]);
 
   // Live runs keyed by conversation: while the user browses a different
   // conversation, a run keeps streaming into its buffer (no UI cost) and is
@@ -2922,7 +2942,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
         : conversation.providerId && providers.some((provider) => provider.id === conversation.providerId && provider.configured)
           ? conversation.providerId
           : configuredProviderId(providers, bootstrap?.defaultProviderId ?? null));
-      setScopeMode(conversation.scope.mode);
+      setScopeTarget(scopeTargetForConversation(conversation.scope, accounts));
       setRenaming(false);
       setModelPickerOpen(false);
     } catch (error) {
@@ -2933,7 +2953,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       // run (if any) keeps streaming in the background and restores its live
       // indicators when replayed on re-entry.
     }
-  }, [active?.id, activeIdRef, bootstrap?.defaultProviderId, conversationProviders, conversations, providers, replayBackgroundSession, syncBackgroundRuns, t]);
+  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, conversationProviders, conversations, providers, replayBackgroundSession, syncBackgroundRuns, t]);
 
   const createConversation = useCallback(async () => {
     // Starting a new conversation does not cancel the current one — a live run
@@ -3369,9 +3389,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       providerId: selectedProvider.id,
       mode,
       scope,
-      context: {
-        ...(currentMessage ? { currentMessageId: currentMessage.id } : {}),
-      },
       ...(truncatedQuote ? { quote: truncatedQuote } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
     };
@@ -3523,11 +3540,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     if (!slashMenu) setSlashIndex(0);
   }, [slashMenu]);
 
-  const scopeOptions: Array<{ mode: AgentScopeMode; label: string; title: string; disabled?: boolean }> = [
-    { mode: "all_accounts", label: t("agent.scope.all"), title: t("agent.scope.all.tooltip") },
-    { mode: "selected_account", label: t("agent.scope.account"), title: t("agent.scope.account.tooltip"), disabled: !currentMessage },
-    { mode: "current_message", label: t("agent.scope.message"), title: t("agent.scope.message.tooltip"), disabled: !currentMessage },
-  ];
   const permissionOptions: Array<{ level: AgentAccessLevel; label: string; hint: string; detail: string; features: string[]; icon: ReactNode }> = [
     { level: "read-only", label: t("agent.permission.readOnly"), hint: t("agent.permission.readOnly.hint"), detail: t("agent.permission.readOnly.detail"), features: [t("agent.permission.readOnly.feature1"), t("agent.permission.readOnly.feature2"), t("agent.permission.readOnly.feature3")], icon: <Eye size={12} /> },
     { level: "send-confirmed", label: t("agent.permission.confirmed"), hint: t("agent.permission.confirmed.hint"), detail: t("agent.permission.confirmed.detail"), features: [t("agent.permission.confirmed.feature1"), t("agent.permission.confirmed.feature2"), t("agent.permission.confirmed.feature3")], icon: <ShieldCheck size={12} /> },
@@ -3537,6 +3549,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const currentPermissionLabel = permissionOptions.find((option) => option.level === agentAccessLevel)?.label;
   const permissionPopover = useMountedVisible(permissionOpen);
   const modelPopover = useMountedVisible(modelPickerOpen);
+  const scopePopover = useMountedVisible(scopePickerOpen);
   // Switching to plain chat hides the permission trigger; close the popover
   // so it does not resurface stale-open when switching back to agent mode.
   useEffect(() => { setPermissionOpen(false); }, [mode]);
@@ -3726,9 +3739,32 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
           </div>
           <div className="agent-header-actions">
             {currentMessage && <button type="button" className="agent-current-context" aria-label={t("agent.context.openInMail")} title={currentMessage.subject || t("agent.context.currentMessage")} onClick={() => onOpenMessage(currentMessage.id)}><Mail size={13} /><span>{currentMessage.subject || t("agent.context.currentMessage")}</span><ArrowUpRight className="agent-current-context-open" size={11} aria-hidden="true" /></button>}
-            <div className="agent-scope-switch" role="group" aria-label={t("agent.scope.label")} data-scope={scopeMode}>
-              <span className="agent-scope-thumb" aria-hidden="true" />
-              {scopeOptions.map((option) => <button key={option.mode} type="button" className={scopeMode === option.mode ? "active" : ""} aria-pressed={scopeMode === option.mode} disabled={option.disabled} data-tooltip={option.title} onClick={() => setScopeMode(option.mode)}>{option.label}</button>)}
+            <div className="agent-scope-picker-wrap" ref={scopePickerRef}>
+              <button type="button" className="agent-scope-picker" onClick={() => setScopePickerOpen((open) => !open)} aria-expanded={scopePickerOpen} aria-haspopup="menu" aria-controls="agent-scope-picker" aria-label={t("agent.scope.switch")} data-tooltip={t("agent.scope.switch")}>
+                {scopeTarget === "all" ? <UsersRound size={13} /> : <Mail size={13} />}
+                <span>{scopeTarget === "all" ? t("agent.scope.all") : (accounts.find((account) => account.id === scopeTarget)?.email ?? scopeTarget)}</span>
+                <ChevronDown size={11} className={`agent-scope-chevron${scopePickerOpen ? " open" : ""}`} aria-hidden="true" />
+              </button>
+              {scopePopover.mounted && (
+                <AgentPickerPopover id="agent-scope-picker" anchor="right" visible={scopePopover.visible} label={t("agent.scope.label")}>
+                  {accounts.map((account) => {
+                    const isCurrent = scopeTarget === account.id;
+                    return (
+                      <button key={account.id} type="button" role="menuitemradio" aria-checked={isCurrent} className={`agent-popover-option agent-scope-option${isCurrent ? " active" : ""}`} onClick={() => { setScopePickerOpen(false); if (!isCurrent) setScopeTarget(account.id); }}>
+                        <span className="agent-popover-option-icon" aria-hidden="true"><Mail size={12} /></span>
+                        <span className="agent-popover-option-main"><strong>{account.email}</strong></span>
+                        {isCurrent && <Check size={13} className="agent-popover-option-check" />}
+                      </button>
+                    );
+                  })}
+                  {accounts.length > 0 && <div className="agent-popover-divider" role="separator" />}
+                  <button type="button" role="menuitemradio" aria-checked={scopeTarget === "all"} className={`agent-popover-option agent-scope-option${scopeTarget === "all" ? " active" : ""}`} onClick={() => { setScopePickerOpen(false); setScopeTarget("all"); }}>
+                    <span className="agent-popover-option-icon" aria-hidden="true"><UsersRound size={12} /></span>
+                    <span className="agent-popover-option-main"><strong>{t("agent.scope.all")}</strong><small>{t("agent.scope.all.tooltip")}</small></span>
+                    {scopeTarget === "all" && <Check size={13} className="agent-popover-option-check" />}
+                  </button>
+                </AgentPickerPopover>
+              )}
             </div>
             <button className="agent-mobile-conversations-button" type="button" aria-label={mobileConversationsOpen ? t("agent.conversation.closeList") : t("agent.conversation.openList")} aria-expanded={mobileConversationsOpen} data-tooltip={mobileConversationsOpen ? t("agent.conversation.closeList") : t("agent.conversation.openList")} onClick={() => setMobileConversationsOpen((open) => !open)}><PanelLeftClose size={17} /></button>
             {!hasConfiguredProvider ? <button ref={providerSettingsTriggerRef} className="agent-configure-provider-action" type="button" onClick={() => setAgentSettingsPane("providers")}><Wrench size={15} />{t("agent.providers.configure")}</button> : null}
