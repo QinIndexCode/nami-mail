@@ -1,6 +1,6 @@
-// Verify the agent workspace close affordance reads as "back to mail", not as
-// a second window-close X: labeled ArrowLeft button in the header, distinct
-// from the corner X convention, and it actually closes the workspace.
+// Verify the agent workspace close affordance is a bare ArrowLeft icon
+// button (matching the other header icon-buttons, distinct from the window
+// corner X convention) and that it closes the workspace.
 import { chromium } from "playwright";
 
 const BASE = process.env.NAMI_WEB_BASE ?? "http://127.0.0.1:5173/";
@@ -20,15 +20,15 @@ try {
   await page.waitForTimeout(1200);
 
   const out = {};
-  const back = page.locator(".agent-workspace-back");
-  out.backCount = await back.count();
-  out.backText = await back.textContent().catch(() => null);
+  const actions = page.locator(".agent-header-actions > *");
+  out.headerActionCount = await actions.count();
+  const back = actions.last();
+  out.backClass = await back.getAttribute("class").catch(() => null);
   out.backAria = await back.getAttribute("aria-label").catch(() => null);
+  out.backText = (await back.textContent()).trim();
   out.hasArrowIcon = (await back.locator("svg").count()) > 0;
-  out.iconPaths = await back.locator("svg").first().evaluate((svg) => Array.from(svg.querySelectorAll("line,path,circle,polyline")).length).catch(() => 0);
-  // The last header action must be this labeled button, not a bare X icon.
-  out.headerActions = await page.locator(".agent-header-actions > *").count();
-  out.lastHeaderTag = await page.locator(".agent-header-actions > *").last().evaluate((el) => el.className);
+  out.arrowPathCount = await back.locator("svg").first().evaluate((svg) => svg.querySelectorAll("line,polyline,path").length).catch(() => 0);
+  out.isBareIconButton = /(^|\s)icon-button(\s|$)/.test(out.backClass ?? "");
 
   await back.click();
   await page.waitForTimeout(600);
@@ -38,18 +38,17 @@ try {
   console.log(JSON.stringify(out, null, 2));
 
   const ok =
-    out.backCount === 1 &&
-    /返回邮件/.test(out.backText ?? "") &&
+    out.isBareIconButton &&
+    out.backText === "" &&
     out.backAria === "关闭邮件助理" &&
     out.hasArrowIcon &&
-    out.workspaceGone &&
-    typeof out.lastHeaderTag === "string" &&
-    typeof out.lastHeaderTag.includes === "function";
+    out.arrowPathCount >= 2 &&
+    out.workspaceGone;
   if (!ok) {
     console.error("FAIL: workspace back button");
     process.exitCode = 1;
   } else {
-    console.log("OK: workspace close is a labeled Back-to-mail button and closes the panel");
+    console.log("OK: workspace close is a bare ArrowLeft icon-button and closes the panel");
   }
 } finally {
   await browser.close();

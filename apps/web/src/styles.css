@@ -10175,32 +10175,6 @@ row-gap:4px;
 display:flex;
 flex-wrap:wrap
 }
-.agent-workspace-back
-{
-border:1px solid var(--line-strong);
-background:var(--panel-muted);
-min-height:28px;
-color:var(--text-soft);
-white-space:nowrap;
-cursor:pointer;
-border-radius:7px;
-align-items:center;
-gap:5px;
-padding:4px 10px 4px 8px;
-font-size:10px;
-font-weight:700;
-display:inline-flex
-}
-.agent-workspace-back:hover
-{
-border-color:var(--text-faint);
-background:var(--hover);
-color:var(--text)
-}
-.agent-workspace-back:active:not(:disabled)
-{
-transform:scale(.98)
-}
 .agent-provider-picker
 {
 border:1px solid var(--line-strong);
