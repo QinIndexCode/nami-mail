@@ -3946,7 +3946,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             <button className="agent-mobile-conversations-button" type="button" aria-label={mobileConversationsOpen ? t("agent.conversation.closeList") : t("agent.conversation.openList")} aria-expanded={mobileConversationsOpen} data-tooltip={mobileConversationsOpen ? t("agent.conversation.closeList") : t("agent.conversation.openList")} onClick={() => setMobileConversationsOpen((open) => !open)}><PanelLeftClose size={17} /></button>
             {!hasConfiguredProvider ? <button ref={providerSettingsTriggerRef} className="agent-configure-provider-action" type="button" onClick={() => setAgentSettingsPane("providers")}><Wrench size={15} />{t("agent.providers.configure")}</button> : null}
             {hasConfiguredProvider && <button ref={providerSettingsTriggerRef} className="icon-button" type="button" onClick={() => setAgentSettingsPane("providers")} aria-label={t("agent.provider.settings")} data-tooltip={t("agent.provider.settings")}><Wrench size={17} /></button>}
-            <button className="icon-button" type="button" onClick={onClose} aria-label={t("agent.workspace.close")} data-tooltip={t("agent.workspace.close")}><ArrowLeft size={17} /></button>
+            <button className="icon-button" type="button" onClick={onClose} aria-label={t("agent.workspace.close")} data-tooltip={t("agent.workspace.close")}><ArrowLeft size={20} strokeWidth={2.4} /></button>
           </div>
         </header>
 
