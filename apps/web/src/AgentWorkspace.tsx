@@ -29,7 +29,6 @@ import {
   SquareCheck,
   SquareSlash,
   ArrowUp,
-  ArrowUpRight,
   ChevronDown,
   ChevronUp,
   Server,
@@ -48,6 +47,7 @@ import { AttachmentFileIcon } from "./mailUi";
 import { presentAttachment } from "./attachmentPresentation";
 import { type AgentSlashCommand, type AgentSlashSubcommand } from "@nami/agent-contracts";
 import { buildSlashMenu, slashCompletionText, slashKeepsMenuOpen, slashMenuActiveIndex } from "./slashMenu";
+import { mentionActiveIndex, mentionQuery } from "./mentionMenu";
 import { AgentMark } from "./AgentMark";
 import { AgentMarkdown, streamingMarkdownContent } from "./AgentMarkdown";
 import { desktopBridge } from "./desktop";
@@ -237,6 +237,45 @@ const REVOKED_STORAGE_KEY = "nami.agent.revokedByConversation";
 
 /** How long the "已撤回信息" notice stays above the composer before fading. */
 const REVOKE_NOTICE_SECONDS = 10;
+
+/** A mail the user pulled into the agent's context; rendered as a chip above
+ *  the composer and sent along as a reference (cap 8). */
+type MailReference = {
+  id: string;
+  subject: string;
+  accountId: string;
+  accountEmail: string;
+};
+
+/** One result row of the /@ mention menu. */
+type MentionItem = {
+  id: string;
+  subject: string;
+  accountId: string;
+  accountEmail: string;
+  sender: string;
+  sentAt: string;
+};
+
+const MAX_MAIL_REFERENCES = 8;
+/** How long a composer edit waits before the /@ mail search fires. */
+const MENTION_QUERY_DEBOUNCE_MS = 250;
+const MENTION_PAGE_SIZE = 10;
+
+function mailReferenceFor(message: Message): MailReference {
+  return { id: message.id, subject: message.subject, accountId: message.accountId, accountEmail: message.accountEmail };
+}
+
+function mentionItemFor(message: Message): MentionItem {
+  return {
+    id: message.id,
+    subject: message.subject,
+    accountId: message.accountId,
+    accountEmail: message.accountEmail,
+    sender: message.from.name || message.from.address,
+    sentAt: message.sentAt,
+  };
+}
 
 /** Categorized copy for a failed revoke. Network/service failures and stale
  *  targets get specific messages; anything else falls back to the generic one. */
@@ -1079,6 +1118,7 @@ type AgentMessageRowProps = {
   locale: string;
   t: Translate;
   onOpenAttachment: (path?: string) => void;
+  onOpenMessage: (messageId: string) => void;
   onRevoke: (messageId: string) => void;
   onRetry: () => void;
   onUserMessageRef: (messageId: string, node: HTMLElement | null) => void;
@@ -1097,6 +1137,7 @@ export const AgentMessageRow = memo(function AgentMessageRowInner({
   locale,
   t,
   onOpenAttachment,
+  onOpenMessage,
   onRevoke,
   onRetry,
   onUserMessageRef,
@@ -1119,6 +1160,13 @@ export const AgentMessageRow = memo(function AgentMessageRowInner({
       {!message.revoked && (
         <>
           {message.quote && <div className="agent-message-quote"><span className="agent-quote-mark" aria-hidden="true">"</span><span className="agent-quote-text">{truncateForPreview(message.quote)}</span><span className="agent-quote-mark" aria-hidden="true">"</span></div>}
+          {message.references && message.references.length > 0 && (
+            <div className="agent-message-references">
+              {message.references.map((reference) => (
+                <button key={reference.id} type="button" className="agent-message-reference" onClick={() => onOpenMessage(reference.id)} title={reference.subject} data-tooltip={t("agent.reference.open")}><Mail size={12} /><span>{reference.subject || t("agent.reference.noSubject")}</span></button>
+              ))}
+            </div>
+          )}
           {message.content ? <AgentMessageContent content={message.content} streaming={message.state === "streaming"} /> : message.state === "streaming" && <div className="agent-thinking"><span className="agent-thinking-dots" aria-hidden="true"><span className="agent-thinking-dot" /><span className="agent-thinking-dot" /><span className="agent-thinking-dot" /></span>{statusMessage || t("agent.message.thinking")}</div>}
           {message.attachments && message.attachments.length > 0 && <div className="agent-message-attachments">{visibleAttachments.map((attachment, index) => { const presentation = presentAttachment(attachment.name, attachment.type, t); return <button key={`${attachment.name}-${index}`} type="button" className="agent-message-attachment" onClick={() => onOpenAttachment(attachment.path)} data-tooltip={attachment.path ?? attachment.name}><AttachmentFileIcon kind={presentation.kind} /><span>{attachment.name}</span></button>; })}{attachmentOverflow > 0 && <button type="button" className="agent-message-attachment is-more" aria-expanded={attachmentsExpanded} onClick={() => setAttachmentsExpanded((value) => !value)}>{attachmentsExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}<span>{attachmentsExpanded ? t("agent.message.collapseAttachments") : t("agent.message.expandAttachments", { count: attachmentOverflow })}</span></button>}</div>}
           {message.toolActivities.length > 0 && <AgentToolList activities={message.toolActivities} superseded={superseded} />}
@@ -1898,6 +1946,27 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const [slashIndex, setSlashIndex] = useState(0);
   /** Set when the user dismisses the slash menu (Esc) or completes a command. */
   const [slashDismissed, setSlashDismissed] = useState(false);
+  /**
+   * Mails the user explicitly introduced as context (via /@ or by entering
+   * from a message); each one renders as a chip above the composer and rides
+   * along as a reference on the next send. Cap 8, deduped by message id.
+   */
+  const [mailReferences, setMailReferences] = useState<MailReference[]>(() =>
+    currentMessage ? [mailReferenceFor(currentMessage)] : [],
+  );
+  /** Set when the user dismisses the /@ menu (Esc) or introduces a mail. */
+  const [mentionDismissed, setMentionDismissed] = useState(false);
+  /** Keyboard selection inside the /@ menu. */
+  const [mentionIndex, setMentionIndex] = useState(0);
+  /** The /@ menu's current result rows. */
+  const [mentionItems, setMentionItems] = useState<MentionItem[]>([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  /** Whether the user was told the 8-reference cap is reached. */
+  const [mentionLimitReached, setMentionLimitReached] = useState(false);
+  /** The composer text mirrored so async pagination reads the latest search term. */
+  const mentionTermRef = useRef<string | null>(null);
+  const mentionLoadingRef = useRef(false);
+  const mentionPageRef = useRef(1);
   /** Memory summaries the agent suggested saving; each needs a save or dismiss. */
   const [pendingMemorySuggestions, setPendingMemorySuggestions] = useState<string[]>([]);
   const [mode, setMode] = useState<AgentMode>("agent");
@@ -3294,7 +3363,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       ...(f.mailToken && f.mailAccountId ? { accountId: f.mailAccountId } : {}),
       ...(f.text ? { text: f.text } : {}),
     }));
-    const userMessage: AgentMessage = { id: newLocalId("user"), role: "user", content: userText, createdAt: currentTime(), state: "complete", citations: [], toolActivities: [], ...(attachments.length > 0 ? { attachments } : {}), ...(truncatedQuote ? { quote: truncatedQuote } : {}) };
+    const userMessage: AgentMessage = { id: newLocalId("user"), role: "user", content: userText, createdAt: currentTime(), state: "complete", citations: [], toolActivities: [], ...(attachments.length > 0 ? { attachments } : {}), ...(truncatedQuote ? { quote: truncatedQuote } : {}), ...(mailReferences.length > 0 ? { references: mailReferences.map((reference) => ({ id: reference.id, subject: reference.subject })) } : {}) };
     const assistantMessage: AgentMessage = { id: newLocalId("assistant"), role: "assistant", content: "", createdAt: currentTime(), state: "streaming", citations: [], toolActivities: [] };
     setComposer("");
     setAttachedFiles([]);
@@ -3391,6 +3460,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       scope,
       ...(truncatedQuote ? { quote: truncatedQuote } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(mailReferences.length > 0 ? { references: mailReferences.map((reference) => ({ id: reference.id, subject: reference.subject })) } : {}),
     };
     // A still-unwinding previous run on the server can briefly reject the new
     // stream with CONFLICT. We retry a few times (swallowing the conflict and
@@ -3479,7 +3549,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       if (ended && ended.controller === controller) sessionStreamsRef.current.delete(conversation.id);
       syncBackgroundRuns();
     }
-  }, [active, attachedFiles, composer, conversationSearch, currentMessage, enqueueStreamPiece, ghostConversationId, mode, quoteContext, refreshConversations, scope, selectedProvider, syncBackgroundRuns, t]);
+  }, [active, attachedFiles, composer, conversationSearch, currentMessage, enqueueStreamPiece, ghostConversationId, mailReferences, mode, quoteContext, refreshConversations, scope, selectedProvider, syncBackgroundRuns, t]);
 
   const stopStreaming = useCallback(() => {
     const conversationId = active?.id;
@@ -3518,6 +3588,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   // Slash commands are mail-operation scoped: only the mail-assistant mode
   // builds the menu, plain chat ignores the leading "/".
   const slashMenu = useMemo(() => mode === "agent" ? buildSlashMenu(composer, { streaming, dismissed: slashDismissed }) : null, [composer, slashDismissed, mode, streaming]);
+  const slashVisible = slashMenu !== null && slashMenu.length > 0;
   const activeSlashIndex = slashMenuActiveIndex(slashMenu, slashIndex);
   const completeSlash = useCallback((command: AgentSlashCommand, sub?: AgentSlashSubcommand) => {
     setSlashDismissed(!slashKeepsMenuOpen(command, sub));
@@ -3539,6 +3610,112 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   useEffect(() => {
     if (!slashMenu) setSlashIndex(0);
   }, [slashMenu]);
+
+  // /@ mail mention menu: when the composer holds a "/@..." prefix the menu
+  // lists mail to pull into context (latest across all accounts, or an FTS
+  // search once a term follows). Introducing a mail adds a reference chip and
+  // clears the composer; a reference from outside the account scope widens the
+  // scope so the agent may actually read it.
+  const mentionTerm = useMemo(
+    () => (mode === "agent" ? mentionQuery(composer, { streaming, dismissed: mentionDismissed, demoMode }) : null),
+    [composer, demoMode, mentionDismissed, mode, streaming],
+  );
+  mentionTermRef.current = mentionTerm;
+  const mentionOpen = mentionTerm !== null;
+  const activeMentionIndex = mentionActiveIndex(mentionItems, mentionIndex);
+  useEffect(() => {
+    if (!mentionOpen) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        mentionLoadingRef.current = true;
+        setMentionLoading(true);
+        try {
+          const term = (mentionTermRef.current ?? "").trim();
+          const query = term
+            ? `q=${encodeURIComponent(term)}&scope=all&pageSize=${MENTION_PAGE_SIZE}`
+            : `pageSize=${MENTION_PAGE_SIZE}`;
+          const page = await api.messages(query);
+          if (cancelled) return;
+          setMentionItems(page.items.map(mentionItemFor));
+          setMentionIndex(0);
+          mentionPageRef.current = 1;
+        } catch {
+          if (!cancelled) setMentionItems([]);
+        } finally {
+          mentionLoadingRef.current = false;
+          if (!cancelled) setMentionLoading(false);
+        }
+      })();
+    }, MENTION_QUERY_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // Each composer edit changes the term and re-arms the debounce; opening and
+    // closing the menu also (de)activates the fetch.
+  }, [mentionOpen, mentionTerm]);
+  useEffect(() => {
+    if (!mentionOpen) {
+      setMentionItems([]);
+      setMentionLoading(false);
+      setMentionIndex(0);
+      mentionPageRef.current = 1;
+    }
+  }, [mentionOpen]);
+  const loadMoreMentions = useCallback(async () => {
+    if (mentionLoadingRef.current || !mentionOpen) return;
+    const term = (mentionTermRef.current ?? "").trim();
+    const nextPage = mentionPageRef.current + 1;
+    mentionLoadingRef.current = true;
+    setMentionLoading(true);
+    try {
+      const query = term
+        ? `q=${encodeURIComponent(term)}&scope=all&pageSize=${MENTION_PAGE_SIZE}&page=${nextPage}`
+        : `pageSize=${MENTION_PAGE_SIZE}&page=${nextPage}`;
+      const page = await api.messages(query);
+      const fresh = page.items.map(mentionItemFor);
+      setMentionItems((current) => {
+        const seen = new Set(current.map((item) => item.id));
+        return [...current, ...fresh.filter((item) => !seen.has(item.id))];
+      });
+      mentionPageRef.current = nextPage;
+    } catch {
+      // A failed page keeps the current results; scrolling again retries.
+    } finally {
+      mentionLoadingRef.current = false;
+      setMentionLoading(false);
+    }
+  }, [mentionOpen]);
+  const introduceMailReference = useCallback((item: MentionItem) => {
+    const alreadyReferenced = mailReferences.some((ref) => ref.id === item.id);
+    if (alreadyReferenced) {
+      setComposer("");
+      setMentionDismissed(true);
+      return;
+    }
+    if (mailReferences.length >= MAX_MAIL_REFERENCES) {
+      setMentionLimitReached(true);
+      return;
+    }
+    setMailReferences((current) => [...current, { id: item.id, subject: item.subject, accountId: item.accountId, accountEmail: item.accountEmail }]);
+    // A reference from outside the current account scope widens the boundary
+    // so the agent may read the mail — scope is account-level, the reference
+    // must not sit outside it.
+    setScopeTarget((target) => (target !== "all" && target !== item.accountId ? "all" : target));
+    setComposer("");
+    setMentionDismissed(true);
+  }, [mailReferences]);
+  const removeMailReference = useCallback((id: string) => {
+    setMailReferences((current) => current.filter((ref) => ref.id !== id));
+  }, []);
+  // A message that becomes current while the workspace stays mounted (the mail
+  // list cannot be reached while the panel covers it, but the prop may change)
+  // joins the reference set — the entering message is already seeded at mount.
+  useEffect(() => {
+    if (!currentMessage) return;
+    setMailReferences((current) => (current.some((ref) => ref.id === currentMessage.id) ? current : [...current, mailReferenceFor(currentMessage)]));
+  }, [currentMessage]);
 
   const permissionOptions: Array<{ level: AgentAccessLevel; label: string; hint: string; detail: string; features: string[]; icon: ReactNode }> = [
     { level: "read-only", label: t("agent.permission.readOnly"), hint: t("agent.permission.readOnly.hint"), detail: t("agent.permission.readOnly.detail"), features: [t("agent.permission.readOnly.feature1"), t("agent.permission.readOnly.feature2"), t("agent.permission.readOnly.feature3")], icon: <Eye size={12} /> },
@@ -3738,7 +3915,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             ) : <div className="agent-conversation-title"><span className="eyebrow">{t("agent.eyebrow")}</span><span className="agent-title-line"><h1 title={active?.title}>{active?.title ?? t("agent.conversation.newTitle")}</h1>{active && <button className="icon-button" type="button" aria-label={t("agent.conversation.rename")} data-tooltip={t("agent.conversation.rename")} onClick={() => { setDraftTitle(active.title); setRenaming(true); }}><Pencil size={15} /></button>}</span></div>}
           </div>
           <div className="agent-header-actions">
-            {currentMessage && <button type="button" className="agent-current-context" aria-label={t("agent.context.openInMail")} title={currentMessage.subject || t("agent.context.currentMessage")} onClick={() => onOpenMessage(currentMessage.id)}><Mail size={13} /><span>{currentMessage.subject || t("agent.context.currentMessage")}</span><ArrowUpRight className="agent-current-context-open" size={11} aria-hidden="true" /></button>}
             <div className="agent-scope-picker-wrap" ref={scopePickerRef}>
               <button type="button" className="agent-scope-picker" onClick={() => setScopePickerOpen((open) => !open)} aria-expanded={scopePickerOpen} aria-haspopup="menu" aria-controls="agent-scope-picker" aria-label={t("agent.scope.switch")} data-tooltip={t("agent.scope.switch")}>
                 {scopeTarget === "all" ? <UsersRound size={13} /> : <Mail size={13} />}
@@ -3819,6 +3995,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
               statusMessage={streamStatus}
               locale={locale}
               t={t}
+              onOpenMessage={onOpenMessage}
               onOpenAttachment={openAttachmentFolder}
               onRevoke={revokeMessage}
               onRetry={retryLastUserTurn}
@@ -3838,6 +4015,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
               statusMessage={null}
               locale={locale}
               t={t}
+              onOpenMessage={onOpenMessage}
               onOpenAttachment={openAttachmentFolder}
               onRevoke={revokeMessage}
               onRetry={retryLastUserTurn}
@@ -3942,11 +4120,21 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             expiresAt={Number.isFinite(confirmationDeadline) && confirmationDeadline > 0 ? confirmationDeadline : undefined}
             onExpire={expirePendingConfirmation}
           />}
+          {mailReferences.length > 0 && (
+            <div className="agent-reference-chips">
+              {mailReferences.map((reference) => (
+                <span key={reference.id} className="agent-reference-chip">
+                  <button type="button" className="agent-reference-chip-open" onClick={() => onOpenMessage(reference.id)} title={reference.subject} data-tooltip={t("agent.reference.open")}><Mail size={12} /><span>{reference.subject || t("agent.reference.noSubject")}</span><span className="agent-reference-chip-account">{reference.accountEmail}</span></button>
+                  <button type="button" className="agent-reference-chip-remove" onClick={() => removeMailReference(reference.id)} aria-label={t("agent.reference.dismiss")} data-tooltip={t("agent.reference.dismiss")}><X size={11} /></button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className={`agent-composer${streaming ? " streaming" : ""}`}>
             <button className={`agent-scroll-to-bottom ${showScrollToBottom ? "visible" : ""}`} type="button" onClick={scrollToBottom} aria-label={t("agent.composer.scrollToBottom")}><ChevronDown size={17} /></button>
             <input ref={fileInputRef} type="file" multiple onChange={(e) => void handleFileSelect(e)} accept=".txt,.md,.markdown,.csv,.tsv,.json,.xml,.html,.htm,.py,.js,.ts,.tsx,.jsx,.css,.scss,.less,.yaml,.yml,.log,.rtf,.ini,.cfg,.conf,.sh,.bash,.zsh,.sql,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.vue,.svelte,.pdf,.docx,.pptx" style={{ display: "none" }} />
             <label className="visually-hidden" htmlFor="agent-composer">{t("agent.composer.label")}</label>
-            <textarea id="agent-composer" ref={composerRef} value={composer} onChange={(event) => { setComposer(event.target.value); setSlashDismissed(false); }} onKeyDown={(event) => {
+            <textarea id="agent-composer" ref={composerRef} value={composer} onChange={(event) => { setComposer(event.target.value); setSlashDismissed(false); setMentionDismissed(false); setMentionLimitReached(false); }} onKeyDown={(event) => {
               const composing = (event.nativeEvent as KeyboardEvent).isComposing;
               // While the slash menu is open, arrows/tab/enter drive it instead
               // of the composer's default editing and send behavior.
@@ -3972,13 +4160,37 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                   return;
                 }
               }
+              // The /@ mention menu is structurally exclusive with the slash
+              // menu (its prefix is not a slash-token), so a second branch drives
+              // arrows/tab/enter/escape the same way.
+              if (mentionOpen && !composing) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  if (mentionItems.length === 0) return;
+                  const delta = event.key === "ArrowDown" ? 1 : -1;
+                  setMentionIndex((index) => (index + delta + mentionItems.length) % mentionItems.length);
+                  return;
+                }
+                if (event.key === "Tab" || event.key === "Enter") {
+                  event.preventDefault();
+                  const active = mentionItems[activeMentionIndex];
+                  if (active) introduceMailReference(active);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setMentionDismissed(true);
+                  setComposer("");
+                  return;
+                }
+              }
               // Ignore Enter while an IME composition is active (e.g. confirming
               // pinyin) so the message is not sent mid-composition.
               if (event.key === "Enter" && !event.shiftKey && !composing) {
                 event.preventDefault();
                 void sendMessage();
               }
-            }} placeholder={t("agent.composer.placeholder")} disabled={composerDisabled} rows={1} aria-expanded={slashMenu !== null && slashMenu.length > 0} aria-controls="agent-slash-menu" />
+            }} placeholder={t("agent.composer.placeholder")} disabled={composerDisabled} rows={1} aria-expanded={(slashMenu !== null && slashMenu.length > 0) || mentionOpen} aria-controls={slashMenu !== null && slashMenu.length > 0 ? "agent-slash-menu" : mentionOpen ? "agent-mention-menu" : undefined} />
             {slashMenu && slashMenu.length > 0 && (
               <div className="agent-slash-menu" id="agent-slash-menu" role="listbox" aria-label={t("agent.commands.label")}>
                 {slashMenu.map((item, index) => (
@@ -3995,6 +4207,36 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                     {item.kind === "sub" ? (item.sub.usageKey && <span className="agent-slash-item-usage">{t(item.sub.usageKey)}</span>) : (item.command.usageKey && <span className="agent-slash-item-usage">{t(item.command.usageKey)}</span>)}
                   </button>
                 ))}
+              </div>
+            )}
+            {mentionOpen && (
+              <div className="agent-mention-menu" id="agent-mention-menu" role="listbox" aria-label={t("agent.mention.label")} onScroll={(event) => {
+                const el = event.currentTarget;
+                if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) void loadMoreMentions();
+              }}>
+                {mentionLoading && mentionItems.length === 0 ? (
+                  <div className="agent-mention-empty"><LoaderCircle size={13} className="spin" /><span>{t("agent.mention.loading")}</span></div>
+                ) : mentionItems.length === 0 ? (
+                  <div className="agent-mention-empty"><span>{t("agent.mention.empty")}</span></div>
+                ) : (
+                  mentionItems.map((item, index) => (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={index === activeMentionIndex}
+                      key={item.id}
+                      className={`agent-mention-item${index === activeMentionIndex ? " selected" : ""}`}
+                      onMouseDown={(event) => { event.preventDefault(); introduceMailReference(item); }}
+                    >
+                      <span className="agent-mention-avatar" aria-hidden="true">{(item.subject ?? "").trim() ? item.subject!.trim()[0].toUpperCase() : "?"}</span>
+                      <span className="agent-mention-main">
+                        <span className="agent-mention-subject">{item.subject || t("agent.reference.noSubject")}</span>
+                        <span className="agent-mention-meta">{item.sender}<span aria-hidden="true">{" · "}</span>{item.accountEmail}</span>
+                      </span>
+                    </button>
+                  ))
+                )}
+                {mentionLimitReached && <div className="agent-mention-limit" role="status">{t("agent.mention.maxReached")}</div>}
               </div>
             )}
             {pendingMemorySuggestions.length > 0 && (

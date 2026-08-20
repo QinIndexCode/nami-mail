@@ -444,7 +444,7 @@ try {
 const contextChip = renderer.desktopDeepDiagnostic?.agent?.agentContextChip;
   if (contextChip != null) {
     assert.equal(contextChip.tag, "BUTTON", "The reference mail chip must be a clickable button.");
-    assert.ok(contextChip.ariaLabel.length > 0, "The reference mail chip must carry an accessible label.");
+    assert.ok(contextChip.chipTitle.length > 0, "The reference mail chip must carry a title.");
     assert.ok(contextChip.railClearance > 0, `The reference mail chip must stay clear of the icon rail (clearance ${contextChip.railClearance}px).`);
     assert.ok(contextChip.panelClearance > 0, `The reference mail chip must stay inside the agent main panel (clearance ${contextChip.panelClearance}px).`);
   }
