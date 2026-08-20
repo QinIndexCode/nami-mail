@@ -89,6 +89,41 @@ describe("settings per-folder sync limit picker", () => {
 
     expect(markup).toContain(`class="themed-select-value">${zh("settings.sync.limit.all")}`);
   });
+
+  it("explains when the environment overrides the stored picker value", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider>
+        <SettingsModal
+          settings={{ ...defaultAppSettings, syncMessageLimit: 2000, effectiveSyncMessageLimit: 5000 }}
+          accounts={[]}
+          demoMode={false}
+          onClose={() => undefined}
+          onSettingsChange={() => undefined}
+          onOpenAgentProviderSettings={() => undefined}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain('class="settings-note"');
+    expect(markup).toContain(translate("zh-CN", "settings.sync.limit.effectiveHint", { limit: 5000 }));
+  });
+
+  it("keeps the environment hint hidden while the effective value matches the picker", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider>
+        <SettingsModal
+          settings={{ ...defaultAppSettings, syncMessageLimit: 2000, effectiveSyncMessageLimit: 2000 }}
+          accounts={[]}
+          demoMode={false}
+          onClose={() => undefined}
+          onSettingsChange={() => undefined}
+          onOpenAgentProviderSettings={() => undefined}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).not.toContain('class="settings-note"');
+  });
 });
 
 describe("settings Escape handling", () => {

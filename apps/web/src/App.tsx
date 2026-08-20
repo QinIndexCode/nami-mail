@@ -185,6 +185,18 @@ export function shouldPollTick(lastSseEventAtMs: number, nowMs: number, interval
   return nowMs - lastSseEventAtMs >= intervalMs;
 }
 
+// Sidebar account row: a sync-cap warning keeps the third (amber) dot state;
+// real issues force the error dot regardless of the account status field.
+export function accountStatusDotClass(issue: MailErrorPresentation | undefined, status: Account["status"]): "warning" | "error" | Account["status"] {
+  return issue ? (issue.severity === "warning" ? "warning" : "error") : status;
+}
+
+// A warning does not take over the subtitle — sync still ran, only the
+// freshness line stays; real issues replace it with their title.
+export function accountShowsFreshness(issue: MailErrorPresentation | undefined): boolean {
+  return !issue || issue.severity === "warning";
+}
+
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 const isDesktop = new URLSearchParams(window.location.search).get("desktop") === "1";
 const isDesktopSmoke = new URLSearchParams(window.location.search).get("desktopSmoke") === "1";
@@ -3658,7 +3670,7 @@ const emptyMessageList = useMemo(() => (query.trim()
   const retryAccountSync = useCallback(async (accountId: string) => {
     if (isDemo) {
       await new Promise((resolve) => window.setTimeout(resolve, 450));
-      return { ok: true, synced: 0, folders: 0, failedFolders: 0 };
+      return { ok: true, synced: 0, folders: 0, failedFolders: 0, limitReached: false };
     }
     try {
       return await api.sync(accountId);
@@ -3740,8 +3752,8 @@ const emptyMessageList = useMemo(() => (query.trim()
               return (
                 <button key={account.id} aria-pressed={selectedAccount === account.id} aria-hidden={collapsed} tabIndex={collapsed ? -1 : undefined} className={`${selectedAccount === account.id ? "active" : ""}${collapsed ? " hidden" : ""}`} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}>
                   <CustomAvatar name={account.email} address={account.email} tone={accountTone(account.email)} className="account-avatar" />
-                  <span className="account-copy"><strong>{account.email.split("@")[0]}</strong><small>{issue?.title ?? t("mail.accountFreshness", { provider: providerName, freshness })}</small></span>
-                  <span className={`status-dot ${issue ? "error" : account.status}`} aria-hidden="true" />
+                  <span className="account-copy"><strong>{account.email.split("@")[0]}</strong><small>{accountShowsFreshness(issue) ? t("mail.accountFreshness", { provider: providerName, freshness }) : issue!.title}</small></span>
+                  <span className={`status-dot ${accountStatusDotClass(issue, account.status)}`} aria-hidden="true" />
                 </button>
               );
             })}

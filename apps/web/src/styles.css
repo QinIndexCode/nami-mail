@@ -949,6 +949,11 @@ border-radius:50%
 background:var(--danger);
 box-shadow:0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent)
 }
+.status-dot.warning
+{
+background:var(--warning);
+box-shadow:0 0 0 3px color-mix(in srgb, var(--warning) 16%, transparent)
+}
 .folder-list
 {
 border-top:1px solid var(--line);
@@ -7216,6 +7221,13 @@ color:var(--text-faint);
 margin:13px 0 0;
 font-size:9px
 }
+.settings-note
+{
+color:var(--warning);
+margin:2px 0 8px;
+font-size:10px;
+line-height:1.45
+}
 .external-guide
 {
 flex-direction:column;
@@ -7789,6 +7801,16 @@ overflow:hidden
 color:var(--danger);
 white-space:normal;
 font-weight:650
+}
+.accounts-row-copy small.account-warning
+{
+color:var(--warning);
+white-space:normal;
+font-weight:650
+}
+.accounts-row.has-warning .account-error-guidance
+{
+color:color-mix(in srgb, var(--warning) 82%, var(--text-soft))
 }
 .accounts-row-copy small.account-error-guidance
 {

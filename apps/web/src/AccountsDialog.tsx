@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Check, ChevronLeft, ChevronRight, LoaderCircle, Pencil, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { accountHealthIssue, mailErrorMessage } from "./errorPresentation";
-import { useI18n } from "./i18n";
+import { useI18n, type Translate } from "./i18n";
 import { providerDisplayName } from "./providerOnboarding";
 import type { Account } from "./types";
 import { setAvatar, useCustomAvatar } from "./avatarStore";
@@ -17,6 +17,11 @@ type Notice = { kind: "success" | "error"; message: string } | null;
 /** Accounts past this count unlock the search / pagination / bulk toolbar. */
 const ACCOUNTS_PER_PAGE = 5;
 
+/** A manual sync that skipped older mail appends the cap explanation to the summary. */
+export function syncResultNoticeMessage(summary: string, limitReached: boolean | undefined, t: Translate): string {
+  return limitReached ? `${summary} ${t("settings.account.syncLimitReached")}` : summary;
+}
+
 export type AccountsDialogProps = {
   accounts: Account[];
   demoMode?: boolean;
@@ -26,7 +31,7 @@ export type AccountsDialogProps = {
   /** Called after an account signature has been saved, or directly in demo mode. */
   onAccountSignatureChanged: (accountId: string, signature: string) => void | Promise<void>;
   /** Retries a single account and lets the host refresh its health state. */
-  onAccountSync?: (accountId: string) => Promise<{ synced: number; folders: number; failedFolders: number }>;
+  onAccountSync?: (accountId: string) => Promise<{ synced: number; folders: number; failedFolders: number; limitReached: boolean }>;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
 };
 
@@ -180,14 +185,17 @@ export default function AccountsDialog({
       const result = onAccountSync
         ? await onAccountSync(account.id)
         : demoMode
-          ? { synced: 0, folders: 0, failedFolders: 0 }
+          ? { synced: 0, folders: 0, failedFolders: 0, limitReached: false }
           : await api.sync(account.id);
       const summary = result.failedFolders
         ? t("settings.account.syncPartial", { email: account.email, failedFolders: result.failedFolders })
         : result.synced
           ? t("settings.account.syncCompletedWithMessages", { email: account.email, synced: result.synced })
           : t("settings.account.syncCompleted", { email: account.email });
-      setNotice({ kind: result.failedFolders ? "error" : "success", message: summary });
+      setNotice({
+        kind: result.failedFolders ? "error" : "success",
+        message: syncResultNoticeMessage(summary, result.limitReached, t),
+      });
     } catch (error) {
       setNotice({ kind: "error", message: t("settings.account.syncFailed", { email: account.email, message: mailErrorMessage(error, undefined, t) }) });
     } finally {
@@ -250,7 +258,7 @@ export default function AccountsDialog({
         const result = onAccountSync
           ? await onAccountSync(accountId)
           : demoMode
-            ? { synced: 0, folders: 0, failedFolders: 0 }
+            ? { synced: 0, folders: 0, failedFolders: 0, limitReached: false }
             : await api.sync(accountId);
         synced += 1;
         failedFolders += result.failedFolders;
@@ -370,17 +378,17 @@ export default function AccountsDialog({
                       const selected = selectedIds.has(account.id);
                       const providerName = providerDisplayName({ id: account.provider, name: account.providerName }, locale, t);
                       return (
-                        <div className={`accounts-row${selected ? " selected" : ""}${issue ? " has-issue" : ""}`} key={account.id}>
+                        <div className={`accounts-row${selected ? " selected" : ""}${issue ? " has-issue" : ""}${issue?.severity === "warning" ? " has-warning" : ""}`} key={account.id}>
                           <div className="accounts-row-main">
                             {showToolbar && (
                               <label className="accounts-row-check">
                                 <input type="checkbox" checked={selected} onChange={() => toggleSelect(account.id)} aria-label={t("settings.account.selectAriaLabel", { email: account.email })} />
                               </label>
                             )}
-                            <span className={`status-dot ${issue ? "error" : account.status}`} aria-hidden="true" />
+                            <span className={`status-dot ${issue ? (issue.severity === "warning" ? "warning" : "error") : account.status}`} aria-hidden="true" />
                             <div className="accounts-row-copy">
                               <strong>{account.email}</strong>
-                              <small className={issue ? "account-error" : ""}>{issue ? `${providerName} · ${issue.title}` : providerName}</small>
+                              <small className={issue ? (issue.severity === "warning" ? "account-warning" : "account-error") : ""}>{issue ? `${providerName} · ${issue.title}` : providerName}</small>
                               {issue && <small className="account-error-guidance">{issue.guidance}</small>}
                             </div>
                             <div className="accounts-row-actions">

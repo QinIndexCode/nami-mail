@@ -560,6 +560,31 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(response.body).not.toContain("password");
   });
 
+  it("surfaces a persisted sync warning on the account row", async () => {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, 'custom', 'Demo', 'encrypted', 'imap.example.test', 993, 1,
+        'smtp.example.test', 465, 1, 'email', 'connected', ?)
+    `).run("warning-demo", "warning@example.test", now);
+    db.prepare("UPDATE accounts SET last_sync_warning_code = 'sync_limit' WHERE id = ?").run("warning-demo");
+
+    const response = await app.inject({ method: "GET", url: "/api/accounts" });
+    const accounts = response.json() as Array<Record<string, unknown>>;
+    const account = accounts.find((row) => row.id === "warning-demo");
+
+    expect(response.statusCode).toBe(200);
+    expect(account).toMatchObject({
+      id: "warning-demo",
+      status: "connected",
+      lastErrorCode: null,
+      lastSyncWarningCode: "sync_limit",
+    });
+  });
+
   it("returns complete provider onboarding metadata without adding form fields", async () => {
     const response = await app.inject({ method: "GET", url: "/api/providers" });
     const providers = response.json() as Array<Record<string, unknown>>;
@@ -740,10 +765,29 @@ it("keeps an Agent stream running after the client closes its response", async (
       refreshIntervalSeconds: 60,
       closeBehavior: "ask",
       customBackgroundUrl: null,
+      syncMessageLimit: 2000,
+      effectiveSyncMessageLimit: 2000,
     });
     expect(settings).not.toHaveProperty("customBackgroundFilename");
     expect(response.body).not.toContain(backgroundDirectory);
     expect(Number.isNaN(Date.parse(settings.updatedAt))).toBe(false);
+  });
+
+  it("reports the env-overridden sync limit separately from the stored picker value", async () => {
+    const previous = process.env.SYNC_MESSAGE_LIMIT;
+    try {
+      process.env.SYNC_MESSAGE_LIMIT = "3000";
+      const response = await app.inject({ method: "GET", url: "/api/settings" });
+      const settings = response.json();
+
+      expect(response.statusCode).toBe(200);
+      // The stored picker value is unchanged; only the effective value reflects
+      // the SYNC_MESSAGE_LIMIT override.
+      expect(settings).toMatchObject({ syncMessageLimit: 2000, effectiveSyncMessageLimit: 3000 });
+    } finally {
+      if (previous === undefined) delete process.env.SYNC_MESSAGE_LIMIT;
+      else process.env.SYNC_MESSAGE_LIMIT = previous;
+    }
   });
 
   it("persists a valid settings patch", async () => {

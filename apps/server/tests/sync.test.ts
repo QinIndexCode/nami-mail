@@ -1697,3 +1697,65 @@ describe("IMAP message flag updates", () => {
       .toEqual({ total: 7, unseen: 3, uid_validity: "100" });
   });
 });
+
+describe("sync message limit warning", () => {
+  let db: DatabaseHandle;
+  const masterKey = Buffer.alloc(32, 7);
+  const lock = { release: vi.fn() };
+  // Five messages in the mailbox; the cap tests below decide how many syncs.
+  const client = {
+    usable: true,
+    connect: vi.fn(async () => undefined),
+    getMailboxLock: vi.fn(async () => lock),
+    mailbox: { exists: 5, uidValidity: 1n },
+    list: vi.fn(async () => [{ path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" }]),
+    status: vi.fn(async () => ({ messages: 5, unseen: 0 })),
+    fetch: vi.fn(async function* () {
+      for (let uid = 1; uid <= 5; uid += 1) {
+        yield { uid, emailId: `m${uid}`, flags: new Set(["\\Seen"]), internalDate: new Date(`2026-08-10T00:00:0${uid}.000Z`), size: 10, source: Buffer.from("Subject: x\r\n\r\nbody") };
+      }
+    }),
+    logout: vi.fn(async () => undefined),
+  };
+
+  beforeEach(() => {
+    db = openDatabase(":memory:");
+    vi.clearAllMocks();
+    client.getMailboxLock.mockImplementation(async () => lock);
+    imapClientForAccount.mockReturnValue(client);
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("account-1", "demo@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("keeps the account healthy and persists sync_limit when a folder exceeds the cap", async () => {
+    const result = await syncAccount(db, masterKey, "account-1", 2);
+    expect(result).toMatchObject({ folders: 1, failedFolders: 0, limitReached: true });
+    expect(db.prepare("SELECT status, last_error, last_error_code, last_sync_warning_code FROM accounts WHERE id = ?").get("account-1"))
+      .toEqual({ status: "connected", last_error: null, last_error_code: null, last_sync_warning_code: "sync_limit" });
+  });
+
+  it("clears a stale warning when the mailbox fits within the cap again", async () => {
+    db.prepare("UPDATE accounts SET last_sync_warning_code = 'sync_limit' WHERE id = ?").run("account-1");
+    const result = await syncAccount(db, masterKey, "account-1", 100);
+    expect(result).toMatchObject({ folders: 1, failedFolders: 0, limitReached: false });
+    expect(db.prepare("SELECT last_sync_warning_code FROM accounts WHERE id = ?").get("account-1"))
+      .toEqual({ last_sync_warning_code: null });
+  });
+
+  it("never raises the warning when the cap is 0 (whole mailbox)", async () => {
+    const result = await syncAccount(db, masterKey, "account-1", 0);
+    expect(result).toMatchObject({ folders: 1, limitReached: false });
+    expect(db.prepare("SELECT last_sync_warning_code FROM accounts WHERE id = ?").get("account-1"))
+      .toEqual({ last_sync_warning_code: null });
+  });
+});

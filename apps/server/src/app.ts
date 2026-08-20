@@ -898,6 +898,9 @@ function publicSettings(context: RuntimeContext, settings: AppSettings) {
     refreshIntervalSeconds: settings.refreshIntervalSeconds,
     realtimePushEnabled: settings.realtimePushEnabled,
     syncMessageLimit: settings.syncMessageLimit,
+    // The stored picker value above, after the SYNC_MESSAGE_LIMIT environment
+    // override is applied. The renderer shows both when they diverge.
+    effectiveSyncMessageLimit: getSyncMessageLimit(context.db),
     closeBehavior: settings.closeBehavior,
     launchAtStartup: settings.launchAtStartup,
     globalShortcutEnabled: settings.globalShortcutEnabled,
@@ -2122,7 +2125,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         app.log.warn({ accountId: id, code: failure.body.code }, "Initial manually configured mailbox sync failed");
       });
     const row = context.db.prepare("SELECT * FROM accounts WHERE id = ?").get(id) as AccountRecord;
-    return reply.code(201).send({ ok: true, account: publicAccount(row), sync: null, syncWarning: null });
+    return reply.code(201).send({ ok: true, account: publicAccount(row), sync: null, syncWarning: row.last_sync_warning_code });
   });
 
   app.post("/api/accounts/test", async (request, reply) => {
@@ -2237,7 +2240,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         app.log.warn({ accountId: id, code: failure.body.code }, "Initial mailbox sync failed");
       });
     const row = context.db.prepare("SELECT * FROM accounts WHERE id = ?").get(id) as AccountRecord;
-    return reply.code(201).send({ ok: true, account: publicAccount(row), sync: null, syncWarning: null });
+    return reply.code(201).send({ ok: true, account: publicAccount(row), sync: null, syncWarning: row.last_sync_warning_code });
   });
 
   app.delete<{ Params: { id: string } }>("/api/accounts/:id", async (request, reply) => {

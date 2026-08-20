@@ -553,7 +553,7 @@ export const api = {
       body: JSON.stringify({ signature }),
     }),
   sync: (id: string) =>
-    request<{ ok: boolean; synced: number; folders: number; failedFolders: number }>(`/api/accounts/${id}/sync`, {
+    request<{ ok: boolean; synced: number; folders: number; failedFolders: number; limitReached: boolean }>(`/api/accounts/${id}/sync`, {
       method: "POST",
       body: "{}",
     }),

@@ -34,7 +34,7 @@ describe("server event bus", () => {
     const healthy = vi.fn();
     bus.subscribe(brittle);
     bus.subscribe(healthy);
-    bus.emit({ type: "mail.synced", payload: { accountId: "account-1", lastSyncedAt: "2026-08-10T00:00:00.000Z" } });
+    bus.emit({ type: "mail.synced", payload: { accountId: "account-1", lastSyncedAt: "2026-08-10T00:00:00.000Z", warningCode: null } });
     expect(healthy).toHaveBeenCalledTimes(1);
   });
 
@@ -54,10 +54,27 @@ describe("server event bus", () => {
 
       db.prepare("UPDATE accounts SET last_synced_at = ? WHERE id = ?").run("2026-08-10T21:05:14.659Z", "account-1");
       emitAccountSynced(db, bus, "account-1");
-      expect(listener).toHaveBeenCalledWith({ type: "mail.synced", payload: { accountId: "account-1", lastSyncedAt: "2026-08-10T21:05:14.659Z" } });
+      expect(listener).toHaveBeenCalledWith({ type: "mail.synced", payload: { accountId: "account-1", lastSyncedAt: "2026-08-10T21:05:14.659Z", warningCode: null } });
 
       // A missing bus is a no-op (SSE is optional at runtime).
       expect(() => emitAccountSynced(db, undefined, "account-1")).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("emitAccountSynced carries the persisted sync warning code when one exists", () => {
+    const db = openDatabase(":memory:");
+    try {
+      db.prepare("INSERT INTO accounts (id, email, provider, provider_name, encrypted_password, imap_host, imap_port, imap_secure, imap_transport, smtp_host, smtp_port, smtp_secure, smtp_transport, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+        "account-1", "a@example.com", "gmail", "Gmail", "x", "imap.gmail.com", 993, 1, "tls", "smtp.gmail.com", 465, 1, "tls", "2026-08-10T00:00:00.000Z", "connected",
+      );
+      const bus = new ServerEventBus();
+      const listener = vi.fn();
+      bus.subscribe(listener);
+      db.prepare("UPDATE accounts SET last_synced_at = ?, last_sync_warning_code = ? WHERE id = ?").run("2026-08-10T21:05:14.659Z", "sync_limit", "account-1");
+      emitAccountSynced(db, bus, "account-1");
+      expect(listener).toHaveBeenCalledWith({ type: "mail.synced", payload: { accountId: "account-1", lastSyncedAt: "2026-08-10T21:05:14.659Z", warningCode: "sync_limit" } });
     } finally {
       db.close();
     }
@@ -96,7 +113,7 @@ describe("server event bus", () => {
       expect(syncedEvents.length).toBeGreaterThan(0);
       expect(syncedEvents[0]).toMatchObject({
         type: "mail.synced",
-        payload: { accountId: "00000000-0000-4000-8000-000000000001", lastSyncedAt: expect.any(String) },
+        payload: { accountId: "00000000-0000-4000-8000-000000000001", lastSyncedAt: expect.any(String), warningCode: null },
       });
     } finally {
       await app.close();
@@ -159,7 +176,7 @@ describe("GET /api/events SSE", () => {
         messages: [{ id: "message-1", accountId: "account-1", subject: "Verification code", fromName: "Demo", fromAddress: "demo@example.com" }],
       },
     });
-    bus.emit({ type: "mail.synced", payload: { accountId: "account-1", lastSyncedAt: "2026-08-10T00:00:00.000Z" } });
+    bus.emit({ type: "mail.synced", payload: { accountId: "account-1", lastSyncedAt: "2026-08-10T00:00:00.000Z", warningCode: null } });
 
     await vi.waitFor(() => {
       const body = chunks.join("");

@@ -15,6 +15,8 @@ export type Account = {
   lastError: string | null;
   /** Stable server-side classification for lastError, when a sync failed. */
   lastErrorCode?: string | null;
+  /** Non-fatal condition from the most recent successful sync (e.g. 'sync_limit'). */
+  lastSyncWarningCode?: string | null;
   lastSyncedAt: string | null;
   signature: string;
   createdAt: string;
@@ -379,6 +381,8 @@ export type AppSettings = {
   realtimePushEnabled: boolean;
   /** Per-folder mailbox sync cap: 0 syncs the whole mailbox (Gmail-style, no cap). */
   syncMessageLimit: 0 | 200 | 500 | 1000 | 2000 | 5000;
+  /** The cap actually applied, after the SYNC_MESSAGE_LIMIT environment override. */
+  effectiveSyncMessageLimit: number | null;
   closeBehavior: CloseBehavior;
   /** Desktop only: open Nami Mail at login. Browser mode ignores it. */
   launchAtStartup: boolean;
@@ -411,6 +415,7 @@ export const defaultAppSettings: AppSettings = {
   refreshIntervalSeconds: 60,
   realtimePushEnabled: true,
   syncMessageLimit: 2000,
+  effectiveSyncMessageLimit: null,
   closeBehavior: "ask",
   launchAtStartup: false,
   globalShortcutEnabled: false,
