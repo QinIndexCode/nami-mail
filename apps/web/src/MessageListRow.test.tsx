@@ -121,6 +121,14 @@ describe("MessageListRow", () => {
     expect(button.classList.contains("multi-selected")).toBe(true);
     expect(button.classList.contains("recently-read-in-unread")).toBe(true);
     expect(button.getAttribute("data-index")).toBe("3");
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("omits aria-pressed outside selection mode and reports unchecked inside it", () => {
+    renderRow(makeMessage());
+    expect(rowButton().getAttribute("aria-pressed")).toBeNull();
+    renderRow(makeMessage(), { selectionMode: true, multiSelected: false });
+    expect(rowButton().getAttribute("aria-pressed")).toBe("false");
   });
 
   it("forwards clicks, context menus and quick actions to the stable handlers with the row message", () => {

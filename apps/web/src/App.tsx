@@ -592,6 +592,9 @@ export default function App() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selectAllPaged, setSelectAllPaged] = useState(false);
+  // The message the last shift+J/K expansion radiated from; plain J/K
+  // navigation clears it so the next expansion starts from the opened row.
+  const keyboardSelectionAnchorIdRef = useRef<string | null>(null);
   const [batchJob, setBatchJob] = useState<BatchJobSnapshot | null>(null);
   const [batchBusy, setBatchBusy] = useState(false);
   const [attachmentKindFilter, setAttachmentKindFilter] = useState<AttachmentKind | undefined>(undefined);
@@ -3352,6 +3355,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         sendingStatusOpen: state.sendingStatusOpen,
         selectedId,
         selected: Boolean(selected),
+        keyboardSelectionAnchorId: keyboardSelectionAnchorIdRef.current,
         accountsLength: accounts.length,
         filteredMessages,
       });
@@ -3373,12 +3377,16 @@ const emptyMessageList = useMemo(() => (query.trim()
         case "reply": openReply(); return;
         case "reply_all": openReplyAll(); return;
         case "forward": openForward(); return;
-        case "open_message": void openMessage(decision.action.message); return;
+        case "open_message": keyboardSelectionAnchorIdRef.current = null; void openMessage(decision.action.message); return;
+        case "select_range":
+          keyboardSelectionAnchorIdRef.current = decision.action.ids.at(-1) ?? null;
+          selectMessageRange(decision.action.ids);
+          return;
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [accounts.length, state.addOpen, state.calendarOpen, closeReader, state.composeOpen, filteredMessages, state.mobileSidebar, actions.openCompose, openForward, openMessage, openReply, openReplyAll, selected, selectedId, state.contactsOpen, state.templatesOpen, state.accountsOpen, state.sendingStatusOpen, state.settingsOpen, updatePromptOpen, actions.openAddAccount, actions.closeSettings, actions.closeCalendar, actions.closeContacts, actions.closeTemplates, actions.closeAccounts, actions.closeAddAccount, actions.closeMobileSidebar]);
+  }, [accounts.length, state.addOpen, state.calendarOpen, closeReader, state.composeOpen, filteredMessages, state.mobileSidebar, actions.openCompose, openForward, openMessage, openReply, openReplyAll, selectMessageRange, selected, selectedId, state.contactsOpen, state.templatesOpen, state.accountsOpen, state.sendingStatusOpen, state.settingsOpen, updatePromptOpen, actions.openAddAccount, actions.closeSettings, actions.closeCalendar, actions.closeContacts, actions.closeTemplates, actions.closeAccounts, actions.closeAddAccount, actions.closeMobileSidebar]);
 
   const sync = async () => {
     if (!accounts.length || syncing) return;

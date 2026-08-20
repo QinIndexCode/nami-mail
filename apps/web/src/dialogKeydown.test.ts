@@ -21,6 +21,7 @@ function baseSnapshot(overrides: Partial<DialogKeydownSnapshot> = {}): DialogKey
     sendingStatusOpen: false,
     selectedId: null,
     selected: false,
+    keyboardSelectionAnchorId: null,
     accountsLength: 0,
     filteredMessages: [],
     ...overrides,
@@ -289,5 +290,53 @@ describe("dialogKeydownDecision · j/k navigation", () => {
 
   it("does nothing on unbound keys", () => {
     expect(dialogKeydownDecision(key("g"), baseSnapshot({ filteredMessages: three }))).toBeNull();
+  });
+
+  it("selects from the first row on shift+j with no selection or anchor", () => {
+    const decision = dialogKeydownDecision(key("j", { shiftKey: true }), baseSnapshot({ filteredMessages: three }));
+    expect(decision?.action).toEqual({ kind: "select_range", ids: ["m1"] });
+    expect(decision?.preventDefault).toBe(true);
+  });
+
+  it("selects from the last row on shift+k with no selection or anchor", () => {
+    const decision = dialogKeydownDecision(key("k", { shiftKey: true }), baseSnapshot({ filteredMessages: three }));
+    expect(decision?.action).toEqual({ kind: "select_range", ids: ["m3"] });
+  });
+
+  it("expands from the selected message without an anchor", () => {
+    const down = dialogKeydownDecision(key("j", { shiftKey: true }), baseSnapshot({ selectedId: "m2", filteredMessages: three }));
+    expect(down?.action).toEqual({ kind: "select_range", ids: ["m2", "m3"] });
+    const up = dialogKeydownDecision(key("k", { shiftKey: true }), baseSnapshot({ selectedId: "m2", filteredMessages: three }));
+    expect(up?.action).toEqual({ kind: "select_range", ids: ["m1", "m2"] });
+  });
+
+  it("walks the span from the anchor on repeated shift+j", () => {
+    // The decision layer returns the closed span from the anchor to the next
+    // row; App merges it into the selection, so repeated presses read as a
+    // growing selection even though each decision is a fresh span.
+    const first = dialogKeydownDecision(key("j", { shiftKey: true }), baseSnapshot({ filteredMessages: three }));
+    expect(first?.action).toEqual({ kind: "select_range", ids: ["m1"] });
+    const second = dialogKeydownDecision(key("j", { shiftKey: true }), baseSnapshot({ keyboardSelectionAnchorId: "m1", filteredMessages: three }));
+    expect(second?.action).toEqual({ kind: "select_range", ids: ["m1", "m2"] });
+    const third = dialogKeydownDecision(key("j", { shiftKey: true }), baseSnapshot({ keyboardSelectionAnchorId: "m2", filteredMessages: three }));
+    expect(third?.action).toEqual({ kind: "select_range", ids: ["m2", "m3"] });
+  });
+
+  it("expands upward from the anchor with shift+k", () => {
+    const decision = dialogKeydownDecision(key("k", { shiftKey: true }), baseSnapshot({ keyboardSelectionAnchorId: "m3", filteredMessages: three }));
+    expect(decision?.action).toEqual({ kind: "select_range", ids: ["m2", "m3"] });
+  });
+
+  it("falls back to the selected message when the anchor is stale", () => {
+    const decision = dialogKeydownDecision(
+      key("j", { shiftKey: true }),
+      baseSnapshot({ keyboardSelectionAnchorId: "m-ghost", selectedId: "m2", filteredMessages: three }),
+    );
+    expect(decision?.action).toEqual({ kind: "select_range", ids: ["m2", "m3"] });
+  });
+
+  it("does nothing when a shift expansion overruns the list", () => {
+    expect(dialogKeydownDecision(key("j", { shiftKey: true }), baseSnapshot({ keyboardSelectionAnchorId: "m3", filteredMessages: three }))).toBeNull();
+    expect(dialogKeydownDecision(key("k", { shiftKey: true }), baseSnapshot({ keyboardSelectionAnchorId: "m1", filteredMessages: three }))).toBeNull();
   });
 });

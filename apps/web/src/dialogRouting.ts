@@ -27,6 +27,8 @@ export interface DialogKeydownSnapshot {
   sendingStatusOpen: boolean;
   selectedId: string | null;
   selected: boolean;
+  /** The message shift+J/K expands from; null until the first expansion. */
+  keyboardSelectionAnchorId: string | null;
   accountsLength: number;
   filteredMessages: Message[];
 }
@@ -47,7 +49,8 @@ export type DialogKeydownAction =
   | { kind: "reply" }
   | { kind: "reply_all" }
   | { kind: "forward" }
-  | { kind: "open_message"; message: Message };
+  | { kind: "open_message"; message: Message }
+  | { kind: "select_range"; ids: string[] };
 
 export interface DialogKeydownDecision {
   action: DialogKeydownAction;
@@ -93,12 +96,31 @@ export function dialogKeydownDecision(event: KeyboardEvent, snapshot: DialogKeyd
     return { action: { kind: "forward" }, preventDefault: true };
   }
   if (key !== "j" && key !== "k") return null;
+  const anchorIndex = snapshot.keyboardSelectionAnchorId
+    ? snapshot.filteredMessages.findIndex((message) => message.id === snapshot.keyboardSelectionAnchorId)
+    : -1;
   const currentIndex = snapshot.filteredMessages.findIndex((message) => message.id === snapshot.selectedId);
   const direction = key === "j" ? 1 : -1;
-  const nextIndex = currentIndex === -1 ? (direction === 1 ? 0 : snapshot.filteredMessages.length - 1) : currentIndex + direction;
+  // Shift expansions move from the anchor instead of the opened message:
+  // select_range never opens a message, so the anchor is the live position.
+  const positionIndex = event.shiftKey && anchorIndex >= 0 ? anchorIndex : currentIndex;
+  const nextIndex = positionIndex === -1 ? (direction === 1 ? 0 : snapshot.filteredMessages.length - 1) : positionIndex + direction;
   const nextMessage = snapshot.filteredMessages[nextIndex];
-  if (nextMessage) return { action: { kind: "open_message", message: nextMessage }, preventDefault: true };
-  return null;
+  if (!nextMessage) return null;
+  // Shift+J/K selects the span from the expand anchor (or the selected
+  // message, or the first/last row) through the navigation target, entering
+  // batch mode the same way shift+click does.
+  if (event.shiftKey) {
+    const startIndex = anchorIndex >= 0
+      ? anchorIndex
+      : currentIndex >= 0
+        ? currentIndex
+        : direction === 1 ? 0 : snapshot.filteredMessages.length - 1;
+    const [from, to] = startIndex <= nextIndex ? [startIndex, nextIndex] : [nextIndex, startIndex];
+    const ids = snapshot.filteredMessages.slice(from, to + 1).map((message) => message.id);
+    return { action: { kind: "select_range", ids }, preventDefault: true };
+  }
+  return { action: { kind: "open_message", message: nextMessage }, preventDefault: true };
 }
 
 export interface DialogRoutingState {

@@ -57,6 +57,7 @@ function shellKeydown(event: KeyboardEvent): void {
     sendingStatusOpen: state.sendingStatusOpen,
     selectedId: null,
     selected: false,
+    keyboardSelectionAnchorId: null,
     accountsLength: 0,
     filteredMessages: [],
   });
