@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Check, ChevronLeft, ChevronRight, LoaderCircle, Pencil, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { accountHealthIssue, mailErrorMessage } from "./errorPresentation";
+import { accountStatusDotClass } from "./accountHealth";
 import { useI18n, type Translate } from "./i18n";
 import { providerDisplayName } from "./providerOnboarding";
 import type { Account } from "./types";
@@ -385,7 +386,7 @@ export default function AccountsDialog({
                                 <input type="checkbox" checked={selected} onChange={() => toggleSelect(account.id)} aria-label={t("settings.account.selectAriaLabel", { email: account.email })} />
                               </label>
                             )}
-                            <span className={`status-dot ${issue ? (issue.severity === "warning" ? "warning" : "error") : account.status}`} aria-hidden="true" />
+                            <span className={`status-dot ${accountStatusDotClass(issue ?? undefined, account.status)}`} aria-hidden="true" />
                             <div className="accounts-row-copy">
                               <strong>{account.email}</strong>
                               <small className={issue ? (issue.severity === "warning" ? "account-warning" : "account-error") : ""}>{issue ? `${providerName} · ${issue.title}` : providerName}</small>

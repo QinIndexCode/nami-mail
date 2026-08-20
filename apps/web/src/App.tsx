@@ -103,6 +103,7 @@ import { applyMailTranslation, extractMailTextSegments } from "./mailDomTranslat
 import { extractMailVisualStyle, llmTranslationErrorMessage, translationErrorMessage } from "./translationPresentation";
 import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type MessageAttachment, type OutboundAttachment, type OutboundSubmission, type ProviderInfo, type Stats } from "./types";
 import { useDialogFocus } from "./useDialogFocus";
+import { dialogKeydownDecision, useDialogRouting } from "./dialogRouting";
 import { findVerificationCodes } from "./verificationCode";
 import { resolveLocale, type Translate, useI18n } from "./i18n";
 import type { AgentBootstrap } from "./agentTypes";
@@ -508,25 +509,11 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [translationSession, setTranslationSession] = useState<TranslationSession | null>(null);
   const [translationAvailability, setTranslationAvailability] = useState<TranslationAvailability>(isDemo ? "available" : "checking");
-  const [translationTermsAccepted, setTranslationTermsAccepted] = useState<boolean>(() => {
-    try {
-      if (localStorage.getItem("nami-mail:translation-terms-accepted") === "1") return true;
-    } catch { /* localStorage may be unavailable */ }
-    // localStorage is origin-scoped and the desktop app uses an ephemeral port
-    // (PORT=0), so every restart gets a different origin. Fall back to a cookie
-    // which in Chromium is shared across ports on the same domain (127.0.0.1).
-    try {
-      if (document.cookie.split(";").some((c) => c.trim().startsWith("nami-mail-translation-terms=1"))) return true;
-    } catch { /* cookie may be unavailable */ }
-    return false;
-  });
-  const [translationTermsOpen, setTranslationTermsOpen] = useState(() => {
-    if (translationTermsAccepted) return false;
-    // Skip terms dialog in desktop smoke test mode
-    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("desktopSmoke") === "1") return false;
-    return true;
-  });
-  const translationTermsPendingRef = useRef<"free" | "llm" | null>(null);
+  // The shell's modal/panel routing (nine dialogs, attachment preview, mobile
+  // sidebar, translation-terms gate) and the global keydown decisions live in
+  // useDialogRouting; the update prompt, reader-domain, and agent-workspace
+  // routing stay here.
+  const { state, actions, translationTermsPendingRef } = useDialogRouting();
   const [view, setView] = useState<MailView>("inbox");
   const [selectedAccount, setSelectedAccount] = useState("all");
   // The bottom fade strip one-tap expands every account row (and hides the
@@ -594,18 +581,9 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
-  const [composeOpen, setComposeOpen] = useState(false);
-  const [composeDraft, setComposeDraft] = useState<ComposeDraft>({});
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [contactsOpen, setContactsOpen] = useState(false);
-  const [templatesOpen, setTemplatesOpen] = useState(false);
-  const [calendarOpen, setCalendarOpen] = useState(false);
-  const [accountsOpen, setAccountsOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>("idle");
   const [agentProviderSettingsRequestId, setAgentProviderSettingsRequestId] = useState(0);
-  const [sendingStatusOpen, setSendingStatusOpen] = useState(false);
   const [submissions, setSubmissions] = useState<OutboundSubmission[]>([]);
   const [submissionLoading, setSubmissionLoading] = useState(true);
   const [submissionLoadError, setSubmissionLoadError] = useState<string | null>(null);
@@ -635,12 +613,10 @@ export default function App() {
   }, [dateFrom, dateTo]);
   const [attachmentDownloads, setAttachmentDownloads] = useState<Record<string, AttachmentDownloadState>>({});
   const [zipAllPhase, setZipAllPhase] = useState<"idle" | "zipping">("idle");
-  const [attachmentPreview, setAttachmentPreview] = useState<{ message: Message; attachment: MessageAttachment } | null>(null);
   const [recipientDetailsOpen, setRecipientDetailsOpen] = useState(false);
   const [readerMoreOpen, setReaderMoreOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [snoozeCustomUntil, setSnoozeCustomUntil] = useState("");
-  const [mobileSidebar, setMobileSidebar] = useState(false);
   const [toast, setToast] = useState<ToastNotice>(null);
   const [autoReplyNotices, setAutoReplyNotices] = useState<DesktopAutoReplyNotice[]>([]);
   const [fatalError, setFatalError] = useState<MailErrorPresentation | null>(null);
@@ -708,7 +684,7 @@ export default function App() {
   const submissionActiveCount = submissions.filter((submission) => ["pending", "submitting", "submitted"].includes(submission.deliveryStatus)).length;
   const submissionOutstandingCount = submissionAttentionCount + submissionActiveCount;
   const sidebarCounts = useMemo(() => sidebarBadgeCounts(stats), [stats]);
-  useDialogFocus(mobileSidebar, sidebarRef);
+  useDialogFocus(state.mobileSidebar, sidebarRef);
   const showToast = useCallback((message: string, kind: ToastKind = "success", action?: ToastAction) => {
     setToast({ kind, message, action });
   }, []);
@@ -898,7 +874,7 @@ export default function App() {
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 820px)");
     const closeDesktopDrawer = () => {
-      if (!mediaQuery.matches) setMobileSidebar(false);
+      if (!mediaQuery.matches) actions.closeMobileSidebar();
     };
     mediaQuery.addEventListener("change", closeDesktopDrawer);
     closeDesktopDrawer();
@@ -1676,9 +1652,9 @@ const emptyMessageList = useMemo(() => (query.trim()
   }, [refreshTranslationAvailability]);
   const translateSelectedMessage = useCallback(async () => {
     if (!selected || translationState.phase === "loading") return;
-    if (!translationTermsAccepted) {
+    if (!state.translationTermsAccepted) {
       translationTermsPendingRef.current = "free";
-      setTranslationTermsOpen(true);
+      actions.setTranslationTermsOpen(true);
       return;
     }
     const messageId = selected.id;
@@ -1782,12 +1758,12 @@ const emptyMessageList = useMemo(() => (query.trim()
         state: { phase: "error", message: translationErrorMessage(error, t), ...(previous ? { previous } : {}), ...(llmAvailable ? { llmAvailable } : {}) },
       });
     }
-  }, [locale, selected, t, theme, translationState, translationTermsAccepted]);
+  }, [locale, selected, t, theme, translationState, state.translationTermsAccepted]);
   const translateSelectedMessageWithLlm = useCallback(async () => {
     if (!selected || translationState.phase === "loading") return;
-    if (!translationTermsAccepted) {
+    if (!state.translationTermsAccepted) {
       translationTermsPendingRef.current = "llm";
-      setTranslationTermsOpen(true);
+      actions.setTranslationTermsOpen(true);
       return;
     }
     const messageId = selected.id;
@@ -1862,7 +1838,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     } finally {
       if (llmTranslationAbortRef.current === controller) llmTranslationAbortRef.current = null;
     }
-  }, [locale, selected, t, translationState, translationTermsAccepted]);
+  }, [locale, selected, t, translationState, state.translationTermsAccepted]);
   const showSelectedTranslation = useCallback(() => {
     setTranslationSession((current) => {
       if (!selected || !current || current.messageId !== selected.id || current.targetLocale !== locale || current.state.phase !== "ready") {
@@ -1890,15 +1866,15 @@ const emptyMessageList = useMemo(() => (query.trim()
     // Also set a cookie so the acceptance survives port changes across restarts
     // (Chromium shares cookies across ports on the same domain).
     try { document.cookie = "nami-mail-translation-terms=1; max-age=31536000; path=/; SameSite=Lax"; } catch { /* cookie may be unavailable */ }
-    setTranslationTermsAccepted(true);
-    setTranslationTermsOpen(false);
+    actions.setTranslationTermsAccepted(true);
+    actions.setTranslationTermsOpen(false);
     const pending = translationTermsPendingRef.current;
     translationTermsPendingRef.current = null;
     if (pending === "free") void translateSelectedMessage();
     else if (pending === "llm") void translateSelectedMessageWithLlm();
   }, [translateSelectedMessage, translateSelectedMessageWithLlm]);
   const declineTranslationTerms = useCallback(() => {
-    setTranslationTermsOpen(false);
+    actions.setTranslationTermsOpen(false);
     const pending = translationTermsPendingRef.current;
     translationTermsPendingRef.current = null;
     if (!pending) {
@@ -1923,11 +1899,6 @@ const emptyMessageList = useMemo(() => (query.trim()
     if (viewRef.current === "unread") setMessageTotal((total) => Math.max(0, total + (nextSeen ? -1 : 1)));
   }, [accounts, stats]);
 
-  const openCompose = useCallback((draft: ComposeDraft = {}) => {
-    setComposeDraft(draft);
-    setComposeOpen(true);
-  }, []);
-
   const openMessage = useCallback(async (message: Message) => {
     const account = accounts.find((item) => item.id === message.accountId);
     const isDraft = account?.folders.some((folder) => folder.path === message.mailbox && folder.specialUse === "\\Drafts");
@@ -1945,7 +1916,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           showToast(mailErrorToastMessage(error, t("mail.error.readDraftAttachments"), t), "error");
         }
       }
-      openCompose({
+      actions.openCompose({
         accountId: message.accountId,
         to: message.to.map((recipient) => recipient.address).filter(Boolean).join(", "),
         cc: message.cc.map((recipient) => recipient.address).filter(Boolean).join(", "),
@@ -1979,7 +1950,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         });
       }
     }
-  }, [accounts, applyLocalSeenChange, openCompose, showToast, t, updateUnreadViewRecentlyRead]);
+  }, [accounts, applyLocalSeenChange, actions.openCompose, showToast, t, updateUnreadViewRecentlyRead]);
 
   const closeReader = useCallback((restoreFocus = false) => {
     const messageId = lastOpenedMessageIdRef.current;
@@ -2058,7 +2029,7 @@ const emptyMessageList = useMemo(() => (query.trim()
   const openReply = useCallback(() => {
     if (!selected) return;
     const reply = buildReplyDraft(selected, [...accounts.map((account) => account.email), selected.accountEmail]);
-    openCompose({
+    actions.openCompose({
       accountId: selected.accountId,
       to: reply.to.join(", "),
       cc: reply.cc.join(", "),
@@ -2067,12 +2038,12 @@ const emptyMessageList = useMemo(() => (query.trim()
       references: reply.references,
       text: replyBody(selected, accounts, locale, t, safeHtml),
     });
-  }, [accounts, locale, openCompose, safeHtml, selected, t]);
+  }, [accounts, locale, actions.openCompose, safeHtml, selected, t]);
 
   const openReplyAll = useCallback(() => {
     if (!selected) return;
     const reply = buildReplyDraft(selected, [...accounts.map((account) => account.email), selected.accountEmail], true);
-    openCompose({
+    actions.openCompose({
       accountId: selected.accountId,
       to: reply.to.join(", "),
       cc: reply.cc.join(", "),
@@ -2081,7 +2052,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       references: reply.references,
       text: replyBody(selected, accounts, locale, t, safeHtml),
     });
-  }, [accounts, locale, openCompose, safeHtml, selected, t]);
+  }, [accounts, locale, actions.openCompose, safeHtml, selected, t]);
 
   const openForward = useCallback(() => {
     if (!selected) return;
@@ -2090,14 +2061,14 @@ const emptyMessageList = useMemo(() => (query.trim()
       selected.textBody || textFromSanitizedMailHtml(safeHtml) || selected.snippet,
     );
     const signature = accounts.find((account) => account.id === selected.accountId)?.signature ?? "";
-    openCompose({
+    actions.openCompose({
       accountId: selected.accountId,
       to: forward.to.join(", "),
       cc: forward.cc.join(", "),
       subject: forward.subject,
       text: signature.trim() ? `${forward.text}\n\n${signature.trim()}` : forward.text,
     });
-  }, [accounts, openCompose, safeHtml, selected]);
+  }, [accounts, actions.openCompose, safeHtml, selected]);
 
   const moveSelectedMessage = async (target: MoveTarget) => {
     if (!selected || selectedRemoteActionsBlocked || (target === "archive" && selectedIsArchived)) return;
@@ -3040,7 +3011,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       showToast(t("mail.attachment.previewDemoUnavailable"), "info");
       return;
     }
-    setAttachmentPreview({ message, attachment });
+    actions.openAttachmentPreview(message, attachment);
   };
 
   const removeAccountFromView = useCallback((accountId: string) => {
@@ -3153,8 +3124,8 @@ const emptyMessageList = useMemo(() => (query.trim()
     setSelectedFolder("");
     setSelectedId(null);
     setRecipientDetailsOpen(false);
-    setMobileSidebar(false);
-  }, [clearUnreadViewRecentlyRead]);
+    actions.closeMobileSidebar();
+  }, [clearUnreadViewRecentlyRead, actions.closeMobileSidebar]);
 
   useEffect(() => {
     const unlockAudio = () => {
@@ -3198,7 +3169,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       void openNotifiedMessage(messageId);
     });
     const unsubscribeComposeNew = bridge.onComposeNew?.((mailtoUrl) => {
-      openCompose(parseMailtoUrl(mailtoUrl ?? "") ?? {});
+      actions.openCompose(parseMailtoUrl(mailtoUrl ?? "") ?? {});
     });
     const unsubscribeOpenInbox = bridge.onOpenInbox?.(() => {
       chooseView("inbox");
@@ -3224,7 +3195,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       unsubscribeAutoReply?.();
       unsubscribeConfirmationResult?.();
     };
-  }, [chooseView, openCompose, openNotifiedMessage, settings.notificationSound, showToast, silentRefresh, t]);
+  }, [chooseView, actions.openCompose, openNotifiedMessage, settings.notificationSound, showToast, silentRefresh, t]);
 
   // A mailto link anywhere in the document (sidebar, message body, agent
   // answer) opens a pre-filled compose window instead of the OS default
@@ -3238,11 +3209,11 @@ const emptyMessageList = useMemo(() => (query.trim()
       const href = anchor.getAttribute("href") ?? "";
       if (!href.toLowerCase().startsWith("mailto:")) return;
       event.preventDefault();
-      openCompose(parseMailtoUrl(href) ?? {});
+      actions.openCompose(parseMailtoUrl(href) ?? {});
     };
     document.addEventListener("click", handleMailtoClick);
     return () => document.removeEventListener("click", handleMailtoClick);
-  }, [openCompose]);
+  }, [actions.openCompose]);
 
   // Plain web sessions have no desktop bridge to push auto-reply events, so
   // poll the pending list and surface newly drafted replies as toasts. The
@@ -3368,66 +3339,46 @@ const emptyMessageList = useMemo(() => (query.trim()
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target;
-      if (updatePromptOpen) {
-        if (event.key === "Escape") event.preventDefault();
-        return;
-      }
-      const isTyping = target instanceof HTMLInputElement
-        || target instanceof HTMLTextAreaElement
-        || target instanceof HTMLSelectElement
-        || Boolean(target instanceof Element && target.closest(".select-control"))
-        || Boolean(target instanceof HTMLElement && target.isContentEditable);
-      if (event.key === "Escape") {
-        if (settingsOpen) setSettingsOpen(false);
-        else if (calendarOpen) setCalendarOpen(false);
-        else if (contactsOpen) setContactsOpen(false);
-        else if (templatesOpen) setTemplatesOpen(false);
-        else if (accountsOpen) setAccountsOpen(false);
-        else if (composeOpen) return;
-        else if (addOpen) setAddOpen(false);
-        else if (mobileSidebar) setMobileSidebar(false);
-        else if (selectedId) closeReader(true);
-        return;
-      }
-      if (settingsOpen || calendarOpen || contactsOpen || templatesOpen || accountsOpen || sendingStatusOpen || composeOpen || addOpen || mobileSidebar) return;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-        return;
-      }
-      if (isTyping || event.metaKey || event.ctrlKey || event.altKey) return;
-      const key = event.key.toLowerCase();
-      if (key === "n") {
-        event.preventDefault();
-        if (accounts.length) openCompose();
-        else setAddOpen(true);
-        return;
-      }
-      if (key === "r" && selected) {
-        event.preventDefault();
-        if (event.shiftKey) openReplyAll();
-        else openReply();
-        return;
-      }
-      if (key === "f" && selected) {
-        event.preventDefault();
-        openForward();
-        return;
-      }
-      if (key !== "j" && key !== "k") return;
-      const currentIndex = filteredMessages.findIndex((message) => message.id === selectedId);
-      const direction = key === "j" ? 1 : -1;
-      const nextIndex = currentIndex === -1 ? (direction === 1 ? 0 : filteredMessages.length - 1) : currentIndex + direction;
-      const nextMessage = filteredMessages[nextIndex];
-      if (nextMessage) {
-        event.preventDefault();
-        void openMessage(nextMessage);
+      const decision = dialogKeydownDecision(event, {
+        updatePromptOpen,
+        settingsOpen: state.settingsOpen,
+        calendarOpen: state.calendarOpen,
+        contactsOpen: state.contactsOpen,
+        templatesOpen: state.templatesOpen,
+        accountsOpen: state.accountsOpen,
+        composeOpen: state.composeOpen,
+        addOpen: state.addOpen,
+        mobileSidebar: state.mobileSidebar,
+        sendingStatusOpen: state.sendingStatusOpen,
+        selectedId,
+        selected: Boolean(selected),
+        accountsLength: accounts.length,
+        filteredMessages,
+      });
+      if (!decision) return;
+      if (decision.preventDefault) event.preventDefault();
+      switch (decision.action.kind) {
+        case "absorb": return;
+        case "close_settings": actions.closeSettings(); return;
+        case "close_calendar": actions.closeCalendar(); return;
+        case "close_contacts": actions.closeContacts(); return;
+        case "close_templates": actions.closeTemplates(); return;
+        case "close_accounts": actions.closeAccounts(); return;
+        case "close_add_account": actions.closeAddAccount(); return;
+        case "close_mobile_sidebar": actions.closeMobileSidebar(); return;
+        case "close_reader": closeReader(true); return;
+        case "focus_search": searchInputRef.current?.focus(); return;
+        case "compose": actions.openCompose(); return;
+        case "add_account": actions.openAddAccount(); return;
+        case "reply": openReply(); return;
+        case "reply_all": openReplyAll(); return;
+        case "forward": openForward(); return;
+        case "open_message": void openMessage(decision.action.message); return;
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [accounts.length, addOpen, calendarOpen, closeReader, composeOpen, filteredMessages, mobileSidebar, openCompose, openForward, openMessage, openReply, openReplyAll, selected, selectedId, contactsOpen, templatesOpen, accountsOpen, sendingStatusOpen, settingsOpen, updatePromptOpen]);
+  }, [accounts.length, state.addOpen, state.calendarOpen, closeReader, state.composeOpen, filteredMessages, state.mobileSidebar, actions.openCompose, openForward, openMessage, openReply, openReplyAll, selected, selectedId, state.contactsOpen, state.templatesOpen, state.accountsOpen, state.sendingStatusOpen, state.settingsOpen, updatePromptOpen, actions.openAddAccount, actions.closeSettings, actions.closeCalendar, actions.closeContacts, actions.closeTemplates, actions.closeAccounts, actions.closeAddAccount, actions.closeMobileSidebar]);
 
   const sync = async () => {
     if (!accounts.length || syncing) return;
@@ -3492,7 +3443,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     setView("inbox");
     setSelectedId(null);
     setRecipientDetailsOpen(false);
-    setMobileSidebar(false);
+    actions.closeMobileSidebar();
   };
 
   return (
@@ -3511,11 +3462,11 @@ const emptyMessageList = useMemo(() => (query.trim()
       <main className={`mail-shell${selected ? " has-open-message" : ""}${agentOpen ? " has-agent-open" : ""}`} data-agent-phase={agentPhase}>
         <aside
           ref={sidebarRef}
-          className={`sidebar ${mobileSidebar ? "open" : ""}`}
-          role={mobileSidebar ? "dialog" : undefined}
-          aria-modal={mobileSidebar ? true : undefined}
-          aria-label={mobileSidebar ? t("navigation.mail") : undefined}
-          tabIndex={mobileSidebar ? -1 : undefined}
+          className={`sidebar ${state.mobileSidebar ? "open" : ""}`}
+          role={state.mobileSidebar ? "dialog" : undefined}
+          aria-modal={state.mobileSidebar ? true : undefined}
+          aria-label={state.mobileSidebar ? t("navigation.mail") : undefined}
+          tabIndex={state.mobileSidebar ? -1 : undefined}
         >
           <div className="brand-row">
             <div className="brand-mark" aria-hidden="true">
@@ -3523,10 +3474,10 @@ const emptyMessageList = useMemo(() => (query.trim()
               <img className="brand-mark-image brand-mark-dark" src="/brand/mark-dark.png" alt="" />
             </div>
             <div><strong>Nami Mail</strong><span>{t("app.localMailSpace")}</span></div>
-            <IconButton label={t("navigation.closeMenu")} className="mobile-only" onClick={() => setMobileSidebar(false)}><X size={18} /></IconButton>
+            <IconButton label={t("navigation.closeMenu")} className="mobile-only" onClick={() => actions.closeMobileSidebar()}><X size={18} /></IconButton>
           </div>
 
-          <button className="compose-button" type="button" onClick={() => { setMobileSidebar(false); if (accounts.length) openCompose(); else setAddOpen(true); }}><PenLine size={18} />{t("mail.compose")}</button>
+          <button className="compose-button" type="button" onClick={() => { actions.closeMobileSidebar(); if (accounts.length) actions.openCompose(); else actions.openAddAccount(); }}><PenLine size={18} />{t("mail.compose")}</button>
 
           <nav className={`nav-section${selectedAccount === "all" && !accountsExpanded ? "" : " collapsed"}`} aria-label={t("navigation.mailViews")}>
             <button aria-pressed={view === "inbox" && !selectedFolder} className={view === "inbox" && !selectedFolder ? "active" : ""} onClick={() => chooseView("inbox")}><Inbox size={18} /><span>{t("mail.unifiedInbox")}</span><em className="sidebar-count" data-tooltip={t("mail.inboxCountTooltip")}>{sidebarCounts.inbox || ""}</em></button>
@@ -3539,9 +3490,9 @@ const emptyMessageList = useMemo(() => (query.trim()
             <button className={selectedFolder === sentFolder?.path ? "active" : ""} disabled={!sentFolder} onClick={() => sentFolder && chooseFolder(sentFolder.path)}><Send size={18} /><span>{t("mail.sent")}</span></button>
           </nav>
 
-          <div className="accounts-heading"><span>{t("mail.accounts")}</span><IconButton label={t("account.add")} onClick={() => { setMobileSidebar(false); setAddOpen(true); }}><Plus size={16} /></IconButton></div>
+          <div className="accounts-heading"><span>{t("mail.accounts")}</span><IconButton label={t("account.add")} onClick={() => { actions.closeMobileSidebar(); actions.openAddAccount(); }}><Plus size={16} /></IconButton></div>
           <div className="account-list" ref={accountListRef}>
-            <button aria-pressed={selectedAccount === "all"} className={selectedAccount === "all" ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount("all"); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}><span className="account-avatar all"><Layers3 size={14} /></span><span className="account-copy"><strong>{t("mail.allAccounts")}</strong><small>{t("mail.accountCount", { count: accounts.length })}</small></span></button>
+            <button aria-pressed={selectedAccount === "all"} className={selectedAccount === "all" ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount("all"); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); actions.closeMobileSidebar(); }}><span className="account-avatar all"><Layers3 size={14} /></span><span className="account-copy"><strong>{t("mail.allAccounts")}</strong><small>{t("mail.accountCount", { count: accounts.length })}</small></span></button>
             {accounts.map((account) => {
               const issue = accountIssues.get(account.id);
               const providerName = localizedProviderName(account);
@@ -3551,7 +3502,7 @@ const emptyMessageList = useMemo(() => (query.trim()
               // Expanded mode shows every row again for one-tap switching.
               const collapsed = !accountsExpanded && selectedAccount !== "all" && selectedAccount !== account.id;
               return (
-                <button key={account.id} aria-pressed={selectedAccount === account.id} aria-hidden={collapsed} tabIndex={collapsed ? -1 : undefined} className={`${selectedAccount === account.id ? "active" : ""}${collapsed ? " hidden" : ""}`} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); setMobileSidebar(false); }}>
+                <button key={account.id} aria-pressed={selectedAccount === account.id} aria-hidden={collapsed} tabIndex={collapsed ? -1 : undefined} className={`${selectedAccount === account.id ? "active" : ""}${collapsed ? " hidden" : ""}`} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); actions.closeMobileSidebar(); }}>
                   <CustomAvatar name={account.email} address={account.email} tone={accountTone(account.email)} className="account-avatar" />
                   <span className="account-copy"><strong>{account.email.split("@")[0]}</strong><small>{accountShowsFreshness(issue) ? t("mail.accountFreshness", { provider: providerName, freshness }) : issue!.title}</small></span>
                   <span className={`status-dot ${accountStatusDotClass(issue, account.status)}`} aria-hidden="true" />
@@ -3603,7 +3554,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         <div className="mail-workspace">
         <section className="message-column">
           <header className="column-header">
-            <IconButton label={t("navigation.openMenu")} className="mobile-only" buttonRef={mobileMenuButtonRef} onClick={() => setMobileSidebar(true)}><Menu size={19} /></IconButton>
+            <IconButton label={t("navigation.openMenu")} className="mobile-only" buttonRef={mobileMenuButtonRef} onClick={() => actions.openMobileSidebar()}><Menu size={19} /></IconButton>
             <div><span className="eyebrow">{selectedAccount === "all" ? t("mail.unifiedMailbox") : selectedAccountRecord ? localizedProviderName(selectedAccountRecord).toUpperCase() : ""}</span><h1>{query.trim() ? t("mail.search.resultsTitle", { query: query.trim() }) : view === "unread" ? t("mail.unread") : view === "starred" ? t("mail.starred") : view === "archived" ? t("mail.action.archive") : view === "snoozed" ? t("mail.snoozed") : view === "attachments" ? t("mail.attachments") : selectedFolderRecord?.name || t("mail.inbox")}</h1></div>
             <div className={`search-wrap${searchOpen ? " expanded" : ""}`} ref={searchWrapRef}><IconButton label={searchOpen ? t("mail.search.collapse") : t("mail.search")} className="search-toggle" onClick={() => setSearchOpen((open) => !open)} expanded={searchOpen}><Search size={17} /></IconButton><label className="visually-hidden" htmlFor="mail-search">{t("mail.search")}</label><input id="mail-search" ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("mail.searchPlaceholder")} />{query && <IconButton label={t("mail.clearSearch")} className="search-clear" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}><X size={15} /></IconButton>}</div>
             <div className="list-filter-wrap" ref={listToolbarRef}>
@@ -3646,7 +3597,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                 </div>
               )}
             </div>
-            <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={selectionMode ? t("mail.selection.done") : t("mail.selection.select")} className={selectionMode ? "selection-toggle active" : "selection-toggle"} onClick={toggleSelectionMode} disabled={!accounts.length}><SquareCheckBig size={17} /></IconButton><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? openCompose() : setAddOpen(true)}><PenLine size={17} /></IconButton>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton><button ref={agentLaunchButtonRef} className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button></div>
+            <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={selectionMode ? t("mail.selection.done") : t("mail.selection.select")} className={selectionMode ? "selection-toggle active" : "selection-toggle"} onClick={toggleSelectionMode} disabled={!accounts.length}><SquareCheckBig size={17} /></IconButton><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? actions.openCompose() : actions.openAddAccount()}><PenLine size={17} /></IconButton>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton><button ref={agentLaunchButtonRef} className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button></div>
           </header>
 
           {healthAlert && healthAlert.until > Date.now() && (
@@ -3654,7 +3605,7 @@ const emptyMessageList = useMemo(() => (query.trim()
               until={healthAlert.until}
               issueCount={accountsNeedingAttention.length}
               problemTitle={primaryAccountNeedingAttention && primaryAccountIssue ? t("mail.accountProblem", { email: primaryAccountNeedingAttention.email, title: primaryAccountIssue.title }) : t("mail.otherAccountsAvailable")}
-              onShowReasons={() => { setAccountsOpen(true); dismissHealthAlert(); }}
+              onShowReasons={() => { actions.openAccounts(); dismissHealthAlert(); }}
               onExpire={dismissHealthAlert}
             />
           )}
@@ -3703,7 +3654,7 @@ const emptyMessageList = useMemo(() => (query.trim()
             messageListRef={messageListRef}
             messageButtonRefs={messageButtonRefs}
             onReconnect={load}
-            onAddAccount={() => setAddOpen(true)}
+            onAddAccount={() => actions.openAddAccount()}
             onClearSearch={clearSearch}
             onOpenMessage={openMessage}
             onToggleSelected={toggleMessageSelected}
@@ -3877,7 +3828,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                 )}
                 <footer className="quick-reply"><CustomAvatar name={selected.accountEmail} address={selected.accountEmail} tone={accountTone(selected.accountEmail)} size="small" /><button onClick={openReply}>{t("mail.reader.replyTo", { sender: selected.from.name || selected.from.address })}</button></footer>
               </article>
-              {attachmentPreview && <Suspense fallback={null}><AttachmentPreviewModal messageId={attachmentPreview.message.id} attachment={attachmentPreview.attachment} onClose={() => setAttachmentPreview(null)} /></Suspense>}
+              {state.attachmentPreview && <Suspense fallback={null}><AttachmentPreviewModal messageId={state.attachmentPreview.message.id} attachment={state.attachmentPreview.attachment} onClose={() => actions.closeAttachmentPreview()} /></Suspense>}
               </div>
             </ErrorBoundary>
           ) : (
@@ -3905,34 +3856,34 @@ const emptyMessageList = useMemo(() => (query.trim()
           void api.message(messageId).then((fetched) => openMessage(fetched)).catch((error: unknown) => showToast(mailErrorToastMessage(error, t("mail.error.openNew"), t), "error"));
         }} /></Suspense>}
         <aside className="icon-rail" aria-label={t("navigation.management")}>
-          <IconButton label={t("settings.title")} onClick={() => { setMobileSidebar(false); setSettingsOpen(true); }}><Settings size={18} /></IconButton>
-          <IconButton label={t("sending.title")} className={submissionAttentionCount ? "attention" : ""} onClick={() => { setMobileSidebar(false); setSendingStatusOpen(true); void refreshSubmissions(accounts, { silent: true }); }}><ListChecks size={18} />{submissionOutstandingCount > 0 && <span className="rail-badge" aria-hidden="true">{submissionOutstandingCount}</span>}</IconButton>
+          <IconButton label={t("settings.title")} onClick={() => { actions.closeMobileSidebar(); actions.openSettings(); }}><Settings size={18} /></IconButton>
+          <IconButton label={t("sending.title")} className={submissionAttentionCount ? "attention" : ""} onClick={() => { actions.closeMobileSidebar(); actions.openSendingStatus(); void refreshSubmissions(accounts, { silent: true }); }}><ListChecks size={18} />{submissionOutstandingCount > 0 && <span className="rail-badge" aria-hidden="true">{submissionOutstandingCount}</span>}</IconButton>
           <span className="icon-rail-divider" aria-hidden="true" />
-          <IconButton label={t("calendar.title")} onClick={() => { setMobileSidebar(false); setCalendarOpen(true); if (!isDemo) calendarCache.warm(); }}><Calendar size={18} /></IconButton>
-          <IconButton label={t("settings.contacts.title")} onClick={() => { setMobileSidebar(false); setContactsOpen(true); if (!isDemo) contactsCache.warm(); }}><Users size={18} /></IconButton>
-          <IconButton label={t("settings.templates.title")} onClick={() => { setMobileSidebar(false); setTemplatesOpen(true); if (!isDemo) templatesCache.warm(); }}><LayoutTemplate size={18} /></IconButton>
-          <IconButton label={t("settings.account.title")} onClick={() => { setMobileSidebar(false); setAccountsOpen(true); }}><AtSign size={18} /></IconButton>
+          <IconButton label={t("calendar.title")} onClick={() => { actions.closeMobileSidebar(); actions.openCalendar(); if (!isDemo) calendarCache.warm(); }}><Calendar size={18} /></IconButton>
+          <IconButton label={t("settings.contacts.title")} onClick={() => { actions.closeMobileSidebar(); actions.openContacts(); if (!isDemo) contactsCache.warm(); }}><Users size={18} /></IconButton>
+          <IconButton label={t("settings.templates.title")} onClick={() => { actions.closeMobileSidebar(); actions.openTemplates(); if (!isDemo) templatesCache.warm(); }}><LayoutTemplate size={18} /></IconButton>
+          <IconButton label={t("settings.account.title")} onClick={() => { actions.closeMobileSidebar(); actions.openAccounts(); }}><AtSign size={18} /></IconButton>
         </aside>
       </main>
 
-      {addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} existingAccounts={accounts} onClose={() => setAddOpen(false)} onAdded={handleAccountAdded} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
-      {composeOpen && <ComposeModal accounts={accounts} draft={composeDraft} onClose={() => setComposeOpen(false)} onSent={(message, kind, undoDraft) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), run: () => { window.setTimeout(() => { setComposeDraft(undoDraft); setComposeOpen(true); }, 0); } }); else showToast(message, kind); }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} />}
-      {settingsOpen && <Suspense fallback={null}><SettingsModal settings={settings} accounts={accounts} onClose={() => setSettingsOpen(false)} onSettingsChange={applySettings} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} onOpenAgentProviderSettings={() => { setSettingsOpen(false); setAgentProviderSettingsRequestId((requestId) => requestId + 1); openAgentWorkspace(); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
-      {contactsOpen && <Suspense fallback={null}><ManagementDialogs demoMode={isDemo} onClose={() => setContactsOpen(false)} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      {templatesOpen && <Suspense fallback={null}><TemplatesDialog demoMode={isDemo} onClose={() => setTemplatesOpen(false)} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      {calendarOpen && <Suspense fallback={null}><CalendarDialog demoMode={isDemo} onClose={() => setCalendarOpen(false)} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      {accountsOpen && <Suspense fallback={null}><AccountsDialog accounts={accounts} demoMode={isDemo} onClose={() => setAccountsOpen(false)} onAccountRemoved={removeAccountFromView} onAccountSignatureChanged={updateAccountSignatureInState} onAccountSync={retryAccountSync} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      {sendingStatusOpen && <Suspense fallback={null}><SendingStatusModal accounts={accounts} submissions={submissions} loading={submissionLoading} loadError={submissionLoadError} onClose={() => setSendingStatusOpen(false)} onRefresh={() => refreshSubmissions(accounts)} onSyncAccount={async (accountId) => { await retryAccountSync(accountId); }} onCreateNewMessage={(draft) => { setSendingStatusOpen(false); openCompose(draft); }} onCancelScheduled={cancelScheduledSubmission} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      <Suspense fallback={null}><TranslationTermsDialog open={translationTermsOpen} onAccept={acceptTranslationTerms} onDecline={declineTranslationTerms} /></Suspense>
+      {state.addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} existingAccounts={accounts} onClose={() => actions.closeAddAccount()} onAdded={handleAccountAdded} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
+      {state.composeOpen && <ComposeModal accounts={accounts} draft={state.composeDraft} onClose={() => actions.closeCompose()} onSent={(message, kind, undoDraft) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), run: () => { window.setTimeout(() => { actions.openCompose(undoDraft); }, 0); } }); else showToast(message, kind); }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} />}
+      {state.settingsOpen && <Suspense fallback={null}><SettingsModal settings={settings} accounts={accounts} onClose={() => actions.closeSettings()} onSettingsChange={applySettings} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} onOpenAgentProviderSettings={() => { actions.closeSettings(); setAgentProviderSettingsRequestId((requestId) => requestId + 1); openAgentWorkspace(); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
+      {state.contactsOpen && <Suspense fallback={null}><ManagementDialogs demoMode={isDemo} onClose={() => actions.closeContacts()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {state.templatesOpen && <Suspense fallback={null}><TemplatesDialog demoMode={isDemo} onClose={() => actions.closeTemplates()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {state.calendarOpen && <Suspense fallback={null}><CalendarDialog demoMode={isDemo} onClose={() => actions.closeCalendar()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {state.accountsOpen && <Suspense fallback={null}><AccountsDialog accounts={accounts} demoMode={isDemo} onClose={() => actions.closeAccounts()} onAccountRemoved={removeAccountFromView} onAccountSignatureChanged={updateAccountSignatureInState} onAccountSync={retryAccountSync} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {state.sendingStatusOpen && <Suspense fallback={null}><SendingStatusModal accounts={accounts} submissions={submissions} loading={submissionLoading} loadError={submissionLoadError} onClose={() => actions.closeSendingStatus()} onRefresh={() => refreshSubmissions(accounts)} onSyncAccount={async (accountId) => { await retryAccountSync(accountId); }} onCreateNewMessage={(draft) => { actions.closeSendingStatus(); actions.openCompose(draft); }} onCancelScheduled={cancelScheduledSubmission} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      <Suspense fallback={null}><TranslationTermsDialog open={state.translationTermsOpen} onAccept={acceptTranslationTerms} onDecline={declineTranslationTerms} /></Suspense>
       <Suspense fallback={null}><StartupUpdatePrompt
         snapshot={desktopUpdateStatus}
         onSnapshot={setDesktopUpdateStatus}
-        defer={addOpen || composeOpen || settingsOpen || contactsOpen || templatesOpen || calendarOpen || accountsOpen || sendingStatusOpen || mobileSidebar || syncing}
+        defer={state.anyModalOrSidebar || syncing}
         onVisibilityChange={setUpdatePromptOpen}
       /></Suspense>
-      {mobileSidebar && <button className="mobile-scrim" aria-label={t("navigation.closeMenu")} onClick={() => setMobileSidebar(false)} />}
+      {state.mobileSidebar && <button className="mobile-scrim" aria-label={t("navigation.closeMenu")} onClick={() => actions.closeMobileSidebar()} />}
       {toast && <div className={`toast ${toast.kind}`} role={toast.kind === "error" || toast.kind === "warning" ? "alert" : "status"} aria-atomic="true"><span className="toast-icon" aria-hidden="true">{toast.kind === "error" || toast.kind === "warning" ? <CircleAlert size={17} /> : toast.kind === "info" ? <Sparkles size={17} /> : <Check size={17} />}</span><span className="toast-message">{toast.message}</span>{toast.action && <button className="toast-action" type="button" onClick={() => { setToast(null); toast.action?.run(); }}>{toast.action.label}</button>}<button className="toast-dismiss" type="button" aria-label={t("common.closeNotification")} data-tooltip={t("common.closeNotification")} onClick={() => setToast(null)}><X size={16} /></button></div>}
-      {autoReplyNotices.length > 0 && <AutoReplyToastStack behindModal={addOpen || composeOpen || settingsOpen || contactsOpen || templatesOpen || calendarOpen || accountsOpen || sendingStatusOpen} notices={autoReplyNotices} onDismiss={(notice) => setAutoReplyNotices((items) => items.filter((item) => autoReplyNoticeKey(item) !== autoReplyNoticeKey(notice)))} />}
+      {autoReplyNotices.length > 0 && <AutoReplyToastStack behindModal={state.anyModalOpen} notices={autoReplyNotices} onDismiss={(notice) => setAutoReplyNotices((items) => items.filter((item) => autoReplyNoticeKey(item) !== autoReplyNoticeKey(notice)))} />}
       </div>
     </div>
   );
