@@ -9901,6 +9901,7 @@ color:var(--danger)
 max-height:0;
 margin:0 8px;
 overflow:hidden;
+flex:none;
 transition:max-height .22s cubic-bezier(.2,.8,.2,1),margin .22s cubic-bezier(.2,.8,.2,1)
 }
 .agent-selection-bar-wrap.open
