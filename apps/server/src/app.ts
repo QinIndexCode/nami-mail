@@ -423,6 +423,10 @@ const agentMessageSchema = z.object({
     // so a truncated file still signals its marker via length.
     text: z.string().max(64_000).optional(),
   }).strict()).max(10).optional(),
+  references: z.array(z.object({
+    id: z.string().trim().min(1).max(128),
+    subject: z.string().trim().max(500).optional(),
+  }).strict()).max(8).optional(),
 }).strict();
 
 const agentConversationQuerySchema = z.object({

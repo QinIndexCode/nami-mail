@@ -188,7 +188,6 @@ describe("slash command expansion", () => {
         expect.stringContaining('"发票 from:alice"'),
         6,
         expect.anything(),
-        undefined,
       );
     } finally {
       await closeFixture(value);

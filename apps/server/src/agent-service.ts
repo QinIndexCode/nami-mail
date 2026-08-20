@@ -32,6 +32,7 @@ import {
 import { AgentRuntime, createPermissionEngine, createToolRegistry, type ToolRegistry } from "@nami/agent-core";
 import type { DatabaseHandle } from "./db.js";
 import { getAppSettings, type AgentAccessLevel, type AppSettings } from "./settings.js";
+import { messagePayloadForRow, type MessagePayload, type MessageStorageRow } from "./message-storage.js";
 import { EncryptedAgentAuditStore } from "./agent/audit.js";
 import { EncryptedConversationStore, type ConversationDescriptor, type DecryptedConversationRecord } from "./agent/conversations.js";
 import type { AccountLifecycleStore} from "./agent/lifecycle.js";
@@ -226,6 +227,9 @@ export type AgentMessage = {
   /** Attachments the user attached to this message; persisted so the file chips
    *  survive a page reload. */
   attachments?: AgentMessageAttachmentInput[];
+  /** Referenced mail the user explicitly pulled into the conversation; persisted
+   *  so the chips survive a page reload and the excerpts stay in later turns. */
+  references?: AgentMessageReference[];
 };
 
 export type AgentConversation = AgentConversationSummary & {
@@ -262,6 +266,24 @@ export type AgentMessageAttachmentInput = {
   text?: string;
 };
 
+/** A mail message the user explicitly pulled into the conversation as context.
+ *  Unlike the scope (the retrieval boundary), references are user-chosen
+ *  excerpts: they ride along in the transcript so the model sees them in every
+ *  subsequent turn, independent of which accounts the agent may search. */
+export type AgentMessageReference = {
+  id: string;
+  subject?: string;
+};
+
+/** Fully resolved reference content, injected into the provider prompt. */
+export type ResolvedAgentMessageReference = {
+  id: string;
+  subject: string;
+  sender: string;
+  sentAt: string;
+  excerpt: string;
+};
+
 export type AgentMessageInput = {
   content: string;
   providerId: string;
@@ -272,6 +294,7 @@ export type AgentMessageInput = {
   };
   quote?: string;
   attachments?: readonly AgentMessageAttachmentInput[];
+  references?: readonly AgentMessageReference[];
 };
 
 /**
@@ -395,7 +418,6 @@ type PendingAgentConfirmation = {
   caller: CallerContext;
   call: ToolCall;
   executionAccountIds: string[];
-  allowedMessageIds?: string[];
   controller: AbortController;
   settled: boolean;
   outcome: Promise<PendingConfirmationOutcome>;
@@ -407,7 +429,6 @@ type PendingAgentConfirmation = {
 type ConfirmationPayloadScope = {
   requestId: string;
   accountIds: string[];
-  allowedMessageIds?: string[];
 };
 
 type ProviderConfiguration = {
@@ -1462,7 +1483,7 @@ export class AgentService {
         message: "The configured access level does not permit external Nami Mail write operations.",
       }));
     }
-    this.prepareConfirmationPayload(call, input.requestId, executionAccountIds, undefined);
+    this.prepareConfirmationPayload(call, input.requestId, executionAccountIds);
     const invocation = await this.runtime.invokeTool({
       requestId: input.requestId,
       caller,
@@ -1782,7 +1803,6 @@ export class AgentService {
       input: call.input,
       requestId: scope.requestId,
       accountIds: scope.accountIds,
-      ...(scope.allowedMessageIds === undefined ? {} : { allowedMessageIds: scope.allowedMessageIds }),
     })).digest("hex");
   }
 
@@ -1790,7 +1810,6 @@ export class AgentService {
     call: ToolCall,
     requestId: string,
     executionAccountIds: readonly string[],
-    allowedMessageIds: readonly string[] | undefined,
   ): void {
     if (!this.confirmationStore) return;
     const resolution = this.tools.resolve(call, executionAccountIds);
@@ -1800,7 +1819,6 @@ export class AgentService {
     this.confirmationPayloadScopes.set(call, {
       requestId,
       accountIds: [...resolution.accountIds],
-      ...(allowedMessageIds === undefined ? {} : { allowedMessageIds: [...allowedMessageIds] }),
     });
   }
 
@@ -1960,6 +1978,7 @@ export class AgentService {
       toolActivities: [],
       ...(input.quote ? { quote: input.quote } : {}),
       ...(input.attachments && input.attachments.length > 0 ? { attachments: [...input.attachments] } : {}),
+      ...(input.references && input.references.length > 0 ? { references: [...input.references] } : {}),
     };
     let assistantContent = "";
     let citations: AgentCitation[] = [];
@@ -2007,9 +2026,6 @@ export class AgentService {
     // starts as the raw first message; a concise title replaces it after the
     // first reply via a separate provider call (see the finally block).
     const isFirstTurn = state.messages.filter((message) => message.role === "user").length === 0 && state.metadata.title === "新对话";
-    const allowedMessageIds = state.metadata.scope.mode === "current_message"
-      ? [...state.metadata.scope.messageIds]
-      : undefined;
     try {
       this.assertRunCurrent(lifecycleTasks, controller.signal);
       this.conversations.append(conversationId, state.leases, "turn", {
@@ -2056,7 +2072,6 @@ export class AgentService {
           providerContent,
           6,
           controller.signal,
-          allowedMessageIds,
         ));
         this.assertRunCurrent(lifecycleTasks, controller.signal);
         // No confidence floor here: lexical and semantic scores live on
@@ -2124,7 +2139,17 @@ export class AgentService {
       const visibleTools = agentAccessLevel === "read-only"
         ? availableTools.filter((tool) => tool.executionMode === "read")
         : availableTools;
-      const providerMessages = this.providerMessages(state, userMessage, providerContent, commandConstraints, ragResults, canUseMailContext, locale, input.mode, toolRoundLimit, agentAccessLevel, visibleTools.map((tool) => tool.name), input.attachments ?? []);
+      // References ride along as user-chosen context across turns. Resolve
+      // once per run so the current turn and every earlier turn with references
+      // share the same fresh excerpts; a message deleted mid-conversation
+      // simply drops out of the prompt.
+      const referencedIds = [
+        ...(input.references ?? []).map((reference) => reference.id),
+        ...state.messages.flatMap((message) =>
+          (Array.isArray(message.references) ? message.references : []).map((reference) => reference.id)),
+      ];
+      const resolvedReferences = new Map(this.resolveMessageReferences(referencedIds).map((reference) => [reference.id, reference]));
+      const providerMessages = this.providerMessages(state, userMessage, providerContent, commandConstraints, ragResults, canUseMailContext, locale, input.mode, toolRoundLimit, agentAccessLevel, visibleTools.map((tool) => tool.name), input.attachments ?? [], resolvedReferences);
       const caller = {
         callerId: "desktop-ui",
         kind: "desktop-ui" as const,
@@ -2269,13 +2294,12 @@ export class AgentService {
           yield { type: "tool", activity: runningActivity };
           syncInFlight();
           const executionAccountIds = [...state.metadata.scope.accountIds];
-          this.prepareConfirmationPayload(call, requestId, executionAccountIds, allowedMessageIds);
+          this.prepareConfirmationPayload(call, requestId, executionAccountIds);
           let invocation = await this.runtime.invokeTool({
             requestId,
             caller,
             call,
             executionAccountIds,
-            ...(allowedMessageIds === undefined ? {} : { allowedMessageIds }),
             signal: controller.signal,
           });
           if (invocation.status === "confirmation_required") {
@@ -2286,7 +2310,6 @@ export class AgentService {
               caller,
               call,
               executionAccountIds,
-              ...(allowedMessageIds === undefined ? {} : { allowedMessageIds: [...allowedMessageIds] }),
               controller,
             });
             if (!pending) {
@@ -2343,7 +2366,6 @@ export class AgentService {
               caller,
               call,
               executionAccountIds,
-              ...(allowedMessageIds === undefined ? {} : { allowedMessageIds }),
               confirmationId: pending.confirmation.id,
               signal: controller.signal,
             });
@@ -2725,6 +2747,43 @@ export class AgentService {
     return (this.options.db.prepare("SELECT id FROM accounts ORDER BY created_at, id").all() as Array<{ id: string }>).map((row) => row.id);
   }
 
+  /** Loads the full content of referenced messages so the model sees the mail
+   *  the user explicitly pulled in. Missing ids are skipped silently: a deleted
+   *  message simply drops out of the context rather than failing the turn. */
+  private resolveMessageReferences(ids: readonly string[]): ResolvedAgentMessageReference[] {
+    const uniqueIds = [...new Set(ids.filter((id): id is string => typeof id === "string" && id.length > 0))];
+    if (!uniqueIds.length) return [];
+    const placeholders = uniqueIds.map(() => "?").join(", ");
+    const rows = this.options.db.prepare(`
+      SELECT m.*, a.email AS account_email
+      FROM messages m
+      JOIN accounts a ON a.id = m.account_id
+      WHERE m.id IN (${placeholders})
+    `).all(...uniqueIds) as MessageStorageRow[];
+    const resolved: ResolvedAgentMessageReference[] = [];
+    for (const row of rows) {
+      let payload: MessagePayload;
+      try {
+        payload = messagePayloadForRow(row, this.options.masterKey);
+      } catch {
+        // Unreadable payload (e.g. a leftover row with no encryption key):
+        // skip the reference instead of failing the whole turn.
+        continue;
+      }
+      const textBody = (payload.textBody ?? "").trim();
+      const htmlBody = payload.htmlBody ? payload.htmlBody.replace(/<[^>]+>/g, " ").trim() : "";
+      const excerpt = (textBody || htmlBody).replace(/\s+/g, " ").slice(0, 1_200);
+      resolved.push({
+        id: row.id,
+        subject: payload.subject,
+        sender: payload.fromName || payload.fromAddress,
+        sentAt: typeof row.sent_at === "string" ? row.sent_at : "",
+        excerpt,
+      });
+    }
+    return resolved;
+  }
+
   private normalizeScope(input: AgentConversationScope): AgentConversationScope {
     const accountIds = uniqueStrings(input.accountIds ?? [], 100, "邮箱范围");
     const messageIds = uniqueStrings(input.messageIds ?? [], 100, "邮件范围");
@@ -2732,12 +2791,22 @@ export class AgentService {
       throw new AgentServiceError("INVALID_ARGUMENT", "邮件上下文范围无效。", 400);
     }
     const activeAccounts = new Set(this.activeAccountIds());
+    let mode: AgentConversationScope["mode"];
     let resolvedAccounts: string[];
+    let normalizedMessageIds: string[];
     if (input.mode === "all_accounts") {
+      mode = "all_accounts";
       resolvedAccounts = this.activeAccountIds();
+      normalizedMessageIds = [];
     } else if (input.mode === "selected_account") {
+      mode = "selected_account";
       resolvedAccounts = accountIds;
+      normalizedMessageIds = messageIds;
     } else {
+      // The removed `current_message` mode still arrives from older clients.
+      // The message-level lock is gone (scope = the retrieval boundary, nothing
+      // narrower than an account), so it folds into the owning account(s): the
+      // agent keeps full read access where the referenced message lived.
       if (!messageIds.length) throw new AgentServiceError("INVALID_ARGUMENT", "当前邮件上下文为空。", 400);
       const rows = this.options.db.prepare(`
         SELECT DISTINCT account_id FROM messages WHERE id = ?
@@ -2747,13 +2816,15 @@ export class AgentService {
         return row ? [row.account_id] : [];
       });
       if (owners.length !== messageIds.length) throw new AgentServiceError("NOT_FOUND", "部分邮件已不存在。", 404);
+      mode = "selected_account";
       resolvedAccounts = [...new Set(owners)];
+      normalizedMessageIds = [];
     }
     if (!resolvedAccounts.length) throw new AgentServiceError("ACCOUNT_UNAVAILABLE", "请先添加至少一个可用邮箱。", 409);
     if (resolvedAccounts.some((accountId) => !activeAccounts.has(accountId))) {
       throw new AgentServiceError("ACCOUNT_UNAVAILABLE", "选择的邮箱已不可用。", 409);
     }
-    return { mode: input.mode, accountIds: resolvedAccounts, messageIds };
+    return { mode, accountIds: resolvedAccounts, messageIds: normalizedMessageIds };
   }
 
   private assertRequestScope(expected: AgentConversationScope, supplied: AgentConversationScope): void {
@@ -2831,17 +2902,18 @@ export class AgentService {
       throw new AgentServiceError("INTERNAL", "会话范围无法读取。", 500);
     }
     const mode = scope.mode as string;
-    // The removed "current_thread" mode is folded into "current_message": both
-    // carried the same exact message IDs at runtime, so old stored sessions
-    // keep working without exposing the option in the UI.
+    // The removed "current_thread" and "current_message" modes fold into
+    // "selected_account": the message-level lock no longer exists, so old
+    // stored sessions keep their own account(s) without the restriction.
     if (!["all_accounts", "selected_account", "current_message", "current_thread"].includes(mode)) {
       throw new AgentServiceError("INTERNAL", "会话范围无法读取。", 500);
     }
-    const normalizedMode = (mode === "current_thread" ? "current_message" : mode) as AgentConversationScope["mode"];
+    const foldsToSelectedAccount = mode === "current_thread" || mode === "current_message";
+    const normalizedMode = (foldsToSelectedAccount ? "selected_account" : mode) as AgentConversationScope["mode"];
     return {
       mode: normalizedMode,
       accountIds: uniqueStrings(scope.accountIds.filter((item): item is string => typeof item === "string"), 100, "会话邮箱范围"),
-      messageIds: uniqueStrings(scope.messageIds.filter((item): item is string => typeof item === "string"), 100, "会话邮件范围"),
+      messageIds: foldsToSelectedAccount ? [] : uniqueStrings(scope.messageIds.filter((item): item is string => typeof item === "string"), 100, "会话邮件范围"),
     };
   }
 
@@ -2883,6 +2955,7 @@ export class AgentService {
         ...(parsed.error ? { error: parsed.error as AgentMessage["error"] } : {}),
         ...(typeof parsed.quote === "string" ? { quote: parsed.quote } : {}),
         ...(Array.isArray(parsed.attachments) ? { attachments: parsed.attachments as AgentMessageAttachmentInput[] } : {}),
+        ...(Array.isArray(parsed.references) ? { references: parsed.references as AgentMessageReference[] } : {}),
         ...(revokedIds.get(parsed.id) ? { revoked: true } : {}),
         mailContextIncluded: value.mailContextIncluded === true,
       });
@@ -2919,6 +2992,24 @@ export class AgentService {
     };
   }
 
+  private referenceBlockFor(
+    message: Pick<AgentMessage, "references">,
+    resolved: ReadonlyMap<string, ResolvedAgentMessageReference>,
+  ): string {
+    const refs = (message.references ?? [])
+      .map((reference) => resolved.get(reference.id))
+      .filter((reference): reference is ResolvedAgentMessageReference => reference !== undefined);
+    if (!refs.length) return "";
+    return refs.map((reference, index) => [
+      `[REFERENCED MAIL ${index + 1}]`,
+      `Subject: ${reference.subject}`,
+      `From: ${reference.sender}`,
+      `Date: ${reference.sentAt}`,
+      reference.excerpt,
+      "[/REFERENCED MAIL]",
+    ].join("\n")).join("\n\n");
+  }
+
   private providerMessages(
     state: ConversationState,
     userMessage: AgentMessage,
@@ -2932,6 +3023,7 @@ export class AgentService {
     accessLevel: AgentAccessLevel,
     availableToolNames: readonly string[],
     userAttachments: readonly AgentMessageAttachmentInput[],
+    resolvedReferences: ReadonlyMap<string, ResolvedAgentMessageReference>,
   ): ProviderChatMessage[] {
     const t = (key: AgentMessageKey, params?: Record<string, string | number>) => agentT(locale, key, params);
     // The most recent memory notes ride along as read-only system context so
@@ -2963,10 +3055,17 @@ export class AgentService {
       .filter((message) => allowMailContext || !message.mailContextIncluded)
       .slice(-14)
       .map((message) => {
+        const referenceBlock = this.referenceBlockFor(message, resolvedReferences);
         // The current turn's content was already composed (providerContent).
-        if (message.id === userMessage.id) return { role: message.role, content: message.content } satisfies ProviderChatMessage;
-        if (message.role === "user" && message.quote) {
-          return { role: "user", content: `"${message.quote}"\n\nUser follow-up question: ${composeAttachmentContent(message.content, message.attachments)}` } satisfies ProviderChatMessage;
+        if (message.id === userMessage.id) {
+          // User-chosen references lead the turn: the model must treat them as
+          // user-introduced context, not as retrieval the agent did itself.
+          const content = referenceBlock ? `${referenceBlock}\n\n${message.content}` : message.content;
+          return { role: message.role, content } satisfies ProviderChatMessage;
+        }
+        if (message.role === "user" && (message.quote || referenceBlock)) {
+          const preamble = [referenceBlock, message.quote ? `"${message.quote}"` : ""].filter(Boolean).join("\n\n");
+          return { role: "user", content: `${preamble}\n\nUser follow-up question: ${composeAttachmentContent(message.content, message.attachments)}` } satisfies ProviderChatMessage;
         }
         return { role: message.role, content: composeAttachmentContent(message.content, message.attachments) } satisfies ProviderChatMessage;
       });
