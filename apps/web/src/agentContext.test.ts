@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { agentScopeFor, sameAgentScope } from "./agentContext";
-import type { Account, Message } from "./types";
+import { agentScopeFor, sameAgentScope, scopeTargetForConversation } from "./agentContext";
+import type { Account } from "./types";
 
 const account: Account = {
   id: "account-1",
@@ -15,57 +15,51 @@ const account: Account = {
   folders: [],
 };
 
-function message(id: string): Message {
-  return {
-    id,
-    accountId: account.id,
-    accountEmail: account.email,
-    providerName: account.providerName,
-    mailbox: "INBOX",
-    uid: 1,
-    subject: id,
-    from: { name: "Sender", address: "sender@example.test" },
-    to: [],
-    cc: [],
-    messageId: `<${id}@example.test>`,
-    sentAt: "2026-07-27T00:00:00.000Z",
-    snippet: "",
-    textBody: "",
-    htmlBody: "",
-    flags: [],
-    seen: false,
-    flagged: false,
-    hasAttachments: false,
-    attachments: [],
-    size: 0,
-  };
-}
+const second: Account = {
+  ...account,
+  id: "account-2",
+  email: "second@example.test",
+};
 
-describe("Agent mail context", () => {
-  it("builds a bounded message scope from the current message", () => {
-    const current = message("current");
-
-    expect(agentScopeFor("current_message", current, [account])).toEqual({
-      mode: "current_message",
-      accountIds: [account.id],
-      messageIds: ["current"],
-    });
-  });
-
-  it("falls back to all accounts without a selected message", () => {
-    expect(agentScopeFor("all_accounts", undefined, [account])).toEqual({
-      mode: "all_accounts",
-      accountIds: [account.id],
+describe("agent scope targets", () => {
+  it("builds a selected_account scope from a concrete account target", () => {
+    expect(agentScopeFor("account-1", [account, second])).toEqual({
+      mode: "selected_account",
+      accountIds: ["account-1"],
       messageIds: [],
     });
   });
 
-  it("keeps scopes exact so a changed context starts a separate conversation", () => {
-    const current = message("current");
-    const messageScope = agentScopeFor("current_message", current, [account]);
-    const allScope = agentScopeFor("all_accounts", undefined, [account]);
+  it("builds an all_accounts scope from the all target", () => {
+    expect(agentScopeFor("all", [account, second])).toEqual({
+      mode: "all_accounts",
+      accountIds: ["account-1", "account-2"],
+      messageIds: [],
+    });
+  });
 
-    expect(sameAgentScope(messageScope, { ...messageScope })).toBe(true);
-    expect(sameAgentScope(messageScope, allScope)).toBe(false);
+  it("uses the target verbatim even when the account is not in the list", () => {
+    expect(agentScopeFor("account-gone", [account])).toEqual({
+      mode: "selected_account",
+      accountIds: ["account-gone"],
+      messageIds: [],
+    });
+  });
+
+  it("maps stored scopes back to picker targets", () => {
+    expect(scopeTargetForConversation({ mode: "all_accounts", accountIds: [], messageIds: [] }, [account])).toBe("all");
+    expect(scopeTargetForConversation({ mode: "selected_account", accountIds: ["account-1"], messageIds: [] }, [account, second])).toBe("account-1");
+    // A folded legacy scope resolves to its owner account...
+    expect(scopeTargetForConversation({ mode: "current_message", accountIds: ["account-1"], messageIds: ["message-1"] }, [account])).toBe("account-1");
+    // ...and a scope whose account was deleted falls back to all.
+    expect(scopeTargetForConversation({ mode: "selected_account", accountIds: ["account-gone"], messageIds: [] }, [account])).toBe("all");
+  });
+
+  it("keeps scopes exact so a changed target starts a separate conversation", () => {
+    const single = agentScopeFor("account-1", [account, second]);
+    const all = agentScopeFor("all", [account, second]);
+
+    expect(sameAgentScope(single, { ...single })).toBe(true);
+    expect(sameAgentScope(single, all)).toBe(false);
   });
 });

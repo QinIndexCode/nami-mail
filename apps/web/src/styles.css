@@ -10276,7 +10276,7 @@ height:auto;
 min-height:48px;
 padding:8px 18px
 }
-.agent-mode-switch,.agent-scope-switch
+.agent-mode-switch
 {
 border:1px solid var(--line);
 background:var(--panel-solid);
@@ -10287,7 +10287,7 @@ padding:3px;
 display:inline-flex;
 position:relative
 }
-.agent-mode-switch .agent-mode-thumb,.agent-scope-switch .agent-scope-thumb
+.agent-mode-switch .agent-mode-thumb
 {
 background:var(--selected);
 border-radius:999px;
@@ -10302,19 +10302,7 @@ left:4px
 {
 left:calc(50% + 2px)
 }
-.agent-scope-switch .agent-scope-thumb
-{
-width:calc(33.3333% - 5.33333px)
-}
-.agent-scope-switch[data-scope=selected_account] .agent-scope-thumb
-{
-left:calc(33.3333% + 2.66667px)
-}
-.agent-scope-switch[data-scope=current_message] .agent-scope-thumb
-{
-left:calc(66.6667% + 1.33333px)
-}
-.agent-mode-switch button,.agent-scope-switch button
+.agent-mode-switch button
 {
 min-height:27px;
 color:var(--text-faint);
@@ -10334,16 +10322,16 @@ font-size:10px;
 display:inline-flex;
 position:relative
 }
-.agent-mode-switch button:hover:not(:disabled),.agent-scope-switch button:hover:not(:disabled)
+.agent-mode-switch button:hover:not(:disabled)
 {
 color:var(--text)
 }
-.agent-mode-switch button.active,.agent-scope-switch button.active
+.agent-mode-switch button.active
 {
 color:var(--text);
 font-weight:650
 }
-.agent-mode-switch button:disabled,.agent-scope-switch button:disabled
+.agent-mode-switch button:disabled
 {
 cursor:default;
 opacity:.42
@@ -10352,7 +10340,7 @@ opacity:.42
 {
 display:none
 }
-.agent-privacy-notice,.agent-current-context
+.agent-privacy-notice,.agent-current-context,.agent-scope-picker
 {
 border:1px solid var(--line);
 min-width:0;
@@ -10408,6 +10396,65 @@ transition:opacity .18s ease
 .agent-current-context:hover .agent-current-context-open,.agent-current-context:focus-visible .agent-current-context-open
 {
 opacity:1
+}
+.agent-scope-picker
+{
+max-width:220px;
+min-height:27px;
+overflow:hidden;
+cursor:pointer;
+font-family:inherit;
+background:0 0
+}
+.agent-scope-picker svg
+{
+flex:none
+}
+.agent-scope-picker span
+{
+min-width:0;
+overflow:hidden;
+text-overflow:ellipsis;
+white-space:nowrap
+}
+.agent-scope-picker:hover,.agent-scope-picker:focus-visible
+{
+border-color:color-mix(in srgb, var(--focus-ring) 60%, var(--line));
+background:var(--hover)
+}
+.agent-scope-picker:focus-visible
+{
+box-shadow:0 0 0 3px var(--focus-ring-subtle);
+outline:none
+}
+.agent-scope-chevron
+{
+flex:none;
+opacity:.62;
+transition:transform .18s,opacity .18s ease
+}
+.agent-scope-chevron.open
+{
+transform:rotate(180deg);
+opacity:1
+}
+.agent-scope-picker-wrap
+{
+position:relative;
+flex:none
+}
+/* The shared popover opens upward (bottom:calc(100% + 8px)); from the header
+   at the top of the panel it must open downward instead. */
+.agent-scope-picker-wrap .agent-popover
+{
+top:calc(100% + 8px);
+bottom:auto;
+transform:translateY(-8px) scale(.97);
+transform-origin:top center
+}
+.agent-scope-picker-wrap .agent-popover.show
+{
+transform:translateY(0) scale(1)
 }
 .agent-transcript-wrap
 {

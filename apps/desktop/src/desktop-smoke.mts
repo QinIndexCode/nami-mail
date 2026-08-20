@@ -161,6 +161,14 @@ export type DesktopDeepDiagnosticResult = {
       railClearance: number;
       panelClearance: number;
     } | null;
+    agentScopePicker: {
+      rect: { x: number; y: number; w: number; h: number; right: number; bottom: number };
+      tag: string;
+      ariaLabel: string;
+      label: string;
+      railClearance: number;
+      panelClearance: number;
+    } | null;
     afterOpenPerf: {
       longtasks: Array<{ start: number; duration: number }>;
       mutations: number;
@@ -551,6 +559,7 @@ export async function inspectDesktopDeepDiagnostic(): Promise<DesktopDeepDiagnos
       shellChildren: null,
       contentEl: null,
       agentContextChip: null,
+      agentScopePicker: null,
       afterOpenPerf: { longtasks: [], mutations: 0, animationCount: 0, animationNames: "", timerMaxGapMs: 0, timerSampleMs: 0 },
     },
   };
@@ -663,6 +672,7 @@ export async function inspectDesktopDeepDiagnostic(): Promise<DesktopDeepDiagnos
         out.agent.workspacePosition = agentWs ? getComputedStyle(agentWs).position : null;
         out.agent.citationsAnchorClearance = agentWs && rail ? Math.round(rail.getBoundingClientRect().left - (agentWs.getBoundingClientRect().right - 14)) : null;
         const chip = document.querySelector(".agent-current-context");
+        const scopePicker = document.querySelector(".agent-scope-picker");
         const mainPanel = agentWs ? agentWs.querySelector(".agent-main-panel") : null;
         out.agent.agentContextChip = chip instanceof HTMLElement && mainPanel instanceof HTMLElement && rail instanceof HTMLElement ? {
           rect: rect(chip),
@@ -671,6 +681,14 @@ export async function inspectDesktopDeepDiagnostic(): Promise<DesktopDeepDiagnos
           subject: (chip.querySelector("span")?.textContent ?? "").slice(0, 60),
           railClearance: Math.round(rail.getBoundingClientRect().left - chip.getBoundingClientRect().right),
           panelClearance: Math.round(mainPanel.getBoundingClientRect().right - chip.getBoundingClientRect().right),
+        } : null;
+        out.agent.agentScopePicker = scopePicker instanceof HTMLElement && mainPanel instanceof HTMLElement && rail instanceof HTMLElement ? {
+          rect: rect(scopePicker),
+          tag: scopePicker.tagName,
+          ariaLabel: scopePicker.getAttribute("aria-label") ?? "",
+          label: (scopePicker.querySelector("span")?.textContent ?? "").slice(0, 60),
+          railClearance: Math.round(rail.getBoundingClientRect().left - scopePicker.getBoundingClientRect().right),
+          panelClearance: Math.round(mainPanel.getBoundingClientRect().right - scopePicker.getBoundingClientRect().right),
         } : null;
         out.agent.afterOpenPerf = await samplePerf(1600);
         return out;
@@ -712,6 +730,7 @@ export async function inspectDesktopChipOverlapSweep(): Promise<Record<string, u
       const rect = (el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), right: Math.round(r.right), bottom: Math.round(r.bottom) }; };
       const rail = document.querySelector(".icon-rail");
       const chip = document.querySelector(".agent-current-context");
+      const picker = document.querySelector(".agent-scope-picker");
       const workspace = document.querySelector(".agent-workspace");
       const panel = workspace ? workspace.querySelector(":scope > .agent-main-panel") : null;
       const strip = panel ? panel.querySelector(":scope > .agent-context-strip") : null;
@@ -733,6 +752,14 @@ export async function inspectDesktopChipOverlapSweep(): Promise<Record<string, u
         subjectLength: (chip.querySelector("span")?.textContent ?? "").length,
         subject: (chip.querySelector("span")?.textContent ?? "").slice(0, 40),
       } : null;
+      const pickerEntry = picker ? {
+        rect: rect(picker),
+        position: getComputedStyle(picker).position,
+        maxWidth: getComputedStyle(picker).maxWidth,
+        marginLeft: getComputedStyle(picker).marginLeft,
+        labelLength: (picker.querySelector("span")?.textContent ?? "").length,
+        label: (picker.querySelector("span")?.textContent ?? "").slice(0, 40),
+      } : null;
       let overlap = null;
       if (chip && rail && getComputedStyle(rail).display !== "none") {
         const cr = chip.getBoundingClientRect();
@@ -740,6 +767,14 @@ export async function inspectDesktopChipOverlapSweep(): Promise<Record<string, u
         const horizontal = Math.max(0, Math.min(cr.right, rr.right) - Math.max(cr.left, rr.left));
         const vertical = Math.max(0, Math.min(cr.bottom, rr.bottom) - Math.max(cr.top, rr.top));
         overlap = { horizontalOverlapPx: Math.round(horizontal), verticalOverlapPx: Math.round(vertical), overlapping: horizontal > 0 && vertical > 0, clearancePx: Math.round(rr.left - cr.right) };
+      }
+      let pickerOverlap = null;
+      if (picker && rail && getComputedStyle(rail).display !== "none") {
+        const pr = picker.getBoundingClientRect();
+        const rr = rail.getBoundingClientRect();
+        const horizontal = Math.max(0, Math.min(pr.right, rr.right) - Math.max(pr.left, rr.left));
+        const vertical = Math.max(0, Math.min(pr.bottom, rr.bottom) - Math.max(pr.top, rr.top));
+        pickerOverlap = { horizontalOverlapPx: Math.round(horizontal), verticalOverlapPx: Math.round(vertical), overlapping: horizontal > 0 && vertical > 0, clearancePx: Math.round(rr.left - pr.right) };
       }
       return {
         innerWidth: window.innerWidth,
@@ -754,8 +789,10 @@ export async function inspectDesktopChipOverlapSweep(): Promise<Record<string, u
         headerBox: boxInfo(header),
         sidebar: sidebar ? rect(sidebar) : null,
         chip: chipEntry,
+        picker: pickerEntry,
         rail: railEntry,
         overlap,
+        pickerOverlap,
       };
     })()
   `;
@@ -812,7 +849,8 @@ export async function inspectDesktopChipOverlapSweep(): Promise<Record<string, u
   await cleanup();
   const overlapping = samples.filter((sample) => {
     const overlap = sample.overlap as { overlapping?: boolean } | null | undefined;
-    return overlap?.overlapping === true;
+    const pickerOverlap = sample.pickerOverlap as { overlapping?: boolean } | null | undefined;
+    return overlap?.overlapping === true || pickerOverlap?.overlapping === true;
   });
   const browserUrl = new URL(desktopUrl);
   browserUrl.searchParams.delete("desktop");

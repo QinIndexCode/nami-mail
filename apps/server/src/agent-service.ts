@@ -289,7 +289,7 @@ export type AgentMessageInput = {
   providerId: string;
   mode: "agent" | "chat";
   scope: AgentConversationScope;
-  context: {
+  context?: {
     currentMessageId?: string;
   };
   quote?: string;

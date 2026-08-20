@@ -1,9 +1,9 @@
 // Regression checker: boots the desktop app with NAMI_CHIP_OVERLAP_PROBE=1
 // (the sweep inside apps/desktop/src/desktop-smoke.mts), then prints the
-// per-width chip-vs-rail geometry from the smoke result and exits non-zero if
-// any sample overlapped, the workspace lost its positioning context, or the
-// citations anchor would land under the rail. The sweep is env-gated, so the
-// normal smoke run never executes it.
+// per-width chip/picker-vs-rail geometry from the smoke result and exits
+// non-zero if any sample overlapped, the workspace lost its positioning
+// context, or the citations anchor would land under the rail. The sweep is
+// env-gated, so the normal smoke run never executes it.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -68,34 +68,43 @@ if (!sweep) {
 }
 
 const subjects = new Set();
-console.log("mode    | width | innerW | agent | chip x..right      | chip maxW | workspace x..right | rail x..right | clearance | overlap | wsPos | citesAnchor | pageOverflow");
-let anyOverlap = false;
-let positionMismatch = false;
-let anchorViolation = false;
-for (const sample of sweep.samples ?? []) {
-  const chip = sample.chip;
-  const rail = sample.rail;
-  const workspace = sample.workspace;
-  const overlap = sample.overlap;
-  const subject = chip && chip.subject ? String(chip.subject) : "";
-  if (subject) subjects.add(`${subject} (${chip.subjectLength})`);
-  const chipSpan = chip ? `${chip.rect.x}..${chip.rect.right}` : "(no chip)";
-  const chipMax = chip ? String(chip.maxWidth) : "-";
-  const workspaceSpan = workspace ? `${workspace.x}..${workspace.right}${workspace.w !== Number(sample.innerWidth) - 56 ? ` [w=${workspace.w}]` : ""}` : "(none)";
-  const railSpan = rail && rail.display !== "none" ? `${rail.rect.x}..${rail.rect.right}` : "(rail hidden)";
-  const clearance = overlap ? String(overlap.clearancePx) : "-";
-  const overlapped = overlap?.overlapping === true ? "OVERLAP!" : "clear";
-  const wsPosition = String(sample.workspacePosition ?? "-");
-  const citesAnchor = sample.citationsAnchor === null || sample.citationsAnchor === undefined ? "-" : String(sample.citationsAnchor);
-  const pageOverflow = Number(sample.pageScrollWidth) > Number(sample.innerWidth) ? "YES" : "no";
-  if (overlap?.overlapping === true) anyOverlap = true;
-  if (sample.agentOpen && wsPosition !== "relative") positionMismatch = true;
-  if (sample.agentOpen && Number.isInteger(sample.citationsAnchor) && Number(sample.citationsAnchor) <= 0) anchorViolation = true;
-  console.log(
-    `${String(sample.mode).padEnd(7)} | ${String(sample.width).padEnd(5)} | ${String(sample.innerWidth).padEnd(6)} | ${String(sample.agentOpen).padEnd(5)} | ${chipSpan.padEnd(18)} | ${chipMax.padEnd(9)} | ${workspaceSpan.padEnd(18)} | ${railSpan.padEnd(14)} | ${clearance.padEnd(9)} | ${overlapped.padEnd(7)} | ${wsPosition.padEnd(7)} | ${citesAnchor.padEnd(13)} | ${pageOverflow}`,
-  );
-}
-if (subjects.size) console.log(`chip subjects: ${[...subjects].join(" | ")}`);
+  const pickerLabels = new Set();
+  console.log("mode    | width | innerW | chip x..right      | chip maxW | pick x..right       | pick maxW | workspace x..right | rail x..right | chipClear | pickClear | overlap | wsPos | citesAnchor | pageOverflow");
+  let anyOverlap = false;
+  let positionMismatch = false;
+  let anchorViolation = false;
+  for (const sample of sweep.samples ?? []) {
+    const chip = sample.chip;
+    const picker = sample.picker;
+    const rail = sample.rail;
+    const workspace = sample.workspace;
+    const overlap = sample.overlap;
+    const pickerOverlap = sample.pickerOverlap;
+    const subject = chip && chip.subject ? String(chip.subject) : "";
+    if (subject) subjects.add(`${subject} (${chip.subjectLength})`);
+    const pickerLabel = picker && picker.label ? String(picker.label) : "";
+    if (pickerLabel) pickerLabels.add(`${pickerLabel} (${picker.labelLength})`);
+    const chipSpan = chip ? `${chip.rect.x}..${chip.rect.right}` : "(no chip)";
+    const chipMax = chip ? String(chip.maxWidth) : "-";
+    const pickerSpan = picker ? `${picker.rect.x}..${picker.rect.right}` : "(no picker)";
+    const pickerMax = picker ? String(picker.maxWidth) : "-";
+    const workspaceSpan = workspace ? `${workspace.x}..${workspace.right}${workspace.w !== Number(sample.innerWidth) - 56 ? ` [w=${workspace.w}]` : ""}` : "(none)";
+    const railSpan = rail && rail.display !== "none" ? `${rail.rect.x}..${rail.rect.right}` : "(rail hidden)";
+    const chipClearance = overlap ? String(overlap.clearancePx) : "-";
+    const pickerClearance = pickerOverlap ? String(pickerOverlap.clearancePx) : "-";
+    const overlapped = overlap?.overlapping === true || pickerOverlap?.overlapping === true ? "OVERLAP!" : "clear";
+    const wsPosition = String(sample.workspacePosition ?? "-");
+    const citesAnchor = sample.citationsAnchor === null || sample.citationsAnchor === undefined ? "-" : String(sample.citationsAnchor);
+    const pageOverflow = Number(sample.pageScrollWidth) > Number(sample.innerWidth) ? "YES" : "no";
+    if (overlap?.overlapping === true || pickerOverlap?.overlapping === true) anyOverlap = true;
+    if (sample.agentOpen && wsPosition !== "relative") positionMismatch = true;
+    if (sample.agentOpen && Number.isInteger(sample.citationsAnchor) && Number(sample.citationsAnchor) <= 0) anchorViolation = true;
+    console.log(
+      `${String(sample.mode).padEnd(7)} | ${String(sample.width).padEnd(5)} | ${String(sample.innerWidth).padEnd(6)} | ${chipSpan.padEnd(18)} | ${chipMax.padEnd(9)} | ${pickerSpan.padEnd(18)} | ${pickerMax.padEnd(9)} | ${workspaceSpan.padEnd(18)} | ${railSpan.padEnd(14)} | ${chipClearance.padEnd(9)} | ${pickerClearance.padEnd(10)} | ${overlapped.padEnd(7)} | ${wsPosition.padEnd(7)} | ${citesAnchor.padEnd(13)} | ${pageOverflow}`,
+    );
+  }
+  if (subjects.size) console.log(`chip subjects: ${[...subjects].join(" | ")}`);
+  if (pickerLabels.size) console.log(`picker labels: ${[...pickerLabels].join(" | ")}`);
 console.log(`overlappingCount=${sweep.overlappingCount ?? 0} ${sweep.overlappingWidths?.length ? `(${sweep.overlappingWidths.join(", ")})` : ""}`);
 console.log(`positionMismatch=${positionMismatch} citationsAnchorViolation=${anchorViolation}`);
 console.log(`desktopUrl=${sweep.desktopUrl}`);

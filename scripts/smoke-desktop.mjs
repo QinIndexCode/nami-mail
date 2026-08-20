@@ -441,12 +441,20 @@ try {
     assert.equal(railAfterOpen.gridRow, "2", "The rail must stay on the second row below the floating bar when the Agent workspace is open.");
     assert.ok(railAfterOpen.rect.h > 500, "The rail must keep its full height beside the Agent workspace.");
   }
-  const contextChip = renderer.desktopDeepDiagnostic?.agent?.agentContextChip;
+const contextChip = renderer.desktopDeepDiagnostic?.agent?.agentContextChip;
   if (contextChip != null) {
     assert.equal(contextChip.tag, "BUTTON", "The reference mail chip must be a clickable button.");
     assert.ok(contextChip.ariaLabel.length > 0, "The reference mail chip must carry an accessible label.");
     assert.ok(contextChip.railClearance > 0, `The reference mail chip must stay clear of the icon rail (clearance ${contextChip.railClearance}px).`);
     assert.ok(contextChip.panelClearance > 0, `The reference mail chip must stay inside the agent main panel (clearance ${contextChip.panelClearance}px).`);
+  }
+  const scopePicker = renderer.desktopDeepDiagnostic?.agent?.agentScopePicker;
+  if (scopePicker != null) {
+    assert.equal(scopePicker.tag, "BUTTON", "The account scope picker must be a clickable button.");
+    assert.ok(scopePicker.ariaLabel.length > 0, "The account scope picker must carry an accessible label.");
+    assert.ok(scopePicker.label.length > 0, "The account scope picker must show the current account or all accounts.");
+    assert.ok(scopePicker.railClearance > 0, `The account scope picker must stay clear of the icon rail (clearance ${scopePicker.railClearance}px).`);
+    assert.ok(scopePicker.panelClearance > 0, `The account scope picker must stay inside the agent main panel (clearance ${scopePicker.panelClearance}px).`);
   }
   const workspacePosition = renderer.desktopDeepDiagnostic?.agent?.workspacePosition;
   if (workspacePosition != null) {
