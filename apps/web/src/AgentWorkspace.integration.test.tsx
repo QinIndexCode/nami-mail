@@ -911,6 +911,8 @@ describe("AgentWorkspace conversation switching", () => {
     expect(container.querySelectorAll(".agent-row-check").length).toBe(2);
     const aCheck = rows().find((r) => r.textContent?.includes("Conversation A"))!.querySelector<HTMLButtonElement>(".agent-row-check");
     expect(aCheck?.classList.contains("checked")).toBe(true);
+    expect(aCheck?.querySelector(".agent-row-check-box")).not.toBeNull();
+    expect(rows().find((r) => r.textContent?.includes("Conversation A"))?.classList.contains("selected")).toBe(true);
 
     // Selecting B makes the delete enable.
     act(() => {
@@ -918,6 +920,7 @@ describe("AgentWorkspace conversation switching", () => {
         .querySelector<HTMLButtonElement>(".agent-conversation-open")!.click();
     });
     await flush();
+    expect(rows().find((r) => r.textContent?.includes("Conversation B"))?.classList.contains("selected")).toBe(true);
     const deleteSelected = container.querySelector<HTMLButtonElement>(".agent-selection-delete");
     expect(deleteSelected?.disabled).toBe(false);
 

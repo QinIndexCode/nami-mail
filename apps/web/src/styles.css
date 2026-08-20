@@ -9995,23 +9995,28 @@ opacity:1;
 transform:translateY(0) scale(1)
 }
 }
-.agent-row-check svg
+.agent-row-check .agent-row-check-box
 {
-opacity:.45;
-transition:opacity .12s
+border:1.5px solid var(--line-strong);
+background:var(--panel);
+color:#0000;
+border-radius:6px;
+place-items:center;
+width:17px;
+height:17px;
+transition:border-color .16s,background .16s,color .16s;
+display:grid
 }
-.agent-row-check:hover:not(:disabled),.agent-row-check:focus-visible
+.agent-row-check:hover:not(:disabled) .agent-row-check-box
 {
-background:var(--hover);
-color:var(--text)
+border-color:var(--focus-ring)
 }
-.agent-row-check.checked
+.agent-row-check.checked .agent-row-check-box
 {
-color:var(--focus-ring)
-}
-.agent-row-check.checked svg
-{
-opacity:1
+border-color:var(--focus-ring);
+background:var(--focus-ring);
+color:var(--panel-solid);
+animation:.24s cubic-bezier(.2,.8,.2,1) both checkbox-pop
 }
 .agent-row-check:disabled
 {
@@ -10029,6 +10034,15 @@ transition:padding-left .18s cubic-bezier(.2,.8,.2,1)
 .agent-conversation-row.selectable .agent-conversation-open:hover:not(:disabled)
 {
 background:color-mix(in srgb, var(--focus-ring) 8%, transparent)
+}
+.agent-conversation-row.selectable.selected
+{
+border-color:color-mix(in srgb, var(--focus-ring) 46%, var(--line-strong));
+background:color-mix(in srgb, var(--selected) 86%, var(--panel-muted))
+}
+.agent-conversation-row.selectable.selected .agent-conversation-open strong
+{
+color:var(--text)
 }
 .agent-context-menu button:disabled
 {
