@@ -1,3 +1,10 @@
+import type { AgentCitation, AgentToolActivity, AgentConfirmation, AgentUiStreamEvent } from "@nami/agent-contracts";
+
+/** The Agent stream vocabulary is schematized in @nami/agent-contracts; the
+ *  server builds these events and the API layer validates them at parse time. */
+export type { AgentCitation, AgentToolActivity, AgentConfirmation };
+export type AgentStreamEvent = AgentUiStreamEvent;
+
 export type AgentProviderKind = "openai-compatible" | "ollama" | "anthropic" | "gemini" | "openai-responses";
 
 /** Non-secret provider details returned by the local Agent service. */
@@ -90,35 +97,6 @@ export type AgentConversationScope = {
   messageIds: string[];
 };
 
-export type AgentCitation = {
-  id: string;
-  messageId: string;
-  accountId: string;
-  subject: string;
-  sender: string;
-  sentAt: string;
-  excerpt: string;
-  confidence?: number;
-};
-
-export type AgentToolActivity = {
-  id: string;
-  toolName: string;
-  title: string;
-  state: "running" | "completed" | "failed" | "awaiting_confirmation";
-  summary?: string;
-  error?: { code: string; message: string; retryable?: boolean };
-};
-
-export type AgentConfirmation = {
-  id: string;
-  title: string;
-  summary: string;
-  fields: Array<{ label: string; value: string }>;
-  expiresAt: string;
-  state: "pending" | "approved" | "rejected" | "expired";
-};
-
 export type AgentMessageAttachment = {
   name: string;
   type: string;
@@ -198,17 +176,6 @@ export type AgentMessageRequest = {
   /** Mails the user explicitly introduced as context (cap 8). */
   references?: AgentMessageReference[];
 };
-
-export type AgentStreamEvent =
-  | { type: "status"; message?: string }
-  | { type: "text_delta"; delta: string }
-  | { type: "citation"; citation: AgentCitation }
-  | { type: "tool"; activity: AgentToolActivity }
-  | { type: "confirmation"; confirmation: AgentConfirmation }
-  | { type: "memory_suggestion"; summary: string }
-  | { type: "title"; title: string }
-  | { type: "error"; error: { code: string; message: string; suggestion?: string; retryable?: boolean } }
-  | { type: "completed"; reason: "stop" | "length" | "cancelled" | "error" };
 
 export type AgentMemoryKind =
   | "auto-reply-sent"
