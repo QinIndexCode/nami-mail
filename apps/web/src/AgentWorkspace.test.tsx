@@ -253,6 +253,7 @@ describe("AgentMessageRow streaming status", () => {
           statusMessage={statusMessage}
           locale="zh-CN"
           t={(key, values) => translate("zh-CN", key, values)}
+          onOpenMessage={() => undefined}
           onOpenAttachment={noop}
           onRevoke={noop}
           onRetry={noop}

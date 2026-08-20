@@ -294,7 +294,7 @@ background:color-mix(in srgb, var(--panel-solid) 46%, transparent);
 -webkit-backdrop-filter:blur(18px) saturate(150%);
 backdrop-filter:blur(18px) saturate(150%)
 }
-.workspace-canvas.background-active .agent-mode-switch,.workspace-canvas.background-active .agent-scope-switch
+.workspace-canvas.background-active .agent-mode-switch,.workspace-canvas.background-active .agent-scope-picker
 {
 border-color:color-mix(in srgb, var(--line-strong) 72%, transparent);
 background:color-mix(in srgb, var(--panel-solid) 34%, transparent);
@@ -3824,26 +3824,26 @@ overflow-y:auto
 pointer-events:none;
 animation:.17s cubic-bezier(.2,.8,.2,1) both modal-out
 }
-:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar
 {
 width:8px;
 height:8px
 }
-:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-track
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-track
 {
 background:0 0
 }
-:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-button
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-button
 {
 width:0;
 height:0;
 display:none
 }
-:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-corner
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-corner
 {
 background:0 0
 }
-:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-thumb
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-thumb
 {
 background-clip:padding-box;
 border:2px solid #0000;
@@ -3893,21 +3893,21 @@ background:0 0
 {
 background:0 0
 }
-:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-thumb
+:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-thumb
 {
 background:0 0
 }
-:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea).scrollbar-reveal::-webkit-scrollbar-thumb
+:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea).scrollbar-reveal::-webkit-scrollbar-thumb
 {
 background:color-mix(in srgb, var(--text-faint) 45%, transparent)
 }
-:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea).scrollbar-reveal::-webkit-scrollbar-thumb:active
+:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea).scrollbar-reveal::-webkit-scrollbar-thumb:active
 {
 background:var(--text-faint)
 }
 @supports ((-moz-appearance:none))
 {
-:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)
 {
 scrollbar-width:thin;
 scrollbar-color:var(--line-strong) transparent
@@ -10268,7 +10268,7 @@ padding:0 18px;
 display:flex;
 overflow:hidden
 }
-:is(.agent-context-strip:has(.agent-privacy-notice),.agent-context-strip:has(.agent-current-context))
+:is(.agent-context-strip:has(.agent-privacy-notice))
 {
 border-bottom:1px solid var(--line);
 background:var(--panel-muted);
@@ -10340,7 +10340,7 @@ opacity:.42
 {
 display:none
 }
-.agent-privacy-notice,.agent-current-context,.agent-scope-picker
+.agent-privacy-notice,.agent-scope-picker
 {
 border:1px solid var(--line);
 min-width:0;
@@ -10357,45 +10357,6 @@ display:inline-flex
 {
 border-color:color-mix(in srgb, var(--danger) 35%, var(--line));
 color:color-mix(in srgb, var(--danger) 82%, var(--text))
-}
-.agent-current-context
-{
-max-width:260px;
-min-height:27px;
-overflow:hidden;
-cursor:pointer;
-font-family:inherit;
-background:0 0
-}
-.agent-current-context svg
-{
-flex:none
-}
-.agent-current-context span
-{
-min-width:0;
-overflow:hidden;
-text-overflow:ellipsis;
-white-space:nowrap
-}
-.agent-current-context:hover,.agent-current-context:focus-visible
-{
-border-color:color-mix(in srgb, var(--focus-ring) 60%, var(--line));
-background:var(--hover)
-}
-.agent-current-context:focus-visible
-{
-box-shadow:0 0 0 3px var(--focus-ring-subtle);
-outline:none
-}
-.agent-current-context .agent-current-context-open
-{
-opacity:.62;
-transition:opacity .18s ease
-}
-.agent-current-context:hover .agent-current-context-open,.agent-current-context:focus-visible .agent-current-context-open
-{
-opacity:1
 }
 .agent-scope-picker
 {
@@ -10627,7 +10588,7 @@ color:var(--text);
 opacity:1;
 animation:none
 }
-.agent-message,.agent-suggestion-card,.agent-attachment-chip,.agent-quote-preview
+.agent-message,.agent-suggestion-card,.agent-attachment-chip,.agent-quote-preview,.agent-reference-chips,.agent-mention-menu
 {
 animation:none
 }
@@ -11767,6 +11728,83 @@ display:flex
 background:var(--hover);
 outline:none
 }
+.agent-reference-chips
+{
+flex-wrap:wrap;
+justify-content:center;
+gap:5px;
+max-width:840px;
+margin:0 auto 6px;
+display:flex
+}
+.agent-reference-chip
+{
+border:1px solid color-mix(in srgb, var(--focus-ring) 32%, var(--line));
+background:color-mix(in srgb, var(--focus-ring) 5%, var(--panel-muted));
+border-radius:8px;
+align-items:center;
+gap:2px;
+min-width:0;
+display:inline-flex
+}
+.agent-reference-chip-open
+{
+border:0;
+background:0 0;
+color:var(--text-soft);
+cursor:pointer;
+border-radius:7px;
+align-items:center;
+gap:5px;
+min-width:0;
+padding:5px 2px 5px 7px;
+font-family:inherit;
+font-size:10.5px;
+display:inline-flex
+}
+.agent-reference-chip-open:hover,.agent-reference-chip-open:focus-visible
+{
+color:var(--text)
+}
+.agent-reference-chip-open>svg
+{
+color:var(--focus-ring);
+flex:none
+}
+.agent-reference-chip-open>span
+{
+max-width:220px;
+text-overflow:ellipsis;
+white-space:nowrap;
+overflow:hidden;
+font-weight:600
+}
+.agent-reference-chip-account
+{
+color:var(--text-faint) !important;
+flex:none;
+font-weight:400 !important
+}
+.agent-reference-chip-remove
+{
+width:20px;
+height:20px;
+color:var(--text-faint);
+cursor:pointer;
+background:0 0;
+border:0;
+border-radius:5px;
+flex:none;
+place-items:center;
+padding:0;
+transition:background .12s,color .12s;
+display:grid
+}
+.agent-reference-chip-remove:hover
+{
+background:var(--hover);
+color:var(--text)
+}
 .agent-quote-preview
 {
 border:1px solid color-mix(in srgb, var(--focus-ring) 30%, var(--line));
@@ -12143,6 +12181,96 @@ opacity:.85;
 flex:none;
 margin-left:auto;
 font-size:11.5px
+}
+.agent-mention-menu
+{
+z-index:30;
+border:1px solid var(--line);
+background:var(--panel);
+border-radius:12px;
+flex-direction:column;
+gap:2px;
+max-height:248px;
+padding:6px;
+display:flex;
+position:absolute;
+bottom:calc(100% + 8px);
+left:0;
+right:0;
+overflow-y:auto;
+box-shadow:0 10px 30px #0000002e
+}
+.agent-mention-item
+{
+width:100%;
+min-width:0;
+color:var(--text);
+text-align:left;
+cursor:pointer;
+background:0 0;
+border:0;
+border-radius:8px;
+align-items:center;
+gap:9px;
+padding:6px 9px;
+font-size:12.5px;
+display:flex
+}
+.agent-mention-item:hover,.agent-mention-item.selected
+{
+background:var(--hover)
+}
+.agent-mention-avatar
+{
+background:color-mix(in srgb, var(--accent) 14%, transparent);
+color:var(--accent);
+border-radius:6px;
+width:26px;
+height:26px;
+flex:none;
+place-items:center;
+font-size:11px;
+font-weight:700;
+display:grid
+}
+.agent-mention-main
+{
+min-width:0;
+flex:1
+}
+.agent-mention-subject
+{
+text-overflow:ellipsis;
+white-space:nowrap;
+color:var(--text);
+display:block;
+overflow:hidden;
+font-weight:550
+}
+.agent-mention-meta
+{
+color:var(--text-faint);
+width:100%;
+text-overflow:ellipsis;
+white-space:nowrap;
+margin-top:1px;
+display:block;
+overflow:hidden;
+font-size:11px
+}
+.agent-mention-empty,.agent-mention-limit
+{
+color:var(--text-faint);
+justify-content:center;
+align-items:center;
+gap:7px;
+padding:10px 6px;
+font-size:12px;
+display:flex
+}
+.agent-mention-limit
+{
+color:color-mix(in srgb, var(--danger) 82%, var(--text))
 }
 .agent-memory-suggestions
 {
@@ -12540,6 +12668,45 @@ flex:none
 text-overflow:ellipsis;
 white-space:nowrap;
 color:var(--text-soft);
+font-size:11px;
+font-weight:600;
+overflow:hidden
+}
+.agent-message-references
+{
+flex-wrap:wrap;
+gap:6px;
+margin-top:7px;
+display:flex
+}
+.agent-message-reference
+{
+border:1px solid color-mix(in srgb, var(--focus-ring) 32%, var(--line));
+background:color-mix(in srgb, var(--focus-ring) 5%, var(--panel-muted));
+color:var(--text-soft);
+cursor:pointer;
+border-radius:8px;
+align-items:center;
+gap:6px;
+max-width:280px;
+padding:5px 10px 5px 8px;
+transition:background .16s,border-color .16s;
+display:inline-flex
+}
+.agent-message-reference:hover
+{
+background:var(--hover);
+border-color:var(--focus-ring)
+}
+.agent-message-reference>svg
+{
+color:var(--focus-ring);
+flex:none
+}
+.agent-message-reference>span
+{
+text-overflow:ellipsis;
+white-space:nowrap;
 font-size:11px;
 font-weight:600;
 overflow:hidden

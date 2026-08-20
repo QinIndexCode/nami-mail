@@ -671,13 +671,13 @@ export async function inspectDesktopDeepDiagnostic(): Promise<DesktopDeepDiagnos
         // right:14px child would land clear of the rail.
         out.agent.workspacePosition = agentWs ? getComputedStyle(agentWs).position : null;
         out.agent.citationsAnchorClearance = agentWs && rail ? Math.round(rail.getBoundingClientRect().left - (agentWs.getBoundingClientRect().right - 14)) : null;
-        const chip = document.querySelector(".agent-current-context");
+        const chip = document.querySelector(".agent-reference-chips .agent-reference-chip-open");
         const scopePicker = document.querySelector(".agent-scope-picker");
         const mainPanel = agentWs ? agentWs.querySelector(".agent-main-panel") : null;
         out.agent.agentContextChip = chip instanceof HTMLElement && mainPanel instanceof HTMLElement && rail instanceof HTMLElement ? {
           rect: rect(chip),
           tag: chip.tagName,
-          ariaLabel: chip.getAttribute("aria-label") ?? "",
+          chipTitle: chip.getAttribute("title") ?? "",
           subject: (chip.querySelector("span")?.textContent ?? "").slice(0, 60),
           railClearance: Math.round(rail.getBoundingClientRect().left - chip.getBoundingClientRect().right),
           panelClearance: Math.round(mainPanel.getBoundingClientRect().right - chip.getBoundingClientRect().right),
@@ -729,7 +729,7 @@ export async function inspectDesktopChipOverlapSweep(): Promise<Record<string, u
     (() => {
       const rect = (el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), right: Math.round(r.right), bottom: Math.round(r.bottom) }; };
       const rail = document.querySelector(".icon-rail");
-      const chip = document.querySelector(".agent-current-context");
+      const chip = document.querySelector(".agent-reference-chips .agent-reference-chip-open");
       const picker = document.querySelector(".agent-scope-picker");
       const workspace = document.querySelector(".agent-workspace");
       const panel = workspace ? workspace.querySelector(":scope > .agent-main-panel") : null;

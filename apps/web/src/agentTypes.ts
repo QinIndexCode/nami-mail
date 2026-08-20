@@ -127,6 +127,12 @@ export type AgentMessageAttachment = {
   token?: string;
 };
 
+/** A mail the user explicitly introduced as context via /@ (cap 8, deduped by id). */
+export type AgentMessageReference = {
+  id: string;
+  subject?: string;
+};
+
 export type AgentMessage = {
   id: string;
   role: "user" | "assistant" | "system";
@@ -138,6 +144,7 @@ export type AgentMessage = {
   confirmation?: AgentConfirmation;
   error?: { code: string; message: string; suggestion?: string; retryable?: boolean };
   attachments?: AgentMessageAttachment[];
+  references?: AgentMessageReference[];
   quote?: string;
   /** Locally revoked by the user (hidden behind a placeholder, never sent back to the agent). */
   revoked?: boolean;
@@ -188,6 +195,8 @@ export type AgentMessageRequest = {
   quote?: string;
   /** Files uploaded by the user; token is present when usable as a mail attachment. */
   attachments?: AgentMessageAttachment[];
+  /** Mails the user explicitly introduced as context (cap 8). */
+  references?: AgentMessageReference[];
 };
 
 export type AgentStreamEvent =

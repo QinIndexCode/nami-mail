@@ -116,7 +116,42 @@ const h = vi.hoisted(() => {
     scope: { mode: "selected_account", accountIds: ["account-2"], messageIds: [] },
     messages: [],
   };
-  return { provider, bootstrap, convA, convB, convGhost, convScoped, onOpenMessage: vi.fn() };
+  // Mail rows served to the /@ mention menu: ten messages across both accounts
+  // so the cap, pagination, and cross-account widen all have material to act on.
+  const mentionMail: Message[] = [
+    ["mention-1", "Invoice for August", "account-1", "me@example.com", "Billing"],
+    ["mention-2", "Project update", "account-2", "work@example.com", "Nora"],
+    ["mention-3", "Weekly digest", "account-1", "me@example.com", "Digest Bot"],
+    ["mention-4", "Conference itinerary", "account-2", "work@example.com", "Events"],
+    ["mention-5", "Q3 planning notes", "account-1", "me@example.com", "Sam"],
+    ["mention-6", "Invoice follow-up", "account-2", "work@example.com", "Billing"],
+    ["mention-7", "Lunch invitation", "account-1", "me@example.com", "Alex"],
+    ["mention-8", "Server maintenance", "account-2", "work@example.com", "Ops"],
+    ["mention-9", "Tax documents", "account-1", "me@example.com", "Finance"],
+    ["mention-10", "Team offsite", "account-2", "work@example.com", "HR"],
+  ].map(([id, subject, accountId, accountEmail, sender], index): Message => ({
+    id,
+    accountId,
+    accountEmail,
+    providerName: "demo",
+    mailbox: "INBOX",
+    uid: index + 1,
+    subject,
+    from: { name: sender, address: `${sender.replace(/[^a-z0-9]/gi, "")}@example.com` },
+    to: [],
+    cc: [],
+    sentAt: "2026-08-10T00:00:00.000Z",
+    snippet: "",
+    textBody: "",
+    htmlBody: "",
+    flags: [],
+    seen: true,
+    flagged: false,
+    hasAttachments: false,
+    attachments: [],
+    size: 0,
+  }));
+  return { provider, bootstrap, convA, convB, convGhost, convScoped, mentionMail, onOpenMessage: vi.fn() };
 });
 
 vi.mock("./api", () => ({
@@ -141,6 +176,12 @@ vi.mock("./api", () => ({
     agentMemoryCreate: vi.fn(async () => ({ ok: true })),
     agentProviders: vi.fn(async () => ({ items: [h.provider], defaultProviderId: "provider-1" })),
     agentMcpServers: vi.fn(async () => ({ items: [] })),
+    messages: vi.fn(async (query: string) => {
+      const params = new URLSearchParams(query);
+      const term = (params.get("q") ?? "").toLowerCase();
+      const items = term ? h.mentionMail.filter((m) => m.subject.toLowerCase().includes(term)) : h.mentionMail;
+      return { items, total: items.length, page: Number(params.get("page") ?? "1"), pageSize: Number(params.get("pageSize") ?? "10") };
+    }),
   },
 }));
 
@@ -187,6 +228,22 @@ const clickSend = () => {
   act(() => {
     send.click();
   });
+};
+
+// The mention menu rows (like the slash items) introduce on mousedown so the
+// composer keeps focus; simulate that instead of a click.
+const pickMentionRow = (row: HTMLButtonElement) => {
+  act(() => {
+    row.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  });
+};
+
+const settleMentionDebounce = async () => {
+  await flush();
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 280));
+  });
+  await flush();
 };
 
 const headingFor = (): string | null => container.querySelector(".agent-conversation-title h1")?.textContent ?? null;
@@ -336,20 +393,22 @@ describe("AgentWorkspace conversation switching", () => {
     expect(api.cancelAgentRun).not.toHaveBeenCalled();
   });
 
-  it("defaults the scope picker to the entering message's account and keeps the mail chip", async () => {
+  it("seeds a reference chip from the entering message above the composer", async () => {
     await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
 
-    const chip = container.querySelector<HTMLButtonElement>(".agent-current-context");
-    expect(chip).not.toBeNull();
-    expect(chip?.tagName).toBe("BUTTON");
-    expect(chip?.textContent).toContain("Reference email subject");
-    expect(chip?.getAttribute("aria-label")).toBeTruthy();
-    // The mail chip and the scope picker live in the workspace header, chip
-    // first, where neither can collide with the icon rail.
-    const actions = container.querySelector<HTMLElement>(".agent-header-actions");
-    expect(actions).not.toBeNull();
-    expect(actions?.contains(chip)).toBe(true);
-    expect(chip?.closest(".agent-context-strip")).toBeNull();
+    // The header chip is gone — the account picker is the only header scope
+    // control. The entering message became the first mail reference instead,
+    // rendered as a removable chip above the composer.
+    expect(container.querySelector<HTMLElement>(".agent-current-context")).toBeNull();
+    const chips = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-reference-chips .agent-reference-chip-open"));
+    expect(chips).toHaveLength(1);
+    expect(chips[0]?.tagName).toBe("BUTTON");
+    expect(chips[0]?.textContent).toContain("Reference email subject");
+    expect(chips[0]?.getAttribute("data-tooltip")).toBeTruthy();
+    const composer = container.querySelector<HTMLElement>(".agent-composer");
+    expect(composer).not.toBeNull();
+    expect(composer?.parentElement?.contains(chips[0])).toBe(true);
+    expect(chips[0]?.closest(".agent-header-actions")).toBeNull();
 
     const picker = container.querySelector<HTMLButtonElement>(".agent-scope-picker");
     expect(picker).not.toBeNull();
@@ -358,13 +417,173 @@ describe("AgentWorkspace conversation switching", () => {
     expect(picker?.getAttribute("aria-expanded")).toBe("false");
     const pickerWrap = container.querySelector<HTMLElement>(".agent-scope-picker-wrap");
     expect(pickerWrap).not.toBeNull();
-    const actionChildren = actions ? Array.from(actions.children) : [];
-    expect(actionChildren.indexOf(pickerWrap!)).toBeGreaterThan(actionChildren.indexOf(chip!));
+    const actions = container.querySelector<HTMLElement>(".agent-header-actions");
+    expect(actions?.contains(pickerWrap)).toBe(true);
 
     act(() => {
-      chip?.click();
+      chips[0]!.click();
     });
     expect(h.onOpenMessage).toHaveBeenCalledWith("msg-ref-1");
+  });
+
+  it("types /@ to reveal the mention menu and introduces a mail as a reference chip", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
+
+    const textarea = container.querySelector<HTMLTextAreaElement>(".agent-composer textarea");
+    expect(textarea?.getAttribute("aria-expanded")).toBe("false");
+    setComposer("/@");
+    await settleMentionDebounce();
+
+    expect(api.messages).toHaveBeenCalledWith("pageSize=10");
+    expect(textarea?.getAttribute("aria-expanded")).toBe("true");
+    const menu = container.querySelector<HTMLElement>(".agent-mention-menu");
+    expect(menu).not.toBeNull();
+    expect(menu?.getAttribute("role")).toBe("listbox");
+    expect(menu?.getAttribute("id")).toBe("agent-mention-menu");
+    const rows = Array.from(menu?.querySelectorAll<HTMLButtonElement>(".agent-mention-item") ?? []);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.getAttribute("role")).toBe("option");
+    // The menu surfaces the account of each row.
+    expect(rows[0]?.textContent).toContain("me@example.com");
+
+    pickMentionRow(rows[0]!);
+    await flush();
+    // Introducing closes the menu and clears the /@ prefix.
+    expect(container.querySelector(".agent-mention-menu")).toBeNull();
+    expect(textarea?.value).toBe("");
+    // The seeded entering-message chip is still there, now joined by the
+    // introduced mail.
+    const chips = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-reference-chips .agent-reference-chip-open"));
+    expect(chips).toHaveLength(2);
+    expect(chips.map((chip) => chip.textContent).join("|")).toContain("Invoice for August");
+  });
+
+  it("searches mail by term and narrows the mention menu", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
+
+    setComposer("/@invoice");
+    await settleMentionDebounce();
+
+    expect(api.messages).toHaveBeenCalledWith("q=invoice&scope=all&pageSize=10");
+    const rows = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-mention-item"));
+    expect(rows.length).toBeGreaterThan(0);
+    // The FTS query runs across all accounts regardless of the current scope.
+    const text = rows.map((row) => row.textContent).join("|");
+    expect(text).toContain("Invoice for August");
+    expect(text).toContain("Invoice follow-up");
+    expect(text).not.toContain("Weekly digest");
+  });
+
+  it("dismisses the mention menu with Escape and reverts the composer", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
+
+    setComposer("/@invoice");
+    await settleMentionDebounce();
+    expect(container.querySelector(".agent-mention-menu")).not.toBeNull();
+
+    act(() => {
+      container.querySelector<HTMLTextAreaElement>(".agent-composer textarea")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await flush();
+    expect(container.querySelector(".agent-mention-menu")).toBeNull();
+    expect(container.querySelector<HTMLTextAreaElement>(".agent-composer textarea")?.value).toBe("");
+  });
+
+  it("introduces the highlighted row with Enter", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
+
+    setComposer("/@offsite");
+    await settleMentionDebounce();
+    const rows = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-mention-item"));
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.getAttribute("aria-selected")).toBe("true");
+
+    act(() => {
+      container.querySelector<HTMLTextAreaElement>(".agent-composer textarea")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await flush();
+    const chips = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-reference-chips .agent-reference-chip-open"));
+    expect(chips.map((chip) => chip.textContent).join("|")).toContain("Team offsite");
+    expect(container.querySelector(".agent-mention-menu")).toBeNull();
+  });
+
+  it("dedupes references and rejects a ninth mail with a cap notice", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
+
+    // Introduce the same mail twice: the second attempt only closes the menu.
+    setComposer("/@offsite");
+    await settleMentionDebounce();
+    pickMentionRow(container.querySelector<HTMLButtonElement>(".agent-mention-item")!);
+    await flush();
+    expect(container.querySelectorAll<HTMLButtonElement>(".agent-reference-chips .agent-reference-chip-open")).toHaveLength(2);
+    setComposer("/@offsite");
+    await settleMentionDebounce();
+    pickMentionRow(container.querySelector<HTMLButtonElement>(".agent-mention-item")!);
+    await flush();
+    expect(container.querySelectorAll<HTMLButtonElement>(".agent-reference-chips .agent-reference-chip-open")).toHaveLength(2);
+
+    // Nine distinct mails: the seeding reference counts toward the cap, so the
+    // ninth introduction is refused with a status notice.
+    const subjects = ["Project update", "Weekly digest", "Conference itinerary", "Q3 planning notes", "Invoice follow-up", "Lunch invitation", "Server maintenance"];
+    for (const subject of subjects) {
+      const term = subject.split(" ")[0]!.toLowerCase();
+      setComposer(`/@${term}`);
+      await settleMentionDebounce();
+      const row = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-mention-item")).find((r) => r.textContent?.includes(subject));
+      pickMentionRow(row!);
+      await flush();
+    }
+    expect(container.querySelectorAll<HTMLButtonElement>(".agent-reference-chips .agent-reference-chip-open")).toHaveLength(8);
+    const notice = container.querySelector<HTMLElement>(".agent-mention-limit");
+    expect(notice).not.toBeNull();
+    expect(notice?.getAttribute("role")).toBe("status");
+  });
+
+  it("introducing a mail from another account widens the scope to all accounts", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
+    // The entering message pins the scope to account-1.
+    expect(container.querySelector<HTMLButtonElement>(".agent-scope-picker")?.textContent).toContain("me@example.com");
+
+    setComposer("/@project");
+    await settleMentionDebounce();
+    const rows = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-mention-item"));
+    const worksRow = rows.find((row) => row.textContent?.includes("Project update"));
+    expect(worksRow?.textContent).toContain("work@example.com");
+    pickMentionRow(worksRow!);
+    await flush();
+
+    // The cross-account reference auto-widened the boundary; the picker now
+    // shows the all-accounts label instead of an account email.
+    const picker = container.querySelector<HTMLButtonElement>(".agent-scope-picker");
+    expect(picker?.textContent).not.toContain("me@example.com");
+    expect(picker?.textContent).not.toContain("work@example.com");
+    expect(picker?.textContent?.length).toBeGreaterThan(0);
+  });
+
+  it("sends references with the message and replays them on the user bubble", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
+
+    setComposer("/@tax");
+    await settleMentionDebounce();
+    pickMentionRow(container.querySelector<HTMLButtonElement>(".agent-mention-item")!);
+    await flush();
+
+    setComposer("summarize the tax documents for me");
+    clickSend();
+    await flush();
+
+    const payload = vi.mocked(api.streamAgentMessage).mock.calls.at(-1)?.[1];
+    expect(payload?.references).toEqual([{ id: "msg-ref-1", subject: "Reference email subject" }, { id: "mention-9", subject: "Tax documents" }]);
+    // The user bubble renders the references as openable chips.
+    const references = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-message-reference"));
+    expect(references.length).toBeGreaterThan(0);
+    expect(references.map((chip) => chip.textContent).join("|")).toContain("Tax documents");
+    act(() => {
+      references.at(-1)!.click();
+    });
+    expect(h.onOpenMessage).toHaveBeenCalledWith("mention-9");
   });
 
   it("switching the scope picker account forks a new conversation scoped to that account", async () => {
