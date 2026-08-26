@@ -34,7 +34,7 @@ try {
   await page.waitForTimeout(600);
   out.workspaceGone = (await page.locator(".agent-workspace").count()) === 0;
 
-  await page.screenshot({ path: "scripts/workspace-back-button.png" });
+  await page.screenshot({ path: "output/workspace-back-button.png" });
   console.log(JSON.stringify(out, null, 2));
 
   const ok =

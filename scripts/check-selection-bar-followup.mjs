@@ -56,7 +56,7 @@ try {
   results.finalHeight = await wrapHeight();
 
   console.log(JSON.stringify(results, null, 2));
-  await page.screenshot({ path: "scripts/selection-bar-multiselect.png" });
+  await page.screenshot({ path: "output/selection-bar-multiselect.png" });
 
   const ok =
     results.entryHeight >= 40 &&

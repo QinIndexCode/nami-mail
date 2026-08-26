@@ -701,6 +701,11 @@ export default function App() {
   // Mirrors `agentPhase` for the open/close controllers so they can read the
   // current phase synchronously without being recreated on every phase change.
   const agentPhaseRef = useRef<AgentPhase>("idle");
+  // Scroll position across the Agent round-trip: the mail column is
+  // display:none while the workspace is open, which resets the virtualized
+  // list's scroller. The offset is captured before hiding and re-applied once
+  // the column is laid out again.
+  const agentReturnScrollTopRef = useRef<number | null>(null);
   const clearAgentSwitchTimers = () => {
     for (const timer of agentSwitchTimersRef.current) window.clearTimeout(timer);
     agentSwitchTimersRef.current = [];
@@ -712,6 +717,7 @@ export default function App() {
   const openAgentWorkspace = useCallback(() => {
     clearAgentSwitchTimers();
     if (agentPhaseRef.current === "mail-leaving" || agentPhaseRef.current === "agent-entering") return;
+    agentReturnScrollTopRef.current = messageListRef.current?.scrollTop ?? null;
     agentPhaseRef.current = "mail-leaving";
     setAgentPhase("mail-leaving");
     // Warm the lazy chunk while the mail layers fade out so the workspace is
@@ -737,6 +743,22 @@ export default function App() {
       setAgentOpen(false);
       agentPhaseRef.current = "mail-entering";
       setAgentPhase("mail-entering");
+      const savedTop = agentReturnScrollTopRef.current;
+      agentReturnScrollTopRef.current = null;
+      if (savedTop == null) return;
+      // The scroller was display:none while the Agent workspace was open, so
+      // its offset was lost. Restore once the column is laid out again (double
+      // rAF: one frame for display, one for the virtualizer's re-measure) so
+      // the user lands exactly where they left. A quick re-entry into the
+      // workspace (phase back to "mail-leaving") cancels the restore.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (agentPhaseRef.current === "mail-leaving") return;
+          const viewport = messageListRef.current;
+          if (!viewport) return;
+          viewport.scrollTop = savedTop;
+        });
+      });
     }, AGENT_SWITCH_TOTAL_MS);
     queueAgentTimer(() => {
       agentPhaseRef.current = "idle";
