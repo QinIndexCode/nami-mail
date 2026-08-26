@@ -84,6 +84,7 @@ export class UnavailableNamedPipeAdapter implements DaclCapableNamedPipeAdapter 
   readonly accessControl = "sid-dacl" as const;
 
   async acquireExclusive(_request: HostLeaseRequest): Promise<DaclNamedPipeLease> {
+    void _request;
     protocolError(
       "BROKER_SECURITY_UNAVAILABLE",
       "Secure local Agent IPC is unavailable because no SID-DACL named-pipe adapter is installed.",

@@ -118,6 +118,179 @@ async function renderAppIcon(mark, size) {
     .toBuffer();
 }
 
+// The tray swaps to this icon while "new mail arrived but the window is not
+// focused": it is the exact 16px app-icon frame (the same one the ICO carries,
+// rendered by renderAppIcon) with a small white dot in the top-right corner.
+// Nothing else may differ between the two, because the main process shows it
+// as the same tray slot while switching.
+const trayIconSize = 16;
+const trayDotCenterX = 11.5;
+const trayDotCenterY = 4.5;
+const trayDotRadius = 2.5;
+
+function assertWhiteDotBadge(plainPixels, badgedPixels) {
+  assert.equal(plainPixels.length, badgedPixels.length);
+  const channels = 4;
+  // Antialiasing blends the dot's edge, so let the diff extend one pixel
+  // beyond the circle; everything else must stay byte-identical.
+  const tolerance = trayDotRadius + 1;
+  let differingPixels = 0;
+  for (let y = 0; y < trayIconSize; y++) {
+    for (let x = 0; x < trayIconSize; x++) {
+      const offset = (y * trayIconSize + x) * channels;
+      const plain = plainPixels.subarray(offset, offset + channels);
+      const badged = badgedPixels.subarray(offset, offset + channels);
+      if (plain.equals(badged)) continue;
+      differingPixels++;
+      const distance = Math.hypot(x + 0.5 - trayDotCenterX, y + 0.5 - trayDotCenterY);
+      assert.ok(distance <= tolerance, `Badge dot differs outside its circle at (${x}, ${y}).`);
+      // The white dot only brightens pixels (including fully transparent ones
+      // under the rounded corner); any darker or more transparent pixel means
+      // the dot changed the icon beyond its intended shape.
+      assert.ok(
+        badged[0] >= plain[0] && badged[1] >= plain[1] && badged[2] >= plain[2] && badged[3] >= plain[3],
+        `Badge dot darkens pixel (${x}, ${y}): ${[...plain]} -> ${[...badged]}.`,
+      );
+    }
+  }
+  assert.ok(differingPixels > 0, "Tray badge icon contains no white dot.");
+  const centerOffset = (Math.floor(trayDotCenterY) * trayIconSize + Math.floor(trayDotCenterX)) * channels;
+  const center = badgedPixels.subarray(centerOffset, centerOffset + channels);
+  assert.ok(
+    center[0] >= 200 && center[1] >= 200 && center[2] >= 200 && center[3] >= 200,
+    `Tray badge dot center is not solid white: ${[...center]}.`,
+  );
+}
+
+async function renderTrayBadgeIcon(plainTrayFrame) {
+  // The composite pipeline re-encodes semi-transparent pixels with a small
+  // rounding shift anywhere in the image, so the reference must pass through
+  // the same decode -> composite -> encode path (with an empty overlay) or
+  // the icon's corner antialiasing would be mistaken for a diff.
+  const reference = Buffer.from(
+    `<svg width="${trayIconSize}" height="${trayIconSize}" xmlns="http://www.w3.org/2000/svg"></svg>`,
+  );
+  const dot = Buffer.from(
+    `<svg width="${trayIconSize}" height="${trayIconSize}" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="${trayDotCenterX}" cy="${trayDotCenterY}" r="${trayDotRadius}" fill="#ffffff" fill-opacity="0.95"/>
+    </svg>`,
+  );
+  const [referenceImage, badged] = await Promise.all([
+    sharp(plainTrayFrame).composite([{ input: reference, left: 0, top: 0 }]).png({ compressionLevel: 9 }).toBuffer(),
+    sharp(plainTrayFrame).composite([{ input: dot, left: 0, top: 0 }]).png({ compressionLevel: 9 }).toBuffer(),
+  ]);
+  const [referencePixels, badgedPixels] = await Promise.all([
+    sharp(referenceImage).raw().toBuffer(),
+    sharp(badged).raw().toBuffer(),
+  ]);
+  assertWhiteDotBadge(referencePixels, badgedPixels);
+  return badged;
+}
+
+// NSIS assisted-installer bitmaps. The wizard paints the sidebar on the left
+// of the welcome/directory pages and the header strip at the top of every
+// page; electron-builder picks these files up by their default names
+// (build/installerSidebar.bmp, build/installerHeader.bmp).
+// NSIS wizard bitmaps must be uncompressed BMPs. sharp cannot write BMP, so
+// encode a 24-bit bottom-up BMP directly from raw RGB (NSIS accepts 24/32-bit).
+function encodeBmp24(rgb, width, height) {
+  const rowSize = Math.ceil((24 * width) / 32) * 4;
+  const pixelDataSize = rowSize * height;
+  const fileSize = 54 + pixelDataSize;
+  const out = Buffer.alloc(fileSize);
+  out.write("BM", 0, "ascii");
+  out.writeUInt32LE(fileSize, 2);
+  out.writeUInt32LE(54, 10);
+  out.writeUInt32LE(40, 14);
+  out.writeInt32LE(width, 18);
+  out.writeInt32LE(height, 22);
+  out.writeUInt16LE(1, 26);
+  out.writeUInt16LE(24, 28);
+  out.writeUInt32LE(0, 30); // BI_RGB
+  out.writeUInt32LE(pixelDataSize, 34);
+  let offset = 54;
+  for (let y = height - 1; y >= 0; y--) {
+    const rowStart = y * width * 3;
+    for (let x = 0; x < width; x++) {
+      const src = rowStart + x * 3;
+      out[offset++] = rgb[src + 2]; // B
+      out[offset++] = rgb[src + 1]; // G
+      out[offset++] = rgb[src];     // R
+    }
+    offset += rowSize - width * 3;
+  }
+  return out;
+}
+
+async function renderInstallerSidebar(mark) {
+  const width = 164;
+  const height = 314;
+  const markSize = 52;
+  const resizedMark = await sharp(mark)
+    .resize(markSize, markSize, { fit: "inside", kernel: sharp.kernel.lanczos3 })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+  const markMetadata = await sharp(resizedMark).metadata();
+  assert.ok(markMetadata.width && markMetadata.height);
+  const overlay = Buffer.from(
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="${width}" height="${height}" fill="#1b1b1f"/>
+      <text x="82" y="226" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#f5f5f6" text-anchor="middle" letter-spacing="0.5">Nami Mail</text>
+      <text x="82" y="245" font-family="Segoe UI, Arial, sans-serif" font-size="9" fill="#9898a0" text-anchor="middle">Local-first mail client</text>
+    </svg>`,
+  );
+  const rgb = await sharp({
+    create: { width, height, channels: 4, background: { r: 27, g: 27, b: 31, alpha: 1 } },
+  })
+    .composite([
+      { input: overlay, left: 0, top: 0 },
+      {
+        input: resizedMark,
+        left: Math.round((width - markMetadata.width) / 2),
+        top: Math.round((height - markMetadata.height) / 2) - 24,
+      },
+    ])
+    .removeAlpha()
+    .toColourspace("srgb")
+    .raw()
+    .toBuffer();
+  return encodeBmp24(rgb, width, height);
+}
+
+async function renderInstallerHeader(mark) {
+  const width = 150;
+  const height = 57;
+  const markSize = 24;
+  const resizedMark = await sharp(mark)
+    .resize(markSize, markSize, { fit: "inside", kernel: sharp.kernel.lanczos3 })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+  const markMetadata = await sharp(resizedMark).metadata();
+  assert.ok(markMetadata.width && markMetadata.height);
+  const overlay = Buffer.from(
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="${width}" height="${height}" fill="#1b1b1f"/>
+      <text x="42" y="35" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#f5f5f6">Nami Mail</text>
+    </svg>`,
+  );
+  const rgb = await sharp({
+    create: { width, height, channels: 4, background: { r: 27, g: 27, b: 31, alpha: 1 } },
+  })
+    .composite([
+      { input: overlay, left: 0, top: 0 },
+      {
+        input: resizedMark,
+        left: 12,
+        top: Math.round((height - markMetadata.height) / 2),
+      },
+    ])
+    .removeAlpha()
+    .toColourspace("srgb")
+    .raw()
+    .toBuffer();
+  return encodeBmp24(rgb, width, height);
+}
+
 function encodeIco(frames) {
   const headerSize = 6;
   const directoryEntrySize = 16;
@@ -171,10 +344,13 @@ const [lightThemeMark, darkThemeMark] = await Promise.all([
     offset: -500,
   }),
 ]);
-const [lightWebMark, darkWebMark, fullSizeIcon] = await Promise.all([
+const [lightWebMark, darkWebMark, fullSizeIcon, installerSidebar, installerHeader, uninstallerSidebar] = await Promise.all([
   renderMark(lightThemeMark, 256, 18),
   renderMark(darkThemeMark, 256, 18),
   renderAppIcon(darkThemeMark, 1024),
+  renderInstallerSidebar(darkThemeMark),
+  renderInstallerHeader(darkThemeMark),
+  renderInstallerSidebar(darkThemeMark),
 ]);
 const iconFrames = await Promise.all(iconSizes.map(async (size) => ({
   size,
@@ -182,6 +358,12 @@ const iconFrames = await Promise.all(iconSizes.map(async (size) => ({
 })));
 const ico = encodeIco(iconFrames);
 const icoEntries = inspectIco(ico);
+// The tray badge icon must composite from the very frame the ICO carries at
+// the tray size, so the swapped-in image matches the app icon pixel for pixel
+// apart from the dot.
+const trayFrame = iconFrames.find(({ size }) => size === trayIconSize);
+assert.ok(trayFrame, "Missing tray-size icon frame.");
+const trayBadgeIcon = await renderTrayBadgeIcon(trayFrame.png);
 
 assert.deepEqual(icoEntries.map(({ width }) => width), iconSizes);
 assert.ok(icoEntries.every(({ width, height, bitDepth, byteLength, offset }) => (
@@ -204,9 +386,13 @@ for (const [name, image, expectedSize] of [
 const outputs = [
   [path.join(projectRoot, "build", "icon.png"), fullSizeIcon],
   [path.join(projectRoot, "build", "icon.ico"), ico],
+  [path.join(projectRoot, "build", "tray-badge-icon.png"), trayBadgeIcon],
   [path.join(projectRoot, "apps", "web", "public", "favicon.ico"), ico],
   [path.join(webBrandDirectory, "mark-light.png"), lightWebMark],
   [path.join(webBrandDirectory, "mark-dark.png"), darkWebMark],
+  [path.join(projectRoot, "build", "installerSidebar.bmp"), installerSidebar],
+  [path.join(projectRoot, "build", "installerHeader.bmp"), installerHeader],
+  [path.join(projectRoot, "build", "uninstallerSidebar.bmp"), uninstallerSidebar],
 ];
 const changed = [];
 for (const [filePath, contents] of outputs) {

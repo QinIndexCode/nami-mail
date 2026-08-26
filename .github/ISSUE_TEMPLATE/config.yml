@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 使用、安装与邮箱接入指南
-    url: https://github.com/QinIndexCode/nami-mail/blob/main/SUPPORT.md
-    about: 请先查看支持、安装和邮箱接入说明；不要在这里提交账户或邮件内容。
-  - name: 私下报告安全漏洞
+  - name: 使用、安装与邮箱接入指南 / Usage, Installation & Email Setup Guide
+    url: https://github.com/QinIndexCode/nami-mail/blob/main/SUPPORT.en.md
+    about: 请先查看支持、安装和邮箱接入说明；不要在这里提交账户或邮件内容。 / Check the support, installation, and email setup guide first. Do not submit account or mail content here.
+  - name: 私下报告安全漏洞 / Privately Report a Security Vulnerability
     url: https://github.com/QinIndexCode/nami-mail/security/advisories/new
-    about: 使用 GitHub 私密漏洞通报；不要在公开 Issue 提交凭据、令牌、真实邮件或可利用的安全细节。
+    about: 使用 GitHub 私密漏洞通报；不要在公开 Issue 提交凭据、令牌、真实邮件或可利用的安全细节。 / Use GitHub private vulnerability reporting. Do not submit credentials, tokens, real mail, or exploitable security details in public issues.

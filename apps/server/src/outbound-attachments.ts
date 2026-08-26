@@ -544,6 +544,31 @@ export function discardPendingOutboundAttachments(
   return removeUnlinkedAttachments(db, directory, tokens);
 }
 
+/**
+ * Resolves uploaded attachment tokens to their display filenames for
+ * confirmation previews. Lenient by design: a missing or cross-account token
+ * is skipped so the preview can still render; the durable send path performs
+ * its own strict validation before anything is attached.
+ */
+export function resolveOutboundAttachmentNames(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+  accountId: string,
+  tokens: readonly string[],
+): string[] {
+  const names: string[] = [];
+  for (const token of tokens) {
+    const row = rowForToken(db, token);
+    if (!row || row.account_id !== accountId) continue;
+    try {
+      names.push(publicAttachment(row, masterKey).filename);
+    } catch {
+      // A damaged metadata envelope must not block the confirmation preview.
+    }
+  }
+  return names;
+}
+
 export function discardDraftOutboundAttachments(
   db: DatabaseHandle,
   directory: string,

@@ -1,4 +1,4 @@
-export const agentConfirmationIpcChannel = "nami:resolve-agent-confirmation";
+export { agentConfirmationIpcChannel } from "./confirmation-channel.cjs";
 
 const agentConfirmationIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const agentConfirmationDecisions = ["approve", "reject"] as const;

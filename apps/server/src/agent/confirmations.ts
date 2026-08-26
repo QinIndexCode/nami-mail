@@ -7,7 +7,7 @@ import type {
 import { randomUUID } from "node:crypto";
 import type { ConfirmationAuthority } from "@nami/agent-core";
 import type { DatabaseHandle } from "../db.js";
-import { AccountLifecycleStore } from "./lifecycle.js";
+import type { AccountLifecycleStore } from "./lifecycle.js";
 import { decryptPersistentAgentRecord, encryptPersistentAgentRecord } from "./record-envelopes.js";
 import { agentOpaqueDigest, canonicalAgentJson } from "./store-crypto.js";
 import { assertAgentStoreReadable } from "./schema.js";
@@ -132,7 +132,10 @@ export class ImmutableGuiConfirmationStore implements ConfirmationAuthority {
     requestId: string,
     operation: DesktopConfirmationVerificationInput["operation"],
   ): TrustedDesktopConfirmation | undefined {
-    if (!capability || caller.kind !== "desktop-ui" || !caller.interactive) return undefined;
+    // Both the Electron window and the local web surface resolve confirmations
+    // interactively; each verifier only ever accepts its own capability, so a
+    // desktop authority never trusts a web caller and vice versa.
+    if (!capability || !caller.interactive || (caller.kind !== "desktop-ui" && caller.kind !== "web-ui")) return undefined;
     const trusted = this.desktopConfirmationVerifier?.verify({
       capability,
       caller,
@@ -239,6 +242,28 @@ export class ImmutableGuiConfirmationStore implements ConfirmationAuthority {
     if (!trusted) {
       throw new Error("A verified desktop confirmation capability is required.");
     }
+    return this.writeDecision(decision, trusted.principalId);
+  }
+
+  /**
+   * Records a decision that arrived through the host's external confirmation
+   * bridge. The bridge is injected by the desktop main process and shows a
+   * native dialog for a paired CLI/MCP caller, so no capability is required;
+   * the caller must still be a non-interactive external caller.
+   */
+  recordExternalDecision(
+    decision: ConfirmationDecision,
+    caller: CallerContext,
+  ): ConfirmationDecision {
+    assertAgentStoreReadable(this.db);
+    validDecision(decision);
+    if (caller.kind !== "cli" && caller.kind !== "mcp") {
+      throw new Error("An external confirmation decision requires a paired CLI or MCP caller.");
+    }
+    return this.writeDecision(decision, `external:${caller.kind}:${caller.callerId}`);
+  }
+
+  private writeDecision(decision: ConfirmationDecision, callerId: string): ConfirmationDecision {
     return this.transaction(() => {
       const requested = this.requestFor(decision.confirmationId);
       if (!requested || requested.request.requestId !== decision.requestId) {
@@ -253,7 +278,7 @@ export class ImmutableGuiConfirmationStore implements ConfirmationAuthority {
             requested.row.confirmation_token_hash,
             "expired",
             "gui-confirmation-decision",
-            { kind: "decision", decision: { ...decision, decision: "expired", decidedAt: now }, callerId: trusted.principalId },
+            { kind: "decision", decision: { ...decision, decision: "expired", decidedAt: now }, callerId },
             now,
           );
         }
@@ -275,7 +300,7 @@ export class ImmutableGuiConfirmationStore implements ConfirmationAuthority {
         requested.row.confirmation_token_hash,
         type,
         "gui-confirmation-decision",
-        { kind: "decision", decision, callerId: trusted.principalId },
+        { kind: "decision", decision, callerId },
         decision.decidedAt,
       );
       return decision;
@@ -300,14 +325,51 @@ export class ImmutableGuiConfirmationStore implements ConfirmationAuthority {
     if (!trusted) {
       return { approved: false, error: agentError("CONFIRMATION_REQUIRED", "This action requires a visible Nami Mail confirmation.") };
     }
+    return this.consumeApprovalTransaction(
+      input.confirmationId,
+      input.requestId,
+      input.immutablePayloadHash,
+      trusted.principalId,
+    );
+  }
+
+  /**
+   * Consumes an approval recorded through the host's external confirmation
+   * bridge. The consuming caller must be the same paired CLI/MCP caller that
+   * triggered the confirmation, so a different caller cannot spend the receipt.
+   */
+  async consumeExternalApproval(input: {
+    confirmationId: string;
+    requestId: string;
+    caller: CallerContext;
+    immutablePayloadHash: string;
+  }): Promise<{ approved: true } | { approved: false; error: AgentError }> {
+    assertAgentStoreReadable(this.db);
+    if (input.caller.kind !== "cli" && input.caller.kind !== "mcp") {
+      return { approved: false, error: agentError("CONFIRMATION_REQUIRED", "This action requires a paired external Nami Mail caller.") };
+    }
+    return this.consumeApprovalTransaction(
+      input.confirmationId,
+      input.requestId,
+      input.immutablePayloadHash,
+      `external:${input.caller.kind}:${input.caller.callerId}`,
+    );
+  }
+
+  private consumeApprovalTransaction(
+    confirmationId: string,
+    requestId: string,
+    immutablePayloadHash: string,
+    callerId: string,
+  ): { approved: true } | { approved: false; error: AgentError } {
     return this.transaction(() => {
-      const requested = this.requestFor(input.confirmationId);
-      if (!requested || requested.request.requestId !== input.requestId) {
+      const requested = this.requestFor(confirmationId);
+      if (!requested || requested.request.requestId !== requestId) {
         return { approved: false, error: agentError("NOT_FOUND", "The confirmation request was not found.") };
       }
       const now = this.clock();
       if (isExpired(requested.request, now)) {
-        if (!this.decisionRow(input.confirmationId)) {
+        if (!this.decisionRow(confirmationId)) {
           this.insertSnapshot(
             requested.request.id,
             requested.request.accountIds,
@@ -324,10 +386,10 @@ export class ImmutableGuiConfirmationStore implements ConfirmationAuthority {
         }
         return { approved: false, error: agentError("CONFIRMATION_EXPIRED", "The confirmation request has expired.") };
       }
-      if (requested.request.immutablePayloadHash !== input.immutablePayloadHash) {
+      if (requested.request.immutablePayloadHash !== immutablePayloadHash) {
         return { approved: false, error: agentError("CONFIRMATION_REJECTED", "The action changed after confirmation was requested.") };
       }
-      const decisionRow = this.decisionRow(input.confirmationId);
+      const decisionRow = this.decisionRow(confirmationId);
       if (!decisionRow) {
         return { approved: false, error: agentError("CONFIRMATION_REQUIRED", "Wait for a visible desktop confirmation before continuing.") };
       }
@@ -335,13 +397,16 @@ export class ImmutableGuiConfirmationStore implements ConfirmationAuthority {
       if (decisionSnapshot.kind !== "decision" || decisionSnapshot.decision.decision !== "approved") {
         return { approved: false, error: agentError("CONFIRMATION_REJECTED", "The confirmation was not approved.") };
       }
+      if (decisionSnapshot.callerId !== callerId) {
+        return { approved: false, error: agentError("CONFIRMATION_REJECTED", "The approval was made by a different caller.") };
+      }
       if (
         decisionSnapshot.decision.requestId !== requested.request.requestId
         || decisionSnapshot.decision.immutablePayloadHash !== requested.request.immutablePayloadHash
       ) {
         return { approved: false, error: agentError("CONFIRMATION_REJECTED", "The approval is not bound to the current immutable payload.") };
       }
-      if (this.consumedRow(input.confirmationId)) {
+      if (this.consumedRow(confirmationId)) {
         return { approved: false, error: agentError("CONFLICT", "The confirmation has already been used.") };
       }
       this.insertSnapshot(
@@ -350,7 +415,7 @@ export class ImmutableGuiConfirmationStore implements ConfirmationAuthority {
         requested.row.confirmation_token_hash,
         "consumed",
         "gui-confirmation-consumed",
-        { kind: "consumed", confirmationId: requested.request.id, requestId: requested.request.requestId, callerId: trusted.principalId, consumedAt: now },
+        { kind: "consumed", confirmationId: requested.request.id, requestId: requested.request.requestId, callerId, consumedAt: now },
         now,
       );
       return { approved: true };

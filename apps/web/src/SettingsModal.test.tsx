@@ -15,7 +15,6 @@ function renderSettings(demoMode: boolean): string {
         demoMode={demoMode}
         onClose={() => undefined}
         onSettingsChange={() => undefined}
-        onAccountRemoved={() => undefined}
         onOpenAgentProviderSettings={() => undefined}
       />
     </I18nProvider>,
@@ -38,6 +37,92 @@ describe("settings model provider entry", () => {
 
     expect(markup).toContain(zh("agent.demo.actionUnavailable"));
     expect(markup).not.toContain(zh("agent.providers.configure"));
+  });
+
+  it("shows the external CLI/MCP access guide with copyable snippets", () => {
+    const markup = renderSettings(false);
+
+    expect(markup).toContain(zh("settings.agent.externalGuide.title"));
+    expect(markup).toContain("namimail pair");
+    expect(markup).toContain("namimail status");
+    expect(markup).toContain('&quot;command&quot;: &quot;cmd.exe&quot;');
+    expect(markup).toContain("namimail mcp start");
+    expect(markup).toContain("namimail service start");
+    expect(markup).toContain(zh("settings.agent.externalGuide.copy"));
+    expect(markup).toContain('class="external-guide-code"');
+  });
+
+  it("keeps the desktop-only behavior toggles out of browser mode", () => {
+    const markup = renderSettings(false);
+
+    expect(markup).not.toContain('data-settings-nav="desktop"');
+    expect(markup).not.toContain(zh("settings.launchAtStartup.label"));
+    expect(markup).not.toContain(zh("settings.shortcut.label"));
+  });
+});
+
+describe("settings per-folder sync limit picker", () => {
+  it("renders the sync cap picker in the sync section with the default selected", () => {
+    const markup = renderSettings(false);
+
+    expect(markup).toContain('data-settings-nav="sync"');
+    expect(markup).toContain('id="sync-message-limit"');
+    expect(markup).toContain(`aria-label="${zh("settings.sync.limit.label")}"`);
+    expect(markup).toContain(zh("settings.sync.limit.description"));
+    // The dropdown is a custom combobox; its trigger renders the selected label.
+    expect(markup).toContain('class="themed-select-value">2000');
+  });
+
+  it("renders the \"all\" label when the persisted value is 0", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider>
+        <SettingsModal
+          settings={{ ...defaultAppSettings, syncMessageLimit: 0 }}
+          accounts={[]}
+          demoMode={false}
+          onClose={() => undefined}
+          onSettingsChange={() => undefined}
+          onOpenAgentProviderSettings={() => undefined}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain(`class="themed-select-value">${zh("settings.sync.limit.all")}`);
+  });
+
+  it("explains when the environment overrides the stored picker value", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider>
+        <SettingsModal
+          settings={{ ...defaultAppSettings, syncMessageLimit: 2000, effectiveSyncMessageLimit: 5000 }}
+          accounts={[]}
+          demoMode={false}
+          onClose={() => undefined}
+          onSettingsChange={() => undefined}
+          onOpenAgentProviderSettings={() => undefined}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain('class="settings-note"');
+    expect(markup).toContain(translate("zh-CN", "settings.sync.limit.effectiveHint", { limit: 5000 }));
+  });
+
+  it("keeps the environment hint hidden while the effective value matches the picker", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider>
+        <SettingsModal
+          settings={{ ...defaultAppSettings, syncMessageLimit: 2000, effectiveSyncMessageLimit: 2000 }}
+          accounts={[]}
+          demoMode={false}
+          onClose={() => undefined}
+          onSettingsChange={() => undefined}
+          onOpenAgentProviderSettings={() => undefined}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).not.toContain('class="settings-note"');
   });
 });
 

@@ -1,6 +1,6 @@
 # Code of Conduct
 
-[简体中文](CODE_OF_CONDUCT.md) | [English](CODE_OF_CONDUCT.en.md)
+[简体中文](CODE_OF_CONDUCT.zh-CN.md) | [English](CODE_OF_CONDUCT.en.md)
 
 Nami Mail aims to be a project where users and contributors can collaborate as equals and with professionalism. When participating in issues, discussions, pull requests, code review, releases, and other project spaces, communicate with respect, clarity, and verifiable evidence.
 

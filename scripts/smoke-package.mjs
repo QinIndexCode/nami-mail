@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import * as asar from "@electron/asar";
+import { FuseV1Options, getCurrentFuseWire } from "@electron/fuses";
 import * as yaml from "js-yaml";
 import {
   assertWindowsSignatureMatchesExpectedIdentity,
@@ -91,11 +92,11 @@ const expectedFiles = [
   "apps/web/dist/favicon.ico",
   "apps/web/dist/brand/mark-light.png",
   "apps/web/dist/brand/mark-dark.png",
-  "apps/web/dist/backgrounds/paper.png",
-  "apps/web/dist/backgrounds/mist.png",
-  "apps/web/dist/backgrounds/coast.png",
-  "apps/web/dist/backgrounds/dawn.png",
-  "apps/web/dist/backgrounds/night.png",
+  "apps/web/dist/backgrounds/paper.svg",
+  "apps/web/dist/backgrounds/mist.svg",
+  "apps/web/dist/backgrounds/coast.svg",
+  "apps/web/dist/backgrounds/dawn.svg",
+  "apps/web/dist/backgrounds/night.svg",
   "node_modules/fastify/package.json",
   "node_modules/imapflow/package.json",
   "node_modules/nodemailer/package.json",
@@ -104,6 +105,10 @@ const expectedFiles = [
   "node_modules/better-sqlite3/package.json",
   "node_modules/sharp/package.json",
   "node_modules/@img/sharp-win32-x64/package.json",
+  "node_modules/@nami/agent-contracts/package.json",
+  "node_modules/@nami/agent-contracts/dist/index.js",
+  "node_modules/@nami/agent-core/package.json",
+  "node_modules/@nami/agent-core/dist/index.js",
 ];
 
 function resolveExactInstaller(target) {
@@ -125,12 +130,55 @@ const installerPath = resolveExactInstaller(expectedInstallerOverride ?? path.jo
 
 packageSmokeStage = "package-inspection";
 await fs.access(archivePath);
+await fs.access(packagedExecutable);
+const packagedFuses = await getCurrentFuseWire(packagedExecutable);
+// @electron/fuses stores each switch as a FuseState byte (DISABLE=48, ENABLE=49)
+// and does not re-export the enum from its index entry, so mirror the bytes here.
+const fuseWireDisable = 48;
+const fuseWireEnable = 49;
+const expectedFuseStates = [
+  [FuseV1Options.RunAsNode, fuseWireDisable],
+  [FuseV1Options.EnableCookieEncryption, fuseWireEnable],
+  [FuseV1Options.EnableNodeOptionsEnvironmentVariable, fuseWireDisable],
+  [FuseV1Options.EnableNodeCliInspectArguments, fuseWireDisable],
+  [FuseV1Options.EnableEmbeddedAsarIntegrityValidation, fuseWireEnable],
+  [FuseV1Options.OnlyLoadAppFromAsar, fuseWireEnable],
+  [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot, fuseWireDisable],
+  [FuseV1Options.GrantFileProtocolExtraPrivileges, fuseWireDisable],
+];
+for (const [fuse, expected] of expectedFuseStates) {
+  assert.equal(
+    packagedFuses[fuse],
+    expected,
+    `The packaged Electron executable must keep the ${FuseV1Options[fuse]} fuse ${expected === fuseWireEnable ? "enabled" : "disabled"}.`,
+  );
+}
 const packagedIconPath = path.join(releaseDirectory, "win-unpacked", "resources", "icon.ico");
 await fs.access(packagedIconPath);
 assert.deepEqual(
   await fs.readFile(packagedIconPath),
   await fs.readFile(path.join(projectRoot, "build", "icon.ico")),
   "The packaged runtime icon must match the generated multi-size brand icon.",
+);
+const agentPipeSourcePath = path.join(projectRoot, "apps", "desktop", "resources", "nami-agent-pipe.ps1");
+const packagedAgentPipePath = path.join(releaseDirectory, "win-unpacked", "resources", "nami-agent-pipe.ps1");
+await fs.access(agentPipeSourcePath);
+await fs.access(packagedAgentPipePath);
+assert.deepEqual(
+  await fs.readFile(packagedAgentPipePath),
+  await fs.readFile(agentPipeSourcePath),
+  "The packaged Agent named-pipe helper must match the desktop resource source.",
+);
+const cliLauncherSourcePath = path.join(projectRoot, "build", "namimail.cmd");
+const cliPathHelperPath = path.join(projectRoot, "build", "namimail-path.ps1");
+await fs.access(cliLauncherSourcePath);
+await fs.access(cliPathHelperPath);
+const packagedCliLauncherSource = await fs.readFile(cliLauncherSourcePath, "utf8");
+assert.match(packagedCliLauncherSource, /"%~dp0Nami Mail\.exe" --cli %\*/, "The CLI launcher resource must re-enter the installed Electron executable.");
+assert.equal(
+  /ELECTRON_RUN_AS_NODE|app\.asar/i.test(packagedCliLauncherSource),
+  false,
+  "The CLI launcher must not bypass Electron safeStorage with a Node or ASAR entry point.",
 );
 const packageEntries = new Set(
   asar.listPackage(archivePath).map((entry) => entry.replaceAll("\\", "/").replace(/^\/+/, "")),
@@ -233,7 +281,7 @@ if (expectedUpdateOwner && expectedUpdateRepo) {
   assert.equal(latest.version, packageManifest.version, "latest.yml version must match package.json.");
   assert.ok(Array.isArray(latest.files) && latest.files.length > 0, "latest.yml must describe at least one update artifact.");
   const installerEntry = latest.files.find((entry) => entry && typeof entry === "object" && typeof entry.url === "string" && entry.url.toLowerCase().endsWith(".exe"));
-  assert.ok(installerEntry, "latest.yml must reference the NSIS installer.");
+  assert.ok(installerEntry, "latest.yml must reference the installer.");
   const installerBytes = await fs.readFile(installerPath);
   const installerSha512 = createHash("sha512").update(installerBytes).digest("base64");
   assert.equal(installerEntry.sha512, installerSha512, "latest.yml installer SHA512 must match the exact installer bytes.");
@@ -244,8 +292,8 @@ if (expectedUpdateOwner && expectedUpdateRepo) {
   const blockmapPath = `${installerPath}.blockmap`;
   const blockmapBytes = await fs.readFile(blockmapPath);
   const blockmap = JSON.parse(gunzipSync(blockmapBytes).toString("utf8"));
-  assert.equal(blockmap.version, "2", "NSIS blockmap must use the supported v2 format.");
-  assert.ok(Array.isArray(blockmap.files) && blockmap.files.length > 0, "NSIS blockmap must describe installer files.");
+  assert.equal(blockmap.version, "2", "The installer blockmap must use the supported v2 format.");
+  assert.ok(Array.isArray(blockmap.files) && blockmap.files.length > 0, "The installer blockmap must describe installer files.");
 
   const { archiveName, manifestName, installerName } = githubZipUpdateAssetNames(packageManifest.version);
   const zipPath = path.join(releaseDirectory, archiveName);
@@ -261,8 +309,8 @@ if (expectedUpdateOwner && expectedUpdateRepo) {
     createHash("sha512").update(zipBytes).digest("base64"),
     "ZIP update manifest SHA-512 must match the exact ZIP bytes.",
   );
-  assert.equal(updateManifest.installer, installerName, "ZIP update manifest must bind the version-specific NSIS installer name.");
-  assert.deepEqual(await inspectZipUpdateArchive(zipPath), [installerName], "ZIP update must contain exactly the version-specific NSIS installer.");
+  assert.equal(updateManifest.installer, installerName, "ZIP update manifest must bind the version-specific installer name.");
+  assert.deepEqual(await inspectZipUpdateArchive(zipPath), [installerName], "ZIP update must contain exactly the version-specific installer.");
 
   const trustPath = path.join(releaseDirectory, "win-unpacked", "resources", "nami-update-trust.json");
   const trust = JSON.parse(await fs.readFile(trustPath, "utf8"));

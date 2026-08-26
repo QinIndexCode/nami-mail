@@ -1,20 +1,41 @@
 # Nami Mail
 
 <p align="center">
-  <a href="README.md">简体中文</a> · <a href="README.en.md">English</a>
+  <a href="README.en.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
 <p align="center">
-  <img src="build/icon.png" alt="Nami Mail" width="112" />
+  <img src="docs/nami-mail-wordmark.png" alt="Nami Mail" width="480" />
 </p>
 
-Nami Mail is a local-first, multi-account mail client. It brings Gmail, iCloud, QQ, 163, Outlook/Hotmail, Yahoo, AOL, Fastmail, Yandex, and other IMAP/SMTP-capable accounts into one inbox that runs on your own machine. Common providers use app passwords or client authorization codes; configured Google and Microsoft accounts can use OAuth 2.0 sign-in.
+Nami Mail is a local-first, multi-account desktop mail client for Windows. It brings Gmail, iCloud, QQ, 163, Outlook/Hotmail, Yahoo, AOL, Fastmail, Yandex, and other IMAP/SMTP-capable accounts into one inbox that runs on your own machine. Common providers use app passwords or client authorization codes; configured Google and Microsoft accounts can use OAuth 2.0 sign-in.
 
 <p align="center">
-  <img src="docs/nami-mail-inbox.png" alt="Nami Mail inbox" width="1200" />
+  <img src="docs/nami-mail-inbox-en.png" alt="Nami Mail inbox — light theme" width="1200" />
+</p>
+
+<p align="center">
+  <em>Unified inbox with multiple accounts, folder navigation, and reading pane.</em>
+</p>
+
+<p align="center">
+  <img src="docs/nami-mail-agent-en.png" alt="Nami Mail Agent workspace" width="1200" />
+</p>
+
+<p align="center">
+  <em>NamiMail Agent: a local-first AI assistant for your mail, with source citations.</em>
 </p>
 
 > The password field is only for long-lived credentials required by the provider: Gmail and iCloud normally require an app password, QQ and NetEase require a client authorization code, and a self-hosted mailbox can require its mailbox password. Credentials are never sent to a service other than Nami Mail and the selected mail provider; they are used only for a direct provider connection. OAuth refresh tokens are also encrypted and stored locally only.
+
+## What's New in 0.3.0
+
+- **External Mail v1**: A paired, local, read-only CLI and MCP interface for scripts and AI assistants. It exposes six tools — accounts, folders, message lists, message detail, threads, and attachment metadata — through a Windows named-pipe Broker restricted to the current user.
+- **NamiMail Agent**: An embedded AI workspace with local retrieval, source citations, and OpenAI-compatible or Ollama provider support. It can read mail and manage drafts within an explicit account scope.
+- **Mail translation**: Optional free translation (Google/MyMemory) and AI-powered translation with streaming output. The first launch shows a terms-and-privacy dialog covering the entire app.
+- **UI improvements**: Skeleton loading states for lists and panels, refined scrollbar styles, quote formatting in Agent conversations, and theme-aware visual polish.
+
+See the [release notes](docs/releases/v0.3.0.en.md) and [changelog](CHANGELOG.en.md) for details.
 
 ## Get Started
 
@@ -27,12 +48,20 @@ See [Windows installation and updates](docs/INSTALLING.en.md) for first installa
 - [Documentation index](docs/README.en.md): find English and Chinese documentation by user, contributor, or release task.
 - [Windows installation and updates](docs/INSTALLING.en.md): downloads, installation, first launch, uninstallation, update prompts, and SmartScreen guidance.
 - [Email provider setup](docs/EMAIL-PROVIDERS.en.md): provider preparation, OAuth, manual IMAP/SMTP, and common connection issues.
+- [External Mail interface](docs/EXTERNAL-MAIL-INTERFACE.en.md): the read-only CLI/MCP interface and security boundary for paired local scripts and MCP clients.
+- [CLI reference](docs/cli/README.en.md): commands, parameters, output formats, and examples for the `namimail` CLI.
+- [MCP Server](docs/mcp/README.en.md): local MCP stdio integration, tool discovery, and security boundaries.
+- [NamiMail Agent usage](docs/agent/usage.en.md): using the mail assistant — conversations, mail scope, source citations, and confirmations.
+- [NamiMail Agent model providers](docs/agent/providers.en.md): configuring OpenAI-compatible/Ollama/Claude/Gemini models, API keys, and cloud mail-content consent.
+- [NamiMail Agent external MCP servers](docs/agent/mcp-servers.en.md): connecting external MCP servers to extend the assistant's tools.
+- [NamiMail Agent architecture](docs/agent/architecture.en.md): local-first Agent design, embedded workspace, and external Broker boundary.
+- [Mail RAG](docs/rag/architecture.en.md): ingestion, cleaning, retrieval, deletion synchronization, and consistency.
 - [Message translation](docs/TRANSLATION.en.md): optional translation-service configuration, the explicit-send boundary, and privacy considerations.
 - [Privacy and local data](docs/PRIVACY.en.md): local data, encryption boundaries, and third-party connections.
 - [Support guide](SUPPORT.en.md): account setup, network problems, and suitable issue reports.
 - [Security policy](SECURITY.en.md): how and when to report vulnerabilities privately.
 - [Contributing guide](CONTRIBUTING.en.md), [code of conduct](CODE_OF_CONDUCT.en.md), [development guide](docs/DEVELOPMENT.en.md), and [architecture and trust boundaries](docs/ARCHITECTURE.en.md): local development, collaboration boundaries, tests, process boundaries, and pull-request requirements.
-- [Windows release guide](docs/RELEASING.en.md), [release notes](docs/releases/README.en.md), and the [changelog](CHANGELOG.en.md): signing, GitHub Releases, user-facing version information, and release verification. The Chinese changelog remains the authoritative version history.
+- [Windows release guide](docs/RELEASING.en.md), [release notes](docs/releases/README.en.md), and the [changelog](CHANGELOG.en.md): signing, GitHub Releases, user-facing version information, and release verification.
 - [Localization guide](docs/LOCALIZATION.en.md): maintenance rules for UI JSON packs and documentation translations.
 
 ## Run from Source
@@ -182,10 +211,14 @@ OAuth callbacks return to local `/api/oauth/google/callback` or `/api/oauth/micr
 - Real IMAP draft saving, editing, send replacement, and close confirmation for unsaved content.
 - Attachment metadata and controlled streaming downloads without copying attachment bytes into the local database.
 - Compose, reply, and send over SMTP using the matching account.
+- **NamiMail Agent**: AI assistant with local retrieval, source citations, and draft management within an explicit account scope.
+- **Mail translation**: free translation (Google/MyMemory) and optional AI-powered translation with streaming output and cancellation.
+- **External Mail v1**: read-only CLI and MCP stdio interface for paired local scripts and AI assistants.
 - System, light, and dark themes; complete offline background presets, a custom background image, and background intensity.
 - Configurable Windows desktop notifications, foreground alerts, system/soft/bright/silent notification sounds, and a test button.
 - Configurable background-sync period, account removal, restore-default settings, a desktop three-column layout, and responsive mobile layout.
 - Local SQLite storage with AES-256-GCM application-layer encryption for credentials, sensitive mail payloads, the outbound queue, and outbound attachments.
+- First-launch terms-and-privacy dialog covering the entire app, with explicit consent before any data is stored.
 
 ## Local Data and Security
 

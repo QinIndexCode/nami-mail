@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildForwardDraft, buildReplyDraft } from "./mailActions";
+import { buildForwardDraft, buildReplyDraft, buildReplyQuote } from "./mailActions";
 import type { Message } from "./types";
 
 const message: Message = {
@@ -80,5 +80,22 @@ describe("mail compose actions", () => {
     });
     expect(draft).not.toHaveProperty("inReplyTo");
     expect(draft).not.toHaveProperty("references");
+  });
+
+  it("quotes every original line with a reply prefix", () => {
+    const quote = buildReplyQuote("第一行\n第二行\r\n第三行", "在 2026年7月20日 11:04，Alice 写道：");
+
+    expect(quote).toBe([
+      "在 2026年7月20日 11:04，Alice 写道：",
+      "> 第一行",
+      "> 第二行",
+      "> 第三行",
+    ].join("\n"));
+  });
+
+  it("drops surrounding whitespace before quoting an original body", () => {
+    const quote = buildReplyQuote("  正文  \n", "On 2026, A wrote:");
+
+    expect(quote).toBe("On 2026, A wrote:\n> 正文");
   });
 });

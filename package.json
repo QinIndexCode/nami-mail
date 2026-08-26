@@ -1,6 +1,6 @@
 {
   "name": "nami-mail",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "private": true,
   "description": "Local-first, multi-account desktop mail client.",
   "author": "Nami Mail",
@@ -29,8 +29,9 @@
   ],
   "scripts": {
     "postinstall": "node scripts/ensure-electron-runtime.mjs",
-    "dev": "concurrently -k -n api,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:server:watch\" \"npm:dev:web\"",
     "dev:server": "npm --workspace @nami/server run dev",
+    "dev:server:watch": "node scripts/dev-server-watch.mjs",
     "dev:web": "npm --workspace @nami/web run dev",
     "build:brand": "node scripts/build-brand-assets.mjs",
     "build:brand:check": "node scripts/build-brand-assets.mjs --check",
@@ -38,6 +39,9 @@
     "start": "npm --workspace @nami/server run start",
     "test": "npm --workspace @nami/agent-contracts run test && npm --workspace @nami/agent-core run test && npm --workspace @nami/server run test && npm --workspace @nami/web run test && npm --workspace @nami/desktop run test",
     "test:desktop-security": "npm --workspace @nami/desktop run test",
+    "test:e2e": "playwright test e2e/smoke.spec.ts e2e/interactions.spec.ts e2e/update-footer.spec.ts",
+    "lint": "eslint apps packages e2e scripts",
+    "lint:fix": "eslint apps packages e2e scripts --fix",
     "test:server": "npm --workspace @nami/server run test",
     "smoke:runtime": "node scripts/run-server-node.mjs --script scripts/smoke-runtime.mjs",
     "smoke:server-node": "node scripts/smoke-server-node-abi.mjs",
@@ -61,6 +65,8 @@
   "dependencies": {
     "@fastify/cors": "^11.1.0",
     "@fastify/static": "^10.1.3",
+    "@nami/agent-contracts": "file:packages/agent-contracts",
+    "@nami/agent-core": "file:packages/agent-core",
     "better-sqlite3": "^13.0.1",
     "dotenv": "^17.2.3",
     "fastify": "^5.11.2",
@@ -69,15 +75,21 @@
     "nodemailer": "^9.0.5",
     "oauth4webapi": "^3.8.6",
     "sharp": "^0.35.3",
+    "yazl": "^3.3.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@electron/asar": "^4.2.1",
+    "@electron/fuses": "^1.8.0",
     "@electron/rebuild": "^4.2.0",
+    "@playwright/test": "^1.62.1",
     "concurrently": "^10.0.4",
     "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
-    "js-yaml": "^5.2.3"
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "js-yaml": "^5.2.3",
+    "typescript-eslint": "^8.66.0"
   },
   "build": {
     "appId": "com.nami.mail",
@@ -93,8 +105,26 @@
         "to": "icon.ico"
       },
       {
+        "from": "build/tray-badge-icon.png",
+        "to": "tray-badge-icon.png"
+      },
+      {
         "from": "build/nami-update-trust.json",
         "to": "nami-update-trust.json"
+      },
+      {
+        "from": "apps/desktop/resources/nami-agent-pipe.ps1",
+        "to": "nami-agent-pipe.ps1"
+      }
+    ],
+    "extraFiles": [
+      {
+        "from": "build/namimail.cmd",
+        "to": "namimail.cmd"
+      },
+      {
+        "from": "build/namimail-path.ps1",
+        "to": "namimail-path.ps1"
       }
     ],
     "files": [
@@ -104,6 +134,16 @@
       "package.json"
     ],
     "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "loadBrowserProcessSpecificV8Snapshot": false,
+      "grantFileProtocolExtraPrivileges": false
+    },
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
       "node_modules/sharp/**/*",
@@ -131,6 +171,12 @@
         "zh_CN"
       ],
       "language": 2052,
+      "license": "LICENSE",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeader": "build/installerHeader.bmp",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/uninstallerSidebar.bmp",
       "include": "build/installer.nsh",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,

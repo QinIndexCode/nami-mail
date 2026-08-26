@@ -10,8 +10,10 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import {
   MOVE_LOCATION_UNVERIFIED_ERROR,
+  PENDING_MOVE_RECONCILIATION_ERROR,
   hasPendingMove,
   hasUnverifiedMoveLocation,
+  encryptMessagePayload,
   messagePayloadForRow,
   migrateMessageStorage,
   type MessageStorageRow,
@@ -19,9 +21,11 @@ import {
 import { markSubmissionSubmitted, prepareSubmission, submissionForId } from "../src/outbox.js";
 import {
   scheduleSentSubmissionVerification,
+  batchMoveMessages,
   moveMessage,
   syncAccount,
   updateMessageFlags,
+  updateMessageFlagsBatch,
   verifySubmissionInSentMailbox,
 } from "../src/sync.js";
 
@@ -121,6 +125,100 @@ describe("IMAP message flag updates", () => {
     expect(folder.unseen).toBe(0);
   });
 
+  it("applies a batch flag update with one connection and one STORE per flag group", async () => {
+    const now = new Date().toISOString();
+    for (const [id, uid, flags] of [
+      ["message-2", 43, ["\\Seen"]],
+      ["message-3", 44, ["\\Seen", "$Custom"]],
+    ] as const) {
+      db.prepare(`
+        INSERT INTO messages (
+          id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+          sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, "account-1", "INBOX", uid, "Subject", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([...flags]), 0, 0, now);
+    }
+
+    const result = await updateMessageFlagsBatch(
+      db, Buffer.alloc(32, 7), ["message-1", "message-2", "message-3"], { seen: true, flagged: true },
+    );
+
+    expect(result).toEqual({ updated: 3, failed: 0, changedIds: ["message-1", "message-2", "message-3"] });
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    expect(client.getMailboxLock).toHaveBeenCalledTimes(1);
+    // \\Seen already present on all three; only \\Flagged needs a STORE, in one call with all UIDs.
+    expect(client.messageFlagsAdd).toHaveBeenCalledTimes(1);
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith([42, 43, 44], ["\\Flagged"], { uid: true });
+    expect(client.messageFlagsRemove).toHaveBeenCalledTimes(0);
+    expect(lock.release).toHaveBeenCalledTimes(1);
+    expect(client.logout).toHaveBeenCalledTimes(1);
+    for (const id of ["message-1", "message-2", "message-3"]) {
+      const row = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get(id) as { flags_json: string };
+      expect(JSON.parse(row.flags_json)).toEqual(expect.arrayContaining(["\\Seen", "\\Flagged"]));
+    }
+    const folder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX") as { unseen: number };
+    expect(folder.unseen).toBe(0);
+  });
+
+  it("reports missing and pending-move messages as failed without touching IMAP", async () => {
+    const now = new Date().toISOString();
+    await updateMessageFlags(db, Buffer.alloc(32, 7), "message-1", { seen: false });
+
+    const result = await updateMessageFlagsBatch(
+      db, Buffer.alloc(32, 7), ["message-1", "message-missing"], { seen: true },
+    );
+
+    expect(result).toEqual({ updated: 1, failed: 1, changedIds: ["message-1"] });
+    expect(client.messageFlagsAdd).toHaveBeenCalledTimes(1);
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith([42], ["\\Seen"], { uid: true });
+    const row = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("message-1") as { flags_json: string };
+    expect(JSON.parse(row.flags_json)).toContain("\\Seen");
+  });
+
+  it("does not persist any local changes when the remote batch STORE fails", async () => {
+    client.messageFlagsAdd.mockRejectedValueOnce(new Error("IMAP rejected batch flag update"));
+
+    const result = await updateMessageFlagsBatch(
+      db, Buffer.alloc(32, 7), ["message-1"], { flagged: true },
+    );
+
+    expect(result).toEqual({ updated: 0, failed: 1, changedIds: [] });
+    const row = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("message-1") as { flags_json: string };
+    expect(JSON.parse(row.flags_json)).toEqual(["\\Seen", "$Custom"]);
+    expect(client.logout).toHaveBeenCalledTimes(1);
+  });
+
+  it("groups messages across mailboxes into separate STORE commands on a shared connection", async () => {
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 1, 0);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("message-4", "account-1", "Archive", 99, "Archived", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+
+    const result = await updateMessageFlagsBatch(
+      db, Buffer.alloc(32, 7), ["message-1", "message-4"], { seen: true },
+    );
+
+    expect(result).toEqual({ updated: 2, failed: 0, changedIds: ["message-4"] });
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    expect(client.getMailboxLock).toHaveBeenCalledTimes(2);
+    expect(client.getMailboxLock).toHaveBeenNthCalledWith(1, "INBOX");
+    expect(client.getMailboxLock).toHaveBeenNthCalledWith(2, "Archive");
+    // Only the Archive message actually needs a STORE; the INBOX message was
+    // already seen, so its mailbox contributes no STORE command.
+    expect(client.messageFlagsAdd).toHaveBeenCalledTimes(1);
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith([99], ["\\Seen"], { uid: true });
+    expect(client.messageFlagsRemove).toHaveBeenCalledTimes(0);
+    const inboxFolder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX") as { unseen: number };
+    const archiveFolder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Archive") as { unseen: number };
+    expect(inboxFolder.unseen).toBe(0);
+    expect(archiveFolder.unseen).toBe(0);
+  });
+
   it("preserves the encrypted source cache row when UIDPLUS maps an archive move into Gmail All Mail", async () => {
     const now = new Date().toISOString();
     db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
@@ -188,6 +286,38 @@ describe("IMAP message flag updates", () => {
     expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
       .toEqual({ total: 0, unseen: 0 });
     expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Trash"))
+      .toEqual({ total: 1, unseen: 1 });
+  });
+
+  it("moves a reported message into the SPECIAL-USE Junk folder", async () => {
+    db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run("[]", "message-1");
+    db.prepare("UPDATE folders SET unseen = ? WHERE account_id = ? AND path = ?").run(1, "account-1", "INBOX");
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Junk", "Junk", "\\Junk", 0, 0);
+    client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Junk", uidMap: new Map([[42, 84]]) });
+
+    await expect(moveMessage(db, masterKey, "message-1", "junk"))
+      .resolves.toEqual({ accountId: "account-1", destination: "Junk", refreshPending: false, uid: 84 });
+
+    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
+      .toEqual({ total: 0, unseen: 0 });
+    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Junk"))
+      .toEqual({ total: 1, unseen: 1 });
+  });
+
+  it("recovers a misclassified message from Junk back into INBOX", async () => {
+    db.prepare("UPDATE messages SET mailbox = ?, flags_json = ? WHERE id = ?").run("Junk", "[]", "message-1");
+    db.prepare("UPDATE folders SET total = ?, unseen = ? WHERE account_id = ? AND path = ?").run(0, 0, "account-1", "INBOX");
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Junk", "Junk", "\\Junk", 1, 1);
+    client.messageMove.mockResolvedValueOnce({ path: "Junk", destination: "INBOX", uidMap: new Map([[42, 84]]) });
+
+    await expect(moveMessage(db, masterKey, "message-1", "inbox"))
+      .resolves.toEqual({ accountId: "account-1", destination: "INBOX", refreshPending: false, uid: 84 });
+
+    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Junk"))
+      .toEqual({ total: 0, unseen: 0 });
+    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
       .toEqual({ total: 1, unseen: 1 });
   });
 
@@ -274,6 +404,303 @@ describe("IMAP message flag updates", () => {
     });
     expect(fetch).toHaveBeenCalledWith([42], { uid: true }, { uid: true });
     expect(client.messageMove).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a stale move intent when the source UID is still present", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    // A previous MOVE response was lost and the row still carries the intent.
+    db.prepare(`
+      UPDATE messages
+      SET pending_move_destination = ?, pending_move_state = 'intent', pending_move_special_use = ?
+      WHERE id = ?
+    `).run("Archive", "\\Archive", "message-1");
+    Object.assign(client, {
+      fetch: vi.fn(async function* (range: unknown) {
+        if (Array.isArray(range) && range.includes(42)) {
+          yield { uid: 42, emailId: "stale-intent-source", flags: new Set(["\\Seen"]) };
+        }
+      }),
+    });
+    client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Archive", uidMap: new Map([[42, 84]]) });
+
+    await expect(moveMessage(db, masterKey, "message-1", "archive"))
+      .resolves.toEqual({ accountId: "account-1", destination: "Archive", refreshPending: false, uid: 84 });
+
+    // The probe proved the earlier MOVE never executed: the stale intent was
+    // discarded and a fresh move ran on the same connection.
+    expect(client.fetch).toHaveBeenCalledWith([42], { uid: true }, { uid: true });
+    expect(client.messageMove).toHaveBeenCalledWith(42, "Archive", { uid: true });
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    const row = db.prepare(`
+      SELECT mailbox, uid, pending_move_destination, pending_move_state
+      FROM messages WHERE id = ?
+    `).get("message-1");
+    expect(row).toEqual({ mailbox: "Archive", uid: 84, pending_move_destination: null, pending_move_state: null });
+  });
+
+  it("keeps a stale move intent blocked when the source UID is absent", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare(`
+      UPDATE messages
+      SET pending_move_destination = ?, pending_move_state = 'intent', pending_move_special_use = ?
+      WHERE id = ?
+    `).run("Archive", "\\Archive", "message-1");
+    Object.assign(client, {
+      // The source UID is gone: the interrupted MOVE did execute and
+      // reconciliation owns the outcome.
+      fetch: vi.fn(async function* () { /* no rows */ }),
+    });
+
+    await expect(moveMessage(db, masterKey, "message-1", "archive"))
+      .rejects.toThrow(PENDING_MOVE_RECONCILIATION_ERROR);
+    expect(client.messageMove).not.toHaveBeenCalled();
+    const row = db.prepare(`
+      SELECT pending_move_destination, pending_move_state
+      FROM messages WHERE id = ?
+    `).get("message-1");
+    expect(row).toEqual({ pending_move_destination: "Archive", pending_move_state: "intent" });
+  });
+
+  it("moves a whole batch with one MOVE command and confirms each UIDPLUS result", async () => {
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("message-2", "account-1", "INBOX", 43, "Second", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+    client.messageMove.mockResolvedValueOnce({
+      path: "INBOX",
+      destination: "Archive",
+      uidMap: new Map([[42, 84], [43, 85]]),
+    });
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1", "message-2"], "archive");
+
+    expect(result.updated).toBe(2);
+    expect(result.failed).toBe(0);
+    expect(result.failures).toEqual([]);
+    expect(result.pendingAccounts).toEqual(new Set());
+    // One connection and one RFC 6851 message-set command served the whole
+    // batch instead of one MOVE per message.
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    expect(client.logout).toHaveBeenCalledTimes(1);
+    expect(client.messageMove).toHaveBeenCalledTimes(1);
+    expect(client.messageMove).toHaveBeenCalledWith([42, 43], "Archive", { uid: true });
+    expect(db.prepare("SELECT mailbox, uid, pending_move_destination FROM messages WHERE id = ?").get("message-1"))
+      .toEqual({ mailbox: "Archive", uid: 84, pending_move_destination: null });
+    expect(db.prepare("SELECT mailbox, uid, pending_move_destination FROM messages WHERE id = ?").get("message-2"))
+      .toEqual({ mailbox: "Archive", uid: 85, pending_move_destination: null });
+  });
+
+  it("removes All Mail / Important mirror rows after a UIDPLUS-confirmed trash move", async () => {
+    const now = new Date().toISOString();
+    for (const [path, name, specialUse, total] of [
+      ["Trash", "Trash", "\\Trash", 0],
+      ["[Gmail]/所有邮件", "All Mail", "\\All", 875],
+      // Gmail does not expose \Important via LIST special-use; the folder
+      // arrives with special_use NULL and must still be recognized as a
+      // system view through the [Gmail]/ namespace prefix.
+      ["[Gmail]/重要", "Important", null, 373],
+      ["Projects", "Projects", null, 5],
+    ] as Array<[string, string, string | null, number]>) {
+      db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+        .run("account-1", path, name, specialUse, total, 0);
+    }
+    const insert = (id: string, mailbox: string, uid: number, lookup: string | null) => {
+      db.prepare(`
+        INSERT INTO messages (
+          id, account_id, mailbox, uid, remote_id_lookup, subject, from_name, from_address, to_json,
+          sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, "account-1", mailbox, uid, lookup, "Subject", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+    };
+    insert("mirror-all", "[Gmail]/所有邮件", 777, "lookup-1");
+    insert("mirror-important", "[Gmail]/重要", 555, "lookup-1");
+    insert("mirror-projects", "Projects", 333, "lookup-1");
+    db.prepare("UPDATE messages SET remote_id_lookup = ? WHERE id = ?").run("lookup-1", "message-1");
+    client.messageMove.mockResolvedValueOnce({
+      path: "INBOX",
+      destination: "Trash",
+      uidMap: new Map([[42, 84]]),
+    });
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1"], "trash");
+
+    expect(result.updated).toBe(1);
+    expect(result.failed).toBe(0);
+    // The moved row itself was rebound to Trash with its UIDPLUS UID.
+    expect(db.prepare("SELECT mailbox, uid FROM messages WHERE id = ?").get("message-1"))
+      .toEqual({ mailbox: "Trash", uid: 84 });
+    // Gmail's \All and \Important views exclude trashed messages, so the
+    // cached mirror rows must disappear immediately instead of waiting for
+    // the slow remote-deletion probe sweep.
+    expect(db.prepare("SELECT 1 FROM messages WHERE id = ?").get("mirror-all")).toBeUndefined();
+    expect(db.prepare("SELECT 1 FROM messages WHERE id = ?").get("mirror-important")).toBeUndefined();
+    // Custom-label folders keep their membership on trashed messages.
+    expect(db.prepare("SELECT 1 FROM messages WHERE id = ?").get("mirror-projects")).toBeDefined();
+    const allMail = db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "[Gmail]/所有邮件") as { total: number };
+    expect(allMail.total).toBe(874);
+    const important = db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "[Gmail]/重要") as { total: number };
+    expect(important.total).toBe(372);
+    const projects = db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Projects") as { total: number };
+    expect(projects.total).toBe(5);
+  });
+
+  it("keeps system-view mirror rows when the move target is not trash", async () => {
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "[Gmail]/所有邮件", "All Mail", "\\All", 875, 0);
+    for (const [id, mailbox, uid, lookup] of [
+      ["mirror-all", "[Gmail]/所有邮件", 777, "lookup-1"],
+    ] as Array<[string, string, number, string | null]>) {
+      db.prepare(`
+        INSERT INTO messages (
+          id, account_id, mailbox, uid, remote_id_lookup, subject, from_name, from_address, to_json,
+          sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, "account-1", mailbox, uid, lookup, "Subject", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+    }
+    db.prepare("UPDATE messages SET remote_id_lookup = ? WHERE id = ?").run("lookup-1", "message-1");
+    client.messageMove.mockResolvedValueOnce({
+      path: "INBOX",
+      destination: "[Gmail]/所有邮件",
+      uidMap: new Map([[42, 84]]),
+    });
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1"], "archive");
+
+    expect(result.updated).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(db.prepare("SELECT 1 FROM messages WHERE id = ?").get("mirror-all")).toBeDefined();
+    const allMail = db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "[Gmail]/所有邮件") as { total: number };
+    expect(allMail.total).toBe(875);
+  });
+
+  it("treats a move into the folder the message already lives in as an idempotent no-op", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Trash", "Trash", "\\Trash", 1, 0);
+    db.prepare("UPDATE messages SET mailbox = ?, uid = ? WHERE id = ?").run("Trash", 84, "message-1");
+
+    await expect(moveMessage(db, masterKey, "message-1", "trash"))
+      .resolves.toEqual({ accountId: "account-1", destination: "Trash", refreshPending: false });
+
+    // No provider round-trip at all: the row and folder counts stay untouched.
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(client.messageMove).not.toHaveBeenCalled();
+    expect(db.prepare("SELECT mailbox, uid FROM messages WHERE id = ?").get("message-1"))
+      .toEqual({ mailbox: "Trash", uid: 84 });
+    expect(db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Trash"))
+      .toEqual({ total: 1 });
+  });
+
+  it("counts a whole already-trashed batch as moved without touching the provider", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Trash", "Trash", "\\Trash", 1, 0);
+    db.prepare("UPDATE messages SET mailbox = ?, uid = ? WHERE id = ?").run("Trash", 84, "message-1");
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("message-2", "account-1", "Trash", 85, "Second", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1", "message-2"], "trash");
+
+    expect(result.updated).toBe(2);
+    expect(result.failed).toBe(0);
+    expect(result.failures).toEqual([]);
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(client.messageMove).not.toHaveBeenCalled();
+  });
+
+  it("clears claimed intents when the provider refuses the whole message set", async () => {    const now = new Date().toISOString();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("message-2", "account-1", "INBOX", 43, "Second", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+    client.messageMove.mockResolvedValueOnce(false);
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1", "message-2"], "archive");
+
+    expect(result.updated).toBe(0);
+    expect(result.failed).toBe(2);
+    expect(result.failures).toEqual([
+      { id: "message-1", message: "邮件服务器未确认移动操作，请稍后重试。" },
+      { id: "message-2", message: "邮件服务器未确认移动操作，请稍后重试。" },
+    ]);
+    expect(client.messageMove).toHaveBeenCalledTimes(1);
+    // The refused message set left both source rows untouched with no intent.
+    for (const id of ["message-1", "message-2"]) {
+      const row = db.prepare("SELECT mailbox, uid, pending_move_destination, pending_move_state FROM messages WHERE id = ?").get(id);
+      expect(row).toMatchObject({ mailbox: "INBOX", pending_move_destination: null, pending_move_state: null });
+    }
+  });
+
+  it("keeps an entry blocked when its intent cannot be claimed and still moves the rest", async () => {
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("message-2", "account-1", "INBOX", 43, "Second", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
+    // message-2 carries an intent left by an interrupted transfer; the probe
+    // proves its source UID is gone, so reconciliation owns the outcome and
+    // the entry stays blocked while message-1 still moves.
+    db.prepare(`
+      UPDATE messages
+      SET pending_move_destination = 'Archive', pending_move_state = 'intent',
+          pending_move_candidate_uid = NULL, pending_move_special_use = NULL
+      WHERE id = ?
+    `).run("message-2");
+    client.fetch = vi.fn(async function* () { /* no rows: source UID absent */ });
+    client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Archive", uidMap: new Map([[42, 84]]) });
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1", "message-2"], "archive");
+
+    expect(result.updated).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(result.failures).toEqual([{ id: "message-2", message: PENDING_MOVE_RECONCILIATION_ERROR }]);
+    expect(client.fetch).toHaveBeenCalledWith([43], { uid: true }, { uid: true });
+    // Only message-1 reached the provider command.
+    expect(client.messageMove).toHaveBeenCalledTimes(1);
+    expect(client.messageMove).toHaveBeenCalledWith([42], "Archive", { uid: true });
+    // The blocked entry keeps its durable intent for the reconciling sync.
+    const blocked = db.prepare("SELECT pending_move_destination, pending_move_state FROM messages WHERE id = ?").get("message-2");
+    expect(blocked).toEqual({ pending_move_destination: "Archive", pending_move_state: "intent" });
+  });
+
+  it("falls back to pending reconciliation when the server lacks UIDPLUS", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Archive", uidMap: new Map() });
+
+    const result = await batchMoveMessages(db, masterKey, ["message-1"], "archive");
+
+    expect(result.updated).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(client.messageMove).toHaveBeenCalledTimes(1);
+    // The row is kept durable at the source mailbox with a local pending UID
+    // and a 'confirmed' intent; a later sync reconciles the exact remote id.
+    const row = db.prepare("SELECT mailbox, uid, pending_move_destination, pending_move_state FROM messages WHERE id = ?").get("message-1");
+    expect(row).toEqual({
+      mailbox: "INBOX",
+      uid: -42,
+      pending_move_destination: "Archive",
+      pending_move_state: "confirmed",
+    });
   });
 
   it("reconciles an Archive target in the same pass after a custom source UID is proven absent", async () => {
@@ -778,7 +1205,56 @@ describe("IMAP message flag updates", () => {
       { uid: 11, remote_id_lookup: expect.stringMatching(/^h1\./), all_mail_archived: 0 },
     ]);
     expect(rows.map((row) => row.remote_id_lookup).join("\n")).not.toContain("gmail-");
-    expect(fetch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ labels: true }));
+    // The window fetch (call #2, after the UID probe) is the labels-bearing one.
+    const windowCall = fetch.mock.calls.find(([range]) => typeof range === "string" && /^\d+:\*$/.test(range));
+    expect(windowCall?.[1]).toMatchObject({ labels: true });
+  });
+
+  it("anchors the rolling window in UID space off the mailbox's newest UID", async () => {
+    const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
+    // Sparse mailbox: 9,500 messages exist, but deletions left the newest
+    // UID at 10,000. A sequence-based floor (9,500 - 20 + 1 = 9,481) would
+    // slice the wrong window; the UID-anchored floor must win.
+    const windowUids = [9981, 9982, 9983, 10000];
+    const fetch = vi.fn(async function* (range: unknown, query: { source?: unknown }) {
+      if (range === "*") {
+        // The UID probe resolves the mailbox's newest UID.
+        yield { uid: 10000, emailId: "probe-latest", flags: new Set<string>() };
+        return;
+      }
+      if (query.source) {
+        for (const uid of windowUids) {
+          const source = Buffer.from(`Subject: Window ${uid}\r\n\r\nBody ${uid}`);
+          yield {
+            uid,
+            emailId: `window-${uid}`,
+            flags: new Set<string>(),
+            internalDate: new Date("2026-07-22T00:00:00.000Z"),
+            size: source.length,
+            source,
+          };
+        }
+        return;
+      }
+      expect(range).toBe("9981:*");
+      for (const uid of windowUids) {
+        yield { uid, emailId: `window-${uid}`, flags: new Set<string>() };
+      }
+    });
+    Object.assign(client, {
+      mailbox: { exists: 9_500, uidValidity: 1n },
+      list: vi.fn(async () => [inbox]),
+      status: vi.fn(async () => ({ messages: 9_500, unseen: 0 })),
+      fetch,
+    });
+
+    await expect(syncAccount(db, masterKey, "account-1", 20)).resolves.toMatchObject({ folders: 1 });
+
+    expect(fetch).toHaveBeenCalledWith("*", { uid: true }, { uid: true });
+    expect(fetch).toHaveBeenCalledWith("9981:*", expect.objectContaining({ uid: true, flags: true }), { uid: true });
+    const rows = db.prepare("SELECT uid FROM messages WHERE account_id = ? AND mailbox = ? AND uid >= 9000 ORDER BY uid")
+      .all("account-1", "INBOX") as Array<{ uid: number }>;
+    expect(rows.map((row) => row.uid)).toEqual(windowUids.slice().sort((a, b) => a - b));
   });
 
   it("verifies a sent submission only after an exact Message-ID match in the provider Sent mailbox", async () => {
@@ -952,6 +1428,126 @@ describe("IMAP message flag updates", () => {
     expect(payload.cc).toEqual([{ name: "Carol", address: "carol@example.com" }]);
   });
 
+  it("hydrates a legacy metadata-less row once and then stops re-fetching its source", async () => {
+    const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
+    const source = Buffer.from([
+      "From: Alice <alice@example.com>",
+      "To: Demo <demo@example.com>",
+      "Message-ID: <legacy@example.com>",
+      "Subject: Legacy row",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Legacy body",
+    ].join("\r\n"));
+    const legacyPayload = {
+      messageId: null,
+      subject: "Legacy row",
+      fromName: "",
+      fromAddress: "alice@example.com",
+      to: [],
+      cc: null,
+      inReplyTo: null,
+      references: null,
+      snippet: "",
+      textBody: "",
+      htmlBody: "",
+      attachments: null,
+    };
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, sent_at, flags_json, has_attachments, size,
+        encrypted_payload, payload_version, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("legacy-1", "account-1", "INBOX", 99, new Date().toISOString(), "[]", 0, 0,
+      encryptMessagePayload(masterKey, "legacy-1", "account-1", legacyPayload), 1, new Date().toISOString());
+    const fetch = vi.fn(async function* (_range: unknown, query: { source?: boolean }) {
+      if (query.source) {
+        yield {
+          uid: 99,
+          flags: new Set<string>(),
+          internalDate: new Date("2026-07-20T03:04:05.000Z"),
+          size: source.length,
+          source,
+        };
+        return;
+      }
+      yield { uid: 99, flags: new Set<string>() };
+    });
+    Object.assign(client, {
+      mailbox: { exists: 100 },
+      list: vi.fn(async () => [inbox]),
+      status: vi.fn(async () => ({ messages: 100, unseen: 0 })),
+      fetch,
+    });
+
+    await syncAccount(db, masterKey, "account-1", 20);
+
+    const hydrated = db.prepare(`
+      SELECT payload_metadata_ready, encrypted_payload FROM messages WHERE id = ?
+    `).get("legacy-1") as { payload_metadata_ready: number | null; encrypted_payload: string };
+    expect(hydrated.payload_metadata_ready).toBe(1);
+    const payload = messagePayloadForRow(
+      db.prepare("SELECT * FROM messages WHERE id = ?").get("legacy-1") as MessageStorageRow,
+      masterKey,
+    );
+    expect(payload.attachments).toEqual([]);
+    expect(payload.cc).toEqual([]);
+    expect(payload.references).toEqual([]);
+
+    // A second sync answers the hydration question from the column alone and
+    // must not fetch the source again. The row is cached, so nothing is new.
+    // Call 1 is the UID probe, call 2 the metadata-only window.
+    fetch.mockClear();
+    const second = await syncAccount(db, masterKey, "account-1", 20);
+    expect(second).toMatchObject({ synced: 0, folders: 1, failedFolders: 0 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.every(([, query]) => !(query as { source?: unknown }).source)).toBe(true);
+  });
+
+  it("skips the metadata refresh pass for rows written with complete metadata", async () => {
+    const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
+    const completePayload = {
+      messageId: "<complete@example.com>",
+      subject: "Complete row",
+      fromName: "Alice",
+      fromAddress: "alice@example.com",
+      to: [{ name: "", address: "demo@example.com" }],
+      cc: [],
+      inReplyTo: null,
+      references: [],
+      snippet: "Complete body",
+      textBody: "Complete body",
+      htmlBody: "",
+      attachments: [],
+    };
+    const encrypted = encryptMessagePayload(masterKey, "complete-1", "account-1", completePayload);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, sent_at, flags_json, has_attachments, size,
+        encrypted_payload, payload_version, payload_metadata_ready, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("complete-1", "account-1", "INBOX", 99, new Date().toISOString(), "[]", 0, 0, encrypted, 1, 1, new Date().toISOString());
+    const fetch = vi.fn(async function* (_range: unknown, _query: { source?: boolean }) {
+      yield { uid: 99, flags: new Set<string>() };
+    });
+    Object.assign(client, {
+      mailbox: { exists: 100 },
+      list: vi.fn(async () => [inbox]),
+      status: vi.fn(async () => ({ messages: 100, unseen: 0 })),
+      fetch,
+    });
+
+    await syncAccount(db, masterKey, "account-1", 20);
+
+    // UID probe + metadata-only window; the complete row must not trigger a
+    // source fetch in either call.
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.every(([, query]) => !(query as { source?: unknown }).source)).toBe(true);
+    const row = db.prepare("SELECT * FROM messages WHERE id = ?").get("complete-1") as MessageStorageRow;
+    expect(row.encrypted_payload).toBe(encrypted);
+    expect(row.payload_metadata_ready).toBe(1);
+  });
+
   it("invalidates a folder cache and re-fetches when IMAP UIDVALIDITY changes", async () => {
     const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
     const replacementSource = Buffer.from([
@@ -999,6 +1595,16 @@ describe("IMAP message flag updates", () => {
         sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run("pending-move", "account-1", "INBOX", -42, "Archive", "Pending move", "Demo", "demo@example.com", "[]", now, "", "", "", "[]", 0, 0, now);
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, pending_move_destination, pending_move_state, pending_move_special_use,
+        subject, from_name, from_address, to_json, sent_at, snippet, text_body, html_body,
+        flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "stale-intent", "account-1", "INBOX", 2, "Archive", "intent", "\\Archive",
+      "Stale intent", "Demo", "demo@example.com", "[]", now, "", "", "", "[]", 0, 0, now,
+    );
     Object.assign(client, {
       mailbox: { exists: 1, uidValidity: 200n },
       list: vi.fn(async () => [inbox]),
@@ -1011,6 +1617,10 @@ describe("IMAP message flag updates", () => {
 
     expect(db.prepare("SELECT id FROM messages WHERE id = ?").get("message-1")).toBeUndefined();
     expect(db.prepare("SELECT id FROM messages WHERE id = ?").get("stale-reused-uid")).toBeUndefined();
+    // The reset destroys the UID epoch the intent was verified against; the
+    // intent row is dropped with the rest of the folder cache instead of being
+    // stranded under a negative placeholder it can never recover from.
+    expect(db.prepare("SELECT id FROM messages WHERE id = ?").get("stale-intent")).toBeUndefined();
     expect(db.prepare("SELECT mailbox, uid, pending_move_destination FROM messages WHERE id = ?").get("pending-move"))
       .toEqual({ mailbox: "INBOX", uid: -42, pending_move_destination: "Archive" });
     const replacementRow = db.prepare("SELECT * FROM messages WHERE account_id = ? AND mailbox = ? AND uid = ?")
@@ -1023,6 +1633,129 @@ describe("IMAP message flag updates", () => {
     });
     expect(db.prepare("SELECT uid_validity FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
       .toEqual({ uid_validity: "200" });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    // UID probe + window + source re-hydration of the reused UID.
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(fetch.mock.calls.some(([, query]) => Boolean((query as { source?: unknown }).source))).toBe(true);
+  });
+
+  it("keeps the local cache when LIST returns no folders", async () => {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, path) DO UPDATE SET
+        name = excluded.name,
+        special_use = excluded.special_use,
+        total = excluded.total,
+        unseen = excluded.unseen,
+        uid_validity = excluded.uid_validity
+    `)
+      .run("account-1", "INBOX", "Inbox", "\\Inbox", 2, 1, "100");
+    Object.assign(client, {
+      list: vi.fn(async () => []),
+    });
+    client.getMailboxLock.mockImplementation(async () => lock);
+
+    // An empty LIST is a provider/connection artifact, never proof that all
+    // folders vanished: the previous folder set and every cached message must
+    // survive until the next pass recovers.
+    await expect(syncAccount(db, Buffer.alloc(32, 7), "account-1", 20)).resolves.toMatchObject({ synced: 0, folders: 0 });
+
+    expect(db.prepare("SELECT total, unseen, uid_validity FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
+      .toEqual({ total: 2, unseen: 1, uid_validity: "100" });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE account_id = ?").get("account-1"))
+      .not.toEqual({ count: 0 });
+  });
+
+  it("retains previous folder counts when STATUS is denied", async () => {
+    db.prepare(`
+      INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, path) DO UPDATE SET
+        name = excluded.name,
+        special_use = excluded.special_use,
+        total = excluded.total,
+        unseen = excluded.unseen,
+        uid_validity = excluded.uid_validity
+    `)
+      .run("account-1", "INBOX", "Inbox", "\\Inbox", 7, 3, "100");
+    const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
+    const fetch = vi.fn(async function* () {});
+    Object.assign(client, {
+      mailbox: { exists: 1, uidValidity: 100n },
+      list: vi.fn(async () => [inbox]),
+      status: vi.fn(async () => {
+        throw new Error("STATUS not permitted for virtual folder");
+      }),
+      fetch,
+    });
+    client.getMailboxLock.mockImplementation(async () => lock);
+
+    await expect(syncAccount(db, Buffer.alloc(32, 7), "account-1", 20)).resolves.toMatchObject({ synced: 0, folders: 1 });
+
+    // A failed STATUS must not clobber the last known counts into zero (which
+    // would trip unread badges) until the next successful STATUS.
+    expect(db.prepare("SELECT total, unseen, uid_validity FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
+      .toEqual({ total: 7, unseen: 3, uid_validity: "100" });
+  });
+});
+
+describe("sync message limit warning", () => {
+  let db: DatabaseHandle;
+  const masterKey = Buffer.alloc(32, 7);
+  const lock = { release: vi.fn() };
+  // Five messages in the mailbox; the cap tests below decide how many syncs.
+  const client = {
+    usable: true,
+    connect: vi.fn(async () => undefined),
+    getMailboxLock: vi.fn(async () => lock),
+    mailbox: { exists: 5, uidValidity: 1n },
+    list: vi.fn(async () => [{ path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" }]),
+    status: vi.fn(async () => ({ messages: 5, unseen: 0 })),
+    fetch: vi.fn(async function* () {
+      for (let uid = 1; uid <= 5; uid += 1) {
+        yield { uid, emailId: `m${uid}`, flags: new Set(["\\Seen"]), internalDate: new Date(`2026-08-10T00:00:0${uid}.000Z`), size: 10, source: Buffer.from("Subject: x\r\n\r\nbody") };
+      }
+    }),
+    logout: vi.fn(async () => undefined),
+  };
+
+  beforeEach(() => {
+    db = openDatabase(":memory:");
+    vi.clearAllMocks();
+    client.getMailboxLock.mockImplementation(async () => lock);
+    imapClientForAccount.mockReturnValue(client);
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("account-1", "demo@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("keeps the account healthy and persists sync_limit when a folder exceeds the cap", async () => {
+    const result = await syncAccount(db, masterKey, "account-1", 2);
+    expect(result).toMatchObject({ folders: 1, failedFolders: 0, limitReached: true });
+    expect(db.prepare("SELECT status, last_error, last_error_code, last_sync_warning_code FROM accounts WHERE id = ?").get("account-1"))
+      .toEqual({ status: "connected", last_error: null, last_error_code: null, last_sync_warning_code: "sync_limit" });
+  });
+
+  it("clears a stale warning when the mailbox fits within the cap again", async () => {
+    db.prepare("UPDATE accounts SET last_sync_warning_code = 'sync_limit' WHERE id = ?").run("account-1");
+    const result = await syncAccount(db, masterKey, "account-1", 100);
+    expect(result).toMatchObject({ folders: 1, failedFolders: 0, limitReached: false });
+    expect(db.prepare("SELECT last_sync_warning_code FROM accounts WHERE id = ?").get("account-1"))
+      .toEqual({ last_sync_warning_code: null });
+  });
+
+  it("never raises the warning when the cap is 0 (whole mailbox)", async () => {
+    const result = await syncAccount(db, masterKey, "account-1", 0);
+    expect(result).toMatchObject({ folders: 1, limitReached: false });
+    expect(db.prepare("SELECT last_sync_warning_code FROM accounts WHERE id = ?").get("account-1"))
+      .toEqual({ last_sync_warning_code: null });
   });
 });

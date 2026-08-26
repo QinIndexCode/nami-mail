@@ -1,5 +1,6 @@
 import type { DatabaseHandle } from "./db.js";
 import { decryptTextEnvelope, deriveEncryptionKey, encryptTextEnvelope } from "./crypto.js";
+import { attachmentKindsJson } from "./attachment-kind.js";
 
 export const MESSAGE_PAYLOAD_VERSION = 1;
 export const MAX_ENCRYPTED_SEARCH_CANDIDATES = 5_000;
@@ -7,6 +8,7 @@ export const PENDING_MOVE_RECONCILIATION_ERROR = "邮件正在同步移动后的
 export const MOVE_LOCATION_UNVERIFIED_ERROR = "邮件已移动，但邮箱服务器未提供可验证的新位置。请刷新目标文件夹后再修改邮件或下载附件。";
 
 const MESSAGE_MIGRATION_ID = "message-payload-v1";
+const ATTACHMENT_KINDS_MIGRATION_ID = "attachment-kinds-v1";
 const messageKeyPurpose = "message-payload-v1";
 
 export type StoredAddress = { name: string; address: string };
@@ -18,6 +20,28 @@ export type StoredAttachmentMetadata = {
   size: number;
   related: boolean;
   disposition: "attachment" | "inline";
+};
+
+/**
+ * Offline screening headers captured at sync time. `labels` are the IMAP
+ * labels the server reported for the message (e.g. Gmail CATEGORY_*).
+ * Optional fields are absent in payloads written before this extension and
+ * read as empty defaults via `payloadHeaders`.
+ */
+export type StoredMessageHeaders = {
+  autoSubmitted: string;
+  listUnsubscribe: string;
+  precedence: string;
+  returnPath: string;
+  labels: string[];
+};
+
+export const EMPTY_MESSAGE_HEADERS: StoredMessageHeaders = {
+  autoSubmitted: "",
+  listUnsubscribe: "",
+  precedence: "",
+  returnPath: "",
+  labels: [],
 };
 
 export type MessagePayload = {
@@ -33,7 +57,23 @@ export type MessagePayload = {
   textBody: string;
   htmlBody: string;
   attachments: StoredAttachmentMetadata[] | null;
+  headers?: StoredMessageHeaders;
 };
+
+export function payloadHeaders(payload: MessagePayload): StoredMessageHeaders {
+  const value = payload.headers;
+  if (!value || typeof value !== "object") return EMPTY_MESSAGE_HEADERS;
+  const item = value as Record<string, unknown>;
+  return {
+    autoSubmitted: typeof item.autoSubmitted === "string" ? item.autoSubmitted : "",
+    listUnsubscribe: typeof item.listUnsubscribe === "string" ? item.listUnsubscribe : "",
+    precedence: typeof item.precedence === "string" ? item.precedence : "",
+    returnPath: typeof item.returnPath === "string" ? item.returnPath : "",
+    labels: Array.isArray(item.labels)
+      ? item.labels.filter((entry): entry is string => typeof entry === "string")
+      : [],
+  };
+}
 
 export type MessageStorageRow = Record<string, unknown> & {
   id: string;
@@ -42,6 +82,7 @@ export type MessageStorageRow = Record<string, unknown> & {
   uid: number;
   encrypted_payload?: string | null;
   payload_version?: number | null;
+  payload_metadata_ready?: number | null;
 };
 
 function pendingMoveDestinationValue(row: unknown): string | null {
@@ -180,6 +221,7 @@ function normalizePayload(value: unknown): MessagePayload {
     textBody: typeof item.textBody === "string" ? item.textBody : "",
     htmlBody: typeof item.htmlBody === "string" ? item.htmlBody : "",
     attachments: item.attachments === null ? null : attachments(item.attachments),
+    headers: item.headers === undefined ? undefined : payloadHeaders(item as MessagePayload),
   };
 }
 
@@ -188,12 +230,59 @@ export function encryptMessagePayload(masterKey: Buffer, id: string, accountId: 
     encryptTextEnvelope(JSON.stringify(payload), key, payloadAad(id, accountId)));
 }
 
+// Decrypting a row is cheap for a small message but dominates the cost of
+// listing folders full of large bodies (newsletters, receipts), where the
+// same page is re-read on every folder open. A payload is immutable once
+// written: any re-encryption (metadata hydration, migration) or tampering
+// changes the ciphertext, and the full ciphertext in the key forces a fresh
+// authenticated decrypt instead of a stale hit. Callers treat payloads as
+// read-only, so the cached object is shared.
+const PAYLOAD_CACHE_MAX_ENTRIES = 128;
+const PAYLOAD_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+const payloadCache = new Map<string, { payload: MessagePayload; bytes: number }>();
+let payloadCacheBytes = 0;
+
+function payloadByteEstimate(payload: MessagePayload): number {
+  // The payload is a plain JSON-shaped object, so the UTF-8 byte length of
+  // its serialized form bounds retained memory closely enough for eviction.
+  // (A naive character-count sum would undercount CJK bodies by up to 2x and
+  // ignore Map/entry overhead.)
+  return Buffer.byteLength(JSON.stringify(payload), "utf8") + 64;
+}
+
+function cachePayload(key: string, payload: MessagePayload): void {
+  const bytes = payloadByteEstimate(payload);
+  // A single payload larger than the whole budget would evict the entire
+  // cache on every fill; keep it uncached instead (a cache miss decrypts the
+  // same way a fresh read would).
+  if (bytes > PAYLOAD_CACHE_MAX_BYTES) return;
+  while (payloadCache.size >= PAYLOAD_CACHE_MAX_ENTRIES || payloadCacheBytes + bytes > PAYLOAD_CACHE_MAX_BYTES) {
+    const oldestKey = payloadCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    const oldest = payloadCache.get(oldestKey);
+    if (oldest) payloadCacheBytes -= oldest.bytes;
+    payloadCache.delete(oldestKey);
+  }
+  payloadCache.set(key, { payload, bytes });
+  payloadCacheBytes += bytes;
+}
+
 export function messagePayloadForRow(row: MessageStorageRow, masterKey: Buffer): MessagePayload {
   if (typeof row.encrypted_payload !== "string" || !row.encrypted_payload) return legacyPayload(row);
+  const cacheKey = `${masterKey.toString("hex")}\0${row.id}\0${row.encrypted_payload}`;
+  const cached = payloadCache.get(cacheKey);
+  if (cached) {
+    // Refresh LRU recency without re-decrypting.
+    payloadCache.delete(cacheKey);
+    payloadCache.set(cacheKey, cached);
+    return cached.payload;
+  }
   return withMessageKey(masterKey, (key) => {
     const plaintext = decryptTextEnvelope(row.encrypted_payload as string, key, payloadAad(row.id, row.account_id));
     try {
-      return normalizePayload(JSON.parse(plaintext) as unknown);
+      const payload = normalizePayload(JSON.parse(plaintext) as unknown);
+      cachePayload(cacheKey, payload);
+      return payload;
     } catch (error) {
       if (error instanceof Error && error.message === "Encrypted message payload is invalid.") throw error;
       throw new Error("Encrypted message payload is invalid.");
@@ -305,4 +394,36 @@ export function migrateMessageStorage(db: DatabaseHandle, masterKey: Buffer): { 
   `).run(MESSAGE_MIGRATION_ID, new Date().toISOString());
   if (vacuumed) db.pragma("wal_checkpoint(TRUNCATE)");
   return { migrated: rows.length, vacuumed };
+}
+
+/**
+ * Backfills the attachment-kind search column for rows written before the
+ * column existed. Rows inserted after this migration carry the kinds via the
+ * sync/draft paths, so this pass is a one-time decrypt sweep (the same cost
+ * profile as the FTS rebuild). Runs after `migrateMessageStorage`, which
+ * guarantees every row holds a decryptable payload.
+ */
+export function ensureAttachmentKinds(db: DatabaseHandle, masterKey: Buffer): { backfilled: number } {
+  const marker = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?").get(ATTACHMENT_KINDS_MIGRATION_ID);
+  if (marker) return { backfilled: 0 };
+  const rows = db.prepare("SELECT * FROM messages").all() as MessageStorageRow[];
+  const update = db.prepare("UPDATE messages SET attachment_kinds_json = ? WHERE id = ?");
+  let backfilled = 0;
+  db.transaction(() => {
+    for (const row of rows) {
+      let payload: MessagePayload;
+      try {
+        payload = messagePayloadForRow(row, masterKey);
+      } catch {
+        continue; // Unreadable payloads cannot be classified either.
+      }
+      update.run(attachmentKindsJson(payload.attachments ?? []), row.id);
+      backfilled += 1;
+    }
+    db.prepare(`
+      INSERT INTO data_migrations (id, completed_at) VALUES (?, ?)
+      ON CONFLICT(id) DO UPDATE SET completed_at = excluded.completed_at
+    `).run(ATTACHMENT_KINDS_MIGRATION_ID, new Date().toISOString());
+  })();
+  return { backfilled };
 }

@@ -243,7 +243,7 @@ export async function resolveWindowsReleaseAssets({ projectRoot, version, releas
     && typeof entry === "object"
     && typeof entry.url === "string"
     && entry.url.toLowerCase().endsWith(".exe"));
-  assert.ok(installerEntry, "latest.yml must identify the remote NSIS installer asset.");
+  assert.ok(installerEntry, "latest.yml must identify the remote installer asset.");
   const installerAssetName = releaseAssetName(installerEntry.url, "latest.yml installer URL");
   assert.equal(releaseAssetName(latest.path, "latest.yml path"), installerAssetName, "latest.yml path must match its installer entry.");
 

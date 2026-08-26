@@ -1,6 +1,6 @@
 # Localization Guide
 
-[简体中文](LOCALIZATION.md) | [English](LOCALIZATION.en.md)
+[简体中文](LOCALIZATION.zh-CN.md) | [English](LOCALIZATION.en.md)
 
 This guide defines the localization conventions for Nami Mail UI copy and repository documentation. Email subjects and bodies, senders, recipients, attachment names, and user-created folder names are user data. Do not translate them or put them into a locale pack.
 
@@ -57,7 +57,7 @@ The generator deliberately does not export the full web copy catalog or read use
 
 ## Documentation Languages
 
-Existing Chinese paths without a suffix remain stable entry points, such as `README.md` and `docs/INSTALLING.md`. English translations use an adjacent `.en.md` file, such as `README.en.md` and `docs/INSTALLING.en.md`, so existing Chinese links do not need to move.
+Existing Chinese paths without a suffix remain stable entry points, such as `README.md` and `docs/INSTALLING.zh-CN.md`. English translations use an adjacent `.en.md` file, such as `README.en.md` and `docs/INSTALLING.en.md`, so existing Chinese links do not need to move.
 
 When adding another documentation language:
 
@@ -65,6 +65,6 @@ When adding another documentation language:
 2. Add a short two-way language switch directly below the title in both source and translation.
 3. Keep version numbers, commands, asset names, paths, link targets, and security boundaries exact when translating user-facing security, privacy, installation, provider, and release documentation.
 4. When a behavior claim, procedure, or link changes in one language, check its published counterparts in the same change.
-5. Keep the Chinese `CHANGELOG.md` as the authoritative version history. When publishing an English or other-language translation, update it in the same change and identify the Chinese original as the source of version facts. Maintain each user-facing release note in every published language.
+5. Keep the Chinese `CHANGELOG.zh-CN.md` as the authoritative version history. When publishing an English or other-language translation, update it in the same change and identify the Chinese original as the source of version facts. Maintain each user-facing release note in every published language.
 
 Do not interleave large bilingual sections in one Markdown file. Adjacent translations preserve clean heading anchors, links, and GitHub reading flow while sharing icons, screenshots, and other binary assets.

@@ -1,6 +1,6 @@
 # Agent/RAG Testing Plan
 
-[Chinese](testing-plan.md) | [English](testing-plan.en.md)
+[Chinese](testing-plan.zh-CN.md) | [English](testing-plan.en.md)
 
 ## Principle
 

@@ -1,8 +1,31 @@
 # Changelog
 
-[简体中文](CHANGELOG.md) | [English](CHANGELOG.en.md)
+[简体中文](CHANGELOG.zh-CN.md) | [English](CHANGELOG.en.md)
 
-This is the English translation of the Chinese source changelog. `CHANGELOG.md` remains the authoritative version history. It follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories and Semantic Versioning.
+This is the English translation of the Chinese source changelog. `CHANGELOG.zh-CN.md` remains the authoritative version history. It follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories and Semantic Versioning.
+
+## [0.3.0] - 2026-08-09
+
+### Added
+
+- Introduced the first formal External Mail v1 local interface (Windows desktop only), for paired local scripts and MCP clients while preserving local-first, default-deny, and read-only boundaries.
+- Added the installer-provided `namimail` PATH shim and direct `"Nami Mail.exe" --cli <args>` invocation.
+- Added `namimail service start`, `status`, and `doctor` to explicitly start or inspect the local AgentHost. Ordinary reads and MCP stdio never start a host implicitly.
+- Added desktop-visible `namimail pair --profile <name>` and `namimail revoke --profile <name>` flows. First pairing fixes the current account-ID snapshot, and an account added later never enters an old profile automatically.
+- Added local MCP stdio access via `namimail mcp start --profile <name>`: it supports MCP protocols `2025-03-26` and `2025-06-18` (the server echoes the client's requested version) and publishes fifteen External Mail v1 tools from `tools/list` (eight read-only plus seven bounded writes).
+- External Mail v1 reads accounts, folders, message lists, message detail (single and batch), threads, and attachment metadata, and provides bounded writes: draft create/update/delete, message move (archive/trash), seen/flagged state, send, and reply. Successful data is validated by versioned strict schemas; mail bodies are bounded plain text and attachments are never exported as files.
+- Added a local mail template library: manage frequently used subjects and bodies in Settings and insert one into a compose or reply with a single click.
+- Added inline attachment preview: PDFs and images render in a read-only viewer; DOCX / PPTX / XLSX and common text files get a read-only text preview without exporting the original file.
+
+### Improved
+
+- Added stable success/failure envelopes, error codes, account scope, and update-drain recovery semantics for scripts and MCP. The GUI main instance actively rebuilds the named-pipe Broker after an abnormal exit, avoiding a false "running but unavailable" state.
+- CLI/MCP reach the running host only through a paired Windows named-pipe Broker restricted to the current user SID. A Fastify token, HTTP/TCP, SQLite, a file URI, mail credentials, or a database path cannot be reused as an integration channel.
+- Retained the experimental local NLLB-200 translation. It remains prepared and triggered explicitly in the desktop reader and is not a CLI/MCP tool.
+
+### Documentation
+
+- Added the paired `v0.3.0` release notes and honestly noted: public-network auto-update acceptance from `0.2.3` to `0.3.0` is still pending, and the `0.3.0` Windows installer is not Authenticode-signed.
 
 ## [0.2.3] - 2026-07-28
 

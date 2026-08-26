@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { callerKindSchema } from "./caller.js";
+import { agentEntryPointSchema, callerKindSchema } from "./caller.js";
 import { agentErrorCodeSchema } from "./errors.js";
 import { accountIdSchema, auditEventIdSchema, confirmationIdSchema, requestIdSchema, timestampSchema, toolCallIdSchema } from "./primitives.js";
 
@@ -12,7 +12,9 @@ export const agentAuditEventSchema = z.object({
   occurredAt: timestampSchema,
   callerId: z.string().trim().min(1).max(128),
   callerKind: callerKindSchema,
-  entryPoint: z.enum(["desktop", "cli", "mcp", "service", "test"]),
+  // Reuse the caller's entry-point vocabulary so a new surface (e.g. web)
+  // cannot drift out of the audit trail's acceptance set.
+  entryPoint: agentEntryPointSchema,
   operation: z.string().trim().min(1).max(128),
   toolName: z.string().trim().min(1).max(128).optional(),
   toolCallId: toolCallIdSchema.optional(),

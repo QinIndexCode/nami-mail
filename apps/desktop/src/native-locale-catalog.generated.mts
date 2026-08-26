@@ -4,7 +4,10 @@ export const defaultNativeLocale = "zh-CN" as const;
 export const nativeLocaleCatalog = {
   "en-US": {
     "trayTooltip": "Nami Mail",
-    "trayOpen": "Open Nami Mail",
+    "trayShow": "Show Nami Mail",
+    "trayHide": "Hide to tray",
+    "trayNewMail": "New mail",
+    "trayInbox": "Open inbox",
     "trayQuit": "Quit Nami Mail",
     "trayFailureTitle": "Unable to minimize to tray",
     "trayFailureMessage": "Nami Mail could not create a system tray icon. The window will stay open. Restart Nami Mail and try again.",
@@ -22,11 +25,21 @@ export const nativeLocaleCatalog = {
     "notificationMultipleTitle": "Nami Mail · {count} new messages",
     "notificationMultipleBody": "Messages from {sender} and others have synced to Inbox",
     "startupFailureTitle": "Nami Mail could not start",
-    "startupFailureMessage": "The local mail service could not start."
+    "startupFailureMessage": "The local mail service could not start.",
+    "externalConfirmTitle": "NamiMail Agent external operation confirmation",
+    "externalConfirmCaller": "Request from {caller}",
+    "externalConfirmOperation": "Operation: {tool}",
+    "externalConfirmApprove": "Approve",
+    "externalConfirmReject": "Reject",
+    "externalAccessDriftTitle": "External Agent access scope changed",
+    "externalAccessDriftBody": "{count} paired client(s) need to be approved again. Open Settings → External access and re-pair them."
   },
   "zh-CN": {
     "trayTooltip": "Nami Mail",
-    "trayOpen": "打开 Nami Mail",
+    "trayShow": "显示 Nami Mail",
+    "trayHide": "隐藏到托盘",
+    "trayNewMail": "新建邮件",
+    "trayInbox": "打开收件箱",
     "trayQuit": "退出 Nami Mail",
     "trayFailureTitle": "无法最小化到托盘",
     "trayFailureMessage": "系统托盘图标创建失败，窗口将保持打开。请重新启动 Nami Mail 后再试。",
@@ -44,7 +57,14 @@ export const nativeLocaleCatalog = {
     "notificationMultipleTitle": "Nami Mail · {count} 封新邮件",
     "notificationMultipleBody": "{sender} 等邮件已同步到收件箱",
     "startupFailureTitle": "Nami Mail 无法启动",
-    "startupFailureMessage": "本地服务启动失败。"
+    "startupFailureMessage": "本地服务启动失败。",
+    "externalConfirmTitle": "NamiMail Agent 外部操作确认",
+    "externalConfirmCaller": "来自 {caller} 的请求",
+    "externalConfirmOperation": "操作：{tool}",
+    "externalConfirmApprove": "允许",
+    "externalConfirmReject": "拒绝",
+    "externalAccessDriftTitle": "外部接入的授权范围已变化",
+    "externalAccessDriftBody": "{count} 个已配对客户端需要重新授权，请在设置 → 外部接入中重新配对。"
   }
 } as const;
 

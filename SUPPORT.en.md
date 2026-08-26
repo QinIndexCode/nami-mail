@@ -1,6 +1,6 @@
 # Support Guide
 
-[简体中文](SUPPORT.md) | [English](SUPPORT.en.md)
+[简体中文](SUPPORT.zh-CN.md) | [English](SUPPORT.en.md)
 
 Nami Mail is a local-first mail client. It connects directly to the mail providers you configure; it does not operate a Nami Mail cloud account system that hosts mail or resets passwords.
 

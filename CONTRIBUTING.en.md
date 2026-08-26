@@ -1,6 +1,6 @@
 # Contributing Guide
 
-[简体中文](CONTRIBUTING.md) | [English](CONTRIBUTING.en.md)
+[简体中文](CONTRIBUTING.zh-CN.md) | [English](CONTRIBUTING.en.md)
 
 Thank you for helping improve Nami Mail. This project handles real email, account credentials, and local caches. Every contribution must put user-data boundaries, recoverability, and verifiability ahead of feature speed.
 

@@ -1,11 +1,12 @@
 # Release Notes
 
-[简体中文](README.md) | [English](README.en.md)
+[简体中文](README.zh-CN.md) | [English](README.en.md)
 
 This directory contains reviewable, reusable GitHub Release bodies. Every release note should serve real users rather than copy build logs, CI output, or internal environment variables.
 
 - [v0.1.0](v0.1.0.en.md) is the ready-to-paste text for the first public release.
-- [v0.2.3](v0.2.3.en.md) is the current ready-to-paste note for the prepared release and explicitly does not describe real online automatic-update acceptance as complete.
+- [v0.3.0](v0.3.0.en.md) is the current ready-to-paste note for the prepared release and explicitly does not describe real online automatic-update acceptance as complete; its installer is not Authenticode-signed.
+- [v0.2.3](v0.2.3.en.md) is the previous published release note and explicitly does not describe real online automatic-update acceptance as complete.
 - [v0.2.2](v0.2.2.en.md) corresponds only to an unpublished source tag. Its Release workflow created neither a draft nor a public Release. It has no downloadable Release or update assets and must not be used as an installation or automatic-update source.
 - [v0.2.1](v0.2.1.en.md) corresponds only to an unpublished source tag. It has no downloadable Release or update assets and must not be used as an installation or automatic-update source.
 - [v0.2.0](v0.2.0.en.md) corresponds only to an unpublished source tag. It has no downloadable Release or update assets and must not be used as an installation or automatic-update source.

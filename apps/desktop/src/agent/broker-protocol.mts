@@ -56,7 +56,13 @@ export type BrokerPairingRecord = {
   hostId: string;
   hostPublicKeyPem: string;
   scopes: readonly string[];
+  /** Missing on pre-release records; those records are denied until re-paired. */
+  accountIds?: readonly string[];
   createdAt: string;
+  /** Pairings approved by current NamiMail builds carry a lifetime. When this
+   * timestamp passes, the Broker rejects requests until the profile is paired
+   * again. Legacy records without it keep their previous no-expiry behavior. */
+  expiresAt?: string;
   lastAcceptedCounter: string;
   revokedAt?: string;
 };
@@ -76,6 +82,7 @@ export interface BrokerPairingStore {
   read(clientId: string): Promise<BrokerPairingRecord | undefined>;
   save(record: BrokerPairingRecord): Promise<void>;
   revoke(clientId: string, revokedAt: string): Promise<boolean>;
+  list(): Promise<BrokerPairingRecord[]>;
   advanceCounter(input: {
     clientId: string;
     expectedLastCounter: string;
@@ -106,6 +113,8 @@ export type BrokerResponseVerificationOptions = {
   pairing: Pick<BrokerPairingRecord, "hostId" | "hostPublicKeyPem">;
   requestId: string;
   requestCounter: string;
+  /** Bind a response to the live host instance recorded in discovery. */
+  bootId?: string;
 };
 
 function failure(
@@ -327,8 +336,16 @@ export async function verifyBrokerRequest(
   if (!pairing) {
     return failure("PAIRING_REQUIRED", "This local Agent client has not been paired with NamiMail.", false);
   }
-  if (pairing.revokedAt) {
-    return failure("PAIRING_REVOKED", "This local Agent client has been revoked.", false);
+if (pairing.revokedAt) {
+    return failure("PAIRING_REVOKED", "This local Agent client has been revoked.");
+  }
+  if (pairing.expiresAt && Date.now() > Date.parse(pairing.expiresAt)) {
+    return failure(
+      "PAIRING_EXPIRED",
+      "This local Agent pairing has expired and must be approved again.",
+      false,
+      "Run namimail revoke --profile <name>, then pair the profile again in NamiMail.",
+    );
   }
   if (
     pairing.hostId !== options.hostId
@@ -378,11 +395,14 @@ export function verifyBrokerResponse(
   if (frame.requestId !== options.requestId || frame.requestCounter !== options.requestCounter) {
     return failure("BROKER_AUTHENTICATION_FAILED", "The local Agent response does not match the request.");
   }
-  if (!verifyHostIdentityProof(frame.hostIdentity, options.pairing)) {
+  if (!verifyHostIdentityProof(frame.hostIdentity, {
+    ...options.pairing,
+    ...(options.bootId ? { bootId: options.bootId } : {}),
+  })) {
     return failure("BROKER_AUTHENTICATION_FAILED", "The local Agent host identity could not be verified.");
   }
   if (!verifyValue(responsePayload(frame), frame.signature, frame.hostIdentity.publicKeyPem)) {
-    return failure("BROKER_AUTHENTICATION_FAILED", "The local Agent response signature could not be verified.");
+  return failure("BROKER_AUTHENTICATION_FAILED", "The local Agent response signature could not be verified.");
   }
   return {
     ok: true,
@@ -393,6 +413,7 @@ export function verifyBrokerResponse(
       hostId: options.pairing.hostId,
       hostPublicKeyPem: options.pairing.hostPublicKeyPem,
       scopes: [],
+      accountIds: ["verified-response"],
       createdAt: frame.hostIdentity.issuedAt,
       lastAcceptedCounter: frame.requestCounter,
     },
@@ -404,6 +425,9 @@ function isSafePublicKey(value: unknown): value is string {
     && value.length >= 64
     && value.length <= 16_384
     && /^-----BEGIN PUBLIC KEY-----\r?\n[\s\S]+\r?\n-----END PUBLIC KEY-----\r?\n?$/.test(value)
+    // Control characters are rejected on purpose: they cannot appear in a
+    // valid key and would complicate file-based transport handling.
+    // eslint-disable-next-line no-control-regex
     && !/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(value);
 }
 
@@ -417,7 +441,9 @@ export function createBrokerPairingRecord(input: Omit<BrokerPairingRecord, "sche
     hostId: input.hostId,
     hostPublicKeyPem: input.hostPublicKeyPem,
     scopes: [...input.scopes],
+    ...(input.accountIds ? { accountIds: [...input.accountIds] } : {}),
     createdAt: input.createdAt,
+    ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
     lastAcceptedCounter: input.lastAcceptedCounter ?? "0",
   };
   if (!isValidBrokerPairingRecord(record) || new Set(record.scopes).size !== record.scopes.length) {
@@ -434,7 +460,9 @@ export function isValidBrokerPairingRecord(value: unknown): value is BrokerPairi
     "hostId",
     "hostPublicKeyPem",
     "scopes",
+    ...(Object.prototype.hasOwnProperty.call(value, "accountIds") ? ["accountIds"] : []),
     "createdAt",
+    ...(Object.prototype.hasOwnProperty.call(value, "expiresAt") ? ["expiresAt"] : []),
     "lastAcceptedCounter",
     ...(Object.prototype.hasOwnProperty.call(value, "revokedAt") ? ["revokedAt"] : []),
   ])) return false;
@@ -447,7 +475,15 @@ export function isValidBrokerPairingRecord(value: unknown): value is BrokerPairi
     && value.scopes.length <= 32
     && value.scopes.every((scope) => typeof scope === "string" && /^[a-z][a-z0-9-]{1,63}$/.test(scope))
     && new Set(value.scopes).size === value.scopes.length
+    && (value.accountIds === undefined || (
+      Array.isArray(value.accountIds)
+      && value.accountIds.length >= 1
+      && value.accountIds.length <= 100
+      && value.accountIds.every((accountId) => typeof accountId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(accountId))
+      && new Set(value.accountIds).size === value.accountIds.length
+    ))
     && isValidTimestamp(value.createdAt)
+    && (value.expiresAt === undefined || isValidTimestamp(value.expiresAt))
     && parseCounter(value.lastAcceptedCounter) !== undefined
     && (value.revokedAt === undefined || isValidTimestamp(value.revokedAt));
 }
@@ -493,7 +529,7 @@ export function isBrokerResponseFrame(value: unknown): value is BrokerResponseFr
 }
 
 function clonePairingRecord(record: BrokerPairingRecord): BrokerPairingRecord {
-  return { ...record, scopes: [...record.scopes] };
+  return { ...record, scopes: [...record.scopes], ...(record.accountIds ? { accountIds: [...record.accountIds] } : {}) };
 }
 
 /** In-memory only test double. It must never be selected by production startup. */
@@ -518,6 +554,10 @@ export class InMemoryBrokerPairingStore implements BrokerPairingStore {
     if (!record) return false;
     this.records.set(clientId, { ...record, revokedAt });
     return true;
+  }
+
+  async list(): Promise<BrokerPairingRecord[]> {
+    return [...this.records.values()].map(clonePairingRecord);
   }
 
   async advanceCounter(input: {

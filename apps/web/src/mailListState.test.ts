@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyBatchSeenChange,
   applyMessageMove,
+  applyMessageMoveConfirmation,
   applyMessageSeenChange,
   isArchivedMessage,
   isVisibleInUnreadView,
   matchesServerMessageQuery,
+  mergeLocalPendingSeen,
   mergePendingArchiveMoves,
+  mergeRolledBackMessages,
   mergeUnreadViewSnapshot,
   nextMessageTotalForMove,
   nextUnreadViewRecentlyReadIds,
+  revertMessageMove,
   sidebarBadgeCounts,
 } from "./mailListState";
 import type { Account, Message, Stats } from "./types";
@@ -22,6 +27,7 @@ const accounts: Account[] = [
     status: "connected",
     lastError: null,
     lastSyncedAt: null,
+    signature: "",
     createdAt: "2026-07-22T00:00:00.000Z",
     folders: [
       { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 3, unseen: 2 },
@@ -117,6 +123,63 @@ describe("mail list state", () => {
     expect(nextUnreadViewRecentlyReadIds(recentlyRead, readMessage, false, true)).not.toContain(unreadMessage.id);
   });
 
+  it("applies a batch seen change once across messages, folder counts, and stats", () => {
+    const second = { ...unreadMessage, id: "message-2", uid: 2, mailbox: "Archive", sentAt: "2026-07-22T01:00:00.000Z" };
+    const otherInbox = { ...unreadMessage, id: "message-3", uid: 3, sentAt: "2026-07-22T02:00:00.000Z" };
+    const items = [unreadMessage, second, otherInbox];
+
+    const next = applyBatchSeenChange(accounts, items, stats, ["message-1", "message-2", "message-3"], true);
+
+    expect(next.changedCount).toBe(3);
+    expect(next.messages.every((message) => message.seen)).toBe(true);
+    expect(next.messages.map((message) => message.flags)).toEqual([["\\Seen"], ["\\Seen"], ["\\Seen"]]);
+    // Two inbox messages were unread; the Archive message does not touch stats.
+    expect(next.stats).toEqual({ accounts: 1, messages: 3, unread: 0 });
+    expect(next.accounts[0]!.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ total: 3, unseen: 0 });
+    expect(next.accounts[0]!.folders.find((folder) => folder.path === "Archive")).toMatchObject({ total: 4, unseen: 0 });
+  });
+
+  it("treats already-read selections as no-ops and counts only real transitions", () => {
+    const read = { ...unreadMessage, id: "message-1", seen: true, flags: ["\\Seen"] };
+    const unread = { ...unreadMessage, id: "message-2", uid: 2 };
+    const next = applyBatchSeenChange(accounts, [read, unread], stats, ["message-1", "message-2"], true);
+
+    expect(next.changedCount).toBe(1);
+    expect(next.messages[0]).toBe(read);
+    expect(next.messages[1]).toMatchObject({ seen: true });
+    expect(next.stats.unread).toBe(1);
+  });
+
+  it("leaves state untouched for an empty or fully-already-applied batch", () => {
+    const first = applyBatchSeenChange(accounts, [unreadMessage], stats, [], true);
+    expect(first).toEqual({ accounts, messages: [unreadMessage], stats, changedCount: 0 });
+
+    const alreadyRead = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
+    const second = applyBatchSeenChange(accounts, [alreadyRead], stats, ["message-1"], true);
+    expect(second.messages[0]).toBe(alreadyRead);
+    expect(second.stats).toBe(stats);
+    expect(second.changedCount).toBe(0);
+  });
+
+  it("restores unread state in a batch and updates the unified total in the other direction", () => {
+    const readMessage = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
+    const next = applyBatchSeenChange(accounts, [readMessage], stats, ["message-1"], false);
+
+    expect(next.messages[0]).toMatchObject({ seen: false, flags: [] });
+    expect(next.stats.unread).toBe(3);
+    expect(next.accounts[0]!.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ unseen: 3 });
+  });
+
+  it("matches the per-message behaviour for a single-item batch", () => {
+    const single = applyBatchSeenChange(accounts, [unreadMessage], stats, ["message-1"], true);
+    const perMessage = applyMessageSeenChange(accounts, [unreadMessage], stats, "message-1", true);
+
+    expect(single.messages).toEqual(perMessage.messages);
+    expect(single.accounts).toEqual(perMessage.accounts);
+    expect(single.stats).toEqual(perMessage.stats);
+    expect(single.changedCount).toBe(1);
+  });
+
   it("retains the just-read row through a background unread reload without inflating its server total", () => {
     const readMessage = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
     const freshUnread = { ...unreadMessage, id: "message-2", uid: 2, sentAt: "2026-07-22T01:00:00.000Z" };
@@ -125,6 +188,27 @@ describe("mail list state", () => {
       .toEqual([freshUnread.id, readMessage.id]);
     expect(mergeUnreadViewSnapshot([freshUnread], [readMessage], new Set([readMessage.id]), false))
       .toEqual([freshUnread]);
+  });
+
+  it("keeps the optimistic read state when a poll snapshot races the in-flight markSeen", () => {
+    const readMessage = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
+    // The server snapshot still reports the row as unread because the markSeen
+    // request has not landed yet.
+    const staleServer = [unreadMessage];
+
+    const merged = mergeLocalPendingSeen(staleServer, [readMessage], new Set([readMessage.id]));
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ id: "message-1", seen: true, flags: ["\\Seen"] });
+  });
+
+  it("does not touch rows without an in-flight seen mutation", () => {
+    const readMessage = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
+    const freshServer = [{ ...unreadMessage, subject: "Updated on server" }];
+
+    const merged = mergeLocalPendingSeen(freshServer, [readMessage], new Set());
+
+    expect(merged[0]).toMatchObject({ seen: false, subject: "Updated on server" });
   });
 
   it("uses the server-reported move destination to update folder badges and unified totals", () => {
@@ -225,9 +309,48 @@ describe("mail list state", () => {
     expect(matchesServerMessageQuery(starredArchive, gmailAccounts, {
       accountId: "all", folder: "", search: "", messageView: "starred",
     })).toBe(true);
+
+    // Global search ignores the view/account/folder restrictions entirely and
+    // lets the needle alone decide, including non-inbox mailboxes.
+    expect(matchesServerMessageQuery(archivedUnread, gmailAccounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", searchScope: "all",
+    })).toBe(false);
+    expect(matchesServerMessageQuery(archivedUnread, gmailAccounts, {
+      accountId: "account-1", folder: "INBOX", search: "project", messageView: "inbox", searchScope: "all",
+    })).toBe(true);
+    expect(matchesServerMessageQuery(archivedUnread, gmailAccounts, {
+      accountId: "account-1", folder: "INBOX", search: "project", messageView: "inbox",
+    })).toBe(false);
     expect(nextMessageTotalForMove(4, true, true)).toBe(4);
     expect(nextMessageTotalForMove(4, false, false)).toBe(4);
     expect(nextMessageTotalForMove(4, true, false)).toBe(3);
+  });
+
+  it("matches the server Attachments view by the attachment flag alone", () => {
+    const withAttachment = { ...unreadMessage, hasAttachments: true };
+
+    expect(matchesServerMessageQuery(withAttachment, accounts, {
+      accountId: "all", folder: "", search: "", messageView: "attachments",
+    })).toBe(true);
+    expect(matchesServerMessageQuery(unreadMessage, accounts, {
+      accountId: "all", folder: "", search: "", messageView: "attachments",
+    })).toBe(false);
+
+    // The view crosses folders the way starred does: an archived message with
+    // a file still matches without any folder bound.
+    expect(matchesServerMessageQuery({ ...withAttachment, mailbox: "Archive" }, accounts, {
+      accountId: "all", folder: "", search: "", messageView: "attachments",
+    })).toBe(true);
+
+    // Account scoping still applies, mirroring the server.
+    expect(matchesServerMessageQuery(withAttachment, accounts, {
+      accountId: "missing-account", folder: "", search: "", messageView: "attachments",
+    })).toBe(false);
+
+    // A file does not leak the message into inbox-derived views.
+    expect(matchesServerMessageQuery(withAttachment, accounts, {
+      accountId: "all", folder: "", search: "", messageView: "unread",
+    })).toBe(true);
   });
 
   it("retains a pending archive move through an empty response and replaces its display snapshot only with the same local record", () => {
@@ -273,5 +396,179 @@ describe("mail list state", () => {
 
     expect(merged.items).toEqual([destinationCopy, first]);
     expect(merged.retainedVisibleCount).toBe(1);
+  });
+
+  it("re-inserts rolled-back messages at their sorted positions", () => {
+    const newer = { ...unreadMessage, id: "message-2", sentAt: "2026-07-22T02:00:00.000Z" };
+    const older = { ...unreadMessage, id: "message-3", sentAt: "2026-07-21T00:00:00.000Z" };
+    const middle = { ...unreadMessage, id: "message-4", sentAt: "2026-07-21T12:00:00.000Z" };
+    const list = [newer, older];
+
+    expect(mergeRolledBackMessages(list, [middle], "newest").map((message) => message.id))
+      .toEqual(["message-2", "message-4", "message-3"]);
+    expect(mergeRolledBackMessages(list, [middle], "oldest").map((message) => message.id))
+      .toEqual(["message-3", "message-4", "message-2"]);
+  });
+
+  it("merges rolled-back messages by id so a reload cannot duplicate them", () => {
+    const duplicate = { ...unreadMessage, id: "message-2", sentAt: "2026-07-22T02:00:00.000Z" };
+    const list = [unreadMessage, duplicate];
+
+    expect(mergeRolledBackMessages(list, [duplicate], "newest")).toHaveLength(2);
+    expect(mergeRolledBackMessages(list, [], "newest")).toBe(list);
+  });
+
+  it("deduplicates and appends rolled-back messages in non-time sort modes", () => {
+    const newer = { ...unreadMessage, id: "message-2", sentAt: "2026-07-22T02:00:00.000Z" };
+    const older = { ...unreadMessage, id: "message-3", sentAt: "2026-07-21T00:00:00.000Z" };
+    const rolledBack = { ...unreadMessage, id: "message-4", sentAt: "2026-07-21T12:00:00.000Z" };
+    const list = [newer, older];
+
+    for (const order of ["sender", "importance"] as const) {
+      expect(mergeRolledBackMessages(list, [rolledBack], order).map((message) => message.id))
+        .toEqual(["message-2", "message-3", "message-4"]);
+      // A message the reload already restored must not be duplicated.
+      expect(mergeRolledBackMessages(list, [newer], order)).toHaveLength(2);
+    }
+  });
+
+  it("reverses an optimistic single move back to the original state", () => {
+    const moved = applyMessageMove(accounts, [unreadMessage], stats, unreadMessage.id, "Archive");
+    expect(moved.messages[0]).toMatchObject({ mailbox: "Archive" });
+    expect(moved.accounts[0]?.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ total: 2, unseen: 1 });
+    expect(moved.accounts[0]?.folders.find((folder) => folder.path === "Archive")).toMatchObject({ total: 5, unseen: 1 });
+    expect(moved.stats).toEqual({ accounts: 1, messages: 2, unread: 1 });
+
+    // Revert against the post-move state (what the app holds while optimistic).
+    const restored = revertMessageMove(moved.accounts, moved.messages, moved.stats, unreadMessage, "Archive");
+    expect(restored.messages[0]).toEqual(unreadMessage);
+    expect(restored.accounts).toEqual(accounts);
+    expect(restored.stats).toEqual(stats);
+  });
+
+  it("reverses an optimistic archive move through Gmail All Mail without touching its counts", () => {
+    const gmailAccounts: Account[] = [{
+      ...accounts[0],
+      folders: [
+        { path: "INBOX", name: "Inbox", specialUse: "\\Inbox", total: 3, unseen: 2 },
+        { path: "[Gmail]/All Mail", name: "All Mail", specialUse: "\\All", total: 9, unseen: 2 },
+      ],
+    }];
+
+    const moved = applyMessageMove(gmailAccounts, [unreadMessage], stats, unreadMessage.id, "[Gmail]/All Mail");
+    expect(moved.messages[0]).toMatchObject({ mailbox: "[Gmail]/All Mail", archived: true });
+    expect(moved.accounts[0]?.folders.find((folder) => folder.path === "[Gmail]/All Mail")).toMatchObject({ total: 9, unseen: 2 });
+
+    const restored = revertMessageMove(moved.accounts, moved.messages, moved.stats, unreadMessage, "[Gmail]/All Mail");
+    expect(restored.messages[0]).toEqual(unreadMessage);
+    expect(restored.accounts).toEqual(gmailAccounts);
+    expect(restored.stats).toEqual(stats);
+  });
+
+  it("leaves state untouched when a reload already restored the message before the rollback", () => {
+    // The list copy sits at its source mailbox, so the optimistic state is no
+    // longer in effect and the rollback must not re-apply any count deltas.
+    const restored = revertMessageMove(accounts, [unreadMessage], stats, unreadMessage, "Archive");
+    expect(restored).toEqual({ accounts, messages: [unreadMessage], stats });
+  });
+
+  it("refines a confirmed optimistic move without re-running count deltas", () => {
+    const moved = applyMessageMove(accounts, [unreadMessage], stats, unreadMessage.id, "Archive").messages;
+    const refined = applyMessageMoveConfirmation(moved, unreadMessage.id, 99, true, true);
+
+    expect(refined[0]).toMatchObject({ mailbox: "Archive", uid: 99, movePending: true, moveLocationUnverified: true });
+    expect(applyMessageMoveConfirmation(moved, "message-other", 7)).toEqual(moved);
+  });
+});
+
+describe("kind and date refinements mirror the server filters", () => {
+  const photoMail = {
+    ...unreadMessage,
+    hasAttachments: true,
+    attachments: [{ partId: "a1", filename: "vacation.png", contentType: "image/png", size: 100, related: false, disposition: "attachment" as const }],
+  };
+  const pdfMail = {
+    ...unreadMessage,
+    id: "message-2",
+    hasAttachments: true,
+    attachments: [{ partId: "a2", filename: "report.pdf", contentType: "application/pdf", size: 100, related: false, disposition: "attachment" as const }],
+  };
+  const mixedMail = {
+    ...unreadMessage,
+    id: "message-3",
+    hasAttachments: true,
+    attachments: [
+      { partId: "a3", filename: "photo.jpg", contentType: "image/jpeg", size: 100, related: false, disposition: "attachment" as const },
+      { partId: "a4", filename: "budget.xlsx", contentType: "application/octet-stream", size: 100, related: false, disposition: "attachment" as const },
+    ],
+  };
+  const sentMidJuly = "2026-07-15T00:00:00.000Z";
+  const sentEndJuly = "2026-07-31T00:00:00.000Z";
+
+  it("keeps only messages whose attachments include the selected kind", () => {
+    expect(matchesServerMessageQuery(pdfMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", attachmentKind: "pdf",
+    })).toBe(true);
+    expect(matchesServerMessageQuery(photoMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", attachmentKind: "pdf",
+    })).toBe(false);
+    expect(matchesServerMessageQuery(mixedMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", attachmentKind: "image",
+    })).toBe(true);
+    // Kinds are re-derived from the local metadata (server side the SQL reads
+    // the stored column), so an attachmentless message can never match either.
+    expect(matchesServerMessageQuery(unreadMessage, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", attachmentKind: "image",
+    })).toBe(false);
+  });
+
+  it("derives the kind through the same MIME fallback as the server", () => {
+    const blobMail = {
+      ...unreadMessage,
+      hasAttachments: true,
+      attachments: [{ partId: "a5", filename: "payload.bin", contentType: "application/pdf", size: 100, related: false, disposition: "attachment" as const }],
+    };
+    expect(matchesServerMessageQuery(blobMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", attachmentKind: "pdf",
+    })).toBe(true);
+  });
+
+  it("applies after inclusively and before exclusively", () => {
+    const midMail = { ...unreadMessage, sentAt: sentMidJuly };
+    const endMail = { ...unreadMessage, sentAt: sentEndJuly };
+    const afterBound = "2026-07-15T00:00:00.000Z";
+    const beforeBound = "2026-07-31T00:00:00.000Z";
+
+    expect(matchesServerMessageQuery(midMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", after: afterBound,
+    })).toBe(true);
+    expect(matchesServerMessageQuery(endMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", after: afterBound, before: beforeBound,
+    })).toBe(false);
+    expect(matchesServerMessageQuery(midMail, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", before: beforeBound,
+    })).toBe(true);
+  });
+
+  it("combines needle, kind, and date the way the server ANDs them", () => {
+    const matching = { ...pdfMail, sentAt: sentMidJuly, subject: "quarterly needle", snippet: "needle" };
+    expect(matchesServerMessageQuery(matching, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "needle", messageView: "inbox",
+      attachmentKind: "pdf", after: sentMidJuly, before: sentEndJuly,
+    })).toBe(true);
+    // Same needle and window, wrong kind.
+    expect(matchesServerMessageQuery({ ...matching, attachments: photoMail.attachments }, accounts, {
+      accountId: "account-1", folder: "INBOX", search: "needle", messageView: "inbox",
+      attachmentKind: "pdf", after: sentMidJuly, before: sentEndJuly,
+    })).toBe(false);
+  });
+
+  it("refines the attachments view by kind instead of replacing it", () => {
+    expect(matchesServerMessageQuery(photoMail, accounts, {
+      accountId: "all", folder: "", search: "", messageView: "attachments", attachmentKind: "image",
+    })).toBe(true);
+    expect(matchesServerMessageQuery(pdfMail, accounts, {
+      accountId: "all", folder: "", search: "", messageView: "attachments", attachmentKind: "image",
+    })).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 # Security Policy
 
-[简体中文](SECURITY.md) | [English](SECURITY.en.md)
+[简体中文](SECURITY.zh-CN.md) | [English](SECURITY.en.md)
 
 Nami Mail handles account credentials, OAuth refresh tokens, and local mail caches. Do not publish a security issue, real mail, tokens, attachments, or data that could identify a user in a public issue, discussion, or pull request.
 

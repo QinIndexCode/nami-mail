@@ -4,10 +4,35 @@ import os from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp, MAX_BACKGROUND_UPLOAD_BYTES } from "../src/app.js";
+import { AGENT_ATTACHMENT_TEXT_LIMIT, AgentService, composeAttachmentContent } from "../src/agent-service.js";
+import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
+import { applyAgentStoreSchema } from "../src/agent/schema.js";
+import { AgentSourceEventOutbox } from "../src/agent/source-events.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
+import { indexMessageFts } from "../src/message-search.js";
 import type { OAuthService } from "../src/oauth.js";
+
+const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
+
+vi.mock("../src/mail.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  return { ...actual, imapClientForAccount };
+});
+
+function readyMailClient() {
+  const lock = { release: vi.fn() };
+  return {
+    usable: true,
+    connect: vi.fn(async () => undefined),
+    getMailboxLock: vi.fn(async () => lock),
+    messageFlagsAdd: vi.fn(async () => undefined),
+    messageFlagsRemove: vi.fn(async () => undefined),
+    messageMove: vi.fn(async () => ({ uidMap: new Map<number, number>() })),
+    logout: vi.fn(async () => undefined),
+  };
+}
 
 async function createValidPng() {
   return sharp({
@@ -64,7 +89,7 @@ describe("local API", () => {
     expect(response.headers["content-security-policy"]).toContain("default-src 'self'");
   });
 
-  it("keeps Agent confirmation decisions off the HTTP surface", async () => {
+  it("rejects confirmation decisions without the auto-reply engine", async () => {
     const unavailable = await app.inject({
       method: "POST",
       url: "/api/agent/confirmations/confirmation-1",
@@ -76,21 +101,27 @@ describe("local API", () => {
       payload: { decision: "approved" },
     });
 
-    expect(unavailable.statusCode).toBe(501);
-    expect(unavailable.json()).toMatchObject({ ok: false, code: "not_supported" });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json()).toMatchObject({ ok: false, code: "auto_reply_unavailable" });
     expect(malformed.statusCode).toBe(400);
   });
 
-  it("aborts an active Agent stream when the client closes its response", async () => {
-    let observeAbort!: () => void;
-    const streamAborted = new Promise<void>((resolve) => { observeAbort = resolve; });
+it("keeps an Agent stream running after the client closes its response", async () => {
+    let markComplete!: () => void;
+    const streamCompleted = new Promise<void>((resolve) => { markComplete = resolve; });
     const agentService = {
       start: () => undefined,
       close: async () => undefined,
       async *streamMessage(_conversationId: string, _input: unknown, signal?: AbortSignal) {
-        signal?.addEventListener("abort", observeAbort, { once: true });
+        // Outlives the client: yield once, wait longer than the client stays
+        // connected, then finish. If the route cancelled the run on close,
+        // this generator would never reach the final events.
+        signal?.addEventListener("abort", () => undefined);
         yield { type: "status", message: "Streaming" };
-        await new Promise<void>((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+        await new Promise<void>((resolve) => setTimeout(resolve, 150));
+        yield { type: "text_delta", delta: "still working" };
+        yield { type: "completed", reason: "stop" };
+        markComplete();
       },
     };
     const streamingApp = await buildApp({
@@ -128,11 +159,333 @@ describe("local API", () => {
         }));
       });
       await Promise.race([
-        streamAborted,
-        new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("Response close did not abort the Agent stream.")), 1_000)),
+        streamCompleted,
+        new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("Closing the response stopped the Agent stream.")), 1_000)),
       ]);
     } finally {
       await streamingApp.close();
+    }
+  });
+
+  it("persists the completed Agent turn when the client closes mid-stream", async () => {
+    const serviceMasterKey = Buffer.alloc(32, 7);
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, 'custom', 'Demo', 'encrypted', 'imap.example.test', 993, 1,
+        'smtp.example.test', 465, 1, 'email', 'connected', ?)
+    `).run("agent-disconnect", "disconnect@example.test", now);
+    applyAgentStoreSchema(db, "2026-08-10T00:00:00.000Z");
+    const lifecycle = new AccountLifecycleStore(db, serviceMasterKey);
+    const sourceEvents = new AgentSourceEventOutbox(db, serviceMasterKey, lifecycle);
+    const agentService = new AgentService({ db, masterKey: serviceMasterKey, lifecycle, sourceEvents });
+    try {
+      const provider = agentService.createProvider({
+        label: "Local test provider",
+        kind: "ollama",
+        endpoint: "http://127.0.0.1:11434/v1",
+        model: "test-model",
+        timeoutMs: 30_000,
+        allowCloudMailContent: false,
+        makeDefault: true,
+      });
+      const conversation = agentService.createConversation({
+        providerId: provider.id,
+        scope: { mode: "selected_account", accountIds: ["agent-disconnect"], messageIds: [] },
+      });
+      const internals = agentService as unknown as {
+        rag: { search: (...arguments_: unknown[]) => Promise<unknown[]> };
+        runtime: { streamChat: (input: unknown) => AsyncIterable<unknown> };
+      };
+      vi.spyOn(internals.rag, "search").mockResolvedValue([]);
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+        yield { type: "text_delta", delta: "First half. " };
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        yield { type: "text_delta", delta: "Second half." };
+        yield { type: "completed", reason: "stop" };
+      });
+
+      const streamingApp = await buildApp({ db, masterKey: serviceMasterKey, backgroundDirectory, agentService });
+      await streamingApp.listen({ host: "127.0.0.1", port: 0 });
+      const address = streamingApp.server.address();
+      if (!address || typeof address === "string") throw new Error("Expected a TCP listener.");
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const client = httpRequest({
+            hostname: "127.0.0.1",
+            port: address.port,
+            method: "POST",
+            path: `/api/agent/conversations/${conversation.id}/messages`,
+            headers: { "content-type": "application/json" },
+          }, (response) => {
+            response.once("data", () => {
+              // The user moved away from the assistant panel mid-generation.
+              client.destroy();
+              resolve();
+            });
+          });
+          client.on("error", () => undefined);
+          client.once("error", reject);
+          client.end(JSON.stringify({
+            content: "Keep going",
+            providerId: provider.id,
+            mode: "agent",
+            scope: conversation.scope,
+            context: {},
+          }));
+        });
+
+        const deadline = Date.now() + 10_000;
+        let lastMessage: { role: string; content: string; state?: string } | undefined;
+        let roles: string[] = [];
+        while (Date.now() < deadline) {
+          const response = await streamingApp.inject({ method: "GET", url: `/api/agent/conversations/${conversation.id}` });
+          const conversationSnapshot = response.json();
+          roles = conversationSnapshot.messages.map((message: { role: string }) => message.role);
+          lastMessage = conversationSnapshot.messages[conversationSnapshot.messages.length - 1];
+          // The run publishes an in-flight streaming assistant snapshot while it
+          // is still answering; wait for the persisted, complete reply instead.
+          if (roles[roles.length - 1] === "assistant" && lastMessage?.state === "complete") break;
+          await new Promise<void>((resolve) => setTimeout(resolve, 150));
+        }
+
+        expect(roles).toEqual(["user", "assistant"]);
+        expect(lastMessage).toMatchObject({ role: "assistant", content: "First half. Second half.", state: "complete" });
+      } finally {
+        await streamingApp.close();
+      }
+    } finally {
+      agentService.close();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("accepts attachment metadata with a desktop file path and persists it with the turn", async () => {
+    const serviceMasterKey = Buffer.alloc(32, 7);
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, 'custom', 'Demo', 'encrypted', 'imap.example.test', 993, 1,
+        'smtp.example.test', 465, 1, 'email', 'connected', ?)
+    `).run("agent-attach", "attach@example.test", now);
+    applyAgentStoreSchema(db, "2026-08-10T00:00:00.000Z");
+    const lifecycle = new AccountLifecycleStore(db, serviceMasterKey);
+    const sourceEvents = new AgentSourceEventOutbox(db, serviceMasterKey, lifecycle);
+    const agentService = new AgentService({ db, masterKey: serviceMasterKey, lifecycle, sourceEvents });
+    try {
+      const provider = agentService.createProvider({
+        label: "Local test provider",
+        kind: "ollama",
+        endpoint: "http://127.0.0.1:11434/v1",
+        model: "test-model",
+        timeoutMs: 30_000,
+        allowCloudMailContent: false,
+        makeDefault: true,
+      });
+      const conversation = agentService.createConversation({
+        providerId: provider.id,
+        scope: { mode: "selected_account", accountIds: ["agent-attach"], messageIds: [] },
+      });
+      const internals = agentService as unknown as {
+        runtime: { streamChat: (input: unknown) => AsyncIterable<unknown> };
+      };
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+        yield { type: "text_delta", delta: "Done." };
+        yield { type: "completed", reason: "stop" };
+      });
+
+      const streamingApp = await buildApp({ db, masterKey: serviceMasterKey, backgroundDirectory, agentService });
+      try {
+        const attachments = [
+          {
+            name: "report.pdf",
+            type: "application/pdf",
+            token: "out_00000000-0000-4000-8000-000000000000",
+            accountId: "agent-attach",
+            path: "C:\\Users\\demo\\AppData\\extracted\\report.pdf",
+            text: "Quarterly figures.\nRevenue is up.",
+          },
+        ];
+        const post = await streamingApp.inject({
+          method: "POST",
+          url: `/api/agent/conversations/${conversation.id}/messages`,
+          payload: {
+            content: "Analyze this PDF",
+            providerId: provider.id,
+            mode: "agent",
+            scope: conversation.scope,
+            context: {},
+            attachments,
+          },
+        });
+        expect(post.statusCode).toBe(200);
+
+        const snapshot = await streamingApp.inject({ method: "GET", url: `/api/agent/conversations/${conversation.id}` });
+        const userMessage = snapshot.json().messages.find((message: { role: string }) => message.role === "user");
+        // The transcript returns attachment metadata for chips but strips the
+        // model-facing extracted text from the payload.
+        expect(userMessage.attachments).toEqual(attachments.map(({ text: _text, ...rest }) => rest));
+        expect(userMessage.attachments[0].text).toBeUndefined();
+        // The persisted transcript keeps the clean user text; the file dump
+        // must not leak into the visible message content.
+        expect(userMessage.content).toBe("Analyze this PDF");
+        expect(userMessage.content).not.toContain("[file:");
+      } finally {
+        await streamingApp.close();
+      }
+    } finally {
+      agentService.close();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("accepts referenced mail with the turn, persists it, and rejects more than eight references", async () => {
+    const serviceMasterKey = Buffer.alloc(32, 7);
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, 'custom', 'Demo', 'encrypted', 'imap.example.test', 993, 1,
+        'smtp.example.test', 465, 1, 'email', 'connected', ?)
+    `).run("agent-refs", "refs@example.test", now);
+    applyAgentStoreSchema(db, "2026-08-10T00:00:00.000Z");
+    const lifecycle = new AccountLifecycleStore(db, serviceMasterKey);
+    const sourceEvents = new AgentSourceEventOutbox(db, serviceMasterKey, lifecycle);
+    const agentService = new AgentService({ db, masterKey: serviceMasterKey, lifecycle, sourceEvents });
+    try {
+      const provider = agentService.createProvider({
+        label: "Local test provider",
+        kind: "ollama",
+        endpoint: "http://127.0.0.1:11434/v1",
+        model: "test-model",
+        timeoutMs: 30_000,
+        allowCloudMailContent: false,
+        makeDefault: true,
+      });
+      const conversation = agentService.createConversation({
+        providerId: provider.id,
+        scope: { mode: "selected_account", accountIds: ["agent-refs"], messageIds: [] },
+      });
+      const internals = agentService as unknown as {
+        runtime: { streamChat: (input: unknown) => AsyncIterable<unknown> };
+      };
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+        yield { type: "completed", reason: "stop" };
+      });
+
+      const streamingApp = await buildApp({ db, masterKey: serviceMasterKey, backgroundDirectory, agentService });
+      try {
+        const references = [
+          { id: "message-ref-a", subject: "Quarterly report" },
+          { id: "message-ref-b" },
+        ];
+        const post = await streamingApp.inject({
+          method: "POST",
+          url: `/api/agent/conversations/${conversation.id}/messages`,
+          payload: {
+            content: "Summarize the referenced mail",
+            providerId: provider.id,
+            mode: "agent",
+            scope: conversation.scope,
+            context: {},
+            references,
+          },
+        });
+        expect(post.statusCode).toBe(200);
+
+        const deadline = Date.now() + 10_000;
+        let persisted: { references?: Array<{ id: string; subject?: string }> } | undefined;
+        while (Date.now() < deadline) {
+          const snapshot = await streamingApp.inject({ method: "GET", url: `/api/agent/conversations/${conversation.id}` });
+          persisted = snapshot.json().messages.find((message: { role: string }) => message.role === "user");
+          if (persisted?.references) break;
+          await new Promise<void>((resolve) => setTimeout(resolve, 150));
+        }
+        expect(persisted?.references).toEqual(references);
+        expect(persisted?.content).toBe("Summarize the referenced mail");
+
+        const tooMany = await streamingApp.inject({
+          method: "POST",
+          url: `/api/agent/conversations/${conversation.id}/messages`,
+          payload: {
+            content: "Too many",
+            providerId: provider.id,
+            mode: "agent",
+            scope: conversation.scope,
+            context: {},
+            references: Array.from({ length: 9 }, (_, index) => ({ id: `ref-${index}` })),
+          },
+        });
+        expect(tooMany.statusCode).toBe(400);
+      } finally {
+        await streamingApp.close();
+      }
+    } finally {
+      agentService.close();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("rejects agent messages with unknown attachment keys", async () => {
+    const serviceMasterKey = Buffer.alloc(32, 7);
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, 'custom', 'Demo', 'encrypted', 'imap.example.test', 993, 1,
+        'smtp.example.test', 465, 1, 'email', 'connected', ?)
+    `).run("agent-reject", "reject@example.test", now);
+    applyAgentStoreSchema(db, "2026-08-10T00:00:00.000Z");
+    const lifecycle = new AccountLifecycleStore(db, serviceMasterKey);
+    const sourceEvents = new AgentSourceEventOutbox(db, serviceMasterKey, lifecycle);
+    const agentService = new AgentService({ db, masterKey: serviceMasterKey, lifecycle, sourceEvents });
+    try {
+      const provider = agentService.createProvider({
+        label: "Local test provider",
+        kind: "ollama",
+        endpoint: "http://127.0.0.1:11434/v1",
+        model: "test-model",
+        timeoutMs: 30_000,
+        allowCloudMailContent: false,
+        makeDefault: true,
+      });
+      const conversation = agentService.createConversation({
+        providerId: provider.id,
+        scope: { mode: "selected_account", accountIds: ["agent-reject"], messageIds: [] },
+      });
+      const streamingApp = await buildApp({ db, masterKey: serviceMasterKey, backgroundDirectory, agentService });
+      try {
+        const post = await streamingApp.inject({
+          method: "POST",
+          url: `/api/agent/conversations/${conversation.id}/messages`,
+          payload: {
+            content: "Analyze this PDF",
+            providerId: provider.id,
+            mode: "agent",
+            scope: conversation.scope,
+            context: {},
+            attachments: [{ name: "report.pdf", type: "application/pdf", exploded: true }],
+          },
+        });
+        expect(post.statusCode).toBe(400);
+        expect(post.json().message).toContain("Unrecognized key");
+      } finally {
+        await streamingApp.close();
+      }
+    } finally {
+      agentService.close();
+      vi.restoreAllMocks();
     }
   });
 
@@ -172,11 +525,64 @@ describe("local API", () => {
     }
   });
 
+  it("rejects non-loopback peers when no local API token is configured", async () => {
+    const unprotectedApp = await buildApp({
+      db,
+      masterKey: Buffer.alloc(32, 7),
+      backgroundDirectory,
+    });
+    try {
+      const loopback = await unprotectedApp.inject({ method: "GET", url: "/api/accounts" });
+      const ipv4Mapped = await unprotectedApp.inject({
+        method: "GET",
+        url: "/api/accounts",
+        remoteAddress: "::ffff:127.0.0.1",
+      });
+      const lan = await unprotectedApp.inject({
+        method: "GET",
+        url: "/api/accounts",
+        remoteAddress: "10.0.0.7",
+      });
+
+      expect(loopback.statusCode).toBe(200);
+      expect(ipv4Mapped.statusCode).toBe(200);
+      expect(lan.statusCode).toBe(401);
+      expect(lan.json()).toMatchObject({ ok: false, code: "local_api_unauthorized" });
+    } finally {
+      await unprotectedApp.close();
+    }
+  });
+
   it("starts with no accounts and never exposes credentials", async () => {
     const response = await app.inject({ method: "GET", url: "/api/accounts" });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual([]);
     expect(response.body).not.toContain("password");
+  });
+
+  it("surfaces a persisted sync warning on the account row", async () => {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, 'custom', 'Demo', 'encrypted', 'imap.example.test', 993, 1,
+        'smtp.example.test', 465, 1, 'email', 'connected', ?)
+    `).run("warning-demo", "warning@example.test", now);
+    db.prepare("UPDATE accounts SET last_sync_warning_code = 'sync_limit' WHERE id = ?").run("warning-demo");
+
+    const response = await app.inject({ method: "GET", url: "/api/accounts" });
+    const accounts = response.json() as Array<Record<string, unknown>>;
+    const account = accounts.find((row) => row.id === "warning-demo");
+
+    expect(response.statusCode).toBe(200);
+    expect(account).toMatchObject({
+      id: "warning-demo",
+      status: "connected",
+      lastErrorCode: null,
+      lastSyncWarningCode: "sync_limit",
+    });
   });
 
   it("returns complete provider onboarding metadata without adding form fields", async () => {
@@ -359,10 +765,29 @@ describe("local API", () => {
       refreshIntervalSeconds: 60,
       closeBehavior: "ask",
       customBackgroundUrl: null,
+      syncMessageLimit: 2000,
+      effectiveSyncMessageLimit: 2000,
     });
     expect(settings).not.toHaveProperty("customBackgroundFilename");
     expect(response.body).not.toContain(backgroundDirectory);
     expect(Number.isNaN(Date.parse(settings.updatedAt))).toBe(false);
+  });
+
+  it("reports the env-overridden sync limit separately from the stored picker value", async () => {
+    const previous = process.env.SYNC_MESSAGE_LIMIT;
+    try {
+      process.env.SYNC_MESSAGE_LIMIT = "3000";
+      const response = await app.inject({ method: "GET", url: "/api/settings" });
+      const settings = response.json();
+
+      expect(response.statusCode).toBe(200);
+      // The stored picker value is unchanged; only the effective value reflects
+      // the SYNC_MESSAGE_LIMIT override.
+      expect(settings).toMatchObject({ syncMessageLimit: 2000, effectiveSyncMessageLimit: 3000 });
+    } finally {
+      if (previous === undefined) delete process.env.SYNC_MESSAGE_LIMIT;
+      else process.env.SYNC_MESSAGE_LIMIT = previous;
+    }
   });
 
   it("persists a valid settings patch", async () => {
@@ -603,6 +1028,337 @@ describe("local API", () => {
     expect(missing.json()).toEqual({ ok: false, message: "Message not found." });
   });
 
+  it("validates batch message flag updates before touching any message", async () => {
+    const malformedPayloads = [
+      {},
+      { ids: [] },
+      { ids: ["a", "a"], patch: { seen: true } },
+      { ids: ["a"], patch: {} },
+      { ids: ["a"], patch: { seen: true, unexpected: false } },
+    ];
+    for (const payload of malformedPayloads) {
+      const response = await app.inject({ method: "PATCH", url: "/api/messages/batch/flags", payload });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ ok: false });
+    }
+  });
+
+  it("reports per-message outcomes for batch flag updates", async () => {
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/batch/flags",
+      payload: { ids: ["missing-message", "also-missing"], patch: { seen: true } },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, updated: 0, failed: 2, changedIds: [] });
+  });
+
+  it("validates batch message moves and reports per-message outcomes", async () => {
+    const malformed = await app.inject({
+      method: "POST",
+      url: "/api/messages/batch/move",
+      payload: { ids: ["a"], target: "sent" },
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json()).toMatchObject({ ok: false });
+
+    const empty = await app.inject({
+      method: "POST",
+      url: "/api/messages/batch/move",
+      payload: { ids: [], target: "archive" },
+    });
+    expect(empty.statusCode).toBe(400);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/messages/batch/move",
+      payload: { ids: ["missing-message", "also-missing"], target: "trash" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      updated: 0,
+      failed: 2,
+      failures: [
+        { id: "missing-message", message: "Message not found." },
+        { id: "also-missing", message: "Message not found." },
+      ],
+    });
+  });
+
+  it("accepts junk and inbox move targets through the route schema", async () => {
+    for (const target of ["junk", "inbox"] as const) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/messages/batch/move",
+        payload: { ids: ["missing-message"], target },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ ok: true, updated: 0, failed: 1 });
+    }
+  });
+
+  function seedJobAccount(accountId: string, archiveFolder = false) {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(accountId, `${accountId}@example.com`, "custom", "Job provider", "encrypted", "127.0.0.1", 1, 1, "127.0.0.1", 1, 1, "email", "connected", now);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(accountId, "INBOX", "INBOX", "\\Inbox", 0, 0);
+    if (archiveFolder) {
+      db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(accountId, "Archive", "Archive", "\\Archive", 0, 0);
+    }
+    const insertMessage = db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    return { now, insertMessage };
+  }
+
+  it("routes batch flag updates through the durable operation queue per account", async () => {
+    imapClientForAccount.mockReturnValue(readyMailClient());
+    const { now, insertMessage } = seedJobAccount("flag-batch-a");
+    const { insertMessage: insertMessageB } = seedJobAccount("flag-batch-b");
+    insertMessage.run("flag-a-1", "flag-batch-a", "INBOX", 51, "Batch A", "Demo", "demo@example.com", "[]", now, "a", "a", "", "[]", 0, 10, now);
+    insertMessageB.run("flag-b-1", "flag-batch-b", "INBOX", 52, "Batch B", "Demo", "demo@example.com", "[]", now, "b", "b", "", "[]", 0, 10, now);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/batch/flags",
+      payload: { ids: ["flag-a-1", "flag-b-1"], patch: { seen: true } },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      updated: 2,
+      failed: 0,
+      changedIds: expect.arrayContaining(["flag-a-1", "flag-b-1"]),
+    });
+
+    // The route must record one durable operation row per affected account
+    // (kind "flags", settled by the queue executor) instead of bypassing the
+    // queue: a shutdown mid-batch would otherwise lose the writes.
+    const rows = db
+      .prepare("SELECT kind, status, payload_json FROM operation_queue WHERE account_id IN (?, ?) ORDER BY account_id")
+      .all("flag-batch-a", "flag-batch-b") as Array<{ kind: string; status: string; payload_json: string }>;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.kind).toBe("flags");
+      expect(row.status).toBe("completed");
+      expect(JSON.parse(row.payload_json)).toEqual({ ids: expect.any(Array), patch: { seen: true } });
+    }
+    const flagged = JSON.parse(
+      (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("flag-a-1") as { flags_json: string }).flags_json,
+    );
+    expect(flagged).toContain("\\Seen");
+  });
+
+  it("counts every message as failed for batch flags when the provider is unreachable", async () => {
+    imapClientForAccount.mockReturnValue(undefined as never);
+    const { now, insertMessage } = seedJobAccount("flag-batch-dead");
+    insertMessage.run("flag-dead-1", "flag-batch-dead", "INBOX", 61, "Stuck", "Demo", "demo@example.com", "[]", now, "s", "s", "", "[]", 0, 10, now);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/batch/flags",
+      payload: { ids: ["flag-dead-1"], patch: { seen: true } },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, updated: 0, failed: 1, changedIds: [] });
+    const stale = JSON.parse(
+      (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("flag-dead-1") as { flags_json: string }).flags_json,
+    );
+    expect(stale).toEqual([]);
+  });
+
+  async function waitForJob(jobId: string, tries = 120) {
+    for (let attempt = 0; attempt < tries; attempt += 1) {
+      const response = await app.inject({ method: "GET", url: `/api/batch-jobs/${jobId}` });
+      expect(response.statusCode).toBe(200);
+      const job = response.json().job;
+      if (job.status !== "running") return job;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`batch job ${jobId} did not finish`);
+  }
+
+  it("resolves a predicate flag job server-side with real outcome counts", async () => {
+    imapClientForAccount.mockReturnValue(readyMailClient());
+    const { now, insertMessage } = seedJobAccount("job-flags");
+    insertMessage.run("job-inbox-1", "job-flags", "INBOX", 11, "Unread one", "Demo", "demo@example.com", "[]", now, "u1", "u1", "", "[]", 0, 10, now);
+    insertMessage.run("job-inbox-2", "job-flags", "INBOX", 12, "Unread two", "Demo", "demo@example.com", "[]", now, "u2", "u2", "", "[]", 0, 10, now);
+    insertMessage.run("job-read", "job-flags", "INBOX", 13, "Already read", "Demo", "demo@example.com", "[]", now, "r", "r", "", '["\\\\Seen"]', 0, 10, now);
+    indexMessageFts(db, "job-inbox-1", { subject: "Unread one", fromName: "Demo", fromAddress: "demo@example.com", textBody: "u1" });
+    indexMessageFts(db, "job-inbox-2", { subject: "Unread two", fromName: "Demo", fromAddress: "demo@example.com", textBody: "u2" });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/batch-jobs",
+      payload: { kind: "flags", patch: { seen: true }, query: { accountId: "job-flags", unread: true, q: "Unread" } },
+    });
+    expect(created.statusCode).toBe(200);
+    const { jobId } = created.json();
+
+    const job = await waitForJob(jobId);
+    // The predicate is resolved server-side to exactly the two unread
+    // messages, the remote STORE succeeds, and both are persisted + reported.
+    expect(job).toEqual({
+      id: jobId,
+      kind: "flags",
+      status: "completed",
+      total: 2,
+      done: 2,
+      updated: 2,
+      failed: 0,
+      createdAt: expect.any(Number),
+      changedIds: ["job-inbox-1", "job-inbox-2"],
+      undoWindowMs: expect.any(Number),
+    });
+    const inboxFlagged = (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("job-inbox-1") as { flags_json: string }).flags_json;
+    expect(JSON.parse(inboxFlagged)).toContain("\\Seen");
+    const untouched = (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("job-read") as { flags_json: string }).flags_json;
+    expect(JSON.parse(untouched)).toEqual(["\\Seen"]);
+  });
+
+  it("counts every message as failed when the provider is unreachable", async () => {
+    imapClientForAccount.mockReturnValue(undefined as never);
+    const { now, insertMessage } = seedJobAccount("job-dead");
+    insertMessage.run("job-dead-1", "job-dead", "INBOX", 21, "Stuck", "Demo", "demo@example.com", "[]", now, "s", "s", "", "[]", 0, 10, now);
+    insertMessage.run("job-dead-2", "job-dead", "INBOX", 22, "Stuck too", "Demo", "demo@example.com", "[]", now, "s2", "s2", "", "[]", 0, 10, now);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/batch-jobs",
+      payload: { kind: "flags", patch: { seen: true }, query: { accountId: "job-dead" } },
+    });
+    const { jobId } = created.json();
+
+    const job = await waitForJob(jobId);
+    // Nothing reached the server, so nothing may be persisted or counted as
+    // "updated" — every message must surface as failed instead.
+    expect(job).toMatchObject({ status: "completed", total: 2, done: 2, updated: 0, failed: 2 });
+    const stale = (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("job-dead-1") as { flags_json: string }).flags_json;
+    expect(JSON.parse(stale)).toEqual([]);
+  });
+
+  it("rejects malformed job payloads and unknown job ids", async () => {
+    for (const payload of [
+      { kind: "flags", patch: { seen: true }, query: { accountId: "x", unknown: true } },
+      { kind: "move", target: "sent", query: {} },
+      { kind: "flags", patch: {}, query: {} },
+      { kind: "nope", query: {} },
+    ]) {
+      const response = await app.inject({ method: "POST", url: "/api/batch-jobs", payload });
+      expect(response.statusCode).toBe(400);
+    }
+    const missing = await app.inject({ method: "GET", url: "/api/batch-jobs/does-not-exist" });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it("supports exactly one undo per job and refuses double undo", async () => {
+    imapClientForAccount.mockReturnValue(readyMailClient());
+    const { now, insertMessage } = seedJobAccount("job-undo");
+    insertMessage.run("job-undo-1", "job-undo", "INBOX", 31, "Unread", "Demo", "demo@example.com", "[]", now, "u", "u", "", "[]", 0, 10, now);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/batch-jobs",
+      payload: { kind: "flags", patch: { seen: true }, query: { accountId: "job-undo" } },
+    });
+    const { jobId } = created.json();
+    await waitForJob(jobId);
+
+    const firstUndo = await app.inject({ method: "POST", url: `/api/batch-jobs/${jobId}/undo`, payload: {} });
+    expect(firstUndo.statusCode).toBe(200);
+    expect(firstUndo.json()).toMatchObject({ ok: true });
+    const undoJobId = firstUndo.json().jobId;
+    await waitForJob(undoJobId);
+    const reverted = (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("job-undo-1") as { flags_json: string }).flags_json;
+    expect(JSON.parse(reverted)).toEqual([]);
+
+    const secondUndo = await app.inject({ method: "POST", url: `/api/batch-jobs/${jobId}/undo`, payload: {} });
+    expect(secondUndo.statusCode).toBe(409);
+    expect(secondUndo.json()).toMatchObject({ ok: false, reason: "already_undone" });
+  });
+
+  it("moves every message matching a view predicate behind one job", async () => {
+    const mailClient = readyMailClient();
+    mailClient.messageMove.mockImplementation(async () => ({ uidMap: new Map([[41, 101]]) }));
+    imapClientForAccount.mockReturnValue(mailClient);
+    const { now, insertMessage } = seedJobAccount("job-move", true);
+    insertMessage.run("job-move-1", "job-move", "INBOX", 41, "Move me", "Demo", "demo@example.com", "[]", now, "m", "m", "", "[]", 0, 10, now);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/batch-jobs",
+      payload: { kind: "move", target: "archive", query: { accountId: "job-move", unread: true } },
+    });
+    expect(created.statusCode).toBe(200);
+    const { jobId } = created.json();
+
+    const job = await waitForJob(jobId);
+    // The predicate is resolved server-side and the UIDPLUS-confirmed move is
+    // persisted locally and counted as updated.
+    expect(job).toMatchObject({ status: "completed", total: 1, done: 1, updated: 1, failed: 0 });
+    expect(job.changedIds).toEqual([]);
+    const moved = db.prepare("SELECT mailbox, uid FROM messages WHERE id = ?").get("job-move-1") as { mailbox: string; uid: number };
+    expect(moved).toEqual({ mailbox: "Archive", uid: 101 });
+  });
+
+  it("updates and exposes an account signature", async () => {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("account-signature", "signature@example.com", "custom", "Signature provider", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: "/api/accounts/account-signature/signature",
+      payload: { signature: "——\n测试签名" },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toEqual({ ok: true });
+
+    const accounts = await app.inject({ method: "GET", url: "/api/accounts" });
+    const target = accounts.json().find((account: { id: string }) => account.id === "account-signature");
+    expect(target).toMatchObject({ email: "signature@example.com", signature: "——\n测试签名" });
+  });
+
+  it("rejects oversized or malformed account signature updates and missing accounts", async () => {
+    const tooLong = await app.inject({
+      method: "PATCH",
+      url: "/api/accounts/account-signature/signature",
+      payload: { signature: "x".repeat(2001) },
+    });
+    expect(tooLong.statusCode).toBe(400);
+    expect(tooLong.json()).toMatchObject({ ok: false });
+
+    const extraField = await app.inject({
+      method: "PATCH",
+      url: "/api/accounts/account-signature/signature",
+      payload: { signature: "ok", unexpected: true },
+    });
+    expect(extraField.statusCode).toBe(400);
+
+    const missing = await app.inject({
+      method: "PATCH",
+      url: "/api/accounts/does-not-exist/signature",
+      payload: { signature: "ok" },
+    });
+    expect(missing.statusCode).toBe(404);
+  });
+
   it("keeps the unified inbox scoped to inbox folders while exposing explicit folders", async () => {
     db.prepare(`
       INSERT INTO accounts (
@@ -632,6 +1388,17 @@ describe("local API", () => {
       JSON.stringify(["<root@example.com>", "<parent@example.com>"]),
       "message-inbox",
     );
+    // These rows are written after buildApp (whose one-time FTS migration
+    // already ran), so mirror the sync write path into the search index.
+    const ftsRows: Array<[string, string, string, string, string]> = [
+      ["message-inbox", "Inbox message", "Demo", "demo@example.com", "inbox"],
+      ["message-seen-inbox", "Seen inbox message", "Demo", "demo@example.com", "seen inbox"],
+      ["message-sent", "Sent message", "Demo", "demo@example.com", "sent"],
+      ["message-starred-sent", "Starred sent message", "Demo", "demo@example.com", "starred"],
+    ];
+    for (const [id, subject, fromName, fromAddress, textBody] of ftsRows) {
+      indexMessageFts(db, id, { subject, fromName, fromAddress, textBody });
+    }
 
     const inbox = await app.inject({ method: "GET", url: "/api/messages?accountId=account-1" });
     expect(inbox.statusCode).toBe(200);
@@ -665,6 +1432,54 @@ describe("local API", () => {
 
     const stats = await app.inject({ method: "GET", url: "/api/stats" });
     expect(stats.json()).toMatchObject({ accounts: 1, messages: 2, unread: 1 });
+  });
+
+  it("lists messages with attachments across every folder and account", async () => {
+    const now = new Date().toISOString();
+    const insertAccount = db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertAccount.run("account-1", "demo@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
+    insertAccount.run("account-2", "two@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox", 3, 0);
+    const insertMessage = db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertMessage.run("attach-inbox", "account-1", "INBOX", 1, "Pdf attached", "Demo", "demo@example.com", "[]", now, "attach", "attach", "", "[]", 1, 10, now);
+    insertMessage.run("attach-archive", "account-1", "Archive", 2, "Tarball attached", "Demo", "demo@example.com", "[]", now, "attach", "attach", "", "[]", 1, 10, now);
+    insertMessage.run("attach-other", "account-2", "INBOX", 1, "Sheet attached", "Demo", "two@example.com", "[]", now, "attach", "attach", "", "[]", 1, 10, now);
+    insertMessage.run("plain-inbox", "account-1", "INBOX", 3, "No attachment", "Demo", "demo@example.com", "[]", now, "plain", "plain", "", "[]", 0, 10, now);
+    indexMessageFts(db, "attach-archive", { subject: "Tarball attached", fromName: "Demo", fromAddress: "demo@example.com", textBody: "attach" });
+
+    // The view replaces the unified-inbox fallback: no accountId bound means
+    // every account, and no folder means every folder.
+    const all = await app.inject({ method: "GET", url: "/api/messages?hasAttachments=1" });
+    expect(all.statusCode).toBe(200);
+    expect(all.json().total).toBe(3);
+    expect(new Set(all.json().items.map((message: { id: string }) => message.id)))
+      .toEqual(new Set(["attach-inbox", "attach-archive", "attach-other"]));
+
+    const scoped = await app.inject({ method: "GET", url: "/api/messages?accountId=account-1&hasAttachments=1" });
+    expect(scoped.json()).toMatchObject({ total: 2 });
+    expect(new Set(scoped.json().items.map((message: { id: string }) => message.id)))
+      .toEqual(new Set(["attach-inbox", "attach-archive"]));
+
+    const folderScoped = await app.inject({ method: "GET", url: "/api/messages?accountId=account-1&folder=Archive&hasAttachments=1" });
+    expect(folderScoped.json()).toMatchObject({ total: 1 });
+    expect(folderScoped.json().items[0]).toMatchObject({ id: "attach-archive", hasAttachments: true });
+
+    // The view composes with the FTS search join like any other filter.
+    const searched = await app.inject({ method: "GET", url: "/api/messages?hasAttachments=1&q=Tarball" });
+    expect(searched.json()).toMatchObject({ total: 1 });
+    expect(searched.json().items[0].id).toBe("attach-archive");
   });
 
   it("lists direct Archive mail and only confirmed Gmail All Mail archives", async () => {
@@ -805,5 +1620,31 @@ describe("local API", () => {
     });
     expect(detail.json()).toMatchObject({ id: "pending-archive", mailbox: "Archive", movePending: true });
     expect(intentDetail.json()).toMatchObject({ id: "pending-intent", mailbox: "INBOX", movePending: true, archived: false });
+  });
+});
+
+describe("composeAttachmentContent", () => {
+  it("returns content unchanged when there are no attachments", () => {
+    expect(composeAttachmentContent("hello", undefined)).toBe("hello");
+    expect(composeAttachmentContent("hello", [{ name: "a.txt", type: "text/plain" }])).toBe("hello");
+  });
+
+  it("prefixes attachment text blocks ahead of the user content", () => {
+    const composed = composeAttachmentContent("check it", [
+      { name: "a.txt", type: "text/plain", text: "alpha" },
+      { name: "b.pdf", type: "application/pdf", text: "beta" },
+    ]);
+    expect(composed).toBe("[file: a.txt]\nalpha\n[/file]\n\n[file: b.pdf]\nbeta\n[/file]\n\ncheck it");
+  });
+
+  it("marks truncated text with a (truncated) marker", () => {
+    const composed = composeAttachmentContent("q", [
+      { name: "big.txt", type: "text/plain", text: "x".repeat(AGENT_ATTACHMENT_TEXT_LIMIT) },
+    ]);
+    expect(composed.startsWith("[file: big.txt (truncated)]\n")).toBe(true);
+  });
+
+  it("keeps content unchanged when no attachment carries text", () => {
+    expect(composeAttachmentContent("plain", [{ name: "a.txt", type: "text/plain", token: "out_00000000-0000-4000-8000-000000000000" }])).toBe("plain");
   });
 });

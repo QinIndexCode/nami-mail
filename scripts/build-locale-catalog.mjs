@@ -22,7 +22,10 @@ const callbackKeys = {
 };
 const nativeCopyKeys = {
   trayTooltip: "native.tray.tooltip",
-  trayOpen: "native.tray.open",
+  trayShow: "native.tray.show",
+  trayHide: "native.tray.hide",
+  trayNewMail: "native.tray.newMail",
+  trayInbox: "native.tray.inbox",
   trayQuit: "native.tray.quit",
   trayFailureTitle: "native.tray.failure.title",
   trayFailureMessage: "native.tray.failure.message",
@@ -41,6 +44,13 @@ const nativeCopyKeys = {
   notificationMultipleBody: "native.notification.multipleBody",
   startupFailureTitle: "native.startup.failure.title",
   startupFailureMessage: "native.startup.failure.message",
+  externalConfirmTitle: "native.externalConfirm.title",
+  externalConfirmCaller: "native.externalConfirm.caller",
+  externalConfirmOperation: "native.externalConfirm.operation",
+  externalConfirmApprove: "native.externalConfirm.approve",
+  externalConfirmReject: "native.externalConfirm.reject",
+  externalAccessDriftTitle: "native.externalAccess.drift.title",
+  externalAccessDriftBody: "native.externalAccess.drift.body",
 };
 export function canonicalLocale(value) {
   if (typeof value !== "string") return null;

@@ -1,5 +1,20 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+// The sandboxed preload cannot require sibling modules outside the packaged
+// asar, so the channel name is declared here and pinned to the canonical
+// value in agent/confirmation-channel.cts by tests/preload-channel-sync.test.ts.
+const agentConfirmationIpcChannel = "nami:resolve-agent-confirmation";
+
+// The frameless window draws its own controls in the renderer; these channels
+// are pinned to the handlers in main.mts by tests/preload-channel-sync.test.ts.
+const windowControlChannels = {
+  minimize: "nami:window-minimize",
+  maximizeToggle: "nami:window-maximize-toggle",
+  close: "nami:window-close",
+  isMaximized: "nami:window-is-maximized",
+  maximizedChanged: "nami:window-maximized-changed",
+} as const;
+
 type NativeNotification = {
   title: string;
   body: string;
@@ -36,6 +51,7 @@ const updateReasons = [
   "platformUnsupported",
   "sourceUnconfigured",
   "trustUnavailable",
+  "trustDisabledByBuild",
   "scheduled",
   "checking",
   "upToDate",
@@ -79,7 +95,6 @@ const updateSnapshotKeys = new Set([
 ]);
 const updateSnapshotArgumentKeys = new Set(["installStage", "cleanupComplete"]);
 const updateInstallResultKeys = new Set(["accepted", "snapshot"]);
-const agentConfirmationIpcChannel = "nami:resolve-agent-confirmation";
 const agentConfirmationIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const agentConfirmationDecisions = ["approve", "reject"] as const;
 const agentConfirmationResultKeys = new Set(["ok"]);
@@ -314,9 +329,17 @@ if (contextBridge && ipcRenderer) {
   });
 
   contextBridge.exposeInMainWorld("namiDesktop", {
-    localApiRequestHeaders: () => ipcRenderer.invoke("nami:local-api-request-headers"),
     notify: (payload: NativeNotification) => ipcRenderer.invoke("nami:notify", payload),
     copyVerificationCode: (code: string) => ipcRenderer.invoke("nami:copy-verification-code", code),
+    showItemInFolder: (path: string) => ipcRenderer.invoke("nami:show-item-in-folder", path),
+    setLaunchAtStartup: (enabled: boolean) => {
+      if (typeof enabled !== "boolean") return;
+      ipcRenderer.send("nami:set-launch-at-startup", enabled);
+    },
+    setGlobalShortcutEnabled: (enabled: boolean) => {
+      if (typeof enabled !== "boolean") return;
+      ipcRenderer.send("nami:set-global-shortcut", enabled);
+    },
     onAgentConfirmationResult: (listener: unknown) => {
       if (typeof listener !== "function") return () => undefined;
       const resultListener = listener as (result: DesktopAgentConfirmationResult) => void;
@@ -330,15 +353,33 @@ if (contextBridge && ipcRenderer) {
     snoozeUpdate: (durationMinutes: number): Promise<DesktopUpdateSnapshot | undefined> => invokeUpdateSnapshot("nami:update-snooze", durationMinutes),
     installUpdate: (): Promise<DesktopUpdateInstallResult> => ipcRenderer.invoke("nami:update-install").then(normalizeDesktopUpdateInstallResult),
     setCustomNotificationSoundReady: (ready: boolean) => ipcRenderer.send("nami:custom-notification-sound-ready", ready),
+    quit: () => ipcRenderer.send("nami:quit"),
     onNewMail: (listener: (payload: NewMailPayload) => void) => {
       const wrapped = (_event: Electron.IpcRendererEvent, payload: NewMailPayload) => listener(payload);
       ipcRenderer.on("nami:new-mail", wrapped);
       return () => ipcRenderer.removeListener("nami:new-mail", wrapped);
     },
+    onAutoReply: (listener: (event: unknown) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, event: unknown) => listener(event);
+      ipcRenderer.on("nami:auto-reply", wrapped);
+      return () => ipcRenderer.removeListener("nami:auto-reply", wrapped);
+    },
     onOpenMessage: (listener: (id: string) => void) => {
       const wrapped = (_event: Electron.IpcRendererEvent, id: string) => listener(id);
       ipcRenderer.on("nami:open-message", wrapped);
       return () => ipcRenderer.removeListener("nami:open-message", wrapped);
+    },
+    onComposeNew: (listener: (mailtoUrl?: string) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, mailtoUrl?: unknown) => {
+        listener(typeof mailtoUrl === "string" ? mailtoUrl : undefined);
+      };
+      ipcRenderer.on("nami:compose-new", wrapped);
+      return () => ipcRenderer.removeListener("nami:compose-new", wrapped);
+    },
+    onOpenInbox: (listener: () => void) => {
+      const wrapped = () => listener();
+      ipcRenderer.on("nami:open-inbox", wrapped);
+      return () => ipcRenderer.removeListener("nami:open-inbox", wrapped);
     },
     onSettingsChanged: (listener: () => void) => {
       const wrapped = () => listener();
@@ -352,6 +393,17 @@ if (contextBridge && ipcRenderer) {
       };
       ipcRenderer.on("nami:update-status", wrapped);
       return () => ipcRenderer.removeListener("nami:update-status", wrapped);
+    },
+    minimizeWindow: () => ipcRenderer.send(windowControlChannels.minimize),
+    toggleMaximizeWindow: () => ipcRenderer.send(windowControlChannels.maximizeToggle),
+    closeWindow: () => ipcRenderer.send(windowControlChannels.close),
+    isWindowMaximized: (): Promise<boolean> => ipcRenderer.invoke(windowControlChannels.isMaximized),
+    onMaximizedChange: (listener: (maximized: boolean) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, maximized: unknown) => {
+        listener(maximized === true);
+      };
+      ipcRenderer.on(windowControlChannels.maximizedChanged, wrapped);
+      return () => ipcRenderer.removeListener(windowControlChannels.maximizedChanged, wrapped);
     },
   });
 }

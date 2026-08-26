@@ -1,4 +1,3 @@
-import type { AgentHostSnapshot } from "./host-controller.mjs";
 import { agentDesktopError, type AgentDesktopError } from "./contracts.mjs";
 
 export const agentHostServiceArgument = "--agent-host";
@@ -6,6 +5,25 @@ export const agentHostServiceStartupFailureExitCode = 1;
 
 const windowsPipePathPattern = /^\\\\\.\\pipe\\[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const windowsSidPattern = /^S-1-(?:0|1|2|3|5|15|16|18)-(?:\d+-){1,14}\d+$/;
+
+/**
+ * The minimal host snapshot consumed by the update drain lifecycle. The
+ * running GUI Broker publishes this shape through its adapter; there is no
+ * external Agent host in this build.
+ */
+export type AgentHostSnapshot = {
+  state: string;
+  mode?: string;
+  endpoint?: {
+    transport?: string;
+    path?: string;
+    ownerSid?: string;
+  };
+  updateDrain: {
+    state: string;
+    activeOperationCount?: number;
+  };
+};
 
 export type DesktopAgentLaunch =
   | { kind: "gui" }
@@ -75,11 +93,13 @@ export type VerifiedAgentHost = {
 };
 
 function hasVerifiedPipeShape(snapshot: AgentHostSnapshot): boolean {
+  if (snapshot.state !== "running") return false;
   const endpoint = snapshot.endpoint;
-  return snapshot.state === "running"
-    && endpoint?.transport === "windows-named-pipe"
-    && windowsPipePathPattern.test(endpoint.path)
-    && windowsSidPattern.test(endpoint.ownerSid);
+  if (endpoint?.transport !== "windows-named-pipe") return false;
+  const path = endpoint.path;
+  const ownerSid = endpoint.ownerSid;
+  if (!path || !ownerSid) return false;
+  return windowsPipePathPattern.test(path) && windowsSidPattern.test(ownerSid);
 }
 
 /**

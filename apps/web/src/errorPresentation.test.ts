@@ -117,4 +117,38 @@ describe("presentMailError", () => {
     expect(issue).toMatchObject({ kind: "connection", title: en("error.timeout.title"), retryable: true });
     expect(`${issue.message} ${issue.guidance}`).not.toMatch(/[\u4E00-\u9FFF]/);
   });
+
+  it("presents a sync-cap warning without turning the account into an error", () => {
+    const issue = accountHealthIssue({
+      status: "connected",
+      lastError: null,
+      lastErrorCode: null,
+      lastSyncWarningCode: "sync_limit",
+    });
+
+    expect(issue).toMatchObject({
+      kind: "sync",
+      severity: "warning",
+      title: zh("account.syncLimit.title"),
+      retryable: false,
+    });
+    expect(issue?.guidance).toBe(zh("account.syncLimit.guidance"));
+  });
+
+  it("keeps a real error ahead of a stale warning on the same row", () => {
+    const issue = accountHealthIssue({
+      status: "error",
+      lastErrorCode: "tls_certificate_failed",
+      lastError: "连接未完成。",
+      lastSyncWarningCode: "sync_limit",
+    });
+
+    expect(issue).toMatchObject({ kind: "tls", severity: "error" });
+  });
+
+  it("stays quiet for a healthy account with no warning", () => {
+    expect(
+      accountHealthIssue({ status: "connected", lastError: null, lastErrorCode: null, lastSyncWarningCode: null }),
+    ).toBeNull();
+  });
 });

@@ -1,61 +1,29 @@
-import type { AgentConversationScope, AgentScopeMode } from "./agentTypes";
-import type { Account, Message } from "./types";
-
-function mailHeaderIds(message: Message): string[] {
-  return [...new Set([
-    message.messageId,
-    message.inReplyTo,
-    ...(message.references ?? []),
-  ].filter((value): value is string => typeof value === "string" && value.length > 0))];
-}
+import type { AgentConversationScope } from "./agentTypes";
+import type { Account } from "./types";
 
 /**
- * Uses only mail already loaded in the renderer. The server remains the
- * authorization boundary because it receives the resulting exact message IDs.
+ * The header scope picker's selection: a concrete account id, or "all" for
+ * every connected account. Mail references (explicitly introduced messages)
+ * are independent of this boundary and do not influence the scope.
  */
-export function currentThreadMessageIds(currentMessage: Message, messages: readonly Message[], maximum = 100): string[] {
-  const candidates = [
-    currentMessage,
-    ...messages.filter((message) => message.accountId === currentMessage.accountId && message.id !== currentMessage.id),
-  ];
-  const knownHeaders = new Set(mailHeaderIds(currentMessage));
-  const selected = new Set([currentMessage.id]);
-  let changed = true;
+export type AgentScopeTarget = "all" | string;
 
-  while (changed && selected.size < maximum) {
-    changed = false;
-    for (const candidate of candidates) {
-      if (selected.has(candidate.id)) continue;
-      const headers = mailHeaderIds(candidate);
-      if (!headers.some((header) => knownHeaders.has(header))) continue;
-      selected.add(candidate.id);
-      for (const header of headers) knownHeaders.add(header);
-      changed = true;
-      if (selected.size >= maximum) break;
-    }
+export function agentScopeFor(target: AgentScopeTarget, accounts: readonly Account[]): AgentConversationScope {
+  if (target === "all") {
+    return { mode: "all_accounts", accountIds: accounts.map((account) => account.id), messageIds: [] };
   }
-
-  return [...selected].sort((left, right) => left.localeCompare(right));
+  return { mode: "selected_account", accountIds: [target], messageIds: [] };
 }
 
-export function agentScopeFor(
-  mode: AgentScopeMode,
-  currentMessage: Message | undefined,
-  messages: readonly Message[],
-  accounts: readonly Account[],
-): AgentConversationScope {
-  const allAccountIds = accounts.map((account) => account.id);
-  const accountIds = currentMessage ? [currentMessage.accountId] : allAccountIds;
-  const messageIds = mode === "current_message" && currentMessage
-    ? [currentMessage.id]
-    : mode === "current_thread" && currentMessage
-      ? currentThreadMessageIds(currentMessage, messages)
-      : [];
-  return {
-    mode,
-    accountIds: mode === "all_accounts" ? allAccountIds : accountIds,
-    messageIds,
-  };
+/** Maps a stored conversation scope back to a header picker target. Legacy
+ *  folded scopes (current_message/current_thread from old sessions) resolve to
+ *  their owner account; a scope whose account no longer exists falls back to
+ *  all. The mode is accepted as a string so historical scopes map cleanly. */
+export function scopeTargetForConversation(scope: { mode: string; accountIds: readonly string[]; messageIds?: readonly string[] }, accounts: readonly Account[]): AgentScopeTarget {
+  if (scope.mode === "all_accounts") return "all";
+  const owner = scope.accountIds[0];
+  if (owner && accounts.some((account) => account.id === owner)) return owner;
+  return "all";
 }
 
 export function sameAgentScope(left: AgentConversationScope, right: AgentConversationScope): boolean {

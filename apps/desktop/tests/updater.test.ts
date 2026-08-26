@@ -314,6 +314,47 @@ test("uses the embedded Ed25519 release trust when the installed executable is u
   updater.dispose();
 });
 
+test("keeps locally verified builds with disabled update trust offline and inert", async (t) => {
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), "nami-desktop-updater-disabled-trust-"));
+  t.after(() => fs.rm(profile, { recursive: true, force: true }));
+  const configPath = path.join(profile, "app-update.yml");
+  const trustPath = path.join(profile, "nami-update-trust.json");
+  await fs.writeFile(configPath, sourceConfig, "utf8");
+  await fs.writeFile(trustPath, JSON.stringify({ schemaVersion: 1, algorithm: "disabled" }), "utf8");
+  let fetchCalls = 0;
+  const snapshots: string[] = [];
+  const updater = new DesktopUpdater({
+    currentVersion: "1.2.2",
+    isPackaged: true,
+    updateConfigPath: configPath,
+    updateTrustPath: trustPath,
+    userDataPath: profile,
+    executablePath: path.join(profile, "Nami Mail.exe"),
+    disabled: false,
+    platform: "win32",
+    automaticCheckDelayMs: 1,
+    periodicCheckIntervalMs: 1,
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("disabled update trust must not fetch");
+    },
+    readTrustedSigner: async () => undefined,
+    broadcast: (snapshot) => snapshots.push(snapshot.phase),
+    prepareForInstall: async () => true,
+    recoverAfterInstallFailure: () => undefined,
+    quitForInstall: () => undefined,
+  });
+
+  const started = await updater.start();
+  assert.equal(started.phase, "unavailable");
+  assert.equal(started.reason, "trustDisabledByBuild");
+  assert.deepEqual(snapshots, ["unavailable"]);
+  assert.deepEqual(await updater.checkForUpdates(), started);
+  assert.deepEqual(await updater.checkAfterExternalTrigger(), started);
+  assert.equal(fetchCalls, 0);
+  updater.dispose();
+});
+
 test("persists skip and later recognizes that only the same target is suppressed", async (t) => {
   const first = await createUpdater(t);
   await first.updater.checkForUpdates();

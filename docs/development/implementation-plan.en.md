@@ -1,6 +1,6 @@
 # NamiMail Agent Implementation Plan
 
-[Chinese](implementation-plan.md) | [English](implementation-plan.en.md)
+[Chinese](implementation-plan.zh-CN.md) | [English](implementation-plan.en.md)
 
 ## Scope and invariants
 

@@ -36,6 +36,18 @@ export function sortSubmissions(items: OutboundSubmission[]): OutboundSubmission
   });
 }
 
+const submissionStatusesNeedingRefresh = new Set<OutboundSubmission["deliveryStatus"]>([
+  "submitting",
+  "submitted",
+  "unknown_delivery",
+]);
+
+// While Sent-folder verification can still change the record, the UI keeps
+// polling those statuses instead of freezing the row on a transient state.
+export function submissionStatusNeedsRefresh(status: OutboundSubmission["deliveryStatus"]): boolean {
+  return submissionStatusesNeedingRefresh.has(status);
+}
+
 export function submissionMessageIdSuffix(messageId: string): string {
   const normalized = messageId.replace(/^</, "").replace(/>$/, "");
   const localPart = normalized.split("@")[0] || normalized;

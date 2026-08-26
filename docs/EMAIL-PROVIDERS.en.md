@@ -1,6 +1,6 @@
 # Email Provider Setup
 
-[简体中文](EMAIL-PROVIDERS.md) | [English](EMAIL-PROVIDERS.en.md)
+[简体中文](EMAIL-PROVIDERS.zh-CN.md) | [English](EMAIL-PROVIDERS.en.md)
 
 Nami Mail synchronizes with IMAP and sends with SMTP. It prefers built-in provider presets and attempts DNS auto-discovery for custom domains. Discovery is only a starting point; it does not replace the final configuration supplied by an enterprise administrator or mail provider.
 
