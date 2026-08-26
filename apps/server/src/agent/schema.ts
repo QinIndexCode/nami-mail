@@ -1,7 +1,7 @@
 import type { DatabaseHandle } from "../db.js";
 
-export const AGENT_STORE_SCHEMA_VERSION = 2;
-export const AGENT_STORE_MINIMUM_READER_VERSION = 2;
+export const AGENT_STORE_SCHEMA_VERSION = 6;
+export const AGENT_STORE_MINIMUM_READER_VERSION = 6;
 
 export class AgentStoreVersionError extends Error {
   constructor(message: string) {
@@ -170,6 +170,24 @@ CREATE TABLE IF NOT EXISTS agent_conversation_records (
 CREATE INDEX IF NOT EXISTS idx_agent_conversation_records_sequence
   ON agent_conversation_records(conversation_id, sequence, record_id);
 
+-- Durable in-progress assistant draft. Unlike agent_conversation_records
+-- (append-only immutable history), this row is updated in place while a reply
+-- streams and is removed once the finished turn is appended. A re-opened panel
+-- reads it from storage instead of relying on process memory; if the process
+-- disappears mid-stream the stale draft marks the reply as interrupted.
+CREATE TABLE IF NOT EXISTS agent_conversation_streaming (
+  conversation_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  encrypted_payload TEXT NOT NULL,
+  crypto_version INTEGER NOT NULL CHECK (crypto_version >= 1),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (conversation_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_conversation_streaming_updated
+  ON agent_conversation_streaming(updated_at);
+
 CREATE TRIGGER IF NOT EXISTS agent_conversation_records_no_update
 BEFORE UPDATE ON agent_conversation_records
 BEGIN
@@ -275,6 +293,62 @@ CREATE TABLE IF NOT EXISTS agent_provider_configurations (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS agent_mcp_servers (
+  server_id TEXT PRIMARY KEY,
+  encrypted_configuration TEXT NOT NULL,
+  crypto_version INTEGER NOT NULL CHECK (crypto_version >= 1),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_memory_records (
+  record_id TEXT PRIMARY KEY,
+  record_kind TEXT NOT NULL CHECK (record_kind IN (
+    'auto-reply-sent', 'auto-reply-ignored', 'email-sent',
+    'calendar-created', 'calendar-updated', 'calendar-deleted', 'note'
+  )),
+  account_id TEXT,
+  encrypted_payload TEXT NOT NULL,
+  crypto_version INTEGER NOT NULL CHECK (crypto_version >= 1),
+  occurred_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_memory_occurred
+  ON agent_memory_records(occurred_at DESC, record_id);
+CREATE INDEX IF NOT EXISTS idx_agent_memory_kind
+  ON agent_memory_records(record_kind, occurred_at DESC, record_id);
+
+CREATE TABLE IF NOT EXISTS agent_rag_index (
+  account_id TEXT NOT NULL,
+  account_generation INTEGER NOT NULL CHECK (account_generation >= 0),
+  page_id TEXT NOT NULL,
+  page_revision INTEGER NOT NULL CHECK (page_revision >= 1),
+  message_id TEXT NOT NULL,
+  term TEXT NOT NULL,
+  tf_subject INTEGER NOT NULL CHECK (tf_subject >= 0),
+  tf_sender INTEGER NOT NULL CHECK (tf_sender >= 0),
+  tf_body INTEGER NOT NULL CHECK (tf_body >= 0),
+  term_count INTEGER NOT NULL CHECK (term_count >= 0),
+  sent_at TEXT,
+  PRIMARY KEY (account_id, account_generation, page_id, page_revision, term)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_rag_index_term
+  ON agent_rag_index(term, account_id, account_generation);
+
+CREATE INDEX IF NOT EXISTS idx_agent_rag_index_page
+  ON agent_rag_index(account_id, account_generation, page_id, page_revision);
+
+CREATE TABLE IF NOT EXISTS agent_rag_index_stats (
+  account_id TEXT NOT NULL,
+  account_generation INTEGER NOT NULL CHECK (account_generation >= 0),
+  doc_count INTEGER NOT NULL CHECK (doc_count >= 0),
+  term_total INTEGER NOT NULL CHECK (term_total >= 0),
+  PRIMARY KEY (account_id, account_generation)
+);
 `;
 
 const agentTableNames = [
@@ -284,10 +358,15 @@ const agentTableNames = [
   "agent_conversations",
   "agent_conversation_scopes",
   "agent_conversation_records",
+  "agent_conversation_streaming",
   "agent_audit_intents",
   "agent_audit_events",
   "agent_gui_confirmation_records",
   "agent_provider_configurations",
+  "agent_mcp_servers",
+  "agent_memory_records",
+  "agent_rag_index",
+  "agent_rag_index_stats",
 ] as const;
 
 function tableExists(db: DatabaseHandle, name: string): boolean {
@@ -331,6 +410,50 @@ function assertCurrentSchemaShape(db: DatabaseHandle): void {
     "created_at",
     "updated_at",
   ]);
+  requireColumns(db, "agent_mcp_servers", [
+    "server_id",
+    "encrypted_configuration",
+    "crypto_version",
+    "created_at",
+    "updated_at",
+  ]);
+  requireColumns(db, "agent_memory_records", [
+    "record_id",
+    "record_kind",
+    "account_id",
+    "encrypted_payload",
+    "crypto_version",
+    "occurred_at",
+    "created_at",
+    "updated_at",
+  ]);
+  requireColumns(db, "agent_conversation_streaming", [
+    "conversation_id",
+    "message_id",
+    "encrypted_payload",
+    "crypto_version",
+    "created_at",
+    "updated_at",
+  ]);
+  requireColumns(db, "agent_rag_index", [
+    "account_id",
+    "account_generation",
+    "page_id",
+    "page_revision",
+    "message_id",
+    "term",
+    "tf_subject",
+    "tf_sender",
+    "tf_body",
+    "term_count",
+    "sent_at",
+  ]);
+  requireColumns(db, "agent_rag_index_stats", [
+    "account_id",
+    "account_generation",
+    "doc_count",
+    "term_total",
+  ]);
   const primaryKey = columnsFor(db, "agent_rag_pages")
     .filter((column) => column.pk > 0)
     .sort((left, right) => left.pk - right.pk)
@@ -338,6 +461,22 @@ function assertCurrentSchemaShape(db: DatabaseHandle): void {
   const expectedPrimaryKey = ["account_id", "account_generation", "page_id", "page_revision"];
   if (primaryKey.length !== expectedPrimaryKey.length || primaryKey.some((column, index) => column !== expectedPrimaryKey[index])) {
     throw new AgentStoreVersionError("The Agent RAG page schema has an unsupported primary key.");
+  }
+  const indexPrimaryKey = columnsFor(db, "agent_rag_index")
+    .filter((column) => column.pk > 0)
+    .sort((left, right) => left.pk - right.pk)
+    .map((column) => column.name);
+  const expectedIndexPrimaryKey = ["account_id", "account_generation", "page_id", "page_revision", "term"];
+  if (indexPrimaryKey.length !== expectedIndexPrimaryKey.length || indexPrimaryKey.some((column, index) => column !== expectedIndexPrimaryKey[index])) {
+    throw new AgentStoreVersionError("The Agent RAG index schema has an unsupported primary key.");
+  }
+  const statsPrimaryKey = columnsFor(db, "agent_rag_index_stats")
+    .filter((column) => column.pk > 0)
+    .sort((left, right) => left.pk - right.pk)
+    .map((column) => column.name);
+  const expectedStatsPrimaryKey = ["account_id", "account_generation"];
+  if (statsPrimaryKey.length !== expectedStatsPrimaryKey.length || statsPrimaryKey.some((column, index) => column !== expectedStatsPrimaryKey[index])) {
+    throw new AgentStoreVersionError("The Agent RAG index stats schema has an unsupported primary key.");
   }
 }
 
@@ -481,6 +620,82 @@ function migrateAgentStoreV1ToV2(db: DatabaseHandle, now: string): void {
   db.exec(agentStoreSchemaSql);
 }
 
+/** v2 → v3 adds the encrypted MCP server configuration table. */
+function migrateAgentStoreV2ToV3(db: DatabaseHandle): void {
+  if (tableExists(db, "agent_mcp_servers")) {
+    requireColumns(db, "agent_mcp_servers", [
+      "server_id",
+      "encrypted_configuration",
+      "crypto_version",
+      "created_at",
+      "updated_at",
+    ]);
+    return;
+  }
+  db.exec(agentStoreSchemaSql);
+}
+
+/** v3 → v4 adds the encrypted Agent memory records table. */
+function migrateAgentStoreV3ToV4(db: DatabaseHandle): void {
+  if (tableExists(db, "agent_memory_records")) {
+    requireColumns(db, "agent_memory_records", [
+      "record_id",
+      "record_kind",
+      "account_id",
+      "encrypted_payload",
+      "crypto_version",
+      "occurred_at",
+      "created_at",
+      "updated_at",
+    ]);
+    return;
+  }
+  db.exec(agentStoreSchemaSql);
+}
+
+/** v4 → v5 adds the persisted lexical RAG index and per-generation stats tables. */
+function migrateAgentStoreV4ToV5(db: DatabaseHandle): void {
+  if (tableExists(db, "agent_rag_index") || tableExists(db, "agent_rag_index_stats")) {
+    requireColumns(db, "agent_rag_index", [
+      "account_id",
+      "account_generation",
+      "page_id",
+      "page_revision",
+      "message_id",
+      "term",
+      "tf_subject",
+      "tf_sender",
+      "tf_body",
+      "term_count",
+      "sent_at",
+    ]);
+    requireColumns(db, "agent_rag_index_stats", [
+      "account_id",
+      "account_generation",
+      "doc_count",
+      "term_total",
+    ]);
+    return;
+  }
+  db.exec(agentStoreSchemaSql);
+}
+
+/** v5 → v6 adds the replaceable in-progress streaming draft table. */
+function migrateAgentStoreV5ToV6(db: DatabaseHandle): void {
+  if (tableExists(db, "agent_conversation_streaming")) {
+    requireColumns(db, "agent_conversation_streaming", [
+      "conversation_id",
+      "message_id",
+      "encrypted_payload",
+      "crypto_version",
+      "created_at",
+      "updated_at",
+    ]);
+    return;
+  }
+  db.exec(agentStoreSchemaSql);
+}
+
 function versionRow(db: DatabaseHandle): AgentStoreVersionRow | undefined {
   return db.prepare(`
     SELECT schema_version, minimum_reader_version
@@ -518,6 +733,14 @@ export function applyAgentStoreSchema(db: DatabaseHandle, now = new Date().toISO
     }
     if (row.schema_version === 1) {
       migrateAgentStoreV1ToV2(db, now);
+    } else if (row.schema_version === 2) {
+      migrateAgentStoreV2ToV3(db);
+    } else if (row.schema_version === 3) {
+      migrateAgentStoreV3ToV4(db);
+    } else if (row.schema_version === 4) {
+      migrateAgentStoreV4ToV5(db);
+    } else if (row.schema_version === 5) {
+      migrateAgentStoreV5ToV6(db);
     } else if (row.schema_version !== AGENT_STORE_SCHEMA_VERSION) {
       throw new AgentStoreVersionError("The Agent store schema is not supported by this Runtime.");
     }

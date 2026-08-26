@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { AGENT_PROTOCOL_VERSION, agentProtocolVersionSchema } from "./primitives.js";
+import type { AGENT_PROTOCOL_VERSION} from "./primitives.js";
+import { accountIdSchema, agentProtocolVersionSchema } from "./primitives.js";
 
 const brokerIdentifierPattern = /^[A-Za-z0-9_-]{16,160}$/;
 const brokerRequestIdPattern = /^[A-Za-z0-9_-]{16,160}$/;
@@ -67,6 +68,12 @@ export const brokerPairingRecordSchema = z.object({
     (scopes) => new Set(scopes).size === scopes.length,
     "Broker pairing scopes cannot contain duplicates.",
   ),
+  // Pairings created before scoped external access shipped omit this field and
+  // deliberately fail closed until the user pairs again.
+  accountIds: z.array(accountIdSchema).min(1).max(100).refine(
+    (accountIds) => new Set(accountIds).size === accountIds.length,
+    "Broker pairing account IDs cannot contain duplicates.",
+  ).optional(),
   createdAt: brokerTimestampSchema,
   lastAcceptedCounter: brokerCounterSchema,
   revokedAt: brokerTimestampSchema.optional(),

@@ -1,6 +1,6 @@
 # RAG Cleaning
 
-[Chinese](cleaning.md) | [English](cleaning.en.md)
+[Chinese](cleaning.zh-CN.md) | [English](cleaning.en.md)
 
 ## Principle
 

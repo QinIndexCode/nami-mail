@@ -5,7 +5,8 @@ import {
   type AgentSourceEventType,
 } from "@nami/agent-contracts";
 import type { DatabaseHandle } from "../db.js";
-import { AccountLifecycleStore, type AccountGenerationLease } from "./lifecycle.js";
+import type { AccountLifecycleStore} from "./lifecycle.js";
+import { type AccountGenerationLease } from "./lifecycle.js";
 import {
   AGENT_STORE_CRYPTO_VERSION,
   agentOpaqueDigest,

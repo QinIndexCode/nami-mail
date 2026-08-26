@@ -301,6 +301,12 @@ describe("selected message translation route", () => {
       timeoutMs: 25_000,
       apiKeyConfigured: false,
       source: "none",
+      primary: "google",
+      backup: "mymemory",
+      providers: [
+        { id: "google", label: "google", builtin: true },
+        { id: "mymemory", label: "mymemory", builtin: true },
+      ],
     });
     expect(row.translation_configuration).toBeNull();
   });

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { externalReadMailContracts } from "@nami/agent-contracts";
 import { createToolRegistry, type AgentToolExecutionContext } from "@nami/agent-core";
 import type { MailApplicationService } from "../src/agent/mail-application-service.js";
 import { createMailTools } from "../src/agent/mail-tools.js";
@@ -88,6 +89,7 @@ function fakeMailApplication() {
     updatedAt: timestamp,
   }));
   const deleteDraft = vi.fn(async () => undefined);
+  const deleteAccount = vi.fn(async () => undefined);
   const updateMessageFlags = vi.fn(async () => undefined);
   const moveMessage = vi.fn(async () => undefined);
   const prepareSubmission = vi.fn(async () => ({
@@ -114,15 +116,29 @@ function fakeMailApplication() {
     createDraft,
     updateDraft,
     deleteDraft,
+    deleteAccount,
     updateMessageFlags,
     moveMessage,
     prepareSubmission,
     submitPreparedMail,
   };
-  return { service, listFolders, listMessages, getMessage, getThread, listAttachments, createDraft, updateDraft, deleteDraft };
+  return { service, listAccounts, listFolders, listMessages, getMessage, getThread, listAttachments, createDraft, updateDraft, deleteDraft, deleteAccount, moveMessage, updateMessageFlags, prepareSubmission, submitPreparedMail };
 }
 
 describe("Agent mail tools", () => {
+  it("reuses the published external read request and result schemas", () => {
+    const fake = fakeMailApplication();
+    const registry = createToolRegistry(createMailTools(fake.service));
+
+    for (const contract of externalReadMailContracts) {
+      const tool = registry.get(contract.toolName);
+      expect(tool).toBeDefined();
+      expect(tool?.inputSchema).toBe(contract.inputSchema);
+      expect(tool?.outputSchema).toBe(contract.outputSchema);
+      expect(tool?.descriptor.availableToExternal).toBe(true);
+    }
+  });
+
   it("rejects strict invalid input before any mail facade method runs", () => {
     const fake = fakeMailApplication();
     const registry = createToolRegistry(createMailTools(fake.service));
@@ -186,7 +202,7 @@ describe("Agent mail tools", () => {
     expect(draftTool!.descriptor).toMatchObject({
       executionMode: "draft",
       requiredScopes: ["write:drafts"],
-      availableToExternal: false,
+      availableToExternal: true,
       confirmationPolicy: "required",
       confirmationAction: "create-draft",
     });
@@ -195,7 +211,7 @@ describe("Agent mail tools", () => {
       to: [{ address: "recipient@example.test" }],
       subject: "Draft subject",
       text: "PRIVATE_DRAFT_BODY",
-    })).toMatchObject({
+    }, "en-US")).toMatchObject({
       title: "Create mail draft",
       fields: expect.arrayContaining([
         expect.objectContaining({ label: "Body preview (18 characters)", value: "PRIVATE_DRAFT_BODY" }),
@@ -230,7 +246,7 @@ describe("Agent mail tools", () => {
     expect(fake.deleteDraft).toHaveBeenCalledWith(expect.objectContaining({ accountIds: ["account-1"] }), "account-1", "draft-1");
     expect(updateTool!.descriptor).toMatchObject({ confirmationPolicy: "required", confirmationAction: "update-draft" });
     expect(deleteTool!.descriptor).toMatchObject({ confirmationPolicy: "required", confirmationAction: "delete-draft" });
-    expect(deleteTool!.confirmationPreview?.({ accountId: "account-1", draftId: "draft-1" })).toMatchObject({
+    expect(deleteTool!.confirmationPreview?.({ accountId: "account-1", draftId: "draft-1" }, "en-US")).toMatchObject({
       fields: [
         { label: "Account", value: "account-1" },
         { label: "Draft ID", value: "draft-1" },
@@ -385,5 +401,434 @@ describe("Agent mail tools", () => {
       expect(JSON.stringify(outcome)).not.toContain("SCOPE_ESCAPE_CANARY");
     }
     expect(fake.listAttachments).not.toHaveBeenCalled();
+  });
+
+  it("rejects a batch read with no or too many message ids before any facade call", () => {
+    const fake = fakeMailApplication();
+    const registry = createToolRegistry(createMailTools(fake.service));
+
+    const empty = registry.resolve(call("messages.batch_get", { messageIds: [] }));
+    const tooMany = registry.resolve(call("messages.batch_get", {
+      messageIds: Array.from({ length: 11 }, (_, index) => `message-${index + 1}`),
+    }));
+
+    expect(empty).toMatchObject({ ok: false, error: { code: "TOOL_INPUT_INVALID" } });
+    expect(tooMany).toMatchObject({ ok: false, error: { code: "TOOL_INPUT_INVALID" } });
+    expect(fake.getMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns full content for found messages and a notFound list for missing ones", async () => {
+    const fake = fakeMailApplication();
+    fake.getMessage.mockImplementation(async (_context: unknown, messageId: string) =>
+      messageId === "message-1" ? mailDetail("message-1") : undefined,
+    );
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const batchTool = registry.get("messages.batch_get");
+    expect(batchTool).toBeDefined();
+
+    const outcome = await batchTool!.execute(context(["account-1"], ["message-1", "message-2"]), {
+      messageIds: ["message-1", "message-2"],
+    });
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: {
+        messages: [{
+          id: "message-1",
+          accountId: "account-1",
+          subject: "Private subject",
+          text: "PRIVATE_MESSAGE_BODY",
+          bodyTruncated: false,
+        }],
+        notFound: ["message-2"],
+      },
+    });
+    if (outcome.ok) {
+      const serialized = JSON.stringify(outcome.value);
+      expect(serialized).not.toContain("PRIVATE_MESSAGE_HTML");
+      expect(serialized).not.toContain("htmlBody");
+    }
+    expect(fake.getMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ accountIds: ["account-1"], allowedMessageIds: ["message-1", "message-2"] }),
+      "message-1",
+    );
+    expect(fake.getMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ accountIds: ["account-1"], allowedMessageIds: ["message-1", "message-2"] }),
+      "message-2",
+    );
+    expect(batchTool!.descriptor).toMatchObject({
+      name: "messages.batch_get",
+      category: "messages",
+      executionMode: "read",
+      requiredScopes: ["read:messages"],
+      accountAccess: "optional",
+      confirmationPolicy: "never",
+      availableToExternal: true,
+    });
+  });
+
+  it("deduplicates repeated message ids in a batch read so each message is fetched once", async () => {
+    const fake = fakeMailApplication();
+    fake.getMessage.mockImplementation(async (_context: unknown, messageId: string) =>
+      messageId === "message-1" ? mailDetail("message-1") : undefined,
+    );
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const batchTool = registry.get("messages.batch_get");
+    expect(batchTool).toBeDefined();
+
+    const outcome = await batchTool!.execute(context(["account-1"], ["message-1", "message-2"]), {
+      messageIds: ["message-1", "message-1", "message-2", "message-2"],
+    });
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: {
+        messages: [{ id: "message-1", accountId: "account-1" }],
+        notFound: ["message-2"],
+      },
+    });
+    expect(fake.getMessage).toHaveBeenCalledTimes(2);
+    expect(fake.getMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ accountIds: ["account-1"], allowedMessageIds: ["message-1", "message-2"] }),
+      "message-1",
+    );
+    expect(fake.getMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ accountIds: ["account-1"], allowedMessageIds: ["message-1", "message-2"] }),
+      "message-2",
+    );
+  });
+
+  it("rejects a batch read when any requested message is outside the exact scope before calling the facade", async () => {
+    const fake = fakeMailApplication();
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const batchTool = registry.get("messages.batch_get");
+    expect(batchTool).toBeDefined();
+
+    const outcome = await batchTool!.execute(context(["account-1"], ["message-1"]), {
+      messageIds: ["message-2", "message-1"],
+    });
+
+    expect(outcome).toMatchObject({ ok: false, error: { code: "SCOPE_DENIED" } });
+    expect(fake.getMessage).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a batch read returns a message outside the exact scope", async () => {
+    const fake = fakeMailApplication();
+    fake.getMessage.mockResolvedValue(mailDetail("message-2", "account-1", "SCOPE_ESCAPE_CANARY"));
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const batchTool = registry.get("messages.batch_get");
+    expect(batchTool).toBeDefined();
+
+    const outcome = await batchTool!.execute(context(["account-1"], ["message-1"]), {
+      messageIds: ["message-1"],
+    });
+
+    expect(outcome).toMatchObject({ ok: false, error: { code: "SCOPE_DENIED" } });
+    expect(JSON.stringify(outcome)).not.toContain("SCOPE_ESCAPE_CANARY");
+  });
+
+  it("fails closed when a mail facade returns accounts or folders outside the pairing account scope", async () => {
+    const fake = fakeMailApplication();
+    fake.listAccounts.mockResolvedValue([{
+      id: "account-2",
+      email: "outside@example.test",
+      provider: "custom",
+      displayName: "SCOPE_ESCAPE_CANARY",
+      status: "connected",
+      lastSyncedAt: timestamp,
+    }]);
+    fake.listFolders.mockResolvedValue([{
+      accountId: "account-2",
+      path: "INBOX",
+      name: "SCOPE_ESCAPE_CANARY",
+      specialUse: "inbox",
+      total: 1,
+      unseen: 0,
+    }]);
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const accountsTool = registry.get("accounts.list");
+    const foldersTool = registry.get("folders.list");
+    expect(accountsTool).toBeDefined();
+    expect(foldersTool).toBeDefined();
+
+    const accountsOutcome = await accountsTool!.execute(context(["account-1"]), {});
+    const foldersOutcome = await foldersTool!.execute(context(["account-1"]), { accountId: "account-1" });
+
+    for (const outcome of [accountsOutcome, foldersOutcome]) {
+      expect(outcome).toMatchObject({ ok: false, error: { code: "SCOPE_DENIED" } });
+      expect(JSON.stringify(outcome)).not.toContain("SCOPE_ESCAPE_CANARY");
+    }
+  });
+
+  it("deletes a scoped account after a visible confirmation", async () => {
+    const fake = fakeMailApplication();
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const deleteTool = registry.get("accounts.delete");
+    expect(deleteTool).toBeDefined();
+
+    const outcome = await deleteTool!.execute(context(["account-1"]), { accountId: "account-1" });
+
+    expect(outcome).toEqual({ ok: true, value: { accountId: "account-1", deleted: true } });
+    expect(fake.deleteAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ accountIds: ["account-1"] }),
+      "account-1",
+    );
+    expect(deleteTool!.descriptor).toMatchObject({
+      name: "accounts.delete",
+      executionMode: "high-risk",
+      requiredScopes: ["manage:accounts"],
+      accountAccess: "required",
+      confirmationPolicy: "required",
+      confirmationAction: "delete-account",
+      availableToExternal: false,
+    });
+    expect(deleteTool!.confirmationPreview?.({ accountId: "account-1" }, "en-US")).toMatchObject({
+      title: "Delete mail account",
+      fields: [{ label: "Account", value: "account-1" }],
+    });
+    expect(deleteTool!.confirmationPreview?.({ accountId: "account-1" }, "zh-CN")).toMatchObject({
+      title: "删除邮箱账户",
+    });
+  });
+
+  it("rejects deleting an account outside the exact scope before calling the facade", async () => {
+    const fake = fakeMailApplication();
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const deleteTool = registry.get("accounts.delete");
+    expect(deleteTool).toBeDefined();
+
+    const outcome = await deleteTool!.execute(context(["account-1"]), { accountId: "account-2" });
+
+    expect(outcome).toMatchObject({ ok: false, error: { code: "SCOPE_DENIED" } });
+    expect(fake.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it("moves a scoped message to archive or trash after confirmation", async () => {    const fake = fakeMailApplication();
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const moveTool = registry.get("messages.move");
+    expect(moveTool).toBeDefined();
+
+    const outcome = await moveTool!.execute(context(["account-1"], ["message-1"]), {
+      messageId: "message-1",
+      target: "archive",
+    });
+
+    expect(outcome).toEqual({ ok: true, value: { messageId: "message-1", target: "archive" } });
+    expect(fake.moveMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ accountIds: ["account-1"], allowedMessageIds: ["message-1"] }),
+      "message-1",
+      "archive",
+    );
+    expect(moveTool!.descriptor).toMatchObject({
+      name: "messages.move",
+      executionMode: "write",
+      requiredScopes: ["write:mail"],
+      confirmationPolicy: "required",
+      confirmationAction: "move-mail",
+    });
+    expect(moveTool!.confirmationPreview?.({ messageId: "message-1", target: "trash" }, "en-US")).toMatchObject({
+      title: "Move mail message",
+      fields: [
+        { label: "Message ID", value: "message-1" },
+        { label: "Target", value: "trash" },
+      ],
+    });
+  });
+
+  it("rejects moving a message outside the exact scope before calling the facade", async () => {
+    const fake = fakeMailApplication();
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const moveTool = registry.get("messages.move");
+    expect(moveTool).toBeDefined();
+
+    const outcome = await moveTool!.execute(context(["account-1"], ["message-1"]), {
+      messageId: "message-2",
+      target: "trash",
+    });
+
+    expect(outcome).toMatchObject({ ok: false, error: { code: "SCOPE_DENIED" } });
+    expect(fake.moveMessage).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the underlying mail-service reason when a move cannot complete", async () => {
+    const fake = fakeMailApplication();
+    fake.moveMessage.mockRejectedValueOnce(new Error("这个邮箱没有提供可用的归档文件夹。"));
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const moveTool = registry.get("messages.move");
+    expect(moveTool).toBeDefined();
+
+    const outcome = await moveTool!.execute(context(["account-1"], ["message-1"]), {
+      messageId: "message-1",
+      target: "archive",
+    });
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      error: {
+        code: "TOOL_EXECUTION_FAILED",
+        retryable: true,
+        suggestion: "这个邮箱没有提供可用的归档文件夹。",
+      },
+    });
+  });
+
+  it("sets the read or starred flag on a scoped message after confirmation", async () => {
+    const fake = fakeMailApplication();
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const flagTool = registry.get("messages.set-flag");
+    expect(flagTool).toBeDefined();
+
+    const seen = await flagTool!.execute(context(["account-1"], ["message-1"]), {
+      messageId: "message-1",
+      flag: "seen",
+      value: true,
+    });
+    const flagged = await flagTool!.execute(context(["account-1"], ["message-1"]), {
+      messageId: "message-1",
+      flag: "flagged",
+      value: false,
+    });
+
+    expect(seen).toEqual({ ok: true, value: { messageId: "message-1", flag: "seen", value: true } });
+    expect(flagged).toEqual({ ok: true, value: { messageId: "message-1", flag: "flagged", value: false } });
+    expect(fake.updateMessageFlags).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ accountIds: ["account-1"], allowedMessageIds: ["message-1"] }),
+      "message-1",
+      { seen: true },
+    );
+    expect(fake.updateMessageFlags).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ accountIds: ["account-1"], allowedMessageIds: ["message-1"] }),
+      "message-1",
+      { flagged: false },
+    );
+    expect(flagTool!.descriptor).toMatchObject({
+      name: "messages.set-flag",
+      executionMode: "write",
+      requiredScopes: ["write:mail"],
+      confirmationPolicy: "required",
+      confirmationAction: "update-message-state",
+    });
+  });
+
+  it("prepares and submits a mail message through the durable outbox", async () => {
+    const fake = fakeMailApplication();
+    fake.prepareSubmission.mockResolvedValue({
+      submissionId: "submission-1",
+      idempotencyKey: "key-1",
+      accountId: "account-1",
+      status: "pending",
+    });
+    fake.submitPreparedMail.mockResolvedValue({
+      submissionId: "submission-1",
+      accountId: "account-1",
+      status: "submitted",
+    });
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const sendTool = registry.get("messages.send");
+    expect(sendTool).toBeDefined();
+
+    const outcome = await sendTool!.execute(context(), {
+      accountId: "account-1",
+      to: [{ name: "Recipient", address: "recipient@example.test" }],
+      subject: "Send subject",
+      text: "PRIVATE_SEND_BODY",
+    });
+
+    expect(outcome).toEqual({ ok: true, value: { submissionId: "submission-1", deliveryStatus: "submitted" } });
+    expect(fake.prepareSubmission).toHaveBeenCalledWith(
+      expect.objectContaining({ accountIds: ["account-1"] }),
+      expect.objectContaining({ accountId: "account-1", subject: "Send subject", text: "PRIVATE_SEND_BODY" }),
+    );
+    expect(fake.submitPreparedMail).toHaveBeenCalledWith(
+      expect.objectContaining({ accountIds: ["account-1"] }),
+      "submission-1",
+    );
+    expect(sendTool!.descriptor).toMatchObject({
+      name: "messages.send",
+      executionMode: "high-risk",
+      requiredScopes: ["write:mail"],
+      confirmationPolicy: "required",
+      confirmationAction: "send-mail",
+      timeoutMs: 60_000,
+    });
+    if (outcome.ok) expect(JSON.stringify(outcome.value)).not.toContain("PRIVATE_SEND_BODY");
+  });
+
+  it("rejects sending from an account outside the execution context before calling the facade", async () => {
+    const fake = fakeMailApplication();
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const sendTool = registry.get("messages.send");
+    expect(sendTool).toBeDefined();
+
+    const outcome = await sendTool!.execute(context(), {
+      accountId: "account-2",
+      to: [{ address: "recipient@example.test" }],
+      subject: "Scope check",
+      text: "Private send body",
+    });
+
+    expect(outcome).toMatchObject({ ok: false, error: { code: "SCOPE_DENIED" } });
+    expect(fake.prepareSubmission).not.toHaveBeenCalled();
+    expect(fake.submitPreparedMail).not.toHaveBeenCalled();
+  });
+
+  it("creates a reply draft defaulting to the original sender and Re: subject", async () => {
+    const fake = fakeMailApplication();
+    fake.getMessage.mockResolvedValue(mailDetail("message-1", "account-1", "Project update"));
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const replyTool = registry.get("mail.reply");
+    expect(replyTool).toBeDefined();
+
+    const outcome = await replyTool!.execute(context(["account-1"], ["message-1"]), {
+      accountId: "account-1",
+      messageId: "message-1",
+      text: "PRIVATE_REPLY_BODY",
+    });
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: { draft: { accountId: "account-1", subject: "Draft subject" } },
+    });
+    expect(fake.createDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ accountIds: ["account-1"], allowedMessageIds: ["message-1"] }),
+      expect.objectContaining({
+        accountId: "account-1",
+        to: [{ name: "Sender", address: "sender@example.test" }],
+        subject: "Re: Project update",
+        text: "PRIVATE_REPLY_BODY",
+        inReplyTo: "thread-1",
+      }),
+    );
+    expect(replyTool!.descriptor).toMatchObject({
+      name: "mail.reply",
+      executionMode: "draft",
+      requiredScopes: ["write:mail", "read:messages"],
+      confirmationPolicy: "required",
+      confirmationAction: "reply-mail",
+    });
+    if (outcome.ok) expect(JSON.stringify(outcome.value)).not.toContain("PRIVATE_REPLY_BODY");
+  });
+
+  it("rejects a reply draft when the original message is outside the exact scope", async () => {
+    const fake = fakeMailApplication();
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const replyTool = registry.get("mail.reply");
+    expect(replyTool).toBeDefined();
+
+    const outcome = await replyTool!.execute(context(["account-1"], ["message-1"]), {
+      accountId: "account-1",
+      messageId: "message-2",
+      text: "PRIVATE_REPLY_BODY",
+    });
+
+    expect(outcome).toMatchObject({ ok: false, error: { code: "SCOPE_DENIED" } });
+    expect(fake.getMessage).not.toHaveBeenCalled();
+    expect(fake.createDraft).not.toHaveBeenCalled();
   });
 });

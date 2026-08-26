@@ -56,10 +56,15 @@ test("release artifacts stay inside an explicitly isolated repository directory"
   assert.throws(() => resolveReleaseDirectory(root, "../outside"), /inside this repository/);
 });
 
-test("installer smoke runs installed executables from an isolated workspace directory", () => {
-  assert.equal(
-    resolveInstallerSmokeBaseDirectory("D:\\Projects\\nami-mail"),
-    path.join("D:\\Projects\\nami-mail", ".nami-installer-smoke"),
+test("installer smoke runs installed executables from an isolated LOCALAPPDATA directory", () => {
+  const projectRoot = "D:\\Projects\\nami-mail";
+  const base = resolveInstallerSmokeBaseDirectory(projectRoot);
+  const expectedRoot = process.env.LOCALAPPDATA?.trim() || path.resolve(projectRoot);
+  assert.equal(base, path.join(expectedRoot, "NamiMailInstallerSmoke"));
+  assert.ok(
+    base.toLowerCase() === expectedRoot.toLowerCase()
+      || base.toLowerCase().startsWith(expectedRoot.toLowerCase() + path.sep.toLowerCase()),
+    "The installer smoke base directory must live under the LOCALAPPDATA install root.",
   );
 });
 
@@ -79,6 +84,20 @@ test("Windows packaging reuses a local Electron distribution only when its execu
     packageManifest.build.electronDist,
     undefined,
     "The package manifest must not force CI runners to use a local Electron directory.",
+  );
+  assert.deepEqual(
+    packageManifest.build.electronFuses,
+    {
+      runAsNode: false,
+      enableCookieEncryption: true,
+      enableNodeOptionsEnvironmentVariable: false,
+      enableNodeCliInspectArguments: false,
+      enableEmbeddedAsarIntegrityValidation: true,
+      onlyLoadAppFromAsar: true,
+      loadBrowserProcessSpecificV8Snapshot: false,
+      grantFileProtocolExtraPrivileges: false,
+    },
+    "The packaged Electron executable must keep the hardened fuse configuration.",
   );
   const packageScript = await fs.readFile(path.join(projectRoot, "scripts", "package-win.mjs"), "utf8");
   assert.match(packageScript, /resolveLocalWindowsElectronDist\(projectRoot\)/);
@@ -106,6 +125,13 @@ test("Windows packaging reuses a local Electron distribution only when its execu
     /const installerSmokeSupervisorTimeoutMs = 1_080_000;[\s\S]*?timeout: installerSmokeSupervisorTimeoutMs,/,
     "The package smoke must leave the installer smoke enough time to return its own diagnostic.",
   );
+  assert.match(packageSmokeScript, /getCurrentFuseWire\(packagedExecutable\)/);
+  assert.match(
+    packageSmokeScript,
+    /\[FuseV1Options\.RunAsNode, fuseWireDisable\][\s\S]*\[FuseV1Options\.LoadBrowserProcessSpecificV8Snapshot, fuseWireDisable\][\s\S]*\[FuseV1Options\.GrantFileProtocolExtraPrivileges, fuseWireDisable\]/,
+    "The package smoke must assert the hardened fuse wire on the packaged executable.",
+  );
+  assert.doesNotMatch(packageSmokeScript, /import[^;]*\bFuseState\b/, "FuseState is not exported by @electron/fuses and must not be imported.");
 
   const installerSmokeScript = await fs.readFile(path.join(projectRoot, "scripts", "smoke-installer.mjs"), "utf8");
   assert.match(
@@ -118,7 +144,7 @@ test("Windows packaging reuses a local Electron distribution only when its execu
   assert.doesNotMatch(installerSmokeScript, /fs\.mkdtemp\(path\.join\(os\.tmpdir\(\), "nami-mail-installer-"\)\)/);
   assert.equal(
     [...installerSmokeScript.matchAll(/timeout: powerShellProbeTimeoutMs/g)].length,
-    3,
+    5,
     "Every installer smoke PowerShell registry or process probe must have its own deadline.",
   );
   assert.match(desktopSmokeScript, /const smokeResultTimeoutMs = 90_000;/);
@@ -634,13 +660,18 @@ test("release workflow isolates read-only validation from credential-minimized p
     "npm run build:brand:check",
     "node --test scripts/release-policy.test.mjs",
     "node --test scripts/build-locale-catalog.test.mjs",
+    "node --test scripts/dev-server-backoff.test.mjs scripts/package-win-trust.test.mjs scripts/dev-port-sync.test.mjs",
+    "node --test scripts/wiki-sync.test.mjs",
     "node scripts/build-locale-catalog.mjs --check",
+    "npm run lint",
     "npm run typecheck",
     "npm run build",
     "npm run test",
-    "npm --workspace @nami/web run test",
     "npm run test:desktop-security",
     "npm run smoke:runtime",
+    "npx playwright install chromium",
+    "npm run test:e2e",
+    "npm run verify:electron-sqlite && node scripts/smoke-desktop.mjs",
     "npm audit --omit=dev --audit-level=high",
   ]);
   const validateBuildIndex = validateCommands.indexOf("npm run build");
@@ -703,13 +734,18 @@ test("pull request validation runs the release gate without write credentials", 
     "npm run build:brand:check",
     "node --test scripts/release-policy.test.mjs",
     "node --test scripts/build-locale-catalog.test.mjs",
+    "node --test scripts/dev-server-backoff.test.mjs scripts/package-win-trust.test.mjs scripts/dev-port-sync.test.mjs",
+    "node --test scripts/wiki-sync.test.mjs",
     "node scripts/build-locale-catalog.mjs --check",
+    "npm run lint",
     "npm run typecheck",
     "npm run build",
     "npm run test",
-    "npm --workspace @nami/web run test",
     "npm run test:desktop-security",
     "npm run smoke:runtime",
+    "npx playwright install chromium",
+    "npm run test:e2e",
+    "npm run verify:electron-sqlite && node scripts/smoke-desktop.mjs",
     "npm audit --omit=dev --audit-level=high",
   ]);
 });

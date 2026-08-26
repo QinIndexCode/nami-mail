@@ -30,6 +30,8 @@ describe("desktop update snapshot contract", () => {
     expect(normalizeDesktopUpdateSnapshot(structuredSnapshot)).toEqual(structuredSnapshot);
     expect(normalizeDesktopUpdateSnapshot({ ...structuredSnapshot, reason: "installResult", args: { installStage: "cleanup", cleanupComplete: false } }))
       .toEqual({ ...structuredSnapshot, reason: "installResult", args: { installStage: "cleanup", cleanupComplete: false } });
+    expect(normalizeDesktopUpdateSnapshot({ ...structuredSnapshot, phase: "unavailable", reason: "trustDisabledByBuild" }))
+      .toEqual({ ...structuredSnapshot, phase: "unavailable", reason: "trustDisabledByBuild" });
 
     for (const malformed of [
       { ...structuredSnapshot, schemaVersion: 1 },
@@ -55,7 +57,6 @@ describe("desktop update snapshot contract", () => {
     let updateListener: ((snapshot: DesktopUpdateSnapshot) => void) | undefined;
     const malformedSnapshot = { ...structuredSnapshot, reason: "futureReason" } as unknown as DesktopUpdateSnapshot;
     const rawBridge: DesktopBridge = {
-      localApiRequestHeaders: async () => ({}),
       notify: async () => ({ shown: false }),
       copyVerificationCode: async () => ({ copied: false }),
       getUpdateStatus: async () => malformedSnapshot,
@@ -120,7 +121,6 @@ describe("desktop Agent confirmation bridge", () => {
   it("exposes a results-only subscription and filters malformed preload payloads", () => {
     let resultListener: ((value: unknown) => void) | undefined;
     const rawBridge: DesktopBridge = {
-      localApiRequestHeaders: async () => ({}),
       notify: async () => ({ shown: false }),
       copyVerificationCode: async () => ({ copied: false }),
       onAgentConfirmationResult: (listener) => {
@@ -154,6 +154,55 @@ describe("desktop Agent confirmation bridge", () => {
       expect(received).toEqual([{ confirmationId, decision: "approve", ok: true }]);
       unsubscribe?.();
       expect(resultListener).toBeUndefined();
+    } finally {
+      if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
+  });
+});
+
+describe("desktop tray command bridge", () => {
+  it("passes the tray's compose and inbox subscriptions straight through", () => {
+    const rawSubscriptions: Record<string, ((mailtoUrl?: string) => void) | undefined> = {};
+    const rawBridge: DesktopBridge = {
+      notify: async () => ({ shown: false }),
+      copyVerificationCode: async () => ({ copied: false }),
+      getUpdateStatus: async () => undefined,
+      checkForUpdates: async () => structuredSnapshot,
+      downloadUpdate: async () => structuredSnapshot,
+      skipUpdate: async () => structuredSnapshot,
+      snoozeUpdate: async () => structuredSnapshot,
+      installUpdate: async () => ({ accepted: false }),
+      setCustomNotificationSoundReady: () => undefined,
+      onNewMail: () => () => undefined,
+      onOpenMessage: () => () => undefined,
+      onSettingsChanged: () => () => undefined,
+      onUpdateStatus: () => () => undefined,
+      onComposeNew: (listener) => {
+        rawSubscriptions.compose = listener;
+        return () => {
+          rawSubscriptions.compose = undefined;
+        };
+      },
+      onOpenInbox: (listener) => {
+        rawSubscriptions.inbox = listener;
+        return () => {
+          rawSubscriptions.inbox = undefined;
+        };
+      },
+    };
+    const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { namiDesktop: rawBridge } });
+
+    try {
+      const bridge = desktopBridge();
+      const commanded: string[] = [];
+      bridge?.onComposeNew?.((mailtoUrl) => commanded.push(`compose:${mailtoUrl ?? ""}`));
+      bridge?.onOpenInbox?.(() => commanded.push("inbox"));
+      rawSubscriptions.compose?.();
+      rawSubscriptions.compose?.("mailto:user@example.com?subject=Hi");
+      rawSubscriptions.inbox?.();
+      expect(commanded).toEqual(["compose:", "compose:mailto:user@example.com?subject=Hi", "inbox"]);
     } finally {
       if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
       else Reflect.deleteProperty(globalThis, "window");

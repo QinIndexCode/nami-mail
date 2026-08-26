@@ -81,6 +81,16 @@ export function buildReplyDraft(message: Message, accountEmails: readonly string
   };
 }
 
+/**
+ * Builds the quoted original-message block placed beneath a reply. Every line
+ * is prefixed with "> " so a plain-text reply stays a plain-text reply.
+ */
+export function buildReplyQuote(body: string, wrote: string): string {
+  const normalized = body.trim().replace(/\r\n/g, "\n");
+  const quoted = normalized.split("\n").map((line) => `> ${line}`).join("\n");
+  return `${wrote}\n${quoted}`;
+}
+
 /** Builds a plain-text forward so message HTML is never copied into the composer unsanitized. */
 export function buildForwardDraft(message: Message, body: string): ComposeAction {
   const forwardedBody = body.trim() || message.snippet.trim();

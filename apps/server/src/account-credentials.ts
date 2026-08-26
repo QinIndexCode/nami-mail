@@ -165,6 +165,16 @@ export function decryptOAuthRefreshToken(
   return decryptBoundSecret(account, payload, masterKey, "oauth-refresh-token", refreshTokenKeyPurpose);
 }
 
+/**
+ * Deterministic identity binding for the oauth-refresh-token credential.
+ * Consumers can cache decryption results keyed on this binding: any change to
+ * a bound account field (endpoint rewrite, username mode, provider) produces
+ * a different binding and therefore forces a fresh decrypt attempt.
+ */
+export function oauthRefreshTokenBinding(account: AccountCredentialIdentity): string {
+  return credentialAad(account, "oauth-refresh-token");
+}
+
 function legacySecret(payload: string, masterKey: Buffer): string {
   if (!payload.startsWith(LEGACY_SECRET_PREFIX)) throw new AccountCredentialIntegrityError();
   try {

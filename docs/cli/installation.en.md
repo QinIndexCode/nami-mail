@@ -1,23 +1,25 @@
-# CLI Installation Status and Future Prerequisites
+# CLI Installation Status and Prerequisites
 
-[Chinese](installation.md) | [Back to overview](README.en.md)
+[Chinese](installation.zh-CN.md) | [Back to overview](README.en.md)
 
-> **Current-build status: the CLI cannot be installed or started.** This Windows build ships no verifiable native SID-DACL named-pipe adapter and installs no `namimail` executable, PATH shim, headless AgentHost, Broker, or client-pairing UI. Do not run, copy, create, or configure `namimail`; it is not a supported entry point in the current release.
+> **Current-build status: installed.** The 0.3.0 installer ships a managed `namimail` executable and registers a current-user PATH shim. The desktop main process starts the Broker and routes `--cli` invocations through it; the installer smoke test verifies the shim and a post-install MCP stdio session.
 
 ## What users can do today
 
-Use the normal Nami Mail desktop UI for mail and settings. Node.js, `npm run dev`, a SQLite file, a Fastify service, or a guessed named pipe in a development checkout cannot substitute for external Agent IPC and cannot become a CLI/MCP fallback.
+After installing Nami Mail, run `namimail --help` from a terminal. Local commands (`version`, `help`) work without a running host. Read-only data commands require a running Agent host and a paired client profile with an approved account scope; run `namimail pair` and approve the request in the visible NamiMail window first.
 
-The installer's data-retention/deletion choice still applies only to desktop-app data; the current installer has no CLI shim to repair, copy, or remove.
+Node.js, `npm run dev`, a SQLite file, a Fastify service, or a guessed named pipe in a development checkout cannot substitute for external Agent IPC and cannot become a CLI/MCP fallback.
 
-## Future release prerequisites (non-executable contract)
+The installer's data-retention/deletion choice applies only to desktop-app data; the installer registers a current-user PATH shim that the uninstaller removes.
 
-Until an installed build ships and verifies a native Windows SID-DACL adapter, none of the following may be presented as available:
+## Release prerequisites
+
+The installed build meets all of the following requirements:
 
 1. The installer provides a managed `namimail` executable and PATH shim.
 2. `namimail version` reports a local version without reading mail data.
-3. Only `namimail service start` may explicitly request a headless AgentHost; ordinary queries must never start Runtime implicitly.
-4. CLI/MCP clients can pair independently in visible NamiMail UI and receive a read-only account scope.
+3. Only `namimail service start` may explicitly request a headless AgentHost; ordinary queries never start Runtime implicitly.
+4. CLI/MCP clients pair independently in visible NamiMail UI and receive a read-only account scope.
 5. Clients reach the host only through a current-user-SID-restricted named-pipe Broker; there is no HTTP, TCP, SQLite, filesystem, or renderer-token fallback.
 
-The future pairing record must bind the client public key, host identity and public key, scopes, account scope, and a durable anti-replay counter. Private keys, public-key PEM, pairing records, pipe paths, and counters must never go into issues, terminal captures, shared repositories, or environment variables. Revocation must also happen in visible NamiMail UI.
+The pairing record binds the client public key, host identity and public key, scopes, account scope, and a durable anti-replay counter. Private keys, public-key PEM, pairing records, pipe paths, and counters must never go into issues, terminal captures, shared repositories, or environment variables. Revocation must also happen in visible NamiMail UI.

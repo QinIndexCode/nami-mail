@@ -50,7 +50,9 @@ for (const name of [
 const execFileAsync = promisify(execFile);
 const reportPath = path.join(projectRoot, "output", "desktop-smoke.json");
 const diagnosticReportPath = path.join(projectRoot, "output", "desktop-smoke-diagnostic.json");
-const gracefulExitTimeoutMs = 10_000;
+// The app quits on its own 8s after the smoke result is written, then shuts
+// the local server down under its own 8s bound; allow both plus margin.
+const gracefulExitTimeoutMs = 25_000;
 const forcedExitTimeoutMs = 10_000;
 const smokeResultTimeoutMs = 90_000;
 const smokeResultPollIntervalMs = 200;
@@ -304,7 +306,7 @@ try {
   const rendererUrl = new URL(renderer.rendererUrl);
   assert.deepEqual(
     [...rendererUrl.searchParams.entries()].sort(([left], [right]) => left.localeCompare(right)),
-    [["desktop", "1"], ["desktopSmoke", "1"]],
+    [["demo", "1"], ["desktop", "1"], ["desktopSmoke", "1"], ["platform", process.platform]],
     "The desktop renderer URL must not expose a local API capability.",
   );
   const runtimePort = Number.parseInt(rendererUrl.port, 10);
@@ -335,13 +337,159 @@ try {
   assert.equal(rendererAfterSingleInstance.desktopSingleInstance?.restored, true, "A second launch must restore the existing Nami Mail window.");
   assert.equal(rendererAfterSingleInstance.desktopSingleInstance?.serviceUrl, primaryServiceUrl, "A second launch must reuse the primary local service.");
   report.desktopSingleInstance = rendererAfterSingleInstance.desktopSingleInstance;
-  assert.equal(renderer.simulatedWebFrameVisible, false, "The desktop renderer must not include the Web macOS demonstration frame.");
+  assert.equal(renderer.desktopWindowBar, true, "The desktop renderer must draw the app-owned window bar.");
+  assert.equal(renderer.desktopWindowBarBlend?.matchesSidebar, true, "The window bar must share the sidebar's translucent surface instead of drawing an opaque strip.");
+  assert.equal(renderer.desktopWindowBarBlend?.hasBottomSeparator, false, "The window bar must not be framed as a standalone strip by a bottom border.");
+  assert.equal(renderer.desktopWindowBarLayout?.barPosition, "absolute", "The window bar must float over the columns as the frameless drag strip.");
+  assert.equal(renderer.desktopWindowBarLayout?.shellTop, 0, "The mail shell must reach the window's top edge.");
+  assert.equal(renderer.desktopWindowBarLayout?.sidebarTop, 0, "The sidebar must reach the window's top edge.");
+  const sidebarHeight = renderer.desktopWindowBarLayout?.sidebarHeight;
+  if (sidebarHeight != null && renderer.desktopWindowBarLayout?.shellBottom != null) {
+    assert.ok(
+      Math.abs(sidebarHeight - renderer.desktopWindowBarLayout.shellBottom) < 1,
+      `The sidebar must span both grid rows (${sidebarHeight}px vs shell ${renderer.desktopWindowBarLayout.shellBottom}px).`,
+    );
+  }
+  assert.equal(renderer.desktopWindowBarLayout?.columnHeaderTop, 0, "The column header must reach the window's top edge.");
+  assert.equal(renderer.desktopWindowBarLayout?.searchWrapDragRegion, "no-drag", "Interactive elements beneath the floating bar must stay clickable.");
+  assert.equal(renderer.desktopWindowBarLayout?.searchClearOfControls, true, "The header search control must not overlap the window controls.");
+  assert.equal(renderer.desktopWindowBarLayout?.searchClearOfControlsList, true, "The header filter controls must not overlap the window controls.");
+  assert.equal(renderer.desktopWindowBarLayout?.railButtonClearOfControls, true, "The icon rail must not overlap the window controls.");
+  assert.ok((renderer.desktopWindowBarLayout?.railButtonTop ?? 0) >= 78, "The icon rail's first button must sit below the floating window bar.");
+  assert.equal(renderer.desktopWindowBarLayout?.columnHeaderHeight, 66, "The column header must keep its compact height so its content moves up.");
+  assert.ok((renderer.desktopWindowBarLayout?.columnActiveTop ?? 0) < 42, "The header's first row must sit inside the floating bar zone after the move-up.");
+  assert.ok(
+    (renderer.desktopWindowBarLayout?.barHeight ?? 0) < (renderer.desktopWindowBarLayout?.columnActiveTop ?? 0),
+    "The drag strip must sit above the header's first row so the moved-up header stays clickable.",
+  );
+  const railBorderLeftColor = renderer.desktopWindowBarLayout?.railBorderLeftColor ?? "";
+  assert.notEqual(railBorderLeftColor, "rgba(0, 0, 0, 0)", "The rail's edge line must draw below the header, not stop at the floating controls.");
+  assert.equal(renderer.desktopWindowBarLayout?.railBackgroundColor, "rgba(0, 0, 0, 0)", "The rail must stay transparent over the wallpaper like the other panels.");
+  assert.ok(
+    Math.abs((renderer.desktopWindowBarLayout?.railTop ?? -1) - (renderer.desktopWindowBarLayout?.columnHeaderHeight ?? -1)) < 1,
+    "The rail must start at the column header's bottom edge without a computed offset.",
+  );
+  const headerRight = renderer.desktopWindowBarLayout?.headerRight;
+  const windowWidth = renderer.desktopWindowBarLayout?.windowWidth;
+  if (headerRight != null && windowWidth != null) {
+    assert.ok(
+      Math.abs(headerRight - windowWidth) < 1,
+      `The header row must end exactly at the window's right edge (header right ${headerRight}px vs window ${windowWidth}px).`,
+    );
+  }
+  assert.ok(
+    (renderer.desktopWindowBarLayout?.documentWidth ?? 0) <= (renderer.desktopWindowBarLayout?.windowWidth ?? 0),
+    "The document must never overflow the window horizontally.",
+  );
+  const junctionGap = renderer.desktopWindowBarLayout?.junctionGap;
+  if (junctionGap != null) {
+    assert.ok(Math.abs(junctionGap) < 1, `The rail must sit flush under the header with no gap (junction gap ${junctionGap}px).`);
+  }
+  if (renderer.desktopWindowBarLayout?.agentHeaderActionsClearOfControls != null) {
+    assert.equal(renderer.desktopWindowBarLayout.agentHeaderActionsClearOfControls, true, "The agent header actions must not overlap the window controls.");
+  }
+  const windowControlsCenter = renderer.desktopWindowBarLayout?.controlsCenter;
+  if (windowControlsCenter != null) {
+    assert.ok(
+      Math.abs(windowControlsCenter - (renderer.desktopWindowBarLayout?.columnRowCenter ?? -1)) < 2,
+      "The window controls must center on the same line as the header icons.",
+    );
+    assert.ok(
+      Math.abs(windowControlsCenter - (renderer.desktopWindowBarLayout?.sidebarBrandCenter ?? -1)) < 2,
+      "The window controls must center on the same line as the sidebar brand icon.",
+    );
+  }
+  const headerControlsGap = renderer.desktopWindowBarLayout?.headerActionsGapToControls;
+  if (headerControlsGap != null) {
+    assert.ok(headerControlsGap >= 10 && headerControlsGap <= 14, `The header must sit one icon gap away from the window controls (got ${headerControlsGap}px).`);
+  }
+  assert.equal(renderer.desktopWindowControls, true, "The frameless window bar must carry its own controls (or the macOS traffic-light slot).");
   assert.equal(renderer.desktopWallpaper?.present, true, "The desktop workspace must render the configured wallpaper layer.");
   assert.equal(renderer.desktopWallpaper?.coversWorkspace, true, "The wallpaper layer must cover the full desktop workspace.");
   assert.ok(Math.abs((renderer.desktopWallpaper?.opacity ?? 0) - 0.68) < 0.02, "The default wallpaper must reach its configured visible opacity.");
   assert.ok(renderer.desktopWallpaper?.sidebarPanelOpacity < 0.8, "The sidebar must remain translucent so wallpaper is visible across the desktop workspace.");
   assert.ok(renderer.desktopWallpaper?.messagePanelOpacity < 0.8, "The message list must remain translucent so wallpaper is visible across the desktop workspace.");
   assert.ok(renderer.desktopWallpaper?.readerPanelOpacity < 0.8, "The reader must remain translucent so wallpaper is visible inside the desktop workspace.");
+  // -- Agent workspace visibility (regression: the workspace used to render
+  // inside the hidden mail-workspace div and came up as an empty 0x0 frame).
+  assert.equal(renderer.desktopDeepDiagnostic?.agent?.launchButtonPresent, true, "The Agent launch button must be present in the workspace.");
+  assert.equal(renderer.desktopDeepDiagnostic?.agent?.agentRevealed, true, "The Agent workspace must be visible after opening.");
+  const agentRect = renderer.desktopDeepDiagnostic?.agent?.agentRect;
+  if (agentRect != null) {
+    const windowWidth = renderer.desktopWindowBarLayout?.windowWidth;
+    if (windowWidth != null) {
+      assert.ok(
+        Math.abs(agentRect.w - (windowWidth - 56)) < 2,
+        `The Agent workspace must fill the shell beside the 56px rail (${agentRect.w}px vs ${windowWidth - 56}px).`,
+      );
+    }
+    assert.ok(agentRect.w > 800 && agentRect.h > 500, `The Agent workspace must have real geometry after opening (${agentRect.w}x${agentRect.h}).`);
+  }
+  const agentChildren = renderer.desktopDeepDiagnostic?.agent?.agentChildren ?? [];
+  assert.ok(agentChildren.length >= 2, "The Agent workspace must contain its conversation sidebar and main panel.");
+  assert.ok(agentChildren.every((c) => c.w > 0 && c.h > 0), "The Agent panels must not be zero-sized.");
+  const agentShellChild = (renderer.desktopDeepDiagnostic?.agent?.shellChildren ?? []).find(
+    (c) => typeof c.className === "string" && c.className.includes("agent-workspace"),
+  );
+  assert.ok(
+    agentShellChild !== undefined && agentShellChild.display !== "none" && agentShellChild.h > 500,
+    "The Agent workspace must be a direct shell child rendered at full height.",
+  );
+  const railAfterOpen = renderer.desktopDeepDiagnostic?.agent?.railAfterOpen;
+  if (railAfterOpen != null) {
+    assert.equal(railAfterOpen.gridColumn, "2", "The rail must move to the second column when the Agent workspace is open.");
+    assert.equal(railAfterOpen.gridRow, "2", "The rail must stay on the second row below the floating bar when the Agent workspace is open.");
+    assert.ok(railAfterOpen.rect.h > 500, "The rail must keep its full height beside the Agent workspace.");
+  }
+const contextChip = renderer.desktopDeepDiagnostic?.agent?.agentContextChip;
+  if (contextChip != null) {
+    assert.equal(contextChip.tag, "BUTTON", "The reference mail chip must be a clickable button.");
+    assert.ok(contextChip.chipTitle.length > 0, "The reference mail chip must carry a title.");
+    assert.ok(contextChip.railClearance > 0, `The reference mail chip must stay clear of the icon rail (clearance ${contextChip.railClearance}px).`);
+    assert.ok(contextChip.panelClearance > 0, `The reference mail chip must stay inside the agent main panel (clearance ${contextChip.panelClearance}px).`);
+  }
+  const scopePicker = renderer.desktopDeepDiagnostic?.agent?.agentScopePicker;
+  if (scopePicker != null) {
+    assert.equal(scopePicker.tag, "BUTTON", "The account scope picker must be a clickable button.");
+    assert.ok(scopePicker.ariaLabel.length > 0, "The account scope picker must carry an accessible label.");
+    assert.ok(scopePicker.label.length > 0, "The account scope picker must show the current account or all accounts.");
+    assert.ok(scopePicker.railClearance > 0, `The account scope picker must stay clear of the icon rail (clearance ${scopePicker.railClearance}px).`);
+    assert.ok(scopePicker.panelClearance > 0, `The account scope picker must stay inside the agent main panel (clearance ${scopePicker.panelClearance}px).`);
+  }
+  const workspacePosition = renderer.desktopDeepDiagnostic?.agent?.workspacePosition;
+  if (workspacePosition != null) {
+    assert.equal(workspacePosition, "relative", "The Agent workspace must stay a positioned ancestor for its absolutely-positioned children (citations sidebar).");
+  }
+  const citationsAnchorClearance = renderer.desktopDeepDiagnostic?.agent?.citationsAnchorClearance ?? null;
+  if (citationsAnchorClearance != null) {
+    assert.ok(citationsAnchorClearance > 0, `A right:14px citation anchor inside the workspace must clear the rail (clearance ${citationsAnchorClearance}px).`);
+  }
+  // -- Main-thread responsiveness (regression: reported jank on the mail and
+  // Agent screens). Hidden smoke windows throttle rAF but not timers, so the
+  // timer-gap metric still catches event-loop stalls.
+  assert.equal(renderer.desktopDeepDiagnostic?.idle?.longtasks?.length ?? 0, 0, "The idle mail workspace must not run long tasks on the main thread.");
+  assert.ok((renderer.desktopDeepDiagnostic?.idle?.timerMaxGapMs ?? 0) < 200, "The idle renderer event loop must stay responsive (max timer gap < 200ms).");
+  assert.ok((renderer.desktopDeepDiagnostic?.agent?.afterOpenPerf?.longtasks?.length ?? 99) <= 1, "Opening the Agent workspace must not flood the main thread with long tasks.");
+  // -- Mail-list scroll cost (regression: reported jank when scrolling the
+  // message list). Each forced layout cycle is one scroll frame's main-thread
+  // cost; staying far below the 16.7ms budget keeps scrolling responsive.
+  const scrollProbe = renderer.desktopDeepDiagnostic?.scroll;
+  if (scrollProbe != null && scrollProbe.note === undefined) {
+    assert.ok(scrollProbe.rowCount > 0, "The smoke mail list must carry demo rows for the scroll probe.");
+    assert.ok(
+      Math.max(...(scrollProbe.frameCostMs ?? [])) < 12,
+      `Scroll frames must stay far below the frame budget (max ${Math.max(...(scrollProbe.frameCostMs ?? []))}ms vs 16.7ms budget).`,
+    );
+  }
+  // CI runners are slower; use a generous ceiling there so the probe
+  // doesn't flake on busy shared hardware while still catching genuine
+  // regressions locally.
+  const windowLoadCeilingMs = process.env.GITHUB_ACTIONS ? 5000 : 1150;
+  const windowLoadedStage = (renderer.desktopStartupTimeline ?? []).find((stage) => stage.stage === "window-loaded");
+  assert.ok(
+    windowLoadedStage !== undefined && windowLoadedStage.elapsedMs < windowLoadCeilingMs,
+    `The window must reach its loaded state during startup (${windowLoadedStage?.elapsedMs ?? "missing"}ms vs ${windowLoadCeilingMs}ms baseline).`,
+  );
   assert.equal(renderer.desktopSettingsUi?.settingsOpened, true, renderer.desktopSettingsUi?.error ?? "The settings dialog did not open.");
   assert.equal(renderer.desktopSettingsUi?.brandName, "Nami Mail", "The sidebar must use the full product name.");
   assert.equal(renderer.desktopSettingsUi?.lightBrandMarkLoaded, true, "The light-theme brand mark must load.");
@@ -475,8 +623,10 @@ try {
     else {
       await writeDesktopSmokeDiagnostic(cleanupFailure, progressPath, desktopProcess, desktopOutputCapture).catch((diagnosticError) => {
         const message = diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError);
-        process.stderr.write(`Desktop smoke could not write its diagnostic: ${message}\n`);
+      process.stderr.write(`Desktop smoke could not write its diagnostic: ${message}\n`);
       });
+      // Cleanup errors only surface when the smoke itself did not already fail.
+      // eslint-disable-next-line no-unsafe-finally
       throw cleanupFailure;
     }
   }

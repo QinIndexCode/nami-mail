@@ -1,5 +1,6 @@
 import type { DatabaseHandle } from "../db.js";
-import { AccountLifecycleStore, type AccountGenerationLease } from "./lifecycle.js";
+import type { AccountLifecycleStore} from "./lifecycle.js";
+import { type AccountGenerationLease } from "./lifecycle.js";
 import {
   agentOpaqueDigest,
   canonicalAgentJson,
@@ -230,6 +231,52 @@ export class EncryptedRagPageStore {
       `).run(now, now, lease.accountId, lease.generation, pageId, current.page_revision);
       const updated = this.currentRow(lease, pageId);
       return updated ? metadata(updated) : undefined;
+    });
+  }
+
+  /**
+   * Physically reclaims storage for this account generation:
+   *
+   * 1. Pages whose latest revision is `deleted` are unreachable (both get() and
+   *    listMetadata() only ever surface the latest revision), so every one of
+   *    their revisions is removed.
+   * 2. Older revisions of still-active pages beyond {@link activeRevisionRetention}
+   *    are unreachable too, and are pruned so repeated re-ingestion of the same
+   *    message cannot accumulate unlimited encrypted rows.
+   *
+   * Returns the number of rows removed. The in-memory index must be rebuilt
+   * after this call because the worker treats the store as authoritative.
+   */
+  purgeTombstoned(lease: AccountGenerationLease, activeRevisionRetention = 5): number {
+    assertAgentStoreReadable(this.db);
+    this.lifecycle.assertCurrent(lease);
+    const retention = Math.max(1, Math.floor(activeRevisionRetention));
+    return this.transaction(() => {
+      const removedTombstoned = this.db.prepare(`
+        DELETE FROM agent_rag_pages
+        WHERE account_id = ? AND account_generation = ?
+          AND page_id IN (
+            SELECT t.page_id FROM (
+              SELECT page_id FROM agent_rag_pages
+              WHERE account_id = ? AND account_generation = ?
+              GROUP BY page_id
+            ) t
+            WHERE (
+              SELECT state FROM agent_rag_pages
+              WHERE account_id = ? AND account_generation = ? AND page_id = t.page_id
+              ORDER BY page_revision DESC LIMIT 1
+            ) = 'deleted'
+          )
+      `).run(lease.accountId, lease.generation, lease.accountId, lease.generation, lease.accountId, lease.generation).changes;
+      const removedOldRevisions = this.db.prepare(`
+        DELETE FROM agent_rag_pages
+        WHERE account_id = ? AND account_generation = ?
+          AND page_revision < (
+            SELECT MAX(page_revision) FROM agent_rag_pages
+            WHERE account_id = ? AND account_generation = ? AND page_id = agent_rag_pages.page_id
+          ) - ?
+      `).run(lease.accountId, lease.generation, lease.accountId, lease.generation, retention - 1).changes;
+      return removedTombstoned + removedOldRevisions;
     });
   }
 }

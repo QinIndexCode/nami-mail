@@ -133,6 +133,59 @@ test("rejects revoked clients and tampered request bodies", async () => {
   if (!rejectedRevocation.ok) assert.equal(rejectedRevocation.error.code, "PAIRING_REVOKED");
 });
 
+test("rejects expired pairings without advancing the counter", async () => {
+  const { client, pairing, hostPublicKeyPem } = createFixture();
+  const store = new InMemoryBrokerPairingStore();
+  await store.save({ ...pairing, expiresAt: "2020-01-01T00:00:00.000Z" });
+  const request = signBrokerRequest({
+    requestId: "123e4567-e89b-12d3-a456-426614174006",
+    hostId,
+    bootId,
+    clientId,
+    counter: "1",
+    payload: { command: "messages.list" },
+    privateKey: client.privateKey,
+  });
+  const result = await verifyBrokerRequest(request, { pairingStore: store, hostId, bootId, hostPublicKeyPem });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.code, "PAIRING_EXPIRED");
+  assert.equal((await store.read(clientId))?.lastAcceptedCounter, "0");
+});
+
+test("accepts pairings whose expiry is still in the future", async () => {
+  const { client, pairing, hostPublicKeyPem } = createFixture();
+  const store = new InMemoryBrokerPairingStore();
+  await store.save({ ...pairing, expiresAt: "2099-01-01T00:00:00.000Z" });
+  const request = signBrokerRequest({
+    requestId: "123e4567-e89b-12d3-a456-426614174007",
+    hostId,
+    bootId,
+    clientId,
+    counter: "1",
+    payload: { command: "messages.list" },
+    privateKey: client.privateKey,
+  });
+  const result = await verifyBrokerRequest(request, { pairingStore: store, hostId, bootId, hostPublicKeyPem });
+  assert.equal(result.ok, true);
+});
+
+test("lists pairing records across statuses without private key material", async () => {
+  const { client, pairing } = createFixture();
+  const store = new InMemoryBrokerPairingStore();
+  await store.save({ ...pairing, accountIds: ["074-account-01"], expiresAt: "2099-01-01T00:00:00.000Z" });
+  await store.save({ ...pairing, clientId: "client-identity-02", accountIds: ["074-account-01"] });
+  await store.revoke("client-identity-02", "2026-07-27T10:02:00.000Z");
+
+  const all = await store.list();
+  assert.equal(all.length, 2);
+  const listed = all.find((entry) => entry.clientId === clientId)!;
+  assert.deepEqual(listed.accountIds, ["074-account-01"]);
+  assert.equal(listed.expiresAt, "2099-01-01T00:00:00.000Z");
+  assert.equal(all.find((entry) => entry.clientId === "client-identity-02")?.revokedAt, "2026-07-27T10:02:00.000Z");
+  assert.equal("privateKeyPem" in listed, false);
+  assert.equal("privateKey" in listed, false);
+});
+
 test("validates the signed host identity and response binding on a client", () => {
   const { host, hostPublicKeyPem, pairing } = createFixture();
   const hostIdentity = createHostIdentityProof({
@@ -155,6 +208,15 @@ test("validates the signed host identity and response binding on a client", () =
     requestCounter: "1",
   });
   assert.equal(verified.ok, true);
+
+  const wrongBoot = verifyBrokerResponse(response, {
+    pairing,
+    requestId: response.requestId,
+    requestCounter: "1",
+    bootId: "other-boot-identity",
+  });
+  assert.equal(wrongBoot.ok, false);
+  if (!wrongBoot.ok) assert.equal(wrongBoot.error.code, "BROKER_AUTHENTICATION_FAILED");
 
   const tampered = { ...response, requestCounter: "2" };
   const rejected = verifyBrokerResponse(tampered, {

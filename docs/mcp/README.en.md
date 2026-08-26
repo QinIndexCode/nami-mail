@@ -1,30 +1,30 @@
 # NamiMail MCP Server
 
-[Chinese](README.md) | [Installation](installation.en.md) | [Configuration](configuration.en.md) | [Tools](tools.en.md) | [Output](output-schema.en.md) | [Security](security.en.md) | [Troubleshooting](troubleshooting.en.md)
+[Chinese](README.zh-CN.md) | [Installation](installation.en.md) | [Configuration](configuration.en.md) | [Tools](tools.en.md) | [Output](output-schema.en.md) | [Security](security.en.md) | [Troubleshooting](troubleshooting.en.md)
 
-> **Current-build status: unavailable.** This Windows build does not ship a verifiable native Windows SID-DACL named-pipe adapter. It therefore starts no external AgentHost or Broker and provides no `namimail` executable, PATH shim, client-pairing UI, or MCP stdio launcher. The MCP configuration, tools, and schema in this document are a future-release security contract; do not add it to a client configuration or attempt to start it in the current build. Experimental local NLLB-200 translation remains separate, explicit, and outside MCP.
+> **Current-build status: available.** The 0.3.0 installer ships a managed `namimail` command and PATH shim, and the desktop main process runs a paired SID-DACL named-pipe Broker that routes MCP stdio sessions. The installer smoke test starts `namimail mcp start` through `cmd.exe`, performs MCP initialization, and verifies that `tools/list` returns exactly fifteen tools (eight read-only plus seven write tools with matching annotations). Data tools require a running, paired Agent host. Experimental local NLLB-200 translation remains separate, explicit, and outside MCP.
 
-NamiMail MCP Server documents how the future interface will let MCP-stdio-capable local developer tools and Agents securely read authorized mail data. It is planned as a paired Broker adapter for the desktop `AgentHost`, not an independent mail service.
+NamiMail MCP Server documents how MCP-stdio-capable local developer tools and Agents securely read authorized mail data. It is a paired Broker adapter for the desktop `AgentHost`, not an independent mail service.
 
 ## v1 guarantees
 
-- After the native adapter ships, the only transport may be local `stdio -> paired SID-DACL Windows named-pipe Broker`.
+- The only transport is local `stdio -> paired SID-DACL Windows named-pipe Broker`.
 - The MCP process never opens SQLite, the mail data directory, a DPAPI master key, or a renderer Fastify token.
 - There is no HTTP, Streamable HTTP, TCP, file-URI, or loopback fallback.
-- External MCP v1 is read-only. Tool discovery exposes only approved read tools; write and high-risk actions must use one-time confirmation in the visible NamiMail UI.
+- External MCP access level defaults to `read-only` and can be configured independently in the desktop app as one of three levels (`read-only` / `send-confirmed` / `full-access`). Write actions at `send-confirmed` use visible one-time confirmation in the NamiMail UI; `full-access` executes automatically within approved account scope. See [Security](security.en.md) and [Tools](tools.en.md).
 - Experimental local NLLB-200 translation remains separate and explicit. It is not an MCP tool and MCP startup never processes mail automatically.
 
 ## Documentation map
 
 | Document | Contents |
 | --- | --- |
-| [Installation](installation.en.md) | Current unavailable status and future host, PATH, startup, and pairing prerequisites. |
-| [Configuration](configuration.en.md) | Non-pasteable future local MCP-client stdio configuration and version negotiation. |
-| [Tools](tools.en.md) | Future v1 read-only tool names, input/output contracts, and permissions. |
-| [Output schema](output-schema.en.md) | Future MCP wrappers and stable NamiMail Agent errors. |
+| [Installation](installation.en.md) | Installer prerequisites: host, PATH, startup, and pairing. |
+| [Configuration](configuration.en.md) | Pasteable local MCP-client stdio configuration and version negotiation. |
+| [Tools](tools.en.md) | v1 tool names (read-only + write), input/output contracts, and permissions. |
+| [Output schema](output-schema.en.md) | MCP wrappers and stable NamiMail Agent errors. |
 | [Resources](resources.en.md) | Why v1 exposes no mail Resources. |
 | [Security](security.en.md) | Pairing, scopes, untrusted mail, audit, and privacy. |
 | [Examples](examples.en.md) | Typical MCP-client calls. |
 | [Troubleshooting](troubleshooting.en.md) | Startup, stdio, pairing, and permission recovery. |
 
-After the native adapter ships, `tools/list` will be the sole authority for host availability and complete JSON Schemas. A client must not infer an unlisted tool from this document, CLI options, or a stale cache.
+`tools/list` is the sole authority for host availability and complete JSON Schemas. A client must not infer an unlisted tool from this document, CLI options, or a stale cache.

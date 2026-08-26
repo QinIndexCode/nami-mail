@@ -4,8 +4,8 @@ import { formatNativeMessage, nativeText, resolveNativeLocale } from "../src/nat
 
 test("uses the selected native locale and canonicalizes supported BCP-47 identifiers", () => {
   assert.equal(resolveNativeLocale("en-us"), "en-US");
-  assert.equal(nativeText("en-US", "trayOpen"), "Open Nami Mail");
-  assert.equal(nativeText("zh-CN", "trayOpen"), "打开 Nami Mail");
+  assert.equal(nativeText("en-US", "trayShow"), "Show Nami Mail");
+  assert.equal(nativeText("zh-CN", "trayShow"), "显示 Nami Mail");
 });
 
 test("falls back to the required Chinese native locale for unavailable values", () => {

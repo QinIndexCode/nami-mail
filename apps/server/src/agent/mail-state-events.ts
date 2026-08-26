@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AccountGenerationLease } from "./lifecycle.js";
-import { AccountLifecycleStore } from "./lifecycle.js";
-import { AgentSourceEventOutbox } from "./source-events.js";
+import type { AccountLifecycleStore } from "./lifecycle.js";
+import type { AgentSourceEventOutbox } from "./source-events.js";
 import { agentOpaqueDigest, canonicalAgentJson } from "./store-crypto.js";
 
 export type AgentMailEventState = Readonly<Record<string, unknown>>;

@@ -1,0 +1,163 @@
+import { ftsLikeEscape } from "./message-search.js";
+import type { AttachmentKind } from "./attachment-kind.js";
+
+// Authoritative WHERE filter fragments for the message list view. Shared by
+// GET /api/messages and the batch-job query resolver so "select all matching
+// this view" always matches exactly what the list shows.
+
+export const effectiveMailboxExpression = "CASE WHEN m.pending_move_state = 'intent' THEN m.mailbox ELSE COALESCE(NULLIF(m.pending_move_destination, ''), m.mailbox) END";
+
+export const inboxMessageFilter = `(
+  UPPER(${effectiveMailboxExpression}) = 'INBOX'
+  OR EXISTS (
+    SELECT 1 FROM folders f
+    WHERE f.account_id = m.account_id
+      AND f.path = ${effectiveMailboxExpression}
+      AND f.special_use = '\\Inbox'
+  )
+)`;
+
+export const archivedMessageFilter = `(
+  (
+    m.pending_move_destination IS NOT NULL
+    AND COALESCE(m.pending_move_state, 'confirmed') = 'confirmed'
+    AND (
+      m.pending_move_special_use = '\\Archive'
+      OR (m.pending_move_special_use = '\\All' AND m.all_mail_archived = 1)
+    )
+  )
+  OR EXISTS (
+    SELECT 1 FROM folders f
+    WHERE f.account_id = m.account_id
+      AND f.path = ${effectiveMailboxExpression}
+      AND f.special_use = '\\Archive'
+  )
+  OR (
+    m.all_mail_archived = 1
+    AND EXISTS (
+      SELECT 1 FROM folders f
+      WHERE f.account_id = m.account_id
+        AND f.path = ${effectiveMailboxExpression}
+        AND f.special_use = '\\All'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM folders archive_folder
+      WHERE archive_folder.account_id = m.account_id
+        AND archive_folder.special_use = '\\Archive'
+    )
+  )
+)`;
+
+export type MessageListFilterQuery = {
+  accountId?: string;
+  folder?: string;
+  q?: string;
+  starred?: boolean;
+  unread?: boolean;
+  archived?: boolean;
+  snoozed?: boolean;
+  // The Attachments view: messages carrying files, across every folder of the
+  // selected account (all accounts when no accountId is bound). Replaces the
+  // unified-inbox fallback, so it never needs a folder.
+  hasAttachments?: boolean;
+  // Attachment-kind segmentation: only messages whose stored attachments
+  // include the selected kind. Refines any view, including global search.
+  attachmentKind?: AttachmentKind;
+  // Exclusive date bounds over the effective sent time, as ISO-UTC instants
+  // ("after" is inclusive, "before" exclusive). The renderer converts local
+  // calendar dates to UTC before sending, so the comparison is pure string
+  // ordering against the stored COALESCE(sent_at, created_at) timestamps.
+  after?: string;
+  before?: string;
+  // "all" searches every account and mailbox (any view). Only meaningful
+  // together with q; without q it is ignored, so a client can never turn the
+  // list into an unbounded full-database dump by accident.
+  scope?: "all";
+};
+
+export type MessageListSqlSelection = {
+  // Full WHERE clause including the "WHERE " prefix ("" when no filters).
+  where: string;
+  // FROM fragment: the FTS join when searching, otherwise plain messages.
+  join: string;
+  // Bound parameters in the same order as the WHERE placeholders.
+  params: unknown[];
+};
+
+/**
+ * Builds the SQL selection for the current list view. Filter precedence
+ * mirrors the list endpoint: an explicit folder wins, then archived/starred/
+ * snoozed views, otherwise the unified inbox (snoozed-hidden until due).
+ * A `q` search switches to the FTS join and prepends its LIKE parameters.
+ */
+export function buildMessageListSql(query: MessageListFilterQuery): MessageListSqlSelection {
+  const filters: string[] = [];
+  const params: unknown[] = [];
+  const search = query.q?.trim();
+  // A global search drops every view/account/folder restriction so the FTS
+  // match alone decides the candidate set. It is a search-only mode: without
+  // q the standard view precedence applies and scope is ignored.
+  const globalSearch = query.scope === "all" && Boolean(search);
+  if (!globalSearch && query.accountId) {
+    filters.push("m.account_id = ?");
+    params.push(query.accountId);
+  }
+  if (!globalSearch && query.folder) {
+    filters.push(`${effectiveMailboxExpression} = ?`);
+    params.push(query.folder);
+  } else if (!globalSearch && query.archived) {
+    filters.push(archivedMessageFilter);
+  } else if (!globalSearch && query.starred) {
+    // Starred is a cross-folder view, unlike the normal unified inbox.
+    filters.push("m.flags_json LIKE '%\\\\Flagged%'");
+  } else if (!globalSearch && query.snoozed) {
+    // The Snoozed view lists messages whose snooze has not fired yet.
+    filters.push("m.snoozed_until IS NOT NULL AND m.snoozed_until > ?");
+    params.push(new Date().toISOString());
+  } else if (!globalSearch && query.hasAttachments) {
+    filters.push("m.has_attachments = 1");
+  } else if (!globalSearch) {
+    filters.push(inboxMessageFilter);
+    // Snoozed messages are hidden from the unified inbox until due.
+    filters.push("(m.snoozed_until IS NULL OR m.snoozed_until <= ?)");
+    params.push(new Date().toISOString());
+  }
+  if (!globalSearch && query.unread) {
+    filters.push("m.flags_json NOT LIKE '%\\\\Seen%'");
+  }
+  // Kind and date refinements apply to every mode, including global search:
+  // they narrow the candidate set, they never widen it.
+  if (query.attachmentKind) {
+    // The stored column is JSON text; the kind token is quoted so a kind can
+    // never match another kind's substring by accident.
+    filters.push("m.attachment_kinds_json LIKE ?");
+    params.push(`%"${query.attachmentKind}"%`);
+  }
+  if (query.after) {
+    filters.push("COALESCE(m.sent_at, m.created_at) >= ?");
+    params.push(query.after);
+  }
+  if (query.before) {
+    filters.push("COALESCE(m.sent_at, m.created_at) < ?");
+    params.push(query.before);
+  }
+  if (search) {
+    const pattern = `%${ftsLikeEscape(search)}%`;
+    const ftsMatch = `(fts.subject LIKE ? ESCAPE '\\'
+      OR fts.from_name LIKE ? ESCAPE '\\'
+      OR fts.from_address LIKE ? ESCAPE '\\'
+      OR fts.body LIKE ? ESCAPE '\\')`;
+    const ftsParams = [pattern, pattern, pattern, pattern];
+    const where = filters.length ? `${ftsMatch} AND (${filters.join(" AND ")})` : ftsMatch;
+    return {
+      where: `WHERE ${where}`,
+      join: "FROM messages_fts fts JOIN messages m ON m.id = fts.message_id",
+      params: [...ftsParams, ...params],
+    };
+  }
+  return {
+    where: filters.length ? `WHERE ${filters.join(" AND ")}` : "",
+    join: "FROM messages m",
+    params,
+  };
+}

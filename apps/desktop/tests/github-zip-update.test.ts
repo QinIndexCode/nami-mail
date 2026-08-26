@@ -8,6 +8,7 @@ import {
   compareStableVersions,
   discoverGitHubZipUpdate,
   downloadGitHubZipUpdate,
+  GitHubZipUpdateError,
   githubReleaseAssetUrl,
   githubZipUpdateAssetNames,
   hasVerifiedCachedUpdate,
@@ -239,4 +240,49 @@ test("deletes a partial ZIP when the published digest does not match", async (t)
   );
   const archiveDirectory = path.join(directory, version);
   assert.equal(await fs.readdir(archiveDirectory).then((entries) => entries.some((entry) => entry.endsWith(".part"))), false);
+});
+
+test("rejects an update manifest body that exceeds the size cap", async () => {
+  const oversizedManifest = JSON.stringify({
+    schemaVersion: 1,
+    version,
+    archive: {
+      name: assetNames.archiveName,
+      size: archiveBytes.byteLength,
+      sha512: createHash("sha512").update(archiveBytes).digest("base64"),
+    },
+    installer: assetNames.installerName,
+    padding: "x".repeat(16 * 1024),
+  });
+  await assert.rejects(
+    discoverGitHubZipUpdate({
+      source,
+      currentVersion: "1.2.2",
+      fetchImpl: async (input) => String(input).startsWith("https://api.github.com/")
+        ? releaseResponse()
+        : new Response(oversizedManifest, { status: 200 }),
+    }),
+    (error: unknown) => error instanceof GitHubZipUpdateError && error.code === "UPDATE_MANIFEST_TOO_LARGE",
+  );
+});
+
+test("rejects an oversized GitHub release metadata body", async () => {
+  const oversizedRelease = new Response(JSON.stringify({
+    tag_name: `v${version}`,
+    draft: false,
+    prerelease: false,
+    assets: [
+      { name: assetNames.archiveName, size: archiveBytes.byteLength },
+      { name: assetNames.manifestName, size: Buffer.byteLength(manifest, "utf8") },
+      ...Array.from({ length: 3_000 }, (_, index) => ({ name: `padding-${index}`, size: 1 })),
+    ],
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  await assert.rejects(
+    discoverGitHubZipUpdate({
+      source,
+      currentVersion: "1.2.2",
+      fetchImpl: async () => oversizedRelease,
+    }),
+    (error: unknown) => error instanceof GitHubZipUpdateError && error.code === "GITHUB_RELEASE_INVALID",
+  );
 });

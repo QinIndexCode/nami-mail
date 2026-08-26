@@ -3,6 +3,24 @@ import { discardDraft, saveDraft } from "../drafts.js";
 import type { DatabaseHandle } from "../db.js";
 import { messagePayloadForRow, type MessageStorageRow } from "../message-storage.js";
 import type { AccountAccessTokenProvider } from "../mail.js";
+import { sendMail } from "../mail.js";
+import {
+  discardDraftOutboundAttachments,
+  discardOutboundAttachmentsForAccount,
+  linkOutboundAttachmentsToDraft,
+  linkOutboundAttachmentsToSubmission,
+  releaseSubmissionOutboundAttachments,
+  resolveOutboundAttachments,
+} from "../outbound-attachments.js";
+import {
+  SubmissionConflictError,
+  markSubmissionSubmitted,
+  prepareSubmission as persistPrepareSubmission,
+  startSubmission,
+  submissionForId,
+  submissionRequestForId,
+  type OutboundSubmissionRequest,
+} from "../outbox.js";
 import { syncAccount, updateMessageFlags, moveMessage } from "../sync.js";
 import type { AccountRecord } from "../types.js";
 import type { AgentMailStateEvents } from "./mail-state-events.js";
@@ -22,7 +40,7 @@ import type {
 } from "./mail-application-service.js";
 
 export class AgentMailApplicationError extends Error {
-  constructor(readonly code: "not_found" | "scope_denied" | "not_supported", message: string) {
+  constructor(readonly code: "not_found" | "scope_denied" | "not_supported" | "conflict", message: string) {
     super(message);
     this.name = "AgentMailApplicationError";
   }
@@ -34,6 +52,8 @@ export type SqliteMailApplicationServiceOptions = {
   oauthService?: AccountAccessTokenProvider;
   agentMailEvents?: AgentMailStateEvents;
   syncMessageLimit: number;
+  /** Directory where uploaded outbound attachment files are stored. */
+  outboundAttachmentDirectory: string;
 };
 
 type MessageRowWithAccount = MessageStorageRow & {
@@ -53,6 +73,12 @@ function placeholders(values: readonly unknown[]): string {
 function trimmed(value: string | undefined): string | undefined {
   const result = value?.trim();
   return result ? result : undefined;
+}
+
+/** Normalizes a validated ISO timestamp to the UTC form stored in SQLite. */
+function utcIsoOf(value: string): string | undefined {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : trimmed(value);
 }
 
 function rowString(row: Record<string, unknown>, key: string): string | null {
@@ -227,21 +253,59 @@ export class SqliteMailApplicationService implements MailApplicationService {
     }
     if (query.unread !== undefined) where.push(query.unread ? "m.flags_json NOT LIKE '%\\Seen%'" : "m.flags_json LIKE '%\\Seen%'");
     if (query.flagged !== undefined) where.push(query.flagged ? "m.flags_json LIKE '%\\Flagged%'" : "m.flags_json NOT LIKE '%\\Flagged%'");
-    if (trimmed(query.sender)) {
-      where.push("LOWER(m.from_address) LIKE ?");
-      params.push(`%${query.sender!.trim().toLocaleLowerCase()}%`);
-    }
-    if (trimmed(query.after)) {
+    // Note: sender filter is applied post-decryption because from_address is
+    // cleared by the encryption migration (clearPlaintextColumns).
+    // Stored timestamps use UTC ISO (sync.ts writes toISOString output). The
+    // caller may pass an offset-carrying timestamp, so normalize both bounds
+    // to the same UTC form before comparing, otherwise text order diverges
+    // from true time (e.g. 10:00+08:00 must equal 02:00Z, not sort after 03:00Z).
+    const afterIso = query.after ? utcIsoOf(query.after) : undefined;
+    const beforeIso = query.before ? utcIsoOf(query.before) : undefined;
+    if (afterIso) {
       where.push("COALESCE(m.sent_at, m.created_at) >= ?");
-      params.push(query.after!.trim());
+      params.push(afterIso);
     }
-    if (trimmed(query.before)) {
+    if (beforeIso) {
       where.push("COALESCE(m.sent_at, m.created_at) <= ?");
-      params.push(query.before!.trim());
+      params.push(beforeIso);
     }
     const limit = Math.max(1, Math.min(100, Math.floor(query.limit || 20)));
     const offset = Number.parseInt(query.cursor ?? "0", 10);
     const safeOffset = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
+    const senderQuery = trimmed(query.sender)?.toLocaleLowerCase();
+
+    if (senderQuery) {
+      // Sender filter requires decryption (from_address is encrypted), so scan
+      // the matching rows in bounded batches, decrypt, filter, then paginate in
+      // memory. Scanning continues until the requested window is filled or all
+      // rows have been read, so results are never silently truncated at a fixed
+      // row limit regardless of account size.
+      const batchSize = 1_000;
+      const matched: MessageRowWithAccount[] = [];
+      const required = safeOffset + limit + 1;
+      for (let batchOffset = 0; ; batchOffset += batchSize) {
+        const batch = this.options.db.prepare(`
+          SELECT m.*, a.email AS account_email, a.provider_name
+          FROM messages m JOIN accounts a ON a.id = m.account_id
+          WHERE ${where.join(" AND ")}
+          ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id
+          LIMIT ? OFFSET ?
+        `).all(...params, batchSize, batchOffset) as MessageRowWithAccount[];
+        if (!batch.length) break;
+        for (const row of batch) {
+          const payload = messagePayloadForRow(row, this.options.masterKey);
+          if (payload.fromAddress.toLowerCase().includes(senderQuery)
+            || payload.fromName.toLowerCase().includes(senderQuery)) {
+            matched.push(row);
+            if (matched.length >= required) break;
+          }
+        }
+        if (matched.length >= required || batch.length < batchSize) break;
+      }
+      const page = matched.slice(safeOffset, safeOffset + limit).map((row) => this.messageView(row));
+      return { items: page, ...(matched.length > safeOffset + limit ? { nextCursor: String(safeOffset + limit) } : {}) };
+    }
+
     const rows = this.options.db.prepare(`
       SELECT m.*, a.email AS account_email, a.provider_name
       FROM messages m JOIN accounts a ON a.id = m.account_id
@@ -263,17 +327,28 @@ export class SqliteMailApplicationService implements MailApplicationService {
     const messageIds = this.authorizedMessageIds(context);
     if (messageIds !== undefined && !messageIds.length) return [];
     const messageScope = messageIds === undefined ? "" : ` AND m.id IN (${placeholders(messageIds)})`;
-    const rows = this.options.db.prepare(`
-      SELECT m.*, a.email AS account_email, a.provider_name
-      FROM messages m JOIN accounts a ON a.id = m.account_id
-      WHERE m.account_id IN (${placeholders(accountIds)})${messageScope}
-      ORDER BY COALESCE(m.sent_at, m.created_at), m.id
-      LIMIT 1_000
-    `).all(...accountIds, ...(messageIds ?? [])) as MessageRowWithAccount[];
-    return rows.filter((row) => {
-      const payload = messagePayloadForRow(row, this.options.masterKey);
-      return payload.messageId === threadId || payload.inReplyTo === threadId || (payload.references ?? []).includes(threadId);
-    }).map((row) => this.messageDetail(row));
+    // Thread membership depends on decrypted headers, so scan the account in
+    // bounded batches instead of truncating at a fixed row limit.
+    const matches: MessageRowWithAccount[] = [];
+    const batchSize = 1_000;
+    for (let batchOffset = 0; ; batchOffset += batchSize) {
+      const rows = this.options.db.prepare(`
+        SELECT m.*, a.email AS account_email, a.provider_name
+        FROM messages m JOIN accounts a ON a.id = m.account_id
+        WHERE m.account_id IN (${placeholders(accountIds)})${messageScope}
+        ORDER BY COALESCE(m.sent_at, m.created_at), m.id
+        LIMIT ? OFFSET ?
+      `).all(...accountIds, ...(messageIds ?? []), batchSize, batchOffset) as MessageRowWithAccount[];
+      if (!rows.length) break;
+      for (const row of rows) {
+        const payload = messagePayloadForRow(row, this.options.masterKey);
+        if (payload.messageId === threadId || payload.inReplyTo === threadId || (payload.references ?? []).includes(threadId)) {
+          matches.push(row);
+        }
+      }
+      if (rows.length < batchSize) break;
+    }
+    return matches.map((row) => this.messageDetail(row));
   }
 
   async listAttachments(context: MailApplicationContext, messageId: string): Promise<readonly MailAttachmentView[]> {
@@ -304,15 +379,23 @@ export class SqliteMailApplicationService implements MailApplicationService {
 
   async createDraft(context: MailApplicationContext, input: DraftMutation): Promise<DraftView> {
     const account = this.account(context, input.accountId);
+    const directory = this.options.outboundAttachmentDirectory;
+    // Validate every token now so a bad upload fails before the IMAP append,
+    // mirroring the web compose draft flow.
     if (input.attachmentTokens?.length) {
-      throw new AgentMailApplicationError("not_supported", "Agent draft attachments are not enabled yet.");
+      resolveOutboundAttachments(this.options.db, directory, this.options.masterKey, account.id, input.attachmentTokens);
     }
     const result = await saveDraft(this.options.db, this.options.masterKey, account, {
       to: input.to.map((recipient) => recipient.address),
       ...(input.cc?.length ? { cc: input.cc.map((recipient) => recipient.address) } : {}),
       subject: input.subject,
       text: input.text,
+      ...(input.inReplyTo ? { inReplyTo: input.inReplyTo } : {}),
+      ...(input.references?.length ? { references: [...input.references] } : {}),
     }, {}, this.options.oauthService, this.options.agentMailEvents, context.signal);
+    if (input.attachmentTokens?.length) {
+      linkOutboundAttachmentsToDraft(this.options.db, account.id, result.messageId, input.attachmentTokens);
+    }
     return {
       id: result.id,
       accountId: account.id,
@@ -325,14 +408,17 @@ export class SqliteMailApplicationService implements MailApplicationService {
   async updateDraft(context: MailApplicationContext, input: DraftMutation & { draftId: string }): Promise<DraftView> {
     this.assertMessage(context, input.draftId);
     const account = this.account(context, input.accountId);
+    const directory = this.options.outboundAttachmentDirectory;
     if (input.attachmentTokens?.length) {
-      throw new AgentMailApplicationError("not_supported", "Agent draft attachments are not enabled yet.");
+      resolveOutboundAttachments(this.options.db, directory, this.options.masterKey, account.id, input.attachmentTokens);
     }
     const result = await saveDraft(this.options.db, this.options.masterKey, account, {
       to: input.to.map((recipient) => recipient.address),
       ...(input.cc?.length ? { cc: input.cc.map((recipient) => recipient.address) } : {}),
       subject: input.subject,
       text: input.text,
+      ...(input.inReplyTo ? { inReplyTo: input.inReplyTo } : {}),
+      ...(input.references?.length ? { references: [...input.references] } : {}),
     }, { replaceDraftId: input.draftId }, this.options.oauthService, this.options.agentMailEvents, context.signal);
     if (result.replaceWarning) {
       // A new remote draft exists, but the requested replacement did not
@@ -341,6 +427,12 @@ export class SqliteMailApplicationService implements MailApplicationService {
         new Error("The replacement draft was saved, but the original draft was not removed. Check Drafts before retrying."),
         { code: "draft_operation_outcome_unknown" },
       );
+    }
+    if (input.attachmentTokens?.length) {
+      // The saved draft owns the new tokens. Its replacement means the old
+      // draft's attachment links no longer belong to any live draft.
+      linkOutboundAttachmentsToDraft(this.options.db, account.id, result.messageId, input.attachmentTokens);
+      discardDraftOutboundAttachments(this.options.db, directory, account.id, input.draftId);
     }
     return {
       id: result.id,
@@ -369,11 +461,117 @@ export class SqliteMailApplicationService implements MailApplicationService {
     await moveMessage(this.options.db, this.options.masterKey, messageId, target, this.options.oauthService, this.options.agentMailEvents);
   }
 
-  async prepareSubmission(_context: MailApplicationContext, _input: DraftMutation & { idempotencyKey?: string }): Promise<PreparedMailSubmission> {
-    throw new AgentMailApplicationError("not_supported", "Agent mail submission is not enabled until the visible confirmation flow is complete.");
+  async deleteAccount(context: MailApplicationContext, accountId: string): Promise<void> {
+    this.account(context, accountId);
+    try {
+      discardOutboundAttachmentsForAccount(this.options.db, this.options.outboundAttachmentDirectory, accountId);
+    } catch {
+      // Attachment cleanup is best-effort; the row deletion below is the
+      // durable step, and startup cleanup can revisit it later.
+    }
+    if (this.options.agentMailEvents) {
+      const deletion = this.options.agentMailEvents.beginAccountDeletion(accountId, () => {
+        const result = this.options.db.prepare("DELETE FROM accounts WHERE id = ?").run(accountId);
+        if (!result.changes) throw new Error("Account deletion did not remove the primary account row.");
+      });
+      try {
+        this.options.agentMailEvents.completeAccountDeletion(accountId, deletion.deletionGeneration);
+      } catch {
+        // The account row and cleanup event are already atomically durable. A
+        // later startup can continue cleanup from the deleting lifecycle state.
+      }
+    } else {
+      const result = this.options.db.prepare("DELETE FROM accounts WHERE id = ?").run(accountId);
+      if (!result.changes) throw new AgentMailApplicationError("not_found", "The requested account is no longer available.");
+    }
   }
 
-  async submitPreparedMail(_context: MailApplicationContext, _submissionId: string): Promise<PreparedMailSubmission> {
-    throw new AgentMailApplicationError("not_supported", "Agent mail submission is not enabled until the visible confirmation flow is complete.");
+  async prepareSubmission(context: MailApplicationContext, input: DraftMutation & { idempotencyKey?: string }): Promise<PreparedMailSubmission> {
+    const account = this.account(context, input.accountId);
+    const directory = this.options.outboundAttachmentDirectory;
+    // Validate every token up front so a bad upload fails before the durable
+    // submission is persisted.
+    if (input.attachmentTokens?.length) {
+      resolveOutboundAttachments(this.options.db, directory, this.options.masterKey, account.id, input.attachmentTokens);
+    }
+    const request: OutboundSubmissionRequest = {
+      to: input.to.map((recipient) => recipient.address),
+      ...(input.cc?.length ? { cc: input.cc.map((recipient) => recipient.address) } : {}),
+      subject: input.subject,
+      text: input.text,
+      attachmentTokens: [...(input.attachmentTokens ?? [])],
+      ...(input.inReplyTo ? { inReplyTo: input.inReplyTo } : {}),
+      ...(input.references?.length ? { references: [...input.references] } : {}),
+    };
+    try {
+      const prepared = persistPrepareSubmission(this.options.db, this.options.masterKey, {
+        accountId: account.id,
+        accountEmail: account.email,
+        ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+        request,
+      });
+      if (input.attachmentTokens?.length) {
+        // Link before submitting so an interrupted process keeps the exact
+        // Message-ID and its attachments intact (same order as the web flow).
+        linkOutboundAttachmentsToSubmission(this.options.db, account.id, prepared.submission.id, input.attachmentTokens);
+      }
+      return {
+        submissionId: prepared.submission.id,
+        idempotencyKey: prepared.idempotencyKey,
+        accountId: account.id,
+        status: prepared.submission.deliveryStatus,
+      };
+    } catch (error) {
+      if (error instanceof SubmissionConflictError) {
+        throw new AgentMailApplicationError("conflict", "This send request is already associated with different message content.");
+      }
+      throw error;
+    }
+  }
+
+  async submitPreparedMail(context: MailApplicationContext, submissionId: string): Promise<PreparedMailSubmission> {
+    const submission = submissionForId(this.options.db, this.options.masterKey, submissionId);
+    if (!submission) throw new AgentMailApplicationError("not_found", "The prepared mail submission is no longer available.");
+    const account = this.account(context, submission.accountId);
+    const attempt = startSubmission(this.options.db, this.options.masterKey, submissionId);
+    if (!attempt.shouldAttempt) {
+      // Another attempt already owns this submission; report its durable state
+      // so the Agent never double-sends a message that SMTP may have accepted.
+      return {
+        submissionId: attempt.submission.id,
+        accountId: attempt.submission.accountId,
+        status: attempt.submission.deliveryStatus,
+      };
+    }
+    const request = submissionRequestForId(this.options.db, this.options.masterKey, submissionId);
+    if (!request) throw new AgentMailApplicationError("not_found", "The prepared mail submission is no longer available.");
+    const directory = this.options.outboundAttachmentDirectory;
+    const attachments = request.attachmentTokens.length
+      ? resolveOutboundAttachments(this.options.db, directory, this.options.masterKey, account.id, request.attachmentTokens)
+      : [];
+    const result = await sendMail(account, this.options.masterKey, {
+      to: request.to,
+      ...(request.cc?.length ? { cc: request.cc } : {}),
+      messageId: attempt.submission.messageId,
+      ...(request.inReplyTo ? { inReplyTo: request.inReplyTo } : {}),
+      ...(request.references?.length ? { references: request.references } : {}),
+      subject: request.subject,
+      text: request.text,
+      ...(request.html ? { html: request.html } : {}),
+      ...(attachments.length ? { attachments } : {}),
+    }, this.options.oauthService);
+    const submitted = markSubmissionSubmitted(this.options.db, this.options.masterKey, submissionId, result.messageId);
+    try {
+      // SMTP accepted the message; release the temporary files now that the
+      // submission is terminal. Failures can be retried without affecting send.
+      releaseSubmissionOutboundAttachments(this.options.db, directory, account.id, submissionId);
+    } catch {
+      // Best effort: stale-file cleanup can retry this later.
+    }
+    return {
+      submissionId: submitted.id,
+      accountId: submitted.accountId,
+      status: submitted.deliveryStatus,
+    };
   }
 }

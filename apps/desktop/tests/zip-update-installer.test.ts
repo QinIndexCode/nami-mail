@@ -227,6 +227,7 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
     return;
   }
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-installer-success-"));
+  // eslint-disable-next-line prefer-const -- helper is reassigned at the start of the spawn below.
   let helper: ChildProcess | undefined;
   t.after(async () => {
     if (helper && helper.exitCode === null && helper.signalCode === null) {

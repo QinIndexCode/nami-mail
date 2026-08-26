@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { translate } from "./i18n";
 import type { OutboundSubmission } from "./types";
 import {
@@ -7,6 +7,7 @@ import {
   recipientSummary,
   sortSubmissions,
   submissionMessageIdSuffix,
+  submissionStatusNeedsRefresh,
   submissionStatusPresentation,
 } from "./sendingStatus";
 
@@ -17,6 +18,7 @@ const baseSubmission: OutboundSubmission = {
   accountId: "account-1",
   messageId: "<4d36290a-1af2-40d3-a0de-41b4218dbe1c@example.com>",
   deliveryStatus: "unknown_delivery",
+  sendAt: null,
   errorCode: "timeout",
   errorMessage: "连接超时。",
   postSubmitWarning: null,
@@ -78,17 +80,11 @@ describe("sending status presentation", () => {
     })).resolves.toMatchObject({ deliveryStatus: "submitting" });
   });
 
-  it("keeps a bounded client refresh active while Sent-folder verification can still change the record", async () => {
-    vi.stubGlobal("window", { location: { search: "" } });
-    vi.stubGlobal("__NAMI_APP_VERSION__", "0.1.0");
-    const { submissionStatusNeedsRefresh } = await import("./App");
-
+  it("keeps a bounded client refresh active while Sent-folder verification can still change the record", () => {
     expect(submissionStatusNeedsRefresh("submitting")).toBe(true);
     expect(submissionStatusNeedsRefresh("submitted")).toBe(true);
     expect(submissionStatusNeedsRefresh("unknown_delivery")).toBe(true);
     expect(submissionStatusNeedsRefresh("confirmed")).toBe(false);
     expect(submissionStatusNeedsRefresh("failed")).toBe(false);
-
-    vi.unstubAllGlobals();
   });
 });

@@ -22,6 +22,15 @@ vi.mock("../src/mail.js", async (importOriginal) => {
   return { ...actual, testOAuthAccountConnection };
 });
 
+vi.mock("../src/account-credentials.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/account-credentials.js")>();
+  return {
+    ...actual,
+    decryptOAuthRefreshToken: vi.fn((account: AccountCredentialIdentity, payload: string, masterKey: Buffer) =>
+      actual.decryptOAuthRefreshToken(account, payload, masterKey)),
+  };
+});
+
 const temporaryDirectories: string[] = [];
 const temporaryDatabases: Array<ReturnType<typeof openDatabase>> = [];
 
@@ -101,7 +110,9 @@ beforeEach(() => {
   vi.stubEnv("NAMI_MAIL_GOOGLE_OAUTH_CLIENT_ID", "google-client-for-tests");
   vi.stubEnv("NAMI_MAIL_MICROSOFT_OAUTH_CLIENT_ID", "microsoft-client-for-tests");
   vi.stubEnv("NAMI_MAIL_MICROSOFT_TENANT", "common");
+  vi.stubEnv("NAMI_MAIL_OAUTH_TEST_ACCESS_TOKEN", "access-token-from-refresh");
   testOAuthAccountConnection.mockReset();
+  vi.mocked(decryptOAuthRefreshToken).mockClear();
 });
 
 afterEach(() => {
@@ -274,5 +285,58 @@ describe("OAuthService refresh tokens", () => {
       status: "reauth_required",
       last_error_code: "reauth_required",
     });
+  });
+
+  it("reuses the cached decrypted refresh token on repeated lookups", async () => {
+    const { OAuthService } = await loadOAuthModule();
+    const masterKey = randomBytes(32);
+    const { account, db } = createGoogleOAuthAccount(masterKey);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      access_token: process.env.NAMI_MAIL_OAUTH_TEST_ACCESS_TOKEN,
+      token_type: "Bearer",
+      expires_in: 3600,
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new OAuthService(db, masterKey);
+
+    await service.getAccessToken(account);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    vi.mocked(decryptOAuthRefreshToken).mockClear();
+    await service.getAccessToken(account);
+    expect(vi.mocked(decryptOAuthRefreshToken)).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-decrypts when the stored ciphertext changes out of band", async () => {
+    const { OAuthService } = await loadOAuthModule();
+    const masterKey = randomBytes(32);
+    const { account, db } = createGoogleOAuthAccount(masterKey);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      access_token: process.env.NAMI_MAIL_OAUTH_TEST_ACCESS_TOKEN,
+      token_type: "Bearer",
+      expires_in: 3600,
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new OAuthService(db, masterKey);
+
+    await service.getAccessToken(account);
+    vi.mocked(decryptOAuthRefreshToken).mockClear();
+
+    db.prepare("UPDATE account_credentials SET encrypted_secret = ?, updated_at = ? WHERE account_id = ?")
+      .run(encryptOAuthRefreshToken(account, "refresh-out-of-band", masterKey), new Date().toISOString(), account.id);
+
+    await service.getAccessToken(account);
+    expect(vi.mocked(decryptOAuthRefreshToken)).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const stored = db.prepare("SELECT encrypted_secret FROM account_credentials WHERE account_id = ?").get(account.id) as { encrypted_secret: string };
+    expect(decryptOAuthRefreshToken(account, stored.encrypted_secret, masterKey)).toBe("refresh-out-of-band");
   });
 });

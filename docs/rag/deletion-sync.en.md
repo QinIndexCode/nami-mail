@@ -1,6 +1,6 @@
 # RAG Deletion Sync
 
-[Chinese](deletion-sync.md) | [English](deletion-sync.en.md)
+[Chinese](deletion-sync.zh-CN.md) | [English](deletion-sync.en.md)
 
 ## Message deletion and attachment-metadata changes
 

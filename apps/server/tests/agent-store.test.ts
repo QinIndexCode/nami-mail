@@ -156,6 +156,51 @@ describe("Agent store encryption and lifecycle", () => {
     expect(conversations.listActive()).toEqual([]);
     db.close();
   });
+
+  it("purgeTombstoned removes unreachable tombstoned pages and prunes stale active revisions", () => {
+    const db = openDatabase(":memory:");
+    const masterKey = randomBytes(32);
+    insertAccount(db, "account-1");
+    applyAgentStoreSchema(db);
+    const lifecycle = new AccountLifecycleStore(db, masterKey);
+    const lease = lifecycle.acquireLease("account-1");
+    const pages = new EncryptedRagPageStore(db, masterKey, lifecycle);
+    try {
+      // One page stays active but is re-ingested many times.
+      for (let revision = 1; revision <= 8; revision += 1) {
+        pages.put({ lease, pageId: "active-page", pageRevision: revision, pageKind: "message", payload: { revision } });
+      }
+      // Another page is created with several revisions and then tombstoned.
+      for (let revision = 1; revision <= 4; revision += 1) {
+        pages.put({ lease, pageId: "tombstoned-page", pageRevision: revision, pageKind: "message", payload: { revision } });
+      }
+      pages.tombstone(lease, "tombstoned-page");
+
+      const before = db.prepare("SELECT COUNT(*) AS n FROM agent_rag_pages").get() as { n: number };
+      expect(before.n).toBe(12);
+
+      const removed = pages.purgeTombstoned(lease);
+      // 4 tombstoned revisions (entire page) + 3 stale active revisions
+      // (1-3; the newest 5, i.e. 4-8, stay within the retention window).
+      expect(removed).toBe(7);
+
+      const rows = db.prepare(`
+        SELECT page_id, page_revision, state FROM agent_rag_pages ORDER BY page_id, page_revision
+      `).all() as { page_id: string; page_revision: number; state: string }[];
+      expect(rows).toEqual([
+        { page_id: "active-page", page_revision: 4, state: "active" },
+        { page_id: "active-page", page_revision: 5, state: "active" },
+        { page_id: "active-page", page_revision: 6, state: "active" },
+        { page_id: "active-page", page_revision: 7, state: "active" },
+        { page_id: "active-page", page_revision: 8, state: "active" },
+      ]);
+      // The latest active revision stays readable; the tombstoned page is gone.
+      expect(pages.get(lease, "active-page")?.payload).toEqual({ revision: 8 });
+      expect(pages.get(lease, "tombstoned-page")).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe("Agent source event outbox", () => {
@@ -215,7 +260,7 @@ describe("Agent source event outbox", () => {
   it("encrypts and recovers a deleted-message locator only for a current leased claim", () => {
     const db = openDatabase(":memory:");
     const masterKey = randomBytes(32);
-    let now = "2026-07-27T10:00:00.000Z";
+    const now = "2026-07-27T10:00:00.000Z";
     insertAccount(db, "account-1");
     insertMessage(db, "account-1");
     applyAgentStoreSchema(db, now);
@@ -501,6 +546,52 @@ describe("Agent schema migration", () => {
     `);
     expect(() => applyAgentStoreSchema(db)).toThrow("cannot be migrated safely");
     expect(db.prepare("SELECT schema_version FROM agent_store_schema WHERE id = 1").get()).toEqual({ schema_version: 1 });
+    db.close();
+  });
+
+  it("migrates a v4 Agent store to v5 by adding the persisted lexical index tables", () => {
+    const db = openDatabase(":memory:");
+    applyAgentStoreSchema(db);
+    db.prepare("UPDATE agent_store_schema SET schema_version = 4, minimum_reader_version = 4, updated_at = ?")
+      .run("2026-07-27T10:00:00.000Z");
+    db.exec(`
+      DROP TABLE agent_rag_index;
+      DROP TABLE agent_rag_index_stats;
+    `);
+    applyAgentStoreSchema(db);
+    expect(db.prepare("SELECT schema_version FROM agent_store_schema WHERE id = 1").get()).toEqual({
+      schema_version: AGENT_STORE_SCHEMA_VERSION,
+    });
+    expect(db.prepare(`
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('agent_rag_index', 'agent_rag_index_stats')
+      ORDER BY name
+    `).all()).toEqual([
+      { name: "agent_rag_index" },
+      { name: "agent_rag_index_stats" },
+    ]);
+    assertAgentStoreReadable(db);
+    applyAgentStoreSchema(db);
+    db.close();
+  });
+
+  it("fails closed when a v4 store declares an incomplete lexical index table", () => {
+    const db = openDatabase(":memory:");
+    applyAgentStoreSchema(db);
+    db.prepare("UPDATE agent_store_schema SET schema_version = 4, minimum_reader_version = 4, updated_at = ?")
+      .run("2026-07-27T10:00:00.000Z");
+    db.exec(`
+      DROP TABLE agent_rag_index;
+      DROP TABLE agent_rag_index_stats;
+      CREATE TABLE agent_rag_index (
+        account_id TEXT NOT NULL,
+        account_generation INTEGER NOT NULL,
+        page_id TEXT NOT NULL,
+        page_revision INTEGER NOT NULL,
+        term TEXT NOT NULL,
+        tf_body INTEGER NOT NULL
+      );
+    `);
+    expect(() => applyAgentStoreSchema(db)).toThrow("The Agent store agent_rag_index schema is incomplete.");
     db.close();
   });
 });

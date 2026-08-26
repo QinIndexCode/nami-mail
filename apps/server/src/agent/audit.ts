@@ -1,7 +1,7 @@
 import type { AgentAuditEvent } from "@nami/agent-contracts";
 import type { AgentAuditSink } from "@nami/agent-core";
 import type { DatabaseHandle } from "../db.js";
-import { AccountLifecycleStore } from "./lifecycle.js";
+import type { AccountLifecycleStore } from "./lifecycle.js";
 import { decryptPersistentAgentRecord, encryptPersistentAgentRecord } from "./record-envelopes.js";
 import { agentOpaqueDigest, canonicalAgentJson } from "./store-crypto.js";
 import { assertAgentStoreReadable } from "./schema.js";

@@ -1,6 +1,8 @@
 node_modules/
+.mimosa/
 apps/server/.native/
 dist/
+dist-check*/
 .env
 .env.*
 !.env.example
@@ -14,6 +16,7 @@ release-current/
 release-artifacts/
 artifacts/
 output/
+site/docs/
 *.tsbuildinfo
 *.db-wal
 *.db-shm
@@ -30,3 +33,14 @@ output/
 *.cer
 *.crt
 *.der
+tools/
+test-results/
+gui-test-screenshots/
+build/namimail.cmd
+build/namimail-path.ps1
+build/nsis-plugin/
+build/x86-unicode/
+build/nami-update-trust.json.package-win-original
+scripts/*.png
+.playwright-mcp/
+.zcode/

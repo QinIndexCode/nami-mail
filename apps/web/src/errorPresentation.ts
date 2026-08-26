@@ -16,6 +16,7 @@ export type MailIssueKind =
 
 export type MailErrorPresentation = {
   kind: MailIssueKind;
+  severity: "error" | "warning";
   title: string;
   message: string;
   guidance: string;
@@ -53,8 +54,9 @@ function presentation(
   message: string,
   guidance: string,
   retryable: boolean,
+  severity: MailErrorPresentation["severity"] = "error",
 ): MailErrorPresentation {
-  return { kind, title, message, guidance, retryable };
+  return { kind, severity, title, message, guidance, retryable };
 }
 
 function localizedPresentation(
@@ -169,13 +171,25 @@ export function mailErrorToastMessage(error: unknown, fallback?: string, t: Tran
 }
 
 export function accountHealthIssue(
-  account: Pick<Account, "status" | "lastError" | "lastErrorCode">,
+  account: Pick<Account, "status" | "lastError" | "lastErrorCode" | "lastSyncWarningCode">,
   t: Translate = defaultTranslate,
 ): MailErrorPresentation | null {
-  if (account.status === "connected" && !account.lastError) return null;
+  if (account.status === "connected" && !account.lastError && !account.lastSyncWarningCode) return null;
   if (account.status === "reauth_required") return presentMailError({ code: "reauth_required", message: account.lastError ?? "" }, t);
   if (account.lastErrorCode || account.lastError) {
     return presentMailError({ code: account.lastErrorCode ?? undefined, message: account.lastError ?? "" }, t);
+  }
+  // A warning is not an error: the sync succeeded, only older mail was
+  // skipped. It must not offer a retry action or displace the freshness text.
+  if (account.lastSyncWarningCode === "sync_limit") {
+    return {
+      kind: "sync",
+      severity: "warning",
+      title: t("account.syncLimit.title"),
+      message: t("account.syncLimit.message"),
+      guidance: t("account.syncLimit.guidance"),
+      retryable: false,
+    };
   }
   if (account.status === "error") return localizedPresentation("connection", "accountError", true, t);
   if (account.status === "degraded") return localizedPresentation("sync", "accountDegraded", true, t);

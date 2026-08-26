@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
 import {
+  extractMailVisualStyle,
   hasUnsavedTranslationConfiguration,
   translationConfigurationErrorMessage,
   translationConfigurationStatusMessage,
@@ -22,6 +23,9 @@ describe("translation error presentation", () => {
     ["translation_tls_certificate_failed", "translation.error.tlsCertificate"],
     ["translation_server_not_found", "translation.error.serverNotFound"],
     ["translation_connection_refused", "translation.error.connectionRefused"],
+    ["translation_model_download_failed", "translation.error.modelDownloadFailed"],
+    ["translation_model_cache_unavailable", "translation.error.modelCacheUnavailable"],
+    ["translation_model_unavailable", "translation.error.modelUnavailable"],
     ["translation_service_authentication_failed", "translation.error.serviceAuthentication"],
     ["translation_rate_limited", "translation.error.rateLimited"],
     ["local_service_unavailable", "translation.error.localServiceUnavailable"],
@@ -45,6 +49,12 @@ describe("translation error presentation", () => {
       timeoutMs: 25_000,
       apiKeyConfigured: false,
       source: "local" as const,
+      primary: "google" as const,
+      backup: "mymemory" as const,
+      providers: [
+        { id: "google" as const, label: "google", builtin: true },
+        { id: "mymemory" as const, label: "mymemory", builtin: true },
+      ],
     };
 
     expect(translationConfigurationStatusMessage({ ...base, configurationError: "unreadable" }, keyOnly))
@@ -63,17 +73,58 @@ describe("translation error presentation", () => {
       timeoutMs: 25_000,
       apiKeyConfigured: true,
       source: "local" as const,
+      primary: "custom" as const,
+      backup: "google" as const,
+      providers: [
+        { id: "google" as const, label: "google", builtin: true },
+        { id: "mymemory" as const, label: "mymemory", builtin: true },
+        { id: "custom" as const, label: "custom", builtin: false, endpoint: "https://translate.example.test/translate" },
+      ],
     };
 
     expect(hasUnsavedTranslationConfiguration(configuration, {
       endpoint: " https://translate.example.test/translate ",
       apiKey: "",
       timeoutMs: 25_000,
+      primary: "custom",
+      backup: "google",
     })).toBe(false);
     expect(hasUnsavedTranslationConfiguration(configuration, {
       endpoint: "https://translate.example.test/translate",
       apiKey: "replacement-key",
       timeoutMs: 25_000,
+      primary: "custom",
+      backup: "google",
     })).toBe(true);
+  });
+});
+
+describe("mail visual style extraction", () => {
+  it("extracts the branded backdrop and typography of a dark newsletter", () => {
+    const style = extractMailVisualStyle(
+      '<html><body style="background-color: #10131a; color: #eef0f4; font-family: Arial, Helvetica, sans-serif; font-size: 14px;"><table><tr><td>Hello</td></tr></table></body></html>',
+    );
+    expect(style).toEqual({
+      background: "#10131a",
+      color: "#eef0f4",
+      fontFamily: "Arial, Helvetica, sans-serif",
+      fontSize: "14px",
+    });
+  });
+
+  it("falls back to a readable foreground on dark surfaces without a declared color", () => {
+    const style = extractMailVisualStyle('<div style="background-color: #0a0a0c"><p>Hi</p></div>');
+    expect(style?.background).toBe("#0a0a0c");
+    expect(style?.color).toBe("#f5f5f6");
+  });
+
+  it("reads legacy bgcolor attributes from the body", () => {
+    const style = extractMailVisualStyle('<body bgcolor="#f4f1ea"><div>Hello</div></body>');
+    expect(style?.background).toBe("#f4f1ea");
+  });
+
+  it("returns undefined when the mail has no opaque backdrop", () => {
+    expect(extractMailVisualStyle("<p>Plain text</p>")).toBeUndefined();
+    expect(extractMailVisualStyle("")).toBeUndefined();
   });
 });

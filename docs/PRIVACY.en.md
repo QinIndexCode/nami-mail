@@ -1,6 +1,6 @@
 # Privacy and Local Data
 
-[简体中文](PRIVACY.md) | [English](PRIVACY.en.md)
+[简体中文](PRIVACY.zh-CN.md) | [English](PRIVACY.en.md)
 
 This document describes how the current Nami Mail code paths handle data. It does not replace the privacy policies of your mail provider, OAuth provider, GitHub, operating system, or enterprise administrator. Nami Mail is designed to be local-first: the project does not operate a hosted mail backend.
 

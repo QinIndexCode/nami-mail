@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6edd8"/>
+      <stop offset="0.55" stop-color="#ecd9b4"/>
+      <stop offset="1" stop-color="#ddc193"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0.22" cy="0.18" r="0.6">
+      <stop offset="0" stop-color="#fffdf5" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#fffdf5" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="shadow" cx="0.8" cy="0.85" r="0.75">
+      <stop offset="0" stop-color="#8a6a35" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#8a6a35" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.55  0 0 0 0 0.42  0 0 0 0 0.2  0 0 0 0.055 0"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#paper)"/>
+  <rect width="1600" height="1000" fill="url(#sheen)"/>
+  <rect width="1600" height="1000" fill="url(#shadow)"/>
+  <rect width="1600" height="1000" filter="url(#grain)"/>
+</svg>

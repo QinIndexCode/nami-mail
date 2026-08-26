@@ -1,14 +1,14 @@
 # Agent Architecture
 
-[Chinese](architecture.md) | [English](architecture.en.md)
+[Chinese](architecture.zh-CN.md) | [English](architecture.en.md)
 
 ## Purpose and status
 
-This page defines NamiMail Agent's production boundary and distinguishes the embedded GUI implementation in the current source from external entry points that have not shipped.
+This page defines NamiMail Agent's production boundary and distinguishes the embedded GUI implementation from the shipped external CLI/MCP entry points and the standalone service mode that still fails closed.
 
-> **Current-build status: external Agent interfaces are unavailable.** The current Windows build has no verifiable native SID-DACL named-pipe adapter and fails closed before starting an external AgentHost, Broker, CLI, or MCP path. The CLI, MCP, and Broker in the diagram are future release security boundaries, not working entry points today; there is no `namimail` command, PATH shim, pairing UI, or MCP launcher. Experimental local NLLB-200 translation is unaffected and remains separate, explicit, and opt-in.
+> **Current-build status: external interfaces are available.** The 0.3.0 installer ships the `namimail` command, PATH shim, CLI, MCP stdio launcher, Broker, and pairing UI, and the installer smoke verifies the packaged MCP stdio path (protocol `2025-03-26`, serverInfo `NamiMail`, exactly fifteen tools: eight read-only and seven write). The CLI, MCP, and Broker in the diagram are working entry points behind a paired current-user SID-DACL named pipe. Standalone headless service mode still fails closed with `BROKER_SECURITY_UNAVAILABLE`. Experimental local NLLB-200 translation is unaffected and remains separate, explicit, and opt-in.
 
-The normal server/runtime in the current source creates and starts an embedded `AgentService`, with GUI-facing `/api/agent` routes, an RAG worker, and a React workspace. This source implementation is not release-grade proof: packaged desktop validation, real account/provider paths, deletion and rebuild lifecycle checks, and security confirmation-flow validation are still required.
+The normal server/runtime in the current source creates and starts an embedded `AgentService`, with GUI-facing `/api/agent` routes, an RAG worker, and a React workspace. Packaged-desktop validation of the CLI/MCP path is covered by the installer smoke. Real account/provider paths, deletion and rebuild lifecycle checks, and security confirmation-flow validation still need live-environment evidence.
 
 | Capability | Current status |
 | --- | --- |
@@ -16,15 +16,15 @@ The normal server/runtime in the current source creates and starts an embedded `
 | OpenAI-compatible and local Ollama provider adapter | A constrained adapter exists; runtime consent still decides whether mail content may leave the device |
 | Transactional mail-state to source-event wiring | Connected in the current source to existing sync and mail-operation paths; real sync, deletion, and rebuild lifecycles still need release-grade validation |
 | Embedded GUI Agent API, tool orchestration, and visible confirmation flow | Implemented in the current server/web source; source presence cannot replace packaged-desktop and security-confirmation-flow validation |
-| SID-DACL Broker, Electron `main.mts` host wiring, and installed-app update drain | Not shipped in the current build; any external entry fails closed before startup without a verifiable native adapter |
+| SID-DACL Broker, Electron `main.mts` host wiring, and installed-app update drain | Shipped in 0.3.0: the desktop host creates the Broker and routes `--cli`; the installer smoke verifies the packaged MCP stdio path. Standalone headless service mode still fails closed |
 
 ## System boundary
 
 ```mermaid
 flowchart LR
   UI["NamiMail React UI"] --> GUI["In-host GUI adapter"]
-  CLI["Future namimail CLI (not shipped)"] --> Broker["Future paired SID-DACL named-pipe Broker"]
-  MCP["Future MCP stdio (not shipped)"] --> Broker
+  CLI["namimail CLI"] --> Broker["Paired SID-DACL named-pipe Broker"]
+  MCP["MCP stdio"] --> Broker
   GUI --> Host["Electron AgentHost"]
   Broker --> Host
   Host --> Runtime["Agent Runtime"]
@@ -37,7 +37,7 @@ flowchart LR
 
 In Windows desktop production mode, `AgentHost` is the sole process allowed to hold the DPAPI-unwrapped master key, open SQLite, schedule sync, manage the update lifecycle, and run the Agent. The renderer uses a GUI adapter in that host; its temporary token must never be accepted by CLI or MCP.
 
-Once this interface ships, CLI/MCP may reach the host only through a paired local Broker. Before a database is opened or migrations run, the Broker must acquire an exclusive named-pipe lease restricted to the current Windows user SID. If a SID DACL cannot be proved, it must return `BROKER_SECURITY_UNAVAILABLE`; loopback TCP, HTTP, and direct SQLite are not fallbacks. The current build rejects external entry for exactly this reason.
+CLI/MCP reach the host only through a paired local Broker. Before a database is opened or migrations run, the Broker acquires an exclusive SID-DACL named-pipe lease restricted to the current Windows user SID. If a SID DACL cannot be proved, it returns `BROKER_SECURITY_UNAVAILABLE`; loopback TCP, HTTP, and direct SQLite are not fallbacks. The current build rejects standalone headless service mode for exactly this reason.
 
 ## Dependency direction
 

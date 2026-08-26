@@ -67,6 +67,8 @@ function imapClient(
   username: string,
   provider: Pick<ConnectionProvider, "imap">,
   auth: MailAuth,
+  socketTimeoutOverride?: number,
+  maxIdleTimeOverride?: number,
 ): ImapFlow {
   const transport = transportOf(provider.imap);
   const client = new ImapFlow({
@@ -80,6 +82,8 @@ function imapClient(
       ? { user: username, accessToken: auth.accessToken }
       : { user: username, pass: auth.secret },
     ...connectionOptions,
+    ...(socketTimeoutOverride !== undefined ? { socketTimeout: socketTimeoutOverride } : {}),
+    ...(maxIdleTimeOverride !== undefined ? { maxIdleTime: maxIdleTimeOverride } : {}),
   });
 
   // ImapFlow reports connection failures both through rejected operations and
@@ -244,10 +248,17 @@ export async function imapClientForAccount(
   account: AccountRecord,
   masterKey: Buffer,
   accessTokenProvider?: AccountAccessTokenProvider,
+  options?: { socketTimeout?: number; maxIdleTime?: number },
 ): Promise<ImapFlow> {
   const provider = connectionProviderForAccount(account);
   const username = account.imap_username?.trim() || loginUsername(account.email, provider as DetectedProvider, "imap");
-  return imapClient(username, provider, await accountAuth(account, masterKey, accessTokenProvider));
+  return imapClient(
+    username,
+    provider,
+    await accountAuth(account, masterKey, accessTokenProvider),
+    options?.socketTimeout,
+    options?.maxIdleTime,
+  );
 }
 
 export async function sendMail(

@@ -6,6 +6,7 @@ import {
   decryptOAuthRefreshToken,
   encryptAccountPassword,
   encryptOAuthRefreshToken,
+  oauthRefreshTokenBinding,
   type AccountCredentialIdentity,
 } from "./account-credentials.js";
 import { config } from "./config.js";
@@ -248,6 +249,7 @@ export class OAuthService implements AccountAccessTokenProvider {
   private readonly attempts = new Map<string, OAuthAttempt>();
   private readonly attemptsByState = new Map<string, string>();
   private readonly tokenCache = new Map<string, { token: string; expiresAt: number }>();
+  private readonly refreshTokenCache = new Map<string, { binding: string; refreshToken: string }>();
   private readonly refreshes = new Map<string, Promise<string>>();
 
   constructor(
@@ -519,6 +521,7 @@ export class OAuthService implements AccountAccessTokenProvider {
 
   private reauthRequired(account: AccountRecord, message: string): OAuthError {
     this.tokenCache.delete(account.id);
+    this.refreshTokenCache.delete(account.id);
     this.db.prepare("UPDATE accounts SET status = 'reauth_required', last_error = ?, last_error_code = ? WHERE id = ?")
       .run(message, "reauth_required", account.id);
     return new OAuthError("reauth_required", message);
@@ -534,20 +537,31 @@ export class OAuthService implements AccountAccessTokenProvider {
     if (credential.crypto_version !== ACCOUNT_CREDENTIAL_CRYPTO_VERSION) {
       throw this.reauthRequired(account, "本地授权数据版本无法验证，请重新登录该邮箱。");
     }
+    // Decryption is key derivation plus AES-GCM; keep the plaintext only while
+    // the identity binding (every credential AAD field) and the stored
+    // ciphertext are unchanged. Endpoint rewrites, credential rotation, and
+    // re-logins all change the binding and re-run the decrypt attempt.
+    const binding = oauthRefreshTokenBinding(account) + "\n" + credential.encrypted_secret;
+    const cached = this.refreshTokenCache.get(account.id);
+    if (cached?.binding === binding) return cached.refreshToken;
+    let refreshToken: string;
     try {
-      return decryptOAuthRefreshToken(account, credential.encrypted_secret, this.masterKey);
+      refreshToken = decryptOAuthRefreshToken(account, credential.encrypted_secret, this.masterKey);
     } catch (error) {
       if (error instanceof AccountCredentialIntegrityError) {
         throw this.reauthRequired(account, "本地授权数据与邮箱连接配置不匹配，请重新登录该邮箱。");
       }
       throw error;
     }
+    this.refreshTokenCache.set(account.id, { binding, refreshToken });
+    return refreshToken;
   }
 
   async getAccessToken(account: AccountRecord): Promise<string> {
-    // Validate the persisted, endpoint-bound refresh token even when an access
-    // token is cached. Otherwise a database endpoint rewrite could reuse the
-    // in-memory token without ever authenticating the modified account row.
+    // Re-validate the persisted, identity-bound refresh token even when an
+    // access token is cached. A database endpoint rewrite changes the binding
+    // and forces a fresh decrypt, which then fails instead of silently
+    // reusing the in-memory token for the modified account row.
     const refreshToken = this.storedRefreshToken(account);
     const cached = this.tokenCache.get(account.id);
     if (cached && cached.expiresAt - Date.now() > 5 * 60_000) return cached.token;
@@ -575,12 +589,14 @@ export class OAuthService implements AccountAccessTokenProvider {
             new Date(now).toISOString(),
             account.id,
           );
+        this.refreshTokenCache.delete(account.id);
       }
       return tokens.access_token;
     } catch (error) {
       const code = flowErrorCode(error);
       if (error instanceof OAuthError || code === "invalid_grant") {
         this.tokenCache.delete(account.id);
+        this.refreshTokenCache.delete(account.id);
         this.db.prepare("UPDATE accounts SET status = 'reauth_required', last_error = ?, last_error_code = ? WHERE id = ?")
           .run("授权已失效，请重新登录。", "reauth_required", account.id);
         throw error instanceof OAuthError ? error : new OAuthError("reauth_required", "授权已经失效，请重新登录该邮箱。" );

@@ -5,12 +5,12 @@ import {
   CircleAlert,
   Copy,
   ExternalLink,
-  KeyRound,
   LoaderCircle,
   Mail,
+  Mailbox,
   Plus,
-  Server,
   ShieldCheck,
+  Wand2,
   X,
 } from "lucide-react";
 import { api } from "./api";
@@ -23,6 +23,7 @@ import {
   orderedProviderCatalog,
   providerAuthLabel,
   providerDisplayName,
+  providerIconUrl,
   providerMonogram,
   providerServerConfiguration,
   quickProviderCatalog,
@@ -30,15 +31,16 @@ import {
 } from "./providerOnboarding";
 import ThemedSelect from "./ThemedSelect";
 import type {
+  Account,
   AccountDiscoveryResult,
   ManualAccountConfig,
-  MailServerPreset,
   MailTransport,
   OAuthProvider,
   ProviderDiscovery,
   ProviderInfo,
 } from "./types";
 import { useDialogFocus } from "./useDialogFocus";
+import { useDismissTransition } from "./useDismissTransition";
 
 type StatusKind = "success" | "warning" | "error" | "idle";
 type StatusField = "email" | "password" | "manual";
@@ -47,6 +49,8 @@ type BusyAction = "idle" | "discover" | "password" | "manual" | "oauth";
 
 type AddAccountModalProps = {
   providers: ProviderInfo[];
+  /** Already-added local accounts, so a duplicate email is caught before the server round-trip. */
+  existingAccounts: Account[];
   onClose: () => void;
   onAdded: () => Promise<void>;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
@@ -58,6 +62,24 @@ const DISCOVERY_DEBOUNCE_MS = 600;
 
 function validEmail(value: string): boolean {
   return emailPattern.test(value.trim());
+}
+
+/**
+ * Gmail-style plus addressing (`user+tag@gmail.com`) delivers into the same
+ * mailbox as `user@gmail.com`, so duplicates must be detected against the
+ * canonical address. Other domains are untouched because `+` is not a
+ * guaranteed alias mechanism there.
+ */
+export function canonicalGmailEmail(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  const at = trimmed.lastIndexOf("@");
+  if (at <= 0) return trimmed;
+  const local = trimmed.slice(0, at);
+  const domain = trimmed.slice(at + 1);
+  if (domain !== "gmail.com" && domain !== "googlemail.com") return trimmed;
+  const plus = local.indexOf("+");
+  if (plus <= 0) return trimmed;
+  return `${local.slice(0, plus)}@${domain}`;
 }
 
 function emailDomain(value: string): string {
@@ -109,7 +131,9 @@ function providerFallback(provider: ProviderInfo | undefined, domain: string, t:
     basicAuthLimited: Boolean(provider?.basicAuthLimited),
     capabilities: { imap: true, smtp: true, pop: false, apis: [] },
     imap: provider?.imap ?? { host: `imap.${domain}`, port: 993, transport: "tls" },
-    smtp: provider?.smtp ?? { host: `smtp.${domain}`, port: 587, transport: "starttls" },
+    // Keep the conventional fallback aligned with the server-side custom
+    // provider (providers.ts), so what the user previews is what gets tested.
+    smtp: provider?.smtp ?? { host: `smtp.${domain}`, port: 465, transport: "tls" },
   };
 }
 
@@ -139,7 +163,7 @@ function manualConfigFor(email: string, provider?: ProviderDiscovery): ManualAcc
   const smtp = provider?.smtp;
   return {
     imap: defaultServer(imap?.host ?? (domain ? `imap.${domain}` : ""), imap?.port ?? 993, imap?.transport ?? "tls", imapUsername),
-    smtp: defaultServer(smtp?.host ?? (domain ? `smtp.${domain}` : ""), smtp?.port ?? 587, smtp?.transport ?? "starttls", smtpUsername),
+    smtp: defaultServer(smtp?.host ?? (domain ? `smtp.${domain}` : ""), smtp?.port ?? 465, smtp?.transport ?? "tls", smtpUsername),
   };
 }
 
@@ -203,7 +227,7 @@ async function copySetupTextToClipboard(text: string): Promise<boolean> {
   }
 }
 
-export default function AddAccountModal({ providers, onClose, onAdded, fallbackFocusRef, demoMode = false }: AddAccountModalProps) {
+export default function AddAccountModal({ providers, existingAccounts, onClose, onAdded, fallbackFocusRef, demoMode = false }: AddAccountModalProps) {
   const { locale, t } = useI18n();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -238,6 +262,23 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
   const discoveryRequestIdRef = useRef(0);
 
   const normalizedEmail = email.trim().toLowerCase();
+  // Matches an already-added local account. Gmail `+tag` sub-addresses are
+  // folded onto their canonical address; the matched account is surfaced so
+  // the message can say which mailbox was actually found. `accountAdded` is
+  // excluded: once the add succeeded, onAdded() refreshes the list and the
+  // just-added address would otherwise instantly "already exists" while the
+  // success state is shown before the dialog closes.
+  const existingAccountMatch = useMemo(() => {
+    if (accountAdded || !validEmail(normalizedEmail)) return undefined;
+    const needle = canonicalGmailEmail(normalizedEmail);
+    return existingAccounts.find((account) => canonicalGmailEmail(account.email) === needle);
+  }, [accountAdded, existingAccounts, normalizedEmail]);
+  const existingDuplicateMessage = useMemo(() => {
+    if (!existingAccountMatch) return "";
+    return existingAccountMatch.email.toLowerCase() === normalizedEmail
+      ? t("account.error.email_exists")
+      : t("account.error.email_exists_plus", { email: existingAccountMatch.email });
+  }, [existingAccountMatch, normalizedEmail, t]);
   const domain = emailDomain(normalizedEmail);
   const matchedProvider = useMemo(
     () => validEmail(normalizedEmail)
@@ -283,6 +324,8 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
   const needsProviderDiscovery = discoveryRequired;
   const authMethods = activeDiscovery?.authMethods ?? providerAuthMethods(matchedProvider);
   const oauthOnly = Boolean(activeOAuthProvider) && authMethods.length > 0 && authMethods.every((method) => method === "oauth2");
+  const passwordLooksLikeAppCredential = !manualOpen
+    && authMethods.some((method) => method === "app-password" || method === "client-authorization-code");
   const canUsePassword = !oauthOnly;
   const busy = busyAction !== "idle";
   const blockingBusy = busyAction === "password" || busyAction === "manual" || busyAction === "oauth";
@@ -333,17 +376,21 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
 
   useDialogFocus(true, dialogRef, { fallbackFocusRef });
 
+  const { closing, requestClose: requestExit } = useDismissTransition(() => {
+    onClose();
+  });
+
   const requestClose = () => {
-    if (!blockingBusy) onClose();
+    if (!blockingBusy) requestExit();
   };
 
   const scheduleClose = useCallback(() => {
     if (autoCloseTimerRef.current !== null) window.clearTimeout(autoCloseTimerRef.current);
     autoCloseTimerRef.current = window.setTimeout(() => {
       autoCloseTimerRef.current = null;
-      onClose();
+      requestExit();
     }, demoMode ? 650 : 1_000);
-  }, [demoMode, onClose]);
+  }, [demoMode, requestExit]);
 
   const showError = useCallback((message: string, field?: StatusField) => {
     setStatus({ kind: "error", message, ...(field ? { field } : {}) });
@@ -411,7 +458,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
         setStatus({ kind: "warning", message: t("account.status.discovery_manual_review") });
       }
       return result;
-    } catch (error) {
+    } catch {
       if (mountedRef.current && requestId === discoveryRequestIdRef.current && candidate === emailValueRef.current.trim().toLowerCase()) {
         setDiscovery(null);
         setDiscoveryEmail(candidate);
@@ -434,7 +481,12 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
   }, [accountAdded, busy, discoverProvider, discoveryRequired, emailFocused]);
 
   const updateEmail = (event: ChangeEvent<HTMLInputElement>) => {
-    if (emailComposingRef.current || (event.nativeEvent as InputEvent).isComposing) return;
+    // The browser's isComposing flag is authoritative. If it reports no active
+    // composition but the local guard is still set, a compositionend was missed
+    // (e.g. focus left the field mid-composition). Clear the stale guard so
+    // normal typing resumes instead of being silently dropped.
+    if ((event.nativeEvent as InputEvent).isComposing) return;
+    if (emailComposingRef.current) emailComposingRef.current = false;
     updateEmailValue(event.target.value);
   };
 
@@ -533,6 +585,10 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
       showError(t("account.error.email_required_for_login"), "email");
       return;
     }
+    if (existingAccountMatch) {
+      showError(existingDuplicateMessage, "email");
+      return;
+    }
 
     // A web popup must be opened synchronously with this click or browsers may block it after the API request.
     const popup = desktopBridge() ? null : window.open("", "nami-mail-oauth", "popup,width=560,height=720");
@@ -594,9 +650,16 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
       showError(t("account.error.email_invalid"), "email");
       return;
     }
+    if (existingAccountMatch) {
+      showError(existingDuplicateMessage, "email");
+      return;
+    }
     if (!password) {
       showError(t("account.error.credential_required", { credential: activeOnboarding?.credentialLabel ?? t("account.credential.fallback") }), "password");
       return;
+    }
+    if (passwordLooksLikeAppCredential && password.length !== 16) {
+      setStatus({ kind: "warning", message: t("account.error.credential_app_password_hint") });
     }
     if (manualOpen && !isServerConfigValid(manualConfig)) {
       showError(t("account.error.manual_invalid"), "manual");
@@ -611,10 +674,11 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
         await finishAddedAccount(t("account.status.demo_connected"));
         return;
       }
-      const result = manualOpen
-        ? await api.addManualAccount({
+      await (manualOpen
+        ? api.addManualAccount({
           email: normalizedEmail,
           password,
+          ...(activeDiscovery && activeDiscovery.id !== "custom" ? { providerId: activeDiscovery.id } : {}),
           imap: {
             host: manualConfig.imap.host.trim(),
             port: manualConfig.imap.port,
@@ -628,28 +692,11 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
           ...(manualConfig.imap.username.trim() ? { imapUsername: manualConfig.imap.username.trim() } : {}),
           ...(manualConfig.smtp.username.trim() ? { smtpUsername: manualConfig.smtp.username.trim() } : {}),
         })
-        : await api.addAccount(normalizedEmail, password);
-      const detail = result.sync
-        ? t("account.status.sync_details", { synced: result.sync.synced, folders: result.sync.folders })
-        : "";
-      if (result.syncWarning) {
-        setAccountAdded(true);
-        setPassword("");
-        await onAdded();
-        const issue = result.account.lastErrorCode
-          ? presentMailError({ code: result.account.lastErrorCode, message: result.syncWarning }, t)
-          : null;
-        setStatus({
-          kind: "warning",
-          message: issue
-            ? t("account.status.sync_warning_issue", { title: issue.title, guidance: issue.guidance })
-            : locale === "zh-CN"
-              ? t("account.status.sync_warning", { warning: result.syncWarning })
-              : t("account.status.sync_warning_generic"),
-        });
-        return;
-      }
-      await finishAddedAccount(t("account.status.connected", { detail }));
+        : api.addAccount(normalizedEmail, password));
+      // The first full mailbox sync already runs in the background: this
+      // request returns as soon as the connection is verified, so the dialog
+      // closes immediately and the messages appear via the post-add refresh.
+      await finishAddedAccount(t("account.status.connected"));
     } catch (error) {
       const issue = presentMailError(error, t);
       // A network, TLS, or protocol problem is not corrected by retyping a
@@ -696,10 +743,10 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
   };
 
   return (
-    <div className="modal-backdrop account-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
+    <div className={`modal-backdrop account-modal-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
       <section
         ref={dialogRef}
-        className="modal-card account-modal"
+        className={`modal-card account-modal${closing ? " closing" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-account-title"
@@ -716,13 +763,15 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
           </button>
         </div>
 
-        <div className="provider-orbit" aria-hidden="true">
-          <div className="provider-core"><Mail size={26} strokeWidth={1.7} /></div>
-          <span className="orbit-chip chip-a">G</span>
-          <span className="orbit-chip chip-b">M</span>
-          <span className="orbit-chip chip-c">Q</span>
-          <span className="orbit-chip chip-d">163</span>
-        </div>
+        {!(showGuide || manualOpen || providerCatalogOpen) && (
+          <div className="provider-orbit" aria-hidden="true">
+            <div className="provider-core"><Mail size={26} strokeWidth={1.7} /></div>
+            <span className="orbit-chip chip-a">G</span>
+            <span className="orbit-chip chip-b">M</span>
+            <span className="orbit-chip chip-c">Q</span>
+            <span className="orbit-chip chip-d">163</span>
+          </div>
+        )}
 
         <p id="add-account-description" className="modal-intro">{t("account.description")}</p>
 
@@ -745,23 +794,28 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
               </button>
             </div>
             <div className="provider-quick-grid">
-              {quickProviders.map((provider) => (
-                <button
-                  key={provider.id}
-                  className={`provider-choice${selectedProviderId === provider.id ? " selected" : ""}`}
-                  type="button"
-                  aria-pressed={selectedProviderId === provider.id}
-                  aria-label={t("account.provider.select_aria", { provider: providerDisplayName(provider, locale, t) })}
-                  onClick={() => selectProvider(provider.id)}
-                  disabled={busy || accountAdded}
-                >
-                  <span className="provider-choice-mark" aria-hidden="true">{providerMonogram(provider)}</span>
-                  <span className="provider-choice-copy">
-                    <strong>{providerDisplayName(provider, locale, t)}</strong>
-                    <small>{provider.domains[0]}</small>
-                  </span>
-                </button>
-              ))}
+              {quickProviders.map((provider) => {
+                const iconUrl = providerIconUrl(provider.id);
+                return (
+                  <button
+                    key={provider.id}
+                    className={`provider-choice${selectedProviderId === provider.id ? " selected" : ""}`}
+                    type="button"
+                    aria-pressed={selectedProviderId === provider.id}
+                    aria-label={t("account.provider.select_aria", { provider: providerDisplayName(provider, locale, t) })}
+                    onClick={() => selectProvider(provider.id)}
+                    disabled={busy || accountAdded}
+                  >
+                    <span className="provider-choice-mark" aria-hidden="true">
+                      {iconUrl ? <img className="provider-choice-icon" src={iconUrl} alt="" loading="lazy" /> : providerMonogram(provider)}
+                    </span>
+                    <span className="provider-choice-copy">
+                      <strong>{providerDisplayName(provider, locale, t)}</strong>
+                      <small>{provider.domains[0]}</small>
+                    </span>
+                  </button>
+                );
+              })}
               <button
                 className={`provider-choice provider-choice-custom${selectedProviderId === CUSTOM_IMAP_PROVIDER_ID ? " selected" : ""}`}
                 type="button"
@@ -769,7 +823,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                 onClick={() => selectProvider(CUSTOM_IMAP_PROVIDER_ID)}
                 disabled={busy || accountAdded}
               >
-                <span className="provider-choice-mark" aria-hidden="true"><Server size={15} /></span>
+                <span className="provider-choice-mark" aria-hidden="true"><Mailbox size={15} /></span>
                 <span className="provider-choice-copy">
                   <strong>{t("account.provider.custom_name")}</strong>
                   <small>{t("account.provider.custom_description")}</small>
@@ -813,12 +867,16 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                 data-dialog-initial-focus
                 autoComplete="email"
                 spellCheck={false}
-                placeholder="name@example.com"
+                placeholder={t("account.email.placeholder")}
                 value={email}
                 onChange={updateEmail}
                 onFocus={() => setEmailFocused(true)}
                 onBlur={() => {
-                  if (!emailComposingRef.current) setEmailFocused(false);
+                  // Abandon any in-flight composition when focus leaves the
+                  // field. Some IMEs never deliver compositionend after a
+                  // blur, which would otherwise block all later typing.
+                  emailComposingRef.current = false;
+                  setEmailFocused(false);
                 }}
                 onCompositionStart={beginEmailComposition}
                 onCompositionEnd={endEmailComposition}
@@ -834,6 +892,12 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
             </button>
           </div>
           <small id="account-email-help" className="account-field-help">{t("account.email.help")}</small>
+
+          {existingAccountMatch && (
+            <div className="form-status error account-email-exists" role="alert">
+              <X size={17} />{existingDuplicateMessage}
+            </div>
+          )}
 
           {activeDiscovery && (
             <section className={`provider-hint account-provider-result${manualReviewRecommended(activeDiscovery) ? " warning" : ""}`} aria-live="polite">
@@ -858,7 +922,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
           {guideAvailable && !accountAdded && guideProvider && (
             <>
               <button className="guide-toggle" type="button" aria-expanded={showGuide} onClick={() => setShowGuide((value) => !value)} disabled={busy}>
-                <KeyRound size={15} />
+                <Wand2 size={15} />
                 <span>{guideIsPreview
                   ? t("account.guide.toggle_preview", { provider: guideProviderName })
                   : t("account.guide.toggle", { provider: guideProviderName })}</span>
@@ -923,7 +987,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                 <p>{t("account.oauth.description")}</p>
               </div>
               {!oauthAvailable && <small className="oauth-config-note">{t("account.oauth.config_unavailable", { provider: activeOAuthProvider === "google" ? "Google" : "Microsoft" })}</small>}
-              <button className="primary-button large oauth-button" type="button" onClick={() => void startOAuth()} disabled={busy || !oauthAvailable}>
+              <button className="primary-button large oauth-button" type="button" onClick={() => void startOAuth()} disabled={busy || !oauthAvailable || Boolean(existingAccountMatch)}>
                 {busyAction === "oauth" ? <LoaderCircle className="spin" size={18} /> : <ShieldCheck size={18} />}
                 {busyAction === "oauth"
                   ? t("account.oauth.waiting_browser")
@@ -975,6 +1039,13 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                 />
               </label>
               <small id="account-credential-help" className="account-field-help">{activeOnboarding?.credentialHint ?? t("account.credential.help")}</small>
+
+              {guideProvider?.helpUrl && (
+                <a className="account-link-button credential-help-link" href={guideProvider.helpUrl} target="_blank" rel="noreferrer">
+                  {guideOnboarding?.helpLabel ?? t("account.guide.open_official")}
+                  <ExternalLink size={13} />
+                </a>
+              )}
 
               <button className="account-link-button manual-config-toggle" type="button" onClick={openManualConfig} disabled={busy} aria-expanded={manualOpen}>
                 {manualOpen ? t("account.manual.collapse") : t("account.manual.open")}
@@ -1045,7 +1116,7 @@ export default function AddAccountModal({ providers, onClose, onAdded, fallbackF
                 </fieldset>
               )}
 
-              <button className="primary-button large" type="submit" disabled={busy || !password}>
+              <button className="primary-button large" type="submit" disabled={busy || !password || Boolean(existingAccountMatch)}>
                 {busyAction === "password" || busyAction === "manual" ? <LoaderCircle className="spin" size={18} /> : <Plus size={18} />}
                 {busyAction === "password" || busyAction === "manual"
                   ? t("account.manual.validating")

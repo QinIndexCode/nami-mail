@@ -54,6 +54,8 @@ function updateStatus(snapshot: DesktopUpdateSnapshot, t: Translate): string {
       return t("update.status.sourceUnconfigured");
     case "trustUnavailable":
       return t("update.status.trustUnavailable");
+    case "trustDisabledByBuild":
+      return t("update.status.trustDisabledByBuild");
     case "scheduled":
       return t("update.status.scheduled");
     case "checking":

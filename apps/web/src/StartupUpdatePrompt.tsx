@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CircleAlert, Clock3, Download, LoaderCircle, RefreshCw, RotateCcw, ShieldCheck, SkipForward } from "lucide-react";
 import { desktopBridge, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
 import { type Translate, useI18n } from "./i18n";
 import ThemedSelect from "./ThemedSelect";
 import { isInstalledCleanupResult, presentUpdateSnapshot } from "./updatePresentation";
 import { useDialogFocus } from "./useDialogFocus";
+import { useDismissTransition } from "./useDismissTransition";
 
 type UpdateAction = "check" | "download" | "skip" | "snooze" | "install";
 
@@ -64,6 +65,30 @@ export default function StartupUpdatePrompt({
   const dialogRef = useRef<HTMLElement>(null);
   const updateUnavailableMessage = t("update.prompt.unavailable");
 
+  // While the exit animation runs, the parent's snapshot may already have
+  // resolved (skip/snooze/install), so render from the frozen pre-close state.
+  const frozenSnapshotRef = useRef<DesktopUpdateSnapshot | null>(null);
+  const [closing, setClosing] = useState(false);
+  const { requestClose } = useDismissTransition(() => {
+    // Clear the open version unconditionally: once the exit animation is
+    // over, the dialog stays closed until the updater broadcasts a fresh
+    // promptable snapshot (the effect below reopens it). A conditional clear
+    // keyed to the frozen snapshot's target version would keep a dialog whose
+    // snapshot resolved to a *different* target (e.g. install → up-to-date)
+    // in a close/reopen loop.
+    setOpenVersion(null);
+    setRequestError(null);
+    setClosing(false);
+    frozenSnapshotRef.current = null;
+  });
+
+  const closeDialog = useCallback(() => {
+    if (closing) return;
+    frozenSnapshotRef.current = snapshot;
+    setClosing(true);
+    requestClose();
+  }, [closing, requestClose, snapshot]);
+
   useEffect(() => {
     if (defer) {
       setOpenVersion(null);
@@ -76,10 +101,9 @@ export default function StartupUpdatePrompt({
     }
     if (!snapshot || !openVersion) return;
     if (snapshot.suppression !== "none" || snapshot.targetVersion !== openVersion) {
-      setOpenVersion(null);
-      setRequestError(null);
+      closeDialog();
     }
-  }, [defer, eligibleVersion, openVersion, snapshot]);
+  }, [defer, eligibleVersion, openVersion, snapshot, closeDialog]);
 
   useEffect(() => {
     if (!backgroundDownloadVersion) return;
@@ -97,6 +121,8 @@ export default function StartupUpdatePrompt({
       && isPromptableSnapshot(snapshot)
       && !(backgroundDownloadVersion === snapshot.targetVersion && snapshot.phase === "available"),
   );
+
+  const visibleSnapshot = closing && frozenSnapshotRef.current ? frozenSnapshotRef.current : snapshot;
 
   useEffect(() => {
     onVisibilityChange?.(dialogOpen);
@@ -177,11 +203,11 @@ export default function StartupUpdatePrompt({
   };
 
   const dismissTerminalPrompt = () => {
+    if (closing) return;
     if (snapshot?.targetVersion && (snapshot.phase === "error" || isInstalledCleanupResult(snapshot))) {
       setDismissedTerminalVersion(snapshot.targetVersion);
     }
-    setOpenVersion(null);
-    setRequestError(null);
+    closeDialog();
   };
 
   const install = async () => {
@@ -220,7 +246,7 @@ export default function StartupUpdatePrompt({
       && snapshot.suppression === "none",
   );
 
-  if (!dialogOpen || !snapshot) {
+  if (!visibleSnapshot) {
     if (!backgroundDownloadVisible || !snapshot) return null;
     return (
       <aside className="update-background-status" role="status" aria-live="polite" aria-label={t("update.prompt.background.downloadingAria", { version: versionLabel(snapshot.targetVersion, t) })}>
@@ -232,19 +258,32 @@ export default function StartupUpdatePrompt({
     );
   }
 
-  const presentation = presentUpdateSnapshot(snapshot, t);
-  const isTransferring = snapshot.phase === "checking" || snapshot.phase === "downloading";
+  if (!dialogOpen && !closing) {
+    if (!backgroundDownloadVisible || !snapshot) return null;
+    return (
+      <aside className="update-background-status" role="status" aria-live="polite" aria-label={t("update.prompt.background.downloadingAria", { version: versionLabel(snapshot.targetVersion, t) })}>
+        <Download size={16} aria-hidden="true" />
+        <span className="update-background-copy"><strong>{snapshot.phase === "available" ? t("update.prompt.background.startingDownload", { version: versionLabel(snapshot.targetVersion, t) }) : t("update.prompt.background.downloading", { version: versionLabel(snapshot.targetVersion, t) })}</strong><small>{t("update.prompt.background.description")}</small></span>
+        <strong className="update-background-percent">{snapshot.percent ?? 0}%</strong>
+        <progress aria-label={t("update.prompt.background.downloadingAria", { version: versionLabel(snapshot.targetVersion, t) })} max={100} value={snapshot.percent ?? 0} />
+      </aside>
+    );
+  }
+
+  const renderSnapshot = visibleSnapshot;
+  const presentation = presentUpdateSnapshot(renderSnapshot, t);
+  const isTransferring = renderSnapshot.phase === "checking" || renderSnapshot.phase === "downloading";
   const actionPending = Boolean(busyAction) || isTransferring;
-  const canChooseLater = ["available", "ready"].includes(snapshot.phase);
+  const canChooseLater = ["available", "ready"].includes(renderSnapshot.phase);
   const installedCleanupNotice = presentation.isInstalledCleanupResult;
   const cleanupRetryRequired = installedCleanupNotice && !presentation.cleanupComplete;
   const hasUpdateError = presentation.isError || cleanupRetryRequired || Boolean(requestError);
 
   return (
-    <div className="modal-backdrop update-prompt-backdrop" role="presentation">
+    <div className={`modal-backdrop update-prompt-backdrop${closing ? " closing" : ""}`} role="presentation">
       <section
         ref={dialogRef}
-        className="update-prompt-card"
+        className={`update-prompt-card${closing ? " closing" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="startup-update-title"
@@ -254,7 +293,7 @@ export default function StartupUpdatePrompt({
       >
         <header className="update-prompt-heading">
           <span className={`update-prompt-icon${hasUpdateError ? " error" : ""}`} aria-hidden="true">
-            {hasUpdateError ? <CircleAlert size={21} /> : snapshot.phase === "ready" || installedCleanupNotice ? <ShieldCheck size={21} /> : <Download size={21} />}
+            {hasUpdateError ? <CircleAlert size={21} /> : renderSnapshot.phase === "ready" || installedCleanupNotice ? <ShieldCheck size={21} /> : <Download size={21} />}
           </span>
           <div>
             <span className="eyebrow">{presentation.prompt.eyebrow}</span>
@@ -264,14 +303,14 @@ export default function StartupUpdatePrompt({
 
         <p id="startup-update-description" className="update-prompt-description">{presentation.prompt.description}</p>
 
-        {snapshot.phase === "downloading" && (
+        {renderSnapshot.phase === "downloading" && (
           <div className="update-progress" role="status" aria-live="polite">
-            <div><span>{t("update.prompt.progressLabel")}</span><strong>{snapshot.percent ?? 0}%</strong></div>
-            <progress aria-label={t("update.prompt.background.downloadingAria", { version: versionLabel(snapshot.targetVersion, t) })} max={100} value={snapshot.percent ?? 0} />
+            <div><span>{t("update.prompt.progressLabel")}</span><strong>{renderSnapshot.percent ?? 0}%</strong></div>
+            <progress aria-label={t("update.prompt.background.downloadingAria", { version: versionLabel(renderSnapshot.targetVersion, t) })} max={100} value={renderSnapshot.percent ?? 0} />
           </div>
         )}
 
-        {snapshot.phase === "checking" && (
+        {renderSnapshot.phase === "checking" && (
           <div className="update-prompt-pending" role="status" aria-live="polite"><LoaderCircle className="spin" size={16} />{t("update.prompt.checkingStatus")}</div>
         )}
 
@@ -279,12 +318,12 @@ export default function StartupUpdatePrompt({
           <div className="form-status error update-prompt-error" role="alert"><CircleAlert size={16} />{requestError ?? presentation.status}</div>
         )}
 
-        {(installedCleanupNotice || (snapshot.phase !== "error" && snapshot.phase !== "checking" && snapshot.phase !== "downloading")) && (
+        {(installedCleanupNotice || (renderSnapshot.phase !== "error" && renderSnapshot.phase !== "checking" && renderSnapshot.phase !== "downloading")) && (
           <p className="update-prompt-status" role="status" aria-live="polite">{presentation.status}</p>
         )}
 
         <footer className="update-prompt-actions">
-          {snapshot.phase === "ready" ? (
+          {renderSnapshot.phase === "ready" ? (
             <>
               <button className="primary-button" type="button" data-dialog-initial-focus disabled={actionPending} onClick={() => void install()}>
                 {busyAction === "install" ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />}
@@ -307,7 +346,7 @@ export default function StartupUpdatePrompt({
             <button className="primary-button" type="button" data-dialog-initial-focus onClick={dismissTerminalPrompt}>
               {t("update.prompt.acknowledge")}
             </button>
-          ) : snapshot.phase === "error" ? (
+          ) : renderSnapshot.phase === "error" ? (
             <>
               <button className="primary-button" type="button" data-dialog-initial-focus disabled={actionPending} onClick={checkAgain}>
                 {busyAction === "check" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}
@@ -315,7 +354,7 @@ export default function StartupUpdatePrompt({
               </button>
               <button className="secondary-button" type="button" disabled={actionPending} onClick={dismissTerminalPrompt}>{t("update.prompt.later")}</button>
             </>
-          ) : snapshot.phase === "available" ? (
+          ) : renderSnapshot.phase === "available" ? (
             <>
               <button className="primary-button" type="button" data-dialog-initial-focus disabled={actionPending} onClick={download}>
                 {busyAction === "download" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}

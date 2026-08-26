@@ -7,23 +7,30 @@ import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import sharp from "sharp";
 import { z } from "zod";
-import { AgentService, AgentServiceError, type AgentConversationScope, type AgentMessageInput, type AgentProviderInput } from "./agent-service.js";
+import { agentMemoryKindSchema, agentMemoryPatchSchema, autoReplyConfigPatchSchema } from "@nami/agent-contracts";
+import { AgentService, AgentServiceError, type AgentConversationScope, type AgentMcpServerInput, type AgentMessageInput, type AgentProviderInput } from "./agent-service.js";
 import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
+import { EncryptedAgentMemoryStore } from "./agent/memory.js";
+import { getAutoReplyEngine } from "./agent/auto-reply.js";
+import { autoReplyDecisionReasons, type AutoReplyDecisionReason } from "./agent/auto-reply-decisions.js";
+import { ZipFile } from "yazl";
 import {
   ACCOUNT_CREDENTIAL_CRYPTO_VERSION,
   encryptAccountPassword,
   type AccountCredentialIdentity,
 } from "./account-credentials.js";
 import { downloadMessageAttachment } from "./attachments.js";
-import { config } from "./config.js";
+import { collectMailBackup } from "./backup.js";
+import { downloadMessageSource } from "./mail-source.js";
+import { emitAccountSynced, emitSettingsChanged } from "./events.js";
+import { config, isLoopbackRemoteAddress } from "./config.js";
 import { discardDraft, saveDraft } from "./drafts.js";
 import { friendlyMailError, mailErrorHttpStatus, safeMailError, sendMail, testAccountConnection } from "./mail.js";
 import {
-  MAX_ENCRYPTED_SEARCH_CANDIDATES,
   messagePayloadById,
   messagePayloadForRow,
-  messagePayloadMatchesQuery,
   migrateMessageStorage,
+  ensureAttachmentKinds,
   hasPendingMove,
   hasUnverifiedMoveLocation,
   pendingMoveDestination,
@@ -31,6 +38,11 @@ import {
   PENDING_MOVE_RECONCILIATION_ERROR,
   type MessageStorageRow,
 } from "./message-storage.js";
+import { ensureMessageFtsIndex, ftsLikeEscape } from "./message-search.js";
+import { createBatchJob, getBatchJobSnapshot, undoBatchJob } from "./batch-jobs.js";
+import { createOperationQueue } from "./operation-queue.js";
+import { archivedMessageFilter, effectiveMailboxExpression, inboxMessageFilter } from "./message-filters.js";
+import { ATTACHMENT_KINDS, type AttachmentKind } from "./attachment-kind.js";
 import {
   MAX_OUTBOUND_ATTACHMENT_COUNT,
   MAX_OUTBOUND_ATTACHMENT_BYTES,
@@ -51,6 +63,7 @@ import {
 } from "./outbound-attachments.js";
 import {
   SubmissionConflictError,
+  deletePendingScheduledSubmission,
   deliveryFailureStatus,
   markSubmissionFailed,
   markSubmissionSubmitted,
@@ -61,29 +74,103 @@ import {
   setSubmissionPostSubmitWarning,
   startSubmission,
   submissionForId,
+  submissionRequestForId,
   submissionsForAccount,
 } from "./outbox.js";
 import { detectProvider, loginUsername, providerPresets, resolveProvider, type DetectedProvider, type ProviderPreset } from "./providers.js";
 import { OAuthError, isSupportedOAuthProvider } from "./oauth.js";
 import { normalizeLocale, oauthCallbackCopy, supportedLocale } from "./localization.js";
-import { TranslationConfigurationStore, type TranslationConfigurationPatch } from "./translation-configuration.js";
-import { TranslationService, TranslationServiceError, translationErrorStatus } from "./translation.js";
+import { BuiltinTranslationChain } from "./builtin-translation.js";
+import { TranslationConfigurationStore, type TranslationConfigurationPatch, type TranslationConfigurationSummary } from "./translation-configuration.js";
+
+/**
+ * Builds the effective translation service from the current configuration:
+ * - a custom endpoint exists -> chain routes custom + built-in engines by the
+ *   user's primary/backup selection
+ * - no custom endpoint -> chain over the built-in Google/MyMemory engines
+ * Falls back to Google -> MyMemory when nothing is configured.
+ */
+function buildTranslationService(summary: TranslationConfigurationSummary): TranslationServiceLike {
+  const customOptions = summary.endpoint.trim()
+    ? { endpoint: summary.endpoint, timeoutMs: summary.timeoutMs }
+    : undefined;
+  // A "custom" selection without a configured endpoint is not meaningful; the
+  // chain falls back to the built-in Google engine for that slot.
+  const primary = summary.primary === "custom" && !customOptions ? "google" : summary.primary;
+  const backup = summary.backup === "custom" && !customOptions ? "mymemory" : summary.backup;
+  return new BuiltinTranslationChain(primary, backup, customOptions);
+}
+import { MAX_TRANSLATION_TEXT_LENGTH, TranslationService, TranslationServiceError, splitTranslationChunks, translationErrorStatus, translationLanguageForLocale } from "./translation.js";
+import { protectTranslationUrls, restoreTranslationUrls } from "./translation-url-guard.js";
+import { buildTranslationBlocks, splitTranslatedBlock } from "./translation-segments.js";
 import {
+  batchMoveMessages,
   moveMessage,
   scheduleSentSubmissionVerification,
   syncAccount,
   updateMessageFlags,
+  updateMessageFlagsBatch,
+  type BatchMessageMoveOutcome,
+  type MessageFlagsPatch,
+  type MessageMoveResult,
+  type MessageMoveTarget,
 } from "./sync.js";
+import {
+  createFilterRule,
+  deleteFilterRule,
+  filterRuleCreateSchema,
+  filterRuleUpdateSchema,
+  listFilterRules,
+  updateFilterRule,
+} from "./filter-rules.js";
+import {
+  clearMessageSnooze,
+  listSnoozedMessages,
+  setMessageSnoozed,
+} from "./snooze.js";
+import {
+  ContactConflictError,
+  contactCreateSchema,
+  contactForId,
+  contactUpdateSchema,
+  createContact,
+  deleteContact,
+  listContacts,
+  updateContact,
+} from "./contacts.js";
+import {
+  createTemplate,
+  deleteTemplate,
+  listTemplates,
+  seedBuiltinTemplates,
+  templateCreateSchema,
+  templateUpdateSchema,
+  updateTemplate,
+} from "./templates.js";
+import {
+  CalendarEventTimeConflictError,
+  calendarEventCreateSchema,
+  calendarEventForId,
+  calendarEventUpdateSchema,
+  createCalendarEvent,
+  deleteCalendarEvent,
+  listCalendarEvents,
+  updateCalendarEvent,
+} from "./calendar.js";
 import {
   BACKGROUND_PRESETS,
   CLOSE_BEHAVIORS,
   NOTIFICATION_SOUNDS,
+  LIST_DENSITIES,
+  AGENT_ACCESS_LEVELS,
+  SYNC_MESSAGE_LIMIT_OPTIONS,
   getAppSettings,
+  getSyncMessageLimit,
   updateAppSettings,
   type AppSettings,
   type AppSettingsPatch,
 } from "./settings.js";
-import { publicAccount, type AccountRecord, type RuntimeContext } from "./types.js";
+import { publicAccount, type AccountRecord, type RuntimeContext, type TranslationServiceLike } from "./types.js";
 
 const credentialsSchema = z.object({
   email: z.email().transform((value) => value.trim().toLowerCase()),
@@ -113,6 +200,12 @@ const manualAccountSchema = z.object({
   smtp: mailEndpointSchema,
   imapUsername: z.string().trim().min(1).max(320).optional(),
   smtpUsername: z.string().trim().min(1).max(320).optional(),
+  /** Provider the user is manually configuring (keeps preset identity instead of falling back to "custom"). */
+  providerId: z.string().trim().min(1).max(128).optional(),
+}).strict();
+
+const accountSignaturePatchSchema = z.object({
+  signature: z.string().max(2000),
 }).strict();
 
 const messageIdHeaderSchema = z.string().trim().regex(/^<[^<>\r\n]{1,998}>$/, "邮件引用标识无效。");
@@ -131,6 +224,7 @@ const sendSchema = z.object({
   html: z.string().max(2_000_000).optional(),
   idempotencyKey: z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/, "发送请求标识无效。").optional(),
   discardDraftId: z.string().min(1).max(128).optional(),
+  sendAt: z.string().datetime({ offset: true }).optional(),
   attachmentTokens: z.array(z.string().regex(/^out_[0-9a-f-]{36}$/)).max(10).default([])
     .refine((tokens) => new Set(tokens).size === tokens.length, { message: "附件不能重复添加。" }),
 }).strict();
@@ -164,7 +258,7 @@ const submissionsQuerySchema = z.object({
 }).strict();
 
 const messageMoveSchema = z.object({
-  target: z.enum(["archive", "trash"]),
+  target: z.enum(["archive", "trash", "junk", "inbox"]),
 }).strict();
 
 const messageFlagsPatchSchema = z.object({
@@ -174,6 +268,51 @@ const messageFlagsPatchSchema = z.object({
   (patch) => patch.seen !== undefined || patch.flagged !== undefined,
   { message: "至少需要更新已读或标星状态。" },
 );
+
+const batchMessageIdsSchema = z.array(z.string().min(1)).min(1).max(100)
+  .refine((ids) => new Set(ids).size === ids.length, { message: "邮件不能重复选择。" });
+
+const batchMessageFlagsPatchSchema = z.object({
+  ids: batchMessageIdsSchema,
+  patch: messageFlagsPatchSchema,
+}).strict();
+
+const batchMessageMoveSchema = z.object({
+  ids: batchMessageIdsSchema,
+  target: z.enum(["archive", "trash", "junk", "inbox"]),
+}).strict();
+
+const batchJobQuerySchema = z.object({
+  accountId: z.string().min(1).optional(),
+  folder: z.string().min(1).optional(),
+  q: z.string().max(500).optional(),
+  starred: z.boolean().optional(),
+  unread: z.boolean().optional(),
+  archived: z.boolean().optional(),
+  snoozed: z.boolean().optional(),
+  hasAttachments: z.boolean().optional(),
+  attachmentKind: z.enum(ATTACHMENT_KINDS as unknown as [AttachmentKind, ...AttachmentKind[]]).optional(),
+  // Date bounds are normalized to UTC instants so the resolver can compare
+  // them directly against the stored sent timestamps.
+  after: z.string().refine((value) => !Number.isNaN(Date.parse(value)), { message: "Invalid after date." })
+    .transform((value) => new Date(value).toISOString()).optional(),
+  before: z.string().refine((value) => !Number.isNaN(Date.parse(value)), { message: "Invalid before date." })
+    .transform((value) => new Date(value).toISOString()).optional(),
+  scope: z.literal("all").optional(),
+}).strict();
+
+const batchJobCreateSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("flags"),
+    patch: messageFlagsPatchSchema,
+    query: batchJobQuerySchema,
+  }).strict(),
+  z.object({
+    kind: z.literal("move"),
+    target: z.enum(["archive", "trash"]),
+    query: batchJobQuerySchema,
+  }).strict(),
+]);
 
 const interfaceLocaleSchema = z.string().trim().max(32)
   .refine((value) => Boolean(supportedLocale(value)), { message: "Unsupported interface language." })
@@ -188,9 +327,15 @@ const translationConfigurationPatchSchema = z.object({
   apiKey: z.string().max(2_048).optional(),
   clearApiKey: z.boolean().optional(),
   timeoutMs: z.number().int().min(1_000).max(60_000).optional(),
+  primary: z.enum(["google", "mymemory", "custom"]).optional(),
+  backup: z.enum(["google", "mymemory", "custom"]).optional(),
+  clearEndpoint: z.boolean().optional(),
 }).strict().refine(
   (patch) => Object.keys(patch).length > 0,
   { message: "At least one translation configuration value is required." },
+).refine(
+  (patch) => !(patch.primary === "custom" && !patch.endpoint),
+  { message: "A custom primary provider requires an endpoint." },
 );
 
 const settingsPatchSchema = z.object({
@@ -202,14 +347,26 @@ const settingsPatchSchema = z.object({
   notifyWhenFocused: z.boolean().optional(),
   notificationSound: z.enum(NOTIFICATION_SOUNDS).optional(),
   refreshIntervalSeconds: z.union([z.literal(30), z.literal(60), z.literal(180), z.literal(300)]).optional(),
+  realtimePushEnabled: z.boolean().optional(),
+  syncMessageLimit: z.union(SYNC_MESSAGE_LIMIT_OPTIONS.map((value) => z.literal(value))).optional(),
   closeBehavior: z.enum(CLOSE_BEHAVIORS).optional(),
+  launchAtStartup: z.boolean().optional(),
+  globalShortcutEnabled: z.boolean().optional(),
+  agentToolRoundLimit: z.number().int().min(1).max(50).optional(),
+  listDensity: z.enum(LIST_DENSITIES).optional(),
+  avatarGravatarEnabled: z.boolean().optional(),
+  agentAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
+  agentCliAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
+  agentMcpAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
+  autoReply: autoReplyConfigPatchSchema.optional(),
 }).strict();
 
 const agentProviderSchema = z.object({
   label: z.string().trim().min(1).max(128),
-  kind: z.enum(["openai-compatible", "ollama"]),
+  kind: z.enum(["openai-compatible", "ollama", "anthropic", "gemini", "openai-responses"]),
   endpoint: z.string().trim().min(1).max(2_048),
   model: z.string().trim().min(1).max(256),
+  embeddingModel: z.string().trim().max(256).optional(),
   apiKey: z.string().max(8_192).optional(),
   clearApiKey: z.boolean().optional(),
   timeoutMs: z.number().int().min(1_000).max(120_000),
@@ -217,8 +374,19 @@ const agentProviderSchema = z.object({
   makeDefault: z.boolean().optional(),
 }).strict();
 
+const agentMcpServerSchema = z.object({
+  label: z.string().trim().min(1).max(128),
+  command: z.string().trim().min(1).max(1_024),
+  args: z.array(z.string().max(1_024)).max(128).optional(),
+  env: z.record(z.string().max(256), z.string().max(8_192)).refine((value) => Object.keys(value).length <= 128, "环境变量数量超过限制。").optional(),
+  envRemove: z.array(z.string().trim().min(1).max(256)).max(128).optional(),
+  cwd: z.string().trim().max(2_048).optional(),
+  timeoutMs: z.number().int().min(5_000).max(180_000),
+  enabled: z.boolean(),
+}).strict();
+
 const agentScopeSchema = z.object({
-  mode: z.enum(["all_accounts", "selected_account", "current_message", "current_thread"]),
+  mode: z.enum(["all_accounts", "selected_account", "current_message"]),
   accountIds: z.array(z.string().trim().min(1).max(128)).max(100),
   messageIds: z.array(z.string().trim().min(1).max(128)).max(100),
 }).strict();
@@ -238,10 +406,29 @@ const agentMessageSchema = z.object({
   providerId: z.string().trim().min(1).max(128),
   mode: z.enum(["agent", "chat"]),
   scope: agentScopeSchema,
+  // Historical field kept optional for old clients; the current UI no longer
+  // sends it (references carry the user-chosen mail context instead).
   context: z.object({
     currentMessageId: z.string().trim().min(1).max(128).optional(),
-    currentThreadMessageIds: z.array(z.string().trim().min(1).max(128)).max(100).optional(),
-  }).strict(),
+  }).strict().optional(),
+  quote: z.string().trim().max(1_000).optional(),
+  attachments: z.array(z.object({
+    name: z.string().trim().min(1).max(768),
+    type: z.string().trim().max(255).default("application/octet-stream"),
+    token: z.string().regex(/^out_[0-9a-f-]{36}$/).optional(),
+    accountId: z.string().trim().min(1).max(128).optional(),
+    // The Electron client includes the extracted file path for tools that
+    // re-read local files; it is opaque metadata to the server.
+    path: z.string().trim().max(2_048).optional(),
+    // Extracted file text carried separately from the user-visible content so
+    // the transcript stays clean; capped a little above the client truncation
+    // so a truncated file still signals its marker via length.
+    text: z.string().max(64_000).optional(),
+  }).strict()).max(10).optional(),
+  references: z.array(z.object({
+    id: z.string().trim().min(1).max(128),
+    subject: z.string().trim().max(500).optional(),
+  }).strict()).max(8).optional(),
 }).strict();
 
 const agentConversationQuerySchema = z.object({
@@ -250,6 +437,25 @@ const agentConversationQuerySchema = z.object({
 
 const agentConfirmationDecisionSchema = z.object({
   decision: z.enum(["approve", "reject"]),
+}).strict();
+
+const agentMemoryQuerySchema = z.object({
+  kind: agentMemoryKindSchema.optional(),
+  accountId: z.string().trim().min(1).max(128).optional(),
+  query: z.string().trim().max(256).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+}).strict();
+
+const agentMemoryParamsSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+}).strict();
+
+const agentMemoryCreateSchema = z.object({
+  kind: agentMemoryKindSchema.optional(),
+  accountId: z.string().trim().min(1).max(128).optional(),
+  summary: z.string().trim().min(1).max(500),
+  detail: z.string().trim().max(4_000).optional(),
+  occurredAt: z.string().trim().min(1).max(64).optional(),
 }).strict();
 
 // Allow contemporary 4K/8K wallpapers without retaining their original size.
@@ -270,6 +476,45 @@ class BackgroundUploadError extends Error {
   constructor(message: string, readonly statusCode = 400) {
     super(message);
   }
+}
+
+/**
+ * Strips HTML tags and decodes entities to produce plain text suitable for
+ * translation. Used as a fallback when a message has no textBody.
+ *
+ * Links are preserved as "text (url)" so a link-only body survives translation:
+ * the URL is picked up by protectTranslationUrls and restored verbatim, keeping
+ * the original destination clickable in the translated output.
+ */
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+    .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_match, href: string, label: string) => {
+      const inner = label.replace(/<[^>]+>/g, "").trim();
+      return inner ? `${inner} (${href})` : href;
+    })
+    .replace(/<(\/?)(p|div|br|h[1-6]|li|tr|hr)\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Returns the best available plain-text body for translation. */
+function translatableTextFromPayload(payload: { textBody?: string; htmlBody?: string }): string | null {
+  const text = payload.textBody?.trim();
+  if (text) return text;
+  const html = payload.htmlBody?.trim();
+  if (html) return htmlToPlainText(html);
+  return null;
 }
 
 function messageRow(row: MessageStorageRow, masterKey: Buffer) {
@@ -310,6 +555,7 @@ function messageRow(row: MessageStorageRow, masterKey: Buffer) {
     hasAttachments: Boolean(row.has_attachments),
     attachments: payload.attachments ?? [],
     size: row.size,
+    snoozedUntil: row.snoozed_until,
   };
 }
 
@@ -326,6 +572,22 @@ function completedThreadingHeaders(message: { inReplyTo?: string; references?: s
 
 function validationMessage(error: z.ZodError): string {
   return error.issues[0]?.message ?? "请求参数无效。";
+}
+
+/**
+ * Normalizes a list-endpoint date-bound query value to a UTC instant.
+ * Returns undefined for an absent value and null when the value cannot be
+ * parsed, so the caller can reject the request with a 400.
+ */
+function parseListDateBound(value: string | undefined): string | undefined | null {
+  if (value === undefined || value === "") return undefined;
+  const time = Date.parse(value);
+  if (Number.isNaN(time)) return null;
+  return new Date(time).toISOString();
+}
+
+function isValidAttachmentKind(value: string | undefined): value is AttachmentKind {
+  return value !== undefined && (ATTACHMENT_KINDS as readonly string[]).includes(value);
 }
 
 function oauthProviderFor(provider: Pick<ProviderPreset, "family">): "google" | "microsoft" | undefined {
@@ -375,13 +637,21 @@ function providerDiscovery(provider: DetectedProvider) {
 }
 
 function manualProvider(provider: DetectedProvider, input: z.infer<typeof manualAccountSchema>): DetectedProvider {
+  // When the user tweaks endpoints for a known provider, keep its preset
+  // identity (id / name / family) so the account stays recognizable; only
+  // truly custom domains fall back to the "custom" label.
+  const declared = input.providerId && input.providerId !== "custom"
+    ? providerPresets.find((preset) => preset.id === input.providerId)
+    : undefined;
+  const identity = declared ?? provider;
   return {
-    ...provider,
-    id: "custom",
-    name: `手动配置 (${provider.domain})`,
-    family: "custom",
-    priority: "fallback",
-    domains: [provider.domain],
+    ...identity,
+    domain: provider.domain,
+    isCustom: provider.isCustom,
+    source: provider.source,
+    confidence: provider.confidence,
+    priority: identity.priority ?? "fallback",
+    domains: identity.domains?.length ? identity.domains : [provider.domain],
     imap: { ...input.imap, secure: input.imap.transport === "tls" },
     smtp: { ...input.smtp, secure: input.smtp.transport === "tls" },
     usernameMode: "email",
@@ -475,7 +745,7 @@ function oauthCallbackDocument(locale: unknown, success: boolean): string {
   const copy = oauthCallbackCopy(normalizedLocale, success);
   const title = escapeHtml(copy.title);
   const message = escapeHtml(copy.message);
-  return `<!doctype html><html lang="${normalizedLocale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head><body><main><h1>${title}</h1><p>${message}</p></main></body></html>`;
+  return `<!doctype html><html lang="${normalizedLocale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head><body><main><h1>${title}</h1><p>${message}</p></main><script>try{window.close()}catch(e){}</script></body></html>`;
 }
 
 function startOAuthInitialSync(app: FastifyInstance, context: RuntimeContext, accountId: string): void {
@@ -483,10 +753,11 @@ function startOAuthInitialSync(app: FastifyInstance, context: RuntimeContext, ac
     context.db,
     context.masterKey,
     accountId,
-    config.syncMessageLimit,
+    getSyncMessageLimit(context.db),
     context.oauthService,
     context.agentMailEvents,
   )
+    .then(() => emitAccountSynced(context.db, context.serverEvents, accountId))
     .catch((error) => {
       const failure = mailFailure(error);
       app.log.warn({ accountId, code: failure.body.code }, "Initial OAuth mailbox sync failed");
@@ -541,6 +812,7 @@ function attachmentActionErrorMessage(error: unknown): string {
     "Attachment not found. Sync this message again.",
     "Attachment part is invalid.",
     "Attachment is no longer available in this mailbox. Sync this message again.",
+    "Message is no longer available in this mailbox. Sync this message again.",
     "Account not found.",
     "Attachment download did not return a readable stream.",
     PENDING_MOVE_RECONCILIATION_ERROR,
@@ -553,7 +825,7 @@ function attachmentErrorStatus(error: unknown): number {
   const message = error instanceof Error ? error.message : "";
   if (message === "Attachment part is invalid.") return 400;
   if (message === "Message not found." || message === "Attachment not found. Sync this message again.") return 404;
-  if (message === "Attachment is no longer available in this mailbox. Sync this message again.") return 409;
+  if (message === "Attachment is no longer available in this mailbox. Sync this message again." || message === "Message is no longer available in this mailbox. Sync this message again.") return 409;
   return 422;
 }
 
@@ -624,7 +896,21 @@ function publicSettings(context: RuntimeContext, settings: AppSettings) {
     notifyWhenFocused: settings.notifyWhenFocused,
     notificationSound: settings.notificationSound,
     refreshIntervalSeconds: settings.refreshIntervalSeconds,
+    realtimePushEnabled: settings.realtimePushEnabled,
+    syncMessageLimit: settings.syncMessageLimit,
+    // The stored picker value above, after the SYNC_MESSAGE_LIMIT environment
+    // override is applied. The renderer shows both when they diverge.
+    effectiveSyncMessageLimit: getSyncMessageLimit(context.db),
     closeBehavior: settings.closeBehavior,
+    launchAtStartup: settings.launchAtStartup,
+    globalShortcutEnabled: settings.globalShortcutEnabled,
+    agentToolRoundLimit: settings.agentToolRoundLimit,
+    listDensity: settings.listDensity,
+    avatarGravatarEnabled: settings.avatarGravatarEnabled,
+    agentAccessLevel: settings.agentAccessLevel,
+    agentCliAccessLevel: settings.agentCliAccessLevel,
+    agentMcpAccessLevel: settings.agentMcpAccessLevel,
+    autoReply: settings.autoReply,
     customBackgroundUrl: hasCustomBackground ? `/api/settings/background-image?v=${encodeURIComponent(settings.updatedAt)}` : null,
     updatedAt: settings.updatedAt,
   };
@@ -680,49 +966,6 @@ async function normalizeBackgroundImage(bytes: Buffer, contentType: BackgroundIn
 
   throw new BackgroundUploadError("这张图片优化后仍超过 8 MB，请选择分辨率更低的图片。", 413);
 }
-
-const effectiveMailboxExpression = "CASE WHEN m.pending_move_state = 'intent' THEN m.mailbox ELSE COALESCE(NULLIF(m.pending_move_destination, ''), m.mailbox) END";
-
-const inboxMessageFilter = `(
-  UPPER(${effectiveMailboxExpression}) = 'INBOX'
-  OR EXISTS (
-    SELECT 1 FROM folders f
-    WHERE f.account_id = m.account_id
-      AND f.path = ${effectiveMailboxExpression}
-      AND f.special_use = '\\Inbox'
-  )
-)`;
-
-const archivedMessageFilter = `(
-  (
-    m.pending_move_destination IS NOT NULL
-    AND COALESCE(m.pending_move_state, 'confirmed') = 'confirmed'
-    AND (
-      m.pending_move_special_use = '\\Archive'
-      OR (m.pending_move_special_use = '\\All' AND m.all_mail_archived = 1)
-    )
-  )
-  OR EXISTS (
-    SELECT 1 FROM folders f
-    WHERE f.account_id = m.account_id
-      AND f.path = ${effectiveMailboxExpression}
-      AND f.special_use = '\\Archive'
-  )
-  OR (
-    m.all_mail_archived = 1
-    AND EXISTS (
-      SELECT 1 FROM folders f
-      WHERE f.account_id = m.account_id
-        AND f.path = ${effectiveMailboxExpression}
-        AND f.special_use = '\\All'
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM folders archive_folder
-      WHERE archive_folder.account_id = m.account_id
-        AND archive_folder.special_use = '\\Archive'
-    )
-  )
-)`;
 
 const contentSecurityPolicy = [
   "default-src 'self'",
@@ -801,6 +1044,8 @@ function hasMatchingLocalApiAccessToken(value: string | string[] | undefined, ex
 
 export async function buildApp(context: RuntimeContext, options: BuildAppOptions = {}): Promise<FastifyInstance> {
   migrateMessageStorage(context.db, context.masterKey);
+  ensureAttachmentKinds(context.db, context.masterKey);
+  ensureMessageFtsIndex(context.db, context.masterKey);
   migrateOutboundAttachments(context.db, outboundAttachmentDirectory(context), context.masterKey);
   migrateOutboundSubmissionStorage(context.db, context.masterKey);
   const ownedAgentMailApplication = !context.agentService && context.agentLifecycle && context.agentSourceEvents
@@ -809,7 +1054,8 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       masterKey: context.masterKey,
       oauthService: context.oauthService,
       agentMailEvents: context.agentMailEvents,
-      syncMessageLimit: config.syncMessageLimit,
+      syncMessageLimit: getSyncMessageLimit(context.db),
+      outboundAttachmentDirectory: outboundAttachmentDirectory(context),
     })
     : undefined;
   const ownedAgentService = !context.agentService && context.agentLifecycle && context.agentSourceEvents
@@ -819,13 +1065,23 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       lifecycle: context.agentLifecycle,
       sourceEvents: context.agentSourceEvents,
       mailApplication: ownedAgentMailApplication,
+      hasCustomBackground: (filename) => Boolean(customBackgroundPath(context, filename) && fs.existsSync(customBackgroundPath(context, filename)!)),
+      onSettingsChanged: () => emitSettingsChanged(context.serverEvents),
     })
     : undefined;
   const agentService = context.agentService ?? ownedAgentService;
   agentService?.start();
+  const memoryStore = new EncryptedAgentMemoryStore(context.db, context.masterKey);
   const app = Fastify({
-    logger: { level: config.logLevel },
+    logger: {
+      level: config.logLevel,
+    },
     bodyLimit: 3 * 1024 * 1024,
+    // The agent RAG backfill can hold the event loop for tens of seconds on a
+    // large mailbox (every message is scanned on first startup); the default
+    // 10s avvio timeout would then kill the fastify-static registration and
+    // the server would fail to boot.
+    pluginTimeout: 60_000,
   });
   const translationConfigurationStore = new TranslationConfigurationStore(context.db, context.masterKey, {
     endpoint: config.translationEndpoint,
@@ -833,7 +1089,12 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     timeoutMs: config.translationTimeoutMs,
   });
   const translationConfigurationManaged = !context.translationService;
-  let translationService = context.translationService ?? translationConfigurationStore.createService();
+  // A single translate-capable service honoring the user's primary/backup
+  // provider selection. When no custom endpoint is configured it is a built-in
+  // chain (Google -> MyMemory); once the user stores a custom endpoint or
+  // chooses a built-in provider explicitly, the chain routes accordingly.
+  let translationService: TranslationServiceLike =
+    context.translationService ?? buildTranslationService(translationConfigurationStore.summary());
   const translationAbortController = new AbortController();
   const abortTranslationsForShutdown = () => translationAbortController.abort();
   const externalTranslationAbortSignal = options.translationAbortSignal;
@@ -872,6 +1133,32 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   if (recoveredSubmissions) {
     app.log.warn({ recoveredSubmissions }, "Marked interrupted SMTP submissions as unknown delivery");
   }
+  // Durable write-operation queue. User moves and flag updates are recorded
+  // before they dispatch, so a shutdown while an operation is queued or in
+  // flight never loses it: pending/running rows are re-enqueued here.
+  const operationQueue = createOperationQueue(context.db);
+  operationQueue.registerRunner("move", async (payload) => {
+    const { messageId, target } = payload as { messageId: string; target: MessageMoveTarget };
+    return moveMessage(context.db, context.masterKey, messageId, target, context.oauthService, context.agentMailEvents);
+  });
+  operationQueue.registerRunner("batch-move", async (payload) => {
+    const { ids, target } = payload as { ids: string[]; target: MessageMoveTarget };
+    return batchMoveMessages(context.db, context.masterKey, ids, target, context.oauthService, context.agentMailEvents);
+  });
+  operationQueue.registerRunner("flags", async (payload) => {
+    // One executor serves both payload shapes: a single-message patch
+    // (PATCH /api/messages/:id) and an account-scoped batch (the batch flags
+    // route groups ids per account before enqueueing).
+    const { messageId, ids, patch } = payload as { messageId?: string; ids?: string[]; patch: MessageFlagsPatch };
+    if (Array.isArray(ids)) {
+      return updateMessageFlagsBatch(context.db, context.masterKey, ids, patch, context.oauthService, context.agentMailEvents);
+    }
+    await updateMessageFlags(context.db, context.masterKey, messageId as string, patch, context.oauthService, context.agentMailEvents);
+    return { updated: 0, failed: 0, changedIds: [] };
+  });
+  void operationQueue.resumePending().then((resumed) => {
+    if (resumed) app.log.warn({ resumed }, "Resumed interrupted write operations");
+  });
   const localApiAccessToken = options.localApiAccessToken?.trim() || undefined;
 
   // Backgrounds and mail attachments use this binary path so image data never
@@ -903,8 +1190,16 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   });
 
   app.addHook("onRequest", async (request, reply) => {
-    if (!localApiAccessToken || !requiresLocalApiAccessToken(request)) return;
-    if (hasMatchingLocalApiAccessToken(request.headers[localApiAccessHeader], localApiAccessToken)) return;
+    if (!requiresLocalApiAccessToken(request)) return;
+    if (localApiAccessToken) {
+      if (hasMatchingLocalApiAccessToken(request.headers[localApiAccessHeader], localApiAccessToken)) return;
+    } else if (isLoopbackRemoteAddress(request.socket.remoteAddress)) {
+      // Browser development runs without a token; a loopback peer is still
+      // this machine, which is the documented trust boundary. Any other
+      // source is rejected so a non-loopback bind misconfiguration cannot
+      // silently expose mailbox data or send capability on the network.
+      return;
+    }
     return reply.code(401).send({
       ok: false,
       code: "local_api_unauthorized",
@@ -960,8 +1255,12 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
 
   app.post<{ Params: { id: string } }>("/api/agent/providers/:id/check", async (request, reply) => {
     if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    // The renderer gives up after 30s; stop the probe as soon as the client
+    // disconnects instead of letting it ride out the provider timeout.
+    const controller = new AbortController();
+    request.raw.once("aborted", () => controller.abort());
     try {
-      return await agentService.checkProvider(request.params.id);
+      return await agentService.checkProvider(request.params.id, controller.signal);
     } catch (error) {
       return agentFailure(reply, error);
     }
@@ -977,10 +1276,74 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
+  app.get("/api/agent/mcp-servers", async (_request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      return agentService.mcpServerList();
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.post("/api/agent/mcp-servers", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const parsed = agentMcpServerSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      return reply.code(201).send(agentService.createMcpServer(parsed.data as AgentMcpServerInput));
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/agent/mcp-servers/:id", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const parsed = agentMcpServerSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      return agentService.updateMcpServer(request.params.id, parsed.data as AgentMcpServerInput);
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/agent/mcp-servers/:id/check", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    // Same pattern as the provider check: stop the probe as soon as the
+    // renderer disconnects instead of letting the subprocess ride out its
+    // full connect + tools/list timeout.
+    const controller = new AbortController();
+    request.raw.once("aborted", () => controller.abort());
+    try {
+      return await agentService.checkMcpServer(request.params.id, controller.signal);
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/agent/mcp-servers/:id", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      agentService.deleteMcpServer(request.params.id);
+      return { ok: true as const };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
   app.get("/api/agent/bootstrap", async (_request, reply) => {
     if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
     try {
       return agentService.bootstrap();
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.get("/api/agent/rag/verify", async (_request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    try {
+      return agentService.verifyRag();
     } catch (error) {
       return agentFailure(reply, error);
     }
@@ -1038,41 +1401,72 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
+  // Mark a conversation message as revoked (or restore it). Idempotent: the
+  // server stores the latest intent per message and filters revoked turns out
+  // of the model context, so the client can optimistically update the UI and
+  // reconcile here without conflict.
+  app.post<{ Params: { id: string }; Body: { messageId?: unknown; revoked?: unknown } }>("/api/agent/conversations/:id/messages/revoke", async (request, reply) => {
+    if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    const { messageId, revoked } = request.body ?? {};
+    if (typeof messageId !== "string" || !messageId) return reply.code(400).send({ ok: false, code: "invalid_argument", message: "缺少消息 ID。" });
+    if (revoked !== undefined && typeof revoked !== "boolean") return reply.code(400).send({ ok: false, code: "invalid_argument", message: "revoked 必须是布尔值。" });
+    try {
+      const summary = agentService.revokeMessage(request.params.id, messageId, revoked !== false);
+      return { ok: true as const, conversation: summary };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
   app.post<{ Params: { id: string } }>("/api/agent/conversations/:id/messages", async (request, reply) => {
     if (!agentService) return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
     const parsed = agentMessageSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
-    const streamAbortController = new AbortController();
-    const abortStream = () => streamAbortController.abort();
+    // Closing the connection (moving away from the assistant panel) is not a
+    // cancel: the run keeps going in the background and the completed turn is
+    // persisted, so the answer is present when the panel reopens. Explicit
+    // cancels and account lifecycle changes abort the run through the
+    // service's own controller; here a closed socket only stops event
+    // delivery while the generator keeps draining.
+    let deliveryStopped = false;
+    const stopDelivery = () => { deliveryStopped = true; };
+    request.raw.once("aborted", stopDelivery);
+    reply.raw.once("close", stopDelivery);
+    // A reset connection surfaces here as an error event; without a listener
+    // it would take the whole process down instead of just this stream.
+    request.raw.on("error", stopDelivery);
+    reply.raw.on("error", stopDelivery);
     const responseSocket = reply.raw.socket;
-    request.raw.once("aborted", abortStream);
-    reply.raw.once("close", abortStream);
-    responseSocket?.once("close", abortStream);
+    responseSocket?.once("close", stopDelivery);
     reply.hijack();
     reply.raw.statusCode = 200;
     reply.raw.setHeader("content-type", "text/event-stream; charset=utf-8");
     reply.raw.setHeader("cache-control", "no-store, no-cache");
     reply.raw.setHeader("connection", "keep-alive");
     try {
-      for await (const event of agentService.streamMessage(request.params.id, parsed.data as AgentMessageInput, streamAbortController.signal)) {
-        if (reply.raw.destroyed) {
-          abortStream();
-          break;
+      const locale = getAppSettings(context.db).locale;
+      for await (const event of agentService.streamMessage(request.params.id, parsed.data as AgentMessageInput, undefined, locale)) {
+        if (deliveryStopped || reply.raw.destroyed) continue;
+        try {
+          reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+        } catch {
+          deliveryStopped = true;
         }
-        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
       }
     } catch (error) {
-      if (!reply.raw.destroyed) {
+      if (!deliveryStopped && !reply.raw.destroyed) {
         const body = error instanceof AgentServiceError
           ? { type: "error", error: { code: error.code, message: error.message, retryable: error.retryable } }
-          : { type: "error", error: { code: "agent_internal", message: "Agent 本地服务未能完成请求。", retryable: true } };
+          : { type: "error", error: { code: "agent_internal", message: "Agent local service failed to complete the request.", retryable: true } };
         reply.raw.write(`data: ${JSON.stringify(body)}\n\n`);
         reply.raw.write(`data: ${JSON.stringify({ type: "completed", reason: "error" })}\n\n`);
       }
     } finally {
-      request.raw.removeListener("aborted", abortStream);
-      reply.raw.removeListener("close", abortStream);
-      responseSocket?.removeListener("close", abortStream);
+      request.raw.removeListener("aborted", stopDelivery);
+      reply.raw.removeListener("close", stopDelivery);
+      request.raw.removeListener("error", stopDelivery);
+      reply.raw.removeListener("error", stopDelivery);
+      responseSocket?.removeListener("close", stopDelivery);
       if (!reply.raw.destroyed) reply.raw.end();
     }
   });
@@ -1088,11 +1482,150 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   app.post<{ Params: { id: string } }>("/api/agent/confirmations/:id", async (request, reply) => {
     const parsed = agentConfirmationDecisionSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
-    return reply.code(501).send({
-      ok: false,
-      code: "not_supported",
-      message: "当前版本尚未启用可执行的 Agent 高风险操作确认。",
-    });
+    // Resolves auto-reply confirmations from the local web surface. The
+    // engine verifies the web confirmation capability before recording the
+    // decision; conversational Agent confirmations remain desktop-only.
+    const engine = getAutoReplyEngine();
+    if (!engine) return reply.code(503).send({ ok: false, code: "auto_reply_unavailable", message: "自动回复引擎当前不可用。" });
+    const resolution = engine.resolveConfirmation(request.params.id, parsed.data.decision, "web");
+    if ("ok" in resolution) return { ok: resolution.ok };
+    if (resolution.decision === "expired") {
+      return reply.code(409).send({ ok: false, code: "confirmation_expired", message: "该自动回复确认已过期。" });
+    }
+    if (resolution.decision === "failed") {
+      return reply.code(409).send({ ok: false, code: "confirmation_record_failed", message: "自动回复确认记录失败。" });
+    }
+    return reply.code(404).send({ ok: false, code: "confirmation_not_found", message: "未找到该自动回复确认。" });
+  });
+
+  app.get("/api/agent/memory", async (request, reply) => {
+    const parsed = agentMemoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      return { items: memoryStore.list({
+        kind: parsed.data.kind,
+        accountId: parsed.data.accountId,
+        query: parsed.data.query,
+        limit: parsed.data.limit,
+      }) };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.delete("/api/agent/memory", async (_request, reply) => {
+    try {
+      return { cleared: memoryStore.clear() };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.post("/api/agent/memory", async (request, reply) => {
+    const parsed = agentMemoryCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      const item = memoryStore.create(parsed.data);
+      return reply.code(201).send({ item });
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/agent/memory/:id", async (request, reply) => {
+    const params = agentMemoryParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(params.error) });
+    const parsed = agentMemoryPatchSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(parsed.error) });
+    try {
+      const item = memoryStore.update(params.data.id, parsed.data);
+      return { item };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/agent/memory/:id", async (request, reply) => {
+    const params = agentMemoryParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ ok: false, code: "invalid_argument", message: validationMessage(params.error) });
+    try {
+      memoryStore.delete(params.data.id);
+      return { ok: true as const };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("was not found")) {
+        return reply.code(404).send({ ok: false, code: "not_found", message: "记忆条目不存在。" });
+      }
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.get("/api/agent/auto-reply/pending", async (_request, reply) => {
+    const engine = getAutoReplyEngine();
+    if (!engine) return reply.code(503).send({ ok: false, code: "auto_reply_unavailable", message: "自动回复引擎当前不可用。" });
+    try {
+      return { items: engine.listPending() };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.get("/api/agent/auto-reply/decisions", async (request, reply) => {
+    const engine = getAutoReplyEngine();
+    if (!engine) return reply.code(503).send({ ok: false, code: "auto_reply_unavailable", message: "自动回复引擎当前不可用。" });
+    const query = request.query as Record<string, string | undefined>;
+    const reason = query.reason ?? undefined;
+    if (reason && !autoReplyDecisionReasons.includes(reason as AutoReplyDecisionReason)) {
+      return reply.code(400).send({ ok: false, message: "无效的自动回复决策类型。" });
+    }
+    const limit = query.limit === undefined ? 100 : Number.parseInt(query.limit, 10);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      return reply.code(400).send({ ok: false, message: "limit 必须是 1-500 之间的整数。" });
+    }
+    try {
+      return {
+        items: engine.listDecisions({
+          ...(reason ? { reason: reason as AutoReplyDecisionReason } : {}),
+          ...(query.query ? { query: query.query } : {}),
+          ...(query.fromAddress ? { fromAddress: query.fromAddress } : {}),
+          ...(query.subject ? { subject: query.subject } : {}),
+          limit,
+        }),
+      };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/agent/auto-reply/decisions/:id", async (request, reply) => {
+    const engine = getAutoReplyEngine();
+    if (!engine) return reply.code(503).send({ ok: false, code: "auto_reply_unavailable", message: "自动回复引擎当前不可用。" });
+    try {
+      const deleted = engine.deleteDecision(request.params.id);
+      if (!deleted) return reply.code(404).send({ ok: false, message: "该记录不存在或已被删除。" });
+      return { ok: true };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.get("/api/agent/pairings", async (_request, reply) => {
+    // The desktop host owns the Broker; a browser-only or test runtime reports
+    // an empty list with the same shape so the panel degrades gracefully.
+    const pairings = (await context.listExternalPairings?.()) ?? [];
+    const now = Date.now();
+    return {
+      pairings: [...pairings].map((pairing) => {
+        const expired = pairing.expiresAt !== undefined && !pairing.revokedAt && Date.parse(pairing.expiresAt) <= now;
+        return {
+          clientId: pairing.clientId,
+          createdAt: pairing.createdAt,
+          ...(pairing.expiresAt ? { expiresAt: pairing.expiresAt } : {}),
+          ...(pairing.revokedAt ? { revokedAt: pairing.revokedAt } : {}),
+          accountIds: [...pairing.accountIds],
+          status: pairing.revokedAt ? "revoked" : expired ? "expired" : "active",
+        };
+      }),
+    };
   });
 
   app.get("/api/providers", async () =>
@@ -1122,7 +1655,78 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     if (updated.refreshIntervalSeconds !== current.refreshIntervalSeconds) {
       context.onRefreshIntervalChanged?.(updated.refreshIntervalSeconds);
     }
+    if (updated.realtimePushEnabled !== current.realtimePushEnabled) {
+      context.onRealtimePushChanged?.(updated.realtimePushEnabled);
+    }
+    // Broadcast so every connected renderer (including the one that did NOT make
+    // this change, and the desktop host) re-fetches the fresh settings snapshot.
+    emitSettingsChanged(context.serverEvents);
     return publicSettings(context, updated);
+  });
+
+  // Server-originated mail events. The browser renderer (and the desktop
+  // renderer via the same code path) keeps an EventSource open here so new
+  // inbox mail can refresh the list immediately once the IDLE watcher or a
+  // poll pass reports it — no waiting for the next poll tick.
+  app.get("/api/events", async (request, reply) => {
+    const bus = context.serverEvents;
+    if (!bus) {
+      return reply.code(404).send({ ok: false, code: "events_unavailable", message: "Server events are not available." });
+    }
+    let deliveryStopped = false;
+    const stopDelivery = () => { deliveryStopped = true; };
+    request.raw.once("aborted", stopDelivery);
+    reply.raw.once("close", stopDelivery);
+    // A reset connection surfaces here as an error event; without a listener
+    // it would take the whole process down instead of just this stream.
+    request.raw.on("error", stopDelivery);
+    reply.raw.on("error", stopDelivery);
+    const responseSocket = reply.raw.socket;
+    responseSocket?.once("close", stopDelivery);
+    reply.hijack();
+    reply.raw.statusCode = 200;
+    reply.raw.setHeader("content-type", "text/event-stream; charset=utf-8");
+    reply.raw.setHeader("cache-control", "no-store, no-cache");
+    reply.raw.setHeader("connection", "keep-alive");
+    const unsubscribe = bus.subscribe((event) => {
+      if (deliveryStopped || reply.raw.destroyed) return;
+      try {
+        // Named event per the WHATWG EventSource format: the `event:` field
+        // is what lets clients subscribe with addEventListener("mail.received")
+        // etc. Without it every frame is delivered as the default "message"
+        // event and the named listeners never fire. The `type` key stays in
+        // the payload as well; it is what the toast and unread-merge paths
+        // switch on.
+        reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      } catch {
+        deliveryStopped = true;
+      }
+    });
+    // Browsers ignore comment frames; the beat keeps middleboxes from timing
+    // the silent stream out while no mail arrives.
+    const heartbeat = setInterval(() => {
+      if (deliveryStopped || reply.raw.destroyed) return;
+      try {
+        reply.raw.write(": ping\n\n");
+      } catch {
+        deliveryStopped = true;
+      }
+    }, 25_000);
+    const cleanup = () => {
+      unsubscribe();
+      clearInterval(heartbeat);
+      request.raw.removeListener("aborted", stopDelivery);
+      reply.raw.removeListener("close", stopDelivery);
+      request.raw.removeListener("error", stopDelivery);
+      reply.raw.removeListener("error", stopDelivery);
+      responseSocket?.removeListener("close", stopDelivery);
+      responseSocket?.removeListener("close", cleanup);
+      if (!reply.raw.destroyed) reply.raw.end();
+    };
+    reply.raw.once("close", cleanup);
+    // A vanished client surfaces as a socket close; end the response so the
+    // server does not hold the connection (and app.close()) open forever.
+    responseSocket?.once("close", cleanup);
   });
 
   app.post<{ Body: Buffer }>("/api/settings/background", {
@@ -1291,6 +1895,151 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     return { ok: true, attemptId: attemptId.data, ...context.oauthService.getAttempt(attemptId.data) };
   });
 
+  app.get("/api/filter-rules", async (request, reply) => {
+    const parsed = z.object({ accountId: z.string().trim().min(1).max(128).optional() }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    return { ok: true, rules: listFilterRules(context.db, parsed.data.accountId) };
+  });
+
+  app.post("/api/filter-rules", async (request, reply) => {
+    const parsed = filterRuleCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    if (parsed.data.accountId) {
+      const account = context.db.prepare("SELECT 1 FROM accounts WHERE id = ?").get(parsed.data.accountId);
+      if (!account) return reply.code(404).send({ ok: false, message: "规则绑定的邮箱不存在。" });
+    }
+    return { ok: true, rule: createFilterRule(context.db, parsed.data) };
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/filter-rules/:id", async (request, reply) => {
+    const parsed = filterRuleUpdateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    if (parsed.data.accountId) {
+      const account = context.db.prepare("SELECT 1 FROM accounts WHERE id = ?").get(parsed.data.accountId);
+      if (!account) return reply.code(404).send({ ok: false, message: "规则绑定的邮箱不存在。" });
+    }
+    const rule = updateFilterRule(context.db, request.params.id, parsed.data);
+    if (!rule) return reply.code(404).send({ ok: false, message: "规则不存在。" });
+    return { ok: true, rule };
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/filter-rules/:id", async (request, reply) => {
+    if (!deleteFilterRule(context.db, request.params.id)) {
+      return reply.code(404).send({ ok: false, message: "规则不存在。" });
+    }
+    return { ok: true };
+  });
+
+  app.get("/api/contacts", async (request, reply) => {
+    const parsed = z.object({ q: z.string().trim().max(320).optional(), limit: z.coerce.number().int().min(1).max(1000).optional() }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    return { ok: true, items: listContacts(context.db, context.masterKey, parsed.data.q, parsed.data.limit) };
+  });
+
+  app.post("/api/contacts", async (request, reply) => {
+    const parsed = contactCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    try {
+      return { ok: true, contact: createContact(context.db, context.masterKey, parsed.data) };
+    } catch (error) {
+      if (error instanceof ContactConflictError) {
+        return reply.code(409).send({ ok: false, code: "contact_exists", message: "该邮箱已在地址簿中。" });
+      }
+      throw error;
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/contacts/:id", async (request, reply) => {
+    const parsed = contactUpdateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    try {
+      const contact = updateContact(context.db, context.masterKey, request.params.id, parsed.data);
+      if (!contact) return reply.code(404).send({ ok: false, message: "联系人不存在。" });
+      return { ok: true, contact };
+    } catch (error) {
+      if (error instanceof ContactConflictError) {
+        return reply.code(409).send({ ok: false, code: "contact_exists", message: "该邮箱已在地址簿中。" });
+      }
+      throw error;
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/contacts/:id", async (request, reply) => {
+    if (!deleteContact(context.db, request.params.id)) {
+      return reply.code(404).send({ ok: false, message: "联系人不存在。" });
+    }
+    return { ok: true };
+  });
+
+  // Seed the app's starter templates idempotently on every startup. Existing
+  // rows (edited or deleted by the user) are never overwritten.
+  seedBuiltinTemplates(context.db, context.masterKey);
+
+  app.get("/api/templates", async (request, reply) => {
+    const parsed = z.object({ q: z.string().trim().max(200).optional(), limit: z.coerce.number().int().min(1).max(1000).optional() }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    return { ok: true, items: listTemplates(context.db, context.masterKey, parsed.data.q, parsed.data.limit) };
+  });
+
+  app.post("/api/templates", async (request, reply) => {
+    const parsed = templateCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    return { ok: true, template: createTemplate(context.db, context.masterKey, parsed.data) };
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/templates/:id", async (request, reply) => {
+    const parsed = templateUpdateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    const template = updateTemplate(context.db, context.masterKey, request.params.id, parsed.data);
+    if (!template) return reply.code(404).send({ ok: false, message: "模板不存在。" });
+    return { ok: true, template };
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/templates/:id", async (request, reply) => {
+    if (!deleteTemplate(context.db, request.params.id)) {
+      return reply.code(404).send({ ok: false, message: "模板不存在。" });
+    }
+    return { ok: true };
+  });
+
+  app.get("/api/calendar/events", async (request, reply) => {
+    const parsed = z.object({
+      after: z.string().datetime({ offset: true }).optional(),
+      before: z.string().datetime({ offset: true }).optional(),
+      limit: z.coerce.number().int().min(1).max(5000).optional(),
+    }).strict().safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    return { ok: true, items: listCalendarEvents(context.db, context.masterKey, { after: parsed.data.after, before: parsed.data.before }, parsed.data.limit) };
+  });
+
+  app.post("/api/calendar/events", async (request, reply) => {
+    const parsed = calendarEventCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    return { ok: true, event: createCalendarEvent(context.db, context.masterKey, parsed.data) };
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/calendar/events/:id", async (request, reply) => {
+    const parsed = calendarEventUpdateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    try {
+      const event = updateCalendarEvent(context.db, context.masterKey, request.params.id, parsed.data);
+      if (!event) return reply.code(404).send({ ok: false, message: "事件不存在。" });
+      return { ok: true, event };
+    } catch (error) {
+      if (error instanceof CalendarEventTimeConflictError) {
+        return reply.code(400).send({ ok: false, message: "事件结束时间不能早于开始时间。" });
+      }
+      throw error;
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/calendar/events/:id", async (request, reply) => {
+    if (!deleteCalendarEvent(context.db, request.params.id)) {
+      return reply.code(404).send({ ok: false, message: "事件不存在。" });
+    }
+    return { ok: true };
+  });
+
   app.post("/api/accounts/discover", async (request, reply) => {
     const parsed = accountDiscoverySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: "invalid_request", message: validationMessage(parsed.error) });
@@ -1358,25 +2107,25 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       provider.usernameMode ?? "email", now,
     );
 
-    let sync: Awaited<ReturnType<typeof syncAccount>> | null = null;
-    let syncWarning: string | null = null;
-    try {
-      sync = await syncAccount(
-        context.db,
-        context.masterKey,
-        id,
-        config.syncMessageLimit,
-        context.oauthService,
-        context.agentMailEvents,
-      );
-      if (sync.failedFolders > 0) syncWarning = `${sync.failedFolders} 个文件夹同步失败，其他邮件已完成同步`;
-    } catch (error) {
-      const failure = mailFailure(error, detected.credentialHint);
-      syncWarning = failure.body.message;
-      app.log.warn({ accountId: id, code: failure.body.code }, "Initial manually configured mailbox sync failed");
-    }
+    // The first full mailbox sync runs in the background so this request
+    // returns as soon as the credentials are verified; the renderer's
+    // post-add refresh together with the periodic sync loop pick up the
+    // folders and messages shortly after.
+    void syncAccount(
+      context.db,
+      context.masterKey,
+      id,
+      getSyncMessageLimit(context.db),
+      context.oauthService,
+      context.agentMailEvents,
+    )
+      .then(() => emitAccountSynced(context.db, context.serverEvents, id))
+      .catch((error) => {
+        const failure = mailFailure(error, detected.credentialHint);
+        app.log.warn({ accountId: id, code: failure.body.code }, "Initial manually configured mailbox sync failed");
+      });
     const row = context.db.prepare("SELECT * FROM accounts WHERE id = ?").get(id) as AccountRecord;
-    return reply.code(201).send({ ok: true, account: publicAccount(row), sync, syncWarning });
+    return reply.code(201).send({ ok: true, account: publicAccount(row), sync: null, syncWarning: row.last_sync_warning_code });
   });
 
   app.post("/api/accounts/test", async (request, reply) => {
@@ -1473,27 +2222,25 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         now,
       );
 
-    let sync: Awaited<ReturnType<typeof syncAccount>> | null = null;
-    let syncWarning: string | null = null;
-    try {
-      sync = await syncAccount(
-        context.db,
-        context.masterKey,
-        id,
-        config.syncMessageLimit,
-        context.oauthService,
-        context.agentMailEvents,
-      );
-      if (sync.failedFolders > 0) {
-        syncWarning = `${sync.failedFolders} 个文件夹同步失败，其他邮件已完成同步`;
-      }
-    } catch (error) {
-      const failure = mailFailure(error, provider.credentialHint);
-      syncWarning = failure.body.message;
-      app.log.warn({ accountId: id, code: failure.body.code }, "Initial mailbox sync failed");
-    }
+    // The first full mailbox sync runs in the background so this request
+    // returns as soon as the credentials are verified; the renderer's
+    // post-add refresh together with the periodic sync loop pick up the
+    // folders and messages shortly after.
+    void syncAccount(
+      context.db,
+      context.masterKey,
+      id,
+      getSyncMessageLimit(context.db),
+      context.oauthService,
+      context.agentMailEvents,
+    )
+      .then(() => emitAccountSynced(context.db, context.serverEvents, id))
+      .catch((error) => {
+        const failure = mailFailure(error, provider.credentialHint);
+        app.log.warn({ accountId: id, code: failure.body.code }, "Initial mailbox sync failed");
+      });
     const row = context.db.prepare("SELECT * FROM accounts WHERE id = ?").get(id) as AccountRecord;
-    return reply.code(201).send({ ok: true, account: publicAccount(row), sync, syncWarning });
+    return reply.code(201).send({ ok: true, account: publicAccount(row), sync: null, syncWarning: row.last_sync_warning_code });
   });
 
   app.delete<{ Params: { id: string } }>("/api/accounts/:id", async (request, reply) => {
@@ -1523,6 +2270,16 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     return { ok: true };
   });
 
+  app.patch<{ Params: { id: string } }>("/api/accounts/:id/signature", async (request, reply) => {
+    const parsed = accountSignaturePatchSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    const result = context.db
+      .prepare("UPDATE accounts SET signature = ? WHERE id = ?")
+      .run(parsed.data.signature, request.params.id);
+    if (!result.changes) return reply.code(404).send({ ok: false, message: "邮箱不存在。" });
+    return { ok: true };
+  });
+
   app.get<{ Querystring: { accountId?: string; limit?: string } }>("/api/submissions", async (request, reply) => {
     const parsed = submissionsQuerySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
@@ -1540,76 +2297,135 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   });
 
   app.post<{ Params: { id: string } }>("/api/accounts/:id/sync", async (request, reply) => {
+    const id = z.uuid().safeParse(request.params.id);
+    if (!id.success) return reply.code(400).send({ ok: false, message: "账号标识无效。" });
+    const accountId = id.data;
+    // A first full sync can run for minutes. The renderer gives up after 30s,
+    // so stop the pass as soon as the client disconnects instead of letting
+    // the IMAP session ride out its own (long) timeouts.
+    const syncController = new AbortController();
+    const syncRuntimeCap = setTimeout(() => syncController.abort(), 3 * 60_000);
+    request.raw.once("aborted", () => syncController.abort());
     try {
       const result = await syncAccount(
         context.db,
         context.masterKey,
-        request.params.id,
-        config.syncMessageLimit,
+        accountId,
+        getSyncMessageLimit(context.db),
         context.oauthService,
         context.agentMailEvents,
+        syncController.signal,
       );
+      emitAccountSynced(context.db, context.serverEvents, accountId);
       return { ok: true, ...result };
     } catch (error) {
-      const account = context.db.prepare("SELECT * FROM accounts WHERE id = ?").get(request.params.id) as AccountRecord | undefined;
+      if (syncController.signal.aborted) {
+        return reply.code(499).send({ ok: false, code: "cancelled", message: "同步已取消或超时。" });
+      }
+      const account = context.db.prepare("SELECT * FROM accounts WHERE id = ?").get(accountId) as AccountRecord | undefined;
       const failure = mailFailure(error, account ? detectProvider(account.email).credentialHint : undefined);
       return reply.code(failure.statusCode).send(failure.body);
+    } finally {
+      clearTimeout(syncRuntimeCap);
     }
   });
 
-  app.get<{ Querystring: { accountId?: string; folder?: string; q?: string; page?: string; pageSize?: string; starred?: string; unread?: string; archived?: string } }>(
+  app.get<{ Querystring: { accountId?: string; folder?: string; q?: string; page?: string; pageSize?: string; starred?: string; unread?: string; archived?: string; snoozed?: string; hasAttachments?: string; attachmentKind?: string; after?: string; before?: string; scope?: string } }>(
     "/api/messages",
     async (request, reply) => {
       const page = Math.max(1, Number.parseInt(request.query.page ?? "1", 10) || 1);
       const pageSize = Math.min(100, Math.max(10, Number.parseInt(request.query.pageSize ?? "40", 10) || 40));
+      const query = request.query.q?.trim();
+      // scope=all searches every account and mailbox regardless of the current
+      // view. It is search-only: without q every restriction below applies as
+      // usual, so the parameter can never widen a normal list request.
+      const globalSearch = request.query.scope === "all" && Boolean(query);
+      if (request.query.attachmentKind !== undefined && !isValidAttachmentKind(request.query.attachmentKind)) {
+        return reply.code(400).send({ ok: false, message: "无效的附件类型。" });
+      }
+      const afterBound = parseListDateBound(request.query.after);
+      const beforeBound = parseListDateBound(request.query.before);
+      if (afterBound === null || beforeBound === null) {
+        return reply.code(400).send({ ok: false, message: "无效的日期范围。" });
+      }
       const filters: string[] = [];
       const params: unknown[] = [];
-      if (request.query.accountId) {
+      if (!globalSearch && request.query.accountId) {
         filters.push("m.account_id = ?");
         params.push(request.query.accountId);
       }
-      if (request.query.folder) {
+      if (!globalSearch && request.query.folder) {
         filters.push(`${effectiveMailboxExpression} = ?`);
         params.push(request.query.folder);
-      } else if (request.query.archived === "1") {
+      } else if (!globalSearch && request.query.archived === "1") {
         filters.push(archivedMessageFilter);
-      } else if (request.query.starred === "1") {
+      } else if (!globalSearch && request.query.starred === "1") {
         // Starred is a cross-folder view, unlike the normal unified inbox.
         filters.push("m.flags_json LIKE '%\\\\Flagged%'");
-      } else {
+      } else if (!globalSearch && request.query.snoozed === "1") {
+        // The Snoozed view lists messages whose snooze has not fired yet.
+        const nowIso = new Date().toISOString();
+        filters.push("m.snoozed_until IS NOT NULL AND m.snoozed_until > ?");
+        params.push(nowIso);
+      } else if (!globalSearch && request.query.hasAttachments === "1") {
+        // The Attachments view replaces the inbox fallback: every folder of
+        // the bound account (all accounts when none is bound) participates.
+        filters.push("m.has_attachments = 1");
+      } else if (!globalSearch) {
         filters.push(inboxMessageFilter);
+        // Snoozed messages are hidden from the unified inbox until due.
+        filters.push("(m.snoozed_until IS NULL OR m.snoozed_until <= ?)");
+        params.push(new Date().toISOString());
       }
-      if (request.query.unread === "1") {
+      if (!globalSearch && request.query.unread === "1") {
         filters.push("m.flags_json NOT LIKE '%\\\\Seen%'");
       }
+      if (request.query.attachmentKind) {
+        // The kind column is JSON text; the quoted token prevents one kind
+        // from matching another kind's substring.
+        filters.push("m.attachment_kinds_json LIKE ?");
+        params.push(`%"${request.query.attachmentKind}"%`);
+      }
+      if (afterBound) {
+        filters.push("COALESCE(m.sent_at, m.created_at) >= ?");
+        params.push(afterBound);
+      }
+      if (beforeBound) {
+        filters.push("COALESCE(m.sent_at, m.created_at) < ?");
+        params.push(beforeBound);
+      }
       const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
-      const query = request.query.q?.trim();
       if (query) {
-        const candidateCount = Number(
-          (context.db.prepare(`SELECT COUNT(*) AS count FROM messages m ${where}`).get(...params) as { count: number }).count,
+        // FTS5 substring/token search over the decrypted-payload index. The
+        // trigram tokenizer accelerates LIKE patterns of three or more
+        // characters and still answers shorter patterns (including two-character
+        // CJK terms) by scanning plaintext index terms, so matching never needs
+        // to decrypt the whole candidate set and the old candidate-count cap
+        // (search_scope_too_large) no longer applies at any data scale.
+        const pattern = `%${ftsLikeEscape(query)}%`;
+        const ftsMatch = `(fts.subject LIKE ? ESCAPE '\\'
+          OR fts.from_name LIKE ? ESCAPE '\\'
+          OR fts.from_address LIKE ? ESCAPE '\\'
+          OR fts.body LIKE ? ESCAPE '\\')`;
+        const ftsParams = [pattern, pattern, pattern, pattern];
+        const join = `
+          FROM messages_fts fts
+          JOIN messages m ON m.id = fts.message_id
+          JOIN accounts a ON a.id = m.account_id`;
+        const ftsWhere = filters.length ? `${ftsMatch} AND (${filters.join(" AND ")})` : ftsMatch;
+        const total = Number(
+          (context.db.prepare(`SELECT COUNT(*) AS count ${join} WHERE ${ftsWhere}`).get(...ftsParams, ...params) as { count: number }).count,
         );
-        if (candidateCount > MAX_ENCRYPTED_SEARCH_CANDIDATES) {
-          return reply.code(422).send({
-            ok: false,
-            code: "search_scope_too_large",
-            message: "搜索范围过大，请先选择一个邮箱或文件夹后再搜索。",
-          });
-        }
-        const candidates = context.db.prepare(`
-          SELECT m.*, a.email AS account_email, a.provider_name
-          FROM messages m JOIN accounts a ON a.id = m.account_id
-          ${where}
-          ORDER BY COALESCE(m.sent_at, m.created_at) DESC
-        `).all(...params) as MessageStorageRow[];
-        const matches = candidates.filter((row) =>
-          messagePayloadMatchesQuery(messagePayloadForRow(row, context.masterKey), query));
-        const offset = (page - 1) * pageSize;
-        return {
-          items: matches.slice(offset, offset + pageSize).map((row) => messageRow(row, context.masterKey)),
-          total: matches.length,
-          page,
-          pageSize,
-        };
+        const rows = context.db
+          .prepare(`
+            SELECT m.*, a.email AS account_email, a.provider_name
+            ${join}
+            WHERE ${ftsWhere}
+            ORDER BY COALESCE(m.sent_at, m.created_at) DESC
+            LIMIT ? OFFSET ?
+          `)
+          .all(...ftsParams, ...params, pageSize, (page - 1) * pageSize) as MessageStorageRow[];
+        return { items: rows.map((row) => messageRow(row, context.masterKey)), total, page, pageSize };
       }
       const total = Number(
         (context.db.prepare(`SELECT COUNT(*) AS count FROM messages m ${where}`).get(...params) as { count: number }).count,
@@ -1639,10 +2455,15 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   });
 
   // This exposes capability only. It deliberately never returns endpoint,
-  // provider, or credential details to the reader UI.
+  // provider, credential, model-cache, or file-path details to the reader UI.
   app.get("/api/translation/status", async () => {
     if (!translationConfigurationManaged) return { enabled: translationService.isConfigured() };
     const summary = translationConfigurationStore.summary();
+    // When no external service is configured the built-in free translator
+    // (Google Translate + MyMemory fallback) is always available.
+    if (!summary.enabled && !summary.configurationError) {
+      return { enabled: true, mode: "builtin" as const };
+    }
     return {
       enabled: summary.enabled,
       ...(summary.configurationError ? { configurationError: summary.configurationError } : {}),
@@ -1681,7 +2502,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
     try {
       const summary = translationConfigurationStore.update(parsed.data as TranslationConfigurationPatch);
-      translationService = translationConfigurationStore.createService();
+      translationService = buildTranslationService(summary);
       return { ok: true, ...summary };
     } catch (error) {
       if (error instanceof TranslationServiceError) {
@@ -1710,7 +2531,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
     try {
       const summary = translationConfigurationStore.clear();
-      translationService = translationConfigurationStore.createService();
+      translationService = buildTranslationService(summary);
       return { ok: true, ...summary };
     } catch {
       app.log.warn("Could not remove translation configuration");
@@ -1718,6 +2539,72 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         ok: false,
         code: "translation_configuration_failed",
         message: "Translation configuration could not be removed.",
+      });
+    }
+  });
+
+  // Translates an array of plain-text segments in parallel. Used by the
+  // reader's style-preserving translation: the client extracts the visible
+  // text nodes of the sanitized HTML body, sends them here, and writes the
+  // translations back into the DOM so markup, links, and inline styles survive.
+  app.post<{ Body: { targetLocale?: unknown; segments?: unknown } }>("/api/messages/translate-segments", async (request, reply) => {
+    const body = request.body ?? {};
+    if (
+      typeof body.targetLocale !== "string" || !body.targetLocale
+      || !Array.isArray(body.segments) || body.segments.length === 0
+      || body.segments.some((segment) => typeof segment !== "string" || !segment.trim())
+    ) {
+      return reply.code(400).send({
+        ok: false,
+        code: "translation_invalid_target",
+        message: "The translation target or segments are invalid.",
+      });
+    }
+    if (body.segments.length > 1_000) {
+      return reply.code(400).send({
+        ok: false,
+        code: "translation_request_too_large",
+        message: "Too many translation segments.",
+      });
+    }
+    const effectiveService = translationService;
+    // Cancel the remaining blocks when the client disconnects or the app
+    // shuts down instead of finishing the whole batch on a dead request.
+    const requestAbortController = new AbortController();
+    const abortForClientDisconnect = () => requestAbortController.abort();
+    request.raw.once("aborted", abortForClientDisconnect);
+    reply.raw.once("close", abortForClientDisconnect);
+    const abortForShutdown = () => requestAbortController.abort();
+    if (translationAbortController.signal.aborted) abortForShutdown();
+    else translationAbortController.signal.addEventListener("abort", abortForShutdown, { once: true });
+    try {
+      // Merge consecutive segments into engine-safe blocks (see
+      // translation-segments.ts) so hundreds of text nodes become a handful of
+      // translation requests, staying under the free engines' rate limits.
+      const blocks = buildTranslationBlocks(body.segments);
+      const translations: string[] = new Array(body.segments.length);
+      for (const block of blocks) {
+        if (requestAbortController.signal.aborted) break;
+        if (block.text.trim() === "") continue;
+        const urlGuard = protectTranslationUrls(block.text);
+        const result = await effectiveService.translate(urlGuard.text, body.targetLocale as string, requestAbortController.signal);
+        const translatedBlock = restoreTranslationUrls(result.translatedText, urlGuard.urls, urlGuard.text);
+        splitTranslatedBlock(translatedBlock, block.indices, translations);
+      }
+      return { ok: true as const, translations };
+    } catch (error) {
+      if (error instanceof TranslationServiceError) {
+        return reply.code(translationErrorStatus(error)).send({
+          ok: false,
+          code: error.code,
+          message: error.message,
+        });
+      }
+      app.log.warn("Segment translation failed");
+      return reply.code(500).send({
+        ok: false,
+        code: "translation_failed",
+        message: "The message text could not be translated.",
       });
     }
   });
@@ -1732,6 +2619,8 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       });
     }
 
+    const llmProviders = agentService?.providerList().items.filter((p) => p.configured) ?? [];
+
     try {
       const stored = messagePayloadById(context.db, context.masterKey, request.params.id);
       if (!stored) {
@@ -1739,19 +2628,101 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
           ok: false,
           code: "translation_content_unavailable",
           message: "The selected message is no longer available.",
+          ...(llmProviders.length > 0 ? { llmAvailable: true } : {}),
         });
       }
 
-      // `textBody` is the parser-produced plain-text mail body. Do not send
-      // headers, addresses, attachments, snippets, or raw HTML to a provider.
-      const result = await translationService.translate(stored.payload.textBody, parsed.data.targetLocale, translationAbortController.signal);
-      return { ok: true, targetLocale: parsed.data.targetLocale, ...result };
+      // Prefer the parser-produced plain-text body; fall back to stripping
+      // HTML when the message has no textBody. Never send headers, addresses,
+      // attachments, snippets, or raw HTML to a translation provider.
+      const translatableText = translatableTextFromPayload(stored.payload);
+      if (!translatableText) {
+        return reply.code(422).send({
+          ok: false,
+          code: "translation_content_unavailable",
+          message: "The message does not contain translatable text.",
+          ...(llmProviders.length > 0 ? { llmAvailable: true } : {}),
+        });
+      }
+      // translationService already routes through the user's primary/backup
+      // chain (built-in Google/MyMemory when nothing is configured), so it is
+      // used directly in both single-chunk and streamed multi-chunk paths.
+      const effectiveService = translationService;
+      // Protect URLs before chunking so link-only bodies survive translation
+      // (see translation-url-guard.ts). Placeholders are single tokens, so a URL
+      // never splits across a chunk boundary.
+      const urlGuard = protectTranslationUrls(translatableText);
+      const chunks = splitTranslationChunks(urlGuard.text);
+      const restoreUrls = (value: string) => restoreTranslationUrls(value, urlGuard.urls, urlGuard.text);
+      // Single-chunk translations keep the original JSON response for backward
+      // compatibility. Multi-chunk translations stream partial results via SSE
+      // so the reader sees incremental progress instead of waiting for the
+      // whole message to finish.
+      // Combine the shutdown signal with client disconnect so cancelling the
+      // request stops the translation instead of wasting API calls.
+      const requestAbortController = new AbortController();
+      const abortForClientDisconnect = () => requestAbortController.abort();
+      request.raw.once("aborted", abortForClientDisconnect);
+      reply.raw.once("close", abortForClientDisconnect);
+      const abortForShutdown = () => requestAbortController.abort();
+      if (translationAbortController.signal.aborted) abortForShutdown();
+      else translationAbortController.signal.addEventListener("abort", abortForShutdown, { once: true });
+      if (chunks.length <= 1) {
+        const result = await effectiveService.translate(urlGuard.text, parsed.data.targetLocale, requestAbortController.signal);
+        return { ok: true, targetLocale: parsed.data.targetLocale, ...result, translatedText: restoreUrls(result.translatedText) };
+      }
+
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      });
+      const send = (data: Record<string, unknown>) => {
+        reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+      try {
+        const parts: string[] = [];
+        let detectedLanguage: string | undefined;
+        for (const [index, chunk] of chunks.entries()) {
+          if (requestAbortController.signal.aborted) break;
+          const chunkResult = await effectiveService.translate(chunk, parsed.data.targetLocale, requestAbortController.signal);
+          parts.push(chunkResult.translatedText);
+          if (!detectedLanguage && chunkResult.detectedLanguage) {
+            detectedLanguage = chunkResult.detectedLanguage;
+          }
+          // Restore URLs on the incremental preview so links stay clickable
+          // during streaming too.
+          send({ type: "chunk", partial: restoreUrls(parts.join("\n")), chunkIndex: index, totalChunks: chunks.length });
+        }
+        if (!requestAbortController.signal.aborted) {
+          send({ type: "complete", translatedText: restoreUrls(parts.join("\n")), ...(detectedLanguage ? { detectedLanguage } : {}) });
+        }
+      } catch (error) {
+        if (requestAbortController.signal.aborted) {
+          // Client cancelled — no error event, just end the stream.
+        } else if (!(error instanceof TranslationServiceError)) {
+          app.log.warn({ messageId: request.params.id }, "Selected message translation failed");
+          const code = "translation_failed";
+          const message = "The selected message could not be translated.";
+          try { send({ type: "error", message, code }); } catch { /* client may have disconnected */ }
+        } else {
+          try { send({ type: "error", message: error.message, code: error.code }); } catch { /* client may have disconnected */ }
+        }
+      } finally {
+        request.raw.removeListener("aborted", abortForClientDisconnect);
+        reply.raw.removeListener("close", abortForClientDisconnect);
+        translationAbortController.signal.removeEventListener("abort", abortForShutdown);
+        try { reply.raw.end(); } catch { /* response already closed */ }
+      }
+      return reply;
     } catch (error) {
       if (error instanceof TranslationServiceError) {
         return reply.code(translationErrorStatus(error)).send({
           ok: false,
           code: error.code,
           message: error.message,
+          ...(llmProviders.length > 0 ? { llmAvailable: true } : {}),
         });
       }
       // Keep message data and provider details out of logs and HTTP errors.
@@ -1760,7 +2731,117 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         ok: false,
         code: "translation_failed",
         message: "The selected message could not be translated.",
+        ...(llmProviders.length > 0 ? { llmAvailable: true } : {}),
       });
+    }
+  });
+
+  // LLM-powered translation fallback. Uses a configured Agent provider to
+  // translate the message when the external free service is unavailable.
+  app.post<{ Params: { id: string } }>("/api/messages/:id/translate-llm", async (request, reply) => {
+    if (!agentService) {
+      return reply.code(503).send({ ok: false, code: "agent_unavailable", message: "Agent 服务当前不可用。" });
+    }
+    const bodySchema = z.object({
+      targetLocale: z.string().trim().min(2).max(16),
+      providerId: z.string().trim().min(1).max(128),
+      model: z.string().trim().min(1).max(256).optional(),
+    });
+    const parsed = bodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ ok: false, code: "translation_invalid_target", message: "The translation request is invalid." });
+    }
+
+    try {
+      // Validate the locale structure but pass the full locale through so the
+      // LLM prompt can distinguish variants like zh-CN vs zh-TW.
+      translationLanguageForLocale(parsed.data.targetLocale);
+      const stored = messagePayloadById(context.db, context.masterKey, request.params.id);
+      if (!stored) {
+        return reply.code(404).send({ ok: false, code: "translation_content_unavailable", message: "The selected message is no longer available." });
+      }
+      if (!stored.payload.textBody?.trim() && !stored.payload.htmlBody?.trim()) {
+        return reply.code(422).send({ ok: false, code: "translation_content_unavailable", message: "The message does not contain translatable text." });
+      }
+      const translatableText = translatableTextFromPayload(stored.payload);
+      if (!translatableText) {
+        return reply.code(422).send({ ok: false, code: "translation_content_unavailable", message: "The message does not contain translatable text." });
+      }
+      if (translatableText.length > MAX_TRANSLATION_TEXT_LENGTH) {
+        return reply.code(413).send({ ok: false, code: "translation_request_too_large", message: "The message is too large to translate." });
+      }
+      // Combine the shutdown signal with client disconnect so cancelling the
+      // request aborts the in-flight LLM call instead of wasting provider quota.
+      const requestAbortController = new AbortController();
+      const abortForClientDisconnect = () => requestAbortController.abort();
+      request.raw.once("aborted", abortForClientDisconnect);
+      reply.raw.once("close", abortForClientDisconnect);
+      const abortForShutdown = () => requestAbortController.abort();
+      if (translationAbortController.signal.aborted) abortForShutdown();
+      else translationAbortController.signal.addEventListener("abort", abortForShutdown, { once: true });
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      });
+      const send = (data: Record<string, unknown>) => {
+        reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+      try {
+        // Protect URLs so link-only bodies survive LLM translation (placeholders
+        // are opaque tokens that stay intact as the model streams).
+        const urlGuard = protectTranslationUrls(translatableText);
+        const restoreUrls = (value: string) => restoreTranslationUrls(value, urlGuard.urls, urlGuard.text, false);
+        // Stream every LLM token through SSE so the reader sees the
+        // translation appear incrementally instead of waiting for the whole
+        // model response to finish.
+        let partial = "";
+        const result = await agentService.translateWithProvider(
+          parsed.data.providerId,
+          urlGuard.text,
+          parsed.data.targetLocale,
+          {
+            ...(parsed.data.model ? { model: parsed.data.model } : {}),
+            signal: requestAbortController.signal,
+            onDelta: (delta) => {
+              partial += delta;
+              if (partial.trim()) {
+                try { send({ type: "chunk", partial: restoreUrls(partial) }); } catch { /* client may have disconnected */ }
+              }
+            },
+          },
+        );
+        if (!requestAbortController.signal.aborted) {
+          send({ type: "complete", translatedText: restoreUrls(result.translatedText) });
+        }
+      } catch (error) {
+        if (requestAbortController.signal.aborted) {
+          // Client cancelled — no error event, just end the stream.
+        } else if (error instanceof TranslationServiceError) {
+          try { send({ type: "error", message: error.message, code: error.code }); } catch { /* client may have disconnected */ }
+        } else if (error instanceof AgentServiceError) {
+          try { send({ type: "error", message: error.message, code: error.code }); } catch { /* client may have disconnected */ }
+        } else {
+          app.log.warn({ messageId: request.params.id }, "LLM translation failed");
+          try { send({ type: "error", message: "The selected message could not be translated.", code: "translation_failed" }); } catch { /* client may have disconnected */ }
+        }
+      } finally {
+        request.raw.removeListener("aborted", abortForClientDisconnect);
+        reply.raw.removeListener("close", abortForClientDisconnect);
+        translationAbortController.signal.removeEventListener("abort", abortForShutdown);
+        try { reply.raw.end(); } catch { /* response already closed */ }
+      }
+      return reply;
+    } catch (error) {
+      if (error instanceof TranslationServiceError) {
+        return reply.code(translationErrorStatus(error)).send({ ok: false, code: error.code, message: error.message });
+      }
+      if (error instanceof AgentServiceError) {
+        return reply.code(error.statusCode).send({ ok: false, code: error.code, message: error.message });
+      }
+      app.log.warn({ messageId: request.params.id }, "LLM translation failed");
+      return reply.code(500).send({ ok: false, code: "translation_failed", message: "The selected message could not be translated." });
     }
   });
 
@@ -1868,6 +2949,59 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
+  app.get<{ Params: { id: string } }>("/api/messages/:id/eml", async (request, reply) => {
+    const messageId = z.string().uuid().safeParse(request.params.id);
+    if (!messageId.success) return reply.code(400).send({ ok: false, message: "邮件标识无效。" });
+    try {
+      const download = await downloadMessageSource(context.db, context.masterKey, messageId.data, context.oauthService);
+      const subject = download.subject.replace(/[\r\n]+/g, " ").trim().slice(0, 80);
+      const filename = `${subject || "message"}.eml`;
+      reply
+        .type("message/rfc822")
+        .header("Content-Disposition", `attachment; filename*=UTF-8''${contentDispositionFilename(filename)}`)
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Cache-Control", "no-store");
+      return reply.send(download.source);
+    } catch (error) {
+      const failure = mailFailure(error);
+      const statusCode = failure.body.code === "unknown" ? attachmentErrorStatus(error) : failure.statusCode;
+      return reply.code(statusCode).send(mailFailureBody(failure, attachmentActionErrorMessage(error)));
+    }
+  });
+
+  app.get("/api/backup", async (_request, reply) => {
+    // Streams every stored message's provider source as .eml entries inside
+    // one zip. Entries are appended as they arrive so memory stays bounded
+    // regardless of mailbox size; per-message failures land in the report.
+    const zip = new ZipFile();
+    // A client disconnect will emit on the output stream; swallow it — the
+    // socket error is already handled by Fastify and a crash here would only
+    // take the process down with an already-aborted transfer.
+    zip.outputStream.on("error", () => undefined);
+    const backupDate = new Date().toISOString().slice(0, 10);
+    reply
+      .type("application/zip")
+      .header("Content-Disposition", `attachment; filename*=UTF-8''${contentDispositionFilename(`nami-mail-backup-${backupDate}.zip`)}`)
+      .header("X-Content-Type-Options", "nosniff")
+      .header("Cache-Control", "no-store");
+    reply.send(zip.outputStream);
+    try {
+      const report = await collectMailBackup(context.db, context.masterKey, {
+        accessTokenProvider: context.oauthService,
+        emit: (entry) => zip.addBuffer(entry.source, entry.path),
+      });
+      zip.addBuffer(Buffer.from(`${JSON.stringify(report, null, 2)}\n`), "export-report.json");
+    } catch (error) {
+      zip.addBuffer(
+        Buffer.from(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }, null, 2)),
+        "export-error.json",
+      );
+    } finally {
+      zip.end();
+    }
+    return reply;
+  });
+
   app.delete<{ Params: { id: string } }>("/api/messages/:id/draft", async (request, reply) => {
     const stored = context.db.prepare(`
       SELECT a.*
@@ -1894,17 +3028,153 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
+  app.patch("/api/messages/batch/flags", async (request, reply) => {
+    const parsed = batchMessageFlagsPatchSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    try {
+      // Enqueue one durable operation per affected account, mirroring the
+      // batch move route: each row waits for that account's write slot, so a
+      // batch issued while another move or flag update is in flight queues
+      // instead of racing it.
+      const rows = context.db
+        .prepare(`SELECT id, account_id FROM messages WHERE id IN (${parsed.data.ids.map(() => "?").join(", ")})`)
+        .all(...parsed.data.ids) as Array<{ id: string; account_id: string }>;
+      const idsByAccount = new Map<string, string[]>();
+      for (const row of rows) {
+        const list = idsByAccount.get(row.account_id);
+        if (list) list.push(row.id);
+        else idsByAccount.set(row.account_id, [row.id]);
+      }
+      const knownIds = new Set(rows.map((row) => row.id));
+      let failed = 0;
+      for (const id of parsed.data.ids) {
+        if (!knownIds.has(id)) failed += 1;
+      }
+      let updated = 0;
+      const changedIds: string[] = [];
+      for (const [accountId, accountIds] of idsByAccount) {
+        const outcome = await operationQueue.enqueueAndRun<{ updated: number; failed: number; changedIds: string[] }>(
+          [accountId],
+          "flags",
+          { ids: accountIds, patch: parsed.data.patch },
+        );
+        updated += outcome.updated;
+        failed += outcome.failed;
+        changedIds.push(...outcome.changedIds);
+      }
+      return { ok: true, updated, failed, changedIds };
+    } catch (error) {
+      request.log.error({ error }, "Batch flag update failed");
+      return reply.code(500).send({ ok: false, message: "批量更新标志失败。" });
+    }
+  });
+
+  app.post("/api/messages/batch/move", async (request, reply) => {
+    const parsed = batchMessageMoveSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    try {
+      // Enqueue one durable operation per affected account. Each row waits
+      // for that account's write slot, so a batch issued while another move
+      // is in flight queues instead of failing the whole request.
+      const rows = context.db
+        .prepare(`SELECT id, account_id FROM messages WHERE id IN (${parsed.data.ids.map(() => "?").join(", ")})`)
+        .all(...parsed.data.ids) as Array<{ id: string; account_id: string }>;
+      const idsByAccount = new Map<string, string[]>();
+      for (const row of rows) {
+        const list = idsByAccount.get(row.account_id);
+        if (list) list.push(row.id);
+        else idsByAccount.set(row.account_id, [row.id]);
+      }
+      const knownIds = new Set(rows.map((row) => row.id));
+      const failures: Array<{ id: string; message: string }> = [];
+      for (const id of parsed.data.ids) {
+        if (!knownIds.has(id)) failures.push({ id, message: "Message not found." });
+      }
+      let updated = 0;
+      const pendingAccounts = new Set<string>();
+      for (const [accountId, accountIds] of idsByAccount) {
+        const outcome = await operationQueue.enqueueAndRun<BatchMessageMoveOutcome>(
+          [accountId],
+          "batch-move",
+          { ids: accountIds, target: parsed.data.target },
+        );
+        updated += outcome.updated;
+        failures.push(...outcome.failures);
+        for (const pending of outcome.pendingAccounts) pendingAccounts.add(pending);
+      }
+      for (const failure of failures) {
+        request.log.warn({ messageId: failure.id, reason: failure.message }, "Batch move failed for message");
+      }
+      for (const accountId of pendingAccounts) {
+        // Some providers cannot confirm a batch MOVE outcome synchronously.
+        // Reconcile each affected account in the background so the renderer
+        // receives the verified destination instead of a stale local snapshot.
+        void syncAccount(
+          context.db,
+          context.masterKey,
+          accountId,
+          getSyncMessageLimit(context.db),
+          context.oauthService,
+          context.agentMailEvents,
+        )
+          .then(() => emitAccountSynced(context.db, context.serverEvents, accountId))
+          .catch(() => request.log.warn({ accountId }, "Batch move cache refresh is pending"));
+      }
+      return { ok: true, updated, failed: failures.length, failures };
+    } catch (error) {
+      request.log.error({ error }, "Batch move failed");
+      return reply.code(500).send({ ok: false, message: "批量移动失败。" });
+    }
+  });
+
+  app.post("/api/batch-jobs", async (request, reply) => {
+    const parsed = batchJobCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    const job = createBatchJob(parsed.data, {
+      db: context.db,
+      masterKey: context.masterKey,
+      oauthService: context.oauthService,
+      agentMailEvents: context.agentMailEvents,
+    });
+    // The job runs in the background; the renderer polls GET for progress.
+    return { ok: true, jobId: job.id };
+  });
+
+  app.get<{ Params: { id: string } }>("/api/batch-jobs/:id", async (request, reply) => {
+    const job = getBatchJobSnapshot(request.params.id);
+    if (!job) {
+      request.log.warn({ jobId: request.params.id }, "Batch job not found (server restarted?)");
+      return reply.code(404).send({ ok: false, message: "批量任务不存在。" });
+    }
+    return { ok: true, job };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/batch-jobs/:id/undo", async (request, reply) => {
+    const outcome = undoBatchJob(request.params.id, {
+      db: context.db,
+      masterKey: context.masterKey,
+      oauthService: context.oauthService,
+      agentMailEvents: context.agentMailEvents,
+    });
+    if (!outcome.ok) {
+      const status = outcome.reason === "not_found" ? 404 : 409;
+      return reply.code(status).send({ ok: false, jobId: request.params.id, reason: outcome.reason, message: "无法撤销该批量任务。" });
+    }
+    return { ok: true, jobId: outcome.jobId };
+  });
+
   app.patch<{ Params: { id: string } }>("/api/messages/:id", async (request, reply) => {
     const parsed = messageFlagsPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
     try {
-      await updateMessageFlags(
-        context.db,
-        context.masterKey,
-        request.params.id,
-        parsed.data,
-        context.oauthService,
-        context.agentMailEvents,
+      // Queued behind any move in flight on the message's account, so
+      // starring a message right after deleting another one waits its turn
+      // instead of failing with a "pending move" error.
+      const messageAccount = context.db.prepare("SELECT account_id FROM messages WHERE id = ?").get(request.params.id) as { account_id: string } | undefined;
+      await operationQueue.enqueueAndRun(
+        messageAccount ? [messageAccount.account_id] : [],
+        "flags",
+        { messageId: request.params.id, patch: parsed.data },
       );
       return { ok: true };
     } catch (error) {
@@ -1917,13 +3187,15 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const parsed = messageMoveSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
     try {
-      const { accountId, ...result } = await moveMessage(
-        context.db,
-        context.masterKey,
-        request.params.id,
-        parsed.data.target,
-        context.oauthService,
-        context.agentMailEvents,
+      // The operation is recorded durably before it waits for the account's
+      // write slot: a second delete issued while the first is still in flight
+      // queues behind it instead of failing, and survives a shutdown while
+      // queued (resumePending re-enqueues it on the next start).
+      const messageAccount = context.db.prepare("SELECT account_id FROM messages WHERE id = ?").get(request.params.id) as { account_id: string } | undefined;
+      const { accountId, ...result } = await operationQueue.enqueueAndRun<MessageMoveResult>(
+        messageAccount ? [messageAccount.account_id] : [],
+        "move",
+        { messageId: request.params.id, target: parsed.data.target },
       );
       if (result.refreshPending || result.locationUnverified) {
         // UIDPLUS may be unavailable, a provider may omit a stable message ID,
@@ -1934,16 +3206,47 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
           context.db,
           context.masterKey,
           accountId,
-          config.syncMessageLimit,
+          getSyncMessageLimit(context.db),
           context.oauthService,
           context.agentMailEvents,
         )
+          .then(() => emitAccountSynced(context.db, context.serverEvents, accountId))
           .catch(() => request.log.warn({ messageId: request.params.id }, "Message move cache refresh is pending"));
       }
       return { ok: true, ...result };
     } catch (error) {
       const failure = mailFailure(error);
       return reply.code(failure.statusCode).send(mailFailureBody(failure, moveActionErrorMessage(error)));
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/messages/:id/snooze", async (request, reply) => {
+    const parsed = z.object({
+      until: z.string().datetime({ offset: true }).refine((value) => new Date(value).getTime() > Date.now(), {
+        message: "稍后处理时间必须在未来。",
+      }),
+    }).strict().safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
+    const existing = context.db.prepare("SELECT 1 FROM messages WHERE id = ?").get(request.params.id);
+    if (!existing) return reply.code(404).send({ ok: false, message: "邮件不存在。" });
+    try {
+      setMessageSnoozed(context.db, request.params.id, parsed.data.until);
+      return { ok: true, snoozedUntil: parsed.data.until };
+    } catch (error) {
+      const failure = mailFailure(error);
+      return reply.code(failure.statusCode).send(mailFailureBody(failure, error instanceof Error ? error.message : "无法稍后处理这封邮件。"));
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/messages/:id/snooze", async (request, reply) => {
+    const existing = context.db.prepare("SELECT 1 FROM messages WHERE id = ?").get(request.params.id);
+    if (!existing) return reply.code(404).send({ ok: false, message: "邮件不存在。" });
+    try {
+      clearMessageSnooze(context.db, request.params.id);
+      return { ok: true };
+    } catch (error) {
+      const failure = mailFailure(error);
+      return reply.code(failure.statusCode).send(mailFailureBody(failure, error instanceof Error ? error.message : "无法取消稍后处理。"));
     }
   });
 
@@ -1957,6 +3260,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       accountId: _accountId,
       idempotencyKey,
       discardDraftId,
+      sendAt,
       attachmentTokens,
       ...message
     } = parsed.data;
@@ -1972,8 +3276,23 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         accountEmail: account.email,
         idempotencyKey,
         request: submissionRequest,
+        sendAt,
       });
       submissionId = prepared.submission.id;
+
+      if (sendAt) {
+        // A future send time parks the durable submission in `pending`; the
+        // background scheduler submits it when due. The interactive route
+        // never touches SMTP for a scheduled send.
+        return reply.code(202).send({
+          ok: true,
+          messageId: prepared.submission.messageId,
+          deliveryStatus: "pending",
+          sendAt,
+          scheduled: true,
+          submission: prepared.submission,
+        });
+      }
 
       if (!prepared.created && ["submitting", "submitted", "confirmed", "unknown_delivery"].includes(prepared.submission.deliveryStatus)) {
         if (prepared.submission.deliveryStatus === "submitted" || prepared.submission.deliveryStatus === "unknown_delivery") {
@@ -2093,6 +3412,31 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     }
   });
 
+  app.post<{ Params: { id: string } }>("/api/messages/send/:id/cancel", async (request, reply) => {
+    const submission = submissionForId(context.db, context.masterKey, request.params.id);
+    if (!submission) return reply.code(404).send({ ok: false, message: "发送任务不存在。" });
+    const requestPayload = submissionRequestForId(context.db, context.masterKey, request.params.id);
+    const cancelled = deletePendingScheduledSubmission(context.db, request.params.id);
+    if (!cancelled) {
+      return reply.code(409).send({ ok: false, message: "该邮件已到发送时间或正在发送，无法取消。" });
+    }
+    if (requestPayload?.attachmentTokens.length) {
+      try {
+        discardPendingOutboundAttachments(
+          context.db,
+          outboundAttachmentDirectory(context),
+          submission.accountId,
+          requestPayload.attachmentTokens,
+        );
+      } catch (error) {
+        // The durable submission is already gone. Orphaned files are cleaned
+        // up by the next startup pass; do not fail the cancellation for it.
+        request.log.warn({ submissionId: request.params.id }, "Could not release cancelled scheduled send attachments");
+      }
+    }
+    return { ok: true, cancelled: true };
+  });
+
   app.post("/api/messages/drafts", async (request, reply) => {
     const parsed = draftSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
@@ -2132,13 +3476,16 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
 
   app.get("/api/stats", async () => {
     const accounts = (context.db.prepare("SELECT COUNT(*) AS count FROM accounts").get() as { count: number }).count;
+    // Snoozed messages are hidden from the unified inbox, so the sidebar
+    // counts must exclude active snoozes too.
+    const nowIso = new Date().toISOString();
     const messages = (
-      context.db.prepare(`SELECT COUNT(*) AS count FROM messages m WHERE ${inboxMessageFilter}`).get() as { count: number }
+      context.db.prepare(`SELECT COUNT(*) AS count FROM messages m WHERE ${inboxMessageFilter} AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?)`).get(nowIso) as { count: number }
     ).count;
     const unread = (
       context.db
-        .prepare(`SELECT COUNT(*) AS count FROM messages m WHERE ${inboxMessageFilter} AND flags_json NOT LIKE '%\\\\Seen%'`)
-        .get() as { count: number }
+        .prepare(`SELECT COUNT(*) AS count FROM messages m WHERE ${inboxMessageFilter} AND flags_json NOT LIKE '%\\\\Seen%' AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?)`)
+        .get(nowIso) as { count: number }
     ).count;
     return { accounts, messages, unread };
   });

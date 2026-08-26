@@ -1,6 +1,6 @@
 # Windows Installation and Updates
 
-[简体中文](INSTALLING.md) | [English](INSTALLING.en.md)
+[简体中文](INSTALLING.zh-CN.md) | [English](INSTALLING.en.md)
 
 This guide is for people using Nami Mail on Windows. The current desktop release scope is Windows x64. A Web session or development desktop session started from source is not the installed release and is not evidence that automatic updates work.
 

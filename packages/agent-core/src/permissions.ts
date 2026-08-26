@@ -17,23 +17,17 @@ export type PermissionDecision =
   | { status: "confirmation_required" }
   | { status: "denied"; error: AgentError };
 
-export type PermissionEngineOptions = {
-  allowExternalWrite?: boolean;
-};
-
 const accessLevelRank: Record<AgentAccessLevel, number> = {
   "read-only": 0,
-  "draft-only": 1,
-  "mail-write": 2,
-  "send-confirmed": 3,
-  "full-access": 4,
+  "send-confirmed": 1,
+  "full-access": 2,
 };
 
 function requiredAccessLevel(mode: AgentToolDescriptor["executionMode"]): AgentAccessLevel {
   switch (mode) {
     case "read": return "read-only";
-    case "draft": return "draft-only";
-    case "write": return "mail-write";
+    case "draft": return "send-confirmed";
+    case "write": return "send-confirmed";
     case "high-risk": return "send-confirmed";
   }
 }
@@ -43,20 +37,15 @@ function deny(code: AgentError["code"], message: string, suggestion?: string): P
 }
 
 export class PermissionEngine {
-  constructor(private readonly options: PermissionEngineOptions = {}) {}
-
   evaluate(check: PermissionCheck): PermissionDecision {
     const { caller, tool, accountIds } = check;
     if (["cli", "mcp"].includes(caller.kind) && !tool.availableToExternal) {
       return deny("NOT_SUPPORTED", `The ${tool.name} tool is not available to external callers.`);
     }
-    if (["cli", "mcp"].includes(caller.kind) && tool.executionMode !== "read" && !this.options.allowExternalWrite) {
-      return deny(
-        "READ_ONLY",
-        "External Nami Mail Agent callers are read-only by default.",
-        "Use the desktop app to create a visible confirmation for a write operation.",
-      );
-    }
+    // External callers may run write tools only when the desktop host has
+    // assigned them a level that reaches the tool (send-confirmed or above).
+    // The host constructs the caller, so a paired CLI/MCP client cannot
+    // self-promote; a read-only external caller is denied right below.
     if (accessLevelRank[caller.accessLevel] < accessLevelRank[requiredAccessLevel(tool.executionMode)]) {
       return deny("PERMISSION_DENIED", `The caller access level does not permit ${tool.name}.`);
     }
@@ -75,7 +64,17 @@ export class PermissionEngine {
       return deny("SCOPE_DENIED", "The requested account is outside the caller account scope.");
     }
 
-    const requiresConfirmation = tool.confirmationPolicy === "required" || tool.executionMode === "high-risk";
+    // Full access is the explicitly-warned highest level: it runs every
+    // supported operation, including sending mail and other inherently
+    // high-risk work, without a per-tool prompt. The host must show a clear
+    // warning before the user enables it. Every lower level still confirms
+    // any operation marked confirmationPolicy "required" or high-risk.
+    // Irreversible operations (tool.irreversible) are the sole exception:
+    // they always ask for a visible confirmation, even under full-access.
+    const requiresConfirmation =
+      (caller.accessLevel !== "full-access"
+        && (tool.confirmationPolicy === "required" || tool.executionMode === "high-risk"))
+      || (caller.accessLevel === "full-access" && tool.irreversible === true);
     if (!requiresConfirmation) return { status: "allowed" };
     if (!caller.interactive || !caller.canRequestConfirmation) {
       return deny(
@@ -88,6 +87,6 @@ export class PermissionEngine {
   }
 }
 
-export function createPermissionEngine(options: PermissionEngineOptions = {}): PermissionEngine {
-  return new PermissionEngine(options);
+export function createPermissionEngine(): PermissionEngine {
+  return new PermissionEngine();
 }

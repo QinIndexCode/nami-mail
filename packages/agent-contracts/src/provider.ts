@@ -21,6 +21,10 @@ export const providerCapabilitiesSchema = z.object({
   toolCalling: z.boolean(),
   structuredOutput: z.boolean(),
   embeddings: z.boolean(),
+  // Whether the provider's chat models accept image inputs (multimodal). The
+  // contract carries this flag so a host can gate image attachments on the
+  // selected model's actual capability instead of guessing by kind.
+  vision: z.boolean(),
   contextWindow: z.number().int().positive(),
   maxOutputTokens: z.number().int().positive().optional(),
 }).strict();
@@ -43,6 +47,10 @@ export const providerChatMessageSchema = z.object({
   // Assistant tool calls are retained between model turns so a provider can
   // correlate the host-validated tool result with the request that produced it.
   toolCalls: z.array(toolCallSchema).max(128).optional(),
+  // Models like Xiaomi MiMo return reasoning_content alongside tool_calls in
+  // thinking mode. Retaining it across turns is required for accurate multi-turn
+  // tool calling per the model documentation.
+  reasoningContent: z.string().max(2_000_000).optional(),
 }).strict();
 
 export const providerTokenUsageSchema = z.object({
@@ -75,6 +83,7 @@ export const providerChatResponseSchema = z.object({
 export const providerStreamEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("response_started"), responseId: z.string().trim().min(1).max(128) }).strict(),
   z.object({ type: z.literal("text_delta"), delta: z.string().min(1).max(200_000) }).strict(),
+  z.object({ type: z.literal("reasoning_delta"), delta: z.string().min(1).max(200_000) }).strict(),
   z.object({ type: z.literal("tool_call"), call: toolCallSchema }).strict(),
   z.object({ type: z.literal("usage"), usage: providerTokenUsageSchema }).strict(),
   z.object({ type: z.literal("completed"), finishReason: z.enum(["stop", "length", "tool-calls", "content-filter", "cancelled"]) }).strict(),

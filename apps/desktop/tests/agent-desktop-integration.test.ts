@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AgentHostSnapshot } from "../src/agent/host-controller.mts";
 import {
   AgentHostUpdateDrainLifecycle,
   agentHostServiceStartupFailureExitCode,
   formatAgentHostStartupFailure,
   resolveDesktopAgentLaunch,
   startupErrorForDesktopAgentLaunch,
+  type AgentHostSnapshot,
   type AgentUpdateDrainController,
   type VerifiedAgentHost,
 } from "../src/agent/desktop-host-integration.mts";

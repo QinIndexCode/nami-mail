@@ -1,5 +1,6 @@
 import type { Citation } from "@nami/agent-contracts";
-import { CitationRevalidator, type StoredCitationReference } from "./citations.js";
+import type { CitationRevalidator} from "./citations.js";
+import { type StoredCitationReference } from "./citations.js";
 
 export type RagMetadataFilter = {
   accountIds: readonly string[];
@@ -161,6 +162,11 @@ export class InMemorySemanticIndex implements SemanticRetriever {
     for (const [id, entry] of this.entries) {
       if (entry.accountId === accountId && entry.accountGeneration <= generationAtMost) this.entries.delete(id);
     }
+  }
+
+  /** Removes entries whose ids match the given page-revision keys exactly. */
+  removeMany(ids: readonly string[]): void {
+    for (const id of ids) this.entries.delete(id);
   }
 
   clear(): void {

@@ -31,7 +31,7 @@ export type AgentTool<TInput = unknown, TOutput = unknown> = {
   inputSchema: z.ZodType<TInput>;
   outputSchema: z.ZodType<TOutput>;
   resolveAccountIds?: (input: TInput) => readonly string[];
-  confirmationPreview?: (input: TInput) => { title: string; summary: string; fields?: Array<{ label: string; value: string }> };
+  confirmationPreview?: (input: TInput, locale?: string) => { title: string; summary: string; fields?: Array<{ label: string; value: string }> };
   execute(context: AgentToolExecutionContext, input: TInput): Promise<ToolExecutionOutcome<TOutput>>;
 };
 
@@ -93,11 +93,27 @@ export class ToolRegistry {
   }
 
   list(): readonly AgentToolDescriptor[] {
-    return [...this.tools.values()].map((tool) => tool.descriptor);
+    return [...this.tools.values()].map((tool) => {
+      const descriptor = tool.descriptor;
+      if (!descriptor.parametersSchema) {
+        try {
+          const jsonSchema = z.toJSONSchema(tool.inputSchema);
+          return { ...descriptor, parametersSchema: jsonSchema as Record<string, unknown> };
+        } catch {
+          // If schema conversion fails, fall back to the descriptor as-is.
+        }
+      }
+      return descriptor;
+    });
   }
 
   get(name: string): AgentTool | undefined {
     return this.tools.get(name);
+  }
+
+  /** Removes a previously registered dynamic tool. Returns false when absent. */
+  unregister(name: string): boolean {
+    return this.tools.delete(name);
   }
 
   resolve(call: ToolCall, executionAccountIds: readonly string[] = []): ToolResolution {

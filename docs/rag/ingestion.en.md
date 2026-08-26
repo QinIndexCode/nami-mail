@@ -1,6 +1,6 @@
 # RAG Ingestion
 
-[Chinese](ingestion.md) | [English](ingestion.en.md)
+[Chinese](ingestion.zh-CN.md) | [English](ingestion.en.md)
 
 ## Source events
 
