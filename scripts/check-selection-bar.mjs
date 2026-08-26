@@ -68,7 +68,7 @@ try {
   const result = { wrap, bar, count, firstRow, list, countFullyInsideWrap, barFullyInsideWrap, rowOverlapsBar };
   console.log(JSON.stringify(result, null, 2));
 
-  await page.screenshot({ path: "scripts/selection-bar-check.png" });
+  await page.screenshot({ path: "output/selection-bar-check.png" });
   if (!countFullyInsideWrap || !barFullyInsideWrap) {
     console.error("FAIL: selection bar content is clipped by its wrap");
     process.exitCode = 1;

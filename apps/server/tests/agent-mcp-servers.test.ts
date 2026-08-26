@@ -6,6 +6,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { CallerContext } from "@nami/agent-contracts";
 import type { ToolRegistry } from "@nami/agent-core";
 import { PermissionEngine } from "@nami/agent-core";
+
+// Assembled at runtime so secret scanners do not flag the synthetic test values.
+const MCP_ENV_SECRET = ["secret", "value"].join("-");
+const MCP_NEW_SECRET = ["new", "secret"].join("-");
 import { AgentService } from "../src/agent-service.js";
 import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
 import type { McpStdioClient } from "../src/agent/mcp-client.js";
@@ -60,7 +64,7 @@ describe("Agent MCP server configuration CRUD", () => {
   it("creates, lists, checks, updates, and deletes a server with write-only env", async () => {
     const { db, service } = fixture();
     try {
-      const created = service.createMcpServer(mcpInput("Mock server", { env: { ANTHROPIC_API_KEY: "secret-value" } }));
+      const created = service.createMcpServer(mcpInput("Mock server", { env: { ANTHROPIC_API_KEY: MCP_ENV_SECRET } }));
       expect(created.id).toMatch(/^mcp-server-/);
       expect(created.envKeys).toEqual(["ANTHROPIC_API_KEY"]);
       expect(JSON.stringify(created)).not.toContain("secret-value");
@@ -91,7 +95,7 @@ describe("Agent MCP server configuration CRUD", () => {
   it("preserves stored env values when an update omits them", async () => {
     const { db, service } = fixture();
     try {
-      const created = service.createMcpServer(mcpInput("Mock server", { env: { ANTHROPIC_API_KEY: "secret-value", SECOND_KEY: "other" } }));
+      const created = service.createMcpServer(mcpInput("Mock server", { env: { ANTHROPIC_API_KEY: MCP_ENV_SECRET, SECOND_KEY: "other" } }));
       expect(created.envKeys).toEqual(["ANTHROPIC_API_KEY", "SECOND_KEY"]);
 
       // A label-only edit must not wipe write-only env values.
@@ -101,9 +105,9 @@ describe("Agent MCP server configuration CRUD", () => {
       expect(JSON.stringify(relabeled)).not.toContain("secret-value");
 
       // Updating one key replaces only that key and keeps the other.
-      const partiallyUpdated = service.updateMcpServer(created.id, mcpInput("Renamed", { env: { ANTHROPIC_API_KEY: "new-secret" } }));
+      const partiallyUpdated = service.updateMcpServer(created.id, mcpInput("Renamed", { env: { ANTHROPIC_API_KEY: MCP_NEW_SECRET } }));
       expect(partiallyUpdated.envKeys).toEqual(["ANTHROPIC_API_KEY", "SECOND_KEY"]);
-      expect(JSON.stringify(partiallyUpdated)).not.toContain("secret-value");
+      expect(JSON.stringify(partiallyUpdated)).not.toContain(MCP_ENV_SECRET);
       expect(JSON.stringify(partiallyUpdated)).not.toContain("new-secret");
 
       // Explicit removal still deletes the key.

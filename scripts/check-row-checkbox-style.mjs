@@ -70,7 +70,7 @@ try {
   out.agentCheckedB = { boxBg: (await css(box(rowB), ["backgroundColor"])).backgroundColor, rowCls: await rowB.getAttribute("class") };
   out.agentCount = await page.locator(".agent-selection-count").evaluate((el) => el.textContent ?? "");
 
-  await page.screenshot({ path: "scripts/row-checkbox-style.png" });
+  await page.screenshot({ path: "output/row-checkbox-style.png" });
   console.log(JSON.stringify(out, null, 2));
   console.log("focus-ring =", focusRing);
 
