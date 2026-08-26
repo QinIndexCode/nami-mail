@@ -171,6 +171,12 @@ position:absolute;
 inset:-2%;
 transform:scale(1.015)
 }
+/* Desktop smoke probes run in a hidden, render-throttled window where the
+   reveal animation may never settle; skip it so computed styles are final. */
+.desktop-smoke .workspace-background
+{
+animation:none
+}
 .workspace-canvas.background-active
 {
 --canvas:var(--bg-canvas-tint)

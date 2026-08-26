@@ -171,6 +171,11 @@ function retainedTranslationContent(state: TranslationPanelState): TranslationCo
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 const isDesktop = new URLSearchParams(window.location.search).get("desktop") === "1";
 const isDesktopSmoke = new URLSearchParams(window.location.search).get("desktopSmoke") === "1";
+// The desktop smoke probes read settled computed styles from a hidden,
+// render-throttled window: mark the root so styles.css can skip decorative
+// reveal animations and the wallpaper probe observes its final opacity
+// deterministically instead of racing the compositor.
+if (isDesktopSmoke) document.documentElement.classList.add("desktop-smoke");
 // The desktop shell injects its host platform ("win32" | "darwin" | "linux")
 // so the window bar can pick the frameless layout (own controls vs. the
 // macOS traffic-light slot).
