@@ -19,7 +19,7 @@
     "@fastify/static": "^10.1.2",
     "@nami/agent-contracts": "file:../../packages/agent-contracts",
     "@nami/agent-core": "file:../../packages/agent-core",
-    "better-sqlite3": "^13.0.1",
+    "better-sqlite3": "^13.0.3",
     "dotenv": "^17.2.3",
     "fastify": "^5.11.2",
     "imapflow": "^1.6.5",
