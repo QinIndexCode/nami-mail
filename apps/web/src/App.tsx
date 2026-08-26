@@ -669,7 +669,9 @@ export default function App() {
   // lands (or dropped when nothing is pinned).
   const scrollAnchorRef = useRef<{ id: string; offset: number; topCaptured: number } | null>(null);
   const batchJobStartedAtRef = useRef(0);
-  const theme = resolveTheme(settings.theme, systemTheme);
+  // The smoke runner's OS theme preference is whatever the CI image happens
+  // to have; force dark so probes observe one deterministic palette.
+  const theme = isDesktopSmoke ? "dark" : resolveTheme(settings.theme, systemTheme);
   const activeBackgroundUrl = backgroundUrl(settings);
   // In light theme the pale canvas dilutes the picture; render the background
   // more densely there so presets stay visible. Dark theme is left untouched.
