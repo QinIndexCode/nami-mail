@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { readFileSync } from "node:fs";
 
@@ -6,6 +6,9 @@ const appVersion = JSON.parse(readFileSync(new URL("../../package.json", import.
 
 export default defineConfig({
   plugins: [react()],
+  test: {
+    setupFiles: ["./src/test-setup.ts"],
+  },
   define: {
     __NAMI_APP_VERSION__: JSON.stringify(appVersion.version),
   },

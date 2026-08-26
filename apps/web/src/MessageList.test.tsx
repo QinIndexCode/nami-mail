@@ -256,7 +256,9 @@ describe("message list range selection", () => {
 });
 
 describe("row quick actions reveal", () => {
-  const stylesheet = readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  // Normalize CRLF so the assertion is independent of the checkout's
+  // core.autocrlf (GitHub's Windows runners check text files out with CRLF).
+  const stylesheet = readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8").replace(/\r\n/g, "\n");
 
   it("reveals the quick actions on a row-level hover (they are siblings of the row button, not descendants)", () => {
     // The quick actions live next to the message button (buttons cannot nest),
@@ -308,7 +310,7 @@ describe("row quick actions reveal", () => {
 });
 
 describe("mail reader title wrapping", () => {
-  const stylesheet = readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  const stylesheet = readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8").replace(/\r\n/g, "\n");
 
   it("wraps unbroken subject lines inside the title column on narrow windows", () => {
     // A subject with no spaces (a URL, a token, a long ID) must break inside
