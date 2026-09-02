@@ -59,8 +59,8 @@ export const config = {
   port: integerEnv("PORT", 3187, 0, 65535),
   databasePath: resolveFromRoot(process.env.DATABASE_PATH?.trim() || "./data/nami-mail.db"),
   masterKeyPath: resolveFromRoot(process.env.MASTER_KEY_PATH?.trim() || "./data/master.key"),
-  // Per-account mailbox sync cap: 0 syncs the whole mailbox like Gmail's web
-  // client (no limit), a positive value fetches only the newest N messages.
+  // Per-account mailbox sync cap: 0 syncs the whole mailbox; a positive value
+  // fetches only the newest N messages.
   // This environment variable is an override for the user-facing setting: when
   // set explicitly it wins over the UI value (see getSyncMessageLimit in
   // settings.ts), otherwise the default mirrors the packaged setting default so

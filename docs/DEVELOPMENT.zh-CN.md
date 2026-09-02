@@ -16,7 +16,7 @@
 npm.cmd ci
 ```
 
-复制 [`.env.example`](../.env.example) 为 `.env`，只按需修改开发服务配置。安装版只读取受限的 `nami-mail.env` OAuth 公共配置；完整规则见 [README](../README.md#oauth-配置)。
+复制 [`.env.example`](../.env.example) 为 `.env`，只按需修改开发服务配置。安装版只读取受限的 `nami-mail.env` OAuth 公共配置；完整规则见 [邮箱接入指南](EMAIL-PROVIDERS.zh-CN.md) 中的 OAuth 配置说明。
 
 ## 运行模式
 

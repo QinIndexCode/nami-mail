@@ -23,6 +23,9 @@
 
 - 证据：`apps/web/src/AgentWorkspace.tsx` 4429 行、148 个 hook 调用点；流累积 / 状态机 / composer 草稿 / chips / selection bar 全内联；测试靠 1127 行重型 harness（AgentWorkspace.integration.test.tsx）。
 - 方案：`useAgentSession` 深 module——流状态机（running / completed / error…）与派生 UI 状态分离。
+- 完成（状态机核心抽离）：`apps/web/src/agent/useAgentSession.ts` 已承接会话运行生命周期 + 流事件管道（帧批处理 / 自适应 reveal pacing）+ 后台缓冲与重放 + 轮询 fold-in + cancel/stop，并暴露 7 个会话导航原语（hasLiveRun / getSession / clearPendingFlush / takeBackgroundError / terminateSession / clearLiveRunIndicators / restoreLiveRunIndicators）。边界采用注入式 `setActive`（`active` 归属组件），`composer/会话列表/chips/context menu` 等 UI 域本批未动。
+  - 单测：`apps/web/src/agent/useAgentSession.test.tsx`（7 项，renderHook 式手写 harness + 受控 rAF 队列）覆盖折叠 / CONFLICT 重试 / terminal 清理 / stop / 打断 / 重放 / 后台缓冲 + 轮询 fold-in；web 全量 635 项测试全绿。
+  - 计划与耦合点记录：`.trae/documents/agent-session-state-machine-refactor.md`。
 
 ### 候选 4：契约化 mail DTO 面（Worth exploring，候选 1 的姊妹篇，机械性低风险）
 

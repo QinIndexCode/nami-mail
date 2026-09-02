@@ -38,7 +38,7 @@ export type AppSettings = {
   refreshIntervalSeconds: 30 | 60 | 180 | 300;
   /** Live IMAP IDLE watcher: new inbox mail triggers an immediate sync instead of waiting for the next poll. */
   realtimePushEnabled: boolean;
-  /** Per-folder mailbox sync cap: 0 syncs the whole mailbox (Gmail-style, no cap); a positive value fetches only the newest N messages per folder. */
+  /** Per-folder mailbox sync cap: 0 syncs the whole mailbox; a positive value fetches only the newest N messages per folder. */
   syncMessageLimit: SyncMessageLimit;
   closeBehavior: CloseBehavior;
   /** Desktop only: register Nami Mail as a login item. Browser mode ignores it. */

@@ -7,7 +7,7 @@ Nami Mail 是本地优先的邮件客户端。它直接连接你配置的邮箱�
 ## 先检查这些内容
 
 1. 在应用中确认邮箱服务商是否要求 IMAP/SMTP 开关、应用专用密码、客户端授权码或 OAuth 登录。
-2. 阅读 [邮箱接入指南](docs/EMAIL-PROVIDERS.md)、[Windows 安装与更新指南](docs/INSTALLING.md) 和服务商在应用中提供的官方帮助入口。
+2. 阅读 [邮箱接入指南](docs/EMAIL-PROVIDERS.zh-CN.md)、[Windows 安装与更新指南](docs/INSTALLING.zh-CN.md) 和服务商在应用中提供的官方帮助入口。
 3. 对 Google 或 Microsoft OAuth，若“安全登录”不可用，先按接入指南确认公共客户端配置和组织策略；不要填写 client secret。
 4. 对网络或 TLS 错误，先检查网络、DNS、代理、安全软件和系统时间，再确认服务器地址与加密方式。
 5. 对 Windows 桌面版，确认你正在使用受支持的安装版，而不是来源不明的便携副本或已修改构建。
@@ -32,4 +32,4 @@ Nami Mail 是本地优先的邮件客户端。它直接连接你配置的邮箱�
 
 维护者会尽力复现有足够信息的问题，但目前不提供响应时间承诺、远程接管、账户恢复或付费支持。GitHub Discussions 是否可用取决于公开仓库的设置；若未启用，请使用与问题类型相符的 Issue 模板。
 
-有关本地保存内容、加密边界、服务商连接和 GitHub Release 更新检查的说明，请参阅 [隐私与本地数据说明](docs/PRIVACY.md) 与 [发布指南](docs/RELEASING.md)。
+有关本地保存内容、加密边界、服务商连接和 GitHub Release 更新检查的说明，请参阅 [隐私与本地数据说明](docs/PRIVACY.zh-CN.md) 与 [发布指南](docs/RELEASING.zh-CN.md)。

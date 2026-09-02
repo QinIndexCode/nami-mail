@@ -5,6 +5,7 @@ import type { MessageListQuery } from "./mailListState";
 import { useI18n } from "./i18n";
 import type { MailErrorPresentation } from "./errorPresentation";
 import { SenderAvatar, accountTone } from "./SenderAvatar";
+import { localizeMessageLinks } from "./app/app-utils";
 import type { Account, AppSettings, Message } from "./types";
 
 // `Intl.DateTimeFormat` construction is not free; per-row-per-frame allocation
@@ -132,7 +133,7 @@ export const MessageListRow = memo(function MessageListRow(props: MessageListRow
         <span className="message-copy">
           <span className="message-meta"><strong>{message.from.name || message.from.address}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
           <span className="message-subject">{message.subject}</span>
-          <span className="message-snippet">{message.snippet}</span>
+          <span className="message-snippet">{localizeMessageLinks(message.snippet, locale)}</span>
           <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
         </span>
         {!message.seen && <span className="unread-dot" />}

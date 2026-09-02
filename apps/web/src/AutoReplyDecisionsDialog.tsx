@@ -4,8 +4,8 @@ import { api, ApiError } from "./api";
 import { useI18n, type Translate } from "./i18n";
 import ThemedSelect from "./ThemedSelect";
 import type { Account, AutoReplyDecisionReason, AutoReplyDecisionRecord } from "./types";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 
 type AutoReplyDecisionsDialogProps = {
   accounts: Account[];

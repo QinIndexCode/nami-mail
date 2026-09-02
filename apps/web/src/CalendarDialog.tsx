@@ -22,8 +22,8 @@ import type { CalendarEvent, CalendarEventColor, CalendarEventInput } from "./ty
 import { calendarEventColors } from "./types";
 import DatePicker from "./DatePicker";
 import { ManagementDialogShell } from "./ManagementDialogs";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 import { calendarCache } from "./dialogPrefetch";
 
 type Notice = { kind: "success" | "error"; message: string } | null;

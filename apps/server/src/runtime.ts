@@ -52,6 +52,7 @@ const webConfirmationVerifier: TrustedDesktopConfirmationVerifier = Object.freez
 import { applyAgentStoreSchema } from "./agent/schema.js";
 import { AgentSourceEventOutbox } from "./agent/source-events.js";
 import { buildApp } from "./app.js";
+import { startCacheCleanupTimer } from "./image-proxy.js";
 import { config } from "./config.js";
 import { loadOrCreateMasterKey } from "./crypto.js";
 import { openDatabase, type DatabaseHandle } from "./db.js";
@@ -128,6 +129,12 @@ export type ServerRuntimeOptions = {
    * development hosts omit it and fall back to the unset-token loopback rule.
    */
   localApiAccessToken?: string;
+  /**
+   * Desktop-only startup instrumentation. Fired for each measured phase inside
+   * startServer so the desktop can fold server-side timings into its own
+   * startup-timings.json. Elapsed is measured from startServer entry.
+   */
+  onStartupTiming?: (stage: string, elapsedMs: number) => void;
 };
 
 export type SyncScheduler = {
@@ -302,7 +309,19 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
       closed = true;
       if (timer) clearTimeout(timer);
       timer = undefined;
-      await activeSync;
+      // A running poll pass performs network IMAP work and must not delay
+      // shutdown: give it a short grace window, then stop waiting. The pass
+      // re-checks `closed` before any new work and its DB writes are
+      // transactional, so abandoning the wait is safe for the final close().
+      if (activeSync) {
+        await Promise.race([
+          activeSync,
+          new Promise<void>((resolve) => {
+            const grace = setTimeout(resolve, 750);
+            grace.unref?.();
+          }),
+        ]);
+      }
     },
   };
 }
@@ -319,10 +338,17 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
   let autoReplyEngine: AutoReplyEngine | undefined;
   const translationAbortController = new AbortController();
   const scheduledSendAbortController = new AbortController();
+  // Startup instrumentation: fold per-phase timings into the desktop's
+  // startup-timings.json via onStartupTiming (if provided).
+  const startupPhaseStart = performance.now();
+  const noteStartupPhase = (stage: string): void => {
+    options.onStartupTiming?.(stage, Math.round(performance.now() - startupPhaseStart));
+  };
 
   try {
     const database = openDatabase(config.databasePath);
     db = database;
+    noteStartupPhase("server:open-database");
     const runtimeMasterKey = options.masterKey ? Buffer.from(options.masterKey) : loadOrCreateMasterKey(config.masterKeyPath);
     if (runtimeMasterKey.length !== 32) throw new Error("Master key must be exactly 32 bytes.");
     masterKey = runtimeMasterKey;
@@ -331,6 +357,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     migrateAccountCredentialStorage(database, runtimeMasterKey);
     migrateKnownProviderUsernameCredentials(database, runtimeMasterKey);
     applyAgentStoreSchema(database);
+    noteStartupPhase("server:migrations");
     // The settings tool needs to broadcast changes over SSE and decide whether
     // a "custom" background preset is selectable, so the bus and the background
     // directory are resolved before the Agent service is constructed.
@@ -349,6 +376,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       syncMessageLimit: getSyncMessageLimit(database),
       outboundAttachmentDirectory: outboundAttachmentDirectory({}),
     });
+    noteStartupPhase("server:mail-application");
     agentService = new AgentService({
       db: database,
       masterKey: runtimeMasterKey,
@@ -360,7 +388,9 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       ...(options.desktopConfirmation ? { desktopConfirmation: options.desktopConfirmation } : {}),
       ...(options.externalConfirmation ? { externalConfirmation: options.externalConfirmation } : {}),
     });
+    noteStartupPhase("server:agent-service-construct");
     agentService.start();
+    noteStartupPhase("server:agent-service-start");
     const autoReplyConfirmationAuthority = options.desktopConfirmation ?? {
       capability: webConfirmationCapability,
       verifier: webConfirmationVerifier,
@@ -386,6 +416,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       onEvent: options.onAutoReplyEvent,
     });
     registerAutoReplyEngine(autoReplyEngine);
+    noteStartupPhase("server:auto-reply-engine");
     const outboundDirectory = outboundAttachmentDirectory({});
     try {
       cleanupExpiredOutboundAttachments(database, outboundDirectory);
@@ -520,8 +551,10 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     const fastify = await buildApp(runtimeContext, {
       localApiAccessToken: options.localApiAccessToken?.trim() || config.localApiAccessToken || undefined,
       translationAbortSignal: translationAbortController.signal,
+      onStartupTiming: options.onStartupTiming,
     });
     app = fastify;
+    noteStartupPhase("server:build-app");
 
     scheduler = createSyncScheduler({
       getIntervalSeconds: () => getAppSettings(database).refreshIntervalSeconds,
@@ -530,6 +563,8 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     });
 
     await fastify.listen({ host: config.host, port: config.port });
+    noteStartupPhase("server:listen");
+    startCacheCleanupTimer();
     const address = fastify.server.address();
     if (!address || typeof address === "string") {
       throw new Error("Nami Mail local service did not provide a TCP address.");
@@ -545,6 +580,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
         fastify.log.warn({ error }, "Microsoft OAuth callback bridge unavailable");
       }
     }
+    noteStartupPhase("server:startServer-complete");
 
     const close = () => {
       closePromise ??= (async () => {

@@ -39,8 +39,8 @@ import type {
   ProviderDiscovery,
   ProviderInfo,
 } from "./types";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 
 type StatusKind = "success" | "warning" | "error" | "idle";
 type StatusField = "email" | "password" | "manual";

@@ -67,7 +67,7 @@ agent-contracts <- agent-core <- server/agent <- server runtime
 
 ## Providers and translation
 
-Providers are authorized by capability, not vendor name. The current source contains an OpenAI-compatible/Ollama adapter; other provider kinds are contract reservations and must not be presented as available before implementation and verification.
+Providers are authorized by capability, not vendor name. The current source ships four provider adapters: OpenAI-compatible (also covers Ollama and custom kinds), Anthropic Claude, Google Gemini, and OpenAI Responses. All support streaming, tool calling, and health checks.
 
 - Cloud mail-content egress is off by default. A user must explicitly consent in visible settings, and UI must name the provider, model, scope, and outgoing context.
 - API keys belong only in secure credential storage or DPAPI-protected configuration, never ordinary settings, logs, browser state, or IPC output.

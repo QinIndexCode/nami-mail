@@ -3,19 +3,13 @@ import {
   Bot,
   CalendarDays,
   Check,
-  CheckCheck,
-  Cloud,
   CircleAlert,
-  CircleHelp,
   ClipboardList,
   Copy,
   Eye,
-  EyeOff,
   FileDown,
   FileText,
   FolderSearch,
-  HardDrive,
-  KeyRound,
   LoaderCircle,
   Mail,
   MessageCircle,
@@ -31,19 +25,17 @@ import {
   ArrowLeft,
   ArrowUp,
   ChevronDown,
-  ChevronUp,
   Server,
   ShieldAlert,
   ShieldCheck,
   Square,
   Trash2,
-  Undo2,
   UsersRound,
   Wrench,
   X,
   Zap,
 } from "lucide-react";
-import { ApiError, api } from "./api";
+import { api } from "./api";
 import { AttachmentFileIcon } from "./mailUi";
 import { presentAttachment } from "./attachmentPresentation";
 import { type AgentSlashCommand, type AgentSlashSubcommand } from "@nami/agent-contracts";
@@ -57,12 +49,7 @@ import type {
   AgentCitation,
   AgentConfirmation,
   AgentConversation,
-  AgentMcpServerInput,
-  AgentMcpServerList,
-  AgentMcpServerSummary,
   AgentMessage,
-  AgentProviderInput,
-  AgentProviderKind,
   AgentProviderList,
   AgentProviderSummary,
   AgentStreamEvent,
@@ -70,11 +57,54 @@ import type {
 } from "./agentTypes";
 import { agentScopeFor, sameAgentScope, scopeTargetForConversation, type AgentScopeTarget } from "./agentContext";
 import { isSupportedFile, processFile, type ProcessedFile } from "./fileProcessor";
-import ThemedSelect from "./ThemedSelect";
 import type { Account, AgentAccessLevel, Message } from "./types";
 import { useI18n, type Translate } from "./i18n";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { AgentProviderSettings, type AgentSettingsPane, configuredProviderId } from "./agent/AgentProviderSettings";
+import { AgentMessageRow } from "./agent/AgentMessageRow";
+import { AgentToolList } from "./agent/AgentToolCard";
+import { AgentConfirmationCard } from "./agent/AgentConfirmationCard";
+import { AgentRecallButton, AgentScrubberBar, AgentMessageContent, RevokeNotice } from "./agent/AgentSmallComponents";
+import { AgentPickerPopover } from "./agent/AgentPickerPopover";
+import {
+  type AgentMode,
+  SCRUBBER_BAR_GAP,
+  SCRUBBER_PREVIEW_DELAY_MS,
+  scrubberBarBlur,
+  newLocalId,
+  currentTime,
+  CONVERSATION_PROVIDERS_KEY,
+  shortDate,
+  REVOKE_NOTICE_SECONDS,
+  type MailReference,
+  type MentionItem,
+  MAX_MAIL_REFERENCES,
+  MENTION_QUERY_DEBOUNCE_MS,
+  MENTION_PAGE_SIZE,
+  mailReferenceFor,
+  mentionItemFor,
+  revokeFailureMessage,
+  readRevokedIds,
+  writeRevokedIds,
+  LAST_ACTIVE_CONVERSATION_KEY,
+  readLastActiveConversationId,
+  lastMessageIsUnanswered,
+  lastMessageIsStreaming,
+  applyRevokedMarks,
+  purgeStaleErrors,
+  sourceLabel,
+  copyToClipboard,
+  dedupeCitations,
+  truncateForPreview,
+  truncateForContext,
+  messageWithEvent,
+  interruptAssistantMessage,
+  applyConfirmationDecision,
+  expireConfirmation,
+} from "./agent/agent-utils";
+import { useMountedVisible } from "./hooks/useMountedVisible";
+import { createDemoConversation } from "./agent/agent-demo-data";
+import { useAgentSession } from "./agent/useAgentSession";
 
 type AgentWorkspaceProps = {
   accounts: Account[];
@@ -90,70 +120,11 @@ type AgentWorkspaceProps = {
   agentAccessLevel?: AgentAccessLevel;
   /** Persists a newly selected Agent permission level. */
   onAgentAccessLevelChange?: (level: AgentAccessLevel) => void;
+  /** Notified when an agent tool mutates primary mail state (flags, moves) so
+   *  the mail list can refresh instead of lagging behind the conversation. */
+  onMailStateChanged?: () => void;
 };
 
-type AgentMode = "agent" | "chat";
-
-// Scrubber layout constants. Bars sit at a fixed vertical interval and the
-// group is centred when it fits; once it overflows the track it anchors to
-// the bottom so the newest messages stay visible, and hovering the top or
-// bottom edge zone auto-scrolls the BAR GROUP itself (faster near the edge),
-// never the transcript content.
-const SCRUBBER_BAR_GAP = 12;
-const SCRUBBER_EDGE_ZONE = 28;
-// Delay before the hovered-bar preview bubble appears, so resting on a bar
-// shows its content while quick passes across the scrubber stay quiet.
-const SCRUBBER_PREVIEW_DELAY_MS = 500;
-// Maximum blur (px) applied to bars as they approach the track edges.
-const SCRUBBER_BLUR_MAX = 1.5;
-
-// Bars blur near the top/bottom edge of the track so the group visually
-// dissolves into the boundary instead of being clipped hard.
-function scrubberBarBlur(top: number, trackHeight: number): number {
-  const distance = Math.min(top, trackHeight - top);
-  if (distance >= SCRUBBER_EDGE_ZONE) return 0;
-  return Math.max(0, 1 - distance / SCRUBBER_EDGE_ZONE) * SCRUBBER_BLUR_MAX;
-}
-
-function newLocalId(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID()}`;
-}
-
-function currentTime(): string {
-  return new Date().toISOString();
-}
-
-// Keeps per-conversation model choices across restarts.
-const CONVERSATION_PROVIDERS_KEY = "nami-agent-conversation-providers";
-
-// Keeps a conditionally rendered panel (e.g. the permission/model pickers)
-// mounted long enough to run its exit transition: closing sets visible=false
-// (the CSS fades/slides out) and only then unmounts the node.
-function useMountedVisible(open: boolean, duration = 240): { mounted: boolean; visible: boolean } {
-  const [mounted, setMounted] = useState(open);
-  const [visible, setVisible] = useState(open);
-  useEffect(() => {
-    if (open) {
-      setMounted(true);
-      // Double rAF: the element must paint its closed state once before the
-      // .show class lands, otherwise the browser batches both DOM updates into
-      // a single frame and the opening transition never runs.
-      let second = 0;
-      const first = requestAnimationFrame(() => {
-        second = requestAnimationFrame(() => setVisible(true));
-      });
-      return () => {
-        cancelAnimationFrame(first);
-        if (second !== 0) cancelAnimationFrame(second);
-      };
-    }
-    setVisible(false);
-    const reduced = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const timer = window.setTimeout(() => setMounted(false), reduced ? 0 : duration);
-    return () => window.clearTimeout(timer);
-  }, [open, duration]);
-  return { mounted, visible };
-}
 
 /**
  * Shared upward accordion panel used by the composer permission and model
@@ -162,1780 +133,8 @@ function useMountedVisible(open: boolean, duration = 240): { mounted: boolean; v
  * option when it opens so the menu is immediately keyboard-ready. Options are
  * native buttons, so Enter/Space activate them without extra wiring.
  */
-function AgentPickerPopover({
-  id,
-  anchor,
-  visible,
-  label,
-  children,
-}: {
-  id: string;
-  anchor: "left" | "right";
-  visible: boolean;
-  label: string;
-  children: ReactNode;
-}) {
-  const innerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!visible) return;
-    const host = innerRef.current;
-    if (!host) return;
-    const checked = host.querySelector<HTMLButtonElement>('.agent-popover-option[aria-checked="true"]');
-    const target = checked ?? host.querySelector<HTMLButtonElement>(".agent-popover-option");
-    target?.focus({ preventScroll: true });
-  }, [visible]);
-
-  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-    const host = innerRef.current;
-    if (!host) return;
-    const options = Array.from(host.querySelectorAll<HTMLButtonElement>(".agent-popover-option"));
-    if (options.length === 0) return;
-    const current = document.activeElement;
-    const index = options.indexOf(current as HTMLButtonElement);
-    let next: number;
-    if (event.key === "ArrowDown") next = index === -1 ? 0 : Math.min(index + 1, options.length - 1);
-    else if (event.key === "ArrowUp") next = index === -1 ? options.length - 1 : Math.max(index - 1, 0);
-    else if (event.key === "Home") next = 0;
-    else next = options.length - 1;
-    event.preventDefault();
-    options[next]?.focus({ preventScroll: true });
-  };
-
-  return (
-    <div id={id} className={`agent-popover anchor-${anchor}${visible ? " show" : ""}`} role="menu" aria-label={label} onKeyDown={handleKeyDown}>
-      <div className="agent-popover-inner" ref={innerRef}>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function shortDate(value: string, locale: string): string {
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "";
-  const sameDay = date.toDateString() === new Date().toDateString();
-  return new Intl.DateTimeFormat(locale, sameDay ? { hour: "2-digit", minute: "2-digit" } : { month: "numeric", day: "numeric" }).format(date);
-}
-
-function formatCountdown(remainingMs: number): string {
-  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  const time = minutes > 0
-    ? `${minutes}:${seconds.toString().padStart(2, "0")}`
-    : `${seconds}s`;
-  return time;
-}
-
-/**
- * Revoked message ids are kept per conversation in localStorage so they survive
- * restarts (the agent service only stores the raw conversation, not the local
- * revocation state).
- */
-const REVOKED_STORAGE_KEY = "nami.agent.revokedByConversation";
-
-/** How long the "已撤回信息" notice stays above the composer before fading. */
-const REVOKE_NOTICE_SECONDS = 10;
-
-/** A mail the user pulled into the agent's context; rendered as a chip above
- *  the composer and sent along as a reference (cap 8). */
-type MailReference = {
-  id: string;
-  subject: string;
-  accountId: string;
-  accountEmail: string;
-};
-
-/** One result row of the /@ mention menu. */
-type MentionItem = {
-  id: string;
-  subject: string;
-  accountId: string;
-  accountEmail: string;
-  sender: string;
-  sentAt: string;
-};
-
-const MAX_MAIL_REFERENCES = 8;
-/** How long a composer edit waits before the /@ mail search fires. */
-const MENTION_QUERY_DEBOUNCE_MS = 250;
-const MENTION_PAGE_SIZE = 10;
-
-function mailReferenceFor(message: Message): MailReference {
-  return { id: message.id, subject: message.subject, accountId: message.accountId, accountEmail: message.accountEmail };
-}
-
-function mentionItemFor(message: Message): MentionItem {
-  return {
-    id: message.id,
-    subject: message.subject,
-    accountId: message.accountId,
-    accountEmail: message.accountEmail,
-    sender: message.from.name || message.from.address,
-    sentAt: message.sentAt,
-  };
-}
-
-/** Categorized copy for a failed revoke. Network/service failures and stale
- *  targets get specific messages; anything else falls back to the generic one. */
-function revokeFailureMessage(error: unknown, t: Translate): string {
-  if (error instanceof ApiError) {
-    if (error.code === "local_service_unavailable") return t("agent.message.revokeFailedService");
-    if (error.code === "NOT_FOUND") return t("agent.message.revokeFailedNotFound");
-  }
-  return t("agent.message.revokeFailed");
-}
-
-function readRevokedIds(conversationId: string): Set<string> {
-  try {
-    const raw = window.localStorage.getItem(REVOKED_STORAGE_KEY);
-    if (!raw) return new Set();
-    const byConversation = JSON.parse(raw) as Record<string, string[]>;
-    return new Set(byConversation[conversationId] ?? []);
-  } catch {
-    return new Set();
-  }
-}
-
-function writeRevokedIds(conversationId: string, ids: Set<string>): void {
-  try {
-    const raw = window.localStorage.getItem(REVOKED_STORAGE_KEY);
-    const byConversation = raw ? (JSON.parse(raw) as Record<string, string[]>) : {};
-    byConversation[conversationId] = [...ids];
-    window.localStorage.setItem(REVOKED_STORAGE_KEY, JSON.stringify(byConversation));
-  } catch {
-    // Storage unavailable — revocation stays in-memory for this session.
-  }
-}
-
-/** The panel reopens onto the conversation that was open when it closed. */
-const LAST_ACTIVE_CONVERSATION_KEY = "nami.agent.lastConversation";
-
-function readLastActiveConversationId(): string | null {
-  try {
-    const raw = window.localStorage.getItem(LAST_ACTIVE_CONVERSATION_KEY);
-    return raw && raw.length > 0 ? raw : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * A conversation whose newest turn has no assistant reply yet (the last
- * message is the user's) may still be finishing on the server after the
- * panel closed — closing the panel does not cancel the run.
- */
-export function lastMessageIsUnanswered(conversation: AgentConversation): boolean {
-  const last = conversation.messages[conversation.messages.length - 1];
-  return Boolean(last && last.role === "user");
-}
-
-/** True when the newest turn has an assistant reply that is still streaming
- *  (a re-opened panel renders the in-flight snapshot and should keep polling
- *  until the turn persists as complete). */
-export function lastMessageIsStreaming(conversation: AgentConversation): boolean {
-  const last = conversation.messages[conversation.messages.length - 1];
-  return Boolean(last && last.role === "assistant" && last.state === "streaming");
-}
-
-function applyRevokedMarks(conversation: AgentConversation): AgentConversation {
-  return mergeRevokedMarks(conversation, readRevokedIds(conversation.id));
-}
-
-/**
- * Merges the server's authoritative revoked marks with the local cache so a
- * cleared localStorage (or a stale cache) never resurrects revoked rows, and
- * an offline revoke still applies once the server round-trip lands.
- */
-export function mergeRevokedMarks(
-  conversation: AgentConversation,
-  localRevoked: ReadonlySet<string>,
-): AgentConversation {
-  let serverHasAny = false;
-  for (const message of conversation.messages) {
-    if (message.revoked) {
-      serverHasAny = true;
-      break;
-    }
-  }
-  if (localRevoked.size === 0 && !serverHasAny) return conversation;
-  return {
-    ...conversation,
-    messages: conversation.messages.map((message) => {
-      const revoked = message.revoked === true || localRevoked.has(message.id);
-      return revoked ? { ...message, revoked: true } : message;
-    }),
-  };
-}
-
-/**
- * Drops stale failure rows when a conversation is (re)loaded: an error message
- * that was followed by a successful assistant turn is outdated (the turn has
- * moved on, e.g. a retry succeeded) and is no longer shown.
- */
-function purgeStaleErrors(conversation: AgentConversation): AgentConversation {
-  const messages = conversation.messages;
-  return {
-    ...conversation,
-    messages: messages.flatMap((message, index) => {
-      if (!message.error) return [message];
-      const laterSuccess = messages.slice(index + 1).some((item) => item.role === "assistant" && item.state === "complete" && item.content.length > 0);
-      if (!laterSuccess) return [message];
-      return message.content === "" ? [] : [{ ...message, error: undefined }];
-    }),
-  };
-}
-
-function sourceLabel(citation: AgentCitation): string {
-  return citation.sender ? `${citation.sender} · ${citation.subject}` : citation.subject;
-}
-
-/** Copies text to the clipboard, falling back to a hidden textarea + execCommand
- *  when the async Clipboard API is unavailable (non-secure contexts). */
-async function copyToClipboard(content: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(content);
-  } catch {
-    const input = document.createElement("textarea");
-    input.value = content;
-    input.style.position = "fixed";
-    input.style.opacity = "0";
-    document.body.append(input);
-    input.select();
-    document.execCommand("copy");
-    input.remove();
-  }
-}
-
-/**
- * The "来源邮件" panel lists distinct source messages, not search chunks.
- * Deduplicate by `messageId` (falling back to the citation id) so the same
- * mail can never appear twice, even if the stream re-emits a citation or two
- * retrieval paths produce one for the same message. Server-side RAG already
- * dedupes by message, so this is a defensive guard, not a data fix.
- */
-export function dedupeCitations(citations: readonly AgentCitation[]): AgentCitation[] {
-  const seen = new Set<string>();
-  const result: AgentCitation[] = [];
-  for (const citation of citations) {
-    const key = citation.messageId || citation.id;
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    result.push(citation);
-  }
-  return result;
-}
-
-function truncateForPreview(text: string, maxLen = 80): string {
-  const clean = text.replace(/\s+/g, " ").trim();
-  if (clean.length <= maxLen) return clean;
-  return clean.slice(0, maxLen) + "…";
-}
-
-function truncateForContext(text: string, headLen = 200, tailLen = 200): string {
-  const clean = text.replace(/\s+/g, " ").trim();
-  if (clean.length <= headLen + tailLen + 5) return clean;
-  return clean.slice(0, headLen) + " …" + clean.slice(-tailLen);
-}
-
-function messageWithEvent(message: AgentMessage, event: AgentStreamEvent): AgentMessage {
-  switch (event.type) {
-    case "text_delta":
-      return { ...message, content: `${message.content}${event.delta}` };
-    case "citation":
-      return { ...message, citations: dedupeCitations([...message.citations, event.citation]) };
-    case "tool": {
-      const previous = message.toolActivities.filter((activity) => activity.id !== event.activity.id);
-      return { ...message, toolActivities: [...previous, event.activity] };
-    }
-    case "confirmation":
-      return { ...message, confirmation: event.confirmation };
-    case "error":
-      return { ...message, state: "error", error: event.error };
-    case "completed":
-      return {
-        ...message,
-        state: event.reason === "error" ? "error" : "complete",
-        // A user-cancelled reply is a truncation, not a finished answer: flag it
-        // so the transcript reads as stopped and retry affordances stay usable.
-        ...(event.reason === "cancelled" ? { interrupted: true } : {}),
-      };
-    default:
-      return message;
-  }
-}
-
-/**
- * Folds an in-flight assistant message into a clearly "interrupted" state when
- * the user sends a new message while the agent is still streaming. It:
- *   - flags the message as interrupted so the partial reply reads as stopped;
- *   - marks every tool that was still running or waiting for confirmation as
- *     failed ("interrupted") so no activity is left spinning forever;
- *   - expires a pending confirmation so it cannot be acted on after the run.
- */
-/**
- * A run that may outlive the conversation currently being viewed. When the user
- * switches away mid-reply, the run keeps streaming into this buffer instead of
- * touching the UI (rendering to a transcript nobody is looking at). Re-entering
- * the conversation replays the buffered events so the reply appears exactly
- * where it left off — the server's `inFlight` snapshot plus the missing tail —
- * then live events resume the same row. Terminal runs are removed once the
- * server has persisted the final turn, so re-entry just renders the persisted
- * transcript.
- */
-type SessionStream = {
-  conversationId: string;
-  assistantMessageId: string;
-  controller: AbortController;
-  /** text_delta / citation / tool / confirmation / error / completed deltas. */
-  events: AgentStreamEvent[];
-  /** Latest status message while the run was in the background. */
-  status: string | null;
-  /** Memory suggestions collected while the run was in the background. */
-  suggestions: string[];
-  /** True once a terminal event (completed/error) was received. */
-  done: boolean;
-};
-
-export function interruptAssistantMessage(message: AgentMessage, interruptedLabel: string): AgentMessage {
-  return {
-    ...message,
-    state: message.state === "error" ? "error" : "complete",
-    interrupted: true,
-    toolActivities: message.toolActivities.map((activity) =>
-      activity.state === "running" || activity.state === "awaiting_confirmation"
-        ? { ...activity, state: "failed", error: { code: "INTERRUPTED", message: interruptedLabel, retryable: false } }
-        : activity,
-    ),
-    confirmation: message.confirmation?.state === "pending"
-      ? { ...message.confirmation, state: "expired" }
-      : message.confirmation,
-  };
-}
-
-/**
- * Applies a user's confirmation decision to a message: resolves the pending
- * confirmation and releases the tool that was waiting for it (completed with
- * an approval label on approval, failed on rejection). Messages without the
- * matching confirmation are returned unchanged.
- */
-export function applyConfirmationDecision(
-  message: AgentMessage,
-  confirmationId: string,
-  decision: "approve" | "reject",
-  settledLabels: { approved: string; rejected: string },
-): AgentMessage {
-  if (message.confirmation?.id !== confirmationId) return message;
-  return {
-    ...message,
-    confirmation: { ...message.confirmation, state: decision === "approve" ? "approved" : "rejected" },
-    toolActivities: message.toolActivities.map((activity) => activity.state === "awaiting_confirmation"
-      ? decision === "approve"
-        ? { ...activity, state: "completed", summary: settledLabels.approved }
-        : { ...activity, state: "failed", error: { code: "CONFIRMATION_REJECTED", message: settledLabels.rejected, retryable: false } }
-      : activity),
-  };
-}
-
-/**
- * Marks a pending confirmation as expired and fails the tools that were
- * waiting for it. Messages without the matching confirmation are returned
- * unchanged.
- */
-export function expireConfirmation(message: AgentMessage, confirmationId: string, expiredLabel: string): AgentMessage {
-  if (message.confirmation?.id !== confirmationId) return message;
-  return {
-    ...message,
-    confirmation: { ...message.confirmation, state: "expired" },
-    toolActivities: message.toolActivities.map((activity) => activity.state === "awaiting_confirmation"
-      ? { ...activity, state: "failed", error: { code: "CONFIRMATION_EXPIRED", message: expiredLabel, retryable: false } }
-      : activity),
-  };
-}
-
-const toolLabelKeys: Readonly<Record<string, string>> = {
-  "rag.search": "agent.tool.ragSearch",
-  "accounts.list": "agent.tool.accountsList",
-  "accounts.delete": "agent.tool.accountsDelete",
-  "folders.list": "agent.tool.foldersList",
-  "messages.list": "agent.tool.messagesList",
-  "messages.get": "agent.tool.messageGet",
-  "messages.batch_get": "agent.tool.messageGet",
-  "mail.summarize": "agent.tool.mailSummarize",
-  "threads.get": "agent.tool.threadGet",
-  "attachments.list": "agent.tool.attachmentsList",
-  "mail.draft.create": "agent.tool.draftCreate",
-  "mail.draft.update": "agent.tool.draftUpdate",
-  "mail.draft.delete": "agent.tool.draftDelete",
-  "messages.send": "agent.tool.messagesSend",
-  "mail.reply": "agent.tool.mailReply",
-  "calendar.list": "agent.tool.calendarList",
-  "calendar.create": "agent.tool.calendarCreate",
-  "calendar.update": "agent.tool.calendarUpdate",
-  "calendar.delete": "agent.tool.calendarDelete",
-};
-
-/**
- * Builds a fully populated sample conversation for demo mode so the transcript
- * styling (tool cards, citations, confirmations, quotes, attachments, errors,
- * streaming state) can be reviewed without a backend.
- */
-function createDemoConversation(): AgentConversation {
-  const minutesAgo = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString();
-  const tool = (id: string, toolName: string, title: string, state: AgentToolActivity["state"], extra?: Partial<AgentToolActivity>): AgentToolActivity => ({
-    id,
-    toolName,
-    title,
-    state,
-    ...extra,
-  });
-  const citation = (id: string, subject: string, sender: string, sentAt: string, excerpt: string, messageId = "demo-mail-1"): AgentCitation => ({
-    id,
-    messageId,
-    accountId: "account-1",
-    subject,
-    sender,
-    sentAt,
-    excerpt,
-    confidence: 0.97,
-  });
-
-return {
-    id: "demo-conversation-1",
-    title: "季度回顾会议准备",
-    preview: "明天上午还有什么安排吗？",
-    updatedAt: minutesAgo(1),
-    scope: { mode: "all_accounts", accountIds: ["account-1"], messageIds: [] },
-    providerId: "demo-ollama",
-    messages: [
-      {
-        id: "demo-msg-0",
-        role: "system",
-        content: "已恢复会话记忆：与星辰科技的合作往来、本周 3 封待办邮件、2 个待确认日程。",
-        createdAt: minutesAgo(59),
-        state: "complete",
-        citations: [],
-        toolActivities: [],
-      },
-      {
-        id: "demo-msg-1",
-        role: "user",
-        content: "早上好，帮我看看今天有哪些需要关注的邮件？",
-        createdAt: minutesAgo(58),
-        state: "complete",
-        citations: [],
-        toolActivities: [],
-      },
-      {
-        id: "demo-msg-2",
-        role: "assistant",
-        content: "今天有 3 封值得关注的邮件：\n\n1. **星辰科技**确认了季度回顾会议，并把时间改到了周二下午 4 点；\n2. **供应商发票**已上传附件，等待你确认付款；\n3. **安全通知**提醒本周将轮换部分账户密码。\n\n需要我展开哪一封？",
-        createdAt: minutesAgo(56),
-        state: "complete",
-        citations: [
-          citation("demo-cite-1", "季度回顾会议时间调整", "星辰科技 <meeting@xingchen.example>", minutesAgo(120), "季度回顾会议调整至周二 16:00，届时请提前准备供应商报价对比表。"),
-          citation("demo-cite-2", "6 月供应商发票", "财务部 <finance@nami.example>", minutesAgo(300), "附上 6 月供应商发票，请在月底前完成确认。"),
-        ],
-        toolActivities: [
-          tool("demo-tool-1", "accounts.list", "accounts.list", "completed"),
-          tool("demo-tool-2", "messages.list", "messages.list", "completed"),
-          tool("demo-tool-3", "messages.get", "messages.get", "completed", { summary: "3 封邮件详情" }),
-        ],
-      },
-      {
-        id: "demo-msg-3",
-        role: "user",
-        content: "那封星辰科技的邮件说要提前讨论供应商报价，附件里是我整理的数据，帮我对一下。",
-        createdAt: minutesAgo(40),
-        state: "complete",
-        citations: [],
-        toolActivities: [],
-        quote: "季度回顾会议调整至周二 16:00，届时请提前准备供应商报价对比。",
-        attachments: [
-          { name: "季度数据.xlsx", type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", path: "C:\\Users\\demo\\Downloads\\季度数据.xlsx", token: "out_demo_quarterly" },
-        ],
-      },
-      {
-        id: "demo-msg-4",
-        role: "assistant",
-        content: "已结合你上传的数据与历史邮件核对：\n\n- 星辰科技在 6 月邮件中提及的供应商报价为 **12.8 万**，与你的数据表一致；\n- 本次邮件把讨论时间从 14:00 改到 **16:00**，原因是采购团队上午有评审会；\n- 建议准备：报价对比表 + 上半年采购量统计表。",
-        createdAt: minutesAgo(38),
-        state: "complete",
-        citations: [
-          citation("demo-cite-3", "6 月供应商报价沟通", "星辰科技 <purchase@xingchen.example>", minutesAgo(3000), "供应商报价 12.8 万，待月度会议确认。", "demo-mail-2"),
-        ],
-        toolActivities: [
-          tool("demo-tool-4", "rag.search", "rag.search", "completed", { summary: "匹配到 3 条历史记录" }),
-          tool("demo-tool-5", "messages.get", "messages.get", "completed"),
-        ],
-      },
-      {
-        id: "demo-msg-5",
-        role: "user",
-        content: "帮我起草一封回复，确认我们周二下午 4 点会参加，并询问需要准备什么材料。",
-        createdAt: minutesAgo(30),
-        state: "complete",
-        citations: [],
-        toolActivities: [],
-      },
-      {
-        id: "demo-msg-6",
-        role: "assistant",
-        content: "草稿已创建，等你确认后就可以发送。需要修改措辞或收件人时告诉我即可。",
-        createdAt: minutesAgo(28),
-        state: "complete",
-        citations: [],
-        toolActivities: [
-          tool("demo-tool-6", "mail.draft.create", "mail.draft.create", "completed"),
-        ],
-        confirmation: {
-          id: "demo-confirm-1",
-          title: "创建邮件草稿",
-          summary: "助手请求创建一封新草稿",
-          fields: [
-            { label: "账户", value: "hello@nami.example" },
-            { label: "收件人", value: "meeting@xingchen.example" },
-            { label: "主题", value: "确认参加季度回顾会议" },
-            { label: "正文", value: "确认参加周二 16:00 的季度回顾会议，请告知需要提前准备的材料。" },
-          ],
-          expiresAt: minutesAgo(28),
-          state: "approved",
-        },
-      },
-      {
-        id: "demo-msg-7",
-        role: "user",
-        content: "在日历上创建一个提醒：周二 15:30 提前准备会议材料。",
-        createdAt: minutesAgo(20),
-        state: "complete",
-        citations: [],
-        toolActivities: [],
-      },
-      {
-        id: "demo-msg-8",
-        role: "assistant",
-        content: "已添加日程「准备季度回顾材料」，周二 15:30–16:00。",
-        createdAt: minutesAgo(18),
-        state: "complete",
-        citations: [],
-        toolActivities: [
-          tool("demo-tool-7", "calendar.create", "calendar.create", "awaiting_confirmation"),
-        ],
-        confirmation: {
-          id: "demo-confirm-3",
-          title: "创建日历日程",
-          summary: "助手请求在日历中添加新日程",
-          fields: [
-            { label: "日程", value: "准备季度回顾材料" },
-            { label: "时间", value: "周二 15:30–16:00" },
-          ],
-          expiresAt: minutesAgo(-42),
-          state: "pending",
-        },
-      },
-      {
-        id: "demo-msg-9",
-        role: "user",
-        content: "另外把之前那个「产品评审」日程删掉吧。",
-        createdAt: minutesAgo(15),
-        state: "complete",
-        citations: [],
-        toolActivities: [],
-      },
-      {
-        id: "demo-msg-10",
-        role: "assistant",
-        content: "好的，已取消删除「产品评审」，该日程保持不变。",
-        createdAt: minutesAgo(13),
-        state: "complete",
-        citations: [],
-        toolActivities: [
-          tool("demo-tool-8", "calendar.delete", "calendar.delete", "completed"),
-        ],
-        confirmation: {
-          id: "demo-confirm-2",
-          title: "删除日历日程",
-          summary: "助手请求删除日程「产品评审」",
-          fields: [
-            { label: "日程", value: "产品评审" },
-            { label: "时间", value: "周三 10:00–11:00" },
-          ],
-          expiresAt: minutesAgo(13),
-          state: "rejected",
-        },
-      },
-      {
-        id: "demo-msg-11",
-        role: "user",
-        content: "好的，那直接把这封确认邮件发出去。",
-        createdAt: minutesAgo(10),
-        state: "complete",
-        citations: [],
-        toolActivities: [],
-      },
-      {
-        id: "demo-msg-12",
-        role: "assistant",
-        content: "发送遇到问题：SMTP 服务器暂时不可用，草稿仍安全保存在草稿箱，可以稍后重试。",
-        createdAt: minutesAgo(8),
-        state: "error",
-        citations: [],
-        toolActivities: [
-          tool("demo-tool-9", "messages.send", "messages.send", "failed", {
-            error: { code: "HOST_UNAVAILABLE", message: "SMTP 服务器暂时不可用（网络中断）", retryable: true },
-          }),
-        ],
-        error: { code: "HOST_UNAVAILABLE", message: "SMTP 服务器暂时不可用（网络中断）", suggestion: "检查网络连接后重试，或稍后再发送", retryable: true },
-      },
-      {
-        id: "demo-msg-13",
-        role: "user",
-        content: "重试发送。",
-        createdAt: minutesAgo(6),
-        state: "complete",
-        citations: [],
-        toolActivities: [],
-      },
-      {
-        id: "demo-msg-14",
-        role: "assistant",
-        content: "已发送：确认参加季度回顾会议（收件人 meeting@xingchen.example）。",
-        createdAt: minutesAgo(5),
-        state: "complete",
-        citations: [],
-        toolActivities: [
-          tool("demo-tool-10", "messages.send", "messages.send", "completed"),
-        ],
-      },
-      {
-        id: "demo-msg-15",
-        role: "user",
-        content: "明天上午还有什么安排吗？",
-        createdAt: minutesAgo(2),
-        state: "complete",
-        citations: [],
-        toolActivities: [],
-      },
-      {
-        id: "demo-msg-16",
-        role: "assistant",
-        content: "",
-        createdAt: minutesAgo(1),
-        state: "streaming",
-        citations: [],
-        toolActivities: [],
-      },
-    ],
-  };
-}
-
-function AgentToolCard({ activity }: { activity: AgentToolActivity }) {
-  const { t } = useI18n();
-  const icon = activity.state === "failed" ? <CircleAlert size={15} /> : activity.state === "completed" ? <Check size={15} /> : <LoaderCircle className="spin" size={15} />;
-  const title = toolLabelKeys[activity.toolName] ? t(toolLabelKeys[activity.toolName]) : activity.title;
-  const summary = activity.state === "failed"
-    ? activity.error?.code === "INTERRUPTED"
-      ? t("agent.interrupted")
-      : activity.error?.code?.startsWith("CONFIRMATION_")
-        ? activity.error.message
-        : t("agent.tool.failed")
-    : activity.state === "completed"
-      ? activity.summary ?? t("agent.tool.completed")
-      : activity.state === "awaiting_confirmation"
-        ? t("agent.confirmation.waiting")
-        : t("agent.tool.running");
-  return (
-    <div className={`agent-tool-card ${activity.state}`}>
-      <span className="agent-tool-icon" aria-hidden="true">{icon}</span>
-      <span className="agent-tool-copy"><strong>{title}</strong><small>{summary}</small></span>
-      {activity.state === "awaiting_confirmation" && <span className="agent-tool-waiting">{t("agent.confirmation.waiting")}</span>}
-    </div>
-  );
-}
-
-// Tool activities stay collapsed into a quiet one-line summary — even while
-// running — so a turn's tool calls never dominate the conversation. A FINAL
-// failure — the newest activity failed — in the LATEST turn expands the list
-// to make the error visible (earlier failures followed by successful tools do
-// not pin it open); once the user starts a new turn (superseded), the old
-// warning folds back into its summary automatically. The user can always fold
-// the list back down; the failed count keeps the error visible on the summary
-// row, and a fresh failure pops it open again. The summary row stays in place
-// as an accordion header so the fold is a smooth height transition.
-export const AgentToolList = memo(function AgentToolListInner({ activities, superseded = false }: { activities: AgentToolActivity[]; superseded?: boolean }) {
-  const { t } = useI18n();
-  const [expanded, setExpanded] = useState(false);
-  // Dismissal is keyed to the latest activity so a NEW failure (a later
-  // activity becomes the latest) pops the list open again.
-  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
-  const latest = activities[activities.length - 1];
-  const autoExpanded = latest?.state === "failed" && !superseded && dismissedKey !== latest.id;
-  const open = expanded || autoExpanded;
-  const failedCount = activities.filter((activity) => activity.state === "failed").length;
-  const runningCount = activities.filter((activity) => activity.state === "running" || activity.state === "awaiting_confirmation").length;
-  // Only a DONE failure can be dismissed; a running tool that fails later must
-  // still pop the list open again.
-  const collapse = () => {
-    setExpanded(false);
-    if (latest?.state === "failed") setDismissedKey(latest.id);
-  };
-
-  return (
-    <div className={`agent-tool-list${open ? " open" : ""}`}>
-      <button type="button" className="agent-tool-summary" aria-expanded={open} onClick={() => (open ? collapse() : setExpanded(true))}>
-        <Wrench size={13} />
-        {/* The count renders as a rolling odometer digit: only the number spins
-            (like a taximeter) when a new tool call lands. The full sentence is
-            kept for screen readers; the visual is the prefix + rolling digit +
-            suffix so the surrounding text never moves. */}
-        <span className="agent-tool-summary-label">
-          <span className="visually-hidden">{t("agent.tool.summary", { count: activities.length })}</span>
-          <span className="agent-tool-summary-visual" aria-hidden="true">
-            <span className="agent-tool-summary-prefix">{t("agent.tool.summaryPrefix")}</span>
-            <span className="agent-tool-count-window">
-              <span className="agent-tool-count-strip" style={{ transform: `translateY(${-activities.length}em)` }}>
-                {Array.from({ length: Math.max(10, activities.length + 1) }, (_, digit) => (
-                  <span key={digit} className="agent-tool-count-digit">{digit}</span>
-                ))}
-              </span>
-            </span>
-            <span className="agent-tool-summary-suffix">{t("agent.tool.summarySuffix")}</span>
-          </span>
-        </span>
-        <span className="agent-tool-summary-chips">{failedCount > 0 && <em className="agent-tool-summary-failed">{t("agent.tool.failedCount", { count: failedCount })}</em>}{runningCount > 0 && <em className="agent-tool-summary-running">{t("agent.tool.runningCount", { count: runningCount })}</em>}</span>
-        <ChevronDown size={13} className="agent-tool-summary-chevron" />
-      </button>
-      <div className="agent-tool-collapse" aria-hidden={!open}>
-        <div className="agent-tool-collapse-inner">
-          {activities.map((activity) => <AgentToolCard key={activity.id} activity={activity} />)}
-          <button type="button" className="agent-tool-toggle" onClick={collapse}>{t("agent.tool.collapse")}</button>
-        </div>
-      </div>
-    </div>
-  );
-});
-
-function AgentConfirmationCard({
-  confirmation,
-  desktopConfirmationAvailable,
-  resolutionError,
-  onDecision,
-  expiresAt,
-  onExpire,
-}: {
-  confirmation: AgentConfirmation;
-  desktopConfirmationAvailable: boolean;
-  resolutionError?: string;
-  /** Local decision handler (demo mode) — real builds resolve through the desktop bridge. */
-  onDecision?: (decision: "approve" | "reject") => void;
-  /** Deadline (epoch ms) driving the local ticking countdown. */
-  expiresAt?: number;
-  /** Called once when the deadline passes while the card is mounted. */
-  onExpire?: () => void;
-}) {
-  const { locale, t } = useI18n();
-  const [leaving, setLeaving] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
-  const expiredRef = useRef(false);
-  useEffect(() => {
-    if (expiresAt === undefined || !Number.isFinite(expiresAt)) return;
-    const timer = window.setInterval(() => {
-      const current = Date.now();
-      setNow(current);
-      if (!expiredRef.current && current >= expiresAt) {
-        expiredRef.current = true;
-        onExpire?.();
-      }
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [expiresAt, onExpire]);
-  const decisionEnabled = Boolean(onDecision);
-  const resolve = (decision: "approve" | "reject") => {
-    if (leaving) return;
-    setLeaving(true);
-    // Let the collapse animation finish before the card unmounts.
-    window.setTimeout(() => onDecision?.(decision), 260);
-  };
-  const remainingMs = expiresAt !== undefined && Number.isFinite(expiresAt) ? expiresAt - now : 0;
-  return (
-    <section
-      className={`agent-confirmation-card${leaving ? " leaving" : ""}`}
-      aria-label={confirmation.title}
-      data-nami-agent-confirmation-card
-      data-nami-agent-confirmation-id={confirmation.id}
-    >
-      <div className="agent-confirmation-heading"><ShieldAlert size={17} /><span><strong>{confirmation.title}</strong><small>{confirmation.summary}</small></span><small className="agent-confirmation-expiry">{remainingMs > 0
-        ? t("agent.confirmation.expiresIn", { time: formatCountdown(remainingMs) })
-        : t("agent.confirmation.expires", { time: shortDate(confirmation.expiresAt, locale) })}</small></div>
-      <dl>
-        {confirmation.fields.map((field) => <div key={`${field.label}:${field.value}`}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}
-      </dl>
-      <div className="agent-confirmation-actions">
-        <button className="secondary-button" type="button" disabled={!desktopConfirmationAvailable && !decisionEnabled} data-nami-agent-confirmation-id={confirmation.id} data-nami-agent-confirmation-decision="reject" onClick={decisionEnabled ? () => resolve("reject") : undefined}>{t("agent.confirmation.reject")}</button>
-        <button className="primary-button" type="button" disabled={!desktopConfirmationAvailable && !decisionEnabled} data-nami-agent-confirmation-id={confirmation.id} data-nami-agent-confirmation-decision="approve" onClick={decisionEnabled ? () => resolve("approve") : undefined}><CheckCheck size={15} />{t("agent.confirmation.approve")}</button>
-      </div>
-      {resolutionError && <div className="agent-message-error" role="alert"><CircleAlert size={15} /><span>{resolutionError}</span></div>}
-    </section>
-  );
-}
-
-// Owns its own 1 s tick so the countdown does not re-render the workspace.
-function RevokeNotice({ until, onExpire }: { until: number; onExpire: () => void }) {
-  const { t } = useI18n();
-  const [now, setNow] = useState(() => Date.now());
-  const expiredRef = useRef(false);
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      const current = Date.now();
-      setNow(current);
-      if (!expiredRef.current && current >= until) {
-        expiredRef.current = true;
-        onExpire();
-      }
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [until, onExpire]);
-  const remaining = Math.max(0, Math.ceil((until - now) / 1000));
-  return (
-    <div className="agent-revoke-notice" role="status">
-      <span>{t("agent.message.revokeNotice")}</span>
-      <em aria-hidden="true">{remaining}s</em>
-    </div>
-  );
-}
-
-function AgentRecallButton({
-  onRevoke,
-  label,
-  confirmLabel,
-  disabled,
-}: {
-  onRevoke: () => void;
-  label: string;
-  confirmLabel: string;
-  disabled?: boolean;
-}) {
-  const [armed, setArmed] = useState(false);
-  const armTimerRef = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(armTimerRef.current), []);
-  const handleClick = () => {
-    if (armed) {
-      window.clearTimeout(armTimerRef.current);
-      setArmed(false);
-      onRevoke();
-      return;
-    }
-    setArmed(true);
-    armTimerRef.current = window.setTimeout(() => setArmed(false), 3200);
-  };
-  return (
-    <button
-      type="button"
-      className={`agent-corner-button recall${armed ? " armed" : ""}`}
-      disabled={disabled}
-      onClick={disabled ? undefined : handleClick}
-      aria-label={label}
-      data-tooltip={armed ? confirmLabel : label}
-    >
-      {armed ? <span className="agent-recall-arm">{confirmLabel}</span> : <Undo2 size={12} />}
-    </button>
-  );
-}
-
-const AgentScrubberBar = memo(function AgentScrubberBarInner({
-  hovered,
-  top,
-  width,
-  blur,
-}: {
-  hovered: boolean;
-  top: number;
-  width: number;
-  blur: number;
-}) {
-  return (
-    <span
-      className={`agent-scrubber-bar${hovered ? " hovered" : ""}`}
-      style={{
-        top: `${top}px`,
-        width: `${width}px`,
-        filter: blur > 0 ? `blur(${blur}px)` : undefined,
-      }}
-    />
-  );
-});
-
-const ollamaEndpointSuggestion = "http://127.0.0.1:11434/v1";
-
-/** Copy button with a transient checkmark: copies, shows a check, then returns
- *  to the copy icon so repeated copies stay possible. The row keeps rendering
- *  only this tiny control, isolated from the memoised message row. */
-function CopyMessageButton({ content, label }: { content: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  const timerRef = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(timerRef.current), []);
-  const handleCopy = () => {
-    void copyToClipboard(content);
-    setCopied(true);
-    window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => setCopied(false), 1200);
-  };
-  return (
-    <button
-      type="button"
-      className={`agent-corner-button copy${copied ? " copied" : ""}`}
-      onClick={handleCopy}
-      aria-label={label}
-      data-tooltip={label}
-    >
-      {copied ? <Check size={12} /> : <Copy size={12} />}
-    </button>
-  );
-}
-
-/**
- * Renders an assistant turn's body. While it is streaming, the content is
- * parsed and rendered live by `AgentMarkdown` (a mature react-markdown-based
- * renderer) instead of showing plain text, so bold/headings/code appear as the
- * model types them. `streamingMarkdownContent` guards against an unfinished
- * code fence swallowing the tail; once the turn completes, the full content is
- * parsed with no truncation.
- */
-const AgentMessageContent = memo(function AgentMessageContentInner({ content, streaming }: { content: string; streaming: boolean }) {
-  if (streaming) {
-    return <AgentMarkdown content={streamingMarkdownContent(content)} />;
-  }
-  return <AgentMarkdown content={content} />;
-});
-
-type AgentMessageRowProps = {
-  message: AgentMessage;
-  /** Whether a newer user turn follows this message (supersedes its warnings). */
-  superseded: boolean;
-  /** Live provider status text (e.g. "retrying") shown in the thinking line. */
-  statusMessage?: string | null;
-  locale: string;
-  t: Translate;
-  onOpenAttachment: (path?: string) => void;
-  onOpenMessage: (messageId: string) => void;
-  onRevoke: (messageId: string) => void;
-  onRetry: () => void;
-  onUserMessageRef: (messageId: string, node: HTMLElement | null) => void;
-};
-
-/**
- * One transcript message. Isolated with React.memo so a streaming update —
- * which only mutates the single in-flight message object — re-renders that row
- * alone instead of re-parsing every historic message's markdown. Callbacks and
- * the i18n helpers must keep stable identities for the memo to hold.
- */
-export const AgentMessageRow = memo(function AgentMessageRowInner({
-  message,
-  superseded,
-  statusMessage,
-  locale,
-  t,
-  onOpenAttachment,
-  onOpenMessage,
-  onRevoke,
-  onRetry,
-  onUserMessageRef,
-}: AgentMessageRowProps) {
-  const userMessageRef = useCallback((node: HTMLElement | null) => {
-    onUserMessageRef(message.id, node);
-  }, [message.id, onUserMessageRef]);
-  const [attachmentsExpanded, setAttachmentsExpanded] = useState(false);
-  // A revoked message disappears from the transcript entirely; the "已撤回信息"
-  // notice lives above the composer instead of leaving a placeholder row.
-  if (message.revoked) return null;
-  const allAttachments = message.attachments ?? [];
-  const attachmentOverflow = allAttachments.length - 5;
-  const visibleAttachments = attachmentsExpanded || attachmentOverflow <= 0 ? allAttachments : allAttachments.slice(0, 5);
-  return (
-    <article
-      className={`agent-message ${message.role} ${message.state === "streaming" ? "streaming" : ""}${message.interrupted ? " interrupted" : ""}`}
-      ref={message.role === "user" ? userMessageRef : undefined}
-    >
-      {!message.revoked && (
-        <>
-          {message.quote && <div className="agent-message-quote"><span className="agent-quote-mark" aria-hidden="true">"</span><span className="agent-quote-text">{truncateForPreview(message.quote)}</span><span className="agent-quote-mark" aria-hidden="true">"</span></div>}
-          {message.references && message.references.length > 0 && (
-            <div className="agent-message-references">
-              {message.references.map((reference) => (
-                <button key={reference.id} type="button" className="agent-message-reference" onClick={() => onOpenMessage(reference.id)} title={reference.subject} data-tooltip={t("agent.reference.open")}><Mail size={12} /><span>{reference.subject || t("agent.reference.noSubject")}</span></button>
-              ))}
-            </div>
-          )}
-          {message.content ? <AgentMessageContent content={message.content} streaming={message.state === "streaming"} /> : message.state === "streaming" && <div className="agent-thinking"><span className="agent-thinking-dots" aria-hidden="true"><span className="agent-thinking-dot" /><span className="agent-thinking-dot" /><span className="agent-thinking-dot" /></span>{statusMessage || t("agent.message.thinking")}</div>}
-          {message.attachments && message.attachments.length > 0 && <div className="agent-message-attachments">{visibleAttachments.map((attachment, index) => { const presentation = presentAttachment(attachment.name, attachment.type, t); return <button key={`${attachment.name}-${index}`} type="button" className="agent-message-attachment" onClick={() => onOpenAttachment(attachment.path)} data-tooltip={attachment.path ?? attachment.name}><AttachmentFileIcon kind={presentation.kind} /><span>{attachment.name}</span></button>; })}{attachmentOverflow > 0 && <button type="button" className="agent-message-attachment is-more" aria-expanded={attachmentsExpanded} onClick={() => setAttachmentsExpanded((value) => !value)}>{attachmentsExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}<span>{attachmentsExpanded ? t("agent.message.collapseAttachments") : t("agent.message.expandAttachments", { count: attachmentOverflow })}</span></button>}</div>}
-          {message.toolActivities.length > 0 && <AgentToolList activities={message.toolActivities} superseded={superseded} />}
-          {message.error && <div className="agent-message-error"><CircleAlert size={15} /><span>{message.error.message}{message.error.suggestion ? ` ${message.error.suggestion}` : ""}</span>{message.error.retryable && <button type="button" onClick={onRetry}>{t("agent.message.retry")}</button>}</div>}
-        </>
-      )}
-      <div className="agent-message-meta">{message.role === "system" && <span className="agent-message-role">{t("agent.message.system")}</span>}{message.interrupted && <span className="agent-message-interrupted">{t("agent.message.interrupted")}</span>}<time>{shortDate(message.createdAt, locale)}</time>{!message.revoked && <span className="agent-message-actions">{message.content && <CopyMessageButton content={message.content} label={t("agent.message.copy")} />}{message.role === "user" && <AgentRecallButton disabled={!message.content || message.state === "streaming"} onRevoke={() => onRevoke(message.id)} label={t("agent.message.revoke")} confirmLabel={t("agent.message.revokeConfirm")} />}</span>}</div>
-    </article>
-  );
-});
-
-type ProviderKindMetadata = {
-  endpointSuggestion: string;
-  endpointHintKey: string;
-  modelPlaceholder: string;
-  embeddingModelPlaceholder?: string;
-};
-
-/** Per-protocol defaults shown in the provider form (placeholders and pre-fill). */
-const providerKindMetadata: Record<AgentProviderKind, ProviderKindMetadata> = {
-  "openai-compatible": {
-    endpointSuggestion: "",
-    endpointHintKey: "agent.providers.fields.endpointHint",
-    modelPlaceholder: "gpt-4.1-mini",
-    embeddingModelPlaceholder: "text-embedding-3-small",
-  },
-  ollama: {
-    endpointSuggestion: ollamaEndpointSuggestion,
-    endpointHintKey: "agent.providers.fields.ollamaEndpointHint",
-    modelPlaceholder: "llama3.2",
-    embeddingModelPlaceholder: "nomic-embed-text",
-  },
-  anthropic: {
-    endpointSuggestion: "https://api.anthropic.com",
-    endpointHintKey: "agent.providers.fields.endpointHintAnthropic",
-    modelPlaceholder: "claude-sonnet-4-5",
-  },
-  gemini: {
-    endpointSuggestion: "https://generativelanguage.googleapis.com/v1beta",
-    endpointHintKey: "agent.providers.fields.endpointHintGemini",
-    modelPlaceholder: "gemini-2.5-flash",
-  },
-  "openai-responses": {
-    endpointSuggestion: "https://api.openai.com/v1",
-    endpointHintKey: "agent.providers.fields.endpointHintOpenAiResponses",
-    modelPlaceholder: "gpt-4.1",
-  },
-};
-
-type ProviderForm = {
-  label: string;
-  kind: AgentProviderKind;
-  endpoint: string;
-  model: string;
-  embeddingModel: string;
-  apiKey: string;
-  clearApiKey: boolean;
-  timeoutMs: string;
-  allowCloudMailContent: boolean;
-  makeDefault: boolean;
-};
-
-function configuredProviderId(providers: readonly AgentProviderSummary[], defaultProviderId: string | null): string {
-  // The default provider wins even when it is not yet configured (e.g. the API
-  // key was left empty or the connection check has not run): the composer must
-  // reflect the user's explicit default choice. Configured providers still
-  // fill in when no default exists.
-  return providers.find((provider) => provider.id === defaultProviderId)?.id
-    ?? providers.filter((provider) => provider.configured)[0]?.id
-    ?? providers[0]?.id
-    ?? "";
-}
-
-function providerFormFor(provider: AgentProviderSummary | null, defaultProviderId: string | null): ProviderForm {
-  if (!provider) {
-    return {
-      label: "",
-      kind: "openai-compatible",
-      endpoint: "",
-      model: "",
-      embeddingModel: "",
-      apiKey: "",
-      clearApiKey: false,
-      timeoutMs: "45000",
-      allowCloudMailContent: false,
-      makeDefault: defaultProviderId === null,
-    };
-  }
-  return {
-    label: provider.label,
-    kind: provider.kind,
-    endpoint: provider.endpoint,
-    model: provider.model,
-    embeddingModel: provider.embeddingModel ?? "",
-    apiKey: "",
-    clearApiKey: false,
-    timeoutMs: String(provider.timeoutMs),
-    allowCloudMailContent: provider.cloudContentConsent,
-    makeDefault: provider.id === defaultProviderId,
-  };
-}
-
-function providerVisualState(provider: AgentProviderSummary): "needsSetup" | "configurationComplete" | "verified" | "degraded" | "unavailable" {
-  if (!provider.configured) return "needsSetup";
-  if (provider.health?.state === "ready") return "verified";
-  if (provider.health?.state === "degraded") return "degraded";
-  if (provider.health?.state === "unavailable") return "unavailable";
-  return "configurationComplete";
-}
-
-function AgentProviderSettings({
-  open,
-  pane,
-  onPaneChange,
-  initialProviders,
-  initialDefaultProviderId,
-  onClose,
-  onProvidersChanged,
-  restoreFocusRef,
-}: {
-  open: boolean;
-  pane: AgentSettingsPane;
-  onPaneChange: (pane: AgentSettingsPane) => void;
-  initialProviders: AgentProviderSummary[];
-  initialDefaultProviderId: string | null;
-  onClose: () => void;
-  onProvidersChanged: (providers: AgentProviderList) => void;
-  restoreFocusRef: RefObject<HTMLElement | null>;
-}) {
-  const { t } = useI18n();
-  const dialogRef = useRef<HTMLElement>(null);
-  const [providers, setProviders] = useState<AgentProviderSummary[]>(initialProviders);
-  const [defaultProviderId, setDefaultProviderId] = useState<string | null>(initialDefaultProviderId);
-  const initialProvidersRef = useRef(initialProviders);
-  const initialDefaultProviderIdRef = useRef(initialDefaultProviderId);
-  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
-  const [form, setForm] = useState<ProviderForm>(() => providerFormFor(null, initialDefaultProviderId));
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [deletePendingId, setDeletePendingId] = useState<string | null>(null);
-  const [keyVisible, setKeyVisible] = useState(false);
-  const selectedProviderIdRef = useRef<string | null>(null);
-
-  const selectedProvider = providers.find((provider) => provider.id === selectedProviderId) ?? null;
-  const isDefaultProvider = Boolean(selectedProvider && selectedProvider.id === defaultProviderId);
-  const isOllama = form.kind === "ollama";
-  // "Send selected mail to the model" is only meaningful for remote endpoints:
-  // a loopback service (Ollama, LM Studio, …) never leaves the machine, so the
-  // switch is locked off there regardless of kind.
-  const isLocalEndpoint = useMemo(() => {
-    try {
-      const hostname = new URL(form.endpoint.trim()).hostname.toLowerCase();
-      return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
-    } catch {
-      return false;
-    }
-  }, [form.endpoint]);
-  // These kinds serve the OpenAI-compatible /embeddings endpoint on the same
-  // origin as chat, so the optional embedding model is exposed for them.
-  const embeddingCapable = form.kind === "openai-compatible" || form.kind === "ollama";
-  const kindMeta = providerKindMetadata[form.kind];
-
-  const healthFeedback = (provider: AgentProviderSummary | undefined): string => {
-    const errorCode = provider?.health?.error?.code;
-    if (errorCode === "PROVIDER_AUTH_FAILED") return t("agent.providers.checkError.auth");
-    if (errorCode === "PROVIDER_TIMEOUT") return t("agent.providers.checkError.timeout");
-    if (errorCode === "PROVIDER_UNAVAILABLE") return t("agent.providers.checkError.unavailable");
-    if (errorCode === "PROVIDER_RATE_LIMITED") return t("agent.providers.checkError.rateLimited");
-    return t("agent.providers.checkError.failed");
-  };
-
-  const requestFeedback = (error: unknown, fallback: string): string => {
-    if (error instanceof ApiError) {
-      if (error.code === "PROVIDER_AUTH_FAILED") return t("agent.providers.checkError.auth");
-      if (error.code === "PROVIDER_CHANGED") return t("agent.providers.checkError.changed");
-      if (error.code === "local_service_unavailable") return t("agent.providers.checkError.localService");
-      return error.message || fallback;
-    }
-    return fallback;
-  };
-
-  // The render that opens this panel carries the latest bootstrap summary.
-  // Subsequent provider-list updates must not reset an in-progress form.
-  useEffect(() => {
-    selectedProviderIdRef.current = selectedProviderId;
-  }, [selectedProviderId]);
-
-  const selectProvider = useCallback((provider: AgentProviderSummary | null, nextDefaultProviderId = defaultProviderId) => {
-    setSelectedProviderId(provider?.id ?? null);
-    setForm(providerFormFor(provider, nextDefaultProviderId));
-    setDeletePendingId(null);
-    setKeyVisible(false);
-    setNotice(null);
-  }, [defaultProviderId]);
-
-  const onProvidersChangedRef = useRef(onProvidersChanged);
-  onProvidersChangedRef.current = onProvidersChanged;
-
-  const applyProviderList = useCallback((snapshot: AgentProviderList, preferredProviderId: string | null = null) => {
-    setProviders(snapshot.items);
-    setDefaultProviderId(snapshot.defaultProviderId);
-    onProvidersChangedRef.current(snapshot);
-    const selected = (preferredProviderId ? snapshot.items.find((provider) => provider.id === preferredProviderId) : undefined)
-      ?? snapshot.items.find((provider) => provider.id === selectedProviderIdRef.current)
-      ?? snapshot.items.find((provider) => provider.id === snapshot.defaultProviderId)
-      ?? snapshot.items[0]
-      ?? null;
-    setSelectedProviderId(selected?.id ?? null);
-    setForm(providerFormFor(selected, snapshot.defaultProviderId));
-    setDeletePendingId(null);
-    setKeyVisible(false);
-  }, []);
-
-  const refreshProviders = useCallback(async (preferredProviderId: string | null = null) => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const snapshot = await api.agentProviders();
-      applyProviderList(snapshot, preferredProviderId);
-      return snapshot;
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : t("agent.providers.loadFailed"));
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, [applyProviderList, t]);
-
-  useEffect(() => {
-    if (!open) return;
-    setProviders(initialProvidersRef.current);
-    setDefaultProviderId(initialDefaultProviderIdRef.current);
-    setSelectedProviderId(null);
-    setForm(providerFormFor(null, initialDefaultProviderIdRef.current));
-    setLoadError(null);
-    setNotice(null);
-    setDeletePendingId(null);
-    void refreshProviders();
-  }, [open, refreshProviders]);
-
-  const { closing, requestClose } = useDismissTransition(() => {
-    onClose();
-  });
-
-  useLayoutEffect(() => {
-    if (!open) return undefined;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || saving) return;
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest(".select-control")?.querySelector('[role="combobox"][aria-expanded="true"]')) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      requestClose();
-    };
-    window.addEventListener("keydown", closeOnEscape, true);
-    return () => window.removeEventListener("keydown", closeOnEscape, true);
-  }, [requestClose, open, saving]);
-
-  useDialogFocus(open || closing, dialogRef, { restoreFocusRef });
-
-  const updateForm = <Key extends keyof ProviderForm>(key: Key, value: ProviderForm[Key]) => {
-    setForm((current) => ({ ...current, [key]: value }));
-    setNotice(null);
-    setDeletePendingId(null);
-  };
-
-  const updateKind = (kind: AgentProviderKind) => {
-    setForm((current) => ({
-      ...current,
-      kind,
-      endpoint: !current.endpoint.trim() ? providerKindMetadata[kind].endpointSuggestion : current.endpoint,
-      allowCloudMailContent: kind === "ollama" ? false : current.allowCloudMailContent,
-    }));
-    setNotice(null);
-    setDeletePendingId(null);
-  };
-
-  const validationMessage = useMemo(() => {
-    if (!form.label.trim()) return t("agent.providers.validation.label");
-    if (!form.endpoint.trim()) return t("agent.providers.validation.endpoint");
-    try {
-      const endpoint = new URL(form.endpoint.trim());
-      if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:") return t("agent.providers.validation.endpoint");
-    } catch {
-      return t("agent.providers.validation.endpoint");
-    }
-    if (!form.model.trim()) return t("agent.providers.validation.model");
-    const timeoutMs = Number(form.timeoutMs);
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 120_000) return t("agent.providers.validation.timeout");
-    return null;
-  }, [form.endpoint, form.label, form.model, form.timeoutMs, t]);
-
-  const saveProvider = async () => {
-    if (saving || validationMessage) return;
-    const timeoutMs = Number(form.timeoutMs);
-    const input: AgentProviderInput = {
-      label: form.label.trim(),
-      kind: form.kind,
-      endpoint: form.endpoint.trim(),
-      model: form.model.trim(),
-      ...(form.embeddingModel.trim() ? { embeddingModel: form.embeddingModel.trim() } : {}),
-      timeoutMs,
-      allowCloudMailContent: isOllama || isLocalEndpoint ? false : form.allowCloudMailContent,
-      ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
-      ...(form.clearApiKey ? { clearApiKey: true } : {}),
-      ...(form.makeDefault ? { makeDefault: true } : {}),
-    };
-    setSaving(true);
-    setLoadError(null);
-    setNotice(null);
-    let saved: AgentProviderSummary | undefined;
-    try {
-      saved = selectedProvider
-        ? await api.updateAgentProvider(selectedProvider.id, input)
-        : await api.createAgentProvider(input);
-      setForm((current) => ({ ...current, apiKey: "", clearApiKey: false }));
-      const checked = await api.checkAgentProvider(saved.id);
-      await refreshProviders(saved.id);
-      if (checked.health?.state === "ready") {
-        setNotice(t("agent.providers.checked"));
-      } else {
-        setLoadError(healthFeedback(checked));
-      }
-    } catch (error) {
-      if (saved) await refreshProviders(saved.id);
-      setLoadError(requestFeedback(error, saved ? t("agent.providers.checkError.failed") : t("agent.providers.saveFailed")));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // Deletes a provider by id; the first call arms the two-step confirmation
-  // (deletePendingId), the second actually removes it. Works both from the
-  // catalog list delete button and the form's footer button.
-  const deleteProviderById = async (providerId: string) => {
-    const target = providers.find((provider) => provider.id === providerId);
-    if (!target || saving) return;
-    if (deletePendingId !== providerId) {
-      setDeletePendingId(providerId);
-      return;
-    }
-    setSaving(true);
-    setLoadError(null);
-    setNotice(null);
-    try {
-      await api.deleteAgentProvider(providerId);
-      await refreshProviders();
-      setNotice(t("agent.providers.deleted"));
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : t("agent.providers.deleteFailed"));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (!open && !closing) return null;
-
-  return (
-    <div
-      className={`agent-provider-settings-scrim${closing ? " closing" : ""}`}
-      onMouseDown={(event) => {
-        if (!saving && event.target === event.currentTarget) requestClose();
-      }}
-    >
-      <aside ref={dialogRef} className={`agent-provider-settings${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={t("agent.providers.title")} tabIndex={-1}>
-        <header className="agent-provider-settings-header">
-          <div><span className="eyebrow">NAMI AGENT</span><span className="agent-provider-title-line"><h2>{pane === "mcp" ? t("agent.mcpServers.title") : t("agent.providers.title")}</h2><button className="agent-provider-help" type="button" tabIndex={-1} aria-label={pane === "mcp" ? t("agent.mcpServers.description") : t("agent.providers.description")} data-tooltip={pane === "mcp" ? t("agent.mcpServers.description") : t("agent.providers.description")}><CircleHelp size={13} /></button></span></div>
-          <div className="agent-provider-settings-actions">
-            <div className="agent-provider-settings-tabs" role="tablist" aria-label={t("agent.providers.settings")} data-pane={pane}>
-              <span className="agent-provider-settings-thumb" aria-hidden="true" />
-              <button className={`agent-provider-settings-tab${pane === "providers" ? " active" : ""}`} type="button" role="tab" aria-selected={pane === "providers"} onClick={() => onPaneChange("providers")}><KeyRound size={13} /><span>{t("agent.providers.open")}</span></button>
-              <button className={`agent-provider-settings-tab${pane === "mcp" ? " active" : ""}`} type="button" role="tab" aria-selected={pane === "mcp"} onClick={() => onPaneChange("mcp")}><Server size={13} /><span>{t("agent.mcpServers.open")}</span></button>
-            </div>
-            <button className="icon-button" type="button" data-dialog-initial-focus aria-label={t("agent.providers.close")} data-tooltip={t("agent.providers.close")} disabled={saving} onClick={requestClose}><X size={18} /></button>
-          </div>
-        </header>
-
-        <div className="agent-provider-settings-body">
-          {pane === "providers" ? (
-            <>
-              <section className="agent-provider-catalog" aria-label={t("agent.providers.title")}>
-            <div className="agent-provider-catalog-header"><span>{t("agent.providers.available")}</span><button className="agent-provider-new" type="button" disabled={saving} onClick={() => selectProvider(null)}><Plus size={15} />{t("agent.providers.new")}</button></div>
-            {loading && <div className="agent-provider-loading" role="status"><LoaderCircle className="spin" size={16} />{t("agent.providers.loading")}</div>}
-            {!loading && !providers.length && <div className="agent-provider-empty"><Bot size={18} /><strong>{t("agent.providers.empty")}</strong></div>}
-            <div className="agent-provider-list">
-              {providers.map((provider) => {
-                const active = provider.id === selectedProviderId;
-                const state = providerVisualState(provider);
-                const pending = deletePendingId === provider.id;
-                return (
-                  <div key={provider.id} className={`agent-provider-list-row${pending ? " delete-pending" : ""}`}>
-                    <button className={`agent-provider-list-item ${active ? "active" : ""}`} type="button" aria-pressed={active} disabled={saving} onClick={() => selectProvider(provider)}>
-                      <span className={`agent-provider-state ${state}`} aria-hidden="true" />
-                      <span><strong>{provider.label}</strong><span className="agent-provider-list-meta">{provider.model && <em className="model" title={provider.model}>{provider.model}</em>}{provider.id === defaultProviderId && <em className="default">{t("agent.providers.status.default")}</em>}</span></span>
-                      {provider.cloud ? <Cloud size={14} aria-label={t("agent.providers.status.cloud")} /> : <HardDrive size={14} aria-label={t("agent.providers.status.local")} />}
-                    </button>
-                    <button className={`agent-provider-list-delete${pending ? " pending" : ""}`} type="button" disabled={saving} aria-label={pending ? t("agent.providers.deleteConfirm") : t("agent.providers.delete")} data-tooltip={pending ? t("agent.providers.deleteConfirm") : t("agent.providers.delete")} onClick={() => void deleteProviderById(provider.id)}>
-                      {pending ? <Check size={14} /> : <Trash2 size={14} />}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-
-          <form className="agent-provider-form" onSubmit={(event) => { event.preventDefault(); void saveProvider(); }}>
-            <div className="agent-provider-form-heading"><h3>{selectedProvider ? t("agent.providers.form.editTitle") : t("agent.providers.form.newTitle")}</h3>{selectedProvider && <span className={`agent-provider-form-status ${providerVisualState(selectedProvider)}`}>{providerVisualState(selectedProvider) === "verified" ? <Check size={14} /> : <CircleAlert size={14} />}{t(`agent.providers.status.${providerVisualState(selectedProvider)}`)}</span>}</div>
-
-            {loadError && <div className="agent-provider-feedback error" role="alert"><CircleAlert size={16} /><span>{loadError}</span><button className="secondary-button" type="button" disabled={saving} onClick={() => void refreshProviders(selectedProviderId)}>{t("agent.providers.retry")}</button></div>}
-            {notice && <div className="agent-provider-feedback success" role="status"><Check size={16} /><span>{notice}</span></div>}
-
-            <label className="agent-provider-field"><span><strong>{t("agent.providers.fields.kind")}</strong><button className="agent-provider-help" type="button" tabIndex={-1} aria-label={t("agent.providers.fields.kindHint")} data-tooltip={t("agent.providers.fields.kindHint")}><CircleHelp size={12} /></button></span><ThemedSelect id="agent-provider-kind" value={form.kind} onValueChange={(value) => updateKind(value as AgentProviderKind)} disabled={saving} aria-label={t("agent.providers.fields.kind")}><option value="openai-compatible">{t("agent.providers.kind.openaiCompatible")}</option><option value="ollama">{t("agent.providers.kind.ollama")}</option><option value="anthropic">{t("agent.providers.kind.anthropic")}</option><option value="gemini">{t("agent.providers.kind.gemini")}</option><option value="openai-responses">{t("agent.providers.kind.openaiResponses")}</option></ThemedSelect></label>
-            <label className="agent-provider-field"><span><strong>{t("agent.providers.fields.label")}</strong></span><input value={form.label} maxLength={128} disabled={saving} onChange={(event) => updateForm("label", event.target.value)} autoComplete="off" /></label>
-            <label className="agent-provider-field"><span><strong>{t("agent.providers.fields.endpoint")}</strong><button className="agent-provider-help" type="button" tabIndex={-1} aria-label={t(kindMeta.endpointHintKey)} data-tooltip={t(kindMeta.endpointHintKey)}><CircleHelp size={12} /></button></span><input value={form.endpoint} placeholder={kindMeta.endpointSuggestion || t("agent.providers.fields.endpointPlaceholder")} disabled={saving} onChange={(event) => updateForm("endpoint", event.target.value)} autoComplete="url" spellCheck={false} /></label>
-            <label className="agent-provider-field"><span><strong>{t("agent.providers.fields.model")}</strong></span><input value={form.model} placeholder={kindMeta.modelPlaceholder} maxLength={256} disabled={saving} onChange={(event) => updateForm("model", event.target.value)} autoComplete="off" spellCheck={false} /></label>
-{embeddingCapable && <label className="agent-provider-field"><span><strong>{t("agent.providers.fields.embeddingModel")}</strong><button className="agent-provider-help" type="button" tabIndex={-1} aria-label={t("agent.providers.fields.embeddingModelHint")} data-tooltip={t("agent.providers.fields.embeddingModelHint")}><CircleHelp size={12} /></button></span><input value={form.embeddingModel} placeholder={kindMeta.embeddingModelPlaceholder} maxLength={256} disabled={saving} onChange={(event) => updateForm("embeddingModel", event.target.value)} autoComplete="off" spellCheck={false} /></label>}
-<label className="agent-provider-field agent-provider-timeout"><span><strong>{t("agent.providers.fields.timeout")}</strong><button className="agent-provider-help" type="button" tabIndex={-1} aria-label={t("agent.providers.fields.timeoutHint")} data-tooltip={t("agent.providers.fields.timeoutHint")}><CircleHelp size={12} /></button></span><input type="text" inputMode="numeric" pattern="[0-9]*" value={form.timeoutMs} disabled={saving} onChange={(event) => updateForm("timeoutMs", event.target.value)} autoComplete="off" /></label>
-            <div className="agent-provider-field"><span><strong>{t("agent.providers.fields.apiKey")}</strong><button className="agent-provider-help" type="button" tabIndex={-1} aria-label={selectedProvider?.apiKeyConfigured ? t("agent.providers.fields.apiKeyConfigured") : t("agent.providers.fields.apiKeyOptional")} data-tooltip={selectedProvider?.apiKeyConfigured ? t("agent.providers.fields.apiKeyConfigured") : t("agent.providers.fields.apiKeyOptional")}><CircleHelp size={12} /></button></span><div className="agent-provider-secret"><input type={keyVisible ? "text" : "password"} value={form.apiKey} disabled={saving || form.clearApiKey} onChange={(event) => updateForm("apiKey", event.target.value)} placeholder={selectedProvider?.apiKeyConfigured ? t("agent.providers.fields.apiKeyKeep") : t("agent.providers.fields.apiKeyPlaceholder")} autoComplete="new-password" spellCheck={false} /><button className="icon-button" type="button" disabled={saving || form.clearApiKey} aria-label={keyVisible ? t("agent.providers.fields.hideKey") : t("agent.providers.fields.showKey")} data-tooltip={keyVisible ? t("agent.providers.fields.hideKey") : t("agent.providers.fields.showKey")} onClick={() => setKeyVisible((visible) => !visible)}>{keyVisible ? <EyeOff size={15} /> : <Eye size={15} />}</button></div>{selectedProvider?.apiKeyConfigured && <button className={`agent-provider-inline-toggle ${form.clearApiKey ? "active" : ""}`} type="button" role="switch" aria-checked={form.clearApiKey} disabled={saving || Boolean(form.apiKey)} onClick={() => updateForm("clearApiKey", !form.clearApiKey)}><span aria-hidden="true" /><span>{t("agent.providers.fields.clearApiKey")}</span></button>}</div>
-            <button className={`agent-provider-toggle-row ${form.allowCloudMailContent ? "active" : ""}`} type="button" role="switch" aria-checked={form.allowCloudMailContent} disabled={saving || isOllama || isLocalEndpoint} onClick={() => updateForm("allowCloudMailContent", !form.allowCloudMailContent)}><span><strong>{t("agent.providers.cloud.title")}</strong><button className="agent-provider-help" type="button" tabIndex={-1} aria-label={isOllama || isLocalEndpoint ? t("agent.providers.cloud.localOnly") : t("agent.providers.cloud.description")} data-tooltip={isOllama || isLocalEndpoint ? t("agent.providers.cloud.localOnly") : t("agent.providers.cloud.description")}><CircleHelp size={12} /></button></span><span className="agent-provider-switch" aria-hidden="true"><span /></span></button>
-            <button className={`agent-provider-toggle-row ${form.makeDefault ? "active" : ""}`} type="button" role="switch" aria-checked={form.makeDefault} disabled={saving || isDefaultProvider} onClick={() => updateForm("makeDefault", !form.makeDefault)}><span><strong>{t("agent.providers.default.title")}</strong><button className="agent-provider-help" type="button" tabIndex={-1} aria-label={isDefaultProvider ? t("agent.providers.default.current") : t("agent.providers.default.description")} data-tooltip={isDefaultProvider ? t("agent.providers.default.current") : t("agent.providers.default.description")}><CircleHelp size={12} /></button></span><span className="agent-provider-switch" aria-hidden="true"><span /></span></button>
-
-            {validationMessage && <p className="agent-provider-validation" role="status"><CircleAlert size={14} />{validationMessage}</p>}
-            <div className="agent-provider-form-actions"><button className="primary-button" type="submit" disabled={saving || Boolean(validationMessage)}>{saving ? <LoaderCircle className="spin" size={15} /> : <KeyRound size={15} />}{saving ? t("agent.providers.savingAndChecking") : t("agent.providers.save")}</button>{selectedProvider && <button className={`secondary-button danger-button ${deletePendingId === selectedProvider.id ? "agent-provider-delete-pending" : ""}`} type="button" disabled={saving} onClick={() => void deleteProviderById(selectedProvider.id)}><Trash2 size={15} />{deletePendingId === selectedProvider.id ? t("agent.providers.deleteConfirm") : t("agent.providers.delete")}</button>}</div>
-            {deletePendingId !== null && <p className="agent-provider-delete-note">{t("agent.providers.deletePrompt")}</p>}
-          </form>
-            </>
-          ) : (
-            <AgentMcpServerPane active={open} />
-          )}
-        </div>
-      </aside>
-    </div>
-  );
-}
-
-/** Which settings pane is shown inside the shared provider/MCP dialog. */
-type AgentSettingsPane = "providers" | "mcp";
-
-type McpServerForm = {
-  label: string;
-  command: string;
-  argsText: string;
-  cwd: string;
-  timeoutMs: string;
-  enabled: boolean;
-};
-
-type EnvRow = {
-  key: string;
-  value: string;
-};
-
-function mcpServerFormFor(server: AgentMcpServerSummary | null): McpServerForm {
-  if (!server) return { label: "", command: "", argsText: "", cwd: "", timeoutMs: "30000", enabled: true };
-  return {
-    label: server.label,
-    command: server.command,
-    argsText: server.args.join("\n"),
-    cwd: server.cwd ?? "",
-    timeoutMs: String(server.timeoutMs),
-    enabled: server.enabled,
-  };
-}
-
-function mcpEnvRowsFor(server: AgentMcpServerSummary | null): EnvRow[] {
-  const rows = server ? server.envKeys.map((key) => ({ key, value: "" })) : [];
-  rows.push({ key: "", value: "" });
-  return rows;
-}
-
-function parseArgsText(text: string): string[] {
-  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-}
-
-function mcpServerVisualState(server: AgentMcpServerSummary): "checked" | "failed" | "enabled" | "disabled" {
-  if (!server.enabled) return "disabled";
-  if (server.lastError) return "failed";
-  if (server.toolCount !== undefined) return "checked";
-  return "enabled";
-}
-
-function AgentMcpServerPane({ active }: { active: boolean }) {
-  const { t } = useI18n();
-  const [servers, setServers] = useState<AgentMcpServerSummary[]>([]);
-  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
-  const [form, setForm] = useState<McpServerForm>(() => mcpServerFormFor(null));
-  const [envRows, setEnvRows] = useState<EnvRow[]>(() => [{ key: "", value: "" }]);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [checking, setChecking] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [deletePending, setDeletePending] = useState(false);
-  const selectedServerIdRef = useRef<string | null>(null);
-
-  const selectedServer = servers.find((server) => server.id === selectedServerId) ?? null;
-
-  useEffect(() => {
-    selectedServerIdRef.current = selectedServerId;
-  }, [selectedServerId]);
-
-  const selectServer = useCallback((server: AgentMcpServerSummary | null) => {
-    setSelectedServerId(server?.id ?? null);
-    setForm(mcpServerFormFor(server));
-    setEnvRows(mcpEnvRowsFor(server));
-    setDeletePending(false);
-    setNotice(null);
-    setLoadError(null);
-  }, []);
-
-  const applyServerList = useCallback((snapshot: AgentMcpServerList, preferredServerId: string | null = null) => {
-    setServers(snapshot.items);
-    const selected = (preferredServerId ? snapshot.items.find((server) => server.id === preferredServerId) : undefined)
-      ?? snapshot.items.find((server) => server.id === selectedServerIdRef.current)
-      ?? snapshot.items[0]
-      ?? null;
-    setSelectedServerId(selected?.id ?? null);
-    setForm(mcpServerFormFor(selected));
-    setEnvRows(mcpEnvRowsFor(selected));
-    setDeletePending(false);
-  }, []);
-
-  const refreshServers = useCallback(async (preferredServerId: string | null = null) => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const snapshot = await api.agentMcpServers();
-      applyServerList(snapshot, preferredServerId);
-      return snapshot;
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : t("agent.mcpServers.loadFailed"));
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, [applyServerList, t]);
-
-  useEffect(() => {
-    if (!active) return;
-    setSelectedServerId(null);
-    setForm(mcpServerFormFor(null));
-    setEnvRows([{ key: "", value: "" }]);
-    setLoadError(null);
-    setNotice(null);
-    setDeletePending(false);
-    void refreshServers();
-  }, [active, refreshServers]);
-
-  const updateForm = <Key extends keyof McpServerForm>(key: Key, value: McpServerForm[Key]) => {
-    setForm((current) => ({ ...current, [key]: value }));
-    setNotice(null);
-    setDeletePending(false);
-  };
-
-  const validationMessage = useMemo(() => {
-    if (!form.label.trim()) return t("agent.mcpServers.validation.label");
-    if (!form.command.trim()) return t("agent.mcpServers.validation.command");
-    if (parseArgsText(form.argsText).some((arg) => arg.length > 1_024)) return t("agent.mcpServers.validation.args");
-    const envPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
-    for (const row of envRows) {
-      const key = row.key.trim();
-      if (!key) continue;
-      if (key.length > 256 || !envPattern.test(key) || row.value.length > 8_192) return t("agent.mcpServers.validation.env");
-    }
-    if (form.cwd.length > 2_048) return t("agent.mcpServers.validation.cwd");
-    const timeoutMs = Number(form.timeoutMs);
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 5_000 || timeoutMs > 180_000) return t("agent.mcpServers.validation.timeout");
-    return null;
-  }, [envRows, form.argsText, form.command, form.cwd, form.label, form.timeoutMs, t]);
-
-  const requestFeedback = (error: unknown, fallback: string): string => {
-    if (error instanceof ApiError) {
-      if (error.code === "SERVER_CHANGED") return t("agent.mcpServers.checkError.changed");
-      if (error.code === "local_service_unavailable") return t("agent.mcpServers.checkError.localService");
-      return error.message || fallback;
-    }
-    return fallback;
-  };
-
-  const checkFeedback = (server: AgentMcpServerSummary): string => {
-    switch (server.lastError?.code) {
-      case "CONNECT_TIMEOUT":
-      case "TIMEOUT":
-        return t("agent.mcpServers.checkError.timeout");
-      case "PROTOCOL_ERROR":
-        return t("agent.mcpServers.checkError.protocol");
-      case "CONNECTION_FAILED":
-      case "CLOSED":
-      case "NOT_CONNECTED":
-        return t("agent.mcpServers.checkError.unavailable");
-      default:
-        return t("agent.mcpServers.checkError.failed");
-    }
-  };
-
-  const buildInput = (): AgentMcpServerInput => {
-    const existingEnvKeys = new Set(selectedServer?.envKeys ?? []);
-    const env: Record<string, string> = {};
-    const envRemove: string[] = [];
-    const seenKeys = new Set<string>();
-    for (const row of envRows) {
-      const key = row.key.trim();
-      if (!key || seenKeys.has(key)) continue;
-      seenKeys.add(key);
-      if (row.value.trim()) env[key] = row.value.trim();
-    }
-    for (const key of existingEnvKeys) {
-      if (!seenKeys.has(key)) envRemove.push(key);
-    }
-    return {
-      label: form.label.trim(),
-      command: form.command.trim(),
-      args: parseArgsText(form.argsText),
-      env,
-      ...(envRemove.length ? { envRemove } : {}),
-      ...(form.cwd.trim() ? { cwd: form.cwd.trim() } : {}),
-      timeoutMs: Number(form.timeoutMs),
-      enabled: form.enabled,
-    };
-  };
-
-  const saveServer = async () => {
-    if (saving || checking || validationMessage) return;
-    setSaving(true);
-    setLoadError(null);
-    setNotice(null);
-    let saved: AgentMcpServerSummary | undefined;
-    try {
-      saved = selectedServer
-        ? await api.updateAgentMcpServer(selectedServer.id, buildInput())
-        : await api.createAgentMcpServer(buildInput());
-      const checked = await api.checkAgentMcpServer(saved.id);
-      await refreshServers(saved.id);
-      if (checked.lastError) {
-        setLoadError(checkFeedback(checked));
-      } else {
-        setNotice(t("agent.mcpServers.checked"));
-      }
-    } catch (error) {
-      if (saved) await refreshServers(saved.id);
-      setLoadError(requestFeedback(error, saved ? t("agent.mcpServers.checkFailed") : t("agent.mcpServers.saveFailed")));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const checkServer = async () => {
-    if (!selectedServer || saving || checking) return;
-    setChecking(true);
-    setLoadError(null);
-    setNotice(null);
-    try {
-      const checked = await api.checkAgentMcpServer(selectedServer.id);
-      await refreshServers(selectedServer.id);
-      if (checked.lastError) {
-        setLoadError(checkFeedback(checked));
-      } else {
-        setNotice(t("agent.mcpServers.checked"));
-      }
-    } catch (error) {
-      setLoadError(requestFeedback(error, t("agent.mcpServers.checkFailed")));
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const deleteServer = async () => {
-    if (!selectedServer || saving || checking) return;
-    if (!deletePending) {
-      setDeletePending(true);
-      return;
-    }
-    setSaving(true);
-    setLoadError(null);
-    setNotice(null);
-    try {
-      await api.deleteAgentMcpServer(selectedServer.id);
-      await refreshServers();
-      setNotice(t("agent.mcpServers.deleted"));
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : t("agent.mcpServers.deleteFailed"));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const updateEnvRow = (index: number, patch: Partial<EnvRow>) => {
-    setEnvRows((rows) => rows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)));
-    setNotice(null);
-    setDeletePending(false);
-  };
-
-  const removeEnvRow = (index: number) => {
-    setEnvRows((rows) => rows.filter((_, rowIndex) => rowIndex !== index));
-    setNotice(null);
-    setDeletePending(false);
-  };
-
-  if (!active) return null;
-
-  const busy = saving || checking;
-  const selectedState = selectedServer ? mcpServerVisualState(selectedServer) : "enabled";
-  const selectedStateLabel = selectedServer ? t(`agent.mcpServers.status.${selectedState}`) : "";
-
-  return (
-    <>
-      <section className="agent-provider-catalog" aria-label={t("agent.mcpServers.title")}>
-            <div className="agent-provider-catalog-header"><span>{t("agent.mcpServers.available")}</span><button className="agent-provider-new" type="button" disabled={busy} onClick={() => selectServer(null)}><Plus size={15} />{t("agent.mcpServers.new")}</button></div>
-            {loading && <div className="agent-provider-loading" role="status"><LoaderCircle className="spin" size={16} />{t("agent.mcpServers.loading")}</div>}
-            {!loading && !servers.length && <div className="agent-provider-empty"><Server size={18} /><strong>{t("agent.mcpServers.empty")}</strong></div>}
-            <div className="agent-provider-list">
-              {servers.map((server) => {
-                const isSelected = server.id === selectedServerId;
-                const state = mcpServerVisualState(server);
-                return (
-                  <button key={server.id} className={`agent-provider-list-item ${isSelected ? "active" : ""}`} type="button" aria-pressed={isSelected} disabled={busy} title={server.command} onClick={() => selectServer(server)}>
-                    <span className={`agent-provider-state ${state}`} aria-hidden="true" />
-                    <span>
-                      <strong>{server.label}</strong>
-                      <span className="agent-provider-list-meta">{server.toolCount !== undefined && <em className="tools">{t("agent.mcpServers.status.tools", { count: server.toolCount })}</em>}</span>
-                    </span>
-                    <Server size={14} aria-hidden="true" />
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-
-          <form className="agent-provider-form" onSubmit={(event) => { event.preventDefault(); void saveServer(); }}>
-            <div className="agent-provider-form-heading"><h3>{selectedServer ? t("agent.mcpServers.form.editTitle") : t("agent.mcpServers.form.newTitle")}</h3>{selectedServer && <span className={`agent-provider-form-status ${selectedState}`}>{selectedState === "checked" ? <Check size={14} /> : <CircleAlert size={14} />}{selectedStateLabel}</span>}</div>
-
-            {loadError && <div className="agent-provider-feedback error" role="alert"><CircleAlert size={16} /><span>{loadError}</span><button className="secondary-button" type="button" disabled={busy} onClick={() => void refreshServers(selectedServerId)}>{t("agent.mcpServers.retry")}</button></div>}
-            {notice && <div className="agent-provider-feedback success" role="status"><Check size={16} /><span>{notice}</span></div>}
-
-            <label className="agent-provider-field"><span><strong>{t("agent.mcpServers.fields.label")}</strong></span><input value={form.label} maxLength={128} disabled={busy} onChange={(event) => updateForm("label", event.target.value)} autoComplete="off" /></label>
-            <label className="agent-provider-field"><span><strong>{t("agent.mcpServers.fields.command")}</strong><button className="agent-provider-help" type="button" tabIndex={-1} aria-label={t("agent.mcpServers.fields.commandHint")} data-tooltip={t("agent.mcpServers.fields.commandHint")}><CircleHelp size={12} /></button></span><input value={form.command} placeholder={t("agent.mcpServers.fields.commandPlaceholder")} maxLength={1024} disabled={busy} onChange={(event) => updateForm("command", event.target.value)} autoComplete="off" spellCheck={false} /></label>
-            <label className="agent-provider-field"><span><strong>{t("agent.mcpServers.fields.args")}</strong></span><textarea className="agent-mcp-args-input" value={form.argsText} placeholder={t("agent.mcpServers.fields.argsPlaceholder")} rows={3} disabled={busy} onChange={(event) => updateForm("argsText", event.target.value)} autoComplete="off" spellCheck={false} /></label>
-            <div className="agent-provider-field"><span><strong>{t("agent.mcpServers.fields.env")}</strong><button className="agent-provider-help" type="button" tabIndex={-1} aria-label={t("agent.mcpServers.fields.envHint")} data-tooltip={t("agent.mcpServers.fields.envHint")}><CircleHelp size={12} /></button></span>
-              <div className="agent-mcp-env-editor">
-                {envRows.map((row, index) => (
-                  <div className="agent-mcp-env-row" key={`${index}:${row.key || ""}:${row.value || ""}`}>
-                    <input value={row.key} placeholder={t("agent.mcpServers.fields.envKeyPlaceholder")} maxLength={256} disabled={busy} onChange={(event) => updateEnvRow(index, { key: event.target.value })} autoComplete="off" spellCheck={false} />
-                    <input value={row.value} placeholder={selectedServer?.envKeys.includes(row.key.trim()) ? t("agent.mcpServers.fields.envSaved") : t("agent.mcpServers.fields.envValuePlaceholder")} maxLength={8192} disabled={busy} onChange={(event) => updateEnvRow(index, { value: event.target.value })} autoComplete="off" spellCheck={false} />
-                    <button className="icon-button" type="button" disabled={busy} aria-label={t("agent.mcpServers.delete")} data-tooltip={t("agent.mcpServers.delete")} onClick={() => removeEnvRow(index)}><X size={14} /></button>
-                  </div>
-                ))}
-                <button className="agent-mcp-add-env" type="button" disabled={busy} onClick={() => setEnvRows((rows) => [...rows, { key: "", value: "" }])}><Plus size={13} />{t("agent.mcpServers.fields.addEnv")}</button>
-              </div>
-            </div>
-            <label className="agent-provider-field"><span><strong>{t("agent.mcpServers.fields.cwd")}</strong></span><input value={form.cwd} maxLength={2048} disabled={busy} onChange={(event) => updateForm("cwd", event.target.value)} autoComplete="off" spellCheck={false} /></label>
-            <label className="agent-provider-field agent-provider-timeout"><span><strong>{t("agent.mcpServers.fields.timeout")}</strong><button className="agent-provider-help" type="button" tabIndex={-1} aria-label={t("agent.mcpServers.fields.timeoutHint")} data-tooltip={t("agent.mcpServers.fields.timeoutHint")}><CircleHelp size={12} /></button></span><input type="text" inputMode="numeric" pattern="[0-9]*" value={form.timeoutMs} disabled={busy} onChange={(event) => updateForm("timeoutMs", event.target.value)} autoComplete="off" /></label>
-            <button className={`agent-provider-toggle-row ${form.enabled ? "active" : ""}`} type="button" role="switch" aria-checked={form.enabled} disabled={busy} onClick={() => updateForm("enabled", !form.enabled)}><span><strong>{t("agent.mcpServers.fields.enabled")}</strong><button className="agent-provider-help" type="button" tabIndex={-1} aria-label={t("agent.mcpServers.fields.enabledHint")} data-tooltip={t("agent.mcpServers.fields.enabledHint")}><CircleHelp size={12} /></button></span><span className="agent-provider-switch" aria-hidden="true"><span /></span></button>
-
-            {validationMessage && <p className="agent-provider-validation" role="status"><CircleAlert size={14} />{validationMessage}</p>}
-            <div className="agent-provider-form-actions">
-              <button className="primary-button" type="submit" disabled={busy || Boolean(validationMessage)}>{saving ? <LoaderCircle className="spin" size={15} /> : <Server size={15} />}{saving ? t("agent.mcpServers.savingAndChecking") : t("agent.mcpServers.save")}</button>
-              {selectedServer && <button className="secondary-button" type="button" disabled={busy || Boolean(validationMessage)} onClick={() => void checkServer()}>{checking ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{checking ? t("agent.mcpServers.checking") : t("agent.mcpServers.check")}</button>}
-              {selectedServer && <button className={`secondary-button danger-button ${deletePending ? "agent-provider-delete-pending" : ""}`} type="button" disabled={busy} onClick={() => void deleteServer()}><Trash2 size={15} />{deletePending ? t("agent.mcpServers.deleteConfirm") : t("agent.mcpServers.delete")}</button>}
-            </div>
-            {deletePending && <p className="agent-provider-delete-note">{t("agent.mcpServers.deletePrompt")}</p>}
-          </form>
-    </>
-  );
-}
-
-export default function AgentWorkspace({ accounts, currentMessage, onClose, onOpenMessage, restoreFocusRef, demoMode = false, providerSettingsRequestId = 0, preloadedBootstrap, agentAccessLevel = "send-confirmed", onAgentAccessLevelChange }: AgentWorkspaceProps) {
+export default function AgentWorkspace({ accounts, currentMessage, onClose, onOpenMessage, restoreFocusRef, demoMode = false, providerSettingsRequestId = 0, preloadedBootstrap, agentAccessLevel = "send-confirmed", onAgentAccessLevelChange, onMailStateChanged }: AgentWorkspaceProps) {
   const { locale, t } = useI18n();
   const [bootstrap, setBootstrap] = useState<AgentBootstrap | null>(null);
   const [conversations, setConversations] = useState<AgentBootstrap["conversations"]>([]);
@@ -1984,17 +183,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
    * scope maps instead, so a reopen restores the conversation's boundary.
    */
   const enteringFromMessageRef = useRef(Boolean(currentMessage));
-  const [streaming, setStreaming] = useState(false);
-  /** Live provider status text shown in the in-flight assistant's thinking line. */
-  const [streamStatus, setStreamStatus] = useState<string | null>(null);
-  /**
-   * A turn that outlived the panel is being picked up: the fold-in poll is
-   * watching this conversation because its newest message is a user message
-   * (or a server streaming snapshot) with no local session attached. While set,
-   * the composer shows a stop affordance backed by cancelAgentRun — the usual
-   * in-session interrupt cannot reach a run without a local controller.
-   */
-  const [ghostConversationId, setGhostConversationId] = useState<string | null>(null);
   /**
    * A conversation whose shell is already on screen (optimistic switch) while
    * its record is still being fetched. The transcript renders a skeleton until
@@ -2087,31 +275,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   // Track height drives the edge blur of bars; kept in state so the blur
   // recalculates on resize without reading the DOM during render.
   const [scrubberTrackHeight, setScrubberTrackHeight] = useState(0);
-  const abortRef = useRef<AbortController | null>(null);
-  // Conversations with a live run streaming in the background (not the one on
-  // screen); drives the sidebar spinner so a run the user left keeps being
-  // visible elsewhere.
-  const [backgroundRunIds, setBackgroundRunIds] = useState<ReadonlySet<string>>(() => new Set());
-  const syncBackgroundRuns = useCallback(() => {
-    const ids = new Set<string>();
-    sessionStreamsRef.current.forEach((session, id) => {
-      // A run that turned terminal (done/aborted) is no longer "working": it
-      // either finished or was stopped, so its spinner goes out immediately
-      // even though the slot is only cleaned up once the SSE finally closes.
-      if (activeIdRef.current !== id && !session.done && !session.controller.signal.aborted) ids.add(id);
-    });
-    setBackgroundRunIds((current) => {
-      if (current.size === ids.size && [...current].every((id) => ids.has(id))) return current;
-      return ids;
-    });
-  }, []);
-  // Clearing a memory suggestion (saved or dismissed) from the UI must also
-  // drop it from the backing session: otherwise re-entering the conversation
-  // replays it as a fresh undecided chip and the same memory can be saved twice.
-  const consumeAgentSuggestion = useCallback((summary: string) => {
-    const session = sessionStreamsRef.current.get(activeIdRef.current ?? "");
-    if (session) session.suggestions = session.suggestions.filter((item) => item !== summary);
-  }, []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const sidebarMenuRef = useRef<HTMLDivElement>(null);
@@ -2141,32 +304,9 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   // empty (or scope-switched) workspace yields a single record, not one orphan
   // per concurrent send.
   const creatingConversationRef = useRef<Promise<AgentConversation> | null>(null);
-  // Failures of background runs (the user left the conversation while it ran).
-  // The server persists most failure turns itself, but requests rejected before
-  // any record is written (scope/slash validation, transport failure, an
-  // exhausted CONFLICT retry) leave the conversation with neither a row nor an
-  // error — re-entry would silently show a bare user message. Keyed by
-  // conversation, consumed (and cleared) once re-surfaced in the view.
-  const backgroundErrorRef = useRef(new Map<string, { code: string; message: string; retryable?: boolean }>());
   useEffect(() => {
     activeIdRef.current = active?.id ?? null;
   }, [active?.id]);
-  useEffect(() => {
-    const streamsRef = sessionStreamsRef;
-    return () => {
-      // Closing the panel is a "leave", not a "cancel". Drop the local stream
-      // (the fetch rejection aborts the SSE, which on the server only stops
-      // event delivery — the run keeps draining and persists the completed
-      // turn, per the /messages route contract). We must NOT call
-      // cancelAgentRun here: that aborts the server run and its finally skips
-      // persisting the assistant row, so reopening shows just the orphaned
-      // user message with no reply and no tool calls. The completed reply is
-      // instead picked up on reopen by the polling fold-in effect.
-      for (const session of streamsRef.current.values()) {
-        session.controller.abort();
-      }
-    };
-  }, []);
   const registerUserMessageEl = useCallback((messageId: string, node: HTMLElement | null) => {
     if (node) userMessageElsRef.current.set(messageId, node);
     else userMessageElsRef.current.delete(messageId);
@@ -2195,14 +335,107 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     return conversations.filter((conversation) => `${conversation.title} ${conversation.preview}`.toLocaleLowerCase(locale).includes(query));
   }, [conversationSearch, conversations, locale]);
 
+  // Conversations the user is deleting right now: local rows are dropped
+  // optimistically while the server delete is still in flight. Any concurrent
+  // refresh must keep these OUT of the list — otherwise the server snapshot,
+  // which may still contain them mid-delete, would resurrect rows the user
+  // already watched disappear.
+  const pendingDeleteIdsRef = useRef<Set<string>>(new Set());
+  // Tracks conversations created in THIS session (via createAgentConversation).
+  // The merge below only keeps a local-only row when it is at least as fresh as
+  // the newest server row; a brand-new row can momentarily be omitted by a
+  // server snapshot while another, newer row exists, and would otherwise be
+  // dropped out of the sidebar (the "conversation flashes away" bug). This set
+  // exempts exactly those locally-created rows from being dropped.
+  const createdThisSessionRef = useRef<Set<string>>(new Set());
+
   const refreshConversations = useCallback(async (query = "") => {
     if (demoMode) {
       setConversations([]);
       return;
     }
     const response = await api.agentConversations(query ? new URLSearchParams({ query }).toString() : "");
-    setConversations(response.items);
+    setConversations((current) => {
+      // When searching, the server result is authoritative for that scope — but
+      // it must still not surface a row whose delete is in flight.
+      if (query) return response.items.filter((item) => !pendingDeleteIdsRef.current.has(item.id));
+      // Otherwise merge instead of blindly replacing: a profile may have just
+      // been created / its turn may still be mid-write, so a server snapshot
+      // can momentarily omit it and replacing wholesale would flash a
+      // disappearing sidebar row. Adopt server rows, but only keep a
+      // local-only row when it is at least as fresh as the newest server row
+      // (a brand-new / in-flight profile). Anything older — e.g. one deleted
+      // here or on another device — is left to the server's authoritative
+      // result so it can never resurrect.
+      //
+      // A locally-deleted row is the one exception to "adopt server rows": the
+      // server delete may not have committed yet, so its snapshot can still
+      // carry the row. Filter those out so an optimistic delete cannot flicker
+      // back into view until the server confirms the removal.
+      const pending = pendingDeleteIdsRef.current;
+      const newestServer = response.items[0]?.updatedAt ?? "";
+      const serverById = new Map(response.items
+        .filter((item) => !pending.has(item.id))
+        .map((item) => [item.id, item]));
+      const merged = [...serverById.values()];
+      for (const item of current) {
+        if (pending.has(item.id)) continue;
+        if (!serverById.has(item.id)) {
+          // A row the server snapshot does not (yet) carry. Keep it when it was
+          // created this session OR it is at least as fresh as the newest server
+          // row; drop it otherwise so an old row deleted on another device
+          // cannot resurrect.
+          const newThisSession = createdThisSessionRef.current.has(item.id);
+          const freshEnough = (item.updatedAt ?? "").localeCompare(newestServer) >= 0;
+          if (newThisSession || freshEnough) merged.push(item);
+        }
+      }
+      return merged.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+    });
   }, [demoMode]);
+
+  // Streaming conversation state machine (session lifecycle + stream pipeline +
+  // background buffer/replay + poll fold-in + run controls), lifted out of this
+  // component into useAgentSession. `active` and its setter stay here (the
+  // transcript is render state); the hook exercises them via the injected
+  // `setActive` boundary so the state machine owns no render state of its own.
+  const {
+    streaming,
+    streamStatus,
+    ghostConversationId,
+    backgroundRunIds,
+    syncBackgroundRuns,
+    getSession,
+    clearPendingFlush,
+    takeBackgroundError,
+    clearLiveRunIndicators,
+    restoreLiveRunIndicators,
+    terminateSession,
+    replayBackgroundSession,
+    stopStreaming,
+    stopGhostRun,
+    prepareInterruptToSend,
+    runStream,
+  } = useAgentSession({
+    demoMode,
+    active,
+    setActive,
+    activeIdRef,
+    setConversations,
+    refreshConversations,
+    conversationSearch,
+    setPendingMemorySuggestions,
+    getT: () => t,
+    onMailStateChanged,
+  });
+
+  // Clearing a memory suggestion (saved or dismissed) from the UI must also
+  // drop it from the backing session: otherwise re-entering the conversation
+  // replays it as a fresh undecided chip and the same memory can be saved twice.
+  const consumeAgentSuggestion = useCallback((summary: string) => {
+    const session = getSession(activeIdRef.current ?? "");
+    if (session) session.suggestions = session.suggestions.filter((item) => item !== summary);
+  }, [getSession]);
 
   const applyProviderList = useCallback((snapshot: AgentProviderList) => {
     setBootstrap((current) => current ? {
@@ -2259,10 +492,11 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
         const currentProvider = value.providers.find((provider) => provider.id === current && provider.configured);
         return currentProvider?.id ?? configuredProviderId(value.providers, value.defaultProviderId);
       });
-      // Show the UI immediately — load the last active conversation (or the
-      // newest one) in the background so a large transcript never blocks the
-      // history list.
-      setLoading(false);
+      // Resolve the initial conversation before clearing loading so the view
+      // never flashes a blank "new conversation" state before restoring the
+      // last active (or newest) conversation. `loading` gates only the empty
+      // transcript state, not the history list, so the sidebar stays usable
+      // while the transcript underneath loads.
       const lastActiveId = readLastActiveConversationId();
       const initialTarget = value.conversations.some((item) => item.id === lastActiveId)
         ? lastActiveId!
@@ -2284,18 +518,38 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             setScopeTarget(scopeTargetForConversation(conversation.scope, accounts));
           }
         } catch {
-          // Background load of the first conversation failed — user can retry by clicking it.
+          // Loading the recovered conversation failed — fall back to the blank
+          // state (loading cleared below); the user can retry by clicking a row.
         }
       }
       setLoading(false);
+      // The preloaded snapshot can be older than the server (e.g. the panel
+      // was closed and reopened before App's close-time refetch landed), so
+      // conversations created in the previous panel session would be missing
+      // until the next stream/poll event. Reconcile once in the background:
+      // a single list fetch converges the sidebar with the server.
+      void refreshConversations();
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : t("agent.error.load"));
     } finally {
       setLoading(false);
     }
-  }, [accounts, demoMode, preloadedBootstrap, t]);
+  }, [accounts, demoMode, preloadedBootstrap, refreshConversations, t]);
 
-  useEffect(() => { void loadBootstrap(); }, [loadBootstrap]);
+  // Mount-once: loadBootstrap wholesale-adopts the (splash-time) bootstrap
+  // snapshot into the sidebar and re-resolves the initial conversation, so
+  // re-running it mid-session would flash the whole list away and hijack the
+  // active conversation. Its useCallback deps include `accounts`, which App
+  // replaces with a new array identity on every silent mail refresh (desktop
+  // new-mail pushes arrive while the agent panel is open) — an unguarded
+  // effect would reload the bootstrap on every new mail arrival. The
+  // error-retry button still re-invokes loadBootstrap deliberately.
+  const bootstrapLoadedRef = useRef(false);
+  useEffect(() => {
+    if (bootstrapLoadedRef.current) return;
+    bootstrapLoadedRef.current = true;
+    void loadBootstrap();
+  }, [loadBootstrap]);
 
   // Close the permission, model, and scope pickers when the user clicks
   // anywhere outside them or presses Escape.
@@ -2716,7 +970,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     void desktopBridge()?.showItemInFolder?.(path);
   }, []);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
   useEffect(() => () => window.clearTimeout(scrubberPreviewTimerRef.current), []);
   // Remember which conversation the panel was on so reopening lands on it
   // (closing the panel does not cancel a running turn; the user returns to
@@ -2729,107 +982,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       // Storage unavailable — the fallback to the newest conversation applies.
     }
   }, [active?.id]);
-  // A pickup the user explicitly abandoned (stop) is recorded so the poll can
-  // never re-arm for the same last message: the server run was cancelled and
-  // can never complete. Recording the message id keeps a fresh turn (a new
-  // last message) on an independent poll.
-  const abandonedPickupRef = useRef<{ conversationId: string; lastMessageId: string } | null>(null);
-  // A conversation whose newest turn has no assistant reply yet may still be
-  // finishing on the server (closing the panel does not cancel the run). Poll
-  // for the completed reply and fold it into the transcript. The polling
-  // stops as soon as the local transcript moves on (new send, conversation
-  // switch) or the attempt budget runs out.
-  // The effect keys on the conversation id and the last message id instead of
-  // the `active` object: a streaming snapshot fold-in must not tear the poll
-  // down and re-arm it (which bypasses the 2s interval).
-  const pollLastMessageId = active?.messages[active.messages.length - 1]?.id;
-  useEffect(() => {
-    // Poll while the newest turn is unfinished: the last message is either the
-    // user's (server still answering) or a streaming assistant snapshot from a
-    // run that outlived the panel. Once a complete assistant reply arrives,
-    // fold it in and stop.
-    if (demoMode || streaming || !active || (!lastMessageIsUnanswered(active) && !lastMessageIsStreaming(active))) return;
-    const targetId = active.id;
-    const pendingLastId = active.messages[active.messages.length - 1].id;
-    // A pickup the user stopped (see stopGhostRun) is abandoned for good: the
-    // run was cancelled server-side and will never complete, so without this
-    // the poll would burn its whole 8-minute budget on a dead turn.
-    if (abandonedPickupRef.current?.conversationId === targetId
-      && abandonedPickupRef.current.lastMessageId === pendingLastId) return;
-    let stopped = false;
-    let attempts = 0;
-    // The message count of the last snapshot: a growing transcript is a live
-    // signal that the server run is still progressing.
-    let lastSeenCount = active.messages.length;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // While polling, the conversation is being picked up without a local
-    // session; surface the pickup affordances (thinking row / stop).
-    setGhostConversationId(targetId);
-    const tick = async () => {
-      if (stopped) return;
-      // The user may have stopped the pickup while a tick was scheduled or
-      // in flight; abandon it (the cancelled run can never complete).
-      if (abandonedPickupRef.current?.conversationId === targetId
-        && abandonedPickupRef.current.lastMessageId === pendingLastId) return;
-      attempts += 1;
-      try {
-        const fresh = await api.agentConversation(targetId);
-        if (stopped) return;
-        const freshLast = fresh.messages[fresh.messages.length - 1];
-        // A terminal state folds in and ends the poll: the turn either
-        // completed, or the server ended it with a persisted error row (which
-        // no longer has anything to wait for).
-        if (freshLast && freshLast.role === "assistant" && (freshLast.state === "complete" || freshLast.state === "error")) {
-          const next = applyRevokedMarks(purgeStaleErrors(fresh));
-          setActive((current) => current && current.id === targetId
-            && current.messages[current.messages.length - 1]?.id === pendingLastId
-            ? next
-            : current);
-          setGhostConversationId((current) => (current === targetId ? null : current));
-          void refreshConversations(conversationSearch);
-          return;
-        }
-        if (freshLast && freshLast.role === "assistant" && freshLast.state === "streaming") {
-          // The in-flight reply gained content since the last read; refresh the
-          // live snapshot while continuing to poll for its completion.
-          const next = applyRevokedMarks(purgeStaleErrors(fresh));
-          setActive((current) => current && current.id === targetId
-            && current.messages[current.messages.length - 1]?.id === pendingLastId
-            ? next
-            : current);
-        }
-        // Renew the poll budget while the turn is visibly still alive on the
-        // server (a streaming row, or the transcript growing). A long
-        // multi-tool turn or one waiting on a desktop confirmation can exceed
-        // the initial budget; it must still be folded in on completion. Only a
-        // completely silent transcript burns the budget down.
-        if (freshLast && freshLast.state === "streaming") {
-          attempts = 0;
-        } else if (fresh.messages.length > lastSeenCount) {
-          attempts = 0;
-          lastSeenCount = fresh.messages.length;
-        }
-      } catch {
-        // Transient failure — keep polling until the attempt budget runs out.
-      }
-      if (attempts < 240) {
-        timer = setTimeout(() => void tick(), 2_000);
-      } else {
-        // The budget ran out while the server stayed silent: the pickup is
-        // dead, so drop its affordances instead of leaving a ghost row, and
-        // record the abandonment so re-entering the conversation cannot arm
-        // the poll for the same dead turn again.
-        setGhostConversationId((current) => (current === targetId ? null : current));
-        abandonedPickupRef.current = { conversationId: targetId, lastMessageId: pendingLastId };
-      }
-    };
-    void tick();
-    return () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
-      setGhostConversationId((current) => (current === targetId ? null : current));
-    };
-  }, [active?.id, pollLastMessageId, conversationSearch, demoMode, refreshConversations, streaming]);
   // A scope target that points at a deleted account must not leave the
   // composer silently scoped to nothing; fall back to the first account, or to
   // all accounts when none are left.
@@ -2838,95 +990,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     if (accounts.some((account) => account.id === scopeTarget)) return;
     setScopeTarget(accounts[0]?.id ?? "all");
   }, [accounts, scopeTarget]);
-
-  // Live runs keyed by conversation: while the user browses a different
-  // conversation, a run keeps streaming into its buffer (no UI cost) and is
-  // replayed on re-entry. Declared before selectConversation, which replays.
-  const sessionStreamsRef = useRef(new Map<string, SessionStream>());
-
-  // Re-entry: the user came back to a conversation whose run was continuing in
-  // the background. The session buffer holds the complete event sequence for the
-  // run, so the reply is rebuilt from it deterministically and any server
-  // inFlight row (which carries the server's message id) is dropped — the reply
-  // is never shown twice. Live events resume through the foreground path
-  // afterwards, appending to the rebuilt row.
-  const replayBackgroundSession = useCallback((session: SessionStream, conversationView: AgentConversation) => {
-    const messages = conversationView.messages;
-    // Only a streaming assistant row *after the last user message* can
-    // belong to the current run: an interrupted previous run's inFlight row
-    // sits before that user message and must never be adopted or replaced,
-    // or the new run's deltas would graft onto the old partial reply.
-    const lastUserIndex = messages.reduce((acc, message, i) => (message.role === "user" ? i : acc), -1);
-    const liveIndex = messages.findIndex((message, i) => i > lastUserIndex && message.role === "assistant" && message.state === "streaming");
-    // A reply the server already sealed (its snapshot row is terminal) must
-    // not get a second row: the server may still hold the SSE open (e.g. the
-    // title bump after `completed`), so by the time the user returns the
-    // client session can outlive the server's inFlight row. When no live
-    // streaming row exists, the server's terminal row is authoritative and
-    // any client-side rebuild risks grafting a stale streaming copy on top.
-    const sealedAfterLastUser = messages.some((message, i) => i > lastUserIndex && message.role === "assistant");
-    let next = messages;
-    if (session.events.length === 0) {
-      // No deltas have arrived yet. Adopt the server's inFlight streaming row
-      // if present (its id becomes the live row id); otherwise — unless the
-      // server already sealed the reply — seed an empty live row so the first
-      // deltas have a target instead of being dropped.
-      if (liveIndex !== -1) {
-        session.assistantMessageId = messages[liveIndex].id;
-      } else if (!sealedAfterLastUser) {
-        next = [
-          ...messages,
-          {
-            id: session.assistantMessageId,
-            role: "assistant",
-            content: "",
-            createdAt: currentTime(),
-            state: "streaming",
-            citations: [],
-            toolActivities: [],
-          },
-        ];
-      }
-    } else {
-      // The client buffer holds the full event sequence and is authoritative.
-      // Rebuild the assistant row from scratch and replace any server inFlight
-      // row (different id) in place so no duplicate reply appears.
-      const base: AgentMessage = {
-        id: session.assistantMessageId,
-        role: "assistant",
-        content: "",
-        createdAt: currentTime(),
-        state: "streaming",
-        citations: [],
-        toolActivities: [],
-      };
-      let rebuilt = base;
-      for (const event of session.events) rebuilt = messageWithEvent(rebuilt, event);
-      next = liveIndex !== -1
-        ? messages.map((message, i) => (i === liveIndex ? rebuilt : message))
-        : sealedAfterLastUser
-          ? messages
-          : [...messages, rebuilt];
-    }
-    setActive({ ...conversationView, messages: next });
-    // Only a replay that ended up with an actual streaming target is a live
-    // run; a sealed reply (server terminal row kept) is not, and must not arm
-    // the streaming affordance readers can't act on (spinner, stop, blocks).
-    // A sealed run's last status is stale by definition — only restore status
-    // for a run still in flight (memory suggestions are durable and stay).
-    const hasLiveTarget = next.some((message, i) => i > lastUserIndex && message.role === "assistant" && message.state === "streaming");
-    if (!session.done && hasLiveTarget) {
-      setStreaming(true);
-      if (session.status) setStreamStatus(session.status);
-    }
-    if (session.suggestions.length > 0) {
-      setPendingMemorySuggestions((items) => {
-        const merged = [...items];
-        for (const suggestion of session.suggestions) if (!merged.includes(suggestion)) merged.push(suggestion);
-        return merged;
-      });
-    }
-  }, []);
 
   const selectConversation = useCallback(async (id: string) => {
     if (active?.id === id) return;
@@ -2939,17 +1002,10 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     // keeps streaming into its session buffer while the user browses here, and
     // is replayed when they come back. The spinner/stop affordance belongs to
     // whatever is on screen, so it must follow the newly selected conversation.
-    if (sessionStreamsRef.current.has(active?.id ?? "")) {
-      setStreaming(false);
-      setStreamStatus(null);
-    }
+    clearLiveRunIndicators();
     // Pending frame-batched deltas belong to the outgoing transcript; drop them
     // so they can never land on a different conversation.
-    if (streamRafRef.current !== null) {
-      cancelAnimationFrame(streamRafRef.current);
-      streamRafRef.current = null;
-    }
-    pendingStreamPiecesRef.current = [];
+    clearPendingFlush();
     // Memory suggestions belong to the reply that produced them; switching
     // conversations discards whatever is undecided (a background session's
     // suggestions are replayed on re-entry).
@@ -2979,15 +1035,14 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       activeIdRef.current = id;
       const conversationView = applyRevokedMarks(purgeStaleErrors(conversation));
       setActive(conversationView);
-      const session = sessionStreamsRef.current.get(id);
+      const session = getSession(id);
       if (session) replayBackgroundSession(session, conversationView);
       syncBackgroundRuns();
       // Re-surface a background run's cached failure as an error row (consumed
       // once shown). Guarded by the functional updater so a live replay that
       // already rebuilt an error row does not produce a duplicate one.
-      const storedError = backgroundErrorRef.current.get(id);
+      const storedError = takeBackgroundError(id);
       if (storedError) {
-        backgroundErrorRef.current.delete(id);
         setActive((current) => current && current.id === id && !current.messages.some((message) => message.role === "assistant" && message.state === "error")
           ? {
             ...current,
@@ -3023,30 +1078,19 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       // run (if any) keeps streaming in the background and restores its live
       // indicators when replayed on re-entry.
     }
-  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, conversationProviders, conversations, providers, replayBackgroundSession, syncBackgroundRuns, t]);
+  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, clearLiveRunIndicators, clearPendingFlush, conversationProviders, conversations, getSession, providers, replayBackgroundSession, syncBackgroundRuns, t, takeBackgroundError]);
 
   const createConversation = useCallback(async () => {
     // Starting a new conversation does not cancel the current one — a live run
     // keeps streaming into its session buffer and resumes if the user returns.
-    if (sessionStreamsRef.current.has(active?.id ?? "")) {
-      setStreaming(false);
-      setStreamStatus(null);
-    }
-    if (streamRafRef.current !== null) {
-      cancelAnimationFrame(streamRafRef.current);
-      streamRafRef.current = null;
-    }
-    pendingStreamPiecesRef.current = [];
+    clearLiveRunIndicators();
+    clearPendingFlush();
     setPendingMemorySuggestions([]);
     if (!selectedProvider) {
       setAgentSettingsPane("providers");
       // The early return abandons the switch; restore the live indicators the
       // cleared status above so a still-running reply keeps its affordances.
-      const currentSession = sessionStreamsRef.current.get(active?.id ?? "");
-      if (currentSession && !currentSession.done) {
-        setStreaming(true);
-        if (currentSession.status) setStreamStatus(currentSession.status);
-      }
+      restoreLiveRunIndicators(active?.id ?? "");
       return;
     }
     // Don't create the conversation record yet — defer until the first message
@@ -3071,7 +1115,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     setRenaming(false);
     setLoadError(null);
     window.requestAnimationFrame(() => composerRef.current?.focus());
-  }, [active?.id, selectedProvider, syncBackgroundRuns]);
+  }, [active?.id, clearLiveRunIndicators, clearPendingFlush, restoreLiveRunIndicators, selectedProvider, syncBackgroundRuns]);
 
   const renameConversation = useCallback(async () => {
     if (!active || !draftTitle.trim()) return;
@@ -3098,6 +1142,14 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     if (targets.length === 0) return;
     setDeleteConfirm(null);
     setMultiDeleteBusy(true);
+    const targetSet = new Set(targets);
+    const pending = pendingDeleteIdsRef.current;
+    // Optimistically drop the rows up front and mark them pending so any
+    // concurrent refresh (heartbeat / pickup poll / stream completion) cannot
+    // resurrect them from a server snapshot that predates the committed delete.
+    // A failed delete clears the mark and the authoritative snapshot restores it.
+    for (const id of targets) pending.add(id);
+    setConversations((current) => current.filter((item) => !targetSet.has(item.id)));
     const deleted: string[] = [];
     const errors: unknown[] = [];
     try {
@@ -3107,6 +1159,10 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
           deleted.push(id);
         } catch (error) {
           errors.push(error);
+        } finally {
+          // The server either confirmed the delete or refused it — either way
+          // the row is no longer something a refresh must keep hidden.
+          pending.delete(id);
         }
       }
       syncBackgroundRuns();
@@ -3114,25 +1170,12 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
         // A deleted conversation must not keep its revoked-id marks: recreating
         // a conversation with the same id would start with messages hidden.
         writeRevokedIds(id, new Set());
-        const session = sessionStreamsRef.current.get(id);
-        if (session) {
-          session.controller.abort();
-          void api.cancelAgentRun(id).catch(() => undefined);
-          // Delete only the session this closure captured. If the user re-sent
-          // to the same conversation while the delete was in flight, a newer
-          // run has rebound the slot — wiping it would strand that run and
-          // freeze the streaming flag (its teardown would no longer see itself
-          // as current).
-          if (sessionStreamsRef.current.get(id)?.controller === session.controller) {
-            sessionStreamsRef.current.delete(id);
-          }
-        }
-        // A cached failure must not outlive its conversation even when no
-        // session is still bound (a finished run could leave one unconsumed).
-        backgroundErrorRef.current.delete(id);
+        // Detach the session buffer (abort + cancel server run + clear cached
+        // failure), deleting only if the slot is still bound to the captured
+        // run so a re-send during an in-flight delete is never stranded.
+        terminateSession(id);
       }
       const deletedSet = new Set(deleted);
-      setConversations((current) => current.filter((item) => !deletedSet.has(item.id)));
       if (active && deletedSet.has(active.id)) {
         const remaining = conversations.filter((item) => !deletedSet.has(item.id));
         setActive(null);
@@ -3143,121 +1186,19 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       setSelectionMode(false);
       if (errors.length > 0) {
         setLoadError(errors[0] instanceof Error ? errors[0].message : t("agent.error.deleteConversation"));
+        // Failed deletes were optimistically hidden; the pending marks are clear,
+        // so refresh once to let the server's authoritative snapshot restore them.
+        void refreshConversations(conversationSearch);
       }
     } finally {
       setMultiDeleteBusy(false);
     }
-  }, [active, activeIdRef, conversations, selectConversation, syncBackgroundRuns, t]);
+  }, [active, activeIdRef, conversationSearch, conversations, refreshConversations, selectConversation, syncBackgroundRuns, t]);
 
-  // Token batching: stream events (text_delta fires per token, far above the
-  // display rate) are queued and flushed once per animation frame, so the row
-  // re-renders and the markdown re-parse cost stay at ~60Hz instead of per
-  // token. Terminal events flush immediately so the end of a turn never lags.
-  // This mirrors the buffering strategy used by streaming-chat UI libraries
-  // (e.g. assistant-ui) without importing their runtime.
-  const pendingStreamPiecesRef = useRef<{ id: string; event: AgentStreamEvent }[]>([]);
-  const streamRafRef = useRef<number | null>(null);
-  const flushPendingStreamPieces = useCallback(() => {
-    streamRafRef.current = null;
-    const pieces = pendingStreamPiecesRef.current;
-    if (pieces.length === 0) return;
-    pendingStreamPiecesRef.current = [];
-    const byId = new Map<string, AgentStreamEvent[]>();
-    for (const piece of pieces) {
-      const events = byId.get(piece.id);
-      if (events) events.push(piece.event);
-      else byId.set(piece.id, [piece.event]);
-    }
-    setActive((current) => {
-      if (!current) return current;
-      let messages = current.messages;
-      byId.forEach((events, messageId) => {
-        let row = messages.find((message) => message.id === messageId);
-        if (!row) return;
-        for (const event of events) row = messageWithEvent(row, event);
-        messages = messages.map((message) => (message.id === messageId ? row : message));
-      });
-      return messages === current.messages ? current : { ...current, messages };
-    });
-  }, []);
-  // Live runs keyed by conversation, so a run the user navigated away from can
-  // keep streaming into a buffer (no UI cost) and be replayed on re-entry. When
-  // the run is foreground, deltas flow through the frame batching path above.
-  // (sessionStreamsRef and replayBackgroundSession live above, next to
-  // selectConversation which replays a background session on re-entry.)
-  const enqueueStreamPiece = useCallback((conversationId: string, messageId: string, event: AgentStreamEvent, flushNow = false) => {
-    const session = sessionStreamsRef.current.get(conversationId);
-    if (!session || session.assistantMessageId !== messageId) return;
-    // Foreground run: surface status/suggestions/title in the live UI and push
-    // message deltas through the frame-batched render path.
-    if (session.conversationId === activeIdRef.current) {
-      if (event.type === "status") {
-        if (event.message) {
-          // Mirror into the session so a later switch away and back restores
-          // the last status instead of losing it.
-          session.status = event.message;
-          setStreamStatus(event.message);
-        }
-        return;
-      }
-      if (event.type === "memory_suggestion") {
-        if (!session.suggestions.includes(event.summary)) session.suggestions.push(event.summary);
-        setPendingMemorySuggestions((items) => (items.includes(event.summary) ? items : [...items, event.summary]));
-        return;
-      }
-      if (event.type === "title") {
-        setActive((current) => current && current.id === conversationId ? { ...current, title: event.title } : current);
-        setConversations((items) => items.map((item) => item.id === conversationId ? { ...item, title: event.title } : item));
-        return;
-      }
-      if (event.type === "completed" || event.type === "error") {
-        session.done = true;
-        setStreamStatus(null);
-      }
-      // Keep the session buffer as the full event sequence for this run (even
-      // while foregrounded) so a later re-entry can rebuild the row
-      // identically. status/memory_suggestion/title never reach here.
-      session.events.push(event);
-      pendingStreamPiecesRef.current.push({ id: messageId, event });
-      if (flushNow) {
-        if (streamRafRef.current !== null) {
-          cancelAnimationFrame(streamRafRef.current);
-          streamRafRef.current = null;
-        }
-        flushPendingStreamPieces();
-        return;
-      }
-      if (streamRafRef.current === null) {
-        streamRafRef.current = requestAnimationFrame(flushPendingStreamPieces);
-      }
-      return;
-    }
-    // Background run: accumulate without rendering. Status/suggestions are kept
-    // for re-entry; a terminal event marks the session complete; the remaining
-    // deltas are replayed onto the message when the user returns.
-    if (event.type === "status") {
-      if (event.message) session.status = event.message;
-      return;
-    }
-    if (event.type === "memory_suggestion") {
-      if (!session.suggestions.includes(event.summary)) session.suggestions.push(event.summary);
-      return;
-    }
-    if (event.type === "title") {
-      // A background run still earns its sidebar title; only the active-header
-      // title is deferred to re-entry (the conversation view carries it).
-      setConversations((items) => items.map((item) => (item.id === conversationId ? { ...item, title: event.title } : item)));
-      return;
-    }
-    if (event.type === "completed" || event.type === "error") session.done = true;
-    // Keep a record of background failures: the server persists only successful
-    // turns, so re-entry would otherwise show a bare user message with no error.
-    if (event.type === "error") backgroundErrorRef.current.set(conversationId, event.error);
-    session.events.push(event);
-  }, [flushPendingStreamPieces]);
-  useEffect(() => () => {
-    if (streamRafRef.current !== null) cancelAnimationFrame(streamRafRef.current);
-  }, []);
+  // Token batching, reveal pacing and session-buffer routing
+  // (flushPendingStreamPieces / enqueueStreamPiece / streamPacingRef /
+  // pendingStreamPiecesRef / streamRafRef) have been lifted into the session
+  // hook (useAgentSession); the component no longer owns them.
 
   useEffect(() => {
     const bridge = desktopBridge();
@@ -3293,35 +1234,10 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     }
     // Interrupt-to-send: if the current conversation hosts a live run, sending
     // a new message folds the running reply into an "interrupted" state and
-    // cancels that run (via its own controller, not the shared abortRef) before
-    // the new one starts. Only the on-screen conversation is affected — a run
-    // streaming in the background for another conversation keeps going.
-    const activeSession = sessionStreamsRef.current.get(active?.id ?? "");
-    if (activeSession && !activeSession.done) {
-      const interruptLabel = t("agent.interrupted");
-      activeSession.controller.abort();
-      void api.cancelAgentRun(activeSession.conversationId).catch(() => undefined);
-      setActive((current) => current ? {
-        ...current,
-        messages: current.messages.map((message) =>
-          message.role === "assistant" && message.state === "streaming" ? interruptAssistantMessage(message, interruptLabel) : message,
-        ),
-      } : current);
-      activeSession.done = true;
-      // The superseded run must not hold the shared streaming flag: its own
-      // teardown will see it is no longer the bound run and skip clearing it,
-      // so clear here (the new run re-sets it once it starts).
-      setStreaming(false);
-      setStreamStatus(null);
-    }
-    // A run being picked up after the panel reopened has no local session to
-    // interrupt. Sending a new message must still cancel it server-side,
-    // otherwise the new stream races the old run and lands in the CONFLICT
-    // retry window (the 5×400ms busy pause).
-    if (!activeSession && ghostConversationId === active?.id) {
-      void api.cancelAgentRun(ghostConversationId).catch(() => undefined);
-      setGhostConversationId(null);
-    }
+    // cancels that run (via its own controller) before the new one starts; a
+    // pickup run (no local controller) is cancelled server-side. Owned by the
+    // session hook's prepareInterruptToSend.
+    prepareInterruptToSend();
     const files = attachedFiles;
     // Quote context from "Follow up" — sent to the LLM as truncated context,
     // the user only sees their own question in the transcript.
@@ -3348,6 +1264,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             creatingConversationRef.current = null;
           }
         }
+        if (conversation) createdThisSessionRef.current.add(conversation.id);
         setActive(conversation);
         setConversations((items) => [{ id: conversation!.id, title: conversation!.title, preview: conversation!.preview, updatedAt: conversation!.updatedAt }, ...items.filter((item) => item.id !== conversation!.id)]);
       } catch (error) {
@@ -3369,8 +1286,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     setComposer("");
     setAttachedFiles([]);
     setQuoteContext(null);
-    setStreaming(true);
-    setStreamStatus(null);
     setLoadError(null);
     setConfirmationErrors({});
     // Sending a new message dismisses the revoke notice immediately.
@@ -3398,189 +1313,26 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     // path only while it is the active one, otherwise they accumulate in the
     // session buffer for replay on re-entry.
     activeIdRef.current = conversation.id;
-    // A new run supersedes any previously cached background failure for this
-    // conversation; its outcome (successful or a fresh error) replaces it.
-    backgroundErrorRef.current.delete(conversation.id);
-    // A new run must not inherit frame-batched deltas of the interrupted one.
-    if (streamRafRef.current !== null) {
-      cancelAnimationFrame(streamRafRef.current);
-      streamRafRef.current = null;
-    }
-    pendingStreamPiecesRef.current = [];
-    const controller = new AbortController();
-    abortRef.current = controller;
-    // Liveness is per-conversation: this run stays current as long as it is
-    // still the session bound to its own conversation. Another conversation
-    // starting its own run must not silence this one — while it streams in the
-    // background its events keep buffering for re-entry.
-    const isCurrentRun = () => {
-      const bound = sessionStreamsRef.current.get(conversation.id);
-      return bound !== undefined && bound.controller === controller;
-    };
-    const streamSession: SessionStream = {
-      conversationId: conversation.id,
-      assistantMessageId: assistantMessage.id,
-      controller,
-      events: [],
-      status: null,
-      suggestions: [],
-      done: false,
-    };
-    // A run may already be bound to this conversation slot — the interrupt path
-    // above covers the visible case, but a concurrent send (double-send through
-    // the creation lock) or one whose teardown is still unwinding can arrive
-    // here with a live session still in place. The slot rebind silences the old
-    // run, so fold its assistant row now; otherwise its earlier transcript row
-    // never gets a terminal event and lingers as a spinning placeholder with no
-    // self-healing path.
-    const prior = sessionStreamsRef.current.get(conversation.id);
-    if (prior && !prior.done) {
-      prior.controller.abort();
-      // Aborting the socket only stops delivery — the server's run unwinds to
-      // completion and keeps claiming the conversation's active-run slot
-      // (tokens keep burning, and the new stream below would eat CONFLICTs).
-      // Cancel the server-side run like every other supersede path does.
-      void api.cancelAgentRun(prior.conversationId).catch(() => undefined);
-      setActive((current) => current && current.id === conversation.id
-        ? {
-          ...current,
-          messages: current.messages.map((message) =>
-            message.id === prior.assistantMessageId && message.state === "streaming"
-              ? interruptAssistantMessage(message, t("agent.interrupted"))
-              : message,
-          ),
-        }
-        : current);
-    }
-    sessionStreamsRef.current.set(conversation.id, streamSession);
-    syncBackgroundRuns();
+    // Run lifecycle — slot rebind, pacing reset, CONFLICT retry, event
+    // consumption, and teardown (streaming flag / session-buffer cleanup) — lives
+    // inside the session hook's runStream.
     const streamPayload: Parameters<typeof api.streamAgentMessage>[1] = {
       content: userText,
       providerId: selectedProvider.id,
       mode,
       scope,
+      // Let the server persist this turn under the optimistic row's id: a
+      // revoke issued seconds later (the recall-and-resend flow) then addresses
+      // a row the server actually knows, instead of 404-ing on a client-only
+      // id and rolling the optimistic revoke back (the "revoked messages
+      // came back" bug).
+      clientMessageId: userMessage.id,
       ...(truncatedQuote ? { quote: truncatedQuote } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(mailReferences.length > 0 ? { references: mailReferences.map((reference) => ({ id: reference.id, subject: reference.subject })) } : {}),
     };
-    // A still-unwinding previous run on the server can briefly reject the new
-    // stream with CONFLICT. We retry a few times (swallowing the conflict and
-    // its trailing events) until the old run finishes tearing down.
-    let conflictRetries = 0;
-    const MAX_CONFLICT_RETRIES = 5;
-    // Set when this run ends in an error terminal. The failure row must stay
-    // visible for retry, so the success cleanup below must not fold it away.
-    let turnFailed = false;
-    try {
-      for (;;) {
-        let conflictRetry = false;
-        await api.streamAgentMessage(conversation.id, streamPayload, (event) => {
-          // A cancelled run may still emit buffered events as it unwinds. They
-          // belong to a superseded run and must not touch the current one.
-          if (!isCurrentRun()) return;
-          if (event.type === "error" && event.error.code === "CONFLICT" && !controller.signal.aborted && conflictRetries < MAX_CONFLICT_RETRIES) {
-            conflictRetry = true;
-            return;
-          }
-          // Once this attempt hit a conflict, drop the rest of its events
-          // (including the trailing completed/error) so the assistant message
-          // is not wrongly marked; the retry below restarts cleanly.
-          if (conflictRetry) return;
-          if (event.type === "error") turnFailed = true;
-          if (event.type === "completed" && event.reason === "error") turnFailed = true;
-          enqueueStreamPiece(conversation.id, streamSession.assistantMessageId, event, event.type === "completed" || event.type === "error");
-        }, controller.signal);
-        if (!conflictRetry) break;
-        if (controller.signal.aborted) return;
-        conflictRetries += 1;
-        // The retry pause belongs to the run that is waiting; only surface the
-        // busy notice on the screen if that run is the one being viewed.
-        if (activeIdRef.current === conversation.id) setStreamStatus(t("agent.error.streamBusy"));
-        // Give the superseded run time to release the conversation on the server.
-        await new Promise((resolve) => window.setTimeout(resolve, 400));
-        // An abort may have raced with the retry delay; do not restart a stream
-        // that is no longer wanted.
-        if (controller.signal.aborted) return;
-      }
-      // A successful turn clears stale failure rows — both the one the retry
-      // targeted and any others left behind — so the transcript stops showing
-      // outdated errors once the conversation moves on. A run that itself
-      // failed keeps its error row for the user to retry. Only touch the
-      // transcript when it is the one on screen; a run that finished in the
-      // background cleans up its own view on re-entry via the server snapshot.
-      if (!turnFailed && activeIdRef.current === conversation.id) {
-        setActive((current) => current ? {
-          ...current,
-          messages: current.messages
-            .filter((item) => !(item.error && item.content === ""))
-            .map((item) => (item.error ? { ...item, error: undefined } : item)),
-        } : current);
-      }
-      await refreshConversations(conversationSearch);
-    } catch (error) {
-      if (!isCurrentRun()) return;
-      if (controller.signal.aborted) {
-        enqueueStreamPiece(conversation.id, streamSession.assistantMessageId, { type: "completed", reason: "cancelled" }, true);
-      } else {
-        const code = error instanceof ApiError ? error.code ?? "agent_request_failed" : "agent_request_failed";
-        const message = code === "agent_stream_unavailable"
-          ? t("agent.error.streamUnavailable")
-          : code === "agent_stream_invalid"
-            ? t("agent.error.streamInvalid")
-            : error instanceof Error ? error.message : t("agent.error.stream");
-        enqueueStreamPiece(conversation.id, streamSession.assistantMessageId, { type: "error", error: { code, message, retryable: true } }, true);
-      }
-    } finally {
-      // Only the latest run may clear shared run state; a superseded run's
-      // teardown must not drop the streaming flag of the run that replaced it.
-      // A background-completed run clears nothing: the streaming flag belongs
-      // to whatever conversation is on screen.
-      if (isCurrentRun()) {
-        if (abortRef.current === controller) abortRef.current = null;
-        if (activeIdRef.current === conversation.id) {
-          setStreaming(false);
-          setStreamStatus(null);
-        }
-      }
-      // Remove this run's session once it ends. Re-entry afterwards simply
-      // renders the server-persisted transcript, so the client buffer is no
-      // longer needed. Guarded by controller identity so an interrupt-to-send
-      // that replaced this session cannot be wiped by the old run's teardown.
-      const ended = sessionStreamsRef.current.get(conversation.id);
-      if (ended && ended.controller === controller) sessionStreamsRef.current.delete(conversation.id);
-      syncBackgroundRuns();
-    }
-  }, [active, attachedFiles, composer, conversationSearch, currentMessage, enqueueStreamPiece, ghostConversationId, mailReferences, mode, quoteContext, refreshConversations, scope, selectedProvider, syncBackgroundRuns, t]);
-
-  const stopStreaming = useCallback(() => {
-    const conversationId = active?.id;
-    if (!conversationId) return;
-    const session = sessionStreamsRef.current.get(conversationId);
-    // The on-screen conversation may be mid-run (user pressed stop) or have no
-    // run at all. Cancel through the session's own controller so a background
-    // run from another conversation can never be stopped by mistake.
-    if (session) {
-      session.controller.abort();
-      void api.cancelAgentRun(session.conversationId).catch(() => undefined);
-    }
-  }, [active?.id]);
-
-  // Stop affordance for a run being picked up after the panel reopened: there
-  // is no local controller, only the server-side run — cancel it directly.
-  const stopGhostRun = useCallback(() => {
-    const conversationId = ghostConversationId;
-    if (!conversationId) return;
-    void api.cancelAgentRun(conversationId).catch(() => undefined);
-    // Abandon the pickup for this last message: the cancelled run never
-    // persists a completed turn, so the transcript stays at the last user
-    // message (same as an interrupted turn after a stop), and the poll must
-    // not keep waiting on a turn that can never complete.
-    if (active?.id === conversationId) {
-      const last = active.messages[active.messages.length - 1];
-      if (last) abandonedPickupRef.current = { conversationId, lastMessageId: last.id };
-    }
-    setGhostConversationId((current) => (current === conversationId ? null : current));
-  }, [ghostConversationId, active?.id]);
+    await runStream({ conversation, assistantMessage, streamPayload });
+  }, [active, attachedFiles, composer, mailReferences, mode, prepareInterruptToSend, quoteContext, runStream, scope, selectedProvider, t]);
 
   // Slash command menu: while the composer holds a bare "/token" the matching
   // commands are offered. Parameterless commands send immediately; commands

@@ -379,7 +379,7 @@ export type AppSettings = {
   notificationSound: NotificationSound;
   refreshIntervalSeconds: 30 | 60 | 180 | 300;
   realtimePushEnabled: boolean;
-  /** Per-folder mailbox sync cap: 0 syncs the whole mailbox (Gmail-style, no cap). */
+  /** Per-folder mailbox sync cap: 0 syncs the whole mailbox. */
   syncMessageLimit: 0 | 200 | 500 | 1000 | 2000 | 5000;
   /** The cap actually applied, after the SYNC_MESSAGE_LIMIT environment override. */
   effectiveSyncMessageLimit: number | null;

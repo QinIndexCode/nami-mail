@@ -20,7 +20,7 @@ import { buildMemoryContextLines, type EncryptedAgentMemoryStore } from "./memor
 import type { ImmutableGuiConfirmationStore } from "./confirmations.js";
 import { canonicalAgentJson } from "./store-crypto.js";
 import type { MailApplicationContext, MailApplicationService } from "./mail-application-service.js";
-import { autoReplyThreadKey, applyAutoReplyScope, renderAutoReplyTemplate, scanSensitiveKeywords, screenAutoReply, screeningIgnoreReasonText, senderDomain, type AutoReplyScopeReason } from "./auto-reply-screening.js";
+import { applyAutoReplyScope, renderAutoReplyTemplate, scanSensitiveKeywords, screenAutoReply, screeningIgnoreReasonText, senderDomain, type AutoReplyScopeReason } from "./auto-reply-screening.js";
 import { type AutoReplyDecisionListOptions, type AutoReplyDecisionReason, type AutoReplyDecisionRecord, type EncryptedAutoReplyDecisionStore } from "./auto-reply-decisions.js";
 
 const CONFIRMATION_TTL_MS = 5 * 60 * 1_000;

@@ -444,7 +444,7 @@ const commandOptionHints: Readonly<Record<string, readonly CliOptionHint[]>> = {
 
 const commonOptionHints: readonly CliOptionHint[] = [
   { name: "output", type: "string", required: false, description: "Output format: table (default), json, jsonl, or text." },
-  { name: "profile", type: "string", required: false, description: "NamiMail Agent profile name (default: default)." },
+  { name: "profile", type: "string", required: false, description: "NamiMail Agent profile name. Defaults to \"default\" if omitted." },
 ];
 
 function optionsForCommand(command: CliCommandDefinition): readonly CliOptionHint[] {

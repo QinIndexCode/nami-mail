@@ -4,8 +4,8 @@ import { desktopBridge, type DesktopUpdateSnapshot, updateBridgeErrorMessage } f
 import { type Translate, useI18n } from "./i18n";
 import ThemedSelect from "./ThemedSelect";
 import { isInstalledCleanupResult, presentUpdateSnapshot } from "./updatePresentation";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 
 type UpdateAction = "check" | "download" | "skip" | "snooze" | "install";
 

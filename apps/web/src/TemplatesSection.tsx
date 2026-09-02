@@ -3,10 +3,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 import { templatesCache } from "./dialogPrefetch";
-import { useStablePagedListHeight } from "./useStablePagedListHeight";
+import { useStablePagedListHeight } from "./hooks/useStablePagedListHeight";
 import type { MailTemplate, MailTemplateInput } from "./types";
 
 export type TemplatesSectionProps = {

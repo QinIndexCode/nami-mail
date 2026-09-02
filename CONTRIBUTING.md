@@ -6,7 +6,7 @@
 
 ## 开始前
 
-- 使用前先阅读 [README](README.md)、[隐私与本地数据说明](docs/PRIVACY.md)、[安全策略](SECURITY.md)、[社区行为准则](CODE_OF_CONDUCT.md) 和 [本地化说明](docs/LOCALIZATION.md)。
+- 使用前先阅读 [README](README.md)、[隐私与本地数据说明](docs/PRIVACY.zh-CN.md)、[安全策略](SECURITY.md)、[社区行为准则](CODE_OF_CONDUCT.md) 和 [本地化说明](docs/LOCALIZATION.zh-CN.md)。
 - 漏洞、凭据泄露、可能读取其他用户邮件的路径，不要开公开 Issue；按 [SECURITY.md](SECURITY.md) 的流程私下报告。
 - 不要提交真实邮件、附件、完整地址、OAuth 回调参数、访问令牌、应用专用密码、`.env` 或 `data/` 中的任何文件。用于复现的截图和日志必须脱敏。
 - 涉及新服务商、同步语义、加密格式、数据库迁移、OAuth 权限或自动更新的较大改动，请先说明问题和方案，确认范围后再实现。
@@ -42,7 +42,7 @@ npm.cmd run verify:node-sqlite
 npm.cmd run verify:electron-sqlite
 ```
 
-更多目录结构、测试和打包注意事项见 [开发说明](docs/DEVELOPMENT.md)。
+更多目录结构、测试和打包注意事项见 [开发说明](docs/DEVELOPMENT.zh-CN.md)。
 
 ## 提交改动
 
@@ -64,7 +64,7 @@ npm.cmd run build
 npm.cmd run smoke:runtime
 ```
 
-Windows 安装包、签名和发布路径的额外步骤见 [发布指南](docs/RELEASING.md)。
+Windows 安装包、签名和发布路径的额外步骤见 [发布指南](docs/RELEASING.zh-CN.md)。
 
 ## Fork 与 Pull Request
 

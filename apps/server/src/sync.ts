@@ -9,20 +9,14 @@ import type { DatabaseHandle } from "./db.js";
 import { deriveEncryptionKey } from "./crypto.js";
 import { friendlyMailError, imapClientForAccount, mailErrorCode, type AccountAccessTokenProvider } from "./mail.js";
 import {
-  MOVE_LOCATION_UNVERIFIED_ERROR,
-  PENDING_MOVE_RECONCILIATION_ERROR,
-  messagePayloadById,
-  moveActionBlockedError,
   protectedMessageColumns,
   type MessageStorageRow,
 } from "./message-storage.js";
-import { listEnabledFilterRules, matchesFilterRuleConditions } from "./filter-rules.js";
 import { autoCollectSender } from "./contacts.js";
 import { indexMessageFts } from "./message-search.js";
+import { redactUrls } from "./message-links.js";
 import {
   confirmSubmissionsInSent,
-  markSubmissionConfirmed,
-  submissionForId,
 } from "./outbox.js";
 import type { AccountRecord } from "./types.js";
 import { getAppSettings } from "./settings.js";
@@ -30,6 +24,26 @@ import { getAutoReplyEngine } from "./agent/auto-reply.js";
 
 const running = new Set<string>();
 const movingAccounts = new Set<string>();
+
+/** True when the account is mid-sync. Used by move operations to block concurrent intents. */
+export function isAccountSyncing(accountId: string): boolean {
+  return running.has(accountId);
+}
+
+/** True when a move operation is in flight for the account. */
+export function isAccountMoving(accountId: string): boolean {
+  return movingAccounts.has(accountId);
+}
+
+/** Mark an account as mid-move. Call from sync-moves.ts only. */
+export function markAccountMoving(accountId: string): void {
+  movingAccounts.add(accountId);
+}
+
+/** Clear the mid-move flag for an account. Call from sync-moves.ts only. */
+export function unmarkAccountMoving(accountId: string): void {
+  movingAccounts.delete(accountId);
+}
 
 // Raised when a sync pass is aborted by its caller (client disconnect or the
 // route-level runtime cap). Distinguished from provider failures so the
@@ -141,8 +155,7 @@ export function withHeldWriteSlots<T>(accountIds: readonly string[], fn: () => P
   if (parent) for (const accountId of parent) held.add(accountId);
   return heldWriteSlots.run(held, fn);
 }
-const scheduledSentVerifications = new Map<string, Promise<void>>();
-const sentVerificationRetryDelaysMs = [0, 2_000, 10_000] as const;
+
 // Probe old cached UIDs in small, rotating batches. This only verifies remote
 // absence after a folder has stayed in the same UIDVALIDITY epoch.
 const remoteDeletionProbeBatchSize = 64;
@@ -157,7 +170,7 @@ export type NewInboxMessage = {
   fromAddress: string;
 };
 
-function accountById(db: DatabaseHandle, id: string): AccountRecord | undefined {
+export function accountById(db: DatabaseHandle, id: string): AccountRecord | undefined {
   return db.prepare("SELECT * FROM accounts WHERE id = ?").get(id) as AccountRecord | undefined;
 }
 
@@ -181,8 +194,82 @@ function messageIdValues(value: string | string[] | undefined): string[] {
   return [...new Set(ids)].slice(-50);
 }
 
+const SNIPPET_MAX_LENGTH = 150;
+
+const htmlEntityMap: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: " ",
+  quot: "\"",
+};
+
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(?:#(x[0-9a-fA-F]+|\d+)|([a-zA-Z]+));/g, (whole, numeric: string | undefined, name: string | undefined) => {
+    if (numeric) {
+      const codePoint = numeric.startsWith("x") || numeric.startsWith("X")
+        ? Number.parseInt(numeric.slice(1), 16)
+        : Number.parseInt(numeric, 10);
+      if (!Number.isSafeInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return whole;
+      try { return String.fromCodePoint(codePoint); } catch { return whole; }
+    }
+    return name && htmlEntityMap[name.toLowerCase()] !== undefined ? htmlEntityMap[name.toLowerCase()]! : whole;
+  });
+}
+
+function htmlToSnippetText(html: string): string {
+  let text = html;
+  // Strip non-visible blocks first so their content doesn't leak into the snippet.
+  text = text.replace(/<(script|style|head|noscript|svg)[^>]*>[\s\S]*?<\/\1\s*>/gi, " ");
+  // Strip all remaining HTML tags.
+  text = text.replace(/<[^>]+>/g, " ");
+  // Decode HTML entities and collapse whitespace.
+  text = decodeHtmlEntities(text).replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
+  return text;
+}
+
 function snippet(value: string): string {
-  return value.replace(/\s+/g, " ").trim().slice(0, 220);
+  // Redact URLs up front so raw links never land in the stored snippet; the
+  // neutral sentinel is rendered as a localized label by the consumer.
+  const compact = redactUrls(value.replace(/\s+/g, " ").trim());
+  return compact.length <= SNIPPET_MAX_LENGTH ? compact : `${compact.slice(0, SNIPPET_MAX_LENGTH).trimEnd()}…`;
+}
+
+const SNIPPET_REDACT_MIGRATION_ID = "message-snippet-redact-v1";
+
+/**
+ * One-time backfill: re-run URL redaction over snippets already stored by older
+ * builds (written before + link filtering existed). Redaction is applied to the
+ * stored, already-truncated snippet directly -- it needs no decryption (bodies
+ * are encrypted, snippets are not) and is strictly an improvement. Guarded by a
+ * data-migration marker so it runs at most once per database.
+ */
+export function backfillRedactMessageSnippets(db: DatabaseHandle): { changed: number } {
+  const marker = db
+    .prepare("SELECT 1 FROM data_migrations WHERE id = ?")
+    .get(SNIPPET_REDACT_MIGRATION_ID);
+  if (marker) return { changed: 0 };
+  const rows = db
+    .prepare("SELECT id, snippet FROM messages WHERE snippet <> ''")
+    .all() as Array<{ id: string; snippet: string }>;
+  const update = db.prepare("UPDATE messages SET snippet = ? WHERE id = ?");
+  const changed = db.transaction(() => {
+    let count = 0;
+    for (const row of rows) {
+      const redacted = redactUrls(row.snippet);
+      if (redacted !== row.snippet) {
+        update.run(redacted, row.id);
+        count += 1;
+      }
+    }
+    db.prepare(`
+      INSERT INTO data_migrations (id, completed_at) VALUES (?, ?)
+      ON CONFLICT(id) DO UPDATE SET completed_at = excluded.completed_at
+    `).run(SNIPPET_REDACT_MIGRATION_ID, new Date().toISOString());
+    return count;
+  })();
+  return { changed };
 }
 
 function headerValue(headers: { get(key: string): unknown } | undefined, key: string): string {
@@ -266,110 +353,9 @@ function uidValidityValue(value: unknown): string | undefined {
   return undefined;
 }
 
-function isSentFolder(folder: ListResponse): boolean {
-  return isSelectableFolder(folder) && folder.specialUse === "\\Sent";
-}
-
-function backgroundDelay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, milliseconds);
-    // Delayed verification must not keep the desktop process alive while it
-    // is closing. The next regular sync can still reconcile the status.
-    timer.unref?.();
-  });
-}
-
-/**
- * Checks the provider's live Sent mailbox for one exact RFC Message-ID.
- * A match confirms that the provider stored a sent copy; it does not claim
- * recipient delivery or a read receipt, which IMAP/SMTP cannot establish.
- */
-export async function verifySubmissionInSentMailbox(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  accountId: string,
-  messageId: string,
-  accessTokenProvider?: AccountAccessTokenProvider,
-): Promise<boolean> {
-  const account = accountById(db, accountId);
-  if (!account) throw new Error("Account not found.");
-  const client = await imapClientForAccount(account, masterKey, accessTokenProvider);
-  try {
-    await client.connect();
-    const sentFolders = (await client.list()).filter(isSentFolder);
-    for (const folder of sentFolders) {
-      const lock = await client.getMailboxLock(folder.path);
-      try {
-        // HEADER is only a candidate lookup. Fetch and compare the returned
-        // ENVELOPE so a partial header match can never confirm another mail.
-        const matchingUids = await client.search({ header: { "Message-ID": messageId } }, { uid: true });
-        if (!matchingUids) continue;
-        for (const uid of matchingUids.slice(-20)) {
-          const candidate = await client.fetchOne(uid, { envelope: true }, { uid: true });
-          if (candidate && candidate.envelope?.messageId === messageId) return true;
-        }
-      } finally {
-        lock.release();
-      }
-    }
-    return false;
-  } finally {
-    if (client.usable) await client.logout().catch(() => undefined);
-  }
-}
-
-type SentVerificationScheduleOptions = {
-  abortSignal?: AbortSignal;
-  onDeferred?: (error: unknown) => void;
-};
-
-/**
- * Starts a bounded, IMAP-only confirmation pass after SMTP acceptance or an
- * uncertain SMTP disconnect. It never calls SMTP and therefore cannot create
- * a duplicate message. A delayed/missing Sent copy leaves the durable status
- * as submitted or unknown_delivery for the normal periodic sync to revisit.
- */
-export function scheduleSentSubmissionVerification(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  submissionId: string,
-  accessTokenProvider?: AccountAccessTokenProvider,
-  options: SentVerificationScheduleOptions = {},
-): void {
-  if (scheduledSentVerifications.has(submissionId)) return;
-  const job = (async () => {
-    let lastVerificationError: unknown;
-    for (const delay of sentVerificationRetryDelaysMs) {
-      if (delay > 0) await backgroundDelay(delay);
-      if (options.abortSignal?.aborted) return;
-      try {
-        const submission = submissionForId(db, masterKey, submissionId);
-        if (!submission || (submission.deliveryStatus !== "submitted" && submission.deliveryStatus !== "unknown_delivery")) {
-          return;
-        }
-        const foundInSent = await verifySubmissionInSentMailbox(
-          db,
-          masterKey,
-          submission.accountId,
-          submission.messageId,
-          accessTokenProvider,
-        );
-        if (options.abortSignal?.aborted) return;
-        if (foundInSent) {
-          markSubmissionConfirmed(db, masterKey, submission.id);
-          return;
-        }
-      } catch (error) {
-        lastVerificationError = error;
-      }
-    }
-    if (!options.abortSignal?.aborted && lastVerificationError) options.onDeferred?.(lastVerificationError);
-  })();
-  scheduledSentVerifications.set(submissionId, job);
-  void job.finally(() => {
-    if (scheduledSentVerifications.get(submissionId) === job) scheduledSentVerifications.delete(submissionId);
-  });
-}
+// Sent verification is in sync-sent-verify.ts; re-export for backward compatibility.
+import { scheduleSentSubmissionVerification } from "./sync-sent-verify.js";
+export { scheduleSentSubmissionVerification, verifySubmissionInSentMailbox } from "./sync-sent-verify.js";
 
 export async function syncAccount(
   db: DatabaseHandle,
@@ -524,7 +510,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         from_name = excluded.from_name,
         from_address = excluded.from_address,
         to_json = excluded.to_json,
-        cc_json = excluded.cc_json,
+        cc_json = excluded.to_json,
         in_reply_to = excluded.in_reply_to,
         references_json = excluded.references_json,
         sent_at = excluded.sent_at,
@@ -981,7 +967,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           if (sameUidValidity && !pendingMoveTouchesFolder) await reconcileRemoteDeletionBatch(folder, currentUidValidity);
           continue;
         }
-        // A limit of 0 syncs the whole mailbox (Gmail-style, no cap); any
+        // A limit of 0 syncs the whole mailbox; any
         // positive value fetches only the newest `messageLimit` messages.
         const start = messageLimit > 0 ? Math.max(1, exists - messageLimit + 1) : 1;
         // The rolling window must be anchored in UID space: sequence numbers
@@ -1111,7 +1097,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
             cc: copiedRecipients,
             inReplyTo,
             references,
-            snippet: snippet(text || html.replace(/<[^>]+>/g, " ")),
+            snippet: snippet(text || htmlToSnippetText(html)),
             textBody: text,
             htmlBody: html,
             attachments,
@@ -1152,7 +1138,10 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
               subject,
               fromName: from.name,
               fromAddress: from.address,
+              to: recipients,
+              cc: copiedRecipients,
               textBody: text,
+              attachments,
             });
             if (agentEvents && agentLease) {
               agentEvents.messageUpsertedWithinTransaction(agentLease, id, {
@@ -1179,6 +1168,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
                   size: attachment.size,
                   related: attachment.related,
                   disposition: attachment.disposition,
+                  ...(attachment.contentId ? { contentId: attachment.contentId } : {}),
                 })),
               });
             }
@@ -1297,1308 +1287,21 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
   }
 }
 
-/**
- * Applies enabled filter rules to newly arrived inbox messages after a sync
- * pass has finished. Runs after the per-account sync guard is released so the
- * reused flag/move operations can open their own IMAP session. Each message is
- * handled by at most the first matching rule (in rule position order); a failed
- * action stops that rule's remaining actions but never fails the sync itself.
- */
-export async function applyFilterRulesToNewMessages(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  accountId: string,
-  newMessages: Array<{ id: string }>,
-  accessTokenProvider?: AccountAccessTokenProvider,
-  agentEvents?: AgentMailEventSink,
-): Promise<{ matched: number; failed: number }> {
-  const rules = listEnabledFilterRules(db, accountId);
-  if (rules.length === 0 || newMessages.length === 0) return { matched: 0, failed: 0 };
-  let matched = 0;
-  let failed = 0;
-  for (const message of newMessages) {
-    const entry = messagePayloadById(db, masterKey, message.id);
-    if (!entry) continue;
-    const rule = rules.find((candidate) => matchesFilterRuleConditions(candidate.conditions, entry.payload));
-    if (!rule) continue;
-    try {
-      for (const action of rule.actions) {
-        switch (action.kind) {
-          case "mark_seen":
-            await updateMessageFlags(db, masterKey, message.id, { seen: true }, accessTokenProvider, agentEvents);
-            break;
-          case "add_flag":
-            await updateMessageFlags(db, masterKey, message.id, { flagged: true }, accessTokenProvider, agentEvents);
-            break;
-          case "archive":
-            await moveMessage(db, masterKey, message.id, "archive", accessTokenProvider, agentEvents);
-            break;
-          case "move_to_folder":
-            await moveMessageToFolder(db, masterKey, message.id, action.folderPath, accessTokenProvider, agentEvents);
-            break;
-        }
-      }
-      matched += 1;
-    } catch {
-      failed += 1;
-    }
-  }
-  return { matched, failed };
-}
+// Filter-rule application is in sync-filter-rules.ts; re-export for backward compatibility.
+import { applyFilterRulesToNewMessages } from "./sync-filter-rules.js";
+export { applyFilterRulesToNewMessages } from "./sync-filter-rules.js";
 
-export type MessageFlagsPatch = {
-  seen?: boolean;
-  flagged?: boolean;
-};
+// Flag operations are in sync-flags.ts; re-export for backward compatibility.
+import { updateMessageFlags, updateMessageFlagsBatch, markMessageSeen, type MessageFlagsPatch } from "./sync-flags.js";
+export { MessageFlagsPatch, updateMessageFlags, updateMessageFlagsBatch, markMessageSeen } from "./sync-flags.js";
 
-const messageFlagNames = {
-  seen: "\\Seen",
-  flagged: "\\Flagged",
-} as const;
-
-export async function updateMessageFlags(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  messageId: string,
-  patch: MessageFlagsPatch,
-  accessTokenProvider?: AccountAccessTokenProvider,
-  agentEvents?: AgentMailEventSink,
-): Promise<void> {
-  const message = db
-    .prepare("SELECT account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id = ?")
-    .get(messageId) as {
-      account_id: string;
-      mailbox: string;
-      uid: number;
-      flags_json: string;
-      remote_id_lookup: string | null;
-      pending_move_destination: string | null;
-      pending_move_state: string | null;
-    } | undefined;
-  if (!message) throw new Error("Message not found.");
-  const moveBlockedError = moveActionBlockedError(message);
-  if (moveBlockedError) throw new Error(moveBlockedError);
-  // The account-level write slot queues a flag update behind any move in
-  // flight on the same account. Without it, starring a message while its
-  // delete is still dispatching fails with a "pending move" error instead of
-  // simply waiting its turn. This also serializes filter-rule and agent flag
-  // writes against user moves.
-  await withAccountWriteLocks([message.account_id], async () => {
-    const currentFlags = new Set<string>(JSON.parse(message.flags_json));
-    const nextFlags = new Set(currentFlags);
-    const add: string[] = [];
-    const remove: string[] = [];
-    for (const [field, flag] of Object.entries(messageFlagNames) as Array<[keyof MessageFlagsPatch, string]>) {
-      const value = patch[field];
-      if (value === undefined || currentFlags.has(flag) === value) continue;
-      if (value) {
-        nextFlags.add(flag);
-        add.push(flag);
-      } else {
-        nextFlags.delete(flag);
-        remove.push(flag);
-      }
-    }
-    // The requested state is already reflected in the last server-confirmed
-    // cache. Avoid a redundant STORE command and, importantly, a second count
-    // adjustment for an idempotent read/open action.
-    if (!add.length && !remove.length) return;
-    const account = accountById(db, message.account_id);
-    if (!account) throw new Error("Account not found.");
-    const agentLease = agentEvents?.acquireLease(message.account_id);
-    const client = await imapClientForAccount(account, masterKey, accessTokenProvider);
-    try {
-      await client.connect();
-      const lock = await client.getMailboxLock(message.mailbox);
-      try {
-        if (add.length) {
-          const added = await client.messageFlagsAdd(message.uid, add, { uid: true });
-          if (added === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
-        }
-        if (remove.length) {
-          const removed = await client.messageFlagsRemove(message.uid, remove, { uid: true });
-          if (removed === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
-        }
-      } finally {
-        lock.release();
-      }
-      const seenChanged = currentFlags.has("\\Seen") !== nextFlags.has("\\Seen");
-      db.transaction(() => {
-        db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run(JSON.stringify([...nextFlags]), messageId);
-        if (seenChanged) {
-          // Keep the cached sidebar badge aligned with the successful remote
-          // STORE. The folder refresh remains authoritative, but it must not
-          // briefly restore an already-read message to the unread total.
-          db.prepare(`
-            UPDATE folders
-            SET unseen = CASE
-              WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
-              ELSE unseen + 1
-            END
-            WHERE account_id = ? AND path = ?
-          `).run(nextFlags.has("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
-        }
-        if (agentEvents && agentLease) {
-          agentEvents.messageUpsertedWithinTransaction(agentLease, messageId, {
-            mailbox: message.mailbox,
-            uid: message.uid,
-            remoteIdLookup: message.remote_id_lookup,
-            flags: [...nextFlags].sort(),
-            pendingMoveDestination: message.pending_move_destination,
-            pendingMoveState: message.pending_move_state,
-          });
-        }
-      })();
-    } finally {
-      if (client.usable) await client.logout().catch(() => undefined);
-    }
-  });
-}
-
-/**
- * Applies the same flag patch to many messages using one IMAP connection per
- * account and one STORE command per mailbox, instead of one connection and one
- * command per message. Failures are per-message: the caller receives how many
- * messages were updated and how many failed, mirroring the per-id behavior of
- * the previous loop.
- */
-export async function updateMessageFlagsBatch(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  messageIds: readonly string[],
-  patch: MessageFlagsPatch,
-  accessTokenProvider?: AccountAccessTokenProvider,
-  agentMailEvents?: AgentMailEventSink,
-): Promise<{ updated: number; failed: number; changedIds: string[] }> {
-  if (!messageIds.length) return { updated: 0, failed: 0, changedIds: [] };
-  const placeholders = messageIds.map(() => "?").join(", ");
-  const rows = db
-    .prepare(`SELECT id, account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id IN (${placeholders})`)
-    .all(...messageIds) as Array<{
-      id: string;
-      account_id: string;
-      mailbox: string;
-      uid: number;
-      flags_json: string;
-      remote_id_lookup: string | null;
-      pending_move_destination: string | null;
-      pending_move_state: string | null;
-    }>;
-
-  // Prepare per-message next flags; skip messages that no longer exist or
-  // would not change. These are counted as "updated" to keep the overall
-  // operation idempotent (they were already in the requested state).
-  type PreparedMessage = {
-    message: typeof rows[number];
-    nextFlags: string[];
-    add: string[];
-    remove: string[];
-    seenChanged: boolean;
-  };
-  const prepared: PreparedMessage[] = [];
-  const blocked: string[] = [];
-  for (const message of rows) {
-    if (moveActionBlockedError(message)) {
-      blocked.push(message.id);
-      continue;
-    }
-    const currentFlags = new Set<string>(JSON.parse(message.flags_json));
-    const nextFlags = new Set(currentFlags);
-    const add: string[] = [];
-    const remove: string[] = [];
-    for (const [field, flag] of Object.entries(messageFlagNames) as Array<[keyof MessageFlagsPatch, string]>) {
-      const value = patch[field];
-      if (value === undefined || currentFlags.has(flag) === value) continue;
-      if (value) {
-        nextFlags.add(flag);
-        add.push(flag);
-      } else {
-        nextFlags.delete(flag);
-        remove.push(flag);
-      }
-    }
-    prepared.push({ message, nextFlags: [...nextFlags], add, remove, seenChanged: currentFlags.has("\\Seen") !== nextFlags.has("\\Seen") });
-  }
-
-  // Group by account: one connection per account, one STORE per mailbox.
-  const byAccount = new Map<string, PreparedMessage[]>();
-  for (const item of prepared) {
-    const group = byAccount.get(item.message.account_id) ?? [];
-    group.push(item);
-    byAccount.set(item.message.account_id, group);
-  }
-
-  let updated = 0;
-  let failed = blocked.length + (messageIds.length - rows.length);
-  const changedIds: string[] = [];
-  for (const [accountId, messages] of byAccount) {
-    // The account write slot serializes the read-modify-write against any move
-    // or flag update in flight on the same account, mirroring the single-message
-    // `updateMessageFlags` path. Without it, a batch STORE racing a move (or
-    // sync) can overwrite the freshly reconciled flags_json.
-    await withAccountWriteLocks([accountId], async () => {
-      const account = accountById(db, accountId);
-      if (!account) {
-        failed += messages.length;
-        return;
-      }
-      const agentLease = agentMailEvents?.acquireLease(accountId);
-      const client = await imapClientForAccount(account, masterKey, accessTokenProvider);
-      let remoteSucceeded = false;
-      try {
-        await client.connect();
-        const byMailbox = new Map<string, PreparedMessage[]>();
-        for (const item of messages) {
-          const group = byMailbox.get(item.message.mailbox) ?? [];
-          group.push(item);
-          byMailbox.set(item.message.mailbox, group);
-        }
-        for (const [mailbox, mailboxMessages] of byMailbox) {
-          const lock = await client.getMailboxLock(mailbox);
-          try {
-            // Messages in the same mailbox may need different flag changes
-            // (some add \\Seen, others already have it). Group by the exact
-            // flag set so each STORE command covers a uniform batch.
-            const byFlagGroup = new Map<string, { add: string[]; remove: string[]; uids: number[] }>();
-            for (const item of mailboxMessages) {
-              const key = `${item.add.join(",")}\u0000${item.remove.join(",")}`;
-              let group = byFlagGroup.get(key);
-              if (!group) {
-                group = { add: item.add, remove: item.remove, uids: [] };
-                byFlagGroup.set(key, group);
-              }
-              group.uids.push(item.message.uid);
-            }
-            for (const group of byFlagGroup.values()) {
-              if (group.add.length && group.uids.length) {
-                const added = await client.messageFlagsAdd(group.uids, group.add, { uid: true });
-                if (added === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
-              }
-              if (group.remove.length && group.uids.length) {
-                const removed = await client.messageFlagsRemove(group.uids, group.remove, { uid: true });
-                if (removed === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
-              }
-            }
-          } finally {
-            lock.release();
-          }
-        }
-        remoteSucceeded = true;
-      } catch {
-        remoteSucceeded = false;
-      } finally {
-        if (client?.usable) await client.logout().catch(() => undefined);
-      }
-      if (!remoteSucceeded) {
-        failed += messages.length;
-        return;
-      }
-
-      // Persist locally only after the remote STORE succeeded for every message
-      // in the account.
-      db.transaction(() => {
-        for (const item of messages) {
-          const { message } = item;
-          db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run(JSON.stringify(item.nextFlags), message.id);
-          // Only messages that actually changed state are undo candidates;
-          // idempotent no-ops (already in the requested state) stay in `updated`.
-          if (item.add.length || item.remove.length) changedIds.push(message.id);
-          if (item.seenChanged) {
-            db.prepare(`
-              UPDATE folders
-              SET unseen = CASE
-                WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
-                ELSE unseen + 1
-              END
-              WHERE account_id = ? AND path = ?
-            `).run(item.nextFlags.includes("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
-          }
-          if (agentMailEvents && agentLease) {
-            agentMailEvents.messageUpsertedWithinTransaction(agentLease, message.id, {
-              mailbox: message.mailbox,
-              uid: message.uid,
-              remoteIdLookup: message.remote_id_lookup,
-              flags: [...item.nextFlags].sort(),
-              pendingMoveDestination: message.pending_move_destination,
-              pendingMoveState: message.pending_move_state,
-            });
-          }
-        }
-      })();
-      updated += messages.length;
-    });
-  }
-  const changedSet = new Set(changedIds);
-  return { updated, failed, changedIds: messageIds.filter((id) => changedSet.has(id)) };
-}
-
-export async function markMessageSeen(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  messageId: string,
-  seen: boolean,
-  accessTokenProvider?: AccountAccessTokenProvider,
-  agentEvents?: AgentMailEventSink,
-): Promise<void> {
-  await updateMessageFlags(db, masterKey, messageId, { seen }, accessTokenProvider, agentEvents);
-}
-
-export type MessageMoveTarget = "archive" | "trash" | "junk" | "inbox";
-
-const moveTargets: Record<MessageMoveTarget, { specialUses: string[]; unavailableMessage: string }> = {
-  archive: {
-    // Some providers expose their archive view as \All. MOVE removes the source
-    // mailbox membership and is therefore the provider-supported archive action.
-    specialUses: ["\\Archive", "\\All"],
-    unavailableMessage: "这个邮箱没有提供可用的归档文件夹。",
-  },
-  trash: {
-    specialUses: ["\\Trash"],
-    unavailableMessage: "这个邮箱没有提供可用的废纸篓文件夹。",
-  },
-  junk: {
-    // The provider's canonical spam folder; some providers expose it under a
-    // localized path, so resolve by SPECIAL-USE only.
-    specialUses: ["\\Junk"],
-    unavailableMessage: "这个邮箱没有提供可用的垃圾邮件文件夹。",
-  },
-  inbox: {
-    // The "not spam" recovery path restores a misclassified message to the
-    // real INBOX regardless of the account's folder naming.
-    specialUses: ["\\Inbox"],
-    unavailableMessage: "这个邮箱没有提供可用的收件箱。",
-  },
-};
-
-function messageIsUnseen(flagsJson: string): boolean {
-  try {
-    const flags = JSON.parse(flagsJson);
-    return Array.isArray(flags) && !flags.includes("\\Seen");
-  } catch {
-    // A malformed legacy cache row must not make an already-confirmed server
-    // MOVE look like a failure. A later sync will repair the folder count.
-    return false;
-  }
-}
-
-function updateFolderCountsForMove(
-  db: DatabaseHandle,
-  message: { account_id: string; mailbox: string; flags_json: string },
-  destination: { path: string; special_use: string | null },
-  destinationAlreadyCached = false,
-): void {
-  const unseen = messageIsUnseen(message.flags_json) ? 1 : 0;
-  db.prepare(`
-    UPDATE folders
-    SET
-      total = CASE WHEN total > 0 THEN total - 1 ELSE 0 END,
-      unseen = CASE WHEN ? = 1 AND unseen > 0 THEN unseen - 1 ELSE unseen END
-    WHERE account_id = ? AND path = ?
-  `).run(unseen, message.account_id, message.mailbox);
-
-  // Gmail's \All already contains the message before archive removes its
-  // Inbox label. Physical archive, trash, junk, and inbox folders gain a new
-  // membership (the last one when a misclassified Junk message is recovered).
-  if (!destinationAlreadyCached && (destination.special_use === "\\Archive" || destination.special_use === "\\Trash" || destination.special_use === "\\Junk" || destination.special_use === "\\Inbox")) {
-    db.prepare(`
-      UPDATE folders
-      SET total = total + 1, unseen = unseen + ?
-      WHERE account_id = ? AND path = ?
-    `).run(unseen, message.account_id, destination.path);
-  }
-}
-
-function pendingMoveUid(
-  db: DatabaseHandle,
-  accountId: string,
-  mailbox: string,
-  sourceUid: number,
-): number {
-  const preferredUid = -sourceUid;
-  const preferredInUse = db.prepare(`
-    SELECT 1 FROM messages WHERE account_id = ? AND mailbox = ? AND uid = ?
-  `).get(accountId, mailbox, preferredUid);
-  if (!preferredInUse) return preferredUid;
-
-  // UIDVALIDITY resets can make a new live UID collide with the negative
-  // placeholder left by an older pending move. Allocate below the current
-  // local negative range; this UID is never sent back to the server.
-  const lowestPendingUid = db.prepare(`
-    SELECT MIN(uid) AS uid FROM messages
-    WHERE account_id = ? AND mailbox = ? AND uid < 0
-  `).get(accountId, mailbox) as { uid: number | null };
-  const nextUid = (lowestPendingUid.uid ?? 0) - 1;
-  if (!Number.isSafeInteger(nextUid)) throw new Error("Too many pending message moves to allocate a local identifier.");
-  return nextUid;
-}
-
-function cachedDestinationCandidateUid(
-  db: DatabaseHandle,
-  accountId: string,
-  destinationMailbox: string,
-  remoteIdLookupValue: string | null,
-  sourceMessageId: string,
-): number | null {
-  if (!remoteIdLookupValue) return null;
-  const candidates = db.prepare(`
-    SELECT uid FROM messages
-    WHERE account_id = ? AND mailbox = ? AND remote_id_lookup = ? AND id <> ?
-    ORDER BY uid
-    LIMIT 2
-  `).all(accountId, destinationMailbox, remoteIdLookupValue, sourceMessageId) as Array<{ uid: number }>;
-  if (candidates.length !== 1) return null;
-  const candidateUid = candidates[0]?.uid;
-  return typeof candidateUid === "number" && Number.isSafeInteger(candidateUid) && candidateUid > 0
-    ? candidateUid
-    : null;
-}
-
-type MoveDestination = { path: string; special_use: string | null };
-
-export type MessageMoveResult = {
-  accountId: string;
-  destination: string;
-  refreshPending: boolean;
-  uid?: number;
-  uncertain?: boolean;
-  locationUnverified?: boolean;
-};
-
-/**
- * Moves a message to an explicit folder path of its own account. Used by
- * filter rules so "move to folder" can address any known folder, not only
- * the archive/trash shortcuts.
- */
-export async function moveMessageToFolder(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  messageId: string,
-  folderPath: string,
-  accessTokenProvider?: AccountAccessTokenProvider,
-  agentEvents?: AgentMailEventSink,
-): Promise<MessageMoveResult> {
-  const message = db
-    .prepare("SELECT account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id = ?")
-    .get(messageId) as {
-      account_id: string;
-      mailbox: string;
-      uid: number;
-      flags_json: string;
-      remote_id_lookup: string | null;
-      pending_move_destination: string | null;
-      pending_move_state: string | null;
-    } | undefined;
-  if (!message) throw new Error("Message not found.");
-  const moveBlockedError = moveActionBlockedError(message);
-  if (moveBlockedError && !isRecoverableStaleMove(message)) throw new Error(moveBlockedError);
-  if (message.mailbox === folderPath) throw new Error("邮件已经在该文件夹中。");
-  const folder = db.prepare(`
-    SELECT path, special_use FROM folders WHERE account_id = ? AND path = ?
-  `).get(message.account_id, folderPath) as MoveDestination | undefined;
-  if (!folder) throw new Error("目标文件夹不存在或不可用。");
-  return moveMessageCore(db, masterKey, messageId, folder, accessTokenProvider, agentEvents);
-}
-
-type MoveMessageOptions = {
-  /** A connected IMAP client to reuse (batch moves share one per account). */
-  client?: Awaited<ReturnType<typeof imapClientForAccount>>;
-};
-
-/**
- * Only an 'intent' left behind by an interrupted transfer can be re-probed
- * against the source mailbox and retried. A 'confirmed' move and an
- * unverified location stay blocked until a sync reconciles the target.
- */
-function isRecoverableStaleMove(message: { pending_move_state: string | null; uid: number }): boolean {
-  return message.pending_move_state === "intent" && message.uid > 0;
-}
-
-/**
- * Proves whether the source UID of a stale 'intent' is still live. Present:
- * the interrupted MOVE never executed, so the intent is discarded for a fresh
- * attempt (true). Absent: the MOVE did happen and reconciliation owns the
- * outcome (false).
- */
-async function recoverStaleMoveIntent(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  messageId: string,
-  message: { account_id: string; mailbox: string; uid: number },
-  accessTokenProvider?: AccountAccessTokenProvider,
-  sharedClient?: Awaited<ReturnType<typeof imapClientForAccount>>,
-): Promise<boolean> {
-  const account = accountById(db, message.account_id);
-  if (!account) return false;
-  const client = sharedClient ?? (await imapClientForAccount(account, masterKey, accessTokenProvider));
-  const ownsClient = !sharedClient;
-  try {
-    if (ownsClient) await client.connect();
-    const lock = await client.getMailboxLock(message.mailbox);
-    try {
-      for await (const item of client.fetch([message.uid], { uid: true }, { uid: true })) {
-        if (item.uid === message.uid) {
-          db.prepare(`
-            UPDATE messages
-            SET pending_move_destination = NULL,
-                pending_move_state = NULL,
-                pending_move_candidate_uid = NULL,
-                pending_move_special_use = NULL
-            WHERE id = ? AND pending_move_state = 'intent'
-          `).run(messageId);
-          return true;
-        }
-      }
-    } finally {
-      lock.release();
-    }
-    return false;
-  } finally {
-    if (ownsClient && client.usable) await client.logout().catch(() => undefined);
-  }
-}
-
-export async function moveMessage(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  messageId: string,
-  target: MessageMoveTarget,
-  accessTokenProvider?: AccountAccessTokenProvider,
-  agentEvents?: AgentMailEventSink,
-  options?: MoveMessageOptions,
-): Promise<MessageMoveResult> {
-  const message = db
-    .prepare("SELECT account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id = ?")
-    .get(messageId) as {
-      account_id: string;
-      mailbox: string;
-      uid: number;
-      flags_json: string;
-      remote_id_lookup: string | null;
-      pending_move_destination: string | null;
-      pending_move_state: string | null;
-    } | undefined;
-  if (!message) throw new Error("Message not found.");
-  // A move already being reconciled must block before the target folder is
-  // resolved: the provider folder may not exist (e.g. no Trash on the account)
-  // and must not shadow the reconciliation error. A stale 'intent' may be
-  // retried after core proves the source UID is still live.
-  const moveBlockedError = moveActionBlockedError(message);
-  if (moveBlockedError && !isRecoverableStaleMove(message)) throw new Error(moveBlockedError);
-  const targetDefinition = moveTargets[target];
-  const destination = resolveMoveDestination(db, message.account_id, target);
-  if (!destination) throw new Error(targetDefinition.unavailableMessage);
-  if (destination.path === message.mailbox) {
-    // The message already lives in the target folder (e.g. a second delete
-    // from the Trash view, or an archive action inside All Mail). Moving it
-    // again is an idempotent no-op: report success so the renderer clears
-    // the message from the current view instead of failing the action.
-    return { accountId: message.account_id, destination: destination.path, refreshPending: false };
-  }
-  // The account-level write slot serializes concurrent user operations: a
-  // move issued while another move is in flight waits its turn instead of
-  // failing with a busy error. Reentrant callers (batch fallbacks, undo)
-  // acquire the slot once at their own level, so this nesting never recurses.
-  return withAccountWriteLocks([message.account_id], () =>
-    moveMessageCore(db, masterKey, messageId, destination, accessTokenProvider, agentEvents, options),
-  );
-}
-
-type MoveMessageFields = {
-  account_id: string;
-  mailbox: string;
-  uid: number;
-  flags_json: string;
-  remote_id_lookup: string | null;
-  pending_move_destination: string | null;
-  pending_move_state: string | null;
-};
-
-/**
- * Resolves the provider folder a move target maps to, or null when the
- * account has no usable folder for the target. A message that already lives
- * in the resolved folder is handled as an idempotent no-op by the callers.
- * Exported for batch-job undo, which must know the job's target folder to
- * avoid dragging manually re-moved messages back.
- */
-export function resolveMoveDestination(
-  db: DatabaseHandle,
-  accountId: string,
-  target: MessageMoveTarget,
-): MoveDestination | null {
-  const targetDefinition = moveTargets[target];
-  const placeholders = targetDefinition.specialUses.map(() => "?").join(", ");
-  const destination = db.prepare(`
-    SELECT path, special_use FROM folders
-    WHERE account_id = ? AND special_use IN (${placeholders})
-    ORDER BY CASE special_use
-      WHEN '\\Archive' THEN 0
-      WHEN '\\Trash' THEN 0
-      ELSE 1
-    END
-    LIMIT 1
-  `).get(accountId, ...targetDefinition.specialUses) as MoveDestination | undefined;
-  return destination ?? null;
-}
-
-/**
- * Persists the UIDPLUS-confirmed outcome of a provider MOVE: the row is
- * rebound to the exact destination UID, duplicate destination rows from a
- * cached \All copy are dropped, and folder counts are adjusted. Shared by
- * single-message moves and aggregated batch moves so both keep identical
- * intent/UIDPLUS semantics.
- */
-/**
- * Gmail's IMAP virtual folders exclude messages in Trash, but the local cache
- * keeps one row per folder view. After a confirmed move to \Trash those mirror
- * rows are stale and would keep deleted mail visible in the All Mail /
- * Important views until the slow remote-deletion probe sweep happens to reach
- * them. Removes them and adjusts the affected folder counts. Custom-label
- * folder rows are kept: Gmail preserves those labels on trashed messages.
- *
- * Gmail reports \All / \Flagged / \Inbox via LIST special-use but not
- * \Important (the 重要 folder arrives with special_use NULL), so system views
- * are additionally matched by the provider's reserved "[Gmail]/" namespace
- * prefix — the prefix is locale-independent while the folder suffix is not.
- * User labels live at the top level and never match. Shared by the UIDPLUS and
- * pending-reconciliation move paths.
- */
-function removeTrashSystemViewMirrors(
-  db: DatabaseHandle,
-  message: { account_id: string; remote_id_lookup: string | null },
-  messageId: string,
-  agentEvents?: AgentMailEventSink,
-  agentLease?: ReturnType<NonNullable<AgentMailEventSink["acquireLease"]>>,
-): void {
-  if (!message.remote_id_lookup) return;
-  const mirrorRows = db.prepare(`
-    SELECT id, mailbox, uid, flags_json, all_mail_archived
-    FROM messages
-    WHERE account_id = ?
-      AND remote_id_lookup = ?
-      AND id <> ?
-      AND COALESCE(pending_move_destination, '') = ''
-      AND pending_move_state IS NULL
-      AND mailbox IN (
-        SELECT path FROM folders
-        WHERE account_id = ?
-          AND (
-            special_use IN ('\\All', '\\Important', '\\Flagged', '\\Inbox')
-            OR path LIKE '[Gmail]/%'
-          )
-      )
-  `).all(message.account_id, message.remote_id_lookup, messageId, message.account_id) as Array<{
-    id: string;
-    mailbox: string;
-    uid: number;
-    flags_json: string;
-    all_mail_archived: number | null;
-  }>;
-  if (!mirrorRows.length) return;
-  const decreaseFolderCount = db.prepare(`
-    UPDATE folders
-    SET
-      total = CASE WHEN total > 0 THEN total - 1 ELSE 0 END,
-      unseen = CASE WHEN ? = 1 AND unseen > 0 THEN unseen - 1 ELSE unseen END
-    WHERE account_id = ? AND path = ?
-  `);
-  const deleteMirror = db.prepare(`
-    DELETE FROM messages
-    WHERE id = ? AND account_id = ? AND mailbox = ?
-      AND COALESCE(pending_move_destination, '') = ''
-      AND pending_move_state IS NULL
-  `);
-  for (const mirror of mirrorRows) {
-    decreaseFolderCount.run(messageIsUnseen(mirror.flags_json) ? 1 : 0, message.account_id, mirror.mailbox);
-    deleteMirror.run(mirror.id, message.account_id, mirror.mailbox);
-    if (agentEvents && agentLease) {
-      agentEvents.messageDeletedWithinTransaction(agentLease, mirror.id, {
-        reason: "move-mirror-removed",
-        mailbox: mirror.mailbox,
-        uid: mirror.uid,
-        remoteIdLookup: message.remote_id_lookup,
-        flagsJson: mirror.flags_json,
-        allMailArchived: mirror.all_mail_archived,
-      });
-    }
-  }
-}
-
-function applyMoveConfirmedUidPlus(
-  db: DatabaseHandle,
-  messageId: string,
-  message: MoveMessageFields,
-  destination: MoveDestination,
-  destinationUid: number,
-  agentEvents?: AgentMailEventSink,
-  agentLease?: ReturnType<NonNullable<AgentMailEventSink["acquireLease"]>>,
-): void {
-  db.transaction(() => {
-    // Gmail can already have a cached \All copy. UIDPLUS proves this is
-    // the same server message, so preserve the current UI-facing id.
-    const duplicateDestinationRows = db.prepare(`
-      SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
-      FROM messages
-      WHERE account_id = ? AND mailbox = ? AND uid = ? AND id <> ?
-    `).all(message.account_id, destination.path, destinationUid, messageId) as Array<{
-      id: string;
-      mailbox: string;
-      uid: number;
-      remote_id_lookup: string | null;
-      flags_json: string;
-      all_mail_archived: number | null;
-    }>;
-    const removedDestinationRow = db.prepare(`
-      DELETE FROM messages
-      WHERE account_id = ? AND mailbox = ? AND uid = ? AND id <> ?
-    `).run(message.account_id, destination.path, destinationUid, messageId);
-    const updated = db.prepare(`
-      UPDATE messages
-      SET mailbox = ?,
-          uid = ?,
-          all_mail_archived = ?,
-          pending_move_destination = NULL,
-          pending_move_state = NULL,
-          pending_move_candidate_uid = NULL,
-          pending_move_special_use = NULL
-      WHERE id = ? AND pending_move_state = 'intent'
-    `).run(destination.path, destinationUid, destination.special_use === "\\All" ? 1 : null, messageId);
-    if (updated.changes !== 1) throw new Error("Move intent was not available for UIDPLUS reconciliation.");
-    updateFolderCountsForMove(db, message, destination, removedDestinationRow.changes > 0);
-    if (destination.special_use === "\\Trash") {
-      removeTrashSystemViewMirrors(db, message, messageId, agentEvents, agentLease);
-    }
-    if (agentEvents && agentLease) {
-      for (const duplicate of duplicateDestinationRows) {
-        agentEvents.messageDeletedWithinTransaction(agentLease, duplicate.id, {
-          reason: "move-destination-duplicate",
-          mailbox: duplicate.mailbox,
-          uid: duplicate.uid,
-          remoteIdLookup: duplicate.remote_id_lookup,
-          flagsJson: duplicate.flags_json,
-          allMailArchived: duplicate.all_mail_archived,
-        });
-      }
-      agentEvents.messageUpsertedWithinTransaction(agentLease, messageId, {
-        transition: "move-confirmed",
-        mailbox: destination.path,
-        uid: destinationUid,
-        remoteIdLookup: message.remote_id_lookup,
-        flagsJson: message.flags_json,
-        allMailArchived: destination.special_use === "\\All" ? 1 : null,
-      });
-    }
-  })();
-}
-
-/**
- * Persists a provider MOVE on a server without UIDPLUS: the encrypted source
- * row is kept durable at the destination and marked 'confirmed' so a later
- * sync can reconcile the exact opaque remote identifier.
- */
-function applyMovePendingReconciliation(
-  db: DatabaseHandle,
-  messageId: string,
-  message: MoveMessageFields,
-  destination: MoveDestination,
-  agentEvents?: AgentMailEventSink,
-  agentLease?: ReturnType<NonNullable<AgentMailEventSink["acquireLease"]>>,
-): { refreshPending: boolean; locationUnverified: boolean } {
-  db.transaction(() => {
-    const candidateUid = cachedDestinationCandidateUid(
-      db,
-      message.account_id,
-      destination.path,
-      message.remote_id_lookup,
-      messageId,
-    );
-    const duplicateDestinationRows = message.remote_id_lookup
-      ? db.prepare(`
-        SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
-        FROM messages
-        WHERE account_id = ? AND mailbox = ? AND remote_id_lookup = ? AND id <> ?
-      `).all(message.account_id, destination.path, message.remote_id_lookup, messageId) as Array<{
-          id: string;
-          mailbox: string;
-          uid: number;
-          remote_id_lookup: string | null;
-          flags_json: string;
-          all_mail_archived: number | null;
-        }>
-      : [];
-    const removedDestinationRows = message.remote_id_lookup
-      ? db.prepare(`
-        DELETE FROM messages
-        WHERE account_id = ? AND mailbox = ? AND remote_id_lookup = ? AND id <> ?
-      `).run(message.account_id, destination.path, message.remote_id_lookup, messageId)
-      : { changes: 0 };
-    const localPendingUid = pendingMoveUid(db, message.account_id, message.mailbox, message.uid);
-    const confirmed = db.prepare(`
-      UPDATE messages
-      SET uid = ?,
-          pending_move_destination = ?,
-          pending_move_state = 'confirmed',
-          pending_move_candidate_uid = ?,
-          pending_move_special_use = ?,
-          all_mail_archived = ?
-      WHERE id = ? AND pending_move_state = 'intent'
-    `).run(
-      localPendingUid,
-      destination.path,
-      candidateUid,
-      destination.special_use,
-      destination.special_use === "\\All" ? 1 : null,
-      messageId,
-    );
-    if (confirmed.changes !== 1) throw new Error("Move intent was not available for pending reconciliation.");
-    updateFolderCountsForMove(db, message, destination, removedDestinationRows.changes > 0);
-    if (destination.special_use === "\\Trash") {
-      removeTrashSystemViewMirrors(db, message, messageId, agentEvents, agentLease);
-    }
-    if (agentEvents && agentLease) {
-      for (const duplicate of duplicateDestinationRows) {
-        agentEvents.messageDeletedWithinTransaction(agentLease, duplicate.id, {
-          reason: "move-destination-duplicate",
-          mailbox: duplicate.mailbox,
-          uid: duplicate.uid,
-          remoteIdLookup: duplicate.remote_id_lookup,
-          flagsJson: duplicate.flags_json,
-          allMailArchived: duplicate.all_mail_archived,
-        });
-      }
-      agentEvents.messageUpsertedWithinTransaction(agentLease, messageId, {
-        transition: "move-confirmed-pending-reconciliation",
-        mailbox: message.mailbox,
-        uid: localPendingUid,
-        destination: destination.path,
-        destinationSpecialUse: destination.special_use,
-        remoteIdLookup: message.remote_id_lookup,
-        flagsJson: message.flags_json,
-        candidateUid,
-        allMailArchived: destination.special_use === "\\All" ? 1 : null,
-      });
-    }
-  })();
-  return {
-    refreshPending: message.remote_id_lookup !== null,
-    locationUnverified: message.remote_id_lookup === null,
-  };
-}
-
-async function moveMessageCore(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  messageId: string,
-  destination: MoveDestination,
-  accessTokenProvider?: AccountAccessTokenProvider,
-  agentEvents?: AgentMailEventSink,
-  options?: MoveMessageOptions,
-): Promise<MessageMoveResult> {
-  const message = db
-    .prepare("SELECT account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id = ?")
-    .get(messageId) as {
-      account_id: string;
-      mailbox: string;
-      uid: number;
-      flags_json: string;
-      remote_id_lookup: string | null;
-      pending_move_destination: string | null;
-      pending_move_state: string | null;
-  } | undefined;
-  if (!message) throw new Error("Message not found.");
-  const account = accountById(db, message.account_id);
-  if (!account) throw new Error("Account not found.");
-  const agentLease = agentEvents?.acquireLease(message.account_id);
-  if (running.has(message.account_id) || movingAccounts.has(message.account_id)) {
-    throw new Error(PENDING_MOVE_RECONCILIATION_ERROR);
-  }
-
-  const clearMoveIntent = db.prepare(`
-    UPDATE messages
-    SET pending_move_destination = NULL,
-        pending_move_state = NULL,
-        pending_move_candidate_uid = NULL,
-        pending_move_special_use = NULL
-    WHERE id = ? AND pending_move_state = 'intent'
-  `);
-  let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
-  let ownedClient: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
-  let moveAttempted = false;
-  let moveSettled = false;
-  let commandRefused = false;
-  let intentClaimed = false;
-  movingAccounts.add(message.account_id);
-  try {
-    // A stale 'intent' (an earlier MOVE whose response was lost) may never
-    // have reached the provider. Prove whether the source UID is still live
-    // before either retrying the move or leaving reconciliation in charge;
-    // the probe reuses the connection the retry will move on.
-    let moveBlockedError = moveActionBlockedError(message);
-    if (moveBlockedError === PENDING_MOVE_RECONCILIATION_ERROR && isRecoverableStaleMove(message)) {
-      if (!options?.client) {
-        ownedClient = await imapClientForAccount(account, masterKey, accessTokenProvider);
-        await ownedClient.connect();
-      }
-      const recovered = await recoverStaleMoveIntent(db, masterKey, messageId, message, accessTokenProvider, options?.client ?? ownedClient);
-      if (recovered) moveBlockedError = null;
-    }
-    if (moveBlockedError) throw new Error(moveBlockedError);
-
-    const intentCandidateUid = cachedDestinationCandidateUid(
-      db,
-      message.account_id,
-      destination.path,
-      message.remote_id_lookup,
-      messageId,
-    );
-
-    // The intent is durable before any provider command. If the process exits
-    // after the command is accepted but before the response is persisted, sync
-    // can either prove the source still exists or reconcile the exact target.
-    const beganIntent = db.prepare(`
-      UPDATE messages
-      SET pending_move_destination = ?,
-          pending_move_state = 'intent',
-          pending_move_candidate_uid = ?,
-          pending_move_special_use = ?
-      WHERE id = ? AND COALESCE(pending_move_destination, '') = ''
-    `).run(destination.path, intentCandidateUid, destination.special_use, messageId);
-    if (beganIntent.changes !== 1) throw new Error(PENDING_MOVE_RECONCILIATION_ERROR);
-    intentClaimed = true;
-
-    if (options?.client) {
-      client = options.client;
-    } else {
-      if (!ownedClient) {
-        ownedClient = await imapClientForAccount(account, masterKey, accessTokenProvider);
-        await ownedClient.connect();
-      }
-      client = ownedClient;
-    }
-    const lock = await client.getMailboxLock(message.mailbox);
-    try {
-      moveAttempted = true;
-      const moved = await client.messageMove(message.uid, destination.path, { uid: true });
-      if (!moved) {
-        commandRefused = true;
-        clearMoveIntent.run(messageId);
-        throw new Error("邮件服务器未确认移动操作，请稍后重试。");
-      }
-      const destinationUid = moved.uidMap?.get(message.uid);
-      if (typeof destinationUid === "number" && Number.isSafeInteger(destinationUid) && destinationUid > 0) {
-        applyMoveConfirmedUidPlus(db, messageId, message, destination, destinationUid, agentEvents, agentLease);
-        moveSettled = true;
-        return { accountId: message.account_id, destination: destination.path, refreshPending: false, uid: destinationUid };
-      }
-    } finally {
-      lock.release();
-    }
-    // Servers without UIDPLUS do not identify the destination UID. Keep the
-    // encrypted source row durable and expose its effective destination until
-    // a later sync can reconcile the exact opaque remote identifier.
-    const reconciled = applyMovePendingReconciliation(db, messageId, message, destination, agentEvents, agentLease);
-    moveSettled = true;
-    // Without a stable server identifier, the confirmed move is still real,
-    // but the local cache cannot safely bind its preserved payload to a target
-    // UID. Keep it readable at the confirmed destination and block operations
-    // that would otherwise address the old, local-only UID.
-    return {
-      accountId: message.account_id,
-      destination: destination.path,
-      refreshPending: reconciled.refreshPending,
-      ...(reconciled.locationUnverified ? { locationUnverified: true } : {}),
-    };
-  } catch (error) {
-    if (moveSettled) throw error;
-    if (!moveAttempted || commandRefused) {
-      // An unclaimed intent (recovery probe, failed claim or failed connect)
-      // must be left untouched: reconciliation owns it.
-      if (intentClaimed) clearMoveIntent.run(messageId);
-      throw error;
-    }
-    // A transport failure after MOVE was issued is ambiguous. Preserve the
-    // intent and start reconciliation instead of claiming either outcome.
-    return { accountId: message.account_id, destination: destination.path, refreshPending: true, uncertain: true };
-  } finally {
-    movingAccounts.delete(message.account_id);
-    if (ownedClient?.usable) await ownedClient.logout().catch(() => undefined);
-  }
-}
-
-export type BatchMessageMoveOutcome = {
-  updated: number;
-  failed: number;
-  failures: Array<{ id: string; message: string }>;
-  pendingAccounts: Set<string>;
-};
-
-const knownLocalMoveErrors = new Set([
-  "Message not found.",
-  "Account not found.",
-  "邮件服务器未确认移动操作，请稍后重试。",
-  "这个邮箱没有提供可用的归档文件夹。",
-  "这个邮箱没有提供可用的废纸篓文件夹。",
-  "目标文件夹不存在或不可用。",
-  "邮件已经在该文件夹中。",
-  PENDING_MOVE_RECONCILIATION_ERROR,
-  MOVE_LOCATION_UNVERIFIED_ERROR,
-]);
-
-function moveErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return knownLocalMoveErrors.has(message) ? message : friendlyMailError(error);
-}
-
-/**
- * Moves every entry of one (account, source mailbox) group with a single
- * provider MOVE command (RFC 6851 message sets). The provider round-trip —
- * the dominant cost of a serial batch — drops from N commands to 1; intent
- * claiming and UIDPLUS reconciliation still run per message, sharing the
- * exact same persistence helpers as single-message moves.
- *
- * Per-message outcomes: moved (UIDPLUS-confirmed or pending reconciliation),
- * blocked (existing intent or a running sync), refused (the provider rejected
- * the whole message set — claimed intents are cleared), or ambiguous
- * (transport failure after the command was issued — intents are preserved for
- * sync's self-healing reconciliation, mirroring the single-move uncertain
- * path).
- */
-async function moveMessagesInOneCommand(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  entries: Array<MoveMessageFields & { id: string }>,
-  destination: MoveDestination,
-  accessTokenProvider: AccountAccessTokenProvider | undefined,
-  agentEvents: AgentMailEventSink | undefined,
-  client: Awaited<ReturnType<typeof imapClientForAccount>>,
-): Promise<{ updated: number; failures: Array<{ id: string; message: string }>; pendingAccounts: Set<string> }> {
-  const outcome = { updated: 0, failures: [] as Array<{ id: string; message: string }>, pendingAccounts: new Set<string>() };
-  const accountId = entries[0]?.account_id;
-  if (!accountId || entries.length === 0) return outcome;
-  const agentLease = agentEvents?.acquireLease(accountId);
-  if (running.has(accountId) || movingAccounts.has(accountId)) {
-    for (const entry of entries) outcome.failures.push({ id: entry.id, message: PENDING_MOVE_RECONCILIATION_ERROR });
-    return outcome;
-  }
-  movingAccounts.add(accountId);
-  const clearMoveIntent = db.prepare(`
-    UPDATE messages
-    SET pending_move_destination = NULL,
-        pending_move_state = NULL,
-        pending_move_candidate_uid = NULL,
-        pending_move_special_use = NULL
-    WHERE id = ? AND pending_move_state = 'intent'
-  `);
-  const claimed: Array<MoveMessageFields & { id: string }> = [];
-  let commandAttempted = false;
-  try {
-    for (const entry of entries) {
-      // A stale 'intent' (an earlier MOVE whose response was lost) may never
-      // have reached the provider; probe the source UID on the shared
-      // connection before either retrying or leaving reconciliation in charge.
-      let moveBlockedError = moveActionBlockedError(entry);
-      if (moveBlockedError === PENDING_MOVE_RECONCILIATION_ERROR && isRecoverableStaleMove(entry)) {
-        const recovered = await recoverStaleMoveIntent(db, masterKey, entry.id, entry, accessTokenProvider, client);
-        if (recovered) moveBlockedError = null;
-      }
-      if (moveBlockedError) {
-        outcome.failures.push({ id: entry.id, message: moveBlockedError });
-        continue;
-      }
-      const intentCandidateUid = cachedDestinationCandidateUid(
-        db,
-        accountId,
-        destination.path,
-        entry.remote_id_lookup,
-        entry.id,
-      );
-      // The intent is durable before the provider command; if the process
-      // exits after the command is accepted but before the response is
-      // persisted, sync can either prove the source still exists or reconcile
-      // the exact target.
-      const beganIntent = db.prepare(`
-        UPDATE messages
-        SET pending_move_destination = ?,
-            pending_move_state = 'intent',
-            pending_move_candidate_uid = ?,
-            pending_move_special_use = ?
-        WHERE id = ? AND COALESCE(pending_move_destination, '') = ''
-      `).run(destination.path, intentCandidateUid, destination.special_use, entry.id);
-      if (beganIntent.changes !== 1) {
-        outcome.failures.push({ id: entry.id, message: PENDING_MOVE_RECONCILIATION_ERROR });
-        continue;
-      }
-      claimed.push(entry);
-    }
-    if (claimed.length === 0) return outcome;
-
-    const lock = await client.getMailboxLock(claimed[0]!.mailbox);
-    try {
-      commandAttempted = true;
-      const moved = await client.messageMove(claimed.map((entry) => entry.uid), destination.path, { uid: true });
-      if (!moved) {
-        // The provider refused the whole message set. Every claimed intent was
-        // recorded before the command and never executed, so clear them all.
-        for (const entry of claimed) clearMoveIntent.run(entry.id);
-        for (const entry of claimed) outcome.failures.push({ id: entry.id, message: "邮件服务器未确认移动操作，请稍后重试。" });
-        return outcome;
-      }
-      for (const entry of claimed) {
-        try {
-          const destinationUid = moved.uidMap?.get(entry.uid);
-          if (typeof destinationUid === "number" && Number.isSafeInteger(destinationUid) && destinationUid > 0) {
-            applyMoveConfirmedUidPlus(db, entry.id, entry, destination, destinationUid, agentEvents, agentLease);
-          } else {
-            const reconciled = applyMovePendingReconciliation(db, entry.id, entry, destination, agentEvents, agentLease);
-            if (reconciled.refreshPending) outcome.pendingAccounts.add(accountId);
-          }
-          outcome.updated += 1;
-        } catch (error) {
-          outcome.failures.push({ id: entry.id, message: moveErrorMessage(error) });
-        }
-      }
-    } finally {
-      lock.release();
-    }
-  } catch (error) {
-    const claimedIds = new Set(claimed.map((entry) => entry.id));
-    if (!commandAttempted) {
-      // The command never reached the provider (e.g. the mailbox lock could
-      // not be acquired). Mirror the single-move path: clear every claimed
-      // intent and report the failure.
-      for (const entry of claimed) clearMoveIntent.run(entry.id);
-      for (const entry of entries) {
-        outcome.failures.push({ id: entry.id, message: moveErrorMessage(error) });
-      }
-    } else {
-      // A transport failure after the MOVE was issued is ambiguous for every
-      // claimed intent: preserve them and let sync's self-healing
-      // reconciliation decide. Entries that never claimed an intent failed
-      // before the command.
-      for (const entry of entries) {
-        if (claimedIds.has(entry.id)) {
-          outcome.updated += 1;
-          outcome.pendingAccounts.add(accountId);
-        } else {
-          outcome.failures.push({ id: entry.id, message: moveErrorMessage(error) });
-        }
-      }
-    }
-  } finally {
-    movingAccounts.delete(accountId);
-  }
-  return outcome;
-}
-
-/**
- * Moves many messages with one IMAP connection per account and one MOVE
- * command per (account, source mailbox). Connection setup (not the MOVE
- * command itself) dominated the old serial batch: an 8-message delete needed
- * ~8 connects, and the message set still sent 8 commands. Sharing the client
- * and aggregating UIDs turns that into 1 connect + 1 command. Per-message
- * intent/UIDPLUS semantics are unchanged; failures are reported individually
- * instead of being swallowed.
- */
-export async function batchMoveMessages(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  ids: string[],
-  target: MessageMoveTarget,
-  accessTokenProvider?: AccountAccessTokenProvider,
-  agentEvents?: AgentMailEventSink,
-): Promise<BatchMessageMoveOutcome> {
-  const outcome: BatchMessageMoveOutcome = {
-    updated: 0,
-    failed: 0,
-    failures: [],
-    pendingAccounts: new Set(),
-  };
-  if (ids.length === 0) return outcome;
-  // Resolve every row up front so each group shares one destination lookup
-  // and one provider MOVE command.
-  const rows = db.prepare(`
-    SELECT id, account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state
-    FROM messages
-    WHERE id IN (${ids.map(() => "?").join(", ")})
-  `).all(...ids) as Array<MoveMessageFields & { id: string }>;
-  const rowsById = new Map(rows.map((row) => [row.id, row]));
-  const groups = new Map<string, Array<MoveMessageFields & { id: string }>>();
-  for (const id of ids) {
-    const row = rowsById.get(id);
-    if (!row) {
-      outcome.failed += 1;
-      outcome.failures.push({ id, message: "Message not found." });
-      continue;
-    }
-    const key = `${row.account_id}\u0000${row.mailbox}`;
-    const group = groups.get(key);
-    if (group) group.push(row);
-    else groups.set(key, [row]);
-  }
-  const clientsByAccount = new Map<string, Awaited<ReturnType<typeof imapClientForAccount>>>();
-  try {
-    for (const group of groups.values()) {
-      const accountId = group[0]!.account_id;
-      try {
-        const account = accountById(db, accountId);
-        if (!account) {
-          for (const entry of group) {
-            outcome.failed += 1;
-            outcome.failures.push({ id: entry.id, message: "Account not found." });
-          }
-          continue;
-        }
-        const destination = resolveMoveDestination(db, accountId, target);
-        if (!destination) {
-          const unavailable = moveTargets[target].unavailableMessage;
-          for (const entry of group) {
-            outcome.failed += 1;
-            outcome.failures.push({ id: entry.id, message: unavailable });
-          }
-          continue;
-        }
-        if (destination.path === group[0]!.mailbox) {
-          // Idempotent no-op: the whole group already lives in the target
-          // folder (e.g. a second delete from the Trash view). Count every
-          // entry as moved so the renderer clears them from the view.
-          outcome.updated += group.length;
-          continue;
-        }
-        let client = clientsByAccount.get(accountId);
-        if (!client || !client.usable) {
-          if (client) await client.logout().catch(() => undefined);
-          client = await imapClientForAccount(account, masterKey, accessTokenProvider);
-          await client.connect();
-          clientsByAccount.set(accountId, client);
-        }
-        // The account-level write slot serializes this group behind any move
-        // already in flight on the same account instead of failing the whole
-        // group with a busy error.
-        const groupOutcome = await withAccountWriteLocks([accountId], () =>
-          moveMessagesInOneCommand(db, masterKey, group, destination, accessTokenProvider, agentEvents, client),
-        );
-        outcome.updated += groupOutcome.updated;
-        outcome.failed += groupOutcome.failures.length;
-        outcome.failures.push(...groupOutcome.failures);
-        for (const pending of groupOutcome.pendingAccounts) outcome.pendingAccounts.add(pending);
-      } catch (error) {
-        // Fall back to per-message moves so a group-level failure (e.g. a
-        // guard error) keeps the previous per-message granularity.
-        for (const entry of group) {
-          try {
-            const result = await moveMessage(db, masterKey, entry.id, target, accessTokenProvider, agentEvents, { client: clientsByAccount.get(accountId) });
-            outcome.updated += 1;
-            if (result.refreshPending) outcome.pendingAccounts.add(accountId);
-          } catch (entryError) {
-            outcome.failed += 1;
-            outcome.failures.push({ id: entry.id, message: moveErrorMessage(entryError) });
-          }
-        }
-      }
-    }
-  } finally {
-    for (const client of clientsByAccount.values()) {
-      if (client.usable) await client.logout().catch(() => undefined);
-    }
-  }
-  return outcome;
-}
+// Move operations are in sync-moves.ts; re-export for backward compatibility.
+export {
+  type BatchMessageMoveOutcome,
+  type MessageMoveResult,
+  type MessageMoveTarget,
+  batchMoveMessages,
+  moveMessage,
+  moveMessageToFolder,
+  resolveMoveDestination,
+} from "./sync-moves.js";

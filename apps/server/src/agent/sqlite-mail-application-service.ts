@@ -22,6 +22,8 @@ import {
   type OutboundSubmissionRequest,
 } from "../outbox.js";
 import { syncAccount, updateMessageFlags, moveMessage } from "../sync.js";
+import { MESSAGE_FTS_TABLE } from "../message-search.js";
+import { redactUrls } from "../message-links.js";
 import type { AccountRecord } from "../types.js";
 import type { AgentMailStateEvents } from "./mail-state-events.js";
 import type {
@@ -36,6 +38,8 @@ import type {
   MailListResult,
   MailMessageDetail,
   MailMessageView,
+  MailSearchQuery,
+  MailSearchResult,
   PreparedMailSubmission,
 } from "./mail-application-service.js";
 
@@ -92,6 +96,39 @@ function rowFlags(row: Record<string, unknown>): string[] {
   } catch {
     return [];
   }
+}
+
+/** Search excerpt cap — generous enough to carry a useful summary, bounded so a
+ * long body never floods the model context. URLs are redacted to a neutral
+ * sentinel, then rendered with a localized label by the tool output. */
+const SEARCH_SNIPPET_MAX_LENGTH = 300;
+function searchSnippet(value: string, keyword: string): string {
+  const compact = redactUrls(value.replace(/\s+/g, " ").trim());
+  if (compact.length <= SEARCH_SNIPPET_MAX_LENGTH) return compact;
+  const needle = keyword.trim().toLocaleLowerCase("en-US");
+  const pos = compact.toLocaleLowerCase("en-US").indexOf(needle);
+  if (pos < 0) {
+    // Keyword not found verbatim (e.g. split across punctuation); take the head.
+    return `${compact.slice(0, SEARCH_SNIPPET_MAX_LENGTH).trimEnd()}…`;
+  }
+  // Center the excerpt on the first hit instead of the body head, so the Agent
+  // sees the relevant context rather than noise from the message opening.
+  const BEFORE = Math.floor(SEARCH_SNIPPET_MAX_LENGTH * 0.4);
+  const start = Math.max(0, pos - BEFORE);
+  const end = Math.min(compact.length, start + SEARCH_SNIPPET_MAX_LENGTH);
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < compact.length ? "…" : "";
+  return `${prefix}${compact.slice(start, end).trim()}${suffix}`;
+}
+
+/**
+ * FTS5 MATCH phrase from a free-text keyword. Wrapping in double quotes makes
+ * embedded spaces and reserved operators literal; the trigram tokenizer then
+ * performs substring matching, which is the same fuzzy semantics the existing
+ * message search relies on.
+ */
+function ftsPhraseQuery(keyword: string): string {
+  return `"${keyword.trim().replace(/"/g, '""')}"`;
 }
 
 /**
@@ -156,6 +193,25 @@ export class SqliteMailApplicationService implements MailApplicationService {
       from: { name: payload.fromName, address: payload.fromAddress },
       sentAt,
       snippet: payload.snippet,
+      flags: rowFlags(row),
+      hasAttachments: row.has_attachments === 1 || row.has_attachments === true,
+    };
+  }
+
+  /** A search result view whose excerpt is a fresh, redacted, keyword-centred
+   * snippet (up to SEARCH_SNIPPET_MAX_LENGTH) cut from the raw body rather than
+   * the short stored preview, so the Agent gets a useful summary in one round. */
+  private searchMessageView(row: MessageRowWithAccount, keyword: string): MailMessageView {
+    const payload = messagePayloadForRow(row, this.options.masterKey);
+    return {
+      id: row.id,
+      accountId: row.account_id,
+      mailbox: row.mailbox,
+      threadId: payload.inReplyTo ?? payload.messageId ?? null,
+      subject: payload.subject,
+      from: { name: payload.fromName, address: payload.fromAddress },
+      sentAt: rowString(row, "sent_at"),
+      snippet: searchSnippet(payload.textBody || payload.snippet || "", keyword),
       flags: rowFlags(row),
       hasAttachments: row.has_attachments === 1 || row.has_attachments === true,
     };
@@ -317,6 +373,76 @@ export class SqliteMailApplicationService implements MailApplicationService {
     return { items: page, ...(rows.length > limit ? { nextCursor: String(safeOffset + limit) } : {}) };
   }
 
+  async searchMessages(context: MailApplicationContext, query: MailSearchQuery): Promise<MailSearchResult> {
+    const requestedAccounts = query.accountIds.length ? unique(query.accountIds) : this.authorizedAccountIds(context);
+    for (const accountId of requestedAccounts) this.assertAccount(context, accountId);
+    const messageIds = this.authorizedMessageIds(context);
+    if (messageIds !== undefined && !messageIds.length) return { items: [], total: 0, truncated: false };
+    const keyword = trimmed(query.query);
+    if (!keyword) return { items: [], total: 0, truncated: false };
+    const where: string[] = [
+      `${MESSAGE_FTS_TABLE} MATCH ?`,
+      `m.account_id IN (${placeholders(requestedAccounts)})`,
+    ];
+    const params: unknown[] = [ftsPhraseQuery(keyword), ...requestedAccounts];
+    if (messageIds !== undefined) {
+      where.push(`m.id IN (${placeholders(messageIds)})`);
+      params.push(...messageIds);
+    }
+    // Stored timestamps use UTC ISO; normalize any offset-carrying bounds to
+    // UTC so text comparison follows real time (see listMessages). Newest-first
+    // ordering keeps the search responsive to "latest" intent within a range.
+    const afterIso = query.after ? utcIsoOf(query.after) : undefined;
+    const beforeIso = query.before ? utcIsoOf(query.before) : undefined;
+    // A bounded window keeps "latest" queries responsive and stops the archive
+    // tail from dominating. The effective lower bound is reported on the result
+    // so callers know how far back the search actually went.
+    let searchedFrom: string | null = null;
+    if (afterIso) {
+      where.push("COALESCE(m.sent_at, m.created_at) >= ?");
+      params.push(afterIso);
+      searchedFrom = afterIso;
+    } else if (!beforeIso) {
+      const ninetyDaysAgo = new Date();
+      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+      searchedFrom = ninetyDaysAgo.toISOString();
+      where.push("COALESCE(m.sent_at, m.created_at) >= ?");
+      params.push(searchedFrom);
+    }
+    const limit = Math.max(1, Math.min(100, Math.floor(query.limit || 10)));
+    const whereSql = where.join(" AND ");
+    const total = Number((this.options.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM ${MESSAGE_FTS_TABLE} f
+      JOIN messages m ON m.id = f.message_id
+      WHERE ${whereSql}
+    `).get(...params) as { count: number }).count);
+    const rows = this.options.db.prepare(`
+      SELECT m.*, a.email AS account_email, a.provider_name
+      FROM ${MESSAGE_FTS_TABLE} f
+      JOIN messages m ON m.id = f.message_id
+      JOIN accounts a ON a.id = m.account_id
+      WHERE ${whereSql}
+      ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id
+      LIMIT ?
+    `).all(...params, limit + 1) as MessageRowWithAccount[];
+    const page = rows.slice(0, limit).map((row) => this.searchMessageView(row, keyword));
+    // Report the newest timestamp available locally so a caller can tell whether
+    // the "latest" mail is actually synced yet.
+    const newestScope: string[] = [`m.account_id IN (${placeholders(requestedAccounts)})`];
+    const newestParams: unknown[] = [...requestedAccounts];
+    if (messageIds !== undefined) {
+      newestScope.push(`m.id IN (${placeholders(messageIds)})`);
+      newestParams.push(...messageIds);
+    }
+    const newestLocalAt = (this.options.db.prepare(`
+      SELECT MAX(COALESCE(m.sent_at, m.created_at)) AS at
+      FROM messages m
+      WHERE ${newestScope.join(" AND ")}
+    `).get(...newestParams) as { at: string | null }).at;
+    return { items: page, total, truncated: rows.length > limit, searchedFrom, newestLocalAt };
+  }
+
   async getMessage(context: MailApplicationContext, messageId: string): Promise<MailMessageDetail | undefined> {
     const row = this.row(context, messageId);
     return row ? this.messageDetail(row) : undefined;
@@ -331,6 +457,12 @@ export class SqliteMailApplicationService implements MailApplicationService {
     // bounded batches instead of truncating at a fixed row limit.
     const matches: MessageRowWithAccount[] = [];
     const batchSize = 1_000;
+    // Per-row header decryption is synchronous AES work, and this server runs
+    // inside the Electron main process: an unbroken pass over a large mailbox
+    // freezes the whole window until the scan completes. Yield to the event
+    // loop every few rows so the app stays responsive while the scan proceeds.
+    const decryptYieldBatch = 64;
+    let decryptedInBatch = 0;
     for (let batchOffset = 0; ; batchOffset += batchSize) {
       const rows = this.options.db.prepare(`
         SELECT m.*, a.email AS account_email, a.provider_name
@@ -344,6 +476,10 @@ export class SqliteMailApplicationService implements MailApplicationService {
         const payload = messagePayloadForRow(row, this.options.masterKey);
         if (payload.messageId === threadId || payload.inReplyTo === threadId || (payload.references ?? []).includes(threadId)) {
           matches.push(row);
+        }
+        decryptedInBatch += 1;
+        if (decryptedInBatch % decryptYieldBatch === 0) {
+          await new Promise<void>((resolve) => setImmediate(() => resolve()));
         }
       }
       if (rows.length < batchSize) break;

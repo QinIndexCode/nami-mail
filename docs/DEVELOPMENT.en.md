@@ -16,7 +16,7 @@ Install dependencies from the repository root:
 npm.cmd ci
 ```
 
-Copy [`.env.example`](../.env.example) to `.env` and change only the development-service configuration you need. Installed builds read only limited OAuth public configuration from `nami-mail.env`; see the [README](../README.en.md#oauth-configuration) for the complete rules.
+Copy [`.env.example`](../.env.example) to `.env` and change only the development-service configuration you need. Installed builds read only limited OAuth public configuration from `nami-mail.env`; see the [Email Provider Setup](EMAIL-PROVIDERS.en.md) for the complete OAuth rules.
 
 ## Run Modes
 

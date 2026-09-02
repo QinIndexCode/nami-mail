@@ -9,9 +9,9 @@ import type { Account } from "./types";
 import { setAvatar, useCustomAvatar } from "./avatarStore";
 import { AvatarEditor } from "./AvatarEditor";
 import { ManagementDialogShell } from "./ManagementDialogs";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
-import { useStablePagedListHeight } from "./useStablePagedListHeight";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
+import { useStablePagedListHeight } from "./hooks/useStablePagedListHeight";
 
 type Notice = { kind: "success" | "error"; message: string } | null;
 

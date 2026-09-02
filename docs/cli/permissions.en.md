@@ -32,8 +32,6 @@ Error codes consistent with the current model include:
 - `BROKER_REPLAY_DETECTED` / `BROKER_COUNTER_INVALID` / `BROKER_SECURITY_UNAVAILABLE`: Broker security checks failed.
 - `HOST_UNAVAILABLE`, `UPDATE_IN_PROGRESS`, `PAIRING_REQUIRED` / `PAIRING_REVOKED`: host, update, or pairing state issues.
 
-The `READ_ONLY` error code is no longer used.
-
 ## Account scope
 
 A pairing record may permit all accounts, selected accounts, or no accounts. Every request account ID must belong to that scope:

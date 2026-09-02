@@ -20,6 +20,7 @@ export type StoredAttachmentMetadata = {
   size: number;
   related: boolean;
   disposition: "attachment" | "inline";
+  contentId?: string;
 };
 
 /**
