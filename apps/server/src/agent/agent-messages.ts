@@ -14,8 +14,8 @@ import type { SupportedLocale } from "../localization.js";
 /** Agent message keys — each maps to a set of locale-specific translations. */
 export const agentMessageCatalog = {
   "status.preparing_context": {
-    "zh-CN": "正在准备对话上下文…",
-    "en-US": "Preparing conversation context…",
+    "zh-CN": "思考中…",
+    "en-US": "Thinking…",
   },
   "status.cloud_not_authorized": {
     "zh-CN": "当前云端模型未获邮件内容授权，本次不会发送任何邮件上下文。",

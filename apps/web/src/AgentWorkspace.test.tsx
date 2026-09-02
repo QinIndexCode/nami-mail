@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AgentMessageRow, AgentToolList, applyConfirmationDecision, dedupeCitations, expireConfirmation, interruptAssistantMessage, lastMessageIsStreaming, lastMessageIsUnanswered, mergeRevokedMarks } from "./AgentWorkspace";
+import { AgentMessageRow } from "./agent/AgentMessageRow";
+import { AgentToolList } from "./agent/AgentToolCard";
+import { applyConfirmationDecision, dedupeCitations, expireConfirmation, interruptAssistantMessage, lastMessageIsStreaming, lastMessageIsUnanswered, mergeRevokedMarks } from "./agent/agent-utils";
 import { I18nProvider, translate } from "./i18n";
 import type { AgentCitation, AgentConfirmation, AgentConversation, AgentMessage, AgentToolActivity } from "./agentTypes";
 

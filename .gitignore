@@ -38,9 +38,34 @@ test-results/
 gui-test-screenshots/
 build/namimail.cmd
 build/namimail-path.ps1
-build/nsis-plugin/
-build/x86-unicode/
 build/nami-update-trust.json.package-win-original
 scripts/*.png
 .playwright-mcp/
 .zcode/
+
+# One-off diagnostics from the window-bar / icon investigation — kept on disk,
+# intentionally not version-controlled.
+scripts/*.err
+scripts/probe*.mjs
+scripts/diag-fixed.mjs
+scripts/reload-page.mjs
+scripts/sweep-settings-close.mjs
+scripts/list-targets.mjs
+scripts/collect-windowbar-layer.mjs
+scripts/verify-windowbar-block.mjs
+scripts/check-window-controls.mjs
+scripts/check-dist-css*.ps1
+scripts/check-web-dist.ps1
+scripts/cleanup*.ps1
+scripts/cleanup2.ps1
+scripts/cleanup3.ps1
+scripts/kill-all.ps1
+scripts/launch-electron.ps1
+scripts/fix-*.ps1
+scripts/wait-*.ps1
+scripts/wait-dom.mjs
+scripts/wait-vite.ps1
+scripts/build-web.ps1
+scripts/build-web-desktop.ps1
+scripts/build-contracts.ps1
+scripts/web-build.log

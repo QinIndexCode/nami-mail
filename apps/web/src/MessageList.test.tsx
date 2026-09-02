@@ -276,6 +276,23 @@ describe("row quick actions reveal", () => {
     expect(stylesheet).toContain(".message-item.selection-mode+.row-quick-actions");
   });
 
+  it("keeps selection-mode content clear of the checkbox in compact density", () => {
+    // The compact-density `.message-item` shorthand `padding:7px 10px` has a
+    // HIGHER specificity (0,3,0) than `.message-item.selection-mode` (0,2,0),
+    // so it resets padding-left to 10px and the absolute-positioned checkbox
+    // (left:6px) overlaps the avatar. The dedicated compact selection-mode
+    // rule (0,4,0) must restore the 34px gutter — the base non-compact rule
+    // alone cannot win against the compact shorthand regardless of order.
+    expect(stylesheet).toContain(".message-item.selection-mode\n{\npadding-left:34px");
+    const compactItem = stylesheet.match(/:root\[data-density=compact\] \.message-item\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(compactItem).toContain("padding:7px 10px");
+    const compactSelection = stylesheet.match(/:root\[data-density=compact\] \.message-item\.selection-mode\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(compactSelection).toContain("padding-left:34px");
+    // The compact rule must come after the shorthand so it is not re-overridden.
+    expect(stylesheet.indexOf(":root[data-density=compact] .message-item.selection-mode"))
+      .toBeGreaterThan(stylesheet.indexOf(":root[data-density=compact] .message-item\n{"));
+  });
+
   it("styles the quick actions with the app-wide IconButton language (10px radius, border feedback, .16s transitions)", () => {
     // The reader uses 32px buttons with border-radius:10px, a transparent
     // 1px border that lights up on hover, and .16s transitions; the row

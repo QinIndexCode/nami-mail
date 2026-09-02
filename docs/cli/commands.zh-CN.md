@@ -50,12 +50,14 @@ namimail <组> <操作> [选项]
 
 ## 默认拒绝的写命令（仅当 CLI 权限为只读时）
 
-下列 7 个写命令在 CLI 权限为 `read-only`（默认档位）时返回 `PERMISSION_DENIED`，请求不会转发给 Broker：
+下列写命令在 CLI 权限为 `read-only`（默认档位）时返回 `PERMISSION_DENIED`，请求不会转发给 Broker：
 
 ```text
 draft create | draft update | draft delete
 messages move | messages set-flag | messages send
-mail reply
+mail reply | mail forward | mail send
+mail archive | mail trash | mail mark-read | mail mark-unread
+rag rebuild
 ```
 
 在桌面设置中把 CLI 权限提升为"操作前确认"（`send-confirmed`）后，这些命令可用，但每次写操作都会在 Nami Mail 桌面端弹出可见确认；确认绑定不可变内容摘要、账户代际和一次性 token，必须由用户在界面中批准。`--yes` 不是授权令牌——解析器对外部命令一律拒绝 `--yes`，因此无法绕过确认。提升为"完全自动"（`full-access`）后自动执行，不再逐项确认，但范围与审计仍然生效。

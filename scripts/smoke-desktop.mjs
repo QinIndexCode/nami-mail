@@ -338,7 +338,7 @@ try {
   assert.equal(rendererAfterSingleInstance.desktopSingleInstance?.serviceUrl, primaryServiceUrl, "A second launch must reuse the primary local service.");
   report.desktopSingleInstance = rendererAfterSingleInstance.desktopSingleInstance;
   assert.equal(renderer.desktopWindowBar, true, "The desktop renderer must draw the app-owned window bar.");
-  assert.equal(renderer.desktopWindowBarBlend?.matchesSidebar, true, "The window bar must share the sidebar's translucent surface instead of drawing an opaque strip.");
+  assert.equal(renderer.desktopWindowBarBlend?.isTransparent, true, "The window bar must be fully transparent so it blends into the surface and never draws an opaque strip.");
   assert.equal(renderer.desktopWindowBarBlend?.hasBottomSeparator, false, "The window bar must not be framed as a standalone strip by a bottom border.");
   assert.equal(renderer.desktopWindowBarLayout?.barPosition, "absolute", "The window bar must float over the columns as the frameless drag strip.");
   assert.equal(renderer.desktopWindowBarLayout?.shellTop, 0, "The mail shell must reach the window's top edge.");
@@ -358,13 +358,14 @@ try {
   assert.ok((renderer.desktopWindowBarLayout?.railButtonTop ?? 0) >= 78, "The icon rail's first button must sit below the floating window bar.");
   assert.equal(renderer.desktopWindowBarLayout?.columnHeaderHeight, 66, "The column header must keep its compact height so its content moves up.");
   assert.ok((renderer.desktopWindowBarLayout?.columnActiveTop ?? 0) < 42, "The header's first row must sit inside the floating bar zone after the move-up.");
-  assert.ok(
-    (renderer.desktopWindowBarLayout?.barHeight ?? 0) < (renderer.desktopWindowBarLayout?.columnActiveTop ?? 0),
-    "The drag strip must sit above the header's first row so the moved-up header stays clickable.",
+  assert.equal(
+    renderer.desktopWindowBarLayout?.barHeight,
+    66,
+    "The window control overlay must span the full 66px header row height.",
   );
   const railBorderLeftColor = renderer.desktopWindowBarLayout?.railBorderLeftColor ?? "";
   assert.notEqual(railBorderLeftColor, "rgba(0, 0, 0, 0)", "The rail's edge line must draw below the header, not stop at the floating controls.");
-  assert.equal(renderer.desktopWindowBarLayout?.railBackgroundColor, "rgba(0, 0, 0, 0)", "The rail must stay transparent over the wallpaper like the other panels.");
+  assert.equal(renderer.desktopWindowBarLayout?.railBackgroundMatchesSidebar, true, "The rail must share the sidebar's translucent surface so the whole chrome circle stays one color over the wallpaper.");
   assert.ok(
     Math.abs((renderer.desktopWindowBarLayout?.railTop ?? -1) - (renderer.desktopWindowBarLayout?.columnHeaderHeight ?? -1)) < 1,
     "The rail must start at the column header's bottom edge without a computed offset.",
@@ -373,8 +374,8 @@ try {
   const windowWidth = renderer.desktopWindowBarLayout?.windowWidth;
   if (headerRight != null && windowWidth != null) {
     assert.ok(
-      Math.abs(headerRight - windowWidth) < 1,
-      `The header row must end exactly at the window's right edge (header right ${headerRight}px vs window ${windowWidth}px).`,
+      Math.abs(headerRight - (windowWidth - 144)) < 1,
+      `The header row must stop 144px short of the window's right edge so the control overlay owns that corner (header right ${headerRight}px vs window ${windowWidth}px).`,
     );
   }
   assert.ok(
@@ -401,7 +402,10 @@ try {
   }
   const headerControlsGap = renderer.desktopWindowBarLayout?.headerActionsGapToControls;
   if (headerControlsGap != null) {
-    assert.ok(headerControlsGap >= 10 && headerControlsGap <= 14, `The header must sit one icon gap away from the window controls (got ${headerControlsGap}px).`);
+    assert.ok(
+      Math.abs(headerControlsGap - 17.33) < 1,
+      `The header must sit one icon gap away from the window control overlay (got ${headerControlsGap}px, expected ~17.33px).`,
+    );
   }
   assert.equal(renderer.desktopWindowControls, true, "The frameless window bar must carry its own controls (or the macOS traffic-light slot).");
   assert.equal(renderer.desktopWallpaper?.present, true, "The desktop workspace must render the configured wallpaper layer.");

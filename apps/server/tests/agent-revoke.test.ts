@@ -1,9 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { EncryptedConversationStore } from "../src/agent/conversations.js";
 import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
 import { applyAgentStoreSchema } from "../src/agent/schema.js";
+import { AgentService } from "../src/agent-service.js";
+import { AgentSourceEventOutbox } from "../src/agent/source-events.js";
 
 function insertAccount(db: DatabaseHandle, id: string): void {
   db.prepare(`
@@ -93,5 +95,90 @@ describe("conversation message revocation", () => {
     }
     expect(latest.get("user-1")).toBe(false);
     expect(latest.get("assistant-1")).toBe(true);
+  });
+});
+
+describe("client-supplied message id and mid-session revocation", () => {
+  function serviceFixture() {
+    const db = openDatabase(":memory:");
+    const masterKey = randomBytes(32);
+    insertAccount(db, "account-1");
+    applyAgentStoreSchema(db, "2026-08-10T10:00:00.000Z");
+    const lifecycle = new AccountLifecycleStore(db, masterKey);
+    const sourceEvents = new AgentSourceEventOutbox(db, masterKey, lifecycle);
+    const service = new AgentService({ db, masterKey, lifecycle, sourceEvents });
+    const provider = service.createProvider({
+      label: "Local test provider",
+      kind: "ollama",
+      endpoint: "http://127.0.0.1:11434/v1",
+      model: "test-model",
+      timeoutMs: 30_000,
+      allowCloudMailContent: false,
+      makeDefault: true,
+    });
+    const conversation = service.createConversation({
+      providerId: provider.id,
+      scope: { mode: "selected_account", accountIds: ["account-1"], messageIds: [] },
+    });
+    return { service, provider, conversation };
+  }
+
+  function mockRunPath(service: AgentService) {
+    const internals = service as unknown as {
+      rag: { drainOnce: () => Promise<void>; search: (...arguments_: unknown[]) => Promise<unknown[]> };
+      runtime: { streamChat: (input: { signal?: AbortSignal }) => AsyncIterable<unknown> };
+    };
+    vi.spyOn(internals.rag, "drainOnce").mockResolvedValue(undefined);
+    vi.spyOn(internals.rag, "search").mockResolvedValue([]);
+    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+      yield { type: "text_delta", delta: "ok" };
+      yield { type: "completed", reason: "stop" };
+    });
+  }
+
+  it("persists the turn under clientMessageId so a revoke right after sending addresses a known row", async () => {
+    // Regression for the "revoked messages came back" bug: the optimistic
+    // transcript row carries a client-generated id, and the revoke issued
+    // seconds later used to be sent with that id while the server had
+    // persisted the turn under a random one — revokeMessage 404'd and the
+    // client rolled its optimistic marks back, resurrecting the messages.
+    const { service, provider, conversation } = serviceFixture();
+    mockRunPath(service);
+
+    for await (const _event of service.streamMessage(conversation.id, {
+      content: "Check project status",
+      providerId: provider.id,
+      mode: "agent",
+      scope: conversation.scope,
+      clientMessageId: "user-client-1",
+    })) {
+      // Drain the run; the persisted state is asserted below.
+    }
+
+    const persisted = service.getConversation(conversation.id).messages;
+    expect(persisted.find((message) => message.role === "user")).toMatchObject({ id: "user-client-1" });
+
+    // The revoke addresses the same id the client holds: no NOT_FOUND, and the
+    // persisted view reflects the revoked mark.
+    service.revokeMessage(conversation.id, "user-client-1", true);
+    const revoked = service.getConversation(conversation.id).messages;
+    expect(revoked.find((message) => message.id === "user-client-1")).toMatchObject({ revoked: true });
+  });
+
+  it("falls back to a server-generated id when no clientMessageId is supplied", async () => {
+    const { service, provider, conversation } = serviceFixture();
+    mockRunPath(service);
+
+    for await (const _event of service.streamMessage(conversation.id, {
+      content: "Check project status",
+      providerId: provider.id,
+      mode: "agent",
+      scope: conversation.scope,
+    })) {
+      // Drain the run.
+    }
+
+    const persisted = service.getConversation(conversation.id).messages;
+    expect(persisted.find((message) => message.role === "user")?.id).toMatch(/^message-/);
   });
 });

@@ -42,7 +42,7 @@ Broker 构造而非客户端声明以下字段：入口 `mcp`、客户端身份�
 | `send-confirmed` | 只读工具 + 7 个写工具（草稿创建/更新/删除、移动、标记、发送、回复）。 | 每次写操作都需要 Nami Mail 桌面端弹出的一次性不可变确认（工具返回 confirmation 流程，客户端不能自行批准）。 |
 | `full-access` | 只读工具 + 7 个写工具。 | 写工具直接自动执行（发送、删除等全部自动），无需逐项确认。 |
 
-`--yes`、MCP 参数或模型工具调用绝不能充当确认或提权。当前错误码：`PERMISSION_DENIED`（级别/scope 不满足，含超过配置级别）、`SCOPE_DENIED`（账户不在范围）、`CONFIRMATION_REQUIRED`（需要可见桌面确认）、`NOT_SUPPORTED`（工具不可供外部 caller）、`TOOL_INPUT_INVALID` / `INVALID_ARGUMENT`（输入不匹配）、`BROKER_REPLAY_DETECTED` / `BROKER_COUNTER_INVALID` / `BROKER_SECURITY_UNAVAILABLE`、`HOST_UNAVAILABLE`、`UPDATE_IN_PROGRESS`、`PAIRING_REQUIRED` / `PAIRING_REVOKED`。`READ_ONLY` 错误码已不再使用。
+`--yes`、MCP 参数或模型工具调用绝不能充当确认或提权。当前错误码：`PERMISSION_DENIED`（级别/scope 不满足，含超过配置级别）、`SCOPE_DENIED`（账户不在范围）、`CONFIRMATION_REQUIRED`（需要可见桌面确认）、`NOT_SUPPORTED`（工具不可供外部 caller）、`TOOL_INPUT_INVALID` / `INVALID_ARGUMENT`（输入不匹配）、`BROKER_REPLAY_DETECTED` / `BROKER_COUNTER_INVALID` / `BROKER_SECURITY_UNAVAILABLE`、`HOST_UNAVAILABLE`、`UPDATE_IN_PROGRESS`、`PAIRING_REQUIRED` / `PAIRING_REVOKED`。
 
 ## 隐私、提示注入和日志
 

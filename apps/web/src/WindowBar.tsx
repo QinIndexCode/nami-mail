@@ -47,30 +47,39 @@ export function WindowBar({ t, theme, onToggleTheme, platform, isDesktop }: Wind
     bridge?.toggleMaximizeWindow?.();
   };
 
+  // 窗口控制按钮（最小化/最大化/关闭）。在桌面端，它们直接渲染在
+  // `.window-bar` 中，这是一个固定在窗口右上角的 overlay。
+  // CSS 确保按钮位置在所有视图中一致，不会继承页面 header 的过渡动画。
+  const controls = drawsControls && bridge?.minimizeWindow ? (
+    <div className="window-controls">
+      <IconButton className="window-control" label={t("app.windowMinimize")} onClick={() => bridge.minimizeWindow?.()}>
+        <Minus size={16} />
+      </IconButton>
+      <IconButton className="window-control" label={maximized ? t("app.windowRestore") : t("app.windowMaximize")} onClick={() => bridge.toggleMaximizeWindow?.()}>
+        {maximized ? <Copy size={14} /> : <Square size={13} />}
+      </IconButton>
+      <IconButton className="window-control window-control-close" label={t("app.windowClose")} onClick={() => bridge.closeWindow?.()}>
+        <X size={16} />
+      </IconButton>
+    </div>
+  ) : null;
+
+  if (isDesktop) {
+    return (
+      <div className="window-bar" onDoubleClick={handleBarDoubleClick}>
+        {platform === "darwin" && <div className="window-control-slot" aria-hidden="true" />}
+        {controls}
+      </div>
+    );
+  }
+
   return (
     <div className="window-bar" onDoubleClick={handleBarDoubleClick}>
-      {isDesktop && platform === "darwin" && <div className="window-control-slot" aria-hidden="true" />}
-      {!isDesktop && <span className="window-title">Nami Mail</span>}
+      <span className="window-title">Nami Mail</span>
       <div className="window-actions">
-        {!isDesktop && (
-          <span className="local-pill"><span /> {t("app.localEncryption")}</span>
-        )}
-        {!isDesktop && (
-          <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={onToggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>
-        )}
-        {drawsControls && bridge?.minimizeWindow && (
-          <div className="window-controls">
-            <IconButton className="window-control" label={t("app.windowMinimize")} onClick={() => bridge.minimizeWindow?.()}>
-              <Minus size={16} />
-            </IconButton>
-            <IconButton className="window-control" label={maximized ? t("app.windowRestore") : t("app.windowMaximize")} onClick={() => bridge.toggleMaximizeWindow?.()}>
-              {maximized ? <Copy size={14} /> : <Square size={13} />}
-            </IconButton>
-            <IconButton className="window-control window-control-close" label={t("app.windowClose")} onClick={() => bridge.closeWindow?.()}>
-              <X size={16} />
-            </IconButton>
-          </div>
-        )}
+        <span className="local-pill"><span /> {t("app.localEncryption")}</span>
+        <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={onToggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>
+        {controls}
       </div>
     </div>
   );

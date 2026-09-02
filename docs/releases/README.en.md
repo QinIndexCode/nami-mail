@@ -18,7 +18,7 @@ This directory contains reviewable, reusable GitHub Release bodies. Every releas
 
 1. After filling in the version title on GitHub Releases, copy the body from the matching note. Do not put private keys, certificates, tokens, test accounts, or local paths in Release Notes.
 2. Before describing signature status or known limitations, confirm that the Release page has exactly the five required assets and that the version tag matches the installer name.
-3. Do not write that online automatic-update verification is complete in the next note until [real post-release update verification](../RELEASING.en.md#real-post-release-update-verification) is complete and reviewable evidence is retained.
+3. Do not write that online automatic-update verification is complete in the next note until [real post-release update validation](../RELEASING.en.md#real-post-release-update-validation) is complete and reviewable evidence is retained.
 4. If assets, signing, a version, or the update manifest changes, withdraw or mark the Release first, then repeat release verification. Do not silently replace assets while retaining the old notes.
 
 Users should always download the Windows `.exe` installer listed on the Release page. Versioned ZIPs, JSON manifests, `latest.yml`, and `.blockmap` are internal release and automatic-update assets, not manual installers.

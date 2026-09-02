@@ -5,6 +5,7 @@ import type { DatabaseHandle } from "./db.js";
 import { friendlyMailError, imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import { moveActionBlockedError, protectedMessageColumns } from "./message-storage.js";
 import { indexMessageFts } from "./message-search.js";
+import { redactUrls } from "./message-links.js";
 import type { ResolvedOutboundAttachment } from "./outbound-attachments.js";
 import type { AccountRecord } from "./types.js";
 
@@ -163,7 +164,7 @@ function persistAppendedDraft(
     cc: draft.cc?.map((address) => ({ name: "", address })) ?? [],
     inReplyTo: draft.inReplyTo ?? null,
     references: draft.references ? [...draft.references] : [],
-    snippet: draft.text.replace(/\s+/g, " ").trim().slice(0, 220),
+    snippet: redactUrls(draft.text.replace(/\s+/g, " ").trim()).slice(0, 150),
     textBody: draft.text,
     htmlBody: "",
     // IMAP APPEND does not expose assigned MIME part identifiers. NULL asks a
@@ -211,7 +212,10 @@ function persistAppendedDraft(
       subject: draft.subject,
       fromName: "",
       fromAddress: account.email,
+      to: draft.to.map((address) => ({ name: "", address })),
+      cc: draft.cc?.map((address) => ({ name: "", address })) ?? [],
       textBody: draft.text,
+      attachments: null,
     });
     if (agentEvents && agentLease) {
       agentEvents.messageUpsertedWithinTransaction(agentLease, id, {

@@ -3,8 +3,8 @@ import { X } from "lucide-react";
 import ContactsSection from "./ContactsSection";
 import TemplatesSection from "./TemplatesSection";
 import { useI18n } from "./i18n";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 
 /**
  * Shared dialog shell for management surfaces that were split out of the

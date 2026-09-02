@@ -222,10 +222,10 @@ function encodeBmp24(rgb, width, height) {
   return out;
 }
 
-async function renderInstallerSidebar(mark) {
-  const width = 164;
-  const height = 314;
-  const markSize = 52;
+async function renderInstallerSidebar(mark, scale = 1) {
+  const width = Math.round(164 * scale);
+  const height = Math.round(314 * scale);
+  const markSize = Math.round(52 * scale);
   const resizedMark = await sharp(mark)
     .resize(markSize, markSize, { fit: "inside", kernel: sharp.kernel.lanczos3 })
     .png({ compressionLevel: 9 })
@@ -235,8 +235,8 @@ async function renderInstallerSidebar(mark) {
   const overlay = Buffer.from(
     `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
       <rect width="${width}" height="${height}" fill="#1b1b1f"/>
-      <text x="82" y="226" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#f5f5f6" text-anchor="middle" letter-spacing="0.5">Nami Mail</text>
-      <text x="82" y="245" font-family="Segoe UI, Arial, sans-serif" font-size="9" fill="#9898a0" text-anchor="middle">Local-first mail client</text>
+      <text x="${Math.round(82 * scale)}" y="${Math.round(215 * scale)}" font-family="Segoe UI, Arial, sans-serif" font-size="${Math.round(16 * scale)}" font-weight="700" fill="#f5f5f6" text-anchor="middle" letter-spacing="0.5">Nami Mail</text>
+      <text x="${Math.round(82 * scale)}" y="${Math.round(235 * scale)}" font-family="Segoe UI, Arial, sans-serif" font-size="${Math.round(9 * scale)}" fill="#9898a0" text-anchor="middle">Local-first mail client</text>
     </svg>`,
   );
   const rgb = await sharp({
@@ -247,7 +247,7 @@ async function renderInstallerSidebar(mark) {
       {
         input: resizedMark,
         left: Math.round((width - markMetadata.width) / 2),
-        top: Math.round((height - markMetadata.height) / 2) - 24,
+        top: Math.round((height - markMetadata.height) / 2),
       },
     ])
     .removeAlpha()
@@ -344,11 +344,12 @@ const [lightThemeMark, darkThemeMark] = await Promise.all([
     offset: -500,
   }),
 ]);
-const [lightWebMark, darkWebMark, fullSizeIcon, installerSidebar, installerHeader, uninstallerSidebar] = await Promise.all([
+const [lightWebMark, darkWebMark, fullSizeIcon, installerSidebar, installerSidebar1_5x, installerHeader, uninstallerSidebar] = await Promise.all([
   renderMark(lightThemeMark, 256, 18),
   renderMark(darkThemeMark, 256, 18),
   renderAppIcon(darkThemeMark, 1024),
   renderInstallerSidebar(darkThemeMark),
+  renderInstallerSidebar(darkThemeMark, 1.5),
   renderInstallerHeader(darkThemeMark),
   renderInstallerSidebar(darkThemeMark),
 ]);
@@ -391,6 +392,7 @@ const outputs = [
   [path.join(webBrandDirectory, "mark-light.png"), lightWebMark],
   [path.join(webBrandDirectory, "mark-dark.png"), darkWebMark],
   [path.join(projectRoot, "build", "installerSidebar.bmp"), installerSidebar],
+  [path.join(projectRoot, "build", "installerSidebar_1.5x.bmp"), installerSidebar1_5x],
   [path.join(projectRoot, "build", "installerHeader.bmp"), installerHeader],
   [path.join(projectRoot, "build", "uninstallerSidebar.bmp"), uninstallerSidebar],
 ];

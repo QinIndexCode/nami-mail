@@ -646,10 +646,20 @@ export class DesktopAgentBrokerHost {
     await relay?.close();
   }
 
-  private waitForActiveRequests(): Promise<void> {
+  private waitForActiveRequests(timeoutMs = 1_000): Promise<void> {
     if (this.activeRequestCount === 0) return Promise.resolve();
+    // Bounded wait: a hung external agent request must never block desktop
+    // shutdown forever (close() is awaited outside the main shutdown budget).
     return new Promise((resolve) => {
-      this.activeRequestsSettled = resolve;
+      const timer = setTimeout(() => {
+        this.activeRequestsSettled = undefined;
+        resolve();
+      }, timeoutMs);
+      timer.unref?.();
+      this.activeRequestsSettled = () => {
+        clearTimeout(timer);
+        resolve();
+      };
     });
   }
 

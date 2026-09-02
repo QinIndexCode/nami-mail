@@ -21,6 +21,7 @@ Without any configured model, the assistant shows "Set up a usable model first" 
 | Anthropic Claude (native protocol) | Anthropic Messages API, e.g. `https://api.anthropic.com` |
 | Google Gemini (native protocol) | e.g. `https://generativelanguage.googleapis.com/v1beta` |
 | OpenAI Responses (native protocol) | e.g. `https://api.openai.com/v1` |
+| Custom | Reserved kind for future or user-defined provider adapters |
 
 ## Fields
 

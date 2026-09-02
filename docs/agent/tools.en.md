@@ -21,9 +21,9 @@ Tools connect to existing mail application services rather than duplicating SQL 
 
 - Reads: accounts, folders, messages, threads, attachment metadata, and sync state.
 - Drafts: saved through the existing draft model; they cannot claim a send completed.
-- The current embedded Agent does not register archive, move, flag, send, or forward tools. Those actions remain in the primary mail UI; a future tool must reuse the existing remote-sync, outbox, and reconciliation paths.
+- The embedded Agent registers move, flag, send, and reply tools (`messages.move`, `messages.set-flag`, `messages.send`, `mail.reply`) that reuse the existing remote-sync, outbox, and reconciliation paths.
 
-`MailApplicationService` is the facade used by the current embedded Agent. The current registered tools are limited to reading accounts, folders, messages, threads, and attachment metadata plus creating, updating, and deleting drafts; its unified boundary does not mean high-risk mail actions, CLI, or MCP have shipped.
+`MailApplicationService` is the facade used by the embedded Agent. Its registered tools include reading accounts, folders, messages, threads, and attachment metadata; creating, updating, and deleting drafts; plus move, flag, send, and reply operations.
 
 ## Input, output, and citations
 

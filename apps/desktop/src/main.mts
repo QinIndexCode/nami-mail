@@ -1,9 +1,9 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, powerMonitor, safeStorage, session, shell, Tray, type NativeImage } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, safeStorage, session, shell, Tray, type NativeImage } from "electron";
 import { parse as parseDotenv } from "dotenv";
 import type { AgentResponseEnvelope, BrokerJsonValue, CallerContext, ExternalPairingSummary } from "@nami/agent-contracts";
 import { createHash, randomBytes } from "node:crypto";
 import { exec, spawn as nodeSpawn } from "node:child_process";
-import { writeFileSync, existsSync, createReadStream } from "node:fs";
+import { writeFileSync, appendFileSync, existsSync, createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -126,6 +126,7 @@ type ServerRuntimeModule = {
     desktopConfirmation?: DesktopConfirmationRuntimeOptions;
     externalConfirmation?: ExternalConfirmationRuntimeOptions;
     listExternalPairings?: () => Promise<ExternalPairingSummary[]>;
+    onStartupTiming?: (stage: string, elapsedMs: number) => void;
   }) => Promise<RunningServer>;
 };
 
@@ -230,6 +231,11 @@ function createExternalConfirmationBridge(): ExternalConfirmationRuntimeOptions 
 }
 let tray: Tray | undefined;
 let appIcon: NativeImage | undefined;
+// Reliable mirror of the main window's real on-screen visibility. We avoid
+// trusting `BrowserWindow.isVisible()` for the tray menu because its return
+// value is unreliable across some Windows/Electron combinations; instead we
+// maintain the flag at the exact points the window is shown or hidden.
+let mainWindowVisible = false;
 let isQuitting = false;
 let shutdownPromise: Promise<void> | undefined;
 let closePromptPending = false;
@@ -464,8 +470,51 @@ initializeDesktopSmoke({
   redact: (message) => (localApiAccessToken ? message.replaceAll(localApiAccessToken, "[redacted]") : message),
 });
 const desktopLoopbackPort = "0";
-const desktopShutdownTimeoutMs = 8_000;
+const desktopShutdownTimeoutMs = 2_000;
 const desktopUpdateCloseTimeoutMs = 30_000;
+// Startup/shutdown timing instrumentation. The smoke harness runs with an
+// isolated data directory and demo data, so it cannot reveal where a real
+// launch spends its time. This writes a tiny JSON file into userData on every
+// real run (process start -> window paint -> splash dismissed -> quit done);
+// it is overwritten each launch and never blocks boot on failure.
+const desktopStartedAt = Date.now();
+const desktopStartupTimings: Array<{ stage: string; elapsedMs: number }> = [];
+let desktopStartupTimingsPath: string | undefined;
+let desktopStartupLogPath: string | undefined;
+// Detailed per-step startup log (JSONL, append). Unlike the summary JSON
+// (startup-timings.json) this keeps every recorded stage across launches with
+// an absolute timestamp plus the process that reported it, so a slow launch
+// can be dissected step by step. Each line is self-contained:
+//   {"t":"2026-08-30T..","ms":1234,"pid":"main","stage":"..."}
+function appendDesktopStartupLog(stage: string, elapsedMs: number, origin: "main" | "server" | "renderer" = "main"): void {
+  const target = desktopStartupLogPath;
+  if (!target) return;
+  try {
+    appendFileSync(
+      target,
+      `${JSON.stringify({ t: new Date().toISOString(), ms: elapsedMs, pid: origin, stage })}\n`,
+      "utf8",
+    );
+  } catch {
+    // Log capture is best-effort; it must never break boot.
+  }
+}
+function recordDesktopStartupTiming(stage: string, elapsedMs?: number): void {
+  const value = elapsedMs ?? Date.now() - desktopStartedAt;
+  desktopStartupTimings.push({ stage, elapsedMs: value });
+  appendDesktopStartupLog(stage, value, "main");
+  const target = desktopStartupTimingsPath;
+  if (!target) return;
+  try {
+    writeFileSync(
+      target,
+      JSON.stringify({ startedAt: new Date(desktopStartedAt).toISOString(), timings: desktopStartupTimings }, null, 2),
+      "utf8",
+    );
+  } catch {
+    // Timing capture is best-effort; a read-only profile must not break boot.
+  }
+}
 async function loadDesktopLocalConfiguration(): Promise<void> {
   // The installed app cannot rely on a project-root .env. Restrict the
   // user-data file to public OAuth settings and non-secret translation
@@ -591,6 +640,7 @@ function applyDesktopSettingsFromServer(): void {
 
 function focusMainWindow(): void {
   if (!mainWindow) return;
+  mainWindowVisible = true;
   if (tray && !tray.isDestroyed()) refreshTrayMenu(tray);
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
@@ -626,6 +676,10 @@ function nativeCopy(key: NativeCopyKey, values?: NativeTranslationValues): strin
 
 function refreshTrayMenu(targetTray: Tray): void {
   targetTray.setToolTip(nativeCopy("trayTooltip"));
+  // Use the maintained visibility flag (see mainWindowVisible) rather than
+  // `BrowserWindow.isVisible()`, which is unreliable here. The label describes
+  // the action that will run on click: when the window is actually visible we
+  // show "hide to tray", otherwise "show Nami Mail".
   const template = buildTrayMenuTemplate(
     {
       hide: nativeCopy("trayHide"),
@@ -634,7 +688,7 @@ function refreshTrayMenu(targetTray: Tray): void {
       inbox: nativeCopy("trayInbox"),
       quit: nativeCopy("trayQuit"),
     },
-    mainWindow?.isVisible() ?? false,
+    mainWindowVisible,
   );
   targetTray.setContextMenu(Menu.buildFromTemplate(template.map((item) => {
     if (item.type === "separator") return { type: "separator" as const };
@@ -646,8 +700,9 @@ function runTrayAction(action: TrayMenuAction): void {
   switch (action.kind) {
     case "toggle-window": {
       // Both branches refresh the menu (hide via ensureTray, show via
-      // focusMainWindow), so the visibility label stays accurate.
-      if (mainWindow?.isVisible()) hideMainWindowToTray();
+      // focusMainWindow), so the visibility label stays accurate. Driven by the
+      // maintained mainWindowVisible flag rather than `isVisible()`.
+      if (mainWindowVisible) hideMainWindowToTray();
       else focusMainWindow();
       break;
     }
@@ -682,6 +737,7 @@ function ensureTray(): Tray {
 function hideMainWindowToTray(): boolean {
   if (!mainWindow) return false;
   try {
+    mainWindowVisible = false;
     ensureTray();
     mainWindow.hide();
     return true;
@@ -784,18 +840,20 @@ function closeLocalServerForExit(): Promise<void> {
   shutdownPromise = (async () => {
     let timeout: NodeJS.Timeout | undefined;
     try {
-      await closeDesktopAgentBroker().catch((error) => {
+      // Broker and server shutdown run in parallel, both bounded by the same
+      // overall budget: a hung agent request or a stuck server.close() must
+      // never keep the process from exiting.
+      const brokerClosed = closeDesktopAgentBroker().catch((error) => {
         console.error("Nami Mail Agent Broker shutdown failed", error);
       });
-      if (server) {
-        await Promise.race([
-          server.close(),
-          new Promise<never>((_resolve, reject) => {
-            timeout = setTimeout(() => reject(new Error(`Desktop shutdown exceeded ${desktopShutdownTimeoutMs} ms.`)), desktopShutdownTimeoutMs);
-            timeout.unref?.();
-          }),
-        ]);
-      }
+      const serverClosed = server ? server.close() : undefined;
+      await Promise.race([
+        Promise.all([brokerClosed, serverClosed]),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error(`Desktop shutdown exceeded ${desktopShutdownTimeoutMs} ms.`)), desktopShutdownTimeoutMs);
+          timeout.unref?.();
+        }),
+      ]);
     } catch (error) {
       console.error("Nami Mail shutdown failed", error);
     } finally {
@@ -812,6 +870,13 @@ function shutdownLocalServerAndQuit(): void {
   if (isQuitting) return;
   desktopAgentBrokerRecoveryGate = "closed";
   isQuitting = true;
+  // Close the window before tearing the local service down. The renderer
+  // keeps a long-lived SSE stream open to /api/events and fastify.close()
+  // waits for open connections, so leaving the window alive would stall the
+  // teardown until the shutdown budget expires. Destroying it (destroy()
+  // bypasses the close handler that routes back into this path) also makes
+  // the window disappear immediately instead of freezing during teardown.
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
   void closeLocalServerForExit().finally(() => app.quit());
 }
 
@@ -1204,12 +1269,19 @@ function notifyAutoReplyEvent(event: DesktopAutoReplyEvent): void {
 
 async function createMainWindow(): Promise<void> {
   if (!localServer) throw new Error("Nami Mail local service was not started.");
+  appendDesktopStartupLog("main-window-create-start", Date.now() - desktopStartedAt, "main");
 
   // Windows/Linux draw their own window bar (the web app's WindowBar with
   // minimize/maximize/close buttons), so the OS frame is dropped. macOS keeps
   // the native traffic lights behind a hidden title bar; the renderer reserves
   // a leading slot for them and draws no controls.
   const frameless = process.platform !== "darwin";
+  // The renderer's splash overlay (apps/web/index.html) paints #ececef in
+  // light mode and #1a1a1e in dark mode. Matching the native window surface
+  // to that exact color prevents a white/black flash between the OS frame
+  // paint and the splash's first render, which is what users see as a flicker
+  // right as the window appears.
+  const splashSurfaceColor = nativeTheme.shouldUseDarkColors ? "#1a1a1e" : "#ececef";
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -1223,7 +1295,7 @@ async function createMainWindow(): Promise<void> {
     show: false,
     title: "Nami Mail",
     icon: appIcon,
-    backgroundColor: "#ececef",
+    backgroundColor: splashSurfaceColor,
     autoHideMenuBar: true,
     ...(frameless
       ? { frame: false }
@@ -1233,9 +1305,13 @@ async function createMainWindow(): Promise<void> {
       nodeIntegration: false,
       sandbox: true,
       preload: path.join(import.meta.dirname, "preload.cjs"),
-      // The smoke window is intentionally hidden. Keep its polling probes on
-      // their normal timer cadence without changing production window behavior.
-      backgroundThrottling: !isDesktopSmoke,
+      // Never throttle the renderer when the window loses focus. With
+      // Chromium's default background throttling the SSE event handlers (and
+      // the poll fallback) queue up while the window is hidden and then flood
+      // the main thread the instant focus returns, producing a visible
+      // multi-second freeze. A mail client has to stay responsive in the
+      // background anyway, so keep timers and rAF on their normal cadence.
+      backgroundThrottling: false,
     },
   });
 
@@ -1249,6 +1325,13 @@ async function createMainWindow(): Promise<void> {
     noteDesktopSmokeDiagnostic(`Preload ${preloadPath}: ${error.message}`);
   });
   mainWindow.webContents.on("console-message", (event) => {
+    // Renderer startup instrumentation: the web app logs "[nami-startup] <stage>"
+    // markers at its key milestones (React mounted, first data load done, splash
+    // dismissed). Forward them into the same startup log so a slow renderer boot
+    // can be dissected alongside the main/server stages.
+    if (typeof event.message === "string" && event.message.startsWith("[nami-startup]")) {
+      appendDesktopStartupLog(event.message.slice("[nami-startup]".length).trim(), Date.now() - desktopStartedAt, "renderer");
+    }
     if (!smokeResultPath || !["warning", "error"].includes(event.level)) return;
     noteDesktopSmokeDiagnostic(`Renderer ${event.level}: ${event.message}`);
   });
@@ -1262,7 +1345,12 @@ async function createMainWindow(): Promise<void> {
     if (isHttpUrl(url)) void openInBrowser(url);
   });
   mainWindow.once("ready-to-show", () => {
-    if (!smokeExitDelay) mainWindow?.show();
+    appendDesktopStartupLog("ready-to-show-fired", Date.now() - desktopStartedAt, "main");
+    recordDesktopStartupTiming("window-first-paint");
+    if (!smokeExitDelay) {
+      mainWindow?.show();
+      mainWindowVisible = true;
+    }
   });
   mainWindow.on("close", handleMainWindowClose);
   mainWindow.on("closed", () => {
@@ -1278,6 +1366,7 @@ async function createMainWindow(): Promise<void> {
   mainWindow.on("focus", () => applyTrayBadge({ type: "window-focused" }));
 
   const appUrl = new URL(localServer.url);
+  appendDesktopStartupLog("main-window-loadurl-start", Date.now() - desktopStartedAt, "main");
   appUrl.searchParams.set("desktop", "1");
   // The renderer needs the host platform to pick the window-bar layout: the
   // macOS native traffic lights leave a leading slot, other platforms draw
@@ -1299,6 +1388,14 @@ async function createMainWindow(): Promise<void> {
       mainWindow?.webContents.send("nami:compose-new", coldMailtoUrl);
     });
   }
+  // did-finish-load fires after the renderer bundle ran and the app mounted;
+  // it precedes the splash dismissal (which waits for the first data load).
+  // The listener must be attached before loadURL: the load event and
+  // did-finish-load are the same navigation milestone, so a late once()
+  // would miss it.
+  mainWindow.webContents.once("did-finish-load", () => {
+    recordDesktopStartupTiming("window-did-finish-load");
+  });
   await mainWindow.loadURL(appUrl.toString());
 }
 
@@ -1455,10 +1552,36 @@ async function warnExternalPairingScopeDrift(): Promise<void> {
   });
 }
 
+// The renderer keeps a splash overlay up until its animation, the first mail
+// load, and the agent bootstrap preload all finish. Polling for the overlay's
+// "done" class (or removal) gives the real "app is usable" timestamp. The poll
+// runs only during startup and stops once the overlay is gone (or after 20s).
+function observeSplashDismissal(): void {
+  const timer = setInterval(() => {
+    const target = mainWindow;
+    if (!target || target.isDestroyed() || Date.now() - desktopStartedAt > 20_000) {
+      clearInterval(timer);
+      return;
+    }
+    void target.webContents
+      .executeJavaScript("(() => { const el = document.getElementById('nami-splash'); return el === null || el.classList.contains('done'); })()")
+      .then((dismissed) => {
+        if (!dismissed) return;
+        clearInterval(timer);
+        recordDesktopStartupTiming("splash-dismissed");
+      })
+      .catch(() => undefined);
+  }, 500);
+}
+
 async function boot(): Promise<void> {
   desktopAgentBrokerRecoveryGate = "accepting";
+  desktopStartupTimingsPath = path.join(app.getPath("userData"), "startup-timings.json");
+  desktopStartupLogPath = path.join(app.getPath("userData"), "startup-log.jsonl");
+  recordDesktopStartupTiming("boot-start");
   await writeDesktopSmokeProgress("waiting-for-electron-ready");
   await app.whenReady();
+  recordDesktopStartupTiming("electron-ready");
   installRendererPermissionPolicy();
   await writeDesktopSmokeProgress("electron-ready");
   appIcon = loadDesktopIcon();
@@ -1478,18 +1601,26 @@ async function boot(): Promise<void> {
   }
   await loadDesktopLocalConfiguration();
   configureLocalService();
+  recordDesktopStartupTiming("configuration-loaded");
   await writeDesktopSmokeProgress("configuration-loaded");
 
   try {
     // The session exists only after `ready`. Clear historical HTTP and
     // Service Worker cache before creating or loading any renderer window.
     // This deliberately excludes cookies, auth cache, localStorage and IDB.
-    rendererCacheCleanup = await clearLegacyRendererMailCache(session.defaultSession);
-    await writeDesktopSmokeProgress("renderer-cache-cleared");
+    //
+    // These three operations are independent — run them in parallel to
+    // shorten the startup critical path before the window can appear.
     const runtimePath = "../../server/dist/runtime.js";
-    const runtime = await import(runtimePath) as ServerRuntimeModule;
     const dataDirectory = path.join(app.getPath("userData"), "data");
-    const desktopMasterKey = await loadOrCreateDesktopMasterKey(dataDirectory, safeStorage);
+    const [rendererCacheCleanupResult, runtime, desktopMasterKey] = await Promise.all([
+      clearLegacyRendererMailCache(session.defaultSession),
+      import(runtimePath) as Promise<ServerRuntimeModule>,
+      loadOrCreateDesktopMasterKey(dataDirectory, safeStorage),
+    ]);
+    rendererCacheCleanup = rendererCacheCleanupResult;
+    recordDesktopStartupTiming("renderer-cache-cleared");
+    await writeDesktopSmokeProgress("renderer-cache-cleared");
     try {
       localServer = await runtime.startServer({
         masterKey: desktopMasterKey.key,
@@ -1502,7 +1633,12 @@ async function boot(): Promise<void> {
         },
         externalConfirmation: createExternalConfirmationBridge(),
         listExternalPairings: () => (desktopAgentBroker ? desktopAgentBroker.describePairings() : Promise.resolve([])),
+        onStartupTiming: (stage, elapsedMs) => {
+          appendDesktopStartupLog(stage, elapsedMs, "server");
+          recordDesktopStartupTiming(stage, elapsedMs);
+        },
       });
+      recordDesktopStartupTiming("local-service-ready");
       await writeDesktopSmokeProgress("local-service-ready");
       applyDesktopSettingsFromServer();
     } finally {
@@ -1520,7 +1656,9 @@ async function boot(): Promise<void> {
         noteDesktopSmokeDiagnostic(`Desktop Agent Broker unavailable: ${error instanceof Error ? error.message : String(error)}`);
       });
       await createMainWindow();
+      recordDesktopStartupTiming("window-loaded");
       await writeDesktopSmokeProgress("window-loaded");
+      observeSplashDismissal();
       await brokerReady;
       scheduleAgentPairingRequests(initialPairingRequestIds);
       void warnExternalPairingScopeDrift().catch(() => undefined);
@@ -1544,14 +1682,20 @@ async function boot(): Promise<void> {
             if (!bar || !sidebar) return null;
             const barStyle = getComputedStyle(bar);
             const sidebarStyle = getComputedStyle(sidebar);
+            const colorAlpha = (cssColor) => {
+              const match = /rgba?\\(([^)]+)\\)/.exec(cssColor);
+              if (!match) return 1;
+              const channels = match[1].split(",").map((channel) => Number.parseFloat(channel));
+              return channels.length > 3 ? channels[3] : 1;
+            };
             return {
-              // The window bar must share the sidebar's translucent surface
-              // instead of drawing its own opaque strip over the workspace
-              // backdrop (or the plain frame without one).
+              // The floating window bar must be fully transparent so it blends
+              // into whatever sits behind it and never paints an opaque strip
+              // of its own over the workspace backdrop.
               backgroundColor: barStyle.backgroundColor,
               sidebarBackgroundColor: sidebarStyle.backgroundColor,
               borderBottomWidth: barStyle.borderBottomWidth,
-              matchesSidebar: barStyle.backgroundColor === sidebarStyle.backgroundColor,
+              isTransparent: colorAlpha(barStyle.backgroundColor) === 0,
               hasBottomSeparator: Number.parseFloat(barStyle.borderBottomWidth) > 0,
             };
           })()`).catch(() => null);
@@ -1636,6 +1780,10 @@ async function boot(): Promise<void> {
               // it never crosses the window controls' background.
               railBorderLeftColor: railStyle ? railStyle.borderLeftColor : null,
               railBackgroundColor: railStyle ? railStyle.backgroundColor : null,
+              // The whole chrome circle (sidebar + header + window bar +
+              // rail) must share one translucent surface that follows
+              // --bg-panel-opacity, so no corner reads as an opaque strip.
+              railBackgroundMatchesSidebar: rail && sidebar ? getComputedStyle(sidebar).backgroundColor === railStyle?.backgroundColor : null,
               railTop: rail ? rail.getBoundingClientRect().top : null,
               // The header row must end flush at the window's right edge and
               // the rail must start exactly on the header's bottom edge —
@@ -1946,7 +2094,10 @@ if (desktopCliArguments !== undefined) {
     })();
   });
   app.on("window-all-closed", () => {
-    if (desktopHostMode === "gui") app.quit();
+    // While shutdown teardown is in flight the window is deliberately
+    // destroyed first (see shutdownLocalServerAndQuit); window-all-closed
+    // must not quit the app until the local service finished closing.
+    if (desktopHostMode === "gui" && !isQuitting) app.quit();
   });
   app.on("open-url", (event, url) => {
     event.preventDefault();
@@ -1962,12 +2113,14 @@ if (desktopCliArguments !== undefined) {
   });
   app.on("before-quit", (event) => {
     desktopAgentBrokerRecoveryGate = "closed";
+    recordDesktopStartupTiming("quit-requested");
     if (!localServer || isQuitting) return;
     event.preventDefault();
     shutdownLocalServerAndQuit();
   });
   app.on("will-quit", () => {
     desktopAgentBrokerRecoveryGate = "closed";
+    recordDesktopStartupTiming("quit-complete");
     globalShortcut.unregisterAll();
     powerMonitor.removeListener("resume", checkForUpdatesAfterExternalTrigger);
     desktopUpdater?.dispose();

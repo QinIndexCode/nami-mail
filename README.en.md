@@ -206,7 +206,7 @@ OAuth callbacks return to local `/api/oauth/google/callback` or `/api/oauth/micr
 - Unified multi-account inbox, account filtering, search, and unread state.
 - Discovery for common providers; adding an account normally needs only two fields.
 - Periodic background synchronization and manual synchronization.
-- Full initial synchronization of selectable folders; the default cache is the newest 200 messages per folder and can be changed with `SYNC_MESSAGE_LIMIT`.
+- Full initial synchronization of selectable folders; the default cache is the newest 2000 messages per folder and can be changed in Settings → Sync (500/1000/2000/5000/All) or overridden by the `SYNC_MESSAGE_LIMIT` environment variable.
 - Mail reading, plain-text and safe-HTML display, read state, real IMAP starring, and a cross-folder starred view.
 - Real IMAP draft saving, editing, send replacement, and close confirmation for unsaved content.
 - Attachment metadata and controlled streaming downloads without copying attachment bytes into the local database.

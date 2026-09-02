@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type Database from "better-sqlite3";
 import { loadDatabaseConstructor } from "./native-sqlite.js";
+import { MESSAGE_FTS_SCHEMA_SQL } from "./message-search.js";
 
 export type DatabaseHandle = Database.Database;
 
@@ -374,18 +375,13 @@ CREATE INDEX IF NOT EXISTS idx_operation_queue_account
 
 -- Full-text search over the decrypted message payload. The messages table keeps
 -- the encrypted envelope; this FTS5 table holds the plaintext searchable text
--- (subject, sender, body) so substring/token matching never needs to decrypt
--- the whole candidate set. It is maintained from application code at payload
--- write time, rebuilt on migration for legacy rows, and pruned by the delete
--- trigger below (which also covers ON DELETE CASCADE from accounts).
-CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-  subject,
-  from_name,
-  from_address,
-  body,
-  message_id UNINDEXED,
-  tokenize = 'trigram'
-);
+-- (subject, sender, recipients, attachment names, body) so substring/token
+-- matching never needs to decrypt the whole candidate set. It is maintained
+-- from application code at payload write time, pruned by the delete trigger
+-- below (which also covers ON DELETE CASCADE from accounts), and rebuilt for
+-- legacy rows by ensureMessageFtsIndex. The DDL is shared with message-search
+-- so an older table missing the v2 columns can be recreated identically.
+${MESSAGE_FTS_SCHEMA_SQL}
 
 -- Keep the search index aligned when messages disappear through any delete
 -- path, including a cascading account deletion.
@@ -599,7 +595,7 @@ function migrateDatabase(db: DatabaseHandle): void {
   // user set on purpose are left untouched.
   db.prepare("UPDATE app_settings SET agent_tool_round_limit = 30 WHERE agent_tool_round_limit = 15").run();
   if (!settingsColumns.some((column) => column.name === "sync_message_limit")) {
-    // Per-folder mailbox sync cap: 0 = whole mailbox (Gmail-style, no cap).
+    // Per-folder mailbox sync cap: 0 syncs the whole mailbox.
     // The CHECK mirrors the UI picker ladder in settings.ts. The default never
     // existed in the database before (the old 200 lived in the environment), so
     // the ALTER's DEFAULT covers every upgrading row without a follow-up update.

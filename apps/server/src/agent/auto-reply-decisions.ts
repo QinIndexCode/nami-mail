@@ -10,7 +10,6 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseHandle } from "../db.js";
 import { assertAgentStoreReadable } from "./schema.js";
 import {
-  AGENT_STORE_CRYPTO_VERSION,
   canonicalAgentJson,
   decryptRootAgentRecord,
   encryptRootAgentRecord,

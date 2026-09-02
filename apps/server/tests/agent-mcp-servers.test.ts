@@ -278,9 +278,9 @@ describe("Agent MCP tool registration and lifecycle", () => {
 
       service.deleteMcpServer(enabled.id);
       expect(registry.get(`${serverSlug(enabled.id)}.get_weather`)).toBeUndefined();
-      // All MCP tools are gone; only the built-in calendar, memory, auto-reply,
-      // and settings tools remain.
-      expect(registry.list().filter((tool) => !tool.name.startsWith("calendar.") && !tool.name.startsWith("memory.") && !tool.name.startsWith("auto-reply.") && !tool.name.startsWith("settings."))).toHaveLength(0);
+      // All MCP tools are gone; only the built-in (non-MCP) tools remain:
+      // calendar, memory, auto-reply, settings, time, and web search.
+      expect(registry.list().filter((tool) => !tool.name.startsWith("calendar.") && !tool.name.startsWith("memory.") && !tool.name.startsWith("auto-reply.") && !tool.name.startsWith("settings.") && tool.name !== "web.search" && !tool.name.startsWith("time."))).toHaveLength(0);
     } finally {
       await service.close();
       db.close();
