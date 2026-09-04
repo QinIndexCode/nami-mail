@@ -403,6 +403,10 @@ export class AgentRagWorker {
     this.embedding = options.embedding;
     this.pollIntervalMs = Math.max(250, Math.min(30_000, options.pollIntervalMs ?? workerIntervalMs));
     this.now = options.now ?? (() => new Date().toISOString());
+    // A generation repaired in a previous process is skipped on the next boot,
+    // so the (expensive) decrypt-and-check scan for missing remote ids runs
+    // once per generation instead of once per process.
+    this.loadRemoteIdRepairState();
   }
 
   /**
@@ -1277,14 +1281,24 @@ export class AgentRagWorker {
     // (same pattern as the semantic rescan above) so the app stays responsive
     // while warm-up proceeds.
     const warmYieldBatch = 32;
-    let processed = 0;
+    let iterations = 0;
     for (const page of pages) {
+      iterations += 1;
       const indexedRevision = indexedByPageId.get(page.pageId);
-      if (indexedRevision !== undefined && indexedRevision >= page.pageRevision) continue;
+      if (indexedRevision !== undefined && indexedRevision >= page.pageRevision) {
+        // A fully warm index never runs the decrypt branch, so gating the yield
+        // on processed-missing pages would let the whole pass (including the
+        // synchronous repair scan below) execute in one block and freeze startup.
+        // Yield by visit count instead so an all-warm warm-up still surrenders
+        // the event loop promptly.
+        if (iterations % warmYieldBatch === 0) {
+          await new Promise<void>((resolve) => setImmediate(() => resolve()));
+        }
+        continue;
+      }
       const decrypted = this.pageStore.get(lease, page.pageId);
       if (decrypted) this.upsertIndex(decrypted);
-      processed += 1;
-      if (processed % warmYieldBatch === 0) {
+      if (iterations % warmYieldBatch === 0) {
         await new Promise<void>((resolve) => setImmediate(() => resolve()));
       }
     }
@@ -1293,7 +1307,7 @@ export class AgentRagWorker {
     }
     this.ragIndex.reconcileStats(lease.accountId, lease.generation);
     this.purgeAccountGeneration(lease);
-    this.repairRemoteIdLookup(lease);
+    await this.repairRemoteIdLookup(lease);
   }
 
   /**
@@ -1302,9 +1316,43 @@ export class AgentRagWorker {
    * message now carries one is re-encrypted in place with the SAME source
    * revision and content (a new page revision) so Gmail label copies of one
    * physical mail collapse during dedup. Runs once per account generation,
-   * lazily on warm-up; a failure is retried on the next warm-up.
+   * lazily on warm-up; a failure is retried on the next warm-up. The completed
+   * state is persisted so a fully scanned generation is skipped on later boots.
    */
-  private repairRemoteIdLookup(lease: AccountGenerationLease): void {
+  private remoteIdRepairKey(accountId: string, generation: number): string {
+    return `${accountId}:${generation}`;
+  }
+
+  private loadRemoteIdRepairState(): void {
+    try {
+      const rows = this.options.db.prepare(`
+        SELECT account_id, account_generation
+        FROM agent_rag_repair_state
+        WHERE repaired = 1
+      `).all() as Array<{ account_id: string; account_generation: number }>;
+      for (const row of rows) {
+        this.remoteIdRepairedGenerations.add(this.remoteIdRepairKey(row.account_id, row.account_generation));
+      }
+    } catch {
+      // Best-effort: if the repair-state table is unavailable the scan simply
+      // re-runs rather than failing startup.
+    }
+  }
+
+  private persistRemoteIdRepairComplete(accountId: string, generation: number): void {
+    try {
+      this.options.db.prepare(`
+        INSERT INTO agent_rag_repair_state (account_id, account_generation, repaired, updated_at)
+        VALUES (?, ?, 1, ?)
+        ON CONFLICT(account_id, account_generation)
+        DO UPDATE SET repaired = 1, updated_at = excluded.updated_at
+      `).run(accountId, generation, this.now());
+    } catch {
+      // A failed persist only costs a re-scan on the next warm-up.
+    }
+  }
+
+  private async repairRemoteIdLookup(lease: AccountGenerationLease): Promise<void> {
     const generationKey = `${lease.accountId}:${lease.generation}`;
     if (this.remoteIdRepairedGenerations.has(generationKey)) return;
     try {
@@ -1325,6 +1373,7 @@ export class AgentRagWorker {
         if (candidates.length === 0) {
           this.remoteIdRepairedGenerations.add(generationKey);
           this.remoteIdRepairCursor.delete(generationKey);
+          this.persistRemoteIdRepairComplete(lease.accountId, lease.generation);
           return;
         }
       }
@@ -1334,7 +1383,13 @@ export class AgentRagWorker {
         .sort((left, right) => left.pageId.localeCompare(right.pageId));
       let repaired = 0;
       let scannedToEnd = true;
+      // Yield by visit count too: even when every page is already repaired the
+      // scan still decrypts each one to check, so a large account must not hold
+      // the event loop in one long synchronous stretch.
+      const repairYieldBatch = 32;
+      let visited = 0;
       for (const page of pages) {
+        visited += 1;
         if (page.pageId <= cursor) continue;
         // Advance the cursor on every inspected page so a later warm-up resumes
         // right after it, whether or not this page needed a repair.
@@ -1358,6 +1413,9 @@ export class AgentRagWorker {
         });
         this.upsertIndex({ ...revised, payload: nextPayload });
         repaired += 1;
+        if (visited % repairYieldBatch === 0) {
+          await new Promise<void>((resolve) => setImmediate(() => resolve()));
+        }
         if (repaired >= REMOTE_ID_REPAIR_BATCH) {
           scannedToEnd = false;
           break;
@@ -1367,6 +1425,7 @@ export class AgentRagWorker {
         this.remoteIdRepairedGenerations.add(generationKey);
         this.remoteIdRepairCursor.delete(generationKey);
         this.remoteIdCandidatePrefixes.delete(generationKey);
+        this.persistRemoteIdRepairComplete(lease.accountId, lease.generation);
       }
     } catch {
       // Best-effort migration; a failure keeps the cursor so the next warm-up

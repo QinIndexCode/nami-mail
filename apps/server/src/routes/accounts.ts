@@ -26,7 +26,7 @@ import {
   outboundAttachmentDirectory,
 } from "../outbound-attachments.js";
 import { submissionForId, submissionsForAccount } from "../outbox.js";
-import { emitAccountSynced } from "../events.js";
+import { emitAccountSynced, emitSyncProgress } from "../events.js";
 import { getSyncMessageLimit, updateAppSettings } from "../settings.js";
 import { syncAccount } from "../sync.js";
 import {
@@ -181,6 +181,8 @@ export function registerAccountRoutes(
       getSyncMessageLimit(context.db),
       context.oauthService,
       context.agentMailEvents,
+      undefined,
+      (progress) => emitSyncProgress(context.serverEvents, progress.accountId, progress.folder, progress.processed, progress.totalEstimate),
     )
       .then(() => emitAccountSynced(context.db, context.serverEvents, id))
       .catch((error) => {
@@ -341,6 +343,8 @@ export function registerAccountRoutes(
       getSyncMessageLimit(context.db),
       context.oauthService,
       context.agentMailEvents,
+      undefined,
+      (progress) => emitSyncProgress(context.serverEvents, progress.accountId, progress.folder, progress.processed, progress.totalEstimate),
     )
       .then(() => emitAccountSynced(context.db, context.serverEvents, id))
       .catch((error) => {

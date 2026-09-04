@@ -2124,6 +2124,7 @@
     "demo.submission.subject.unknown_delivery": "合作提案最终确认",
     "demo.submission.subject.submitting": "周末行程与预订信息",
     "demo.submission.subject.confirmed": "照片下载链接",
-    "demo.submission.error.connectionFailed": "发送连接在等待最终响应时中断，服务端是否接受邮件暂时无法确认。"
+    "demo.submission.error.connectionFailed": "发送连接在等待最终响应时中断，服务端是否接受邮件暂时无法确认。",
+    "mail.syncingHistory": "正在同步历史邮件，最新邮件已可查看（{processed}/{totalCount}）"
   }
 }

@@ -214,6 +214,13 @@ export function useAgentSession({
   // ---------------------------------------------------------------------------
   const pendingStreamPiecesRef = useRef<{ id: string; event: AgentStreamEvent }[]>([]);
   const streamRafRef = useRef<number | null>(null);
+  // While the window is hidden the flush falls back to setTimeout (rAF may stop
+  // firing on some hidden-window configurations). The pending id lives here so
+  // every cancellation point can also clear it even though the rAF ref is null.
+  const streamHiddenTimerRef = useRef<number | null>(null);
+  // Lets armStreamFlush (defined before flushPendingStreamPieces) reach the
+  // latest flush callback without a use-before-declaration cycle.
+  const flushPendingStreamPiecesRef = useRef<() => void>(() => undefined);
   const streamPacingRef = useRef<{
     lastTick: number;
     value: number; // current reveal rate, chars/sec
@@ -240,8 +247,33 @@ export function useAgentSession({
   // ---------------------------------------------------------------------------
   // rAF flush + reveal pacing
   // ---------------------------------------------------------------------------
+  // Arm the next frame-batched flush pass. While the window is visible it runs
+  // on requestAnimationFrame so it batches with paints; while the window is
+  // hidden rAF may stop firing entirely on some platforms, which would let a
+  // long background stream pile an unbounded backlog that all flushes at once
+  // on restore. Falling back to a bounded setTimeout keeps the hidden backlog
+  // draining at a fixed pace, so restoring never hits a giant flush. The active
+  // id lives in whichever ref matches the path taken; every cancellation point
+  // clears both so a stale id can never fire into the wrong context.
+  const armStreamFlush = useCallback(() => {
+    if (streamRafRef.current !== null) {
+      cancelAnimationFrame(streamRafRef.current);
+      streamRafRef.current = null;
+    }
+    if (streamHiddenTimerRef.current !== null) {
+      window.clearTimeout(streamHiddenTimerRef.current);
+      streamHiddenTimerRef.current = null;
+    }
+    if (document.hidden) {
+      streamHiddenTimerRef.current = window.setTimeout(flushPendingStreamPiecesRef.current, 250);
+    } else {
+      streamRafRef.current = requestAnimationFrame(flushPendingStreamPiecesRef.current);
+    }
+  }, []);
+
   const flushPendingStreamPieces = useCallback(() => {
     streamRafRef.current = null;
+    streamHiddenTimerRef.current = null;
     const queue = pendingStreamPiecesRef.current;
     if (queue.length === 0) return;
     pendingStreamPiecesRef.current = [];
@@ -304,11 +336,9 @@ export function useAgentSession({
       return messages === current.messages ? current : { ...current, messages };
     });
     // Drain the remaining backlog on the next frame at the same bounded pace.
-    if (leftovers.length > 0) {
-      if (streamRafRef.current !== null) cancelAnimationFrame(streamRafRef.current);
-      streamRafRef.current = requestAnimationFrame(flushPendingStreamPieces);
-    }
-  }, [setActive]);
+    if (leftovers.length > 0) armStreamFlush();
+  }, [armStreamFlush, setActive]);
+  flushPendingStreamPiecesRef.current = flushPendingStreamPieces;
 
   // Live runs keyed by conversation, so a run the user navigated away from can
   // keep streaming into a buffer (no UI cost) and be replayed on re-entry. When
@@ -363,12 +393,14 @@ export function useAgentSession({
           cancelAnimationFrame(streamRafRef.current);
           streamRafRef.current = null;
         }
+        if (streamHiddenTimerRef.current !== null) {
+          window.clearTimeout(streamHiddenTimerRef.current);
+          streamHiddenTimerRef.current = null;
+        }
         flushPendingStreamPieces();
         return;
       }
-      if (streamRafRef.current === null) {
-        streamRafRef.current = requestAnimationFrame(flushPendingStreamPieces);
-      }
+      armStreamFlush();
       return;
     }
     // Background run: accumulate without rendering. Status/suggestions are kept
@@ -393,7 +425,7 @@ export function useAgentSession({
     // turns, so re-entry would otherwise show a bare user message with no error.
     if (event.type === "error") backgroundErrorRef.current.set(conversationId, event.error);
     session.events.push(event);
-  }, [activeIdRef, flushPendingStreamPieces, setActive, setConversations, setPendingMemorySuggestions]);
+  }, [activeIdRef, armStreamFlush, flushPendingStreamPieces, setActive, setConversations, setPendingMemorySuggestions]);
 
   // Close the panel is a "leave", not a "cancel". Drop every local stream (the
   // fetch rejection aborts the SSE, which on the server only stops event
@@ -409,6 +441,10 @@ export function useAgentSession({
         session.controller.abort();
       }
       if (streamRafRef.current !== null) cancelAnimationFrame(streamRafRef.current);
+      if (streamHiddenTimerRef.current !== null) {
+        window.clearTimeout(streamHiddenTimerRef.current);
+        streamHiddenTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -670,6 +706,10 @@ export function useAgentSession({
       cancelAnimationFrame(streamRafRef.current);
       streamRafRef.current = null;
     }
+    if (streamHiddenTimerRef.current !== null) {
+      window.clearTimeout(streamHiddenTimerRef.current);
+      streamHiddenTimerRef.current = null;
+    }
     pendingStreamPiecesRef.current = [];
   }, []);
 
@@ -780,6 +820,10 @@ export function useAgentSession({
     if (streamRafRef.current !== null) {
       cancelAnimationFrame(streamRafRef.current);
       streamRafRef.current = null;
+    }
+    if (streamHiddenTimerRef.current !== null) {
+      window.clearTimeout(streamHiddenTimerRef.current);
+      streamHiddenTimerRef.current = null;
     }
     pendingStreamPiecesRef.current = [];
     const pacing = streamPacingRef.current;
