@@ -199,7 +199,13 @@ try {
     });
   }
 
-  await run(process.execPath, [path.join(projectRoot, "scripts", "smoke-package.mjs")], {
+  const smokePackageArgs = [path.join(projectRoot, "scripts", "smoke-package.mjs")];
+  // Local machines that already have a real install must not have the installer
+  // smoke uninstall/upgrade it. Opt in explicitly with NAMI_MAIL_SKIP_INSTALLER_SMOKE=1.
+  if (process.env.NAMI_MAIL_SKIP_INSTALLER_SMOKE === "1") {
+    smokePackageArgs.push("--skip-installer-smoke");
+  }
+  await run(process.execPath, smokePackageArgs, {
     ...cleanEnvironment,
     NAMI_MAIL_RELEASE_DIRECTORY: releaseDirectory,
     NAMI_MAIL_EXPECTED_INSTALLER: expectedInstaller,

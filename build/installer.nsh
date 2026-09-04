@@ -47,10 +47,16 @@
 !macroend
 
 !macro namiUnregisterCliPath
+  ; PATH cleanup is best-effort and must never fail the surrounding operation.
+  ; Losing the namimail.cmd shell alias only means the user re-adds the path;
+  ; it has no relation to whether the app can be updated/uninstalled. Making it
+  ; fatal would make the old uninstaller exit non-zero during an in-place
+  ; update (--updated), which electron-builder's uninstallOldVersion retries
+  ; 5x and then aborts the whole install with the misleading "cannot be closed"
+  ; prompt.
   !insertmacro namiApplyCliPath "unregister"
   ${If} $R0 != "0"
-    DetailPrint "Nami Mail CLI PATH cleanup failed: $R0"
-    SetErrorLevel 6
+    DetailPrint "Nami Mail CLI PATH cleanup failed (non-fatal): $R0"
   ${EndIf}
 !macroend
 
@@ -222,7 +228,12 @@ Var /GLOBAL namiVersionComparison
 ; process tree, so no orphan child process is left behind.
 !macro customCheckAppRunning
   nami_check_app_loop:
-  nsExec::Exec `"$CmdPath" /C tasklist /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
+  ; Only consider the current user's own app processes. A same-named process
+  ; owned by another session/user (e.g. an elevated orphan, or an instance left
+  ; by a different logged-on user) is not the per-user instance this installer
+  ; must close, and this non-elevated installer cannot terminate one that runs
+  ; at a higher integrity level anyway.
+  nsExec::ExecToLog `"$CmdPath" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
   Pop $R0
   ${If} $R0 != 0
     Goto nami_check_app_done
@@ -236,14 +247,16 @@ Var /GLOBAL namiVersionComparison
   nami_check_app_graceful:
   DetailPrint "$(appClosing)"
 
-  ; Graceful close request (taskkill without /F posts WM_CLOSE).
-  nsExec::Exec `"$CmdPath" /C taskkill /IM "${APP_EXECUTABLE_FILENAME}"`
+  ; Graceful close request (taskkill without /F posts WM_CLOSE). Log the output
+  ; so a failure (access denied, not found, etc.) is recorded in the install
+  ; log instead of being silently swallowed.
+  nsExec::ExecToLog `"$CmdPath" /C taskkill /IM "${APP_EXECUTABLE_FILENAME}" /FI "USERNAME eq %USERNAME%"`
   ; Poll for a clean self-exit (up to 5s, 250ms steps) instead of a fixed
   ; Sleep: an app that exits quickly no longer pays the full wait.
   StrCpy $R1 0
   nami_wait_close:
     Sleep 250
-    nsExec::Exec `"$CmdPath" /C tasklist /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
+    nsExec::ExecToLog `"$CmdPath" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
     Pop $R0
     ${If} $R0 != 0
       Goto nami_check_app_done
@@ -253,11 +266,14 @@ Var /GLOBAL namiVersionComparison
       Goto nami_wait_close
     ${EndIf}
 
-  ; Force close the whole process tree so no orphan child process remains.
-  nsExec::Exec `"$CmdPath" /C taskkill /T /F /IM "${APP_EXECUTABLE_FILENAME}"`
+  ; Force close the whole process tree so no orphan child process remains. If
+  ; the target itself runs elevated while this installer is not, taskkill logs
+  ; "ERROR: The process ... could not be terminated." (access denied) and the
+  ; process survives; the logged message below is what makes that case visible.
+  nsExec::ExecToLog `"$CmdPath" /C taskkill /T /F /IM "${APP_EXECUTABLE_FILENAME}" /FI "USERNAME eq %USERNAME%"`
   Sleep 500
 
-  nsExec::Exec `"$CmdPath" /C tasklist /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
+  nsExec::ExecToLog `"$CmdPath" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
   Pop $R0
   ${If} $R0 == 0
     MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY nami_check_app_loop

@@ -28,7 +28,7 @@
     "packages/*"
   ],
   "scripts": {
-    "postinstall": "node scripts/ensure-electron-runtime.mjs",
+    "postinstall": "node scripts/ensure-electron-runtime.mjs && node scripts/apply-nsis-registry-patch.mjs",
     "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:server:watch\" \"npm:dev:web\"",
     "dev:server": "npm --workspace @nami/server run dev",
     "dev:server:watch": "node scripts/dev-server-watch.mjs",
