@@ -2124,6 +2124,7 @@
     "demo.submission.subject.unknown_delivery": "Final proposal confirmation",
     "demo.submission.subject.submitting": "Weekend itinerary and booking details",
     "demo.submission.subject.confirmed": "Photo download link",
-    "demo.submission.error.connectionFailed": "The connection dropped while waiting for the final response, so we can't confirm whether the server accepted the email."
+    "demo.submission.error.connectionFailed": "The connection dropped while waiting for the final response, so we can't confirm whether the server accepted the email.",
+    "mail.syncingHistory": "Syncing history — latest messages are ready ({processed}/{totalCount})"
   }
 }

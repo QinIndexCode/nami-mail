@@ -64,7 +64,8 @@ import { resolveUpdateFooter, type UpdateFooterAction } from "./updateFooter";
 import { demoDataSnapshot, ensureDemoLoaded } from "./demo-loader";
 import { mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
 import { AccountHealthBanner, accountShowsFreshness, accountStatusDotClass, useAccountHealth } from "./accountHealth";
-import { useRealtimeSync } from "./realtimeSync";
+import { useRealtimeSync, type SyncProgressPayload } from "./realtimeSync";
+import { useCoalescedRefresh } from "./useCoalescedRefresh";
 import { buildForwardDraft, buildReplyDraft } from "./mailActions";
 import { ComposeModal } from "./ComposeModal";
 import { sortMessages } from "./mailImportance";
@@ -887,6 +888,32 @@ await refreshSubmissions(nextAccounts, { silent: true });
     }
   }, [captureScrollAnchor, attachmentKindFilter, dateBounds, debouncedQuery, refreshSubmissions, searchScope, selectedAccount, selectedFolder, view]);
 
+  // One gate for every refresh trigger (SSE events, the desktop new-mail IPC
+  // bridge, the poll fallback and the Agent's mail-state changes). While the
+  // window is hidden a request only marks the list dirty and is flushed by a
+  // single catch-up on the next visibilitychange — so a background sync storm
+  // stops feeding the main thread, and restoring the window never hits a burst
+  // of queued full reloads. Foreground bursts collapse onto a trailing pass.
+  const requestRefresh = useCoalescedRefresh(silentRefresh);
+
+  // Live initial/full sync progress, fed by "sync.progress" SSE frames. It
+  // drives a lightweight "syncing history" banner; the banner auto-dismisses a
+  // short beat after the last frame so a busy multi-folder download stays
+  // visible but a finished one does not linger.
+  const [syncProgress, setSyncProgress] = useState<SyncProgressPayload | null>(null);
+  const syncProgressClearTimerRef = useRef<number | null>(null);
+  const handleSyncProgress = useCallback((next: SyncProgressPayload) => {
+    if (syncProgressClearTimerRef.current !== null) {
+      window.clearTimeout(syncProgressClearTimerRef.current);
+      syncProgressClearTimerRef.current = null;
+    }
+    setSyncProgress(next);
+    syncProgressClearTimerRef.current = window.setTimeout(() => setSyncProgress(null), 1_500);
+  }, []);
+  useEffect(() => () => {
+    if (syncProgressClearTimerRef.current !== null) window.clearTimeout(syncProgressClearTimerRef.current);
+  }, []);
+
   const loadSettings = useCallback(async () => {
     if (isDemo) return;
     const ticket = settingsLoadCoordinatorRef.current.beginLoad();
@@ -1016,8 +1043,9 @@ await refreshSubmissions(nextAccounts, { silent: true });
     isDesktop: Boolean(desktopBridge()),
     t,
     showToast,
-    onRefresh: silentRefresh,
+    onRefresh: requestRefresh,
     onSettingsChanged: loadSettings,
+    onSyncProgress: handleSyncProgress,
   });
   // Defensive: a read/unread toggle whose request hangs would otherwise leave
   // its id in the in-flight set, pinning the optimistic seen state on top of
@@ -1222,9 +1250,9 @@ await refreshSubmissions(nextAccounts, { silent: true });
   // lands, without waiting for the periodic refresh interval.
   const handleAccountAdded = useCallback(async () => {
     await load();
-    window.setTimeout(() => void silentRefresh(), 8_000);
-    window.setTimeout(() => void silentRefresh(), 30_000);
-  }, [load, silentRefresh]);
+    window.setTimeout(() => requestRefresh(), 8_000);
+    window.setTimeout(() => requestRefresh(), 30_000);
+  }, [load, requestRefresh]);
 
   const loadedServerMessageCount = useMemo(() => {
     if (isDemo) return filteredMessages.length;
@@ -2933,7 +2961,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     const bridge = desktopBridge();
     if (!bridge || isDemo) return undefined;
     const unsubscribeNewMail = bridge.onNewMail((notice) => {
-      void silentRefresh();
+      requestRefresh();
       if (!notice.shouldAlert) return;
       if (notice.playCustomSound && !playNotificationSound(settings.notificationSound)) {
         bridge.setCustomNotificationSoundReady(false);
@@ -3398,6 +3426,12 @@ const emptyMessageList = useMemo(() => (query.trim()
             />
           )}
 
+          {syncProgress && syncProgress.totalEstimate > 0 && (
+            <div className="sync-progress-banner" role="status" aria-live="polite">
+              {t("mail.syncingHistory", { processed: syncProgress.processed, totalCount: syncProgress.totalEstimate })}
+            </div>
+          )}
+
           <div className={`list-toolbar-frame${selectionMode ? " selection-on" : ""}`}>
             <div className="list-toolbar list-status-bar">
               <span className={recentlyReadVisibleCount ? "unread-retention-note" : ""} aria-live={recentlyReadVisibleCount ? "polite" : undefined}>{listToolbarStatus}</span>
@@ -3624,7 +3658,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           )}
 </section>
         </div>
-        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} providerSettingsRequestId={agentProviderSettingsRequestId} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { void silentRefresh(); }} onClose={() => {
+        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} providerSettingsRequestId={agentProviderSettingsRequestId} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
           closeAgentWorkspace();
           // Refresh agent bootstrap so the translation panel picks up any
           // provider configuration changes made inside the assistant workspace.

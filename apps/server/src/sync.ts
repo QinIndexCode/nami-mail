@@ -25,6 +25,16 @@ import { getAutoReplyEngine } from "./agent/auto-reply.js";
 const running = new Set<string>();
 const movingAccounts = new Set<string>();
 
+/**
+ * How many newly fetched messages are written (and their bodies downloaded)
+ * per pass-two batch. Pass one scans the whole window for metadata only; pass
+ * two then upserts in descending-UID batches so the newest mail lands and is
+ * visible within the first ~100-message group instead of only after the entire
+ * mailbox has been fetched. Smaller batches make recent mail appear sooner on
+ * a fresh/full sync at the cost of a few more FETCH round-trips.
+ */
+const INITIAL_SYNC_BATCH = 100;
+
 /** True when the account is mid-sync. Used by move operations to block concurrent intents. */
 export function isAccountSyncing(accountId: string): boolean {
   return running.has(accountId);
@@ -168,6 +178,16 @@ export type NewInboxMessage = {
   subject: string;
   fromName: string;
   fromAddress: string;
+};
+
+/** Progress of the pass-two upsert for one folder during a sync pass. */
+export type SyncProgress = {
+  accountId: string;
+  folder: string;
+  /** How many newly fetched messages have been written so far this pass. */
+  processed: number;
+  /** Best-effort count of new messages in this folder's window. */
+  totalEstimate: number;
 };
 
 export function accountById(db: DatabaseHandle, id: string): AccountRecord | undefined {
@@ -365,6 +385,7 @@ export async function syncAccount(
   accessTokenProvider?: AccountAccessTokenProvider,
   agentEvents?: AgentMailEventSink,
   signal?: AbortSignal,
+  onProgress?: (progress: SyncProgress) => void,
 ): Promise<{ synced: number; folders: number; failedFolders: number; limitReached: boolean; newInboxMessages: NewInboxMessage[] }> {
   if (running.has(accountId) || movingAccounts.has(accountId)) {
     return { synced: 0, folders: 0, failedFolders: 0, limitReached: false, newInboxMessages: [] };
@@ -1055,8 +1076,21 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           continue;
         }
         const newUidSet = new Set(newUids);
+        // Persist newest mail first. Pass one (above) collected every new UID
+        // from the window with a single metadata-only scan; pass two downloads
+        // bodies and upserts them. IMAP FETCH has no descending form, so we
+        // chunk the collected UIDs newest-first: the newest message lands and
+        // becomes visible within the first ~100-message batch instead of only
+        // after the whole window has been fetched. This keeps a fresh account
+        // (or a deep full sync) from hiding recent mail while older mail is
+        // still downloading.
+        const uidsDescending = [...uidsToFetch].sort((a, b) => b - a);
+        let processedInFolder = 0;
+        for (let batchOffset = 0; batchOffset < uidsDescending.length; batchOffset += INITIAL_SYNC_BATCH) {
+          const batchUids = uidsDescending.slice(batchOffset, batchOffset + INITIAL_SYNC_BATCH);
+          processedInFolder += batchUids.length;
         for await (const message of client.fetch(
-          uidsToFetch,
+          batchUids,
           {
             uid: true,
             envelope: true,
@@ -1189,7 +1223,14 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
               newInboxMessages.push({ id, accountId, subject, fromName: from.name, fromAddress: from.address });
             }
           }
-        }
+        } // end inner for-await over this newest-first batch
+          onProgress?.({
+            accountId,
+            folder: folder.path,
+            processed: processedInFolder,
+            totalEstimate: uidsDescending.length,
+          });
+        } // end newest-first batch loop
         if (sameUidValidity && !pendingMoveTouchesFolder) await reconcileRemoteDeletionBatch(folder, currentUidValidity);
       } catch (error) {
         if (error instanceof SyncAbortedError) throw error;

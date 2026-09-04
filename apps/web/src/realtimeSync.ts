@@ -12,6 +12,13 @@ export function shouldPollTick(lastSseEventAtMs: number, nowMs: number, interval
   return nowMs - lastSseEventAtMs >= intervalMs;
 }
 
+export type SyncProgressPayload = {
+  accountId: string;
+  folder: string;
+  processed: number;
+  totalEstimate: number;
+};
+
 export type RealtimeSyncOptions = {
   /** Master switch (the App shell passes `!isDemo`); when off nothing connects or polls. */
   enabled: boolean;
@@ -27,6 +34,8 @@ export type RealtimeSyncOptions = {
   onRefresh: () => void;
   /** Re-fetch and apply app settings after the Agent tool changed them. */
   onSettingsChanged: () => void;
+  /** Live initial/full sync progress, for a "syncing history" banner. */
+  onSyncProgress: (progress: SyncProgressPayload) => void;
 };
 
 /**
@@ -52,15 +61,18 @@ export function useRealtimeSync({
   showToast,
   onRefresh,
   onSettingsChanged,
+  onSyncProgress,
 }: RealtimeSyncOptions): void {
   const sseHandlersRef = useRef<{
     mailReceived: (event: MessageEvent<string>) => void;
     mailSynced: () => void;
     settingsChanged: () => void;
+    syncProgress: (event: MessageEvent<string>) => void;
   }>({
     mailReceived: () => undefined,
     mailSynced: () => undefined,
     settingsChanged: () => undefined,
+    syncProgress: () => undefined,
   });
   // Timestamp of the most recent inbound SSE event; the periodic poll skips
   // its tick while this stays fresh (see shouldPollTick) and resumes once a
@@ -93,6 +105,27 @@ export function useRealtimeSync({
     // The Agent settings tool changed app settings — re-fetch and apply them
     // so the running UI reflects the change immediately.
     sseHandlersRef.current.settingsChanged = () => { lastSseEventAtRef.current = Date.now(); void onSettingsChanged(); };
+    // Live initial/full sync progress. This is display-only (a "syncing history"
+    // banner) and intentionally does NOT trigger onRefresh — a background bulk
+    // download would otherwise hammer the mailbox API once per batch. The
+    // finished-pass mail.synced event is what reconciles the list at the end.
+    sseHandlersRef.current.syncProgress = (event: MessageEvent<string>) => {
+      lastSseEventAtRef.current = Date.now();
+      try {
+        const parsed = JSON.parse(event.data) as { payload?: { accountId?: unknown; folder?: unknown; processed?: unknown; totalEstimate?: unknown } };
+        const payload = parsed.payload;
+        if (!payload || typeof payload.accountId !== "string" || typeof payload.folder !== "string"
+          || typeof payload.processed !== "number" || typeof payload.totalEstimate !== "number") return;
+        onSyncProgress({
+          accountId: payload.accountId,
+          folder: payload.folder,
+          processed: payload.processed,
+          totalEstimate: payload.totalEstimate,
+        });
+      } catch {
+        // Malformed frame — ignore, the next one carries the same state.
+      }
+    };
   });
 
   useEffect(() => {
@@ -124,6 +157,7 @@ export function useRealtimeSync({
     const handleMailReceived = (event: MessageEvent<string>) => sseHandlersRef.current.mailReceived(event);
     const handleMailSynced = () => sseHandlersRef.current.mailSynced();
     const handleSettingsChanged = () => sseHandlersRef.current.settingsChanged();
+    const handleSyncProgress = (event: MessageEvent<string>) => sseHandlersRef.current.syncProgress(event);
 
     const connect = () => {
       source?.close();
@@ -132,6 +166,7 @@ export function useRealtimeSync({
       next.addEventListener("mail.received", handleMailReceived);
       next.addEventListener("mail.synced", handleMailSynced);
       next.addEventListener("settings.changed", handleSettingsChanged);
+      next.addEventListener("sync.progress", handleSyncProgress);
       next.onopen = () => { attempt = 0; };
       next.onerror = () => {
         if (closed || next !== source) return;

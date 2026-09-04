@@ -28,10 +28,20 @@ export type SettingsChangedEvent = {
   at: string;
 };
 
+export type SyncProgressEvent = {
+  accountId: string;
+  folder: string;
+  /** Number of newly fetched messages persisted so far in this folder's pass. */
+  processed: number;
+  /** Best-effort total new-message count for the folder; can change between frames. */
+  totalEstimate: number;
+};
+
 export type ServerEvent =
   | { type: "mail.received"; payload: MailReceivedEvent }
   | { type: "mail.synced"; payload: MailSyncedEvent }
-  | { type: "settings.changed"; payload: SettingsChangedEvent };
+  | { type: "settings.changed"; payload: SettingsChangedEvent }
+  | { type: "sync.progress"; payload: SyncProgressEvent };
 
 export type ServerEventListener = (event: ServerEvent) => void;
 
@@ -87,4 +97,12 @@ export function emitAccountSynced(db: DatabaseHandle, bus: ServerEventBus | unde
 export function emitSettingsChanged(bus: ServerEventBus | undefined): void {
   if (!bus) return;
   bus.emit({ type: "settings.changed", payload: { at: new Date().toISOString() } });
+}
+
+/** Broadcasts that a folder's pass-two upsert advanced, so connected renderers can
+ * show live "syncing history" progress instead of a blank list while a fresh/full
+ * sync downloads a large mailbox. */
+export function emitSyncProgress(bus: ServerEventBus | undefined, accountId: string, folder: string, processed: number, totalEstimate: number): void {
+  if (!bus) return;
+  bus.emit({ type: "sync.progress", payload: { accountId, folder, processed, totalEstimate } });
 }
