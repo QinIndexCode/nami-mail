@@ -10,7 +10,7 @@ import {
 } from "./attachmentPreview";
 import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 
 export type PreviewAttachment = {
   partId: string;

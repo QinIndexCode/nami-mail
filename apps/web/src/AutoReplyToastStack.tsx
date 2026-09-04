@@ -5,7 +5,7 @@ import type { DesktopAutoReplyNotice } from "./desktop";
 import { desktopBridge } from "./desktop";
 import { autoReplySenderLabel } from "./AutoReplyPendingDialog";
 import { useI18n } from "./i18n";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 
 const EXIT_DURATION_MS = 240;
 

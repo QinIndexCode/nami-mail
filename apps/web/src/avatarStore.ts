@@ -63,34 +63,42 @@ export function useCustomAvatar(email: string): string | null {
 /**
  * Reads a picked image file and downsizes it into a square JPEG data URL.
  * Returns null when the file is not decodable as an image.
+ *
+ * Uses FileReader.readAsDataURL to avoid blob-URL loading issues in
+ * Electron's sandboxed renderer where `URL.createObjectURL` + `Image` can
+ * silently fail to fire `onload`.
  */
 export function resizeAvatarFile(file: File, maxSize = 112): Promise<string | null> {
   return new Promise((resolve) => {
-    const objectUrl = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-      try {
-        const scale = Math.min(1, maxSize / Math.max(image.naturalWidth, image.naturalHeight));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-        const context = canvas.getContext("2d");
-        if (!context) {
-          resolve(null);
-          return;
-        }
-        context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.85));
-      } catch {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== "string") {
         resolve(null);
-      } finally {
-        URL.revokeObjectURL(objectUrl);
+        return;
       }
+      const image = new Image();
+      image.onload = () => {
+        try {
+          const scale = Math.min(1, maxSize / Math.max(image.naturalWidth, image.naturalHeight));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+          const context = canvas.getContext("2d");
+          if (!context) {
+            resolve(null);
+            return;
+          }
+          context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.85));
+        } catch {
+          resolve(null);
+        }
+      };
+      image.onerror = () => resolve(null);
+      image.src = dataUrl;
     };
-    image.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      resolve(null);
-    };
-    image.src = objectUrl;
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
   });
 }

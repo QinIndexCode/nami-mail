@@ -70,6 +70,25 @@ export type MailListResult = {
   nextCursor?: string;
 };
 
+export type MailSearchQuery = {
+  accountIds: readonly string[];
+  /** Free-text keyword matched against subject, sender, body, recipients, and attachment names. */
+  query: string;
+  after?: string;
+  before?: string;
+  limit: number;
+};
+
+export type MailSearchResult = {
+  items: readonly MailMessageView[];
+  total: number;
+  truncated: boolean;
+  /** Effective lower bound (UTC ISO) actually applied to the search, or null when unbounded. */
+  searchedFrom?: string | null;
+  /** Newest message timestamp present in the local index for the searched accounts, or null if none. */
+  newestLocalAt?: string | null;
+};
+
 export type DraftMutation = {
   accountId: string;
   draftId?: string;
@@ -110,6 +129,7 @@ export interface MailApplicationService {
   listAccounts(context: MailApplicationContext): Promise<readonly MailAccountView[]>;
   listFolders(context: MailApplicationContext, accountId: string): Promise<readonly MailFolderView[]>;
   listMessages(context: MailApplicationContext, query: MailListQuery): Promise<MailListResult>;
+  searchMessages(context: MailApplicationContext, query: MailSearchQuery): Promise<MailSearchResult>;
   getMessage(context: MailApplicationContext, messageId: string): Promise<MailMessageDetail | undefined>;
   getThread(context: MailApplicationContext, threadId: string): Promise<readonly MailMessageDetail[]>;
   listAttachments(context: MailApplicationContext, messageId: string): Promise<readonly MailAttachmentView[]>;

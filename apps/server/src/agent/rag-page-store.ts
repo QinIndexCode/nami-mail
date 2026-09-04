@@ -87,6 +87,14 @@ function metadata(row: StoredRagPageRow): RagPageMetadata {
  * are rebuilt from these authenticated pages after a restart.
  */
 export class EncryptedRagPageStore {
+  /** Upper bound on cached decrypted page payloads. RAG pages are append-only:
+   *  a given (account, generation, pageId, pageRevision) always decrypts to the
+   *  same content, so repeated reads (e.g. during warm-up followed by searches)
+   *  skip the AES-GCM decrypt + JSON.parse entirely. Eviction is a coarse LRU
+   *  via Map insertion order. */
+  private static readonly decryptCacheSize = 512;
+  private readonly decryptCache = new Map<string, DecryptedRagPage>();
+
   constructor(
     private readonly db: DatabaseHandle,
     private readonly masterKey: Buffer,
@@ -174,6 +182,15 @@ export class EncryptedRagPageStore {
     const row = this.currentRow(lease, pageId);
     if (!row || row.state !== "active") return undefined;
     if (row.crypto_version !== 1) throw new Error("Encrypted RAG page has an unsupported format.");
+    const cacheKey = `${lease.accountId}\u0000${lease.generation}\u0000${row.page_id}\u0000${row.page_revision}`;
+    const cached = this.decryptCache.get(cacheKey);
+    if (cached) {
+      // The page may have been deleted while cached; never return stale content.
+      this.lifecycle.assertCurrent(lease);
+      this.decryptCache.delete(cacheKey); // refresh recency
+      this.decryptCache.set(cacheKey, cached);
+      return cached;
+    }
     const accountDek = this.lifecycle.accountDataKey(lease);
     try {
       const plaintext = decryptAccountAgentRecord(
@@ -193,7 +210,13 @@ export class EncryptedRagPageStore {
       // The row may have been invalidated while it was decrypted. The caller
       // must never receive old-account content after a deletion race.
       this.lifecycle.assertCurrent(lease);
-      return { ...metadata(row), payload };
+      const page: DecryptedRagPage = { ...metadata(row), payload };
+      if (this.decryptCache.size >= EncryptedRagPageStore.decryptCacheSize) {
+        const oldest = this.decryptCache.keys().next();
+        if (!oldest.done) this.decryptCache.delete(oldest.value);
+      }
+      this.decryptCache.set(cacheKey, page);
+      return page;
     } finally {
       accountDek.fill(0);
     }

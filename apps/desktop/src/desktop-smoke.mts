@@ -701,7 +701,7 @@ export async function inspectDesktopDeepDiagnostic(): Promise<DesktopDeepDiagnos
 }
 
 /**
- * Temporary reference-mail chip vs rail overlap sweep. Gated behind
+ * Opt-in reference-mail chip vs rail overlap sweep. Gated behind
  * NAMI_CHIP_OVERLAP_PROBE so the normal smoke run keeps its exact probe
  * sequence; the app is driven through several window widths in both the
  * desktop and the browser layout and every sample records the chip's and

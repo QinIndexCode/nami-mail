@@ -62,6 +62,7 @@ import type {
   MailListQuery,
   MailMessageDetail,
   MailMessageView,
+  MailSearchQuery,
 } from "./mail-application-service.js";
 
 const MAX_ACCOUNT_RESULTS = externalMailReadBounds.accountResults;
@@ -93,6 +94,24 @@ const messageInputSchema = externalMessageGetInputSchema;
 const threadInputSchema = externalThreadGetInputSchema;
 const attachmentsListInputSchema = externalAttachmentsListInputSchema;
 
+// messages.search is a free-text full-text-search tool; its schema is local
+// because there is no contract counterpart. `after`/`before` accept ISO
+// timestamps (UTC or offset-carrying), matching messages.list semantics.
+const searchMessagesInputSchema = z.object({
+  query: z.string().trim().min(1).max(200),
+  after: z.string().optional(),
+  before: z.string().optional(),
+  limit: z.number().int().min(1).max(20).optional(),
+}).strict();
+
+const searchMessagesOutputSchema = z.object({
+  query: z.string(),
+  messages: z.array(messageMetadataOutputSchema),
+  total: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+  note: z.string().optional(),
+}).strict();
+
 const accountsOutputSchema = externalAccountsListOutputSchema;
 const foldersOutputSchema = externalFoldersListOutputSchema;
 const messagesOutputSchema = externalMessagesListOutputSchema;
@@ -114,6 +133,7 @@ type MoveMessageOutput = z.infer<typeof externalMoveMailOutputSchema>;
 type SetFlagOutput = z.infer<typeof externalSetFlagOutputSchema>;
 type SendMailOutput = z.infer<typeof externalSendMailOutputSchema>;
 type ReplyDraftInput = z.infer<typeof externalReplyMailInputSchema>;
+type SearchMessagesOutput = z.infer<typeof searchMessagesOutputSchema>;
 
 function clipped(value: string, maximum: number): string {
   return value.length > maximum ? value.slice(0, maximum) : value;
@@ -546,6 +566,58 @@ function messagesBatchGetTool(mailApplication: MailApplicationService): AgentToo
         results.push(messageDetail(result.value));
       }
       return { ok: true, value: { messages: results, notFound } };
+    },
+  };
+}
+
+function messagesSearchTool(mailApplication: MailApplicationService): AgentTool<z.infer<typeof searchMessagesInputSchema>, SearchMessagesOutput> {
+  return {
+    descriptor: {
+      name: "messages.search",
+      title: "Search mail messages",
+      description: "Full-text search across local mail (subject, sender, recipients, attachment names, and body) for a free-text keyword. Results are newest-first and each item is a short excerpt centred on the keyword, not the full body. Input: { query: string (a distinct keyword or short phrase), after?: ISO timestamp to bound the search to mail on/after it, before?: ISO timestamp, limit?: 1-20 (default 10) }. Use `after`/`before` together with a `limit` when the mail is known to be recent, and prefer messages.list for \"latest/today\" questions. Without a range, only mail from the last ~90 days is searched; the result's `note` reports the applied time window and the newest locally-synced timestamp, so if you need mail newer than the local sync you should tell the user the local copy may be behind. Returns truncated:true when more matches exist than the returned page.",
+      category: "messages",
+      executionMode: "read",
+      requiredScopes: ["read:messages"],
+      accountAccess: "optional",
+      confirmationPolicy: "never",
+      availableToExternal: true,
+      timeoutMs: 20_000,
+    },
+    inputSchema: searchMessagesInputSchema,
+    outputSchema: searchMessagesOutputSchema,
+    execute: async (context, input) => {
+      const denied = requireScope<SearchMessagesOutput>(context);
+      if (denied) return denied;
+      const query: MailSearchQuery = {
+        accountIds: scopedAccountIds(context),
+        query: input.query,
+        ...(input.after ? { after: input.after } : {}),
+        ...(input.before ? { before: input.before } : {}),
+        limit: input.limit ?? 10,
+      };
+      const result = await fromMailApplication(context, () => mailApplication.searchMessages(scopedContext(context), query));
+      if (!result.ok) return result;
+      const returnedScopeDenied = requireReturnedMessages<SearchMessagesOutput>(context, result.value.items);
+      if (returnedScopeDenied) return returnedScopeDenied;
+      const notes: string[] = [];
+      if (result.value.total === 0) notes.push("No messages matched the search query.");
+      if (result.value.searchedFrom && !input.after && !input.before) {
+        notes.push(`No time range was given, so only mail on/after ${result.value.searchedFrom} was searched`);
+      }
+      if (result.value.newestLocalAt) {
+        notes.push(`Local data is synced up to ${result.value.newestLocalAt}; newer mail may not be available yet`);
+      }
+      return {
+        ok: true,
+        value: {
+          query: input.query,
+          messages: result.value.items.slice(0, MAX_MESSAGE_RESULTS).map(messageMetadata),
+          total: result.value.total,
+          truncated: result.value.truncated || result.value.items.length > MAX_MESSAGE_RESULTS,
+          ...(notes.length ? { note: notes.join(" ") } : {}),
+        },
+      };
     },
   };
 }
@@ -999,6 +1071,7 @@ export function createMailTools(
     messagesListTool(mailApplication),
     messageGetTool(mailApplication),
     messagesBatchGetTool(mailApplication),
+    messagesSearchTool(mailApplication),
     summarizeMailTool(mailApplication),
     threadGetTool(mailApplication),
     attachmentsListTool(mailApplication),

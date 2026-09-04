@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { shouldPollTick, useRealtimeSync, type RealtimeSyncOptions } from "./realtimeSync";
+import { shouldPollTick, useRealtimeSync, type RealtimeSyncOptions, type SyncProgressPayload } from "./realtimeSync";
 import { translate, type Translate } from "./i18n";
 import type { ToastKind } from "./mailUi";
 
@@ -71,6 +71,7 @@ function baseOptions(): RealtimeSyncOptions {
     showToast: vi.fn<(message: string, kind?: ToastKind) => void>(),
     onRefresh: vi.fn<() => void>(),
     onSettingsChanged: vi.fn<() => void>(),
+    onSyncProgress: vi.fn<(progress: SyncProgressPayload) => void>(),
   };
 }
 
@@ -105,12 +106,12 @@ describe("useRealtimeSync", () => {
     expect(FakeEventSource.instances).toHaveLength(0);
   });
 
-  it("opens one stream and subscribes to the three event names", () => {
+  it("opens one stream and subscribes to the four event names", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     mount(baseOptions());
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(FakeEventSource.instances[0].url).toBe("/api/events");
-    for (const eventName of ["mail.received", "mail.synced", "settings.changed"]) {
+    for (const eventName of ["mail.received", "mail.synced", "settings.changed", "sync.progress"]) {
       expect(FakeEventSource.instances[0].listeners.has(eventName)).toBe(true);
     }
   });
@@ -199,6 +200,33 @@ describe("useRealtimeSync", () => {
     mount({ ...baseOptions(), onSettingsChanged });
     act(() => { FakeEventSource.instances[0].dispatch("settings.changed"); });
     expect(onSettingsChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards sync.progress payloads without refreshing", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const { onRefresh, onSyncProgress } = baseOptions();
+    mount({ ...baseOptions(), onRefresh, onSyncProgress });
+    const instance = FakeEventSource.instances[0];
+    act(() => {
+      instance.dispatch("sync.progress", { data: JSON.stringify({ type: "sync.progress", payload: { accountId: "acc-1", folder: "INBOX", processed: 120, totalEstimate: 500 } }) });
+    });
+    // Display-only: a background bulk download must not trickle into refreshes.
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(onSyncProgress).toHaveBeenCalledTimes(1);
+    expect(onSyncProgress).toHaveBeenCalledWith({ accountId: "acc-1", folder: "INBOX", processed: 120, totalEstimate: 500 });
+  });
+
+  it("ignores malformed sync.progress frames", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const { onSyncProgress } = baseOptions();
+    mount({ ...baseOptions(), onSyncProgress });
+    const instance = FakeEventSource.instances[0];
+    act(() => {
+      instance.dispatch("sync.progress", { data: "{ not json" });
+      instance.dispatch("sync.progress", { data: JSON.stringify({ type: "sync.progress" }) });
+      instance.dispatch("sync.progress", { data: JSON.stringify({ type: "sync.progress", payload: { accountId: "a", folder: "INBOX", processed: "x", totalEstimate: 5 } }) });
+    });
+    expect(onSyncProgress).not.toHaveBeenCalled();
   });
 
   it("stops reconnecting after the capped backoff budget is exhausted", () => {

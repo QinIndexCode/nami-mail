@@ -1,6 +1,6 @@
 # NamiMail CLI
 
-[English](README.en.md) | [安装](installation.md) | [命令](commands.md) | [输出](output-schema.md) | [权限](permissions.md) | [示例](examples.md) | [排错](troubleshooting.md)
+[English](README.en.md) | [安装](installation.zh-CN.md) | [命令](commands.zh-CN.md) | [输出](output-schema.zh-CN.md) | [权限](permissions.zh-CN.md) | [示例](examples.zh-CN.md) | [排错](troubleshooting.zh-CN.md)
 
 > **当前构建状态：不可执行。** 此 Windows 构建没有随附可验证的 Windows SID-DACL 命名管道原生适配器。因此不会启动外部 AgentHost 或 Broker，也不提供 `namimail` 可执行文件、PATH shim 或客户端配对界面。本文的命令、输出、权限和示例是未来发布的安全契约；请勿在当前构建中配置或执行它们。实验性的本地 NLLB-200 翻译仍独立保留，只能由用户在界面中主动、可选使用。
 
@@ -12,14 +12,14 @@ NamiMail CLI 文档定义 Windows 桌面应用未来的本机自动化契约。�
 
 | 主题 | 说明 |
 | --- | --- |
-| [安装](installation.md) | Windows 安装、显式启动宿主和配对前提。 |
-| [命令](commands.md) | v1 命令表，以及被明确拒绝的写命令。 |
-| [参数](parameters.md) | 公共参数、类型和解析规则。 |
-| [输出](output-schema.md) | 稳定 JSON 包络、JSONL、错误和退出码。 |
-| [权限](permissions.md) | scope、账户范围、确认和审计边界。 |
-| [外部 Agent 接入](agent-integration.md) | 面向脚本、IDE Agent 和自动化的调用规则。 |
-| [示例](examples.md) | 可复制的只读工作流。 |
-| [排错](troubleshooting.md) | 宿主、更新、配对和网络/Provider 问题。 |
+| [安装](installation.zh-CN.md) | Windows 安装、显式启动宿主和配对前提。 |
+| [命令](commands.zh-CN.md) | v1 命令表，以及被明确拒绝的写命令。 |
+| [参数](parameters.zh-CN.md) | 公共参数、类型和解析规则。 |
+| [输出](output-schema.zh-CN.md) | 稳定 JSON 包络、JSONL、错误和退出码。 |
+| [权限](permissions.zh-CN.md) | scope、账户范围、确认和审计边界。 |
+| [外部 Agent 接入](agent-integration.zh-CN.md) | 面向脚本、IDE Agent 和自动化的调用规则。 |
+| [示例](examples.zh-CN.md) | 可复制的只读工作流。 |
+| [排错](troubleshooting.zh-CN.md) | 宿主、更新、配对和网络/Provider 问题。 |
 
 ## v1 边界
 

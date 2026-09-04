@@ -1,40 +1,23 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
 import {
   Bell,
-  BookOpen,
   Bot,
   Check,
-  CircleHelp,
   Clock3,
-  CloudCog,
-  Copy,
   Download,
-  Eye,
-  EyeOff,
-  ImagePlus,
   KeyRound,
   Laptop,
   Languages,
   LoaderCircle,
-  Globe,
-  MessageSquareReply,
-  MessageSquareX,
-  Minimize2,
-  Monitor,
-  Moon,
   Palette,
-  Power,
   RefreshCw,
   RotateCcw,
-  Save,
   SkipForward,
-  Sun,
   Trash2,
   Undo2,
   Upload,
   Volume2,
   VolumeX,
-  Wrench,
   X,
   Zap,
   type LucideIcon,
@@ -46,7 +29,6 @@ import { mailErrorMessage } from "./errorPresentation";
 import FilterRulesSection from "./FilterRulesSection";
 import AgentMemoryDialog from "./AgentMemoryDialog";
 import AutoReplyPendingDialog from "./AutoReplyPendingDialog";
-import AutoReplyScopeEditor from "./AutoReplyScopeEditor";
 import AutoReplyDecisionsDialog from "./AutoReplyDecisionsDialog";
 import { useI18n } from "./i18n";
 import { canPlayCustomNotificationSound, playNotificationSound, primeNotificationSound } from "./sounds";
@@ -54,11 +36,10 @@ import ThemedSelect from "./ThemedSelect";
 import {
   hasUnsavedTranslationConfiguration,
   translationConfigurationErrorMessage,
-  translationConfigurationStatusMessage,
 } from "./translationPresentation";
 import { presentUpdateSnapshot } from "./updatePresentation";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 import type {
   Account,
   AgentAccessLevel,
@@ -71,24 +52,22 @@ import type {
   NotificationSound,
 } from "./types";
 import { defaultAppSettings } from "./types";
+import {
+  soundOptions,
+  closeBehaviorOptions,
+  errorMessage,
+  backgroundContentTypeForFile,
+  revokeDemoObjectUrl,
+  copyGuideTextToClipboard,
+  maxBackgroundUploadBytes,
+} from "./settings/settings-utils";
+import { Switch, CloseBehaviorIcon } from "./settings/SettingsUIComponents";
+import SettingsAgentSection from "./settings/SettingsAgentSection";
+import SettingsTranslationSection from "./settings/SettingsTranslationSection";
+import SettingsAppearanceSection from "./settings/SettingsAppearanceSection";
 
 const isDesktopRuntime = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("desktop") === "1";
 
-export type BackgroundPresetOption = {
-  id: Exclude<BackgroundPreset, "custom">;
-  labelKey: string;
-  descriptionKey: string;
-  image?: string;
-};
-
-export const backgroundPresetOptions: readonly BackgroundPresetOption[] = [
-  { id: "none", labelKey: "settings.backgroundPreset.none.label", descriptionKey: "settings.backgroundPreset.none.description" },
-  { id: "paper", labelKey: "settings.backgroundPreset.paper.label", descriptionKey: "settings.backgroundPreset.paper.description", image: "/backgrounds/paper.svg" },
-  { id: "mist", labelKey: "settings.backgroundPreset.mist.label", descriptionKey: "settings.backgroundPreset.mist.description", image: "/backgrounds/mist.svg" },
-  { id: "coast", labelKey: "settings.backgroundPreset.coast.label", descriptionKey: "settings.backgroundPreset.coast.description", image: "/backgrounds/coast.svg" },
-  { id: "dawn", labelKey: "settings.backgroundPreset.dawn.label", descriptionKey: "settings.backgroundPreset.dawn.description", image: "/backgrounds/dawn.svg" },
-  { id: "night", labelKey: "settings.backgroundPreset.night.label", descriptionKey: "settings.backgroundPreset.night.description", image: "/backgrounds/night.svg" },
-];
 
 export type SettingsModalProps = {
   settings: AppSettings;
@@ -150,209 +129,6 @@ const restoreDefaultsPatch: AppSettingsPatch = {
   avatarGravatarEnabled: defaultAppSettings.avatarGravatarEnabled,
 };
 
-const maxBackgroundUploadBytes = 50 * 1024 * 1024;
-const backgroundContentTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
-
-type TranslatedOption<T extends string> = { value: T; labelKey: string; detailKey: string };
-
-const themeOptions: Array<TranslatedOption<AppTheme>> = [
-  { value: "system", labelKey: "settings.theme.system.label", detailKey: "settings.theme.system.detail" },
-  { value: "light", labelKey: "settings.theme.light.label", detailKey: "settings.theme.light.detail" },
-  { value: "dark", labelKey: "settings.theme.dark.label", detailKey: "settings.theme.dark.detail" },
-];
-const listDensityOptions: Array<TranslatedOption<ListDensity>> = [
-  { value: "comfortable", labelKey: "settings.density.comfortable.label", detailKey: "settings.density.comfortable.detail" },
-  { value: "compact", labelKey: "settings.density.compact.label", detailKey: "settings.density.compact.detail" },
-];
-const agentAccessLevelOptions: Array<TranslatedOption<AgentAccessLevel>> = [
-  { value: "read-only", labelKey: "settings.agent.accessLevel.readOnly", detailKey: "settings.agent.accessLevel.readOnly.detail" },
-  { value: "send-confirmed", labelKey: "settings.agent.accessLevel.sendConfirmed", detailKey: "settings.agent.accessLevel.sendConfirmed.detail" },
-  { value: "full-access", labelKey: "settings.agent.accessLevel.fullAccess", detailKey: "settings.agent.accessLevel.fullAccess.detail" },
-];
-
-const soundOptions: Array<TranslatedOption<NotificationSound>> = [
-  { value: "system", labelKey: "settings.sound.system.label", detailKey: "settings.sound.system.detail" },
-  { value: "soft", labelKey: "settings.sound.soft.label", detailKey: "settings.sound.soft.detail" },
-  { value: "bright", labelKey: "settings.sound.bright.label", detailKey: "settings.sound.bright.detail" },
-  { value: "none", labelKey: "settings.sound.none.label", detailKey: "settings.sound.none.detail" },
-];
-
-const closeBehaviorOptions: Array<TranslatedOption<CloseBehavior>> = [
-  { value: "ask", labelKey: "settings.closeBehavior.ask.label", detailKey: "settings.closeBehavior.ask.detail" },
-  { value: "tray", labelKey: "settings.closeBehavior.tray.label", detailKey: "settings.closeBehavior.tray.detail" },
-  { value: "quit", labelKey: "settings.closeBehavior.quit.label", detailKey: "settings.closeBehavior.quit.detail" },
-];
-
-const externalCliGuideCode = "namimail pair\nnamimail status";
-const externalMcpGuideCode = [
-  "{",
-  '  "mcpServers": {',
-  '    "namimail": {',
-  '      "command": "cmd.exe",',
-  '      "args": ["/d", "/s", "/c", "namimail mcp start"]',
-  "    }",
-  "  }",
-  "}",
-].join("\n");
-const externalServiceGuideCode = "namimail service start\nnamimail service stop";
-const externalDocsUrl = "https://github.com/QinIndexCode/nami-mail";
-
-function ExternalGuideBlock(props: {
-  id: string;
-  label: string;
-  hint: string;
-  code: string;
-  copiedId: string | null;
-  onCopy: (text: string, id: string) => void;
-}) {
-  const { t } = useI18n();
-  const copied = props.copiedId === props.id;
-  return (
-    <div className="external-guide-block">
-      <div className="external-guide-block-head">
-        <span>
-          <strong>{props.label}</strong>
-          <small>{props.hint}</small>
-        </span>
-        <button
-          className="secondary-button"
-          type="button"
-          disabled={copied}
-          aria-label={copied ? t("settings.agent.externalGuide.copied") : `${t("settings.agent.externalGuide.copy")} ${props.label}`}
-          onClick={() => props.onCopy(props.code, props.id)}
-        >
-          {copied ? <Check size={12} /> : <Copy size={12} />}
-          {copied ? t("settings.agent.externalGuide.copied") : t("settings.agent.externalGuide.copy")}
-        </button>
-      </div>
-      <pre className="external-guide-code"><code>{props.code}</code></pre>
-    </div>
-  );
-}
-
-function errorMessage(error: unknown, fallback: string, t: ReturnType<typeof useI18n>["t"]): string {
-  return mailErrorMessage(error, fallback, t);
-}
-
-function backgroundContentTypeForFile(file: File): string | undefined {
-  if (backgroundContentTypes.has(file.type)) return file.type;
-  const filename = file.name.toLowerCase();
-  if (filename.endsWith(".jpg") || filename.endsWith(".jpeg")) return "image/jpeg";
-  if (filename.endsWith(".png")) return "image/png";
-  if (filename.endsWith(".webp")) return "image/webp";
-  return undefined;
-}
-
-function revokeDemoObjectUrl(url: string | null | undefined): void {
-  if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
-}
-
-/**
- * Copies guide snippets to the clipboard with a short-lived fallback for
- * local sessions where clipboard permissions are unavailable.
- */
-async function copyGuideTextToClipboard(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // Fall through to the short-lived selection fallback below.
-  }
-  const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "");
-  textarea.setAttribute("aria-hidden", "true");
-  textarea.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none;";
-  document.body.appendChild(textarea);
-  try {
-    textarea.focus({ preventScroll: true });
-    textarea.select();
-    return document.execCommand("copy");
-  } catch {
-    return false;
-  } finally {
-    textarea.remove();
-    activeElement?.focus({ preventScroll: true });
-  }
-}
-
-function Switch({
-  checked,
-  disabled = false,
-  label,
-  description,
-  onChange,
-}: {
-  checked: boolean;
-  disabled?: boolean;
-  label: string;
-  description: string;
-  onChange: () => void;
-}) {
-  return (
-    <div className="setting-row setting-switch-row">
-      <div>
-        <strong>{label}</strong>
-        <span>{description}</span>
-      </div>
-      <button
-        className={`setting-switch${checked ? " active" : ""}`}
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={label}
-        disabled={disabled}
-        onClick={onChange}
-      >
-        <span aria-hidden="true" />
-      </button>
-    </div>
-  );
-}
-
-function ThemeIcon({ value }: { value: AppTheme }) {
-  if (value === "light") return <Sun size={17} />;
-  if (value === "dark") return <Moon size={17} />;
-  return <Monitor size={17} />;
-}
-
-function NumberStepper({ value, min, max, onChange, disabled, decreaseLabel = "Decrease", increaseLabel = "Increase" }: {
-  value: number;
-  min: number;
-  max: number;
-  onChange: (value: number) => void;
-  disabled?: boolean;
-  decreaseLabel?: string;
-  increaseLabel?: string;
-}) {
-  const clamp = (v: number) => Math.max(min, Math.min(max, v));
-  return (
-    <div className="number-stepper">
-      <button type="button" onClick={() => onChange(clamp(value - 1))} disabled={disabled || value <= min} aria-label={decreaseLabel}>−</button>
-      <input
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        disabled={disabled}
-        onChange={(e) => {
-          const n = parseInt(e.target.value, 10);
-          if (!Number.isNaN(n)) onChange(clamp(n));
-        }}
-      />
-      <button type="button" onClick={() => onChange(clamp(value + 1))} disabled={disabled || value >= max} aria-label={increaseLabel}>+</button>
-    </div>
-  );
-}
-
-function CloseBehaviorIcon({ value }: { value: CloseBehavior }) {
-  if (value === "tray") return <Minimize2 size={17} />;
-  if (value === "quit") return <Power size={17} />;
-  return <CircleHelp size={17} />;
-}
 
 export default function SettingsModal({
   settings,
@@ -1115,7 +891,7 @@ export default function SettingsModal({
             <span className="eyebrow">{t("settings.eyebrow")}</span>
             <h2 id="settings-title">{t("settings.title")}</h2>
           </div>
-          <button className="icon-button" type="button" aria-label={t("settings.close")} data-tooltip={t("settings.close")} disabled={controlsBusy} onClick={requestClose}>
+          <button className="icon-button" type="button" aria-label={t("common.close")} data-tooltip={t("common.close")} onClick={requestClose}>
             <X size={18} />
           </button>
         </header>
@@ -1157,130 +933,24 @@ export default function SettingsModal({
               </label>
             </section>
 
-            <section className="settings-section" data-settings-nav="appearance" aria-labelledby="appearance-settings">
-              <div className="settings-section-title">
-                <Palette size={16} />
-                <div><span>{t("settings.appearance.title")}</span><p id="appearance-settings">{t("settings.appearance.description")}</p></div>
-              </div>
-
-              <div className="settings-option-grid theme-option-grid" role="group" aria-label={t("settings.theme.groupLabel")}>
-                {themeOptions.map((option) => (
-                  <button
-                    key={option.value}
-                    className={`settings-option${currentSettings.theme === option.value ? " active" : ""}`}
-                    type="button"
-                    aria-pressed={currentSettings.theme === option.value}
-                    disabled={controlsBusy}
-                    onClick={() => void applyOptimisticSettings({ theme: option.value }, null)}
-                  >
-                    <ThemeIcon value={option.value} />
-                    <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
-                    {currentSettings.theme === option.value && <Check className="option-check" size={15} />}
-                  </button>
-                ))}
-              </div>
-
-              <label className="setting-select-row" htmlFor="list-density">
-                <span><strong>{t("settings.density.title")}</strong><small>{t("settings.density.description")}</small></span>
-                <ThemedSelect
-                  id="list-density"
-                  value={currentSettings.listDensity}
-                  aria-label={t("settings.density.title")}
-                  disabled={controlsBusy}
-                  onValueChange={(value) => void applyOptimisticSettings({ listDensity: value as ListDensity }, null)}
-                >
-                  {listDensityOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
-                  ))}
-                </ThemedSelect>
-              </label>
-
-              <Switch
-                checked={currentSettings.avatarGravatarEnabled}
-                disabled={controlsBusy}
-                label={t("settings.avatars.gravatar.label")}
-                description={t("settings.avatars.gravatar.description")}
-                onChange={() => void applyOptimisticSettings({ avatarGravatarEnabled: !currentSettings.avatarGravatarEnabled }, null)}
-              />
-
-              <div className="setting-subheading"><span>{t("settings.background.title")}</span><small>{t("settings.background.offlineHint")}</small></div>
-              <div className="background-preset-grid" role="group" aria-label={t("settings.background.presetGroupLabel")}>
-                {backgroundPresetOptions.map((preset) => {
-                  const active = currentSettings.backgroundPreset === preset.id;
-                  return (
-                    <button
-                      key={preset.id}
-                      className={`background-preset${active ? " active" : ""}`}
-                      type="button"
-                      aria-pressed={active}
-                      disabled={controlsBusy}
-                      onClick={() => choosePreset(preset.id)}
-                    >
-                      <span
-                        className={`background-preview background-${preset.id}`}
-                        aria-hidden="true"
-                      >
-                        {preset.image && <span className="background-preview-image" style={{ backgroundImage: `url(${preset.image})`, opacity: currentSettings.backgroundIntensity / 100 }} />}
-                      </span>
-                      <span><strong>{t(preset.labelKey)}</strong><small>{t(preset.descriptionKey)}</small></span>
-                      {active && <Check className="option-check" size={14} />}
-                    </button>
-                  );
-                })}
-                <button
-                  className={`background-preset custom-background-preset${currentSettings.backgroundPreset === "custom" ? " active" : ""}`}
-                  type="button"
-                  aria-pressed={currentSettings.backgroundPreset === "custom"}
-                  disabled={controlsBusy}
-                  onClick={chooseCustomBackground}
-                >
-                  <span
-                    className="background-preview background-custom"
-                    aria-hidden="true"
-                  >
-                    {hasCustomBackground && <span className="background-preview-image" style={{ backgroundImage: `url(${currentSettings.customBackgroundUrl})`, opacity: currentSettings.backgroundIntensity / 100 }} />}
-                    {!hasCustomBackground && <ImagePlus size={18} />}
-                  </span>
-                  <span><strong>{t("settings.background.custom.label")}</strong><small>{hasCustomBackground ? (demoMode ? t("settings.background.custom.demoOnly") : t("settings.background.custom.savedOnDevice")) : t("settings.background.custom.localImage")}</small></span>
-                  {currentSettings.backgroundPreset === "custom" && <Check className="option-check" size={14} />}
-                </button>
-              </div>
-              <input ref={uploadInput} hidden type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void uploadBackground(event)} />
-
-              <div className="background-controls">
-                <label className="setting-range" htmlFor="background-intensity">
-                  <span><strong>{t("settings.background.intensity")}</strong><small>{intensityDraft}%</small></span>
-                  <input
-                    id="background-intensity"
-                    type="range"
-                    min="0"
-                    max="80"
-                    step="1"
-                    value={intensityDraft}
-                    disabled={controlsBusy}
-                    onChange={(event) => setIntensityDraft(Number(event.target.value))}
-                    onBlur={commitIntensity}
-                    onPointerUp={commitIntensity}
-                    onKeyUp={(event) => {
-                      if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) commitIntensity();
-                    }}
-                  />
-                </label>
-                <div className="background-actions">
-                  <button ref={uploadButton} className="secondary-button" type="button" disabled={controlsBusy} onClick={() => uploadInput.current?.click()}>
-                    {busyAction === "background-upload" ? <LoaderCircle className="spin" size={15} /> : <Upload size={15} />}
-                    {hasCustomBackground ? t("settings.background.replaceImage") : t("settings.background.uploadImage")}
-                  </button>
-                  {hasCustomBackground && (
-                    <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("clear-background"); }}>
-                      {busyAction === "background-remove" ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}
-                      {t("settings.background.clear")}
-                    </button>
-                  )}
-                </div>
-              </div>
-              <p className="background-upload-hint">{t("settings.background.uploadHint")}</p>
-            </section>
+            <SettingsAppearanceSection
+              t={t}
+              currentSettings={currentSettings}
+              controlsBusy={controlsBusy}
+              busyAction={busyAction}
+              demoMode={demoMode}
+              intensityDraft={intensityDraft}
+              hasCustomBackground={hasCustomBackground}
+              applyOptimisticSettings={applyOptimisticSettings}
+              choosePreset={choosePreset}
+              setIntensityDraft={setIntensityDraft}
+              commitIntensity={commitIntensity}
+              chooseCustomBackground={chooseCustomBackground}
+              uploadBackground={uploadBackground}
+              resetConfirmClosing={resetConfirmClosing}
+              setPendingConfirmation={setPendingConfirmation}
+              uploadButtonRef={uploadButton}
+            />
 
             <section className="settings-section" data-settings-nav="notifications" aria-labelledby="notification-settings">
               <div className="settings-section-title">
@@ -1482,453 +1152,53 @@ export default function SettingsModal({
 
             <FilterRulesSection accounts={accounts} demoMode={demoMode} />
 
-            <section className="settings-section" data-settings-nav="agent" aria-labelledby="agent-settings">
-              <div className="settings-section-title">
-                <Bot size={16} />
-                <div><span>{t("agent.launch")}</span><p id="agent-settings">{demoMode ? t("agent.demo.description") : t("agent.providers.description")}</p></div>
-              </div>
-              {demoMode ? (
-                <p className="settings-empty" role="status">{t("agent.demo.actionUnavailable")}</p>
-              ) : (
-                <>
-                  <div className="setting-row agent-provider-settings-row">
-                    <div>
-                      <strong>{t("agent.providers.title")}</strong>
-                      <span>{t("agent.providers.emptyDescription")}</span>
-                    </div>
-                    <button className="secondary-button" type="button" disabled={controlsBusy} onClick={requestAgentProviderSettings}>
-                      <Wrench size={15} />{t("agent.providers.configure")}
-                    </button>
-                  </div>
-                  <div className="setting-row">
-                    <div>
-                      <strong>{t("settings.agent.toolRoundLimit")}</strong>
-                      <span>{t("settings.agent.toolRoundLimitDesc")}</span>
-                    </div>
-                    <NumberStepper
-                      value={currentSettings.agentToolRoundLimit}
-                      min={1}
-                      max={50}
-                      disabled={controlsBusy}
-                      decreaseLabel={t("settings.agent.toolRoundLimitDecrease")}
-                      increaseLabel={t("settings.agent.toolRoundLimitIncrease")}
-                      onChange={(value) => void applyOptimisticSettings({ agentToolRoundLimit: value }, null)}
-                    />
-                  </div>
-                  <div className="setting-subheading"><span>{t("settings.agent.autoReplyGroup")}</span><small>{t("settings.agent.autoReplyGroupDesc")}</small></div>
-                  <Switch
-                    checked={currentSettings.autoReply.enabled}
-                    disabled={controlsBusy}
-                        label={t("settings.agent.autoReplyEnabled")}
-                        description={t("settings.agent.autoReplyEnabledDesc")}
-                        onChange={() => void applyOptimisticSettings(
-                          { autoReply: { ...currentSettings.autoReply, enabled: !currentSettings.autoReply.enabled } },
-                          null,
-                        )}
-                      />
-                      {currentSettings.autoReply.enabled && (
-                        <>
-                          <div className="setting-row setting-column-row">
-                            <div>
-                              <strong>{t("settings.agent.autoReplyAccounts")}</strong>
-                              <span>{t("settings.agent.autoReplyAccountsDesc")}</span>
-                            </div>
-                            <div className="auto-reply-account-list" role="group" aria-label={t("settings.agent.autoReplyAccounts")}>
-                              {accounts.length === 0 && <p className="settings-empty">{t("settings.agent.autoReplyNoAccounts")}</p>}
-                              {accounts.map((account) => {
-                                const checked = currentSettings.autoReply.accountIds.includes(account.id);
-                                return (
-                                  <label className="accounts-row-check" key={account.id}>
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      disabled={controlsBusy}
-                                      onChange={() => {
-                                        const accountIds = checked
-                                          ? currentSettings.autoReply.accountIds.filter((id) => id !== account.id)
-                                          : [...currentSettings.autoReply.accountIds, account.id];
-                                        void applyOptimisticSettings({ autoReply: { ...currentSettings.autoReply, accountIds } }, null);
-                                      }}
-                                      aria-label={t("settings.agent.autoReplyAccountAriaLabel", { email: account.email })}
-                                    />
-                                    {account.email}
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          </div>
-                          <div className="setting-row setting-column-row">
-                            <div>
-                              <strong>{t("settings.agent.autoReplyMode")}</strong>
-                              <span>{t("settings.agent.autoReplyModeDesc")}</span>
-                            </div>
-                            <div className="auto-reply-mode-toggle" role="group" aria-label={t("settings.agent.autoReplyMode")}>
-                              <button
-                                className={`secondary-button${currentSettings.autoReply.mode === "llm" ? " active" : ""}`}
-                                type="button"
-                                disabled={controlsBusy}
-                                onClick={() => void applyOptimisticSettings(
-                                  { autoReply: { ...currentSettings.autoReply, mode: "llm" } },
-                                  null,
-                                )}
-                              >
-                                {t("settings.agent.autoReplyModeLlm")}
-                              </button>
-                              <button
-                                className={`secondary-button${currentSettings.autoReply.mode === "template" ? " active" : ""}`}
-                                type="button"
-                                disabled={controlsBusy}
-                                onClick={() => void applyOptimisticSettings(
-                                  { autoReply: { ...currentSettings.autoReply, mode: "template" } },
-                                  null,
-                                )}
-                              >
-                                {t("settings.agent.autoReplyModeTemplate")}
-                              </button>
-                            </div>
-                          </div>
-                          {currentSettings.autoReply.mode === "template" && (
-                            <>
-                              <div className="setting-row setting-column-row">
-                                <div>
-                                  <strong>{t("settings.agent.autoReplyTemplate")}</strong>
-                                  <span>{t("settings.agent.autoReplyTemplateDesc")}</span>
-                                </div>
-                                <textarea
-                                  className="auto-reply-template-input"
-                                  value={currentSettings.autoReply.template.text}
-                                  rows={5}
-                                  maxLength={2000}
-                                  disabled={controlsBusy}
-                                  placeholder={t("settings.agent.autoReplyTemplatePlaceholder")}
-                                  aria-label={t("settings.agent.autoReplyTemplate")}
-                                  onChange={(event) => void applyOptimisticSettings(
-                                    { autoReply: { ...currentSettings.autoReply, template: { ...currentSettings.autoReply.template, text: event.target.value } } },
-                                    null,
-                                  )}
-                                />
-                                <p className="auto-reply-template-hint">{t("settings.agent.autoReplyTemplateHint")}</p>
-                              </div>
-                              <Switch
-                                checked={currentSettings.autoReply.template.skipConfirmation}
-                                disabled={controlsBusy}
-                                label={t("settings.agent.autoReplySkipConfirmation")}
-                                description={t("settings.agent.autoReplySkipConfirmationDesc")}
-                                onChange={() => void applyOptimisticSettings(
-                                  { autoReply: { ...currentSettings.autoReply, template: { ...currentSettings.autoReply.template, skipConfirmation: !currentSettings.autoReply.template.skipConfirmation } } },
-                                  null,
-                                )}
-                              />
-                            </>
-                          )}
-                          <AutoReplyScopeEditor
-                            scope={currentSettings.autoReply.scope}
-                            disabled={controlsBusy}
-                            onChange={(scope) => void applyOptimisticSettings(
-                              { autoReply: { ...currentSettings.autoReply, scope } },
-                              null,
-                            )}
-                          />
-                          <div className="setting-row">
-                            <div>
-                              <strong>{t("settings.agent.autoReplyDailyLimit")}</strong>
-                              <span>{t("settings.agent.autoReplyDailyLimitDesc")}</span>
-                            </div>
-                            <NumberStepper
-                              value={currentSettings.autoReply.dailyLimitPerAccount}
-                              min={0}
-                              max={500}
-                              disabled={controlsBusy}
-                              decreaseLabel={t("settings.agent.autoReplyDailyLimitDecrease")}
-                              increaseLabel={t("settings.agent.autoReplyDailyLimitIncrease")}
-                              onChange={(value) => void applyOptimisticSettings(
-                                { autoReply: { ...currentSettings.autoReply, dailyLimitPerAccount: value } },
-                                null,
-                              )}
-                            />
-                          </div>
-                        </>
-                      )}
-                      <div className="setting-row agent-tools-row">
-                        <div>
-                          <strong>{t("settings.agent.autoReplyTools")}</strong>
-                          <span>{t("settings.agent.autoReplyToolsDesc")}</span>
-                        </div>
-                        <div className="agent-tools-actions">
-                          <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setAutoReplyDialogOpen(true)}>
-                            <MessageSquareReply size={15} />{t("settings.agent.autoReplyToolsPending")}
-                          </button>
-                          <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setAutoReplyDecisionsOpen(true)}>
-                            <MessageSquareX size={15} />{t("settings.agent.autoReplyToolsDeclined")}
-                          </button>
-                          <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setMemoryDialogOpen(true)}>
-                            <BookOpen size={15} />{t("settings.agent.autoReplyToolsMemory")}
-                          </button>
-                        </div>
-                      </div>
-                </>
-              )}
-              <div className="setting-subheading"><span>{t("settings.agent.accessLevelGroup")}</span><small>{t("settings.agent.accessLevelGroupDesc")}</small></div>
-              <label className="setting-select-row" htmlFor="agent-access-level">
-                <span><strong>{t("settings.agent.builtinAccessLevel")}</strong><small>{t("settings.agent.builtinAccessLevelDesc")}</small></span>
-                <ThemedSelect
-                  id="agent-access-level"
-                  value={currentSettings.agentAccessLevel}
-                  aria-label={t("settings.agent.builtinAccessLevel")}
-                  disabled={controlsBusy}
-                  onValueChange={(value) => requestAccessLevelChange({ agentAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, null)}
-                >
-                  {agentAccessLevelOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
-                  ))}
-                </ThemedSelect>
-              </label>
-              <label className="setting-select-row" htmlFor="agent-cli-access-level">
-                <span><strong>{t("settings.agent.cliAccessLevel")}</strong><small>{t("settings.agent.cliAccessLevelDesc")}</small></span>
-                <ThemedSelect
-                  id="agent-cli-access-level"
-                  value={currentSettings.agentCliAccessLevel}
-                  aria-label={t("settings.agent.cliAccessLevel")}
-                  disabled={controlsBusy}
-                  onValueChange={(value) => requestAccessLevelChange({ agentCliAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, null)}
-                >
-                  {agentAccessLevelOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
-                  ))}
-                </ThemedSelect>
-              </label>
-              <label className="setting-select-row" htmlFor="agent-mcp-access-level">
-                <span><strong>{t("settings.agent.mcpAccessLevel")}</strong><small>{t("settings.agent.mcpAccessLevelDesc")}</small></span>
-                <ThemedSelect
-                  id="agent-mcp-access-level"
-                  value={currentSettings.agentMcpAccessLevel}
-                  aria-label={t("settings.agent.mcpAccessLevel")}
-                  disabled={controlsBusy}
-                  onValueChange={(value) => requestAccessLevelChange({ agentMcpAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, null)}
-                >
-                  {agentAccessLevelOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
-                  ))}
-                </ThemedSelect>
-              </label>
-              <div className="setting-subheading"><span>{t("settings.agent.externalGuide.title")}</span><small>{t("settings.agent.externalGuide.desc")}</small></div>
-              <div className="external-guide">
-                <p className="external-guide-note">{t("settings.agent.externalGuide.steps.intro")}</p>
-                <ol className="external-guide-steps">
-                  <li>{t("settings.agent.externalGuide.steps.1")}</li>
-                  <li>{t("settings.agent.externalGuide.steps.2")} <code>namimail service start</code></li>
-                  <li>{t("settings.agent.externalGuide.steps.3")}</li>
-                  <li>{t("settings.agent.externalGuide.steps.4")}</li>
-                </ol>
-                <ExternalGuideBlock
-                  id="cli"
-                  label={t("settings.agent.externalGuide.cli.label")}
-                  hint={t("settings.agent.externalGuide.cli.hint", { cmd: "namimail accounts list" })}
-                  code={externalCliGuideCode}
-                  copiedId={externalGuideCopied}
-                  onCopy={copyExternalGuide}
-                />
-                <ExternalGuideBlock
-                  id="mcp"
-                  label={t("settings.agent.externalGuide.mcp.label")}
-                  hint={t("settings.agent.externalGuide.mcp.hint")}
-                  code={externalMcpGuideCode}
-                  copiedId={externalGuideCopied}
-                  onCopy={copyExternalGuide}
-                />
-                <ExternalGuideBlock
-                  id="service"
-                  label={t("settings.agent.externalGuide.service.label")}
-                  hint={t("settings.agent.externalGuide.service.hint")}
-                  code={externalServiceGuideCode}
-                  copiedId={externalGuideCopied}
-                  onCopy={copyExternalGuide}
-                />
-                <p className="external-guide-docs">{t("settings.agent.externalGuide.docs")}<a href={externalDocsUrl} target="_blank" rel="noopener noreferrer">github.com/QinIndexCode/nami-mail</a></p>
-              </div>
-              <div className="setting-subheading">
-                <span>{t("settings.agent.externalPairings.title")}</span>
-                <small>{t("settings.agent.externalPairings.desc")}</small>
-              </div>
-              <div className="external-pairings">
-                {externalPairingsError ? (
-                  <p className="external-pairings-empty">{t("settings.agent.externalPairings.loadError")}</p>
-                ) : externalPairings === null ? (
-                  <p className="external-pairings-empty" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("common.loading")}</p>
-                ) : externalPairings.length === 0 ? (
-                  <p className="external-pairings-empty">{t("settings.agent.externalPairings.empty", { cmd: "namimail pair" })}</p>
-                ) : (
-                  <ul className="external-pairings-list">
-                    {externalPairings.map((pairing) => {
-                      const currentIds = new Set(accounts.map((account) => account.id));
-                      const drifted = pairing.status === "active"
-                        && (pairing.accountIds.length !== currentIds.size || pairing.accountIds.some((id) => !currentIds.has(id)));
-                      return (
-                        <li key={pairing.clientId} className={`external-pairing-row external-pairing-${pairing.status}`}>
-                          <span className="external-pairing-id" title={pairing.clientId}>{pairing.clientId.slice(0, 20)}</span>
-                          <span className="external-pairing-meta">
-                            {t("settings.agent.externalPairings.created", { date: formatDate(pairing.createdAt) })}
-                            {pairing.expiresAt ? ` · ${t("settings.agent.externalPairings.expires", { date: formatDate(pairing.expiresAt) })}` : ""}
-                            {` · ${t("settings.agent.externalPairings.accountCount", { count: pairing.accountIds.length })}`}
-                          </span>
-                          <span className="external-pairing-status">{t(`settings.agent.externalPairings.status.${pairing.status}`)}</span>
-                          {drifted ? <span className="external-pairing-drift">{t("settings.agent.externalPairings.drift")}</span> : null}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-              <button
-                className="secondary-button external-pairings-refresh"
-                type="button"
-                onClick={() => setExternalPairingsReload((value) => value + 1)}
-              >
-                {t("settings.agent.externalPairings.refresh")}
-              </button>
-            </section>
+            <SettingsAgentSection
+              t={t}
+              formatDate={formatDate}
+              accounts={accounts}
+              currentSettings={currentSettings}
+              controlsBusy={controlsBusy}
+              demoMode={demoMode}
+              requestAgentProviderSettings={requestAgentProviderSettings}
+              requestAccessLevelChange={requestAccessLevelChange}
+              applyOptimisticSettings={applyOptimisticSettings}
+              externalGuideCopied={externalGuideCopied}
+              setExternalGuideCopied={setExternalGuideCopied}
+              externalPairings={externalPairings}
+              externalPairingsError={externalPairingsError}
+              setExternalPairingsReload={setExternalPairingsReload}
+              setAutoReplyDialogOpen={setAutoReplyDialogOpen}
+              setAutoReplyDecisionsOpen={setAutoReplyDecisionsOpen}
+              setMemoryDialogOpen={setMemoryDialogOpen}
+            />
 
-            <section className="settings-section" data-settings-nav="translation" aria-labelledby="translation-settings">
-              <div className="settings-section-title">
-                <KeyRound size={16} />
-                <div><span>{t("settings.translation.title")}</span><p id="translation-settings">{demoMode ? t("settings.translation.demoDescription") : t("settings.translation.description")}</p></div>
-              </div>
-              {demoMode ? null : translationConfigurationLoading ? (
-                <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("common.loading")}</p>
-              ) : translationConfiguration ? (
-                <form className="translation-settings-form" onSubmit={(event) => {
-                  event.preventDefault();
-                  void saveTranslationConfiguration();
-                }}>
-                  <div className="translation-provider-picker">
-                    <div className="translation-provider-column">
-                      <span className="translation-provider-role">{t("settings.translation.primary")}</span>
-                      <div className="translation-provider-options" role="radiogroup" aria-label={t("settings.translation.primary")}>
-                        {translationConfiguration.providers.map((provider) => (
-                          <button
-                            key={provider.id}
-                            type="button"
-                            role="radio"
-                            aria-checked={translationPrimary === provider.id}
-                            className={`translation-provider-option${translationPrimary === provider.id ? " active" : ""}`}
-                            disabled={controlsBusy || (provider.id === "custom" && !provider.endpoint)}
-                            onClick={() => setTranslationPrimary(provider.id)}
-                          >
-                            {provider.builtin ? <Globe size={14} /> : <CloudCog size={14} />}
-                            <span>{t(`settings.translation.provider.${provider.id}`)}</span>
-                            {translationPrimary === provider.id && <Check size={13} className="translation-provider-check" />}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="translation-provider-column">
-                      <span className="translation-provider-role">{t("settings.translation.backup")}</span>
-                      <div className="translation-provider-options" role="radiogroup" aria-label={t("settings.translation.backup")}>
-                        {translationConfiguration.providers.map((provider) => (
-                          <button
-                            key={provider.id}
-                            type="button"
-                            role="radio"
-                            aria-checked={translationBackup === provider.id}
-                            className={`translation-provider-option${translationBackup === provider.id ? " active" : ""}`}
-                            disabled={controlsBusy || provider.id === translationPrimary || (provider.id === "custom" && !provider.endpoint)}
-                            onClick={() => setTranslationBackup(provider.id)}
-                          >
-                            {provider.builtin ? <Globe size={14} /> : <CloudCog size={14} />}
-                            <span>{t(`settings.translation.provider.${provider.id}`)}</span>
-                            {translationBackup === provider.id && <Check size={13} className="translation-provider-check" />}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  <label className="translation-setting-field" htmlFor="translation-service-endpoint">
-                    <span><strong>{t("settings.translation.endpoint")}</strong><small>{t("settings.translation.endpointHint")}</small></span>
-                    <input
-                      id="translation-service-endpoint"
-                      type="url"
-                      value={translationEndpoint}
-                      placeholder={t("settings.translation.endpointPlaceholder")}
-                      autoComplete="url"
-                      spellCheck={false}
-                      required
-                      disabled={controlsBusy}
-                      onChange={(event) => setTranslationEndpoint(event.target.value)}
-                    />
-                  </label>
-                  <label className="translation-setting-field" htmlFor="translation-service-key">
-                    <span>
-                      <strong>{t("settings.translation.apiKey")}</strong>
-                      <small>{translationApiKeyHint}</small>
-                    </span>
-                    <span className="translation-secret-input">
-                      <input
-                        id="translation-service-key"
-                        type={translationApiKeyVisible ? "text" : "password"}
-                        value={translationApiKey}
-                        placeholder={t("settings.translation.apiKeyPlaceholder")}
-                        autoComplete="new-password"
-                        spellCheck={false}
-                        disabled={controlsBusy}
-                        onChange={(event) => setTranslationApiKey(event.target.value)}
-                      />
-                      <button
-                        className="icon-button translation-key-visibility"
-                        type="button"
-                        aria-label={translationApiKeyVisible ? t("settings.translation.hideApiKey") : t("settings.translation.showApiKey")}
-                        aria-pressed={translationApiKeyVisible}
-                        data-tooltip={translationApiKeyVisible ? t("settings.translation.hideApiKey") : t("settings.translation.showApiKey")}
-                        disabled={controlsBusy || !translationApiKey}
-                        onClick={() => setTranslationApiKeyVisible((value) => !value)}
-                      >
-                        {translationApiKeyVisible ? <EyeOff size={15} /> : <Eye size={15} />}
-                      </button>
-                    </span>
-                  </label>
-                  <label className="translation-setting-field translation-timeout-field" htmlFor="translation-service-timeout">
-                    <span><strong>{t("settings.translation.timeout")}</strong><small>{t("settings.translation.timeoutHint")}</small></span>
-                    <input
-                      id="translation-service-timeout"
-                      type="number"
-                      min="1000"
-                      max="60000"
-                      step="1000"
-                      value={translationTimeoutMs}
-                      disabled={controlsBusy}
-                      onChange={(event) => setTranslationTimeoutMs(Number(event.target.value))}
-                    />
-                  </label>
-                  <div className="translation-configuration-meta" role="status" aria-live="polite">
-                    <span className={`status-dot ${translationConfiguration.enabled && !translationConfiguration.configurationError ? "connected" : "error"}`} aria-hidden="true" />
-                    <span>{translationConfigurationStatusMessage(translationConfiguration, t)}</span>
-                    {translationConfiguration.apiKeyConfigured && !translationConfiguration.configurationError && <small>{t("settings.translation.keySaved")}</small>}
-                  </div>
-                  <div className="settings-inline-actions">
-                    <button className="primary-button" type="submit" disabled={controlsBusy || translationConfigurationNeedsReplacementKey}>
-                      {busyAction === "translation-configuration" ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}
-                      {busyAction === "translation-configuration" ? t("settings.translation.saving") : t("settings.translation.save")}
-                    </button>
-                    {translationConfiguration.source === "local" && translationConfiguration.apiKeyConfigured && (
-                      <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("remove-translation-api-key"); }}>
-                        <KeyRound size={15} />{t("settings.translation.removeKey")}
-                      </button>
-                    )}
-                    {translationConfiguration.source === "local" && (
-                      <button className="secondary-button danger-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("remove-translation-configuration"); }}>
-                        <Trash2 size={15} />{t("settings.translation.removeService")}
-                      </button>
-                    )}
-                  </div>
-                </form>
-              ) : (
-                <div className="settings-empty translation-configuration-load-error" role="alert">
-                  <span>{translationConfigurationErrorMessage(translationConfigurationError, t, "settings.translation.loadFailed")}</span>
-                  <button className="secondary-button" type="button" disabled={controlsBusy || translationConfigurationLoading} onClick={retryTranslationConfigurationLoad}>
-                    <RefreshCw size={15} aria-hidden="true" />{t("common.retry")}
-                  </button>
-                </div>
-              )}
-            </section>
+            <SettingsTranslationSection
+              t={t}
+              controlsBusy={controlsBusy}
+              busyAction={busyAction}
+              demoMode={demoMode}
+              translationConfiguration={translationConfiguration}
+              translationConfigurationLoading={translationConfigurationLoading}
+              translationConfigurationError={translationConfigurationError}
+              translationEndpoint={translationEndpoint}
+              setTranslationEndpoint={setTranslationEndpoint}
+              translationApiKey={translationApiKey}
+              setTranslationApiKey={setTranslationApiKey}
+              translationApiKeyVisible={translationApiKeyVisible}
+              setTranslationApiKeyVisible={setTranslationApiKeyVisible}
+              translationTimeoutMs={translationTimeoutMs}
+              setTranslationTimeoutMs={setTranslationTimeoutMs}
+              translationPrimary={translationPrimary}
+              setTranslationPrimary={setTranslationPrimary}
+              translationBackup={translationBackup}
+              setTranslationBackup={setTranslationBackup}
+              translationConfigurationNeedsReplacementKey={translationConfigurationNeedsReplacementKey}
+              translationApiKeyHint={translationApiKeyHint}
+              saveTranslationConfiguration={saveTranslationConfiguration}
+              retryTranslationConfigurationLoad={retryTranslationConfigurationLoad}
+              resetConfirmClosing={resetConfirmClosing}
+              setPendingConfirmation={setPendingConfirmation}
+            />
           </div>
         </div>
 

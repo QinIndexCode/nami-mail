@@ -5,8 +5,8 @@ import type { AutoReplyPendingSummary } from "./agentTypes";
 import { desktopBridge } from "./desktop";
 import { useI18n } from "./i18n";
 import type { Account } from "./types";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 
 type AutoReplyPendingDialogProps = {
   accounts: Account[];

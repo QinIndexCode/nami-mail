@@ -21,6 +21,7 @@ export const agentPermissionScopes = [
   "web:search",
   "external:network",
   "admin:host",
+  "time:read",
 ] as const;
 
 export const agentPermissionScopeSchema = z.enum(agentPermissionScopes);

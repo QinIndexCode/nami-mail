@@ -7,7 +7,7 @@ import { CitationRevalidator, SqliteCitationAuthority, type StoredCitationRefere
 import type { AccountLifecycleStore} from "./agent/lifecycle.js";
 import { type AccountGenerationLease } from "./agent/lifecycle.js";
 import { EncryptedRagPageStore, type DecryptedRagPage, type RagPageMetadata } from "./agent/rag-page-store.js";
-import { SqliteRagIndex, bm25TermScore, effectiveTermFrequency, tokenCounts, type RagIndexedTerm } from "./agent/rag-index.js";
+import { SqliteRagIndex, bm25TermScore, effectiveTermFrequency, tokenCounts, type RagIndexedTerm, type RagIndexPageRef } from "./agent/rag-index.js";
 import {
   HybridRagRetriever,
   InMemorySemanticIndex,
@@ -392,6 +392,9 @@ export class AgentRagWorker {
   private timer: NodeJS.Timeout | undefined;
   private draining: Promise<void> | undefined;
   private stopped = false;
+  /** Monotonic id invalidating an in-flight semantic rescan when embedding changes again. */
+  private semanticRescanId = 0;
+  private semanticRescan: Promise<void> | undefined;
 
   constructor(private readonly options: AgentRagWorkerOptions) {
     this.pageStore = new EncryptedRagPageStore(options.db, options.masterKey, options.lifecycle, options.now);
@@ -400,6 +403,10 @@ export class AgentRagWorker {
     this.embedding = options.embedding;
     this.pollIntervalMs = Math.max(250, Math.min(30_000, options.pollIntervalMs ?? workerIntervalMs));
     this.now = options.now ?? (() => new Date().toISOString());
+    // A generation repaired in a previous process is skipped on the next boot,
+    // so the (expensive) decrypt-and-check scan for missing remote ids runs
+    // once per generation instead of once per process.
+    this.loadRemoteIdRepairState();
   }
 
   /**
@@ -421,6 +428,25 @@ export class AgentRagWorker {
     }
     this.semantic.clear();
     this.pendingSemantic.clear();
+    this.rescanSemanticIndex();
+  }
+
+  /**
+   * Rebuilds the process-local semantic index from the already-warmed lexical
+   * index after a provider/model change. Page decryption is the expensive part
+   * (one decrypt per page, which can be tens of thousands on a large mailbox),
+   * so the scan runs in chunks that yield to the event loop: boot and
+   * concurrent HTTP never see a multi-second stall. A newer scan supersedes an
+   * in-flight one.
+   */
+  private rescanSemanticIndex(): void {
+    const scanId = (this.semanticRescanId += 1);
+    const refs: Array<{
+      accountId: string;
+      accountGeneration: number;
+      lease: AccountGenerationLease;
+      ref: RagIndexPageRef;
+    }> = [];
     for (const account of this.options.db.prepare(`
       SELECT DISTINCT account_id, account_generation FROM agent_rag_index
     `).all() as Array<{ account_id: string; account_generation: number }>) {
@@ -431,24 +457,76 @@ export class AgentRagWorker {
         continue;
       }
       for (const ref of this.ragIndex.distinctPagesFor(account.account_id, account.account_generation)) {
-        const page = this.pageStore.get(lease, ref.pageId);
-        if (!page || page.pageRevision !== ref.pageRevision) continue;
-        const payload = parsePayload(page.payload);
-        if (!payload) continue;
-        this.scheduleSemanticIndex({
-          accountId: lease.accountId,
-          accountGeneration: lease.generation,
-          pageId: ref.pageId,
-          pageRevision: ref.pageRevision,
-          payload,
-        });
+        refs.push({ accountId: lease.accountId, accountGeneration: lease.generation, lease, ref });
       }
     }
+    if (!refs.length) return;
+    const semanticRescanBatch = 64;
+    const run = async () => {
+      let processed = 0;
+      for (const { accountId, accountGeneration, lease, ref } of refs) {
+        if (this.stopped || this.semanticRescanId !== scanId) return;
+        const page = this.pageStore.get(lease, ref.pageId);
+        if (page && page.pageRevision === ref.pageRevision) {
+          const payload = parsePayload(page.payload);
+          if (payload) {
+            this.scheduleSemanticIndex({
+              accountId,
+              accountGeneration,
+              pageId: ref.pageId,
+              pageRevision: ref.pageRevision,
+              payload,
+            });
+          }
+        }
+        processed += 1;
+        if (processed % semanticRescanBatch === 0) {
+          await new Promise<void>((resolve) => setImmediate(() => resolve()));
+        }
+      }
+    };
+    this.semanticRescan = run();
   }
 
   start(): void {
     if (this.stopped) return;
     this.schedule(0);
+    void this.warmActiveAccountsOnStartup();
+  }
+
+  /**
+   * Warm up the persisted index for every active account once at startup so a
+   * first agent search does not stall on a cold-decryption pass. This is
+   * best-effort and non-blocking: warmAccount only repairs the delta (already
+   * in its own yielded batches) and is safe to run concurrently with the
+   * regular poll cycle. A failure degrades to the existing lazy warm-up that
+   * runs on the first search.
+   */
+  private async warmActiveAccountsOnStartup(): Promise<void> {
+    if (this.stopped) return;
+    let accountIds: string[];
+    try {
+      accountIds = this.options.lifecycle.listActiveAccounts();
+    } catch {
+      return;
+    }
+    for (const accountId of accountIds) {
+      if (this.stopped) return;
+      let lease: AccountGenerationLease;
+      try {
+        lease = this.options.lifecycle.acquireLease(accountId);
+      } catch {
+        continue; // account was removed or is being deleted; skip its warm-up
+      }
+      try {
+        await this.warmAccount(lease);
+      } catch {
+        // A warm-up failure is not fatal; the first search retries it lazily.
+      }
+      // Breathe between accounts so a very large mailbox cannot monopolize the
+      // event loop at startup.
+      await new Promise<void>((resolve) => setImmediate(() => resolve()));
+    }
   }
 
   async stop(): Promise<void> {
@@ -511,7 +589,7 @@ export class AgentRagWorker {
       } catch {
         continue;
       }
-      this.warmAccount(lease);
+      await this.warmAccount(lease);
     }
     if (this.embedding) {
       // Semantic retrieval is best-effort: a failed query embedding or a
@@ -1185,7 +1263,7 @@ export class AgentRagWorker {
     return row.page_revision + 1;
   }
 
-  private warmAccount(lease: AccountGenerationLease): void {
+  private async warmAccount(lease: AccountGenerationLease): Promise<void> {
     // The persisted index is a derived cache of the authoritative encrypted
     // page store. Warm-up only repairs the delta: pages whose latest active
     // revision is missing from the index are decrypted and indexed, and index
@@ -1196,18 +1274,40 @@ export class AgentRagWorker {
     const indexedByPageId = new Map(
       this.ragIndex.distinctPagesFor(lease.accountId, lease.generation).map((ref) => [ref.pageId, ref.pageRevision]),
     );
+    // Decrypting the missing delta is synchronous AES work on the caller's
+    // thread — and this server runs inside the Electron main process, so a
+    // long unbroken pass freezes the whole window (input, cursor) until the
+    // first agent search finishes. Yield to the event loop every few pages
+    // (same pattern as the semantic rescan above) so the app stays responsive
+    // while warm-up proceeds.
+    const warmYieldBatch = 32;
+    let iterations = 0;
     for (const page of pages) {
+      iterations += 1;
       const indexedRevision = indexedByPageId.get(page.pageId);
-      if (indexedRevision !== undefined && indexedRevision >= page.pageRevision) continue;
+      if (indexedRevision !== undefined && indexedRevision >= page.pageRevision) {
+        // A fully warm index never runs the decrypt branch, so gating the yield
+        // on processed-missing pages would let the whole pass (including the
+        // synchronous repair scan below) execute in one block and freeze startup.
+        // Yield by visit count instead so an all-warm warm-up still surrenders
+        // the event loop promptly.
+        if (iterations % warmYieldBatch === 0) {
+          await new Promise<void>((resolve) => setImmediate(() => resolve()));
+        }
+        continue;
+      }
       const decrypted = this.pageStore.get(lease, page.pageId);
       if (decrypted) this.upsertIndex(decrypted);
+      if (iterations % warmYieldBatch === 0) {
+        await new Promise<void>((resolve) => setImmediate(() => resolve()));
+      }
     }
     for (const pageId of indexedByPageId.keys()) {
       if (!activeByPageId.has(pageId)) this.removeIndex(lease.accountId, lease.generation, pageId);
     }
     this.ragIndex.reconcileStats(lease.accountId, lease.generation);
     this.purgeAccountGeneration(lease);
-    this.repairRemoteIdLookup(lease);
+    await this.repairRemoteIdLookup(lease);
   }
 
   /**
@@ -1216,9 +1316,43 @@ export class AgentRagWorker {
    * message now carries one is re-encrypted in place with the SAME source
    * revision and content (a new page revision) so Gmail label copies of one
    * physical mail collapse during dedup. Runs once per account generation,
-   * lazily on warm-up; a failure is retried on the next warm-up.
+   * lazily on warm-up; a failure is retried on the next warm-up. The completed
+   * state is persisted so a fully scanned generation is skipped on later boots.
    */
-  private repairRemoteIdLookup(lease: AccountGenerationLease): void {
+  private remoteIdRepairKey(accountId: string, generation: number): string {
+    return `${accountId}:${generation}`;
+  }
+
+  private loadRemoteIdRepairState(): void {
+    try {
+      const rows = this.options.db.prepare(`
+        SELECT account_id, account_generation
+        FROM agent_rag_repair_state
+        WHERE repaired = 1
+      `).all() as Array<{ account_id: string; account_generation: number }>;
+      for (const row of rows) {
+        this.remoteIdRepairedGenerations.add(this.remoteIdRepairKey(row.account_id, row.account_generation));
+      }
+    } catch {
+      // Best-effort: if the repair-state table is unavailable the scan simply
+      // re-runs rather than failing startup.
+    }
+  }
+
+  private persistRemoteIdRepairComplete(accountId: string, generation: number): void {
+    try {
+      this.options.db.prepare(`
+        INSERT INTO agent_rag_repair_state (account_id, account_generation, repaired, updated_at)
+        VALUES (?, ?, 1, ?)
+        ON CONFLICT(account_id, account_generation)
+        DO UPDATE SET repaired = 1, updated_at = excluded.updated_at
+      `).run(accountId, generation, this.now());
+    } catch {
+      // A failed persist only costs a re-scan on the next warm-up.
+    }
+  }
+
+  private async repairRemoteIdLookup(lease: AccountGenerationLease): Promise<void> {
     const generationKey = `${lease.accountId}:${lease.generation}`;
     if (this.remoteIdRepairedGenerations.has(generationKey)) return;
     try {
@@ -1239,6 +1373,7 @@ export class AgentRagWorker {
         if (candidates.length === 0) {
           this.remoteIdRepairedGenerations.add(generationKey);
           this.remoteIdRepairCursor.delete(generationKey);
+          this.persistRemoteIdRepairComplete(lease.accountId, lease.generation);
           return;
         }
       }
@@ -1248,7 +1383,13 @@ export class AgentRagWorker {
         .sort((left, right) => left.pageId.localeCompare(right.pageId));
       let repaired = 0;
       let scannedToEnd = true;
+      // Yield by visit count too: even when every page is already repaired the
+      // scan still decrypts each one to check, so a large account must not hold
+      // the event loop in one long synchronous stretch.
+      const repairYieldBatch = 32;
+      let visited = 0;
       for (const page of pages) {
+        visited += 1;
         if (page.pageId <= cursor) continue;
         // Advance the cursor on every inspected page so a later warm-up resumes
         // right after it, whether or not this page needed a repair.
@@ -1272,6 +1413,9 @@ export class AgentRagWorker {
         });
         this.upsertIndex({ ...revised, payload: nextPayload });
         repaired += 1;
+        if (visited % repairYieldBatch === 0) {
+          await new Promise<void>((resolve) => setImmediate(() => resolve()));
+        }
         if (repaired >= REMOTE_ID_REPAIR_BATCH) {
           scannedToEnd = false;
           break;
@@ -1281,6 +1425,7 @@ export class AgentRagWorker {
         this.remoteIdRepairedGenerations.add(generationKey);
         this.remoteIdRepairCursor.delete(generationKey);
         this.remoteIdCandidatePrefixes.delete(generationKey);
+        this.persistRemoteIdRepairComplete(lease.accountId, lease.generation);
       }
     } catch {
       // Best-effort migration; a failure keeps the cursor so the next warm-up

@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentBootstrap, AgentConversation, AgentProviderSummary } from "./agentTypes";
+import type { AgentBootstrap, AgentConversation, AgentProviderSummary, AgentStreamEvent } from "./agentTypes";
 import type { Account, Message } from "./types";
 
 // React 19 requires the act() environment flag when not running through
@@ -321,6 +321,16 @@ describe("AgentWorkspace conversation switching", () => {
     });
     container.remove();
     vi.clearAllMocks();
+    // Several tests reassign api.agentConversation outright (e.g. the stale-fetch
+    // deferred below); vi.clearAllMocks() only resets call records, not such
+    // reassigned implementations. Restore the default so later tests' loadBootstrap
+    // initial-conversation fetch resolves instead of hanging with `loading`.
+    (api as unknown as { agentConversation: unknown }).agentConversation = vi.fn(
+      async (id: string) => (id === "conv-a" ? h.convA : id === "conv-g" ? h.convGhost : id === "conv-scoped" ? h.convScoped : h.convB),
+    );
+    (api as unknown as { agentConversations: unknown }).agentConversations = vi.fn(async () => ({ items: h.bootstrap.conversations }));
+    (api as unknown as { streamAgentMessage: unknown }).streamAgentMessage = vi.fn(async () => new Promise(() => undefined));
+    (api as unknown as { createAgentConversation: unknown }).createAgentConversation = vi.fn(async () => h.convB);
   });
 
   const renderWorkspace = async (bootstrap: AgentBootstrap = h.bootstrap, currentMessage?: Message, accounts: Account[] = []) => {
@@ -671,6 +681,131 @@ describe("AgentWorkspace conversation switching", () => {
     expect(payload?.scope).toEqual({ mode: "selected_account", accountIds: ["account-2"], messageIds: [] });
     // The dead currentMessageId context field no longer rides the wire.
     expect("context" in (payload ?? {})).toBe(false);
+  });
+
+  it("keeps a locally-created conversation when a refresh snapshot omits it but carries a newer row", async () => {
+    // Mint a brand-new conversation the server snapshot below does not carry.
+    // Its updatedAt (the creation time) is OLDER than the newest row a concurrent
+    // refresh can report — the exact race where the pre-fix merge dropped a
+    // just-created row and the sidebar flashed it away until the next poll.
+    const convNew: AgentConversation = {
+      id: "conv-new",
+      title: "New Conversation",
+      preview: "hello",
+      updatedAt: "2026-08-10T00:00:00.000Z",
+      providerId: "provider-1",
+      scope: { mode: "all_accounts", accountIds: [], messageIds: [] },
+      messages: [],
+    };
+    (api as unknown as { createAgentConversation: unknown }).createAgentConversation = vi.fn(async () => convNew);
+
+    // The post-run refresh snapshot omits conv-new entirely and carries a NEWER
+    // row (conv-b bumped after conv-new was created). Locally the row is kept
+    // solely because it was created in this session (createdThisSessionRef), so
+    // it must not be dropped as "resurrectable".
+    (api as unknown as { agentConversations: unknown }).agentConversations = vi.fn(async () => ({
+      items: [
+        { id: "conv-b", title: "Conversation B", preview: "", updatedAt: "2026-08-10T00:00:01.000Z" },
+        { id: "conv-a", title: "Conversation A", preview: "", updatedAt: "2026-08-10T00:00:00.000Z" },
+      ],
+    }));
+
+    // Let the LLM answer synchronously: emitting `completed` finishes the run,
+    // whose completion path calls refreshConversations with the snapshot above.
+    (api as unknown as { streamAgentMessage: unknown }).streamAgentMessage = vi.fn(
+      async (_id: string, _payload: unknown, onEvent: (event: AgentStreamEvent) => void) => {
+        onEvent({ type: "completed", reason: "stop" });
+      },
+    );
+
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
+
+    // Fork a new conversation scoped to account-2 so the first send creates one.
+    const picker = container.querySelector<HTMLButtonElement>(".agent-scope-picker");
+    act(() => {
+      picker?.click();
+    });
+    await flush();
+    const options = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-scope-option"));
+    act(() => {
+      options[1]!.click();
+    });
+    await flush();
+
+    setComposer("hello");
+    clickSend();
+    await flush();
+    await flush();
+
+    expect(api.createAgentConversation).toHaveBeenCalledTimes(1);
+
+    // conv-new survives the refresh even though the snapshot omitted it and
+    // conv-b is newer — the createdThisSessionRef guard keeps it in the sidebar.
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".agent-conversation-row"))
+      .find((item) => item.textContent?.includes("New Conversation"));
+    expect(row).toBeTruthy();
+  });
+
+  it("keeps the sidebar when the accounts prop identity changes mid-session (no bootstrap re-clobber)", async () => {
+    // Regression for the whole-sidebar flicker (rows vanishing for ~3s): App
+    // replaces the accounts array with a fresh identity on every silent mail
+    // refresh (desktop new-mail pushes arrive while the agent panel is open).
+    // loadBootstrap's useCallback depends on `accounts`, so an unguarded mount
+    // effect re-ran the bootstrap load — wholesale replacing the sidebar with
+    // the stale splash-time preloaded snapshot and hijacking the active
+    // conversation until the next stream/poll refresh restored the rows.
+    const convNew: AgentConversation = {
+      id: "conv-new",
+      title: "New Conversation",
+      preview: "hello",
+      updatedAt: "2026-08-10T00:00:00.000Z",
+      providerId: "provider-1",
+      scope: { mode: "all_accounts", accountIds: [], messageIds: [] },
+      messages: [],
+    };
+    (api as unknown as { createAgentConversation: unknown }).createAgentConversation = vi.fn(async () => convNew);
+    (api as unknown as { agentConversations: unknown }).agentConversations = vi.fn(async () => ({
+      items: h.bootstrap.conversations,
+    }));
+    (api as unknown as { streamAgentMessage: unknown }).streamAgentMessage = vi.fn(
+      async (_id: string, _payload: unknown, onEvent: (event: AgentStreamEvent) => void) => {
+        onEvent({ type: "completed", reason: "stop" });
+      },
+    );
+
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo]);
+
+    // Fork a new conversation scoped to account-2 so the first send creates
+    // a sidebar row the (stale) preloaded snapshot does not carry.
+    const picker = container.querySelector<HTMLButtonElement>(".agent-scope-picker");
+    act(() => {
+      picker?.click();
+    });
+    await flush();
+    const options = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-scope-option"));
+    act(() => {
+      options[1]!.click();
+    });
+    await flush();
+
+    setComposer("hello");
+    clickSend();
+    await flush();
+    await flush();
+
+    expect(api.createAgentConversation).toHaveBeenCalledTimes(1);
+    const rowVisible = () => Array.from(container.querySelectorAll<HTMLElement>(".agent-conversation-row"))
+      .some((item) => item.textContent?.includes("New Conversation"));
+    expect(rowVisible()).toBe(true);
+
+    // Simulate the desktop new-mail push: App's silentRefresh installs a NEW
+    // accounts array (same content, new identity) and re-renders the panel.
+    await renderWorkspace(h.bootstrap, referenceMessage, [{ ...accountOne }, { ...accountTwo }]);
+
+    // The bootstrap load must not re-run: the preloaded snapshot (which lacks
+    // conv-new) never clobbers the sidebar, and no fallback fetch fires.
+    expect(api.agentBootstrap).not.toHaveBeenCalled();
+    expect(rowVisible()).toBe(true);
   });
 
   it("defaults to the first account without a message and switches to all accounts", async () => {

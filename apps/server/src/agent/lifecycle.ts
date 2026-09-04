@@ -142,6 +142,17 @@ export class AccountLifecycleStore {
     return row ? publicRecord(row) : undefined;
   }
 
+  /** Account ids with an active lifecycle, in reverse-updated order (most
+   *  recently touched first). Used for startup warm-up so the index is ready
+   *  before a first search needs it, without blocking the host process. */
+  listActiveAccounts(): string[] {
+    assertAgentStoreReadable(this.db);
+    const rows = this.db.prepare(
+      "SELECT account_id FROM agent_account_lifecycle WHERE state = 'active' ORDER BY updated_at DESC",
+    ).all() as Array<{ account_id: string }>;
+    return rows.map((row) => row.account_id);
+  }
+
   acquireLease(accountId: string): AccountGenerationLease {
     const lifecycle = this.ensureActive(accountId);
     return Object.freeze({ accountId: lifecycle.accountId, generation: lifecycle.generation });

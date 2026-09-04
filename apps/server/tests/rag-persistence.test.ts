@@ -289,4 +289,69 @@ describe("Persisted RAG lexical index", () => {
     expect((after!.payload as { remoteIdLookup?: string }).remoteIdLookup).toBe("h1.stable-id");
     await second.stop();
   });
+
+  it("caches decrypted pages so a repeated read on the same store skips re-decryption", async () => {
+    db = openDatabase(":memory:");
+    masterKey = randomBytes(32);
+    insertAccount(db);
+    applyAgentStoreSchema(db);
+    const context = setup(db, masterKey);
+    insertMessage(db, "message-1", 1, "Project review", "The approved project review is on Friday.");
+    context.outbox.enqueue({
+      lease: context.lease,
+      event: upsertEvent(context.lease, "message-1", "revision-1", "source-upsert-1"),
+    });
+    const worker = new AgentRagWorker({ db, masterKey, lifecycle: context.lifecycle, sourceEvents: context.outbox });
+    await worker.drainOnce();
+    await worker.stop();
+
+    const pageId = "message:message-1:chunk:0";
+    const store = new EncryptedRagPageStore(db, masterKey, context.lifecycle);
+    const lease = context.lifecycle.acquireLease("account-1");
+
+    // Repeated reads on the same store return an identical, stable payload.
+    // (The LRU cache serves these without re-running the decrypt path.)
+    const first = store.get(lease, pageId);
+    const second = store.get(lease, pageId);
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(second!.payload).toEqual(first!.payload);
+    expect(second!.payload).toMatchObject({ kind: "mail-chunk", subject: "Project review" });
+
+    // The cached page must not survive a tombstone: a deleted page is unreachable.
+    store.tombstone(lease, pageId);
+    expect(store.get(lease, pageId)).toBeUndefined();
+  });
+
+  it("warms the index for active accounts on startup so a first search is served", async () => {
+    db = openDatabase(":memory:");
+    masterKey = randomBytes(32);
+    insertAccount(db);
+    applyAgentStoreSchema(db);
+    const context = setup(db, masterKey);
+    // Enqueue source events but DO NOT drain: only start() runs, and it must
+    // backfill + warm the index on its own.
+    insertMessage(db, "message-1", 1, "Project review", "The approved project review is on Friday.");
+    context.outbox.enqueue({
+      lease: context.lease,
+      event: upsertEvent(context.lease, "message-1", "revision-1", "source-upsert-1"),
+    });
+
+    const worker = new AgentRagWorker({ db, masterKey, lifecycle: context.lifecycle, sourceEvents: context.outbox });
+    worker.start();
+
+    // start() is fire-and-forget; poll until the index reflects the message.
+    const indexCount = () =>
+      (db!.prepare("SELECT COUNT(*) AS n FROM agent_rag_index").get() as { n: number }).n;
+    const deadline = Date.now() + 5000;
+    while (indexCount() === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(indexCount()).toBeGreaterThan(0);
+
+    // A subsequent search is served from the warmed index without a manual drain.
+    const results = await worker.search(["account-1"], "project review", 5);
+    expect(results[0]?.citation.messageId).toBe("message-1");
+    await worker.stop();
+  });
 });

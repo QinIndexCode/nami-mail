@@ -22,6 +22,7 @@ export type MessageAttachmentMetadata = {
   size: number;
   related: boolean;
   disposition: "attachment" | "inline";
+  contentId?: string;
 };
 
 export type MessageAttachmentDownload = {
@@ -72,6 +73,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function normalizeStoredAttachment(value: unknown, index: number): MessageAttachmentMetadata | undefined {
   if (!isRecord(value) || !isValidAttachmentPartId(value.partId)) return undefined;
   const related = value.related === true;
+  const contentId = typeof value.contentId === "string" ? value.contentId : undefined;
   return {
     partId: value.partId,
     filename: sanitizeAttachmentFilename(value.filename, index),
@@ -79,6 +81,7 @@ function normalizeStoredAttachment(value: unknown, index: number): MessageAttach
     size: safeSize(value.size),
     related,
     disposition: safeDisposition(value.disposition, related),
+    ...(contentId ? { contentId } : {}),
   };
 }
 
@@ -106,6 +109,9 @@ export function attachmentMetadataFromParsedMail(attachments: readonly Attachmen
     if (!isValidAttachmentPartId(parsedAttachment.partId) || seenPartIds.has(parsedAttachment.partId)) return [];
     seenPartIds.add(parsedAttachment.partId);
     const related = parsedAttachment.related === true;
+    const contentId = typeof parsedAttachment.contentId === "string"
+      ? parsedAttachment.contentId.replace(/^<|>$/g, "")
+      : undefined;
     return [{
       partId: parsedAttachment.partId,
       filename: sanitizeAttachmentFilename(parsedAttachment.filename, index),
@@ -113,6 +119,7 @@ export function attachmentMetadataFromParsedMail(attachments: readonly Attachmen
       size: safeSize(parsedAttachment.size),
       related,
       disposition: safeDisposition(parsedAttachment.contentDisposition, related),
+      ...(contentId ? { contentId } : {}),
     }];
   });
 }

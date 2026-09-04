@@ -255,6 +255,9 @@ export class WindowsSidDaclPipeRelay {
       this.child = undefined;
       if (!child || child.killed) return;
       await new Promise<void>((resolve) => {
+        // The relay process usually exits as soon as stdin closes. A short
+        // grace window keeps a stuck PowerShell from delaying desktop exit;
+        // the OS drops the named pipe once the process is gone either way.
         const timeout = setTimeout(() => {
           try {
             child.kill();
@@ -262,7 +265,7 @@ export class WindowsSidDaclPipeRelay {
             // Best-effort shutdown after closing stdin.
           }
           resolve();
-        }, 2_000);
+        }, 500);
         timeout.unref?.();
         child.once("exit", () => {
           clearTimeout(timeout);

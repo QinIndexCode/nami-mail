@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { computePosition, flip, offset, shift } from "@floating-ui/dom";
-import DOMPurify from "dompurify";
 import {
   Archive,
   ArrowLeft,
@@ -65,13 +64,13 @@ import { resolveUpdateFooter, type UpdateFooterAction } from "./updateFooter";
 import { demoDataSnapshot, ensureDemoLoaded } from "./demo-loader";
 import { mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
 import { AccountHealthBanner, accountShowsFreshness, accountStatusDotClass, useAccountHealth } from "./accountHealth";
-import { useRealtimeSync } from "./realtimeSync";
-import { buildForwardDraft, buildReplyDraft, buildReplyQuote } from "./mailActions";
+import { useRealtimeSync, type SyncProgressPayload } from "./realtimeSync";
+import { useCoalescedRefresh } from "./useCoalescedRefresh";
+import { buildForwardDraft, buildReplyDraft } from "./mailActions";
 import { ComposeModal } from "./ComposeModal";
 import { sortMessages } from "./mailImportance";
 import { groupMessagesByThread, shouldCollapseThread, sortThreadByTimeline } from "./threads";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { mailBackgroundColor, mailReaderSurface, mailSurfaceForBackground, shouldResetMailForeground, type MailSurface } from "./mailHtmlTheme";
 import {
   applyBatchSeenChange as applyBatchSeenChangeState,
   applyMessageMove,
@@ -102,13 +101,37 @@ import TranslationPanel, { type TranslationAvailability, type TranslationContent
 import { applyMailTranslation, extractMailTextSegments } from "./mailDomTranslation";
 import { extractMailVisualStyle, llmTranslationErrorMessage, translationErrorMessage } from "./translationPresentation";
 import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type MessageAttachment, type OutboundAttachment, type OutboundSubmission, type ProviderInfo, type Stats } from "./types";
-import { useDialogFocus } from "./useDialogFocus";
+import { useDialogFocus } from "./hooks/useDialogFocus";
 import { dialogKeydownDecision, useDialogRouting } from "./dialogRouting";
 import { findVerificationCodes } from "./verificationCode";
 import { resolveLocale, type Translate, useI18n } from "./i18n";
 import type { AgentBootstrap } from "./agentTypes";
 import MessageList from "./MessageList";
 import { AutoReplyToastStack, autoReplyNoticeKey } from "./AutoReplyToastStack";
+import {
+  formatMessageTime,
+  formatFullDate,
+  formatSyncFreshness,
+  isCompactMailLayout,
+  buildMessageQuery,
+  demoMessageTotal,
+  moveTargetSpecialUses,
+  moveActionKey,
+  demoMoveDestination,
+  accountTone,
+  currentSystemTheme,
+  resolveTheme,
+  backgroundUrl,
+  sanitizeMailHtml,
+  textFromSanitizedMailHtml,
+  replyBody,
+  SWITCH_FADE_MS,
+  MAIL_FADE_STAGGER_MS,
+  AGENT_FADE_STAGGER_MS,
+  MAX_LLM_TRANSLATION_TEXT_LENGTH,
+  type AttachmentDownloadState,
+  localizeMessageLinks,
+} from "./app/app-utils";
 
 const AgentWorkspace = lazy(() => import("./AgentWorkspace"));
 const AccountConnectionModal = lazy(() => import("./AddAccountModal"));
@@ -139,22 +162,12 @@ type ToastNotice = { kind: ToastKind; message: string; action?: ToastAction } | 
 // names; the motion itself lives in styles.css. `idle` is the settled state in
 // either direction.
 type AgentPhase = "idle" | "mail-leaving" | "agent-entering" | "agent-leaving" | "mail-entering";
-// Per-layer fade duration and the stagger between layers. Totals must match
-// the CSS animations (mail = 2 leaving layers, agent = 2 entering layers) —
-// see `.mail-shell[data-agent-phase]`.
-const SWITCH_FADE_MS = 240;
-const MAIL_FADE_STAGGER_MS = 60;
-const AGENT_FADE_STAGGER_MS = 80;
 const MAIL_SWITCH_TOTAL_MS = SWITCH_FADE_MS + MAIL_FADE_STAGGER_MS;
 const AGENT_SWITCH_TOTAL_MS = SWITCH_FADE_MS + AGENT_FADE_STAGGER_MS;
 type TranslationSession = {
   messageId: string;
   targetLocale: string;
   state: TranslationPanelState;
-};
-type AttachmentDownloadState = {
-  phase: "downloading" | "ready" | "error";
-  detail?: string;
 };
 
 function retainedTranslationContent(state: TranslationPanelState): TranslationContent | undefined {
@@ -181,282 +194,17 @@ if (isDesktopSmoke) document.documentElement.classList.add("desktop-smoke");
 // macOS traffic-light slot).
 const desktopPlatform = new URLSearchParams(window.location.search).get("platform") ?? undefined;
 
-// Mirrors MAX_TRANSLATION_TEXT_LENGTH in the local server so the reader rejects
-// oversized messages before any mail content is sent to a translation provider.
-const MAX_LLM_TRANSLATION_TEXT_LENGTH = 50_000;
-
-function formatMessageTime(value: string, locale: string): string {
-  const date = new Date(value);
-  const now = new Date();
-  const sameDay = date.toDateString() === now.toDateString();
-  if (sameDay) return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(date);
-  const sameYear = date.getFullYear() === now.getFullYear();
-  return new Intl.DateTimeFormat(locale, sameYear ? { month: "numeric", day: "numeric" } : { year: "2-digit", month: "numeric", day: "numeric" }).format(date);
-}
-
-function formatFullDate(value: string, locale: string): string {
-  return new Intl.DateTimeFormat(locale, {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-function formatSyncFreshness(value: string | null, t: Translate): string {
-  if (!value) return t("mail.sync.never");
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
-  if (!Number.isFinite(elapsedSeconds) || elapsedSeconds < 60) return t("mail.sync.justNow");
-  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-  if (elapsedMinutes < 60) return t(elapsedMinutes === 1 ? "mail.sync.minuteAgo" : "mail.sync.minutesAgo", { count: elapsedMinutes });
-  const elapsedHours = Math.floor(elapsedMinutes / 60);
-  if (elapsedHours < 24) return t(elapsedHours === 1 ? "mail.sync.hourAgo" : "mail.sync.hoursAgo", { count: elapsedHours });
-  const elapsedDays = Math.floor(elapsedHours / 24);
-  return t(elapsedDays === 1 ? "mail.sync.dayAgo" : "mail.sync.daysAgo", { count: elapsedDays });
-}
-
-function isCompactMailLayout(): boolean {
-  return window.matchMedia("(max-width: 620px)").matches;
-}
-
-function buildMessageQuery({
-  accountId,
-  folder,
-  search,
-  messageView,
-  searchScope,
-  attachmentKind,
-  after,
-  before,
-  page = 1,
-}: {
-  accountId: string;
-  folder: string;
-  search: string;
-  messageView: MailView;
-  searchScope: "view" | "all";
-  attachmentKind?: AttachmentKind;
-  after?: string;
-  before?: string;
-  page?: number;
-}): string {
-  const query = new URLSearchParams({ pageSize: "100" });
-  if (page > 1) query.set("page", String(page));
-  const globalSearch = searchScope === "all" && search.trim() !== "";
-  if (!globalSearch) {
-    if (accountId !== "all") query.set("accountId", accountId);
-    if (folder) query.set("folder", folder);
-    if (messageView === "starred") query.set("starred", "1");
-    if (messageView === "unread") query.set("unread", "1");
-    if (messageView === "archived") query.set("archived", "1");
-    if (messageView === "snoozed") query.set("snoozed", "1");
-    if (messageView === "attachments") query.set("hasAttachments", "1");
-  }
-  // Kind and date refinements survive the global-search switch too; the
-  // server applies them on top of the FTS candidate set.
-  if (attachmentKind) query.set("attachmentKind", attachmentKind);
-  if (after) query.set("after", after);
-  if (before) query.set("before", before);
-  if (search.trim()) {
-    query.set("q", search.trim());
-    if (globalSearch) query.set("scope", "all");
-  }
-  return query.toString();
-}
-
-function demoMessageTotal(messages: readonly Message[], accounts: readonly Account[], {
-  accountId,
-  folder,
-  search,
-  messageView,
-  searchScope,
-  attachmentKind,
-  after,
-  before,
-}: {
-  accountId: string;
-  folder: string;
-  search: string;
-  messageView: MailView;
-  searchScope: "view" | "all";
-  attachmentKind?: AttachmentKind;
-  after?: string;
-  before?: string;
-}): number {
-  const normalizedQuery = search.trim().toLowerCase();
-  return messages.filter((message) => {
-    if (!(searchScope === "all" && normalizedQuery)) {
-      if (accountId !== "all" && message.accountId !== accountId) return false;
-      if (folder && message.mailbox !== folder) return false;
-      if (!folder && messageView === "inbox" && !isInboxMessage(message, accounts)) return false;
-      if (messageView === "unread" && message.seen) return false;
-      if (messageView === "starred" && !message.flagged) return false;
-      if (messageView === "archived" && !isArchivedMessage(message, accounts)) return false;
-      if (messageView === "snoozed" && !isSnoozedMessage(message)) return false;
-      if (messageView === "attachments" && !message.hasAttachments) return false;
-    }
-    if (attachmentKind
-      && !message.attachments.some((item) => presentAttachment(item.filename, item.contentType).kind === attachmentKind)) {
-      return false;
-    }
-    if (after || before) {
-      const sentTime = new Date(message.sentAt).getTime();
-      if (!Number.isFinite(sentTime)) return false;
-      if (after && sentTime < new Date(after).getTime()) return false;
-      if (before && sentTime >= new Date(before).getTime()) return false;
-    }
-    if (normalizedQuery && !`${message.subject} ${message.from.name} ${message.from.address} ${message.snippet}`.toLowerCase().includes(normalizedQuery)) return false;
-    return true;
-  }).length;
-}
-
-const moveTargetSpecialUses: Record<MoveTarget, string[]> = {
-  archive: ["\\Archive", "\\All"],
-  trash: ["\\Trash"],
-  junk: ["\\Junk"],
-  inbox: ["\\Inbox"],
-};
-
-// The confirmation toasts differ per action; spam actions reuse the same
-// success wording whether they came from the reader menu or the batch bar.
-function moveActionKey(target: MoveTarget, selection: boolean): string {
-  if (selection) {
-    return target === "archive" ? "mail.selection.archived" : target === "trash" ? "mail.selection.trashed" : "mail.selection.reportedSpam";
-  }
-  return target === "archive" ? "mail.action.archived" : target === "trash" ? "mail.action.trashed" : target === "junk" ? "mail.action.reportedSpam" : "mail.action.recoveredFromSpam";
-}
-
-function demoMoveDestination(accounts: readonly Account[], accountId: string, target: MoveTarget): string {
-  const folders = accounts.find((account) => account.id === accountId)?.folders ?? [];
-  for (const specialUse of moveTargetSpecialUses[target]) {
-    const folder = folders.find((item) => item.specialUse === specialUse);
-    if (folder) return folder.path;
-  }
-  return "";
-}
-
-function initials(name: string, address: string): string {
-  const value = name.trim() || address.split("@")[0] || "?";
-  return [...value].slice(0, 2).join("").toUpperCase();
-}
-
-function accountTone(value: string): number {
-  return [...value].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4;
-}
-
-function currentSystemTheme(): "light" | "dark" {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
-function resolveTheme(preference: AppSettings["theme"], systemTheme: "light" | "dark"): "light" | "dark" {
-  return preference === "system" ? systemTheme : preference;
-}
-
-function backgroundUrl(settings: AppSettings): string | null {
-  if (settings.backgroundPreset === "custom") return settings.customBackgroundUrl;
-  if (settings.backgroundPreset === "none") return null;
-  return `/backgrounds/${settings.backgroundPreset}.svg`;
-}
 
 function reportCustomNotificationSoundAvailability(): void {
   desktopBridge()?.setCustomNotificationSoundReady(canPlayCustomNotificationSound());
 }
 
-function sanitizeMailHtml(html: string, darkMode: boolean): string {
-  const clean = DOMPurify.sanitize(html, {
-    FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "img", "form"],
-  });
-
-  const template = document.createElement("template");
-  template.innerHTML = clean;
-  const elements = [...template.content.querySelectorAll("*")];
-  for (const element of elements) {
-    const styled = element as HTMLElement;
-    // Mail content is intentionally selectable. Remove only the inline
-    // properties that can override the reader's explicit selection policy.
-    styled.style?.removeProperty("user-select");
-    styled.style?.removeProperty("-webkit-user-select");
-    // Email content must not be able to opt itself into the reader's surface
-    // normalization before we classify its own declared background.
-    element.removeAttribute("data-nami-mail-surface");
-  }
-  const surfaceByElement = new Map<Element, MailSurface>();
-  for (const element of elements) {
-    const styled = element as HTMLElement;
-    const surface = mailSurfaceForBackground(mailBackgroundColor(
-      styled.style?.getPropertyValue("background-color") || styled.style?.backgroundColor,
-      styled.style?.getPropertyValue("background") || styled.style?.background,
-      element.getAttribute("bgcolor") || element.getAttribute("background"),
-    ));
-    if (!surface) continue;
-    surfaceByElement.set(element, surface);
-    element.setAttribute("data-nami-mail-surface", surface.tone);
-  }
-
-  const readerSurface = mailReaderSurface(darkMode ? "dark" : "light");
-  const nearestSurface = (element: Element): MailSurface => {
-    let current: Element | null = element;
-    while (current) {
-      const surface = surfaceByElement.get(current);
-      if (surface) return surface;
-      current = current.parentElement;
-    }
-    return readerSurface;
-  };
-
-  for (const element of elements) {
-    const styled = element as HTMLElement;
-    const surface = nearestSurface(element);
-    // WebKit text fill wins over `color` when present. Email generators use it
-    // surprisingly often, so checking only `color` can still leave white copy
-    // on a light table after sanitization.
-    const foregrounds = [
-      { value: styled.style?.getPropertyValue("-webkit-text-fill-color") ?? "", reset: () => styled.style?.removeProperty("-webkit-text-fill-color") },
-      { value: styled.style?.getPropertyValue("color") ?? "", reset: () => styled.style?.removeProperty("color") },
-      { value: element.getAttribute("color") ?? "", reset: () => element.removeAttribute("color") },
-    ].filter((foreground) => Boolean(foreground.value));
-    // Links retain recognizable brand colors, but still need a visible
-    // contrast floor distinct from the stricter body-copy requirement.
-    const minimumContrast = element.closest("a") ? 3 : undefined;
-    const readableForeground = foregrounds.some((foreground) => !shouldResetMailForeground(foreground.value, surface, minimumContrast));
-    for (const foreground of foregrounds) {
-      if (shouldResetMailForeground(foreground.value, surface, minimumContrast)) foreground.reset();
-    }
-    // The app's light reader would otherwise provide dark inherited text for
-    // a dark authored table. Give only unstyled or corrected surface roots a
-    // readable inherited foreground, while preserving intentional email colors.
-    if (!darkMode && surfaceByElement.get(element)?.tone === "dark" && !readableForeground) {
-      styled.style?.setProperty("color", "#f5f5f6");
-      styled.style?.setProperty("-webkit-text-fill-color", "#f5f5f6");
-      styled.style?.setProperty("color-scheme", "dark");
-    }
-  }
-  return template.innerHTML;
-}
-
-function textFromSanitizedMailHtml(html: string): string {
-  if (!html) return "";
-  const template = document.createElement("template");
-  template.innerHTML = html;
-  return template.content.textContent ?? "";
-}
 
 /**
  * Composes the reply body: the sender's signature, a blank line, then the
  * quoted original message. The empty leading block keeps the reply cursor at
  * the top while the signature and quote sit beneath it.
  */
-function replyBody(message: Message, accounts: readonly Account[], locale: string, t: Translate, safeHtml: string): string {
-  const signature = accounts.find((account) => account.id === message.accountId)?.signature ?? "";
-  const body = message.textBody || textFromSanitizedMailHtml(safeHtml) || message.snippet;
-  const sender = message.from.name ? `${message.from.name} <${message.from.address}>` : message.from.address;
-  const quote = buildReplyQuote(body, t("compose.replyQuote", {
-    date: formatFullDate(message.sentAt, locale),
-    sender,
-  }));
-  return signature.trim() ? `${signature.trim()}\n\n${quote}` : `\n\n${quote}`;
-}
 
 async function copyVerificationCodeToClipboard(code: string): Promise<boolean> {
   const bridge = desktopBridge();
@@ -1039,6 +787,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         setLoading(false);
         if (!splashDataDoneRef.current) {
           splashDataDoneRef.current = true;
+          console.log("[nami-startup] renderer-data-loaded");
           if (splashAnimationDoneRef.current && splashAgentDoneRef.current && !splashDismissedRef.current) {
             splashDismissedRef.current = true;
             const el = document.getElementById("nami-splash");
@@ -1139,6 +888,32 @@ await refreshSubmissions(nextAccounts, { silent: true });
     }
   }, [captureScrollAnchor, attachmentKindFilter, dateBounds, debouncedQuery, refreshSubmissions, searchScope, selectedAccount, selectedFolder, view]);
 
+  // One gate for every refresh trigger (SSE events, the desktop new-mail IPC
+  // bridge, the poll fallback and the Agent's mail-state changes). While the
+  // window is hidden a request only marks the list dirty and is flushed by a
+  // single catch-up on the next visibilitychange — so a background sync storm
+  // stops feeding the main thread, and restoring the window never hits a burst
+  // of queued full reloads. Foreground bursts collapse onto a trailing pass.
+  const requestRefresh = useCoalescedRefresh(silentRefresh);
+
+  // Live initial/full sync progress, fed by "sync.progress" SSE frames. It
+  // drives a lightweight "syncing history" banner; the banner auto-dismisses a
+  // short beat after the last frame so a busy multi-folder download stays
+  // visible but a finished one does not linger.
+  const [syncProgress, setSyncProgress] = useState<SyncProgressPayload | null>(null);
+  const syncProgressClearTimerRef = useRef<number | null>(null);
+  const handleSyncProgress = useCallback((next: SyncProgressPayload) => {
+    if (syncProgressClearTimerRef.current !== null) {
+      window.clearTimeout(syncProgressClearTimerRef.current);
+      syncProgressClearTimerRef.current = null;
+    }
+    setSyncProgress(next);
+    syncProgressClearTimerRef.current = window.setTimeout(() => setSyncProgress(null), 1_500);
+  }, []);
+  useEffect(() => () => {
+    if (syncProgressClearTimerRef.current !== null) window.clearTimeout(syncProgressClearTimerRef.current);
+  }, []);
+
   const loadSettings = useCallback(async () => {
     if (isDemo) return;
     const ticket = settingsLoadCoordinatorRef.current.beginLoad();
@@ -1169,6 +944,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     if (splashDismissedRef.current) return;
     if (!splashAnimationDoneRef.current || !splashDataDoneRef.current || !splashAgentDoneRef.current) return;
     splashDismissedRef.current = true;
+    console.log("[nami-startup] renderer-splash-dismissed");
     const el = document.getElementById("nami-splash");
     if (el) {
       el.classList.add("done");
@@ -1179,6 +955,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
   useEffect(() => {
     const timer = setTimeout(() => {
       splashAnimationDoneRef.current = true;
+      console.log("[nami-startup] renderer-splash-animation-done(2s)");
       // If data or agent is still loading, show the loading bar
       if (!splashDataDoneRef.current || !splashAgentDoneRef.current) {
         const loader = document.querySelector(".nami-splash-loader");
@@ -1203,6 +980,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
       setPreloadedAgentBootstrap(capped);
     }).catch(() => undefined).finally(() => {
       splashAgentDoneRef.current = true;
+      console.log("[nami-startup] renderer-agent-bootstrap-done");
       dismissSplash();
     });
   }, [dismissSplash]);
@@ -1265,8 +1043,9 @@ await refreshSubmissions(nextAccounts, { silent: true });
     isDesktop: Boolean(desktopBridge()),
     t,
     showToast,
-    onRefresh: silentRefresh,
+    onRefresh: requestRefresh,
     onSettingsChanged: loadSettings,
+    onSyncProgress: handleSyncProgress,
   });
   // Defensive: a read/unread toggle whose request hangs would otherwise leave
   // its id in the in-flight set, pinning the optimistic seen state on top of
@@ -1471,9 +1250,9 @@ await refreshSubmissions(nextAccounts, { silent: true });
   // lands, without waiting for the periodic refresh interval.
   const handleAccountAdded = useCallback(async () => {
     await load();
-    window.setTimeout(() => void silentRefresh(), 8_000);
-    window.setTimeout(() => void silentRefresh(), 30_000);
-  }, [load, silentRefresh]);
+    window.setTimeout(() => requestRefresh(), 8_000);
+    window.setTimeout(() => requestRefresh(), 30_000);
+  }, [load, requestRefresh]);
 
   const loadedServerMessageCount = useMemo(() => {
     if (isDemo) return filteredMessages.length;
@@ -3182,7 +2961,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     const bridge = desktopBridge();
     if (!bridge || isDemo) return undefined;
     const unsubscribeNewMail = bridge.onNewMail((notice) => {
-      void silentRefresh();
+      requestRefresh();
       if (!notice.shouldAlert) return;
       if (notice.playCustomSound && !playNotificationSound(settings.notificationSound)) {
         bridge.setCustomNotificationSoundReady(false);
@@ -3647,6 +3426,12 @@ const emptyMessageList = useMemo(() => (query.trim()
             />
           )}
 
+          {syncProgress && syncProgress.totalEstimate > 0 && (
+            <div className="sync-progress-banner" role="status" aria-live="polite">
+              {t("mail.syncingHistory", { processed: syncProgress.processed, totalCount: syncProgress.totalEstimate })}
+            </div>
+          )}
+
           <div className={`list-toolbar-frame${selectionMode ? " selection-on" : ""}`}>
             <div className="list-toolbar list-status-bar">
               <span className={recentlyReadVisibleCount ? "unread-retention-note" : ""} aria-live={recentlyReadVisibleCount ? "polite" : undefined}>{listToolbarStatus}</span>
@@ -3831,7 +3616,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                 <div className="mail-content">
                   {selected.htmlBody
                     ? <div className="mail-html" dangerouslySetInnerHTML={{ __html: (translationState.phase === "ready" && translationState.visible && translationState.translatedHtml) ? translationState.translatedHtml : safeHtml }} />
-                    : <div className="mail-text">{selected.textBody || selected.snippet}</div>}
+                    : <div className="mail-text">{selected.textBody || (selected.snippet ? localizeMessageLinks(selected.snippet, locale) : "")}</div>}
                 </div>
                 {visibleAttachments.length > 0 && (
                   <section className="attachment-list" aria-label={t("mail.attachment.aria", { count: visibleAttachments.length })}>
@@ -3873,7 +3658,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           )}
 </section>
         </div>
-        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} providerSettingsRequestId={agentProviderSettingsRequestId} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onClose={() => {
+        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} providerSettingsRequestId={agentProviderSettingsRequestId} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
           closeAgentWorkspace();
           // Refresh agent bootstrap so the translation panel picks up any
           // provider configuration changes made inside the assistant workspace.

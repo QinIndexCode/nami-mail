@@ -50,12 +50,14 @@ Recipient options accept `address` or `Name <address>` and are comma-separated. 
 
 ## Write commands rejected by default (only when the CLI permission is read-only)
 
-The following seven write commands return `PERMISSION_DENIED` and are not forwarded to the Broker when the CLI permission is `read-only` (the default level):
+The following write commands return `PERMISSION_DENIED` and are not forwarded to the Broker when the CLI permission is `read-only` (the default level):
 
 ```text
 draft create | draft update | draft delete
 messages move | messages set-flag | messages send
-mail reply
+mail reply | mail forward | mail send
+mail archive | mail trash | mail mark-read | mail mark-unread
+rag rebuild
 ```
 
 After raising the CLI permission in desktop settings to "confirm before operations" (`send-confirmed`), these commands are available, but every write raises a visible confirmation in the Nami Mail desktop app; the confirmation binds an immutable content digest, account generation, and one-time token, and must be approved by the user in the UI. `--yes` is not an authorization token: the parser rejects `--yes` for external commands, so confirmation cannot be bypassed. At the "fully automatic" (`full-access`) level, writes execute automatically without per-item confirmation, but scope and audit still apply.
