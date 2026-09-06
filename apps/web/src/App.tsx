@@ -629,25 +629,54 @@ export default function App() {
     ].join(",");
     const BAND = 8; // matches the custom track width in styles.css
     let raf = 0;
+    // Only the container under the pointer can need the class, so track it
+    // with mouseover/mouseout and read exactly one rect per frame instead of
+    // querying the whole document and measuring every scrollable on each move.
+    let current: HTMLElement | null = null;
+    const clear = () => {
+      current?.classList.remove("scrollbar-reveal");
+      current = null;
+    };
+    const over = (event: MouseEvent) => {
+      const host = (event.target as HTMLElement | null)?.closest?.(REVEAL) as HTMLElement | null ?? null;
+      if (host !== current) {
+        clear();
+        current = host;
+      }
+    };
+    const out = (event: MouseEvent) => {
+      if (!current) return;
+      const next = (event.relatedTarget as HTMLElement | null)?.closest?.(REVEAL) as HTMLElement | null ?? null;
+      if (next !== current) clear();
+    };
     const onMove = (event: MouseEvent) => {
-      if (raf) return;
+      if (!current || raf) return;
+      const x = event.clientX;
+      const y = event.clientY;
       raf = requestAnimationFrame(() => {
         raf = 0;
-        const x = event.clientX;
-        const y = event.clientY;
-        for (const el of document.querySelectorAll<HTMLElement>(REVEAL)) {
-          const r = el.getBoundingClientRect();
-          const onTrack =
-            (x >= r.right - BAND && x <= r.right && y >= r.top && y <= r.bottom) ||
-            (y >= r.bottom - BAND && y <= r.bottom && x >= r.left && x <= r.right);
-          el.classList.toggle("scrollbar-reveal", onTrack);
+        const host = current;
+        if (!host) return;
+        if (!host.isConnected) {
+          clear();
+          return;
         }
+        const r = host.getBoundingClientRect();
+        const onTrack =
+          (x >= r.right - BAND && x <= r.right && y >= r.top && y <= r.bottom) ||
+          (y >= r.bottom - BAND && y <= r.bottom && x >= r.left && x <= r.right);
+        host.classList.toggle("scrollbar-reveal", onTrack);
       });
     };
+    document.addEventListener("mouseover", over);
+    document.addEventListener("mouseout", out);
     document.addEventListener("mousemove", onMove);
     return () => {
+      document.removeEventListener("mouseover", over);
+      document.removeEventListener("mouseout", out);
       document.removeEventListener("mousemove", onMove);
       if (raf) cancelAnimationFrame(raf);
+      clear();
     };
   }, []);
 
@@ -3079,7 +3108,12 @@ const emptyMessageList = useMemo(() => (query.trim()
       }
     };
     void poll();
-    const timer = window.setInterval(() => void poll(), 20_000);
+    const timer = window.setInterval(() => {
+      // A hidden tab needs no fresh toast data; the next tick after the user
+      // returns catches up (at most one interval stale).
+      if (document.hidden) return;
+      void poll();
+    }, 20_000);
     return () => {
       disposed = true;
       window.clearInterval(timer);

@@ -519,6 +519,10 @@ function migrateDatabase(db: DatabaseHandle): void {
     db.exec("ALTER TABLE messages ADD COLUMN snoozed_until TEXT");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_snoozed_until ON messages(snoozed_until) WHERE snoozed_until IS NOT NULL");
+  // Partial index for the cross-folder Attachments view and its sidebar
+  // count: only attachment-carrying rows are indexed, so both stay cheap no
+  // matter how large the mailbox grows.
+  db.exec("CREATE INDEX IF NOT EXISTS idx_messages_has_attachments ON messages(has_attachments) WHERE has_attachments = 1");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_account_mailbox_remote_id ON messages(account_id, mailbox, remote_id_lookup)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_pending_move_remote_id ON messages(account_id, pending_move_destination, remote_id_lookup)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_pending_move_candidate ON messages(account_id, pending_move_destination, pending_move_candidate_uid)");

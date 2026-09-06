@@ -1055,10 +1055,14 @@ export class AgentRagWorker {
           this.backfillCursors.set(account.id, cursor);
           continue;
         }
+        // One existence probe per batch instead of per row: the unique index
+        // on (account_id, account_generation, source_locator_opaque, ...)
+        // serves the whole IN list, turning an N+1 scan into two queries.
+        const existingLocators = this.hasSourceEventLocators(lease, rows.map((row) => this.sourceEventLocator(lease, row.id)));
         for (const row of rows) {
           cursor.lastRowId = row.row_id;
           task.assertCurrent();
-          if (this.hasSourceEvent(lease, row.id)) continue;
+          if (existingLocators.has(this.sourceEventLocator(lease, row.id))) continue;
           const occurredAt = this.now();
           this.options.sourceEvents.enqueue({
             lease,
@@ -1089,18 +1093,23 @@ export class AgentRagWorker {
     }
   }
 
-  private hasSourceEvent(lease: AccountGenerationLease, messageId: string): boolean {
-    const sourceLocatorOpaque = agentOpaqueDigest(
+  private sourceEventLocator(lease: AccountGenerationLease, messageId: string): string {
+    return agentOpaqueDigest(
       this.options.masterKey,
       "source-locator",
       canonicalAgentJson({ accountId: lease.accountId, source: { kind: "message", messageId } }),
     );
-    return Boolean(this.options.db.prepare(`
-      SELECT 1 FROM agent_source_events
+  }
+
+  private hasSourceEventLocators(lease: AccountGenerationLease, locators: string[]): Set<string> {
+    if (!locators.length) return new Set();
+    const placeholders = locators.map(() => "?").join(",");
+    const rows = this.options.db.prepare(`
+      SELECT source_locator_opaque FROM agent_source_events
       WHERE account_id = ? AND account_generation = ?
-        AND source_locator_opaque = ? AND event_type = 'message-upserted'
-      LIMIT 1
-    `).get(lease.accountId, lease.generation, sourceLocatorOpaque));
+        AND source_locator_opaque IN (${placeholders}) AND event_type = 'message-upserted'
+    `).all(lease.accountId, lease.generation, ...locators) as Array<{ source_locator_opaque: string }>;
+    return new Set(rows.map((row) => row.source_locator_opaque));
   }
 
   private backfillRevision(row: BackfillMessageRow): string {

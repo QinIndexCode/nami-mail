@@ -320,14 +320,21 @@ function advanceRemoteDeletionProbeCursor(key: string, uid: number): void {
 
 const remoteIdLookupKeyPurpose = "message-remote-id-lookup-v1";
 
+// The HKDF derivation dominates remoteIdLookup's cost and its output depends
+// only on (masterKey, purpose), so memoize it per master-key object. The
+// cached key shares the master key's own lifetime (both live for the whole
+// process), which is why it is not zeroed after each use unlike the
+// single-shot keys elsewhere.
+const remoteIdLookupKeyCache = new WeakMap<Buffer, Buffer>();
+
 function remoteIdLookup(masterKey: Buffer, accountId: string, remoteId: string | undefined): string | null {
   if (!remoteId) return null;
-  const key = deriveEncryptionKey(masterKey, remoteIdLookupKeyPurpose);
-  try {
-    return `h1.${createHmac("sha256", key).update(accountId, "utf8").update("\0").update(remoteId, "utf8").digest("base64url")}`;
-  } finally {
-    key.fill(0);
+  let key = remoteIdLookupKeyCache.get(masterKey);
+  if (!key) {
+    key = deriveEncryptionKey(masterKey, remoteIdLookupKeyPurpose);
+    remoteIdLookupKeyCache.set(masterKey, key);
   }
+  return `h1.${createHmac("sha256", key).update(accountId, "utf8").update("\0").update(remoteId, "utf8").digest("base64url")}`;
 }
 
 function isSelectableFolder(folder: ListResponse): boolean {
@@ -1022,8 +1029,6 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           if (signal?.aborted) throw new SyncAbortedError();
           if (!message.uid) continue;
           const flagsJson = JSON.stringify([...(message.flags ?? [])]);
-          const remoteLookup = remoteIdLookup(masterKey, accountId, message.emailId);
-          const allMailArchived = allMailArchivedValue(folder, message.labels);
           let existing = findMessage.get(accountId, folder.path, message.uid) as MessageStorageRow | undefined;
           const reconciliation = reconcilePendingRemoteMessage(folder, message);
           if (reconciliation === "waiting") {
@@ -1034,6 +1039,11 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
             existing = findMessage.get(accountId, folder.path, message.uid) as MessageStorageRow | undefined;
           }
           if (existing) {
+            // The lookup is only consumed by the metadata-refresh UPDATE
+            // below; computing it for brand-new messages (the whole window on
+            // a fresh account) would burn an HKDF+HMAC per message for nothing.
+            const remoteLookup = remoteIdLookup(masterKey, accountId, message.emailId);
+            const allMailArchived = allMailArchivedValue(folder, message.labels);
             db.transaction(() => {
               updateCachedMessage.run(
                 flagsJson,
