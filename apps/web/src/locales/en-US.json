@@ -1745,6 +1745,7 @@
     "agent.mcpServers.loadFailed": "Unable to load MCP server settings.",
     "settings.agent.autoReplyGroup": "Auto-reply",
     "settings.agent.autoReplyGroupDesc": "The Agent drafts replies to new mail; LLM-mode replies must be confirmed by you before they are sent, while template mode can send without confirmation.",
+    "settings.agent.autoReplyInvalidWarning": "The saved auto-reply configuration could not be read, so defaults are shown. Re-saving your settings will repair it.",
     "settings.agent.autoReplyEnabled": "Enable auto-reply",
     "settings.agent.autoReplyEnabledDesc": "Watch selected accounts for new mail and draft auto-replies for you to confirm.",
     "settings.agent.autoReplyAccounts": "Accounts to watch",
@@ -2125,6 +2126,19 @@
     "demo.submission.subject.submitting": "Weekend itinerary and booking details",
     "demo.submission.subject.confirmed": "Photo download link",
     "demo.submission.error.connectionFailed": "The connection dropped while waiting for the final response, so we can't confirm whether the server accepted the email.",
+    "demo.calendar.event1.title": "Morning standup",
+    "demo.calendar.event1.description": "Daily sync",
+    "demo.calendar.event1.location": "Online",
+    "demo.calendar.event2.title": "Design review",
+    "demo.calendar.event2.description": "Product iteration design review",
+    "demo.calendar.event2.location": "Meeting room A",
+    "demo.calendar.event3.title": "Product launch",
+    "demo.calendar.event3.description": "Monthly release rollout",
+    "demo.calendar.event4.title": "Team outing",
+    "demo.calendar.event4.description": "Quarterly team building",
+    "demo.calendar.event4.location": "Country park",
+    "demo.autoReply.subject": "Quarterly metrics review and this week's sync",
+    "demo.autoReply.replyPreview": "Noted — I'll finish the metrics review and sync back to you within the week. Thanks!",
     "mail.syncingHistory": "Syncing history — latest messages are ready ({processed}/{totalCount})"
   }
 }

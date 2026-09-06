@@ -159,7 +159,7 @@ export function mentionItemFor(message: Message): MentionItem {
 /** Categorized copy for a failed revoke. */
 export function revokeFailureMessage(error: unknown, t: Translate): string {
   if (error instanceof ApiError) {
-    if (error.code === "local_service_unavailable") return t("agent.message.revokeFailedService");
+    if (error.code === "local_service_unavailable" || error.code === "local_service_timeout") return t("agent.message.revokeFailedService");
     if (error.code === "NOT_FOUND") return t("agent.message.revokeFailedNotFound");
   }
   return t("agent.message.revokeFailed");

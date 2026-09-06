@@ -196,7 +196,7 @@ export function AgentProviderSettings({
     if (error instanceof ApiError) {
       if (error.code === "PROVIDER_AUTH_FAILED") return t("agent.providers.checkError.auth");
       if (error.code === "PROVIDER_CHANGED") return t("agent.providers.checkError.changed");
-      if (error.code === "local_service_unavailable") return t("agent.providers.checkError.localService");
+      if (error.code === "local_service_unavailable" || error.code === "local_service_timeout") return t("agent.providers.checkError.localService");
       return error.message || fallback;
     }
     return fallback;

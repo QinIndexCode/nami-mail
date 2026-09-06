@@ -25,6 +25,8 @@ export interface DialogKeydownSnapshot {
   addOpen: boolean;
   mobileSidebar: boolean;
   sendingStatusOpen: boolean;
+  translationTermsOpen: boolean;
+  attachmentPreviewOpen: boolean;
   selectedId: string | null;
   selected: boolean;
   /** The message shift+J/K expands from; null until the first expansion. */
@@ -78,7 +80,7 @@ export function dialogKeydownDecision(event: KeyboardEvent, snapshot: DialogKeyd
     if (snapshot.selectedId) return { action: { kind: "close_reader" }, preventDefault: false };
     return null;
   }
-  if (snapshot.settingsOpen || snapshot.calendarOpen || snapshot.contactsOpen || snapshot.templatesOpen || snapshot.accountsOpen || snapshot.sendingStatusOpen || snapshot.composeOpen || snapshot.addOpen || snapshot.mobileSidebar) return null;
+  if (snapshot.settingsOpen || snapshot.calendarOpen || snapshot.contactsOpen || snapshot.templatesOpen || snapshot.accountsOpen || snapshot.sendingStatusOpen || snapshot.composeOpen || snapshot.addOpen || snapshot.mobileSidebar || snapshot.translationTermsOpen || snapshot.attachmentPreviewOpen) return null;
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     return { action: { kind: "focus_search" }, preventDefault: true };
   }

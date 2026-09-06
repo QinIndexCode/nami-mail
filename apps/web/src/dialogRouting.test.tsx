@@ -55,6 +55,8 @@ function shellKeydown(event: KeyboardEvent): void {
     addOpen: state.addOpen,
     mobileSidebar: state.mobileSidebar,
     sendingStatusOpen: state.sendingStatusOpen,
+    translationTermsOpen: state.translationTermsOpen,
+    attachmentPreviewOpen: state.attachmentPreview !== null,
     selectedId: null,
     selected: false,
     keyboardSelectionAnchorId: null,
@@ -294,6 +296,9 @@ describe("assembly · App executor over the routed decisions", () => {
   it("n with no accounts opens the add-account dialog", async () => {
     await mount();
     await act(async () => {
+      latest!.actions.setTranslationTermsOpen(false);
+    });
+    await act(async () => {
       shellKeydown(keyOnDocument("n"));
     });
     expect(latest!.state.addOpen).toBe(true);
@@ -302,6 +307,9 @@ describe("assembly · App executor over the routed decisions", () => {
 
   it("Cmd+K reports preventDefault so the App effect stops the browser", async () => {
     await mount();
+    await act(async () => {
+      latest!.actions.setTranslationTermsOpen(false);
+    });
     const event = keyOnDocument("k", { metaKey: true });
     await act(async () => {
       shellKeydown(event);
@@ -311,6 +319,9 @@ describe("assembly · App executor over the routed decisions", () => {
 
   it("after the close action the same gateway re-arms", async () => {
     await mount();
+    await act(async () => {
+      latest!.actions.setTranslationTermsOpen(false);
+    });
     await act(async () => {
       latest!.actions.openSettings();
     });

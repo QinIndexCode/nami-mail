@@ -105,6 +105,25 @@ describe("app settings migrations", () => {
     }
   });
 
+  it("flags a corrupt stored auto-reply config instead of silently using defaults", () => {
+    const db = openDatabase(":memory:");
+    try {
+      // The settings row is created lazily on first read; materialize it
+      // before corrupting the stored config, otherwise the UPDATE hits 0 rows.
+      expect(getAppSettings(db).autoReplyInvalid).toBe(false);
+      db.prepare("UPDATE app_settings SET auto_reply_config = ? WHERE id = 1").run("{not-json");
+      const settings = getAppSettings(db);
+      expect(settings.autoReplyInvalid).toBe(true);
+      expect(settings.autoReply.enabled).toBe(false);
+      // The raw row is preserved untouched for diagnosis and repair.
+      expect((db.prepare("SELECT auto_reply_config FROM app_settings WHERE id = 1").get() as { auto_reply_config: string }).auto_reply_config).toBe("{not-json");
+      db.prepare("UPDATE app_settings SET auto_reply_config = NULL WHERE id = 1").run();
+      expect(getAppSettings(db).autoReplyInvalid).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
   it("accepts the desktop settings payload that spreads the full auto-reply config", () => {
     const parsed = autoReplyConfigPatchSchema.safeParse({
       enabled: false,

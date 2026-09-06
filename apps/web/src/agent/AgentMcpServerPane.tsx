@@ -152,7 +152,7 @@ export function AgentMcpServerPane({ active }: { active: boolean }) {
   const requestFeedback = (error: unknown, fallback: string): string => {
     if (error instanceof ApiError) {
       if (error.code === "SERVER_CHANGED") return t("agent.mcpServers.checkError.changed");
-      if (error.code === "local_service_unavailable") return t("agent.mcpServers.checkError.localService");
+      if (error.code === "local_service_unavailable" || error.code === "local_service_timeout") return t("agent.mcpServers.checkError.localService");
       return error.message || fallback;
     }
     return fallback;
