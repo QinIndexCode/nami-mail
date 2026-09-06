@@ -379,19 +379,26 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   notePhase("build:register-remaining-routes");
 
   app.get("/api/stats", async () => {
-    const accounts = (context.db.prepare("SELECT COUNT(*) AS count FROM accounts").get() as { count: number }).count;
     // Snoozed messages are hidden from the unified inbox, so the sidebar
     // counts must exclude active snoozes too.
     const nowIso = new Date().toISOString();
-    const messages = (
-      context.db.prepare(`SELECT COUNT(*) AS count FROM messages m WHERE ${inboxMessageFilter} AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?)`).get(nowIso) as { count: number }
-    ).count;
-    const unread = (
-      context.db
-        .prepare(`SELECT COUNT(*) AS count FROM messages m WHERE ${inboxMessageFilter} AND flags_json NOT LIKE '%\\\\Seen%' AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?)`)
-        .get(nowIso) as { count: number }
-    ).count;
-    return { accounts, messages, unread };
+    // One pass over messages instead of six sequential COUNT(*) scans: every
+    // badge shares the same table walk and only differs in its predicate.
+    // SUM returns NULL on an empty table, hence the COALESCE guards.
+    const row = context.db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM accounts) AS accounts,
+        COALESCE(SUM(CASE WHEN ${inboxMessageFilter} AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?) THEN 1 ELSE 0 END), 0) AS messages,
+        COALESCE(SUM(CASE WHEN ${inboxMessageFilter} AND m.flags_json NOT LIKE '%\\\\Seen%' AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?) THEN 1 ELSE 0 END), 0) AS unread,
+        COALESCE(SUM(CASE WHEN m.flags_json LIKE '%\\\\Flagged%' THEN 1 ELSE 0 END), 0) AS starred,
+        COALESCE(SUM(CASE WHEN m.snoozed_until IS NOT NULL AND m.snoozed_until > ? THEN 1 ELSE 0 END), 0) AS snoozed,
+        COALESCE(SUM(CASE WHEN m.has_attachments = 1 THEN 1 ELSE 0 END), 0) AS attachments
+      FROM messages m
+    `).get(nowIso, nowIso, nowIso) as { accounts: number; messages: number; unread: number; starred: number; snoozed: number; attachments: number };
+    // Sidebar badge counts for the cross-folder views: starred, snoozed and
+    // the attachments view (every folder participates, mirroring the messages
+    // route's filter semantics for those views).
+    return { accounts: row.accounts, messages: row.messages, unread: row.unread, starred: row.starred, snoozed: row.snoozed, attachments: row.attachments };
   });
 
   const hasWebDist = fs.existsSync(config.webDistPath);

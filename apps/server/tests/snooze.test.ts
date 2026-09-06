@@ -118,7 +118,8 @@ describe("snooze API routes", () => {
 
     const stats = await app.inject({ method: "GET", url: "/api/stats" });
     // The snoozed message is hidden; message-2 remains unread in the inbox.
-    expect(stats.json()).toEqual({ accounts: 1, messages: 1, unread: 1 });
+    // toMatchObject (not toEqual): cross-folder badge keys evolve separately.
+    expect(stats.json()).toMatchObject({ accounts: 1, messages: 1, unread: 1 });
   });
 
   it("cancels a snooze so the message is visible again", async () => {
