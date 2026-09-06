@@ -14,7 +14,7 @@ const DEMO_FOLDER_KEYS: Record<string, string> = {
 };
 
 /** Translates demo copy, keeping the established literal when a locale pack entry is missing. */
-function demoTranslate(locale: string, key: string, fallback: string): string {
+export function demoTranslate(locale: string, key: string, fallback: string): string {
   const resolved = translate(locale, key);
   return resolved === key ? fallback : resolved;
 }

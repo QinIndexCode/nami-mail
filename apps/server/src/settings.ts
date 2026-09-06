@@ -53,10 +53,16 @@ export type AppSettings = {
   agentMcpAccessLevel: AgentAccessLevel;
   customBackgroundFilename: string | null;
   autoReply: AutoReplyConfig;
+  /**
+   * True when the stored auto_reply_config failed to parse. autoReply then
+   * carries defaults while the raw row is preserved untouched, so the UI can
+   * warn instead of silently showing defaults for a config the user did set.
+   */
+  autoReplyInvalid: boolean;
   updatedAt: string;
 };
 
-export type AppSettingsPatch = Partial<Omit<AppSettings, "customBackgroundFilename" | "updatedAt">> & {
+export type AppSettingsPatch = Partial<Omit<AppSettings, "customBackgroundFilename" | "updatedAt" | "autoReplyInvalid">> & {
   customBackgroundFilename?: string | null;
 };
 
@@ -82,6 +88,7 @@ const defaults: Omit<AppSettings, "updatedAt"> = {
   agentMcpAccessLevel: "read-only",
   customBackgroundFilename: null,
   autoReply: DEFAULT_AUTO_REPLY,
+  autoReplyInvalid: false,
 };
 
 type SettingsRow = {
@@ -109,13 +116,13 @@ type SettingsRow = {
   updated_at: string;
 };
 
-function parseAutoReplyConfig(value: string | null): AutoReplyConfig {
-  if (!value) return DEFAULT_AUTO_REPLY;
+function parseAutoReplyConfig(value: string | null): { config: AutoReplyConfig; invalid: boolean } {
+  if (!value) return { config: DEFAULT_AUTO_REPLY, invalid: false };
   try {
     const parsed = autoReplyConfigSchema.safeParse(JSON.parse(value) as unknown);
-    return parsed.success ? parsed.data : DEFAULT_AUTO_REPLY;
+    return parsed.success ? { config: parsed.data, invalid: false } : { config: DEFAULT_AUTO_REPLY, invalid: true };
   } catch {
-    return DEFAULT_AUTO_REPLY;
+    return { config: DEFAULT_AUTO_REPLY, invalid: true };
   }
 }
 
@@ -147,6 +154,7 @@ function ensureSettingsRow(db: DatabaseHandle): void {
 }
 
 function rowToSettings(row: SettingsRow): AppSettings {
+  const autoReply = parseAutoReplyConfig(row.auto_reply_config);
   return {
     theme: row.theme,
     locale: normalizeLocale(row.locale),
@@ -168,7 +176,8 @@ function rowToSettings(row: SettingsRow): AppSettings {
     agentCliAccessLevel: row.agent_cli_access_level,
     agentMcpAccessLevel: row.agent_mcp_access_level,
     customBackgroundFilename: row.custom_background_filename,
-    autoReply: parseAutoReplyConfig(row.auto_reply_config),
+    autoReply: autoReply.config,
+    autoReplyInvalid: autoReply.invalid,
     updatedAt: row.updated_at,
   };
 }

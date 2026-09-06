@@ -395,6 +395,8 @@ export type AppSettings = {
   agentCliAccessLevel: AgentAccessLevel;
   agentMcpAccessLevel: AgentAccessLevel;
   autoReply: AutoReplyConfig;
+  /** True when the stored auto-reply config failed to parse; autoReply carries defaults. Output-only, never patched. */
+  autoReplyInvalid: boolean;
   customBackgroundUrl: string | null;
   updatedAt: string;
 };
@@ -434,6 +436,7 @@ export const defaultAppSettings: AppSettings = {
     requireConfirmation: true,
     dailyLimitPerAccount: 30,
   },
+  autoReplyInvalid: false,
   customBackgroundUrl: null,
   updatedAt: "",
 };

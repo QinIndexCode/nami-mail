@@ -499,10 +499,11 @@ function appendDesktopStartupLog(stage: string, elapsedMs: number, origin: "main
     // Log capture is best-effort; it must never break boot.
   }
 }
-// Kill switch for the append-only startup log (packaged installs that want no
-// diagnostic file growth): NAMI_MAIL_NO_STARTUP_LOG=1 also freezes any
-// pre-existing file in place. Honor it lazily so values arriving later via
-// nami-mail.env still take effect for the rest of the launch.
+// Kill switch for appending to the startup log (packaged installs that want
+// no diagnostic file growth): NAMI_MAIL_NO_STARTUP_LOG=1 stops all appends.
+// Honor it lazily so values arriving later via nami-mail.env still take
+// effect for the rest of the launch. Pruning below is intentionally NOT gated:
+// an old oversized file is trimmed back even when appending is disabled.
 function isDesktopStartupLogDisabled(): boolean {
   return process.env.NAMI_MAIL_NO_STARTUP_LOG === "1";
 }
@@ -512,7 +513,7 @@ function isDesktopStartupLogDisabled(): boolean {
 const desktopStartupLogMaxLines = 2000;
 function pruneDesktopStartupLog(): void {
   const target = desktopStartupLogPath;
-  if (!target || isDesktopStartupLogDisabled()) return;
+  if (!target) return;
   try {
     if (!existsSync(target)) return;
     const lines = readFileSync(target, "utf8").split("\n");
@@ -1352,9 +1353,12 @@ async function createMainWindow(): Promise<void> {
     // Renderer startup instrumentation: the web app logs "[nami-startup] <stage>"
     // markers at its key milestones (React mounted, first data load done, splash
     // dismissed). Forward them into the same startup log so a slow renderer boot
-    // can be dissected alongside the main/server stages.
+    // can be dissected alongside the main/server stages. Renderer content is
+    // untrusted for sizing: cap a single line so one huge console message
+    // cannot bloat the file and stall the next boot's synchronous prune.
     if (typeof event.message === "string" && event.message.startsWith("[nami-startup]")) {
-      appendDesktopStartupLog(event.message.slice("[nami-startup]".length).trim(), Date.now() - desktopStartedAt, "renderer");
+      const stage = event.message.slice("[nami-startup]".length).trim().slice(0, 512);
+      appendDesktopStartupLog(stage, Date.now() - desktopStartedAt, "renderer");
     }
     if (!smokeResultPath || !["warning", "error"].includes(event.level)) return;
     noteDesktopSmokeDiagnostic(`Renderer ${event.level}: ${event.message}`);
@@ -1602,7 +1606,6 @@ async function boot(): Promise<void> {
   desktopAgentBrokerRecoveryGate = "accepting";
   desktopStartupTimingsPath = path.join(app.getPath("userData"), "startup-timings.json");
   desktopStartupLogPath = path.join(app.getPath("userData"), "startup-log.jsonl");
-  pruneDesktopStartupLog();
   recordDesktopStartupTiming("boot-start");
   await writeDesktopSmokeProgress("waiting-for-electron-ready");
   await app.whenReady();
@@ -1626,6 +1629,10 @@ async function boot(): Promise<void> {
   }
   await loadDesktopLocalConfiguration();
   configureLocalService();
+  // Prune once the configuration is final so a kill switch from nami-mail.env
+  // is honored for this same launch; earlier appends (boot-start, at most a
+  // couple of lines) are trimmed here when appending stays enabled.
+  pruneDesktopStartupLog();
   recordDesktopStartupTiming("configuration-loaded");
   await writeDesktopSmokeProgress("configuration-loaded");
 

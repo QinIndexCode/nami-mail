@@ -3113,13 +3113,13 @@ const emptyMessageList = useMemo(() => (query.trim()
           requestId: "demo-auto-reply-request",
           accountId: demo.createDemoAccounts(locale)[0]?.id ?? "personal",
           messageId: "demo-auto-reply-message",
-          subject: "季度数据回顾与本周同步",
+          subject: demo.demoTranslate(locale, "demo.autoReply.subject", "季度数据回顾与本周同步"),
           fromName: "Lena Chen",
           fromAddress: "lena.chen@example.com",
           sensitive: false,
           createdAt: new Date(now).toISOString(),
           expiresAt: new Date(now + 20 * 60 * 1000).toISOString(),
-          replyPreview: "收到，我会在本周内完成数据回顾并同步给你。谢谢！",
+          replyPreview: demo.demoTranslate(locale, "demo.autoReply.replyPreview", "收到，我会在本周内完成数据回顾并同步给你。谢谢！"),
         },
       ]);
     })();
@@ -3161,6 +3161,8 @@ const emptyMessageList = useMemo(() => (query.trim()
         addOpen: state.addOpen,
         mobileSidebar: state.mobileSidebar,
         sendingStatusOpen: state.sendingStatusOpen,
+        translationTermsOpen: state.translationTermsOpen,
+        attachmentPreviewOpen: state.attachmentPreview !== null,
         selectedId,
         selected: Boolean(selected),
         keyboardSelectionAnchorId: keyboardSelectionAnchorIdRef.current,
@@ -3194,7 +3196,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [accounts.length, state.addOpen, state.calendarOpen, closeReader, state.composeOpen, filteredMessages, state.mobileSidebar, actions.openCompose, openForward, openMessage, openReply, openReplyAll, selectMessageRange, selected, selectedId, state.contactsOpen, state.templatesOpen, state.accountsOpen, state.sendingStatusOpen, state.settingsOpen, updatePromptOpen, actions.openAddAccount, actions.closeSettings, actions.closeCalendar, actions.closeContacts, actions.closeTemplates, actions.closeAccounts, actions.closeAddAccount, actions.closeMobileSidebar]);
+  }, [accounts.length, state.addOpen, state.calendarOpen, closeReader, state.composeOpen, filteredMessages, state.mobileSidebar, actions.openCompose, openForward, openMessage, openReply, openReplyAll, selectMessageRange, selected, selectedId, state.contactsOpen, state.templatesOpen, state.accountsOpen, state.sendingStatusOpen, state.translationTermsOpen, state.attachmentPreview, state.settingsOpen, updatePromptOpen, actions.openAddAccount, actions.closeSettings, actions.closeCalendar, actions.closeContacts, actions.closeTemplates, actions.closeAccounts, actions.closeAddAccount, actions.closeMobileSidebar]);
 
   const sync = async () => {
     if (!accounts.length || syncing) return;

@@ -65,6 +65,7 @@ function publicSettings(context: RuntimeContext, settings: AppSettings) {
     agentCliAccessLevel: settings.agentCliAccessLevel,
     agentMcpAccessLevel: settings.agentMcpAccessLevel,
     autoReply: settings.autoReply,
+    autoReplyInvalid: settings.autoReplyInvalid,
     customBackgroundUrl: hasCustomBackground ? `/api/settings/background-image?v=${encodeURIComponent(settings.updatedAt)}` : null,
     updatedAt: settings.updatedAt,
   };

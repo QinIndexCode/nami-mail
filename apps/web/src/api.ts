@@ -220,7 +220,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // translation) manage their own lifetime via an explicit signal and must not
   // be cut at a fixed 30s. A caller-supplied signal is forwarded so an
   // intentional abort still propagates as an AbortError, while a timeout
-  // surfaces as a distinct "local service did not respond" failure.
+  // surfaces as a distinct local_service_timeout failure (not
+  // local_service_unavailable, so callers can tell "no response" from
+  // "unreachable").
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort(new DOMException("The Nami Mail local service did not respond in time.", "TimeoutError"));
@@ -239,6 +241,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await requestResponse(path, { ...init, signal: controller.signal });
     if (!response.ok) throw await apiError(response);
     return (await response.json().catch(() => ({}))) as T;
+  } catch (error) {
+    // The timer above aborts with a TimeoutError reason, but requestResponse
+    // wraps non-abort rejections as local_service_unavailable before this
+    // catch runs — so read the signal's own reason, which survives the
+    // wrapping. A caller-driven abort keeps its original reason and falls
+    // through to requestResponse's classification untouched.
+    const reason = controller.signal.reason;
+    if (reason instanceof DOMException && reason.name === "TimeoutError") {
+      throw new ApiError("The Nami Mail local service did not respond in time.", "local_service_timeout");
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
     callerSignal?.removeEventListener("abort", forwardAbort);
@@ -432,9 +445,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ targetLocale, segments }),
     });
+    if (!response.ok) throw await apiError(response);
     const json = await response.json() as { ok: true; translations: string[] };
     if (!json.ok || !Array.isArray(json.translations) || json.translations.length !== segments.length) {
-      throw new ApiError("translation_failed", "The message segments could not be translated.");
+      throw new ApiError("The message segments could not be translated.", "translation_failed");
     }
     return json;
   },
