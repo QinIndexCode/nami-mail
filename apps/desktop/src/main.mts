@@ -3,7 +3,7 @@ import { parse as parseDotenv } from "dotenv";
 import type { AgentResponseEnvelope, BrokerJsonValue, CallerContext, ExternalPairingSummary } from "@nami/agent-contracts";
 import { createHash, randomBytes } from "node:crypto";
 import { exec, spawn as nodeSpawn } from "node:child_process";
-import { writeFileSync, appendFileSync, existsSync, createReadStream } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, existsSync, createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -488,7 +488,7 @@ let desktopStartupLogPath: string | undefined;
 //   {"t":"2026-08-30T..","ms":1234,"pid":"main","stage":"..."}
 function appendDesktopStartupLog(stage: string, elapsedMs: number, origin: "main" | "server" | "renderer" = "main"): void {
   const target = desktopStartupLogPath;
-  if (!target) return;
+  if (!target || isDesktopStartupLogDisabled()) return;
   try {
     appendFileSync(
       target,
@@ -497,6 +497,30 @@ function appendDesktopStartupLog(stage: string, elapsedMs: number, origin: "main
     );
   } catch {
     // Log capture is best-effort; it must never break boot.
+  }
+}
+// Kill switch for the append-only startup log (packaged installs that want no
+// diagnostic file growth): NAMI_MAIL_NO_STARTUP_LOG=1 also freezes any
+// pre-existing file in place. Honor it lazily so values arriving later via
+// nami-mail.env still take effect for the rest of the launch.
+function isDesktopStartupLogDisabled(): boolean {
+  return process.env.NAMI_MAIL_NO_STARTUP_LOG === "1";
+}
+// The JSONL log keeps every stage across launches, so without a bound it
+// grows forever (~2KB per launch). Trim to the trailing window once per boot;
+// each line is self-contained so dropping the head loses nothing structural.
+const desktopStartupLogMaxLines = 2000;
+function pruneDesktopStartupLog(): void {
+  const target = desktopStartupLogPath;
+  if (!target || isDesktopStartupLogDisabled()) return;
+  try {
+    if (!existsSync(target)) return;
+    const lines = readFileSync(target, "utf8").split("\n");
+    if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+    if (lines.length <= desktopStartupLogMaxLines) return;
+    writeFileSync(target, `${lines.slice(-desktopStartupLogMaxLines).join("\n")}\n`, "utf8");
+  } catch {
+    // Pruning is best-effort; it must never break boot.
   }
 }
 function recordDesktopStartupTiming(stage: string, elapsedMs?: number): void {
@@ -1578,6 +1602,7 @@ async function boot(): Promise<void> {
   desktopAgentBrokerRecoveryGate = "accepting";
   desktopStartupTimingsPath = path.join(app.getPath("userData"), "startup-timings.json");
   desktopStartupLogPath = path.join(app.getPath("userData"), "startup-log.jsonl");
+  pruneDesktopStartupLog();
   recordDesktopStartupTiming("boot-start");
   await writeDesktopSmokeProgress("waiting-for-electron-ready");
   await app.whenReady();

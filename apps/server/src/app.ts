@@ -65,6 +65,23 @@ import { type RuntimeContext, type TranslationServiceLike } from "./types.js";
 import { MAX_BACKGROUND_UPLOAD_BYTES } from "./helpers.js";
 export { MAX_BACKGROUND_UPLOAD_BYTES };
 
+// Bound for the append-only startup request log (startup-request-log.jsonl):
+// without it the first-60s capture grows forever (~10-60KB per boot). Each
+// line is self-contained, so keeping the trailing window loses nothing
+// structural. Runs once per boot; never throws.
+const startupRequestLogMaxLines = 5000;
+function pruneStartupRequestLog(logPath: string): void {
+  try {
+    if (!fs.existsSync(logPath)) return;
+    const lines = fs.readFileSync(logPath, "utf8").split("\n");
+    if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+    if (lines.length <= startupRequestLogMaxLines) return;
+    fs.writeFileSync(logPath, `${lines.slice(-startupRequestLogMaxLines).join("\n")}\n`, "utf8");
+  } catch {
+    // Best-effort instrumentation; a read-only data dir must not break boot.
+  }
+}
+
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'none'",
@@ -288,20 +305,27 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   // event loop was contended while the window was booting.
   const startupRequestsStartedAt = Date.now();
   const startupRequestLogPath = path.join(path.dirname(config.databasePath), "startup-request-log.jsonl");
-  app.addHook("onResponse", async (request, reply) => {
-    const elapsedMs = reply.elapsedTime;
-    const elapsedSinceBoot = Date.now() - startupRequestsStartedAt;
-    if (elapsedSinceBoot > 60_000 && elapsedMs < 25) return;
-    try {
-      appendFileSync(
-        startupRequestLogPath,
-        `${JSON.stringify({ t: new Date().toISOString(), bootMs: elapsedSinceBoot, ms: Math.round(elapsedMs), method: request.method, url: request.url?.split("?")[0] })}\n`,
-        "utf8",
-      );
-    } catch {
-      // Best-effort instrumentation; a read-only data dir must not break boot.
-    }
-  });
+  // Kill switch for packaged installs that want no diagnostic file growth:
+  // NAMI_MAIL_NO_STARTUP_LOG=1 skips both the per-boot prune and all appends,
+  // freezing any pre-existing file in place. The desktop host shares its
+  // process.env with the in-process server, so one setting covers both logs.
+  if (process.env.NAMI_MAIL_NO_STARTUP_LOG !== "1") {
+    pruneStartupRequestLog(startupRequestLogPath);
+    app.addHook("onResponse", async (request, reply) => {
+      const elapsedMs = reply.elapsedTime;
+      const elapsedSinceBoot = Date.now() - startupRequestsStartedAt;
+      if (elapsedSinceBoot > 60_000 && elapsedMs < 25) return;
+      try {
+        appendFileSync(
+          startupRequestLogPath,
+          `${JSON.stringify({ t: new Date().toISOString(), bootMs: elapsedSinceBoot, ms: Math.round(elapsedMs), method: request.method, url: request.url?.split("?")[0] })}\n`,
+          "utf8",
+        );
+      } catch {
+        // Best-effort instrumentation; a read-only data dir must not break boot.
+      }
+    });
+  }
 
   app.get("/api/health", async () => ({ ok: true, service: "nami-mail", time: new Date().toISOString() }));
 

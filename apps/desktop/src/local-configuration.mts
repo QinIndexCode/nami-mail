@@ -9,6 +9,11 @@ export const installedDesktopConfigurationEnvironmentNames = [
   "NAMI_MAIL_TRANSLATION_TIMEOUT_MS",
   // The server's built-in per-folder sync cap can be overridden per install.
   "SYNC_MESSAGE_LIMIT",
+  // Non-secret kill switch for the append-only startup logs (desktop
+  // startup-log.jsonl + server startup-request-log.jsonl). Safe for the
+  // user-data file: it only disables diagnostic writes, never credentials,
+  // loopback, database, or keys.
+  "NAMI_MAIL_NO_STARTUP_LOG",
 ] as const;
 
 export const developmentDesktopConfigurationEnvironmentNames = [

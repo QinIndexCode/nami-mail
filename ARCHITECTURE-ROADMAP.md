@@ -1,7 +1,7 @@
 # 架构与优化路线图（ARCHITECTURE ROADMAP）
 
 > 本文件是 Nami Mail 的持续推进计划，供新的 ZCode 会话续接工作。
-> 最后更新：2026-08-21。每项完成一个批次后同步更新本文件与下方「交付记录」。
+> 最后更新：2026-09-06。每项完成一个批次后同步更新本文件与下方「交付记录」。
 > 交付分支固定为 `backup/backgrounds-baseline`，**绝不 push main**。
 
 ## 0. 当前基线（2026-08-21）
@@ -11,17 +11,28 @@
 - 已取消：图标专属动画（用户拍板成本 > 价值，含 back-arrow hover 动画，勿再提议）。
 - 源码零 TODO/FIXME/HACK 残留；零 console.log（测试文件内两处无害）；styles.css 内 53 处 `!important`、22 处组件内联样式。
 
+## 0.1 现状快照（2026-09-06，开发辅助勘误，未走交付流程）
+
+- 单体规模实测：`apps/web/src/App.tsx` 3651 行、`AgentWorkspace.tsx` 2209 行、`apps/server/src/app.ts` 371 行（路由已拆分到 `routes/`，候选 5 描述过时）、`apps/desktop/src/main.mts` 2177 行（比记录的 1976 更厚）、`styles.css` 16821 行 + 53 处 `!important`。
+- 组件内联 `style={` 36 处（含子目录口径；原记 22 为顶层口径，有反弹）。
+- `console.log` 8 处：`App.tsx` 4 + `main.tsx` 2 为有意 `[nami-startup]` 埋点（桌面 host 转发进 startup-log，见 `main.tsx:8-11` 注释），`AgentWorkspace.poll.test.tsx` 2 为调试输出——原“零残留”口径过时。
+- help 按钮 `tabIndex={-1}` 已清零（12 处，`AgentProviderSettings.tsx` 8 + `AgentMcpServerPane.tsx` 4，2026-09-06 去掉后恢复可聚焦，web typecheck 全绿）。
+- `SYNC_MESSAGE_LIMIT`：server 默认 2000（`config.ts:68`），README 也是 2000；desktop 源码无 200 硬编码（仅 `spawn-environment.mts` / `local-configuration.mts` 透传变量）——“桌面默认 200”记述过时，待实测桌面 spawn 实际值后定论。
+- e2e：`e2e/` 4 个 spec 文件，默认 `test:e2e` 只跑 3 个（smoke / interactions / update-footer）；`ui-stress.spec.ts` 需种子数据 + 100 分钟超时，是独立压测通道，排除是刻意的。
+- 测试文件数：web 69 / server tests 94 / desktop tests 24（文件数口径，非用例数；用例数 628/766/135/26 待下次全量回归刷新）。
+- 工作区现状：`main` ahead 3 + 在途改动（locale-boot / latest-first sync 等 24 文件已暂存 + help 按钮 2 文件未暂存），与“绝不 push main”约束存在偏差，收尾时需处理。
+
 ## 1. 架构候选（来自 2026-08-20 走查报告，候选 1、2、6 已完成）
 
 ### 候选 2：折叠 App shell（Strong，已完成）
 
-- 证据：`apps/web/src/App.tsx` 4138 行（现约 3890 行）；SSE 客户端、账户健康推导、轮询、弹窗路由、compose 全内联。
+- 证据：`apps/web/src/App.tsx` 4138 行（2026-09-06 实测 3651 行）；SSE 客户端、账户健康推导、轮询、弹窗路由、compose 全内联。
 - 进度（Batch N）：健康推导 + banner + 三纯函数 → `accountHealth.tsx`；SSE + 轮询（共享 lastSseEventAtRef，必须同模块）→ `realtimeSync.ts`。
 - 进度（Batch O）：弹窗路由 → `dialogRouting.ts`——`dialogKeydownDecision`（键盘决策纯函数，被 App 真正消费）+ `useDialogRouting`（状态 + actions + 三哨兵）；键盘门控测试从零补齐 64 条（含装配等价测试：App effect 骨架 feed snapshot → 决策 → 执行 action 断言状态迁移）。剩：reader 域（snoozeOpen/readerMoreOpen/recipientDetailsOpen/closeReader 链）、列表域（filterPanelOpen/searchOpen）、useDialogFocus、agent 工作区路由（候选 B，两阶段状态机与 settings/preloadedAgentBootstrap 交叉耦合）未抽——留待候选 3 前后另批。
 
 ### 候选 3：深化 AgentWorkspace 核心：会话状态机（Strong，投入最大）
 
-- 证据：`apps/web/src/AgentWorkspace.tsx` 4429 行、148 个 hook 调用点；流累积 / 状态机 / composer 草稿 / chips / selection bar 全内联；测试靠 1127 行重型 harness（AgentWorkspace.integration.test.tsx）。
+- 证据：`apps/web/src/AgentWorkspace.tsx` 4429 行（2026-09-06 实测 2209 行）、148 个 hook 调用点；流累积 / 状态机 / composer 草稿 / chips / selection bar 全内联；测试靠 1127 行重型 harness（AgentWorkspace.integration.test.tsx）。
 - 方案：`useAgentSession` 深 module——流状态机（running / completed / error…）与派生 UI 状态分离。
 - 完成（状态机核心抽离）：`apps/web/src/agent/useAgentSession.ts` 已承接会话运行生命周期 + 流事件管道（帧批处理 / 自适应 reveal pacing）+ 后台缓冲与重放 + 轮询 fold-in + cancel/stop，并暴露 7 个会话导航原语（hasLiveRun / getSession / clearPendingFlush / takeBackgroundError / terminateSession / clearLiveRunIndicators / restoreLiveRunIndicators）。边界采用注入式 `setActive`（`active` 归属组件），`composer/会话列表/chips/context menu` 等 UI 域本批未动。
   - 单测：`apps/web/src/agent/useAgentSession.test.tsx`（7 项，renderHook 式手写 harness + 受控 rAF 队列）覆盖折叠 / CONFLICT 重试 / terminal 清理 / stop / 打断 / 重放 / 后台缓冲 + 轮询 fold-in；web 全量 635 项测试全绿。
@@ -34,7 +45,7 @@
 
 ### 候选 5：给 app.ts 一根脊柱（Worth exploring）
 
-- 证据：`apps/server/src/app.ts` 3510 行、46 条路由 + 4 个 queue runner（move/batch/flags）；`operation-queue.ts`（64 行 interface + runner map）是深 module 范本，但 snooze/outbox 未走同等 seam，走 scheduled-send/outbox 各自路径。
+- 证据：`apps/server/src/app.ts` 3510 行（2026-09-06 实测 371 行，路由已拆分到 `routes/`，本候选描述过时、待重估）、46 条路由 + 4 个 queue runner（move/batch/flags）；`operation-queue.ts`（64 行 interface + runner map）是深 module 范本，但 snooze/outbox 未走同等 seam，走 scheduled-send/outbox 各自路径。
 - 方案：给 snooze/outbox 补同等 queue seam。
 
 ### 候选 6：账户健康收拢为一个 module（已完成，Batch N）
@@ -44,7 +55,7 @@
 
 ### 候选 7：继续削薄桌面 main.mts（Speculative，建议不做）
 
-- 证据：`apps/desktop/src/main.mts` 1976 行；窗口栏 / 托盘 / 更新接线 / 协议注册 / 服务拉起。提取模式已在 Batch F（commit 9367c3a，desktop-smoke.mts 净删 769 行）验证。
+- 证据：`apps/desktop/src/main.mts` 1976 行（2026-09-06 实测 2177 行，不增反厚）；窗口栏 / 托盘 / 更新接线 / 协议注册 / 服务拉起。提取模式已在 Batch F（commit 9367c3a，desktop-smoke.mts 净删 769 行）验证。
 - 判断：桌面壳再薄边际收益低。
 
 **推荐顺序**：候选 2+6 已完成 → 键盘可达性（功能缺口 1，高优先 4 个纯补丁项）→ 候选 4 → 候选 3（单独成批）。
@@ -54,15 +65,15 @@
 1. **键盘可达性**（✅ 高优先 4 项已于 Batch P 完成，commit `0049ef8`；两组实现勘误已固化：① `.mail-title h2` 的 outline:none 系初版就有、非被删，缺口是无 `:focus-visible` 配对；② 邮件列表 shift+click 范围多选**已实现**（MessageList.tsx + App.selectMessageRange）且零测试，Batch P 补了键盘半边（shift+J/K）与 shift+click 回归测试。设计决策：模板选择器触发器是普通 button 非 combobox，按 menu-button 模式宣告（aria-expanded/controls/haspopup），`aria-activedescendant` 不适用于 button 故未挂）：
    - ✅ 高：附件预览关闭后焦点 restore（AttachmentPreviewModal 开/关沿判定 + rAF，语义照抄 useDialogFocus）；slash/mention 菜单 aria-activedescendant + option id + ArrowDown/Up scrollIntoView；键盘范围多选 shift+J/K（snapshot 锚点 + select_range 决策，非 shift 路径零变化）；`.mail-title h2` 焦点环（`focus:not(:focus-visible)` 保指针无环 + `focus-visible` 复用全局环语言）。
    - ✅ 高（同批追加）：ComposeModal To 联系人建议补全 combobox 语义（aria-autocomplete/expanded/controls/activedescendant + 方向键导航 + Enter 应用防误提交表单）+ 模板选择器展开态三件套 + option id。
-   - 中：约 10 处 `tabIndex={-1}` agent-provider help 按钮成键盘黑洞；三个搜索输入框 outline:none 无配对焦点样式；对话列表无方向键导航。
+   - ✅ 中（2026-09-06 完成，未走交付流程）：12 处 `tabIndex={-1}` agent-provider help 按钮（`AgentProviderSettings.tsx` 8 + `AgentMcpServerPane.tsx` 4）去掉后恢复可聚焦；焦点环由全局 `button:focus-visible`（`styles.css:112`）覆盖；tooltip 保持 hover-only 既定设计（见 `App.tsx:1170` 注释），键盘/SR 用户经聚焦可读 `aria-label` hint；web typecheck 全绿。剩余中优先级：三个搜索输入框 outline:none 无配对焦点样式；对话列表无方向键导航。
    - 低：对话行 `aria-pressed` 宜改 role="checkbox"（用户拍板保留 button 语义，勿再提）；ThemedSelect 缺 listbox 语义；虚拟列表 tab 序随滚动漂移。
    - 焦点管理测试从 Batch P 起有锚定（AttachmentPreviewModal.focus.test.tsx 2 条），但覆盖仍薄、无键盘 e2e——后续键盘工作继续补。键盘门控逻辑本体已于 Batch O 补 64 条单测锚定。
-2. **桌面同步上限默认 200**：桌面 spawn 时 `SYNC_MESSAGE_LIMIT` 默认 200（见 sync-message-limit-diagnosis 记忆），用户会"少收 200 封邮件"；Batch L 已补警告链（last_sync_warning_code + 三态圆点），默认值本身仍是 footgun。评估是否把桌面默认提到与 UI 默认一致（2000）或明确文档化。
-3. **e2e 覆盖薄**：只有三套 spec，邮件主链路（同步、写信发送回环）无端到端自动化。
+2. **桌面同步上限默认 200**（2026-09-06 勘误：记述过时，待实测）：desktop 源码已无 200 硬编码（仅透传 `SYNC_MESSAGE_LIMIT`，见 `spawn-environment.mts:22` / `local-configuration.mts:11`），server 默认与 README 均为 2000（`config.ts:68`）。原“桌面 spawn 默认 200”出自 sync-message-limit-diagnosis 记忆，需实测桌面 spawn 实际值后再定是改默认还是只改文档；Batch L 的警告链（last_sync_warning_code + 三态圆点）不受影响。
+3. **e2e 覆盖薄**：默认 `test:e2e` 只跑三套 spec（smoke / interactions / update-footer），邮件主链路（同步、写信发送回环）无端到端自动化。`e2e/ui-stress.spec.ts` 是第四套独立压测通道（需种子数据 + 100 分钟超时，见文件头注释），排除出默认命令是刻意的，不算缺口。
 
 ## 3. 样式 / 工程债
 
-- 无 Tailwind，单文件 `styles.css` 实为 **16755 行**（原记录 3700 有误，2026-08-21 探索勘误）+ 53 处 `!important`——CSS 是第二个单体；各功能区段落（壳层 / banner / 弹窗皮肤 / status-dot）已内聚，拆分是机械搬迁，另立批次。
+- 无 Tailwind，单文件 `styles.css` 实测 **16821 行**（原记录 3700 有误，2026-08-21 探索勘误；2026-09-06 复测 16821）+ 53 处 `!important` + 组件内联 `style={` 36 处（含子目录口径；原记 22 为顶层口径，有反弹）——CSS 是第二个单体；各功能区段落（壳层 / banner / 弹窗皮肤 / status-dot）已内聚，拆分是机械搬迁，另立批次。
 - lucide-react 停在 1.28（Batch H2 教训：新图标不存在需先验证）；依赖升级是欠账。
 - main 从未合入，全部交付在 backup 分支——流程未收尾。
 - 两个一次性坑：wiki 首次需手动建页；electron-builder 从根 package.json 收集依赖（新增运行时依赖需同步根清单并抽查 asar）。
@@ -84,3 +95,5 @@
 - Batch N：候选 2 部分 + 候选 6——realtimeSync.ts（SSE+轮询）+ accountHealth.tsx（健康收拢）+ submissionStatusNeedsRefresh 迁移（commit 347baaf；web 521→545）。
 - Batch O：候选 2 收尾——dialogRouting.ts（dialogKeydownDecision + useDialogRouting）+ App.tsx keydown 决策-执行两段式改造 + AccountsDialog status-dot 收拢 + 键盘门控测试从零补齐 64 条（commit 1ebdcc3；web 545→609，候选 2 完成）。
 - Batch P：功能缺口 1「键盘可达性」高优先 4 项 + ComposeModal 同类缺口（attachment 焦点 restore / `.mail-title h2` 焦点环 / slash·mention aria-activedescendant + scrollIntoView / ComposeModal 联系人建议 combobox 三件套 + 模板选择器 menu-button / shift+J·K 隐式扩选键盘范围多选 / 多选行 aria-pressed + shift+click 回归）——仓库首个焦点断言（AttachmentPreviewModal.focus.test.tsx）与首个 ComposeModal 交互测试（commit 0049ef8；web 609→628，功能缺口 1 高优先项完成；Mimosa seal `sha256:1093b081…` 入 commit body，395 findings 全 inconclusive）。
+- Batch Q（2026-09-06，未提交、未走交付流程）：功能缺口 1 中优先级 help 按钮键盘黑洞——`AgentProviderSettings.tsx` 8 处 + `AgentMcpServerPane.tsx` 4 处去掉 `tabIndex={-1}`（残留 0，web typecheck 全绿）；同期勘误本文件过时口径（§0.1 快照：单体行数 / console.log 8 处 / 内联样式 36 处 / 同步上限 200 / ui-stress 说明）。
+- 未提交（2026-09-06）：启动日志治理——`startup-log.jsonl`（desktop `main.mts`）启动时裁剪至末尾 2000 行、`startup-request-log.jsonl`（server `app.ts`）裁剪至末尾 5000 行，`NAMI_MAIL_NO_STARTUP_LOG=1` 总开关（desktop/server 同进程，一处生效；`nami-mail.env` 已放行该变量）；server/desktop typecheck 全绿，desktop `local-configuration.test.ts` 全绿，`app.test.ts` 2 失败系暂存区 settings 默认值在途变更所致、与本改动无关。

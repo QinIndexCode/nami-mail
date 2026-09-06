@@ -20,6 +20,7 @@ test("keeps translation API keys out of installed user-data configuration", () =
       "NAMI_MAIL_TRANSLATION_ENDPOINT",
       "NAMI_MAIL_TRANSLATION_TIMEOUT_MS",
       "SYNC_MESSAGE_LIMIT",
+      "NAMI_MAIL_NO_STARTUP_LOG",
     ],
   }]);
 });
