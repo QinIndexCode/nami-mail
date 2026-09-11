@@ -34,6 +34,7 @@ This is the English translation of the Chinese source changelog. `CHANGELOG.zh-C
 - Unread view: a message you just read stays in the list without being counted twice in "N unread", and "select all matching" no longer exceeds what the server can actually handle.
 - Desktop new mail: the notification subscription is no longer torn down and re-created on every refresh, so mail arriving during one no longer misses its alert and toast.
 - Agent: a streaming reply no longer rewinds when an earlier server snapshot arrives - switching back into a conversation and the background pickup poll now keep whichever copy of a row is further along - and a retry rejected by the server no longer carries the previous attempt's leftovers into the new reply.
+- Agent: pressing Stop drops the generating state immediately instead of waiting for the server to confirm, and renaming a conversation applies instantly and rolls back if the rename fails.
 
 ### Improved
 
