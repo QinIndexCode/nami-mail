@@ -34,6 +34,7 @@ export type DesktopUpdateReason =
   | "mailDataBusy"
   | "installerNotStarted"
   | "installResult"
+  | "installNotApplied"
   | "unknown";
 
 export type DesktopUpdateInstallStage =
