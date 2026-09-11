@@ -34,6 +34,8 @@ Nami Mail currently ships a Windows x64 desktop app. This page organizes the pub
 - [Design system](DESIGN-SYSTEM.en.md): visual baselines for prose measure, radius, shadows, type scale, colour, and interaction states.
 - [Windows release guide](RELEASING.en.md): maintainer steps for signing, releases, and real update verification.
 - [Agent implementation plan](development/implementation-plan.en.md): module ownership, phases, acceptance criteria, and rollback boundaries.
+- [Interaction conventions](INTERACTION.en.md): cross-module rules for multi-select completion, optimistic updates, immediate feedback, and snapshot merging.
+- [Large-file refactoring plan](REFACTORING-PLAN.en.md): mapped seams, ordering, and verification gates for the four large files.
 
 ## Languages and Versions
 
