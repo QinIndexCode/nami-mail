@@ -77,17 +77,24 @@ async function installStub(page: Page, initialStatus: StubSnapshot): Promise<voi
   }, initialStatus);
 }
 
-/** Boots the demo and resolves whichever modal appears on top first. */
+/**
+ * Boots the demo, accepting the first-run gate and then resolving the update
+ * prompt. The gate comes first on purpose: the shell defers the update prompt
+ * while a modal owns the screen, so the prompt only appears after acceptance.
+ */
 async function bootDemo(page: Page): Promise<void> {
   await page.goto("/?demo=1");
   await expect(page.locator("#nami-splash")).toHaveClass(/done/, { timeout: 15_000 });
-  const updateCard = page.locator(".update-prompt-card");
-  if (await updateCard.isVisible().catch(() => false)) {
-    await updateCard.getByRole("button", { name: "下载更新" }).click();
-  }
   const terms = page.locator(".translation-terms-card");
   if (await terms.isVisible().catch(() => false)) {
     await terms.locator(".primary-button").click();
+  }
+  const updateCard = page.locator(".update-prompt-card");
+  // The prompt is deferred while the gate is open, so it lands a tick after the
+  // gate closes: wait for it instead of sampling visibility once.
+  await updateCard.waitFor({ state: "visible", timeout: 5_000 }).catch(() => undefined);
+  if (await updateCard.isVisible().catch(() => false)) {
+    await updateCard.getByRole("button", { name: "下载更新" }).click();
   }
   await expect(page.locator(".compose-button")).toBeVisible();
   await expect(page.locator(".message-item").first()).toBeVisible();
@@ -129,13 +136,16 @@ test.describe("sidebar update footer button", () => {
     await page.goto("/?demo=1");
     await expect(page.locator("#nami-splash")).toHaveClass(/done/, { timeout: 15_000 });
 
-    // The error prompt appears; dismiss it — the footer retry is the durable
-    // entry point once the terminal prompt has been acknowledged.
-    await page.locator(".update-prompt-card").getByRole("button", { name: "稍后" }).click();
+    // The first-run consent gate owns the shell until it is accepted: the update
+    // prompt is deferred rather than covering it (a prompt stacked on the gate
+    // is what made "agree and continue" unclickable at narrow widths).
     const terms = page.locator(".translation-terms-card");
-    if (await terms.isVisible().catch(() => false)) {
-      await terms.locator(".primary-button").click();
-    }
+    await expect(terms).toBeVisible();
+    await terms.locator(".primary-button").click();
+
+    // With the shell free the error prompt appears; dismiss it — the footer
+    // retry is the durable entry point once the terminal prompt is acknowledged.
+    await page.locator(".update-prompt-card").getByRole("button", { name: "稍后" }).click();
     await expect(page.locator(".compose-button")).toBeVisible();
 
     const button = page.locator(".update-footer-button");
