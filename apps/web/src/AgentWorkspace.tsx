@@ -104,7 +104,7 @@ import {
 } from "./agent/agent-utils";
 import { useMountedVisible } from "./hooks/useMountedVisible";
 import { createDemoConversation } from "./agent/agent-demo-data";
-import { useAgentSession } from "./agent/useAgentSession";
+import { keepAheadTranscript, useAgentSession } from "./agent/useAgentSession";
 
 type AgentWorkspaceProps = {
   accounts: Account[];
@@ -1062,8 +1062,15 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       setLoadingConversationId(null);
       activeIdRef.current = id;
       const conversationView = applyRevokedMarks(purgeStaleErrors(conversation));
-      setActive(conversationView);
       const session = getSession(id);
+      // A fetch that resolves while the run is still streaming carries a snapshot
+      // older than the text already buffered locally. Adopting it wholesale
+      // rewinds the reply the user is reading, so keep whichever copy of a row is
+      // further along until the run ends (see keepAheadTranscript).
+      const live = Boolean(session && !session.done);
+      setActive((current) => current && current.id === id
+        ? keepAheadTranscript(current, conversationView, live)
+        : conversationView);
       if (session) replayBackgroundSession(session, conversationView);
       syncBackgroundRuns();
       // Re-surface a background run's cached failure as an error row (consumed

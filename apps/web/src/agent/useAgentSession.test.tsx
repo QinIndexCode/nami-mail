@@ -26,9 +26,51 @@ import type {
   AgentStreamEvent,
   AgentToolActivity,
 } from "../agentTypes";
-import { useAgentSession, type UseAgentSessionResult } from "./useAgentSession";
+import { keepAheadTranscript, useAgentSession, type UseAgentSessionResult } from "./useAgentSession";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+describe("keepAheadTranscript", () => {
+  const conversation = (messages: AgentMessage[]): AgentConversation => ({
+    id: "c1",
+    title: "",
+    preview: "",
+    updatedAt: "",
+    providerId: "p",
+    scope: { mode: "all_accounts", accountIds: [], messageIds: [] },
+    messages,
+  });
+  const row = (id: string, content: string): AgentMessage => ({
+    id,
+    role: "assistant",
+    content,
+    createdAt: "",
+    state: "streaming",
+  });
+
+  it("keeps the buffered text when a snapshot taken earlier arrives mid-run", () => {
+    // The poll/fetch snapshot predates the text that has since streamed in;
+    // adopting it wholesale is what makes a reply visibly go backwards.
+    const local = conversation([row("m1", "a long buffered reply")]);
+    const server = conversation([row("m1", "a long")]);
+
+    expect(keepAheadTranscript(local, server, true).messages[0]?.content).toBe("a long buffered reply");
+  });
+
+  it("lets the server win once the run has ended", () => {
+    const local = conversation([row("m1", "a long buffered reply")]);
+    const server = conversation([row("m1", "the final reply")]);
+
+    expect(keepAheadTranscript(local, server, false)).toBe(server);
+  });
+
+  it("adopts rows and content the local view does not have", () => {
+    const local = conversation([row("m1", "partial")]);
+    const server = conversation([row("m1", "partial"), row("m2", "second")]);
+
+    expect(keepAheadTranscript(local, server, true).messages.map((item) => item.id)).toEqual(["m1", "m2"]);
+  });
+});
 
 const h = vi.hoisted(() => ({
   agentConversation: vi.fn<typeof import("../api").api.agentConversation>(async () => ({ id: "x", title: "", preview: "", updatedAt: "", providerId: "p", scope: { mode: "all_accounts", accountIds: [], messageIds: [] }, messages: [] })),

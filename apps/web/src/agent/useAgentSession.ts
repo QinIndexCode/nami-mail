@@ -153,6 +153,35 @@ export type UseAgentSessionResult = {
   }) => Promise<void>;
 };
 
+/**
+ * Folds a server transcript snapshot into what is already on screen.
+ *
+ * A poll or a conversation fetch can return a snapshot taken before the text
+ * that has since streamed into the local buffer. Adopting it wholesale rewinds
+ * the reply the user is reading — the visible symptom of "the answer went
+ * backwards". While a run is still live for the conversation, keep whichever
+ * copy of a row is further along; once the run ends the server is authoritative
+ * again, so nothing is held back indefinitely.
+ */
+export function keepAheadTranscript(
+  current: AgentConversation,
+  server: AgentConversation,
+  live: boolean,
+): AgentConversation {
+  if (!live) return server;
+  const byId = new Map(current.messages.map((message) => [message.id, message]));
+  let changed = false;
+  const messages = server.messages.map((incoming) => {
+    const mine = byId.get(incoming.id);
+    if (mine && (mine.content?.length ?? 0) > (incoming.content?.length ?? 0)) {
+      changed = true;
+      return mine;
+    }
+    return incoming;
+  });
+  return changed ? { ...server, messages } : server;
+}
+
 export function useAgentSession({
   demoMode,
   active,
@@ -490,9 +519,11 @@ export function useAgentSession({
         // no longer has anything to wait for).
         if (freshLast && freshLast.role === "assistant" && (freshLast.state === "complete" || freshLast.state === "error")) {
           const next = applyRevokedMarks(purgeStaleErrors(fresh));
+          const pending = sessionStreamsRef.current.get(targetId);
+          const live = Boolean(pending && !pending.done);
           setActive((current) => current && current.id === targetId
             && current.messages[current.messages.length - 1]?.id === pendingLastId
-            ? next
+            ? keepAheadTranscript(current, next, live)
             : current);
           setGhostConversationId((current) => (current === targetId ? null : current));
           void refreshConversations(conversationSearch);
@@ -502,9 +533,11 @@ export function useAgentSession({
           // The in-flight reply gained content since the last read; refresh the
           // live snapshot while continuing to poll for its completion.
           const next = applyRevokedMarks(purgeStaleErrors(fresh));
+          const pending = sessionStreamsRef.current.get(targetId);
+          const live = Boolean(pending && !pending.done);
           setActive((current) => current && current.id === targetId
             && current.messages[current.messages.length - 1]?.id === pendingLastId
-            ? next
+            ? keepAheadTranscript(current, next, live)
             : current);
         }
         // Renew the poll budget while the turn is visibly still alive on the
@@ -863,6 +896,10 @@ export function useAgentSession({
         if (!conflictRetry) break;
         if (controller.signal.aborted) return;
         conflictRetries += 1;
+        // The attempt the server rejected may already have buffered deltas. They
+        // belong to a run that never happened and would otherwise be flushed onto
+        // the retry's reply as a duplicated or truncated fragment.
+        clearPendingFlush();
         // The retry pause belongs to the run that is waiting; only surface the
         // busy notice on the screen if that run is the one being viewed.
         if (activeIdRef.current === conversation.id) setStreamStatus(t("agent.error.streamBusy"));
@@ -878,7 +915,10 @@ export function useAgentSession({
       // failed keeps its error row for the user to retry. Only touch the
       // transcript when it is the one on screen; a run that finished in the
       // background cleans up its own view on re-entry via the server snapshot.
-      if (!turnFailed && activeIdRef.current === conversation.id) {
+      // The run identity matters as much as the conversation: a superseded or
+      // background-finished run must not clear error rows belonging to the run
+      // that replaced it on screen.
+      if (!turnFailed && activeIdRef.current === conversation.id && isCurrentRun()) {
         setActive((current) => current ? {
           ...current,
           messages: current.messages
