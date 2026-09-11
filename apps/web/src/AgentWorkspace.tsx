@@ -1156,12 +1156,22 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
 
   const renameConversation = useCallback(async () => {
     if (!active || !draftTitle.trim()) return;
+    const conversationId = active.id;
+    const nextTitle = draftTitle.trim();
+    const previousTitle = active.title;
+    // Optimistic: the heading and the sidebar follow the keystroke immediately.
+    // A failed rename restores the previous title rather than leaving a row that
+    // silently disagrees with the server.
+    setActive((current) => current && current.id === conversationId ? { ...current, title: nextTitle } : current);
+    setConversations((items) => items.map((item) => item.id === conversationId ? { ...item, title: nextTitle } : item));
+    setRenaming(false);
     try {
-      const summary = await api.renameAgentConversation(active.id, draftTitle.trim());
+      const summary = await api.renameAgentConversation(conversationId, nextTitle);
       setActive((current) => current && current.id === summary.id ? { ...current, ...summary } : current);
       setConversations((items) => items.map((item) => item.id === summary.id ? summary : item));
-      setRenaming(false);
     } catch (error) {
+      setActive((current) => current && current.id === conversationId ? { ...current, title: previousTitle } : current);
+      setConversations((items) => items.map((item) => item.id === conversationId ? { ...item, title: previousTitle } : item));
       setLoadError(error instanceof Error ? error.message : t("agent.error.renameConversation"));
     }
   }, [active, draftTitle, t]);

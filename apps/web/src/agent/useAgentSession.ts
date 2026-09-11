@@ -666,7 +666,16 @@ export function useAgentSession({
     // run from another conversation can never be stopped by mistake.
     if (session) {
       session.controller.abort();
+      // The run is over from the user's point of view: the server row is now
+      // authoritative, so a late snapshot must win over the buffered text.
+      session.done = true;
       void api.cancelAgentRun(session.conversationId).catch(() => undefined);
+      // Drop the affordances now rather than waiting for the aborted fetch to
+      // reject and unwind: the stop button the user just pressed must not stay
+      // armed for the round-trip, and the run's own teardown becomes a no-op
+      // once it sees it is no longer the bound run.
+      setStreaming(false);
+      setStreamStatus(null);
     }
   }, [active?.id]);
 
