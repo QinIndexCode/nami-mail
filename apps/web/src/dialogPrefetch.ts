@@ -12,6 +12,16 @@ export type PrefetchCache<T> = {
   warm(): void;
   /** Discard the cached value and refetch in the background. */
   refresh(): void;
+  /**
+   * Monotonic revision, bumped by every `refresh()`.
+   *
+   * A consumer that awaits `get()` captures this first and compares it after
+   * awaiting: a change means a newer refresh superseded the response, so writing
+   * it to state would undo the local edit that triggered the refresh (a deleted
+   * contact reappearing). The promise itself cannot express this — it is shared
+   * by everyone who asked while it was in flight.
+   */
+  revision(): number;
 };
 
 /**
@@ -22,6 +32,7 @@ export type PrefetchCache<T> = {
  */
 export function createPrefetchCache<T>(loader: () => Promise<T>, ttlMs = DEFAULT_TTL_MS): PrefetchCache<T> {
   let entry: CacheEntry<T> | null = null;
+  let revision = 0;
   const load = (): Promise<T> => {
     const promise = loader().catch((error: unknown) => {
       if (entry?.promise === promise) entry = null;
@@ -39,8 +50,14 @@ export function createPrefetchCache<T>(loader: () => Promise<T>, ttlMs = DEFAULT
       void this.get().catch(() => undefined);
     },
     refresh() {
+      // Bumping first: any response already being awaited belongs to the state
+      // this refresh is replacing.
+      revision += 1;
       entry = null;
       void this.get().catch(() => undefined);
+    },
+    revision() {
+      return revision;
     },
   };
 }

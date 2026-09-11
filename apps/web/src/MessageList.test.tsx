@@ -65,43 +65,52 @@ const emptyMessageList: MessageListEmptyState = { title: "没有邮件", descrip
 let container: HTMLDivElement;
 let root: Root;
 
+function listProps(props: Partial<Parameters<typeof MessageList>[0]>) {
+  return {
+    loading: false,
+    fatalError: null,
+    accounts: [account],
+    messages: [message({ id: "m-1" }), message({ id: "m-2", seen: true, flagged: true })],
+    selectedId: null,
+    selectionMode: false,
+    selectedMessageIds: new Set<string>(),
+    view: "inbox",
+    unreadViewRecentlyReadIds: new Set<string>(),
+    threadById: new Map(),
+    listDensity: "comfortable",
+    avatarGravatarEnabled: false,
+    emptyMessageList,
+    messageListRef: { current: null },
+    messageButtonRefs: { current: new Map() },
+    onReconnect: () => {},
+    onAddAccount: () => {},
+    onClearSearch: () => {},
+    onOpenMessage: () => {},
+    onToggleSelected: () => {},
+    onSelectRange: () => {},
+    onQuickToggleStar: () => {},
+    onQuickToggleSeen: () => {},
+    onQuickMoveMessage: () => {},
+    ...props,
+  } as Parameters<typeof MessageList>[0];
+}
+
+/** Re-renders into the existing root, so element identity across a change is observable. */
+function renderIntoRoot(props: Partial<Parameters<typeof MessageList>[0]>) {
+  act(() => {
+    root.render(
+      <I18nProvider>
+        <MessageList {...listProps(props)} />
+      </I18nProvider>,
+    );
+  });
+}
+
 function renderList(props: Partial<Parameters<typeof MessageList>[0]>) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  act(() => {
-    root.render(
-      <I18nProvider>
-        <MessageList
-          loading={false}
-          fatalError={null}
-          accounts={[account]}
-          messages={[message({ id: "m-1" }), message({ id: "m-2", seen: true, flagged: true })]}
-          selectedId={null}
-          selectionMode={false}
-          selectedMessageIds={new Set()}
-          view="inbox"
-          unreadViewRecentlyReadIds={new Set()}
-          threadById={new Map()}
-          listDensity="comfortable"
-          avatarGravatarEnabled={false}
-          emptyMessageList={emptyMessageList}
-          messageListRef={{ current: null }}
-          messageButtonRefs={{ current: new Map() }}
-          onReconnect={() => {}}
-          onAddAccount={() => {}}
-          onClearSearch={() => {}}
-          onOpenMessage={() => {}}
-          onToggleSelected={() => {}}
-          onSelectRange={() => {}}
-          onQuickToggleStar={() => {}}
-          onQuickToggleSeen={() => {}}
-          onQuickMoveMessage={() => {}}
-          {...props}
-        />
-      </I18nProvider>,
-    );
-  });
+  renderIntoRoot(props);
   return container;
 }
 
@@ -277,7 +286,7 @@ describe("row quick actions reveal", () => {
   });
 
   it("keeps selection-mode content clear of the checkbox in compact density", () => {
-    // The compact-density `.message-item` shorthand `padding:7px 10px` has a
+    // The compact-density `.message-item` shorthand `padding:8px 10px` has a
     // HIGHER specificity (0,3,0) than `.message-item.selection-mode` (0,2,0),
     // so it resets padding-left to 10px and the absolute-positioned checkbox
     // (left:6px) overlaps the avatar. The dedicated compact selection-mode
@@ -285,7 +294,7 @@ describe("row quick actions reveal", () => {
     // alone cannot win against the compact shorthand regardless of order.
     expect(stylesheet).toContain(".message-item.selection-mode\n{\npadding-left:34px");
     const compactItem = stylesheet.match(/:root\[data-density=compact\] \.message-item\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(compactItem).toContain("padding:7px 10px");
+    expect(compactItem).toContain("padding:8px 10px");
     const compactSelection = stylesheet.match(/:root\[data-density=compact\] \.message-item\.selection-mode\s*\{[^}]*\}/)?.[0] ?? "";
     expect(compactSelection).toContain("padding-left:34px");
     // The compact rule must come after the shorthand so it is not re-overridden.
@@ -334,9 +343,25 @@ describe("mail reader title wrapping", () => {
     // the word instead of forcing the .mail-reader column to widen or scroll
     // horizontally; the rule lives in the same block as the other title
     // typography.
+    //
+    // Width comes from the reader measure on .mail-title (--measure), so the h2
+    // must not re-impose a second column width of its own — it only has to
+    // break inside long words.
     expect(stylesheet).toContain(
-      ".mail-title h2\n{\nletter-spacing:0;\nfont-variant-numeric:lining-nums;\nmax-width:720px;\nmargin:0;\nfont-family:Georgia,Songti SC,serif;\nfont-size:32px;\nfont-weight:400;\nline-height:1.24;\noverflow-wrap:anywhere\n}",
+      ".mail-title h2\n{\nletter-spacing:0;\nfont-variant-numeric:lining-nums;\nmax-width:100%;\nmargin:0;\nfont-family:Georgia,Songti SC,serif;\nfont-size:32px;\nfont-weight:400;\nline-height:1.24;\noverflow-wrap:anywhere\n}",
     );
+  });
+
+  it("gives the whole reading column one shared prose measure", () => {
+    // Title, body, translation, verification codes and attachments are five
+    // centred blocks in the same column; if they do not share the measure their
+    // text edges stop lining up (and the body line runs past a comfortable
+    // 45–75 characters at 16px).
+    expect(stylesheet).toContain("--measure:672px");
+    for (const selector of [".mail-title\n{", ".mail-content\n{", ".translation-panel\n{", ".verification-code-list\n{", ".attachment-list\n{"]) {
+      const block = stylesheet.match(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^}]*\\}`))?.[0] ?? "";
+      expect(block, selector).toContain("max-width:var(--measure)");
+    }
   });
 
   it("keeps the recipient line ellipsized instead of wrapping", () => {
@@ -358,5 +383,41 @@ describe("mail reader title wrapping", () => {
     expect(keyboardBlock).toContain("outline-offset:2px");
     // Guard against regressing to a single bare outline:none rule on focus.
     expect(stylesheet).not.toMatch(/\.mail-title h2:focus\s*\{\s*outline:none\s*\}/);
+  });
+});
+
+describe("list switching", () => {
+  it("keeps the current rows on screen while a switch is still loading", () => {
+    // A switch used to replace the list with a six-row skeleton: the list got
+    // shorter, the layout jumped and the user lost their place. The skeleton is
+    // now reserved for a list that has nothing to show yet.
+    renderList({ loading: true });
+
+    expect(container.querySelector(".message-skeleton-list")).toBeNull();
+    expect(container.querySelectorAll(".message-item").length).toBe(2);
+    expect(container.querySelector(".message-list-viewport")?.getAttribute("data-switching")).toBe("true");
+  });
+
+  it("shows the skeleton only when there is nothing to show yet", () => {
+    renderList({ loading: true, messages: [] });
+
+    expect(container.querySelector(".message-skeleton-list")).not.toBeNull();
+    expect(container.querySelector(".message-list-viewport")).toBeNull();
+    // The empty state must not race the skeleton: it waits for loading to end.
+    expect(container.querySelector(".empty-state")).toBeNull();
+  });
+
+  it("swaps the viewport element when the list identity changes", () => {
+    renderList({ listKey: "inbox" });
+    const first = container.querySelector(".message-list-viewport");
+
+    renderIntoRoot({ listKey: "archive" });
+
+    const second = container.querySelector(".message-list-viewport");
+    expect(second).not.toBeNull();
+    // A different element means the arriving list can animate in instead of
+    // mutating the previous one in place.
+    expect(second).not.toBe(first);
+    expect(second?.getAttribute("data-switching")).toBeNull();
   });
 });

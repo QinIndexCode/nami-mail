@@ -85,8 +85,12 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
     let active = true;
     setLoading(true);
     setLoadError(null);
+    // Capture the cache revision before waiting: a refresh started by an edit
+    // (delete/save) means this response is already stale, and applying it would
+    // put the deleted contact back.
+    const revision = contactsCache.revision();
     void contactsCache.get().then((items) => {
-      if (!active) return;
+      if (!active || contactsCache.revision() !== revision) return;
       setContacts(items);
     }).catch((error: unknown) => {
       if (!active) return;

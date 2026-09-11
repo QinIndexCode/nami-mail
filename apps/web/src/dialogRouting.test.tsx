@@ -189,8 +189,27 @@ describe("useDialogRouting · modal transitions", () => {
 });
 
 describe("useDialogRouting · sentinels", () => {
-  it("anyModalOpen turns on with any of the eight core modals", async () => {
+  /** Mounts past the fresh-origin terms gate, i.e. how the app runs in practice. */
+  async function mountWithGateAccepted(): Promise<void> {
     await mount();
+    if (latest!.state.translationTermsOpen) {
+      await act(async () => {
+        latest!.actions.setTranslationTermsOpen(false);
+      });
+    }
+  }
+
+  it("counts the first-run terms gate as an open modal", async () => {
+    // The gate must push the toast stack behind it: otherwise a toast painted
+    // over "agree and continue" on a narrow window and the click never landed.
+    await mount();
+    expect(latest!.state.translationTermsOpen).toBe(true);
+    expect(latest!.state.anyModalOpen).toBe(true);
+    expect(latest!.state.anyModalOrSidebar).toBe(true);
+  });
+
+  it("anyModalOpen turns on with any of the eight core modals", async () => {
+    await mountWithGateAccepted();
     expect(latest!.state.anyModalOpen).toBe(false);
     await act(async () => {
       latest!.actions.openSettings();
@@ -204,7 +223,7 @@ describe("useDialogRouting · sentinels", () => {
   });
 
   it("the mobile sidebar alone does not count as a core modal", async () => {
-    await mount();
+    await mountWithGateAccepted();
     await act(async () => {
       latest!.actions.openMobileSidebar();
     });

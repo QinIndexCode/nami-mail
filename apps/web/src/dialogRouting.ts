@@ -240,7 +240,11 @@ export function useDialogRouting(): DialogRouting {
   }, []);
   const closeAttachmentPreview = useCallback(() => setAttachmentPreview(null), []);
 
-  const anyModalOpen = addOpen || composeOpen || settingsOpen || contactsOpen || templatesOpen || calendarOpen || accountsOpen || sendingStatusOpen;
+  // The first-run translation-terms gate renders in the same backdrop +
+  // aria-modal shell, so it counts too. Leaving it out kept the toast stack at
+  // its raised z-index while the gate was open, and at narrow widths a toast
+  // painted over "agree and continue" and swallowed the click.
+  const anyModalOpen = addOpen || composeOpen || settingsOpen || contactsOpen || templatesOpen || calendarOpen || accountsOpen || sendingStatusOpen || translationTermsOpen;
   const anyModalOrSidebar = anyModalOpen || mobileSidebar;
 
   return {

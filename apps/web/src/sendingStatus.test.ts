@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { translate } from "./i18n";
 import type { OutboundSubmission } from "./types";
 import {
+  isStaleSubmissionSnapshot,
+  mergeSubmissionSnapshots,
   newMessageDraftFromSubmission,
   pollSubmittingSubmission,
   recipientSummary,
@@ -27,6 +29,40 @@ const baseSubmission: OutboundSubmission = {
   createdAt: "2026-07-20T08:00:00.000Z",
   updatedAt: "2026-07-20T08:01:00.000Z",
 };
+
+describe("submission snapshot merging", () => {
+  const current = { ...baseSubmission, deliveryStatus: "confirmed" as const, updatedAt: "2026-07-20T08:05:00.000Z" };
+
+  it("keeps a newer status when a slower snapshot describes an earlier moment", () => {
+    // The verification poll and an action finishing both refresh the list; the
+    // older response must not un-confirm a send the user already saw succeed.
+    const stale = { ...baseSubmission, deliveryStatus: "submitting" as const, updatedAt: "2026-07-20T08:02:00.000Z" };
+
+    expect(isStaleSubmissionSnapshot(stale, current)).toBe(true);
+    expect(mergeSubmissionSnapshots([stale], [current])).toEqual([current]);
+  });
+
+  it("falls back to the status progression when the timestamps are equal", () => {
+    const sameMoment = { ...current, deliveryStatus: "submitted" as const };
+
+    expect(isStaleSubmissionSnapshot(sameMoment, current)).toBe(true);
+    expect(mergeSubmissionSnapshots([sameMoment], [current])).toEqual([current]);
+  });
+
+  it("accepts a later snapshot and rows it has never seen", () => {
+    const advanced = { ...baseSubmission, deliveryStatus: "confirmed" as const, updatedAt: "2026-07-20T08:09:00.000Z" };
+    const fresh = { ...baseSubmission, id: "submission-2", updatedAt: "2026-07-20T08:09:00.000Z" };
+
+    expect(mergeSubmissionSnapshots([advanced, fresh], [current])).toEqual([advanced, fresh]);
+  });
+
+  it("drops rows the user cancelled even when the snapshot still reports them", () => {
+    // The server list can lag a cancellation by a moment; re-adding the row is
+    // exactly the "the cancelled mail came back" bug.
+    expect(mergeSubmissionSnapshots([baseSubmission], [baseSubmission], { cancelledIds: new Set([baseSubmission.id]) }))
+      .toEqual([]);
+  });
+});
 
 describe("sending status presentation", () => {
   it("keeps every durable state distinct and warns against retrying unknown delivery", () => {

@@ -4,14 +4,20 @@ import {
   applyMessageMove,
   applyMessageMoveConfirmation,
   applyMessageSeenChange,
+  applyPinnedUnseenCorrections,
+  EMPTY_PENDING_LOCAL_STATE,
+  createPendingLocalState,
   isArchivedMessage,
   isVisibleInUnreadView,
   matchesServerMessageQuery,
-  mergeLocalPendingSeen,
   mergePendingArchiveMoves,
+  mergePendingLocalState,
   mergeRolledBackMessages,
   mergeUnreadViewSnapshot,
+  pinFlagOverride,
+  unpinFlagOverride,
   nextMessageTotalForMove,
+  nextMessageTotalForSnapshot,
   nextUnreadViewRecentlyReadIds,
   revertMessageMove,
   sidebarBadgeCounts,
@@ -63,7 +69,7 @@ const stats: Stats = { accounts: 1, messages: 3, unread: 2 };
 
 describe("mail list state", () => {
   it("keeps inbox total and unread badges semantically distinct", () => {
-    expect(sidebarBadgeCounts({ accounts: 1, messages: 5, unread: 3 })).toEqual({ inbox: 5, unread: 3 });
+    expect(sidebarBadgeCounts({ accounts: 1, messages: 5, unread: 3 })).toEqual({ inbox: 5, unread: 3, starred: 0, snoozed: 0, attachments: 0 });
   });
 
   it("recognizes archive folders and only uses All Mail as a fallback", () => {
@@ -196,19 +202,129 @@ describe("mail list state", () => {
     // request has not landed yet.
     const staleServer = [unreadMessage];
 
-    const merged = mergeLocalPendingSeen(staleServer, [readMessage], new Set([readMessage.id]));
+    const merged = mergePendingLocalState(staleServer, [readMessage], {
+      flagOverrides: new Map([[readMessage.id, 1]]),
+      movedAway: new Map(),
+    });
 
     expect(merged).toHaveLength(1);
     expect(merged[0]).toMatchObject({ id: "message-1", seen: true, flags: ["\\Seen"] });
   });
 
-  it("does not touch rows without an in-flight seen mutation", () => {
+  it("keeps the optimistic star state when a poll snapshot races the in-flight flag write", () => {
+    const starredMessage = { ...unreadMessage, flagged: true, flags: ["\\Flagged"] };
+    const staleServer = [{ ...unreadMessage, subject: "Server copy" }];
+
+    const merged = mergePendingLocalState(staleServer, [starredMessage], {
+      flagOverrides: new Map([[unreadMessage.id, 1]]),
+      movedAway: new Map(),
+    });
+
+    expect(merged[0]).toMatchObject({ flagged: true, flags: ["\\Flagged"], subject: "Server copy" });
+  });
+
+  it("holds a row pinned until the last in-flight mutation on it has finished", () => {
+    // Opening a mail auto-marks it read while the user may star it: two
+    // operations, same row. With a plain set the first one to finish would drop
+    // the pin the other still needs, and the next refresh would flip the row.
+    const state = createPendingLocalState();
+    const optimistic = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
+
+    pinFlagOverride(state, unreadMessage.id);
+    pinFlagOverride(state, unreadMessage.id);
+    unpinFlagOverride(state, unreadMessage.id);
+    expect(mergePendingLocalState([unreadMessage], [optimistic], state)[0]).toMatchObject({ seen: true });
+
+    unpinFlagOverride(state, unreadMessage.id);
+    expect(mergePendingLocalState([unreadMessage], [optimistic], state)).toEqual([unreadMessage]);
+    // Releasing an id nobody holds must not leave a negative count behind.
+    expect(state.flagOverrides.size).toBe(0);
+    unpinFlagOverride(state, unreadMessage.id);
+    expect(state.flagOverrides.size).toBe(0);
+  });
+
+  it("does not touch rows without an in-flight mutation", () => {
     const readMessage = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
     const freshServer = [{ ...unreadMessage, subject: "Updated on server" }];
 
-    const merged = mergeLocalPendingSeen(freshServer, [readMessage], new Set());
+    expect(mergePendingLocalState(freshServer, [readMessage], EMPTY_PENDING_LOCAL_STATE)[0])
+      .toMatchObject({ seen: false, subject: "Updated on server" });
+  });
 
-    expect(merged[0]).toMatchObject({ seen: false, subject: "Updated on server" });
+  it("keeps a row the user already moved out of the view until the server agrees", () => {
+    // The delete/edit is still in flight server-side, so the snapshot still
+    // lists the row in INBOX. Re-adding it is exactly the "it came back" bug.
+    const serverStillInInbox = [{ ...unreadMessage, subject: "Server copy" }];
+    const pending = { flagOverrides: new Map<string, number>(), movedAway: new Map([[unreadMessage.id, "Trash"]]) };
+
+    expect(mergePendingLocalState(serverStillInInbox, [], pending)).toEqual([]);
+    // Once the server reports the destination the row is authoritative again.
+    const serverAtDestination = [{ ...unreadMessage, mailbox: "Trash" }];
+    expect(mergePendingLocalState(serverAtDestination, [], pending)).toEqual(serverAtDestination);
+  });
+
+  it("shifts the folder unread count and the unified total for a pinned read toggle", () => {
+    // The snapshot was read before the local commit, so it still reports the row
+    // unread and the old counts; the badge used to flick back to them.
+    const state = createPendingLocalState();
+    pinFlagOverride(state, unreadMessage.id);
+    const serverRow = { ...unreadMessage };
+    const mergedRow = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
+    const startAccounts = [{
+      ...accounts[0]!,
+      folders: [{ path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 3, unseen: 2 }],
+    }];
+
+    const corrected = applyPinnedUnseenCorrections(
+      startAccounts,
+      { accounts: 1, messages: 3, unread: 2 },
+      [serverRow],
+      [mergedRow],
+      state,
+    );
+
+    expect(corrected.accounts[0]?.folders[0]).toMatchObject({ unseen: 1, total: 3 });
+    expect(corrected.stats.unread).toBe(1);
+  });
+
+  it("has nothing to correct when no flag override is pinned or the server already agrees", () => {
+    const startAccounts = [{
+      ...accounts[0]!,
+      folders: [{ path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 3, unseen: 2 }],
+    }];
+    const startStats = { accounts: 1, messages: 3, unread: 2 };
+
+    // Untouched identities let React keep the previous objects (no re-render).
+    const idle = applyPinnedUnseenCorrections(startAccounts, startStats, [unreadMessage], [unreadMessage], EMPTY_PENDING_LOCAL_STATE);
+    expect(idle.accounts).toBe(startAccounts);
+    expect(idle.stats).toBe(startStats);
+
+    const state = createPendingLocalState();
+    pinFlagOverride(state, unreadMessage.id);
+    const agreed = applyPinnedUnseenCorrections(startAccounts, startStats, [unreadMessage], [unreadMessage], state);
+    expect(agreed.accounts).toBe(startAccounts);
+    expect(agreed.stats).toBe(startStats);
+  });
+
+  it("keeps the unread total on the server number so retained rows are not counted twice", () => {
+    // The unread view deliberately keeps a just-read row on screen and reports it
+    // separately ("含 M 封已读保留"). Counting it in the total as well would
+    // double count it, and would offer a "select all matching" that no
+    // server-side job can fulfil.
+    expect(nextMessageTotalForSnapshot(10, 11, true)).toBe(10);
+    expect(nextMessageTotalForSnapshot(10, 11, false)).toBe(11);
+    expect(nextMessageTotalForSnapshot(12, 11, false)).toBe(12);
+  });
+
+  it("suppresses only the moved ids and leaves the rest of the snapshot alone", () => {
+    const other = { ...unreadMessage, id: "message-2", uid: 2, mailbox: "Trash" };
+    const merged = mergePendingLocalState(
+      [{ ...unreadMessage, subject: "Server copy" }, other],
+      [],
+      { flagOverrides: new Map<string, number>(), movedAway: new Map([[unreadMessage.id, "Trash"]]) },
+    );
+
+    expect(merged.map((message) => message.id)).toEqual(["message-2"]);
   });
 
   it("uses the server-reported move destination to update folder badges and unified totals", () => {

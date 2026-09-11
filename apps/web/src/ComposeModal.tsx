@@ -107,8 +107,13 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const suggestedIndex = toSuggestions.length > 0 ? Math.min(toSuggestionIndex, toSuggestions.length - 1) : 0;
   // Template quick-reply: templates are a local encrypted store, so the
   // picker loads only on first open and never sends template text anywhere.
+  const templateLoadInFlightRef = useRef(false);
   const loadComposeTemplates = async () => {
-    if (isDemo || composeTemplates) return;
+    // Toggling the picker and the retry button can both fire while the first
+    // request is still running; the store is local and the result idempotent, so
+    // the only thing worth preventing is the duplicate request.
+    if (isDemo || composeTemplates || templateLoadInFlightRef.current) return;
+    templateLoadInFlightRef.current = true;
     setTemplateLoadBusy(true);
     setTemplateLoadFailed(false);
     try {
@@ -117,6 +122,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     } catch {
       setTemplateLoadFailed(true);
     } finally {
+      templateLoadInFlightRef.current = false;
       setTemplateLoadBusy(false);
     }
   };
