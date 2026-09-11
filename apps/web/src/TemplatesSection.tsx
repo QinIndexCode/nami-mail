@@ -54,8 +54,12 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
     let active = true;
     setLoading(true);
     setLoadError(null);
+    // Capture the cache revision before waiting: a refresh started by an edit
+    // (delete/save) means this response is already stale, and applying it would
+    // put the deleted template back.
+    const revision = templatesCache.revision();
     void templatesCache.get().then((items) => {
-      if (!active) return;
+      if (!active || templatesCache.revision() !== revision) return;
       setTemplates(items);
     }).catch((error: unknown) => {
       if (!active) return;

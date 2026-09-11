@@ -302,7 +302,7 @@ export type CalendarEventInput = {
 
 export type CalendarEventUpdate = Partial<CalendarEventInput>;
 
-export type Stats = { accounts: number; messages: number; unread: number };
+export type Stats = { accounts: number; messages: number; unread: number; starred?: number; snoozed?: number; attachments?: number };
 
 export type AppTheme = "system" | "light" | "dark";
 export type BackgroundPreset = "none" | "paper" | "mist" | "coast" | "dawn" | "night" | "custom";
@@ -409,8 +409,8 @@ export type AppSettingsPatch = Partial<Pick<
 export const defaultAppSettings: AppSettings = {
   theme: "system",
   locale: "zh-CN",
-  backgroundPreset: "coast",
-  backgroundIntensity: 68,
+  backgroundPreset: "none",
+  backgroundIntensity: 80,
   notificationsEnabled: true,
   notifyWhenFocused: false,
   notificationSound: "soft",

@@ -156,7 +156,7 @@ export default function SettingsAppearanceSection({
             id="background-intensity"
             type="range"
             min="0"
-            max="80"
+            max="100"
             step="1"
             value={intensityDraft}
             disabled={controlsBusy}

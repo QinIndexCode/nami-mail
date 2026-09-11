@@ -224,8 +224,11 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     setLoadError(null);
     const rangeStart = new Date(viewMonth.getFullYear(), viewMonth.getMonth() - 1, 1).getTime();
     const rangeEnd = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 2, 0, 23, 59, 59, 999).getTime();
+    // Capture the cache revision before waiting: a refresh started by an edit
+    // means this response is already stale.
+    const revision = calendarCache.revision();
     void calendarCache.get().then((all) => {
-      if (!active) return;
+      if (!active || calendarCache.revision() !== revision) return;
       const inRange = all.filter((event) => {
         const start = new Date(event.startAt).getTime();
         return start >= rangeStart && start <= rangeEnd;
@@ -253,8 +256,9 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     let active = true;
     setListLoading(true);
     setLoadError(null);
+    const revision = calendarCache.revision();
     void calendarCache.get().then((all) => {
-      if (!active) return;
+      if (!active || calendarCache.revision() !== revision) return;
       setListEvents(all);
     }).catch((error: unknown) => {
       if (!active) return;

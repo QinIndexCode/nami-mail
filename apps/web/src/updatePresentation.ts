@@ -88,6 +88,9 @@ function updateStatus(snapshot: DesktopUpdateSnapshot, t: Translate): string {
       return t("update.status.installerNotStarted");
     case "installResult":
       return t("update.status.installResult", { stage: installStageLabel(snapshot, t) });
+    case "installNotApplied":
+      // The installer reported success but the running version never changed.
+      return t("update.status.installNotApplied", { version });
     case "unknown":
       return t("update.status.unknown");
   }

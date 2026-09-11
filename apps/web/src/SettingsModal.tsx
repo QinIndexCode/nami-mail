@@ -152,6 +152,10 @@ export default function SettingsModal({
   const [pendingFullAccess, setPendingFullAccess] = useState<{ patch: AppSettingsPatch; successMessage: string | null } | null>(null);
   const [backgroundUploadError, setBackgroundUploadError] = useState<string | null>(null);
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateSnapshot | null>(null);
+  // Bumped by every pushed update-status event: an action's own snapshot was
+  // taken before any event broadcast while it ran, so it may only win when no
+  // event intervened (the same rule the App-level footer follows).
+  const updateEventSeqRef = useRef(0);
   const [updateActionBusy, setUpdateActionBusy] = useState<"check" | "download" | "skip" | "snooze" | "install" | null>(null);
   const [updateSnoozeMinutes, setUpdateSnoozeMinutes] = useState(24 * 60);
   const [translationConfiguration, setTranslationConfiguration] = useState<TranslationConfiguration | null>(null);
@@ -249,6 +253,11 @@ export default function SettingsModal({
   };
 
   useEffect(() => {
+    // Our own save echoes straight back through this prop. Adopting it would
+    // rebuild every field from the server snapshot, discarding whatever the user
+    // has typed since the save started (translation endpoint, reply templates).
+    // A change made anywhere else carries a different updatedAt and is adopted.
+    if (settings.updatedAt && settings.updatedAt === lastPublishedSettingsAtRef.current) return;
     setCurrentSettings(settings);
   }, [settings]);
 
@@ -319,10 +328,14 @@ export default function SettingsModal({
     const bridge = desktopBridge();
     if (!bridge) return undefined;
     let active = true;
+    let receivedUpdateEvent = false;
     void bridge.getUpdateStatus().then((snapshot) => {
-      if (active && snapshot) setUpdateStatus(snapshot);
+      // A broadcast received after subscribing is newer than this initial read.
+      if (active && !receivedUpdateEvent && snapshot) setUpdateStatus(snapshot);
     }).catch(() => undefined);
     const removeListener = bridge.onUpdateStatus((snapshot) => {
+      receivedUpdateEvent = true;
+      updateEventSeqRef.current += 1;
       if (active) setUpdateStatus(snapshot);
     });
     return () => {
@@ -363,10 +376,16 @@ export default function SettingsModal({
   useDialogFocus(Boolean(backgroundUploadError), backgroundAlert, { restoreFocusRef: uploadButton });
 
   const publishSettings = async (next: AppSettings): Promise<AppSettings> => {
+    lastPublishedSettingsAtRef.current = next.updatedAt ?? null;
     setCurrentSettings(next);
     await onSettingsChange(next);
     return next;
   };
+
+  /** Sequence number of the newest settings write; older ones must not publish. */
+  const settingsWriteRef = useRef(0);
+  /** `updatedAt` of the last snapshot this modal published (see the echo guard). */
+  const lastPublishedSettingsAtRef = useRef<string | null>(null);
 
   /**
    * Optimistic settings update: applies the patch to local state immediately
@@ -375,7 +394,8 @@ export default function SettingsModal({
    *
    * This avoids the "pessimistic lock" pattern where `busyAction` disables all
    * controls while waiting for the API response, which caused visible UI lag
-   * on theme switches and other reversible settings.
+   * on theme switches and other reversible settings. Because saves are not
+   * serialized, the newest write owns the state (see settingsWriteRef).
    */
   const applyOptimisticSettings = async (
     patch: AppSettingsPatch,
@@ -387,13 +407,27 @@ export default function SettingsModal({
       ...patch,
       updatedAt: new Date().toISOString(),
     };
-    // Apply immediately — UI reacts before the API round-trip.
+    // Two saves issued back to back (theme, then density) can resolve out of
+    // order, and the older response — or its rollback — would then put an older
+    // snapshot on top of the newer one: the option the user just picked snaps
+    // back, and sometimes stays back. Only the newest write may publish.
+    const writeId = ++settingsWriteRef.current;
+    const newestWrite = () => settingsWriteRef.current === writeId;
+    const publish = async (next: AppSettings) => {
+      if (!newestWrite()) return;
+      lastPublishedSettingsAtRef.current = next.updatedAt ?? null;
+      setCurrentSettings(next);
+      await onSettingsChange(next);
+    };
+    // Apply immediately — UI reacts before the API round-trip. This one is
+    // unconditional: it is the newest intent at this instant.
+    lastPublishedSettingsAtRef.current = optimisticNext.updatedAt ?? null;
     setCurrentSettings(optimisticNext);
     try {
       await onSettingsChange(optimisticNext);
     } catch {
       // If the host rejects the change, roll back.
-      setCurrentSettings(previousSettings);
+      await publish(previousSettings);
       return undefined;
     }
     try {
@@ -403,8 +437,7 @@ export default function SettingsModal({
       // If the server returned a different result (e.g. normalised values),
       // reconcile local state without flickering.
       if (serverNext !== optimisticNext) {
-        setCurrentSettings(serverNext);
-        await onSettingsChange(serverNext);
+        await publish(serverNext);
       }
       // Most settings take effect visually the moment they are changed, so a
       // success banner is noise; only surface messages that carry information
@@ -419,10 +452,10 @@ export default function SettingsModal({
       }
       return serverNext;
     } catch (error) {
-      // Roll back on failure.
-      setCurrentSettings(previousSettings);
-      await onSettingsChange(previousSettings);
-      setNotice({ kind: "error", message: errorMessage(error, t("settings.error.save"), t) });
+      // Roll back on failure — again only if this is still the newest write, so
+      // a stale failure cannot undo a newer successful save or nag about it.
+      await publish(previousSettings);
+      if (newestWrite()) setNotice({ kind: "error", message: errorMessage(error, t("settings.error.save"), t) });
       return undefined;
     }
   };
@@ -624,9 +657,12 @@ export default function SettingsModal({
     if (updateActionBusy) return;
     setUpdateActionBusy(action);
     setNotice(null);
+    // The operation's own snapshot predates any progress event broadcast while
+    // it ran; only apply it when nothing newer arrived meanwhile.
+    const seqAtStart = updateEventSeqRef.current;
     try {
       const next = await operation();
-      if (next) setUpdateStatus(next);
+      if (next && updateEventSeqRef.current === seqAtStart) setUpdateStatus(next);
     } catch (error) {
       setNotice({ kind: "error", message: updateBridgeErrorMessage(error, t("settings.error.updateAction"), t) });
     } finally {
@@ -679,11 +715,12 @@ export default function SettingsModal({
     }
     setPendingConfirmation(null);
     setUpdateActionBusy("install");
+    const seqAtStart = updateEventSeqRef.current;
     try {
       const result = await bridge.installUpdate();
       if (!result.accepted) {
         if (result.snapshot) {
-          setUpdateStatus(result.snapshot);
+          if (updateEventSeqRef.current === seqAtStart) setUpdateStatus(result.snapshot);
         } else {
           setNotice({ kind: "error", message: t("settings.error.updateNotReady") });
         }

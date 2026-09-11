@@ -27,6 +27,53 @@ export function submissionStatusPresentation(status: OutboundSubmissionStatus, t
   };
 }
 
+/**
+ * How far along a submission is. Sent-folder verification only ever advances a
+ * record, so this ordering doubles as the tie-break when two snapshots carry the
+ * same timestamp: the further-along status wins.
+ */
+const submissionStatusRank: Record<OutboundSubmissionStatus, number> = {
+  pending: 0,
+  submitting: 1,
+  submitted: 2,
+  confirmed: 3,
+  unknown_delivery: 3,
+  failed: 3,
+};
+
+/** True when `next` describes the same submission as of an older moment. */
+export function isStaleSubmissionSnapshot(next: OutboundSubmission, current: OutboundSubmission): boolean {
+  const nextAt = new Date(next.updatedAt).getTime();
+  const currentAt = new Date(current.updatedAt).getTime();
+  if (Number.isFinite(nextAt) && Number.isFinite(currentAt) && nextAt !== currentAt) return nextAt < currentAt;
+  return submissionStatusRank[next.deliveryStatus] < submissionStatusRank[current.deliveryStatus];
+}
+
+/**
+ * Merges a freshly fetched submission snapshot into the rows already on screen.
+ *
+ * The list is refetched from several independent triggers (an action
+ * finishing, the delivery-verification poll, a manual refresh) and the
+ * responses can land out of order. A slower snapshot describing an earlier
+ * moment must therefore not put a row back — a send that was already confirmed
+ * reverting to "sending", or a cancelled scheduled send reappearing — while
+ * every other row still comes from the server.
+ */
+export function mergeSubmissionSnapshots(
+  incoming: readonly OutboundSubmission[],
+  current: readonly OutboundSubmission[],
+  { cancelledIds }: { cancelledIds?: ReadonlySet<string> } = {},
+): OutboundSubmission[] {
+  const currentById = new Map(current.map((item) => [item.id, item]));
+  const merged: OutboundSubmission[] = [];
+  for (const next of incoming) {
+    if (cancelledIds?.has(next.id)) continue;
+    const previous = currentById.get(next.id);
+    merged.push(previous && isStaleSubmissionSnapshot(next, previous) ? previous : next);
+  }
+  return merged;
+}
+
 export function sortSubmissions(items: OutboundSubmission[]): OutboundSubmission[] {
   return [...items].sort((left, right) => {
     const timeDifference = new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ToastKind } from "./mailUi";
 import type { Translate } from "./i18n";
 
@@ -39,6 +39,19 @@ export type RealtimeSyncOptions = {
 };
 
 /**
+ * Push-stream health. `offline` means the backoff budget is spent and only the
+ * periodic poll is left: the shell surfaces it so the user can retry by hand
+ * instead of silently losing live updates for the rest of the session.
+ */
+export type RealtimeConnectionState = "disabled" | "connecting" | "live" | "reconnecting" | "offline";
+
+export type RealtimeSyncHandle = {
+  connectionState: RealtimeConnectionState;
+  /** Restart the stream immediately, resetting the backoff budget. */
+  reconnect: () => void;
+};
+
+/**
  * Owns the real-time push stream and its poll fallback as one unit, because
  * both share the last-SSE-event timestamp: the poll skips its tick while the
  * stream is fresh and resumes after a full silent interval, so a dead stream
@@ -62,7 +75,7 @@ export function useRealtimeSync({
   onRefresh,
   onSettingsChanged,
   onSyncProgress,
-}: RealtimeSyncOptions): void {
+}: RealtimeSyncOptions): RealtimeSyncHandle {
   const sseHandlersRef = useRef<{
     mailReceived: (event: MessageEvent<string>) => void;
     mailSynced: () => void;
@@ -78,6 +91,11 @@ export function useRealtimeSync({
   // its tick while this stays fresh (see shouldPollTick) and resumes once a
   // full interval passes without one, so a dead stream never stalls the UI.
   const lastSseEventAtRef = useRef(0);
+  const [connectionState, setConnectionState] = useState<RealtimeConnectionState>("disabled");
+  // Bumping this re-runs the stream effect with a fresh attempt budget, which
+  // is how the shell's manual retry escapes the exhausted-backoff state.
+  const [reconnectNonce, setReconnectNonce] = useState(0);
+  const reconnect = useCallback(() => setReconnectNonce((value) => value + 1), []);
 
   useEffect(() => {
     sseHandlersRef.current.mailReceived = (event: MessageEvent<string>) => {
@@ -144,7 +162,10 @@ export function useRealtimeSync({
   }, [enabled, onRefresh, refreshIntervalSeconds]);
 
   useEffect(() => {
-    if (!enabled || !pushEnabled) return undefined;
+    if (!enabled || !pushEnabled) {
+      setConnectionState("disabled");
+      return undefined;
+    }
     let closed = false;
     let source: EventSource | null = null;
     let retryTimer = 0;
@@ -159,32 +180,45 @@ export function useRealtimeSync({
     const handleSettingsChanged = () => sseHandlersRef.current.settingsChanged();
     const handleSyncProgress = (event: MessageEvent<string>) => sseHandlersRef.current.syncProgress(event);
 
-    const connect = () => {
+    const connect = (isRetry: boolean) => {
       source?.close();
+      if (!closed) setConnectionState(isRetry ? "reconnecting" : "connecting");
       const next = new EventSource("/api/events");
       source = next;
       next.addEventListener("mail.received", handleMailReceived);
       next.addEventListener("mail.synced", handleMailSynced);
       next.addEventListener("settings.changed", handleSettingsChanged);
       next.addEventListener("sync.progress", handleSyncProgress);
-      next.onopen = () => { attempt = 0; };
+      next.onopen = () => {
+        if (closed || next !== source) return;
+        attempt = 0;
+        setConnectionState("live");
+      };
       next.onerror = () => {
         if (closed || next !== source) return;
         // EventSource would auto-reconnect and hammer a dead endpoint; close
         // and retry with capped exponential backoff instead.
         next.close();
-        if (attempt >= maxReconnectAttempts) return;
+        if (attempt >= maxReconnectAttempts) {
+          // Budget spent: the poll keeps the mailbox fresh, but live updates
+          // are gone until the user retries or the app restarts.
+          setConnectionState("offline");
+          return;
+        }
         const delay = Math.min(1_000 * 2 ** attempt, 30_000);
         attempt += 1;
-        retryTimer = window.setTimeout(() => { if (!closed) connect(); }, delay);
+        setConnectionState("reconnecting");
+        retryTimer = window.setTimeout(() => { if (!closed) connect(true); }, delay);
       };
     };
 
-    connect();
+    connect(false);
     return () => {
       closed = true;
       window.clearTimeout(retryTimer);
       source?.close();
     };
-  }, [enabled, pushEnabled]);
+  }, [enabled, pushEnabled, reconnectNonce]);
+
+  return { connectionState, reconnect };
 }

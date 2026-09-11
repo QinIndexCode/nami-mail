@@ -1,4 +1,5 @@
 import { agentUiStreamEventSchema } from "@nami/agent-contracts";
+import { recordApiTiming } from "./perfTelemetry";
 import type {
   AgentBootstrap,
   AgentConversation,
@@ -237,10 +238,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } else {
     callerSignal?.addEventListener("abort", forwardAbort, { once: true });
   }
+  // Perf telemetry: the wall time covers the round trip plus body parsing, so
+  // a slow read of a big page shows up next to a slow endpoint. Aborts are
+  // intentionally not recorded (intentional cancellation is not jank data).
+  const startedAt = performance.now();
   try {
     const response = await requestResponse(path, { ...init, signal: controller.signal });
     if (!response.ok) throw await apiError(response);
-    return (await response.json().catch(() => ({}))) as T;
+    const parsed = (await response.json().catch(() => ({}))) as T;
+    recordApiTiming(path, performance.now() - startedAt, { status: response.status });
+    return parsed;
   } catch (error) {
     // The timer above aborts with a TimeoutError reason, but requestResponse
     // wraps non-abort rejections as local_service_unavailable before this
@@ -248,6 +255,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // wrapping. A caller-driven abort keeps its original reason and falls
     // through to requestResponse's classification untouched.
     const reason = controller.signal.reason;
+    const isAbort = error instanceof DOMException && error.name === "AbortError";
+    // Timeouts and service outages stall every refresh path, so they are jank
+    // signals too; deliberate caller cancellations are not.
+    if (!isAbort) {
+      recordApiTiming(path, performance.now() - startedAt, {
+        error: reason instanceof DOMException && reason.name === "TimeoutError" ? "timeout" : (error instanceof Error ? error.name : "unknown"),
+      });
+    }
     if (reason instanceof DOMException && reason.name === "TimeoutError") {
       throw new ApiError("The Nami Mail local service did not respond in time.", "local_service_timeout");
     }
@@ -437,13 +452,18 @@ export const api = {
   // message into multiple chunks. Falls back to a plain JSON response when the
   // server translates the message as a single chunk. The optional signal lets
   // callers abort an in-flight stream.
-  translateMessageSegments: async (segments: string[], targetLocale: string): Promise<{ ok: true; translations: string[] }> => {
+  translateMessageSegments: async (
+    segments: string[],
+    targetLocale: string,
+    signal?: AbortSignal,
+  ): Promise<{ ok: true; translations: string[] }> => {
     // The server merges consecutive segments into larger blocks before calling
     // the translation engine, so a single request stays well within rate limits
     // even for mails with hundreds of visible text nodes.
     const response = await requestResponse("/api/messages/translate-segments", {
       method: "POST",
       body: JSON.stringify({ targetLocale, segments }),
+      signal,
     });
     if (!response.ok) throw await apiError(response);
     const json = await response.json() as { ok: true; translations: string[] };
