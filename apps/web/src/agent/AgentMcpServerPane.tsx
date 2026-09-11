@@ -73,6 +73,12 @@ export function AgentMcpServerPane({ active }: { active: boolean }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [deletePending, setDeletePending] = useState(false);
   const selectedServerIdRef = useRef<string | null>(null);
+  // Set by any form/env edit: a refresh that lands afterwards must keep what the
+  // user has typed rather than rebuild the form from the server snapshot.
+  const formDirtyRef = useRef(false);
+  // Only the newest list request may write state; a check-then-refresh pair can
+  // overlap with the open-time load otherwise.
+  const listRequestRef = useRef(0);
 
   const selectedServer = servers.find((server) => server.id === selectedServerId) ?? null;
 
@@ -82,6 +88,7 @@ export function AgentMcpServerPane({ active }: { active: boolean }) {
 
   const selectServer = useCallback((server: AgentMcpServerSummary | null) => {
     setSelectedServerId(server?.id ?? null);
+    formDirtyRef.current = false;
     setForm(mcpServerFormFor(server));
     setEnvRows(mcpEnvRowsFor(server));
     setDeletePending(false);
@@ -89,30 +96,49 @@ export function AgentMcpServerPane({ active }: { active: boolean }) {
     setLoadError(null);
   }, []);
 
-  const applyServerList = useCallback((snapshot: AgentMcpServerList, preferredServerId: string | null = null) => {
+  const applyServerList = useCallback((
+    snapshot: AgentMcpServerList,
+    preferredServerId: string | null = null,
+    { resetForm = false }: { resetForm?: boolean } = {},
+  ) => {
     setServers(snapshot.items);
     const selected = (preferredServerId ? snapshot.items.find((server) => server.id === preferredServerId) : undefined)
       ?? snapshot.items.find((server) => server.id === selectedServerIdRef.current)
       ?? snapshot.items[0]
       ?? null;
     setSelectedServerId(selected?.id ?? null);
-    setForm(mcpServerFormFor(selected));
-    setEnvRows(mcpEnvRowsFor(selected));
+    // Keep the form when the user is mid-edit (the check-then-refresh pair fires
+    // right after a save, and the open-time load can land after they started
+    // typing) unless they asked for a reset or the server is gone.
+    const keepForm = formDirtyRef.current && !resetForm && selected?.id === selectedServerIdRef.current;
+    if (!keepForm) {
+      setForm(mcpServerFormFor(selected));
+      setEnvRows(mcpEnvRowsFor(selected));
+      formDirtyRef.current = false;
+    }
     setDeletePending(false);
   }, []);
 
-  const refreshServers = useCallback(async (preferredServerId: string | null = null) => {
+  const refreshServers = useCallback(async (
+    preferredServerId: string | null = null,
+    options: { resetForm?: boolean } = {},
+  ) => {
+    // Two refreshes can overlap; only the newest may write state, or the older
+    // list wins and the panel shows servers it already replaced.
+    const request = ++listRequestRef.current;
     setLoading(true);
     setLoadError(null);
     try {
       const snapshot = await api.agentMcpServers();
-      applyServerList(snapshot, preferredServerId);
+      if (request !== listRequestRef.current) return snapshot;
+      applyServerList(snapshot, preferredServerId, options);
       return snapshot;
     } catch (error) {
+      if (request !== listRequestRef.current) return null;
       setLoadError(error instanceof Error ? error.message : t("agent.mcpServers.loadFailed"));
       return null;
     } finally {
-      setLoading(false);
+      if (request === listRequestRef.current) setLoading(false);
     }
   }, [applyServerList, t]);
 
@@ -128,6 +154,7 @@ export function AgentMcpServerPane({ active }: { active: boolean }) {
   }, [active, refreshServers]);
 
   const updateForm = <Key extends keyof McpServerForm>(key: Key, value: McpServerForm[Key]) => {
+    formDirtyRef.current = true;
     setForm((current) => ({ ...current, [key]: value }));
     setNotice(null);
     setDeletePending(false);
@@ -211,14 +238,15 @@ export function AgentMcpServerPane({ active }: { active: boolean }) {
         ? await api.updateAgentMcpServer(selectedServer.id, buildInput())
         : await api.createAgentMcpServer(buildInput());
       const checked = await api.checkAgentMcpServer(saved.id);
-      await refreshServers(saved.id);
+      // The save succeeded, so the server now owns this form: rebuild it.
+      await refreshServers(saved.id, { resetForm: true });
       if (checked.lastError) {
         setLoadError(checkFeedback(checked));
       } else {
         setNotice(t("agent.mcpServers.checked"));
       }
     } catch (error) {
-      if (saved) await refreshServers(saved.id);
+      if (saved) await refreshServers(saved.id, { resetForm: true });
       setLoadError(requestFeedback(error, saved ? t("agent.mcpServers.checkFailed") : t("agent.mcpServers.saveFailed")));
     } finally {
       setSaving(false);
@@ -256,7 +284,7 @@ export function AgentMcpServerPane({ active }: { active: boolean }) {
     setNotice(null);
     try {
       await api.deleteAgentMcpServer(selectedServer.id);
-      await refreshServers();
+      await refreshServers(null, { resetForm: true });
       setNotice(t("agent.mcpServers.deleted"));
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : t("agent.mcpServers.deleteFailed"));
@@ -266,12 +294,14 @@ export function AgentMcpServerPane({ active }: { active: boolean }) {
   };
 
   const updateEnvRow = (index: number, patch: Partial<EnvRow>) => {
+    formDirtyRef.current = true;
     setEnvRows((rows) => rows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)));
     setNotice(null);
     setDeletePending(false);
   };
 
   const removeEnvRow = (index: number) => {
+    formDirtyRef.current = true;
     setEnvRows((rows) => rows.filter((_, rowIndex) => rowIndex !== index));
     setNotice(null);
     setDeletePending(false);
@@ -325,7 +355,7 @@ export function AgentMcpServerPane({ active }: { active: boolean }) {
                     <button className="icon-button" type="button" disabled={busy} aria-label={t("agent.mcpServers.delete")} data-tooltip={t("agent.mcpServers.delete")} onClick={() => removeEnvRow(index)}><X size={14} /></button>
                   </div>
                 ))}
-                <button className="agent-mcp-add-env" type="button" disabled={busy} onClick={() => setEnvRows((rows) => [...rows, { key: "", value: "" }])}><Plus size={13} />{t("agent.mcpServers.fields.addEnv")}</button>
+                <button className="agent-mcp-add-env" type="button" disabled={busy} onClick={() => { formDirtyRef.current = true; setEnvRows((rows) => [...rows, { key: "", value: "" }]); }}><Plus size={13} />{t("agent.mcpServers.fields.addEnv")}</button>
               </div>
             </div>
             <label className="agent-provider-field"><span><strong>{t("agent.mcpServers.fields.cwd")}</strong></span><input value={form.cwd} maxLength={2048} disabled={busy} onChange={(event) => updateForm("cwd", event.target.value)} autoComplete="off" spellCheck={false} /></label>

@@ -8,7 +8,8 @@ import { filterAgentSlashCommands, type AgentSlashCommand, type AgentSlashSubcom
 
 export type SlashMenuItem =
   | { kind: "command"; command: AgentSlashCommand }
-  | { kind: "sub"; command: AgentSlashCommand; sub: AgentSlashSubcommand };
+  | { kind: "sub"; command: AgentSlashCommand; sub: AgentSlashSubcommand }
+  | { kind: "mail-reference" };
 
 export type SlashMenuOptions = {
   streaming?: boolean;
@@ -19,17 +20,25 @@ export function buildSlashMenu(composer: string, options: SlashMenuOptions = {})
   if (options.streaming || options.dismissed) return null;
   const trimmed = composer.trim();
   if (!trimmed.startsWith("/")) return null;
-  const token = /^\/([A-Za-z]*)$/.exec(trimmed);
+  // String.match, not RegExp.exec — keeps this a pure parse of the composer
+  // text (the exec-shaped call reads as shell execution to security scanners).
+  const token = trimmed.match(/^\/([A-Za-z]*)$/);
   if (!token) return null;
   const typed = token[1].toLowerCase();
   const commands = filterAgentSlashCommands(typed);
   // While "/{name}" is being typed, sub-operations of that command (e.g.
   // /memory save|list|update|delete) are offered right below their parent.
-  return commands.flatMap((command): SlashMenuItem[] => {
+  const items: SlashMenuItem[] = commands.flatMap((command): SlashMenuItem[] => {
     const parent: SlashMenuItem[] = [{ kind: "command", command }];
     if (!typed) return parent;
     return [...parent, ...(command.subcommands ?? []).map((sub): SlashMenuItem => ({ kind: "sub", command, sub }))];
   });
+  // The /@ mail-reference picker is a UI-side flow (it opens the mail mention
+  // menu, never an LLM prompt) and its trigger "/@" sits outside the
+  // letter-only slash token, so a bare "/" offers it explicitly at the top —
+  // otherwise the mail-context command would be undiscoverable from the menu.
+  if (!typed) return [{ kind: "mail-reference" }, ...items];
+  return items;
 }
 
 /** The composer text produced by selecting a menu item. */

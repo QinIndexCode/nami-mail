@@ -182,7 +182,12 @@ export default function AgentMemoryDialog({ accounts, onClose, fallbackFocusRef 
     return () => window.clearTimeout(timer);
   }, [filters.query]);
 
+  const loadRequestRef = useRef(0);
   const load = async (keepItems = false) => {
+    // Filter changes (and the manual refresh) can overlap; only the newest
+    // request may write, or a slower response for the previous filter replaces
+    // the list the user is now looking at.
+    const request = ++loadRequestRef.current;
     setError(null);
     if (!keepItems) setLoading(true);
     try {
@@ -192,11 +197,13 @@ export default function AgentMemoryDialog({ accounts, onClose, fallbackFocusRef 
         query: debouncedQuery || undefined,
         limit: 200,
       });
+      if (request !== loadRequestRef.current) return;
       setItems(result.items);
     } catch (requestError) {
+      if (request !== loadRequestRef.current) return;
       setError(requestError instanceof ApiError ? requestError.message : t("agentMemory.loadError"));
     } finally {
-      setLoading(false);
+      if (request === loadRequestRef.current) setLoading(false);
     }
   };
 

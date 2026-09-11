@@ -106,6 +106,9 @@ export default function SettingsAgentSection({
             />
           </div>
           <div className="setting-subheading"><span>{t("settings.agent.autoReplyGroup")}</span><small>{t("settings.agent.autoReplyGroupDesc")}</small></div>
+          {currentSettings.autoReplyInvalid && (
+            <p className="form-status error" role="alert">{t("settings.agent.autoReplyInvalidWarning")}</p>
+          )}
           <Switch
             checked={currentSettings.autoReply.enabled}
             disabled={controlsBusy}
