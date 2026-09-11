@@ -29,6 +29,8 @@ import {
   hasPendingMove,
   hasUnverifiedMoveLocation,
   pendingMoveDestination,
+  MAILBOX_SYNCING_ERROR,
+  MAIL_MOVE_IN_FLIGHT_ERROR,
   MOVE_LOCATION_UNVERIFIED_ERROR,
   PENDING_MOVE_RECONCILIATION_ERROR,
   type MessageStorageRow,
@@ -85,6 +87,7 @@ import {
 import { getSyncMessageLimit } from "../settings.js";
 import { emitAccountSynced } from "../events.js";
 import type { createOperationQueue } from "../operation-queue.js";
+import { commitLocalFlags } from "../flags-outbox.js";
 
 export type MessageRouteDeps = {
   context: RuntimeContext;
@@ -176,6 +179,8 @@ function moveActionErrorMessage(error: unknown): string {
     "邮件服务器未确认移动操作，请稍后重试。",
     "这个邮箱没有提供可用的归档文件夹。",
     "这个邮箱没有提供可用的废纸篓文件夹。",
+    MAILBOX_SYNCING_ERROR,
+    MAIL_MOVE_IN_FLIGHT_ERROR,
     PENDING_MOVE_RECONCILIATION_ERROR,
     MOVE_LOCATION_UNVERIFIED_ERROR,
   ]);
@@ -275,6 +280,12 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
   const { context, log, operationQueue } = deps;
 
   const sentVerificationAbortController = new AbortController();
+  // Fastify only runs onClose once in-flight handlers have drained. Aborting
+  // first stops a Sent-folder verification from making shutdown wait out its
+  // IMAP timeout; the submission is then re-verified by the outbox sweep.
+  app.addHook("preClose", () => {
+    sentVerificationAbortController.abort();
+  });
 
   function scheduleSentVerification(submissionId: string): void {
     scheduleSentSubmissionVerification(
@@ -604,37 +615,11 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const parsed = batchMessageFlagsPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
     try {
-      // Enqueue one durable operation per affected account, mirroring the
-      // batch move route: each row waits for that account's write slot, so a
-      // batch issued while another move or flag update is in flight queues
-      // instead of racing it.
-      const rows = context.db
-        .prepare(`SELECT id, account_id FROM messages WHERE id IN (${parsed.data.ids.map(() => "?").join(", ")})`)
-        .all(...parsed.data.ids) as Array<{ id: string; account_id: string }>;
-      const idsByAccount = new Map<string, string[]>();
-      for (const row of rows) {
-        const list = idsByAccount.get(row.account_id);
-        if (list) list.push(row.id);
-        else idsByAccount.set(row.account_id, [row.id]);
-      }
-      const knownIds = new Set(rows.map((row) => row.id));
-      let failed = 0;
-      for (const id of parsed.data.ids) {
-        if (!knownIds.has(id)) failed += 1;
-      }
-      let updated = 0;
-      const changedIds: string[] = [];
-      for (const [accountId, accountIds] of idsByAccount) {
-        const outcome = await operationQueue.enqueueAndRun<{ updated: number; failed: number; changedIds: string[] }>(
-          [accountId],
-          "flags",
-          { ids: accountIds, patch: parsed.data.patch },
-        );
-        updated += outcome.updated;
-        failed += outcome.failed;
-        changedIds.push(...outcome.changedIds);
-      }
-      return { ok: true, updated, failed, changedIds };
+      // Write-behind: one local transaction commits the whole selection in
+      // milliseconds; the IMAP STORE is pushed per account by the durable
+      // background queue, so the response never queues behind a running sync.
+      const outcome = commitLocalFlags(context.db, parsed.data.ids, parsed.data.patch, operationQueue, context.agentMailEvents);
+      return { ok: true, updated: outcome.updated, failed: outcome.failed, changedIds: outcome.changedIds };
     } catch (error) {
       request.log.error({ error }, "Batch flag update failed");
       return reply.code(500).send({ ok: false, message: "批量更新标志失败。" });
@@ -703,15 +688,12 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const parsed = messageFlagsPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, message: validationMessage(parsed.error) });
     try {
-      // Queued behind any move in flight on the message's account, so
-      // starring a message right after deleting another one waits its turn
-      // instead of failing with a "pending move" error.
+      // Write-behind: the local cache commits in milliseconds and the IMAP
+      // STORE is pushed by the durable background queue (flags-outbox), so a
+      // toggle never queues behind a move, a batch, or a running sync.
       const messageAccount = context.db.prepare("SELECT account_id FROM messages WHERE id = ?").get(request.params.id) as { account_id: string } | undefined;
-      await operationQueue.enqueueAndRun(
-        messageAccount ? [messageAccount.account_id] : [],
-        "flags",
-        { messageId: request.params.id, patch: parsed.data },
-      );
+      if (!messageAccount) throw new Error("Message not found.");
+      commitLocalFlags(context.db, [request.params.id], parsed.data, operationQueue, context.agentMailEvents);
       return { ok: true };
     } catch (error) {
       const failure = mailFailure(error);

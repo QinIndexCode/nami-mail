@@ -69,8 +69,8 @@ export type AppSettingsPatch = Partial<Omit<AppSettings, "customBackgroundFilena
 const defaults: Omit<AppSettings, "updatedAt"> = {
   theme: "system",
   locale: defaultLocale,
-  backgroundPreset: "coast",
-  backgroundIntensity: 68,
+  backgroundPreset: "none",
+  backgroundIntensity: 80,
   notificationsEnabled: true,
   notifyWhenFocused: false,
   notificationSound: "soft",

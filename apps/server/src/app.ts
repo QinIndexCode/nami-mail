@@ -21,6 +21,7 @@ import { registerBackupRoutes } from "./routes/backup.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerOutboundAttachmentRoutes } from "./routes/outbound-attachments.js";
 import { registerBatchJobRoutes } from "./routes/batch-jobs.js";
+import { clearPendingFlagsMarkers, pushFlagsRemote, type FlagsPushEntry } from "./flags-outbox.js";
 import {
   oauthProviderFor,
   providerInfo,
@@ -227,7 +228,16 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   // Durable write-operation queue. User moves and flag updates are recorded
   // before they dispatch, so a shutdown while an operation is queued or in
   // flight never loses it: pending/running rows are re-enqueued here.
-  const operationQueue = createOperationQueue(context.db);
+  const operationQueue = createOperationQueue(context.db, {
+    onBackgroundPermanentFailure: (kind, payload) => {
+      // A flags push that exhausted its retries keeps the local (user) state
+      // but must stop blocking sync reconciliation for those rows.
+      if (kind === "flags-push") {
+        const { entries } = payload as { entries?: FlagsPushEntry[] };
+        if (Array.isArray(entries)) clearPendingFlagsMarkers(context.db, entries.map((entry) => entry.id));
+      }
+    },
+  });
   operationQueue.registerRunner("move", async (payload) => {
     const { messageId, target } = payload as { messageId: string; target: MessageMoveTarget };
     return moveMessage(context.db, context.masterKey, messageId, target, context.oauthService, context.agentMailEvents);
@@ -238,14 +248,18 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   });
   operationQueue.registerRunner("flags", async (payload) => {
     // One executor serves both payload shapes: a single-message patch
-    // (PATCH /api/messages/:id) and an account-scoped batch (the batch flags
-    // route groups ids per account before enqueueing).
+    // (internal callers) and an account-scoped batch (batch jobs).
     const { messageId, ids, patch } = payload as { messageId?: string; ids?: string[]; patch: MessageFlagsPatch };
     if (Array.isArray(ids)) {
       return updateMessageFlagsBatch(context.db, context.masterKey, ids, patch, context.oauthService, context.agentMailEvents);
     }
     await updateMessageFlags(context.db, context.masterKey, messageId as string, patch, context.oauthService, context.agentMailEvents);
     return { updated: 0, failed: 0, changedIds: [] };
+  });
+  operationQueue.registerRunner("flags-push", async (payload) => {
+    const push = payload as { accountId: string; entries: FlagsPushEntry[] };
+    await pushFlagsRemote({ db: context.db, masterKey: context.masterKey, accessTokenProvider: context.oauthService }, push);
+    clearPendingFlagsMarkers(context.db, push.entries.map((entry) => entry.id));
   });
   void operationQueue.resumePending().then((resumed) => {
     if (resumed) app.log.warn({ resumed }, "Resumed interrupted write operations");
@@ -306,11 +320,12 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   const startupRequestsStartedAt = Date.now();
   const startupRequestLogPath = path.join(path.dirname(config.databasePath), "startup-request-log.jsonl");
   // Kill switch for packaged installs that want no diagnostic file growth:
-  // NAMI_MAIL_NO_STARTUP_LOG=1 skips both the per-boot prune and all appends,
-  // freezing any pre-existing file in place. The desktop host shares its
-  // process.env with the in-process server, so one setting covers both logs.
+  // NAMI_MAIL_NO_STARTUP_LOG=1 skips all appends. Pruning is intentionally
+  // NOT gated so an old oversized file is trimmed back even when appending
+  // is disabled. The desktop host shares its process.env with the in-process
+  // server, so one setting covers both logs.
+  pruneStartupRequestLog(startupRequestLogPath);
   if (process.env.NAMI_MAIL_NO_STARTUP_LOG !== "1") {
-    pruneStartupRequestLog(startupRequestLogPath);
     app.addHook("onResponse", async (request, reply) => {
       const elapsedMs = reply.elapsedTime;
       const elapsedSinceBoot = Date.now() - startupRequestsStartedAt;
@@ -318,7 +333,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       try {
         appendFileSync(
           startupRequestLogPath,
-          `${JSON.stringify({ t: new Date().toISOString(), bootMs: elapsedSinceBoot, ms: Math.round(elapsedMs), method: request.method, url: request.url?.split("?")[0] })}\n`,
+          `${JSON.stringify({ t: new Date().toISOString(), bootMs: elapsedSinceBoot, ms: Math.round(elapsedMs), method: request.method, url: (request.url?.split("?")[0] ?? request.url ?? "").slice(0, 512) })}\n`,
           "utf8",
         );
       } catch {

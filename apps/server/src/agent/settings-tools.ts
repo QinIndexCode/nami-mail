@@ -23,7 +23,7 @@ import {
 const settingsUpdateInputSchema = z.object({
   theme: z.enum(["system", "light", "dark"]).optional(),
   backgroundPreset: z.enum(BACKGROUND_PRESETS).optional(),
-  backgroundIntensity: z.number().int().min(0).max(80).optional(),
+  backgroundIntensity: z.number().int().min(0).max(100).optional(),
   listDensity: z.enum(LIST_DENSITIES).optional(),
   avatarGravatarEnabled: z.boolean().optional(),
   notificationsEnabled: z.boolean().optional(),
@@ -93,7 +93,7 @@ export function createSettingsTools(db: DatabaseHandle, hooks: SettingsToolHooks
           "Input fields (all optional, provide at least one):",
           "theme: 'system' | 'light' | 'dark';",
           "backgroundPreset: 'none' | 'paper' | 'mist' | 'coast' | 'dawn' | 'night' | 'custom';",
-          "backgroundIntensity: integer 0-80;",
+          "backgroundIntensity: integer 0-100;",
           "listDensity: 'comfortable' | 'compact';",
           "avatarGravatarEnabled: boolean (show sender photos via Gravatar; hashes the email to a third party — enable only when the user asks);",
           "notificationsEnabled: boolean;",

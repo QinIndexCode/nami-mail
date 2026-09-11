@@ -9,6 +9,8 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import {
+  MAILBOX_SYNCING_ERROR,
+  MAIL_MOVE_IN_FLIGHT_ERROR,
   MOVE_LOCATION_UNVERIFIED_ERROR,
   PENDING_MOVE_RECONCILIATION_ERROR,
   hasPendingMove,
@@ -20,13 +22,18 @@ import {
 } from "../src/message-storage.js";
 import { markSubmissionSubmitted, prepareSubmission, submissionForId } from "../src/outbox.js";
 import {
+  ACCOUNT_SYNC_WAIT_MS,
   scheduleSentSubmissionVerification,
   batchMoveMessages,
+  markAccountMoving,
   moveMessage,
   syncAccount,
+  unmarkAccountMoving,
   updateMessageFlags,
   updateMessageFlagsBatch,
   verifySubmissionInSentMailbox,
+  waitForAccountSyncIdle,
+  waitUntil,
 } from "../src/sync.js";
 
 describe("IMAP message flag updates", () => {
@@ -437,6 +444,99 @@ describe("IMAP message flag updates", () => {
       FROM messages WHERE id = ?
     `).get("message-1");
     expect(row).toEqual({ mailbox: "Archive", uid: 84, pending_move_destination: null, pending_move_state: null });
+  });
+
+  it("names the dispatching move instead of the pending-move state when the account is busy", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+
+    // Only account-level state is involved: this message has no pending move,
+    // so the pending-move wording would send the user (and any later
+    // investigation) after the wrong condition.
+    markAccountMoving("account-1");
+    try {
+      await expect(moveMessage(db, masterKey, "message-1", "archive"))
+        .rejects.toThrow(MAIL_MOVE_IN_FLIGHT_ERROR);
+      expect(client.messageMove).not.toHaveBeenCalled();
+      const row = db.prepare("SELECT pending_move_destination, pending_move_state FROM messages WHERE id = ?").get("message-1");
+      expect(row).toEqual({ pending_move_destination: null, pending_move_state: null });
+    } finally {
+      unmarkAccountMoving("account-1");
+    }
+  });
+
+  it("waits out a running sync pass instead of failing the user's action", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Archive", uidMap: new Map([[42, 84]]) });
+
+    // Hold the pass open on connect so the move arrives while the account is
+    // genuinely syncing. `syncAccount` claims the account synchronously, so
+    // starting it first is what makes the timing deterministic.
+    let releaseConnect!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    client.connect.mockImplementationOnce(() => gate);
+    const pass = syncAccount(db, masterKey, "account-1", 20, undefined, undefined, undefined).catch(() => undefined);
+
+    try {
+      const moved = moveMessage(db, masterKey, "message-1", "archive");
+      // Before this change the move rejected here in ~2ms with the pending-move
+      // message; now it waits for the pass to release the account.
+      releaseConnect();
+      await expect(moved).resolves.toMatchObject({ destination: "Archive" });
+    } finally {
+      releaseConnect();
+      await pass;
+    }
+  });
+
+  it("reports a still-syncing account when the pass outlives the wait budget", async () => {
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+
+    // A pass that does not release the account within the budget must surface
+    // an accurate, retryable reason — not the pending-move message and not a
+    // silent hang until the renderer's 30s timeout.
+    let releaseConnect!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    client.connect.mockImplementationOnce(() => gate);
+    const pass = syncAccount(db, masterKey, "account-1", 20, undefined, undefined, undefined).catch(() => undefined);
+
+    try {
+      await expect(moveMessage(db, masterKey, "message-1", "archive", undefined, undefined, { syncWaitMs: 60 }))
+        .rejects.toThrow(MAILBOX_SYNCING_ERROR);
+    } finally {
+      // Always release the account so the module-level sync guard cannot leak
+      // into the tests that follow.
+      releaseConnect();
+      await pass;
+    }
+  });
+
+  it("does not wait when no sync pass is in flight for the account", async () => {
+    // The wait path must be transparent for the common case: an idle account
+    // proceeds immediately instead of paying the poll interval.
+    const started = Date.now();
+    await expect(waitForAccountSyncIdle("account-1")).resolves.toBe(true);
+    expect(Date.now() - started).toBeLessThan(50);
+  });
+
+  it("polls a condition until it holds or the budget runs out", async () => {
+    // Keep the server-side budget under the renderer's 30s request timeout so
+    // a slow account still returns the real outcome instead of a client abort.
+    expect(ACCOUNT_SYNC_WAIT_MS).toBeLessThan(30_000);
+
+    await expect(waitUntil(() => true, 50, 5)).resolves.toBe(true);
+
+    let ready = false;
+    setTimeout(() => { ready = true; }, 30);
+    await expect(waitUntil(() => ready, 500, 5)).resolves.toBe(true);
+
+    await expect(waitUntil(() => false, 60, 5)).resolves.toBe(false);
   });
 
   it("keeps a stale move intent blocked when the source UID is absent", async () => {
