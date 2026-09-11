@@ -36,6 +36,7 @@ import {
 import { AgentRuntime, createPermissionEngine, createToolRegistry, type ToolRegistry } from "@nami/agent-core";
 import type { DatabaseHandle } from "./db.js";
 import { getAppSettings, type AgentAccessLevel, type AppSettings } from "./settings.js";
+import { serverLog } from "./logging.js";
 import { messagePayloadForRow, type MessagePayload, type MessageStorageRow } from "./message-storage.js";
 import { EncryptedAgentAuditStore } from "./agent/audit.js";
 import { EncryptedConversationStore, type ConversationDescriptor, type DecryptedConversationRecord } from "./agent/conversations.js";
@@ -2467,7 +2468,7 @@ export class AgentService {
         const expected = (error instanceof Error && error.message === "Conversation is unavailable.")
           || (error instanceof AgentServiceError && error.code === "CANCELLED");
         if (!expected) {
-          console.error(`[agent] failed to persist the assistant turn for conversation ${conversationId}:`, error);
+          serverLog.error({ conversationId }, "Agent failed to persist the assistant turn", error);
         }
       }
       for (const summary of suggestions) {

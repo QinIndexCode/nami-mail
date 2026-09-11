@@ -118,10 +118,15 @@ describe("mail transport error API responses", () => {
     expect(response.json()).toMatchObject({ ok: false, code: "connection_refused" });
   });
 
-  it("keeps flag and move transport failures classified and redacted", async () => {
+  it("keeps move transport failures classified and redacted while flags respond via the outbox", async () => {
     const secret = "do-not-return-this-secret";
-    updateMessageFlags.mockRejectedValueOnce(Object.assign(new Error(`connect ENETUNREACH password=${secret}`), { code: "ENETUNREACH" }));
     moveMessage.mockRejectedValueOnce(Object.assign(new Error(`write EPROTO ${secret}`), { code: "EPROTO" }));
+    insertAccount(db);
+    // The flag action must have a real row to commit against.
+    db.prepare(`
+      INSERT INTO messages (id, account_id, mailbox, uid, flags_json, has_attachments, attachments_json, size, created_at)
+      VALUES ('message-1', 'account-1', 'INBOX', 1, '[]', 0, '[]', 0, ?)
+    `).run(new Date().toISOString());
 
     const flagResponse = await app.inject({
       method: "PATCH",
@@ -134,9 +139,13 @@ describe("mail transport error API responses", () => {
       payload: { target: "archive" },
     });
 
-    expect(flagResponse.statusCode).toBe(503);
-    expect(flagResponse.json()).toMatchObject({ ok: false, code: "network_unavailable" });
-    expect(flagResponse.body).not.toContain(secret);
+    // Write-behind: the flag action commits locally and succeeds immediately;
+    // a transport failure surfaces later as a retried flags-push row, never
+    // as an error response to the user.
+    expect(flagResponse.statusCode).toBe(200);
+    expect(flagResponse.json()).toMatchObject({ ok: true });
+    const marker = db.prepare("SELECT pending_flags_push FROM messages WHERE id = ?").get("message-1") as { pending_flags_push: number };
+    expect(marker.pending_flags_push).toBe(1);
     expect(moveResponse.statusCode).toBe(422);
     expect(moveResponse.json()).toMatchObject({ ok: false, code: "tls_handshake_failed" });
     expect(moveResponse.body).not.toContain(secret);

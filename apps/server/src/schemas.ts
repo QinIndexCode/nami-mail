@@ -115,7 +115,13 @@ export const messageFlagsPatchSchema = z.object({
   { message: "至少需要更新已读或标星状态。" },
 );
 
-export const batchMessageIdsSchema = z.array(z.string().min(1)).min(1).max(100)
+// One batch request becomes ONE account-queue operation (one write-slot
+// acquisition). The old 100-id cap forced the renderer to split a large
+// selection into sequential requests, each reacquiring the slot that IMAP
+// sync shares — a flag toggle behind a batch waited seconds (measured 16s).
+// 5000 covers a fully loaded mailbox; SQLite's variable limit (32766 default)
+// is not a constraint.
+export const batchMessageIdsSchema = z.array(z.string().min(1)).min(1).max(5000)
   .refine((ids) => new Set(ids).size === ids.length, { message: "邮件不能重复选择。" });
 
 export const batchMessageFlagsPatchSchema = z.object({
@@ -188,7 +194,7 @@ export const settingsPatchSchema = z.object({
   theme: z.enum(["system", "light", "dark"]).optional(),
   locale: interfaceLocaleSchema.optional(),
   backgroundPreset: z.enum(BACKGROUND_PRESETS).optional(),
-  backgroundIntensity: z.number().int().min(0).max(80).optional(),
+  backgroundIntensity: z.number().int().min(0).max(100).optional(),
   notificationsEnabled: z.boolean().optional(),
   notifyWhenFocused: z.boolean().optional(),
   notificationSound: z.enum(NOTIFICATION_SOUNDS).optional(),

@@ -22,7 +22,7 @@ import {
   type OutboundSubmissionRequest,
 } from "../outbox.js";
 import { syncAccount, updateMessageFlags, moveMessage } from "../sync.js";
-import { MESSAGE_FTS_TABLE } from "../message-search.js";
+import { ftsLikeEscape, MESSAGE_FTS_TABLE } from "../message-search.js";
 import { redactUrls } from "../message-links.js";
 import type { AccountRecord } from "../types.js";
 import type { AgentMailStateEvents } from "./mail-state-events.js";
@@ -309,8 +309,6 @@ export class SqliteMailApplicationService implements MailApplicationService {
     }
     if (query.unread !== undefined) where.push(query.unread ? "m.flags_json NOT LIKE '%\\Seen%'" : "m.flags_json LIKE '%\\Seen%'");
     if (query.flagged !== undefined) where.push(query.flagged ? "m.flags_json LIKE '%\\Flagged%'" : "m.flags_json NOT LIKE '%\\Flagged%'");
-    // Note: sender filter is applied post-decryption because from_address is
-    // cleared by the encryption migration (clearPlaintextColumns).
     // Stored timestamps use UTC ISO (sync.ts writes toISOString output). The
     // caller may pass an offset-carrying timestamp, so normalize both bounds
     // to the same UTC form before comparing, otherwise text order diverges
@@ -331,35 +329,23 @@ export class SqliteMailApplicationService implements MailApplicationService {
     const senderQuery = trimmed(query.sender)?.toLocaleLowerCase();
 
     if (senderQuery) {
-      // Sender filter requires decryption (from_address is encrypted), so scan
-      // the matching rows in bounded batches, decrypt, filter, then paginate in
-      // memory. Scanning continues until the requested window is filled or all
-      // rows have been read, so results are never silently truncated at a fixed
-      // row limit regardless of account size.
-      const batchSize = 1_000;
-      const matched: MessageRowWithAccount[] = [];
-      const required = safeOffset + limit + 1;
-      for (let batchOffset = 0; ; batchOffset += batchSize) {
-        const batch = this.options.db.prepare(`
-          SELECT m.*, a.email AS account_email, a.provider_name
-          FROM messages m JOIN accounts a ON a.id = m.account_id
-          WHERE ${where.join(" AND ")}
-          ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id
-          LIMIT ? OFFSET ?
-        `).all(...params, batchSize, batchOffset) as MessageRowWithAccount[];
-        if (!batch.length) break;
-        for (const row of batch) {
-          const payload = messagePayloadForRow(row, this.options.masterKey);
-          if (payload.fromAddress.toLowerCase().includes(senderQuery)
-            || payload.fromName.toLowerCase().includes(senderQuery)) {
-            matched.push(row);
-            if (matched.length >= required) break;
-          }
-        }
-        if (matched.length >= required || batch.length < batchSize) break;
-      }
-      const page = matched.slice(safeOffset, safeOffset + limit).map((row) => this.messageView(row));
-      return { items: page, ...(matched.length > safeOffset + limit ? { nextCursor: String(safeOffset + limit) } : {}) };
+      // from_address is encrypted at rest, but its text is mirrored into the
+      // FTS index (from_address / from_name columns, written from the
+      // decrypted payload at sync time — the same index the user-facing
+      // search runs on). Filter through the index instead of decrypting every
+      // candidate row on the main process. LIKE keeps the historical
+      // substring semantics for any query length (a MATCH phrase would
+      // silently drop 1-2 character filters below the trigram floor) and
+      // stays ASCII-case-insensitive like the rest of the search paths. This
+      // assumes the FTS row always exists for a message row — the same
+      // invariant the user search already relies on (message-fts-v2 rebuild).
+      const pattern = `%${ftsLikeEscape(senderQuery)}%`;
+      where.push(`EXISTS (
+        SELECT 1 FROM ${MESSAGE_FTS_TABLE} fts
+        WHERE fts.message_id = m.id
+          AND (fts.from_address LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\')
+      )`);
+      params.push(pattern, pattern);
     }
 
     const rows = this.options.db.prepare(`

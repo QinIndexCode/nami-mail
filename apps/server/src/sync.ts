@@ -15,6 +15,7 @@ import {
 import { autoCollectSender } from "./contacts.js";
 import { indexMessageFts } from "./message-search.js";
 import { redactUrls } from "./message-links.js";
+import { serverLog } from "./logging.js";
 import {
   confirmSubmissionsInSent,
 } from "./outbox.js";
@@ -97,6 +98,35 @@ export function withTimeout<T>(promise: Promise<T>, milliseconds: number, messag
       (error) => { clearTimeout(timer); reject(error); },
     );
   });
+}
+
+/** Longest a write lets an in-flight sync pass finish before giving up. Kept
+ * well below the renderer's 30s request budget so the caller still gets the
+ * real outcome instead of a client-side timeout. */
+export const ACCOUNT_SYNC_WAIT_MS = 15_000;
+
+/** Polls `predicate` until it holds or `timeoutMs` elapses. */
+export async function waitUntil(predicate: () => boolean, timeoutMs: number, intervalMs = 150): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return true;
+}
+
+/**
+ * Resolves true once no sync pass is in flight for the account, false when the
+ * budget ran out.
+ *
+ * A write must never *block* a sync cycle (see the write-chain note above), but
+ * it must also not be rejected just because a pass happens to be running. The
+ * caller claims the account for moving first, which makes `syncAccount` skip
+ * it, so no new pass can start here — only the pass already underway has to
+ * finish.
+ */
+export function waitForAccountSyncIdle(accountId: string, timeoutMs = ACCOUNT_SYNC_WAIT_MS): Promise<boolean> {
+  return waitUntil(() => !running.has(accountId), timeoutMs);
 }
 
 /**
@@ -482,7 +512,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       // folder vanished. Treating it as removal would delete the whole local
       // cache. Keep the previous folder set untouched and let the next pass
       // recover, like every other transient provider failure.
-      console.warn(`IMAP LIST returned no folders for account ${accountId}; skipping folder-removal pass`);
+      serverLog.warn({ accountId }, "IMAP LIST returned no folders; skipping folder-removal pass");
     } else {
       const inactiveFolderClause = ` AND mailbox NOT IN (${activeFolderPaths.map(() => "?").join(", ")})`;
       const listMessagesInRemovedFolders = db.prepare(`
@@ -563,6 +593,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           remote_id_lookup = COALESCE(?, remote_id_lookup),
           all_mail_archived = COALESCE(?, all_mail_archived)
       WHERE account_id = ? AND mailbox = ? AND uid = ?
+        AND pending_flags_push IS NOT 1
     `);
     const findPendingMoves = db.prepare(`
       SELECT * FROM messages
@@ -1045,7 +1076,10 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
             const remoteLookup = remoteIdLookup(masterKey, accountId, message.emailId);
             const allMailArchived = allMailArchivedValue(folder, message.labels);
             db.transaction(() => {
-              updateCachedMessage.run(
+              // pending_flags_push rows keep their local (user) flags until the
+              // background STORE lands; the guarded UPDATE below is then a
+              // no-op and the agent event must not claim a flags change.
+              const { changes } = updateCachedMessage.run(
                 flagsJson,
                 remoteLookup,
                 allMailArchived,
@@ -1053,6 +1087,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
                 folder.path,
                 message.uid,
               );
+              if (changes !== 1) return;
               if (agentEvents && agentLease) {
                 agentEvents.messageUpsertedWithinTransaction(agentLease, existing.id, {
                   transition: "sync-metadata-refresh",
@@ -1226,7 +1261,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
               try {
                 autoCollectSender(db, masterKey, from.address, from.name, [account.email]);
               } catch (error) {
-                console.warn(`Sender auto-collect skipped for account ${accountId}:`, error);
+                serverLog.warn({ accountId }, "Sender auto-collect skipped", error);
               }
             }
             if ((folder.specialUse === "\\Inbox" || folder.path.toUpperCase() === "INBOX") && !flags.includes("\\Seen")) {
@@ -1272,7 +1307,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       } catch (error) {
         // Replay is a local-only refinement after the folder passes already
         // succeeded; a failure here must not fail the whole sync pass.
-        console.warn(`Pending move replay failed for account ${accountId}:`, error);
+        serverLog.warn({ accountId }, "Pending move replay failed", error);
       }
     }
 
@@ -1298,7 +1333,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     } catch (error) {
       // The pass itself already succeeded; a Sent verification failure must
       // not surface as a failed sync (it would mask the healthy update above).
-      console.warn(`Sent-folder submission verification failed for account ${accountId}:`, error);
+      serverLog.warn({ accountId }, "Sent-folder submission verification failed", error);
     }
     pendingRuleTargets = newInboxMessages;
     pendingAutoReplyTargets = newInboxMessages.map((message) => message.id);
@@ -1322,7 +1357,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       // logged and the affected messages remain visible for manual handling.
       void applyFilterRulesToNewMessages(db, masterKey, accountId, targets, accessTokenProvider, agentEvents)
         .catch((error) => {
-          console.warn(`Filter rule application failed for account ${accountId}:`, error);
+          serverLog.warn({ accountId }, "Filter rule application failed", error);
         });
     }
     if (pendingAutoReplyTargets.length > 0) {
@@ -1332,7 +1367,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       // live in the engine and their expiry is guarded by its own timers.
       getAutoReplyEngine()?.notifyInboxMessages(accountId, targets)
         .catch((error) => {
-          console.warn(`Auto-reply pipeline failed for account ${accountId}:`, error);
+          serverLog.warn({ accountId }, "Auto-reply pipeline failed", error);
         });
     }
   }

@@ -15,6 +15,7 @@ import type { DatabaseHandle } from "../db.js";
 import { messagePayloadById, payloadHeaders } from "../message-storage.js";
 import { getAppSettings } from "../settings.js";
 import { contactFromRow, type ContactRow } from "../contacts.js";
+import { serverLog } from "../logging.js";
 import type { EncryptedAgentAuditStore } from "./audit.js";
 import { buildMemoryContextLines, type EncryptedAgentMemoryStore } from "./memory.js";
 import type { ImmutableGuiConfirmationStore } from "./confirmations.js";
@@ -232,7 +233,7 @@ export class AutoReplyEngine {
     try {
       this.options.confirmationStore.recordDecision(receipt, caller, authority.capability);
     } catch (error) {
-      console.warn(`Auto-reply confirmation record failed for ${confirmationId}:`, error);
+      serverLog.warn({ confirmationId }, "Auto-reply confirmation record failed", error);
       return { decision: "failed" };
     }
     this.settle(pending, decision === "approve" ? "approved" : "rejected");
@@ -260,7 +261,7 @@ export class AutoReplyEngine {
     try {
       return this.options.decisions.list(options);
     } catch (error) {
-      console.warn("Auto-reply decision list failed:", error);
+      serverLog.warn({}, "Auto-reply decision list failed", error);
       return [];
     }
   }
@@ -270,7 +271,7 @@ export class AutoReplyEngine {
     try {
       return this.options.decisions.delete(recordId);
     } catch (error) {
-      console.warn(`Auto-reply decision delete failed for ${recordId}:`, error);
+      serverLog.warn({ recordId }, "Auto-reply decision delete failed", error);
       return false;
     }
   }
@@ -405,7 +406,7 @@ export class AutoReplyEngine {
           memoryContext,
         });
       } catch (error) {
-        console.warn(`Auto-reply evaluation failed for ${messageId}:`, error);
+        serverLog.warn({ messageId }, "Auto-reply evaluation failed", error);
         this.recordLedger(messageId, accountId, "failed", threadKey);
         this.rememberIgnored(accountId, messageId, "自动回复评估失败，已跳过。");
         this.recordDecision(accountId, messageId, threadKey, "llm-failed", {
@@ -513,7 +514,7 @@ export class AutoReplyEngine {
         replyPreview: replyText.slice(0, 200),
       });
     } catch (error) {
-      console.warn(`Auto-reply pending event failed for ${confirmation.id}:`, error);
+      serverLog.warn({ confirmationId: confirmation.id }, "Auto-reply pending event failed", error);
     }
     const outcome = await outcomePromise;
     this.pending.delete(confirmation.id);
@@ -574,10 +575,10 @@ export class AutoReplyEngine {
           replyPreview: pending.replyText.slice(0, 200),
         });
       } catch (error) {
-        console.warn(`Auto-reply sent event failed for ${pending.messageId}:`, error);
+        serverLog.warn({ messageId: pending.messageId }, "Auto-reply sent event failed", error);
       }
     } catch (error) {
-      console.warn(`Auto-reply send failed for ${pending.messageId}:`, error);
+      serverLog.warn({ messageId: pending.messageId }, "Auto-reply send failed", error);
       this.recordLedger(pending.messageId, pending.accountId, "failed", threadKey);
       this.audit(pending.accountId, pending.confirmation.requestId, "auto-reply.send", "发送失败", "failed", pending.confirmation.id);
       this.rememberIgnored(pending.accountId, pending.messageId, `自动回复发送失败：${pending.subject}`);
@@ -610,7 +611,7 @@ export class AutoReplyEngine {
     try {
       this.options.confirmationStore.recordDecision(receipt, autoReplyDesktopCaller, authority.capability);
     } catch (error) {
-      console.warn(`Auto-reply confirmation expiry could not be recorded for ${pending.confirmation.id}:`, error);
+      serverLog.warn({ confirmationId: pending.confirmation.id }, "Auto-reply confirmation expiry could not be recorded", error);
     } finally {
       this.settle(pending, "expired");
     }
@@ -704,7 +705,7 @@ export class AutoReplyEngine {
     try {
       return this.options.decisions.hasThreadRejected(threadKey);
     } catch (error) {
-      console.warn("Auto-reply thread rejection check failed:", error);
+      serverLog.warn({}, "Auto-reply thread rejection check failed", error);
       return false;
     }
   }
@@ -724,7 +725,7 @@ export class AutoReplyEngine {
         }
       }
     } catch (error) {
-      console.warn("Auto-reply contact lookup failed:", error);
+      serverLog.warn({}, "Auto-reply contact lookup failed", error);
     }
     return addresses;
   }
@@ -749,7 +750,7 @@ export class AutoReplyEngine {
         detail: input.detail,
       });
     } catch (error) {
-      console.warn(`Auto-reply decision record failed for ${messageId}:`, error);
+      serverLog.warn({ messageId }, "Auto-reply decision record failed", error);
     }
   }
 
@@ -781,7 +782,7 @@ export class AutoReplyEngine {
         detail: `发送给 ${sender} 的回复：\n${replyText}\n（原邮件 ${messageId}）`,
       });
     } catch (error) {
-      console.warn("Auto-reply memory write failed:", error);
+      serverLog.warn({}, "Auto-reply memory write failed", error);
     }
   }
 
@@ -794,7 +795,7 @@ export class AutoReplyEngine {
         detail: `原邮件编号 ${messageId}`,
       });
     } catch (error) {
-      console.warn("Auto-reply memory write failed:", error);
+      serverLog.warn({}, "Auto-reply memory write failed", error);
     }
   }
 
@@ -814,7 +815,7 @@ export class AutoReplyEngine {
       parametersSummary: detail.slice(0, 240),
     };
     Promise.resolve(this.options.audit.append(event)).catch((error) => {
-      console.warn("Auto-reply audit append failed:", error);
+      serverLog.warn({}, "Auto-reply audit append failed", error);
     });
   }
 }

@@ -14,6 +14,8 @@ import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import type { DatabaseHandle } from "./db.js";
 import { friendlyMailError, imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import {
+  MAILBOX_SYNCING_ERROR,
+  MAIL_MOVE_IN_FLIGHT_ERROR,
   MOVE_LOCATION_UNVERIFIED_ERROR,
   PENDING_MOVE_RECONCILIATION_ERROR,
   moveActionBlockedError,
@@ -25,6 +27,7 @@ import {
   isAccountSyncing,
   markAccountMoving,
   unmarkAccountMoving,
+  waitForAccountSyncIdle,
   withAccountWriteLocks,
 } from "./sync.js";
 
@@ -203,6 +206,8 @@ export async function moveMessageToFolder(
 type MoveMessageOptions = {
   /** A connected IMAP client to reuse (batch moves share one per account). */
   client?: Awaited<ReturnType<typeof imapClientForAccount>>;
+  /** Overrides how long the move waits for a running sync pass (tests). */
+  syncWaitMs?: number;
 };
 
 /**
@@ -609,9 +614,10 @@ async function moveMessageCore(
   const account = accountById(db, message.account_id);
   if (!account) throw new Error("Account not found.");
   const agentLease = agentEvents?.acquireLease(message.account_id);
-  if (isAccountSyncing(message.account_id) || isAccountMoving(message.account_id)) {
-    throw new Error(PENDING_MOVE_RECONCILIATION_ERROR);
-  }
+  // Another move on this account is already dispatching. Report that specific
+  // condition instead of the pending-move message, which describes a different
+  // state and sent the last investigation after the wrong cause.
+  if (isAccountMoving(message.account_id)) throw new Error(MAIL_MOVE_IN_FLIGHT_ERROR);
 
   const clearMoveIntent = db.prepare(`
     UPDATE messages
@@ -627,8 +633,16 @@ async function moveMessageCore(
   let moveSettled = false;
   let commandRefused = false;
   let intentClaimed = false;
+  // Claim the account *before* waiting: syncAccount skips an account that is
+  // moving, so no new pass can start here and the wait is bounded by the pass
+  // already underway. Waiting (rather than failing in ~2ms) matches how every
+  // other write path behaves — a delete issued during a sync used to be
+  // rejected with the pending-move message, which is not what the user saw.
   markAccountMoving(message.account_id);
   try {
+    if (isAccountSyncing(message.account_id) && !await waitForAccountSyncIdle(message.account_id, options?.syncWaitMs)) {
+      throw new Error(MAILBOX_SYNCING_ERROR);
+    }
     // A stale 'intent' (an earlier MOVE whose response was lost) may never
     // have reached the provider. Prove whether the source UID is still live
     // before either retrying the move or leaving reconciliation in charge;
@@ -780,8 +794,8 @@ async function moveMessagesInOneCommand(
   const accountId = entries[0]?.account_id;
   if (!accountId || entries.length === 0) return outcome;
   const agentLease = agentEvents?.acquireLease(accountId);
-  if (isAccountSyncing(accountId) || isAccountMoving(accountId)) {
-    for (const entry of entries) outcome.failures.push({ id: entry.id, message: PENDING_MOVE_RECONCILIATION_ERROR });
+  if (isAccountMoving(accountId)) {
+    for (const entry of entries) outcome.failures.push({ id: entry.id, message: MAIL_MOVE_IN_FLIGHT_ERROR });
     return outcome;
   }
   markAccountMoving(accountId);
@@ -796,6 +810,13 @@ async function moveMessagesInOneCommand(
   const claimed: Array<MoveMessageFields & { id: string }> = [];
   let commandAttempted = false;
   try {
+    // Same policy as single moves: the account is claimed already, so no new
+    // pass can start here; let the running one finish instead of failing every
+    // entry with the pending-move message.
+    if (isAccountSyncing(accountId) && !await waitForAccountSyncIdle(accountId)) {
+      for (const entry of entries) outcome.failures.push({ id: entry.id, message: MAILBOX_SYNCING_ERROR });
+      return outcome;
+    }
     for (const entry of entries) {
       // A stale 'intent' (an earlier MOVE whose response was lost) may never
       // have reached the provider; probe the source UID on the shared
