@@ -2,15 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <script>
-      // Apply the stored locale to the document language before React mounts,
-      // so the splash screen and initial paint honor the user's preference.
-      // Keep the key in sync with localePreferenceStorageKey (localePreference.ts).
-      try {
-        var preferred = localStorage.getItem("nami-mail.locale-preference");
-        if (preferred) document.documentElement.lang = preferred;
-      } catch (error) {}
-    </script>
+    <script src="/locale-boot.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f4f4f5" />
     <meta name="color-scheme" content="light dark" />
@@ -25,6 +17,13 @@
       }
       @media (prefers-color-scheme: dark) { #nami-splash { background: #1a1a1e; } }
       #nami-splash.done { opacity: 0; visibility: hidden; pointer-events: none; }
+      /* The desktop shell's native splash already shows the final splash
+         state (see apps/desktop/src/main.mts nativeSplashUrl); render the web
+         splash in that same final state so the handover never restarts the
+         entry animation as a visible flash. */
+      html.desktop-splash-instant .nami-splash-logo { opacity: 1; transform: none; animation: none; }
+      html.desktop-splash-instant .nami-splash-divider { max-width: 1px; margin-left: 14px; opacity: 1; animation: none; }
+      html.desktop-splash-instant .nami-splash-wordmark { max-width: 200px; margin-left: 14px; opacity: 1; animation: none; }
       .nami-splash-content { display: flex; align-items: center; justify-content: center; }
       .nami-splash-logo {
         width: 64px; height: 64px; opacity: 0; transform: scale(1.6); flex-shrink: 0;
@@ -69,7 +68,7 @@
   <body>
     <div id="nami-splash">
       <div class="nami-splash-content">
-        <img class="nami-splash-logo" src="/splash-logo.png" alt="" />
+        <img class="nami-splash-logo" src="__NAMI_SPLASH_LOGO_SRC__" alt="" />
         <span class="nami-splash-divider"></span>
         <span class="nami-splash-wordmark">Nami Mail</span>
       </div>

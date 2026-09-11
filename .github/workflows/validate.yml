@@ -46,6 +46,9 @@ jobs:
       # trust injection, dev ports pinned to the server PORT default, and the
       # docs-to-wiki page mapping.
       - run: node --test scripts/dev-server-backoff.test.mjs scripts/package-win-trust.test.mjs scripts/dev-port-sync.test.mjs
+      # GitHub ZIP update assets: the Ed25519 trust record must never embed the
+      # release private key.
+      - run: node --test scripts/github-update-assets.test.mjs
       - run: node --test scripts/wiki-sync.test.mjs
       - run: node scripts/build-locale-catalog.mjs --check
       - run: npm run lint
