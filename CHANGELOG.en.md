@@ -4,6 +4,48 @@
 
 This is the English translation of the Chinese source changelog. `CHANGELOG.zh-CN.md` remains the authoritative version history. It follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories and Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- The desktop app now keeps a runtime log (`runtime-log.jsonl`): uncaught exceptions, renderer crashes, and local-service errors are written to disk (gated by `NAMI_MAIL_NO_STARTUP_LOG=1`), so it can be attached when reporting issues.
+- A broken auto-reply configuration (for example a missing API key) now shows a clear warning in Settings instead of failing silently.
+
+### Fixed
+
+- Fixed the first-run "translation service terms" dialog being coverable by notification and update prompts, which left its button unclickable on narrow windows: the dialog is now recognised as an open modal, so prompts step behind it (the update prompt also waits for it to close).
+- Fixed the remote image proxy being redirectable into loopback/private addresses: every redirect hop is now validated and private DNS resolutions are refused, with new security tests for the module.
+- Fixed database migrations leaving a half-applied schema on failure: migrations now run in a transaction and release the connection, so the database file is no longer locked.
+- Fixed the Sent-folder delivery verification continuing to touch a closed local service during app shutdown.
+- Fixed Agent shortcuts firing while the translation-terms or attachment-preview dialogs were open; local-service timeouts now return a dedicated error code.
+- Fixed the message list scroll position not being restored after an Agent turn.
+- Fixed move actions (move to trash, archive) failing instantly whenever a mailbox sync pass was running: the move now waits for the running pass to finish first (up to ~15s) and, if it still cannot take its turn, says the mailbox is syncing instead of showing an unrelated move-state message.
+- Fixed optimistic state being rolled back during consecutive actions: after marking read, deleting or starring, a list refresh triggered by a *different* action finishing used to restore the rows still queued server-side (read flipping back to unread, deleted mail reappearing, stars reverting). Every optimistic change is now registered in one place that no refresh path — including paging — can overwrite.
+- Fixed the list jumping folders when a bulk operation finishes: switching folders while a bulk job ran used to yank the list back to the folder the job was started in.
+- Fixed mail references leaking between Agent conversations: switching conversations no longer carries over the references introduced in the previous one (they ride along in the request and are persisted with the message, so mail the user never referenced there used to be written into the record).
+- Fixed a settings save that was already in flight overwriting a newer change when two options were edited back to back.
+- Bulk actions (mark read/unread, star, …) now leave multi-select when they finish, instead of leaving the processed rows armed for an accidental second batch; a failed action keeps the selection so it can be retried.
+- Fixed two delivery-record races: a cancelled scheduled send is no longer re-added by a slower list response, and a confirmed send no longer falls back to "sending".
+- Fixed the sidebar unread count jumping back after marking mail read: the list and the counts come from the same server snapshot, but only the rows were being corrected.
+- Fixed deleted contacts, templates and calendar events reappearing from an earlier cache response.
+- Fixed unsaved edits in the settings dialog being overwritten by an external settings change, the desktop update progress bar moving backwards, and an Agent conversation looking idle after a failed reload while its reply was still streaming.
+- Auto-reply decisions: the search box waits for a pause before querying, and switching a filter no longer briefly shows the previous filter's results.
+- Agent provider / MCP server settings: refreshing the list no longer clears the form being filled in (including a typed API key), and the refresh after approving a pending reply is no longer dropped by a poll already in flight.
+- Unread view: a message you just read stays in the list without being counted twice in "N unread", and "select all matching" no longer exceeds what the server can actually handle.
+- Desktop new mail: the notification subscription is no longer torn down and re-created on every refresh, so mail arriving during one no longer misses its alert and toast.
+
+### Improved
+
+- The calendar palette and attachment icons are desaturated to match the muted semantic colours, and small labels on them now meet WCAG AA — the worst case went from 2.2:1 to ≥4.5:1 (dark theme adjusted too).
+- Popover and card shadows now come from the design tokens (one level for menus/popovers/filter panels, one for cards and status bars), so they switch consistently with the theme and no longer drift between similar overlays.
+- Performance: single-pass stats, newest-first sync, batched RAG backfill, and event-delegated scroll reveal.
+- The local mail service now runs in its own process: SQLite sync, IMAP traffic and decryption no longer share the window's event loop, so the UI no longer freezes during mailbox sync or bulk operations.
+- Keyboard accessibility: focus restore after attachment preview, title focus ring, keyboard navigation for slash/mention menus and recipient suggestions, and Shift+J/K range selection.
+- Startup and runtime logs are trimmed to a fixed line count instead of growing forever.
+- The Agent session lifecycle is now driven by a state machine with steadier background buffering and replay.
+- Switching account, folder, view or search no longer replaces the whole list with a six-row skeleton: the current mail stays until the new list arrives and fades in then, so the list no longer shrinks, the layout no longer jumps and the reading position is kept.
+- Desktop test scripts are explicitly registered and run in CI.
+
 ## [0.3.0] - 2026-08-09
 
 ### Added

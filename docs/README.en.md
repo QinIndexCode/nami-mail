@@ -31,6 +31,7 @@ Nami Mail currently ships a Windows x64 desktop app. This page organizes the pub
 - [Code of conduct](../CODE_OF_CONDUCT.en.md): collaboration rules and reporting conduct issues.
 - [Development guide](DEVELOPMENT.en.md): run modes, directories, and the validation baseline.
 - [Architecture and trust boundaries](ARCHITECTURE.en.md): process, data, and update boundaries.
+- [Design system](DESIGN-SYSTEM.en.md): visual baselines for prose measure, radius, shadows, type scale, colour, and interaction states.
 - [Windows release guide](RELEASING.en.md): maintainer steps for signing, releases, and real update verification.
 - [Agent implementation plan](development/implementation-plan.en.md): module ownership, phases, acceptance criteria, and rollback boundaries.
 
