@@ -46,6 +46,8 @@ describe("keepAheadTranscript", () => {
     content,
     createdAt: "",
     state: "streaming",
+    citations: [],
+    toolActivities: [],
   });
 
   it("keeps the buffered text when a snapshot taken earlier arrives mid-run", () => {
