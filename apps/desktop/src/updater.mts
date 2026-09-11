@@ -27,6 +27,12 @@ import {
   updateInstallResultPath,
   type UpdateInstallFailure,
 } from "./update-install-result.mjs";
+import {
+  PendingUpdateInstallStore,
+  pendingInstallObservationDelayMs,
+  pendingUpdateInstallPath,
+  resolvePendingUpdateInstall,
+} from "./update-pending-install.mjs";
 import { classifyUpdateError, createUpdateSnapshot, type DesktopUpdateSnapshot } from "./update-status.mjs";
 import { loadEmbeddedUpdateTrust, verifyEd25519UpdateManifest, type Ed25519UpdateTrust } from "./update-trust.mjs";
 import {
@@ -48,6 +54,8 @@ type DesktopUpdaterOptions = {
   platform?: NodeJS.Platform;
   automaticCheckDelayMs?: number;
   periodicCheckIntervalMs?: number;
+  /** Grace period before a leftover install record is judged (tests shorten it). */
+  pendingInstallObservationDelayMs?: number;
   retryBaseDelayMs?: number;
   retryMaxDelayMs?: number;
   random?: () => number;
@@ -77,6 +85,7 @@ export class DesktopUpdater {
   private consecutiveCheckFailures = 0;
   private readonly preferences: UpdatePreferencesStore;
   private readonly installResults: UpdateInstallResultStore;
+  private readonly pendingInstall: PendingUpdateInstallStore;
   private readonly cacheDirectory: string;
   private update: GitHubZipUpdate | undefined;
   private updateTrust: { kind: "authenticode"; signer: TrustedWindowsSigner } | { kind: "ed25519"; trust: Ed25519UpdateTrust } | undefined;
@@ -90,6 +99,7 @@ export class DesktopUpdater {
     this.cacheDirectory = path.join(options.userDataPath, updateCacheDirectoryName);
     this.preferences = new UpdatePreferencesStore(path.join(options.userDataPath, updatePreferencesFileName));
     this.installResults = new UpdateInstallResultStore(updateInstallResultPath(this.cacheDirectory));
+    this.pendingInstall = new PendingUpdateInstallStore(pendingUpdateInstallPath(this.cacheDirectory));
   }
 
   getSnapshot(): DesktopUpdateSnapshot {
@@ -147,6 +157,42 @@ export class DesktopUpdater {
         ? { installStage: "cleanup", cleanupComplete: false }
         : { installStage: installFailure.stage },
     });
+  }
+
+  /**
+   * Interprets a leftover install record for the version that is running now.
+   * Returns true when it published a snapshot of its own.
+   *
+   * A helper that reports success while the program files never changed leaves
+   * no failure record at all, so without this the next launch would announce
+   * "up to date" for a version the user believes they installed. A record that
+   * is still inside the helper's own working window ("pending") is kept for a
+   * later launch to judge rather than guessed at now.
+   */
+  private async reportUnappliedPendingInstall(): Promise<boolean> {
+    const record = await this.pendingInstall.read();
+    if (!record) return false;
+    const outcome = resolvePendingUpdateInstall(
+      record,
+      this.options.currentVersion,
+      this.now(),
+      this.options.pendingInstallObservationDelayMs ?? pendingInstallObservationDelayMs,
+    );
+    if (outcome === "pending") return false;
+    // Both "landed" and "invalid" describe a record that can never say anything
+    // more: the app is either the target version already or the record does not
+    // describe this installation.
+    await this.pendingInstall.clear();
+    if (outcome !== "not-applied") return false;
+    this.transition("error", "installNotApplied", {
+      targetVersion: record.toVersion,
+      checkedAt: record.startedAt,
+      percent: null,
+      suppression: "none",
+      remindAt: null,
+      args: {},
+    });
+    return true;
   }
 
   private clearScheduledCheck(): void {
@@ -231,7 +277,7 @@ export class DesktopUpdater {
         // version directory and keep the recovery record when Windows still
         // has a file locked, so a later startup can retry safely.
         await this.publishInstallResult(installFailure);
-      } else {
+      } else if (!await this.reportUnappliedPendingInstall()) {
         this.transition("idle", "scheduled", { percent: null });
       }
       this.scheduleCheck(Math.max(1_000, this.options.automaticCheckDelayMs ?? defaultAutomaticCheckDelayMs));
@@ -410,19 +456,30 @@ export class DesktopUpdater {
     try {
       const result = await prepareAndBeginUpdateInstall(
         this.options.prepareForInstall,
-        () => (this.options.launchInstaller ?? launchZipUpdateInstaller)({
-          cacheDirectory: this.cacheDirectory,
-          archivePath,
-          archiveSize: update.archiveSize,
-          archiveSha512: update.archiveSha512,
-          targetVersion: update.version,
-          installerName: update.installerName,
-          currentExecutablePath: this.options.executablePath,
-          trust: updateTrust.kind === "authenticode"
-            ? { kind: "authenticode", signer: updateTrust.signer }
-            : { kind: "ed25519" } as ZipUpdateInstallerTrust,
-          parentProcessId: process.pid,
-        }),
+        async () => {
+          // Record the intent only once the app is committed to handing over:
+          // an install that never starts must not leave a record behind, and a
+          // record that exists must mean the helper was really launched.
+          await this.pendingInstall.write({
+            schemaVersion: 1,
+            fromVersion: this.options.currentVersion,
+            toVersion: update.version,
+            startedAt: new Date(this.now()).toISOString(),
+          });
+          return (this.options.launchInstaller ?? launchZipUpdateInstaller)({
+            cacheDirectory: this.cacheDirectory,
+            archivePath,
+            archiveSize: update.archiveSize,
+            archiveSha512: update.archiveSha512,
+            targetVersion: update.version,
+            installerName: update.installerName,
+            currentExecutablePath: this.options.executablePath,
+            trust: updateTrust.kind === "authenticode"
+              ? { kind: "authenticode", signer: updateTrust.signer }
+              : { kind: "ed25519" } as ZipUpdateInstallerTrust,
+            parentProcessId: process.pid,
+          });
+        },
         this.options.quitForInstall,
         this.options.recoverAfterInstallFailure,
       );
@@ -435,11 +492,15 @@ export class DesktopUpdater {
         return { accepted: false, snapshot };
       }
       if (result === "installer-not-started") {
+        await this.pendingInstall.clear();
         const snapshot = this.transition("error", "installerNotStarted", { percent: null });
         return { accepted: false, snapshot };
       }
       return { accepted: true, snapshot: this.getSnapshot() };
     } catch (error) {
+      // The helper never took over, so the record would only produce a false
+      // "update did not apply" notice on the next launch.
+      await this.pendingInstall.clear();
       const snapshot = this.transition("error", classifyUpdateError(error), { percent: null });
       return { accepted: false, snapshot };
     }

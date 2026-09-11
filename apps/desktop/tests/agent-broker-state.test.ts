@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { AGENT_CONTRACT_VERSION } from "@nami/agent-contracts";
 import {
   createBrokerPairingRecord,
   signBrokerRequest,
@@ -420,14 +421,15 @@ test("Broker allow-list routes only declared external tools and rejects unknown 
           success: true,
           data: { tool: input.toolName },
           error: null,
-          meta: { contractVersion: "1.0", durationMs: 0 },
+          meta: { contractVersion: AGENT_CONTRACT_VERSION, durationMs: 0 },
         };
       },
     });
     const internals = host as unknown as BrokerHostInternals;
     const identity = await internals.state.hostIdentity();
+    const bootId = "boot-allow-list-guard-01";
     internals.identity = identity;
-    internals.bootId = "boot-allow-list-guard-01";
+    internals.bootId = bootId;
     internals.acceptingRequests = true;
     const client = clientIdentity();
     await internals.state.createReadOnlyPairing({
@@ -441,7 +443,7 @@ test("Broker allow-list routes only declared external tools and rejects unknown 
       const request = signBrokerRequest({
         requestId,
         hostId: identity.hostId,
-        bootId: internals.bootId,
+        bootId,
         clientId: client.clientId,
         counter,
         payload: { entryPoint, command, arguments: argumentsValue as never },

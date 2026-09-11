@@ -9,7 +9,9 @@ const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 function extractChannelLiteral(source: string, variableName: string): string {
   const match = source.match(new RegExp(`const ${variableName}\\s*=\\s*"([^"]+)"`));
   assert.ok(match, `Expected a const ${variableName} declaration in the desktop source.`);
-  return match![1];
+  const literal = match[1];
+  assert.ok(typeof literal === "string", `Expected a const ${variableName} declaration in the desktop source.`);
+  return literal;
 }
 
 test("the sandboxed preload and the agent module agree on the confirmation IPC channel", async () => {
@@ -32,7 +34,9 @@ test("the preload window-control channels match the handlers registered in main.
   ]);
   const windowControlsMatch = preloadSource.match(/const windowControlChannels = \{([\s\S]*?)\} as const;/);
   assert.ok(windowControlsMatch, "Expected a windowControlChannels declaration in the preload.");
-  const declaredChannels = [...windowControlsMatch![1].matchAll(/(\w+): "([^"]+)"/g)].map((match) => match[2]);
+  const windowControlsBody = windowControlsMatch[1];
+  assert.ok(typeof windowControlsBody === "string", "Expected a windowControlChannels declaration in the preload.");
+  const declaredChannels = [...windowControlsBody.matchAll(/(\w+): "([^"]+)"/g)].map((match) => match[2]);
   assert.ok(declaredChannels.length >= 5, "Expected the five window-control channels in the preload.");
 
   const registeredChannels = new Set(
