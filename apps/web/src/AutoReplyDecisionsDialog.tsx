@@ -86,25 +86,42 @@ export default function AutoReplyDecisionsDialog({ accounts, onClose, fallbackFo
 
   const { closing, requestClose } = useDismissTransition(onClose);
 
+  // The search box used to fire a request per keystroke. Only the settled text
+  // drives the query; the reason filter still applies immediately.
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 250);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  const requestRef = useRef(0);
   const refresh = useCallback(async () => {
+    // Typing (or switching the reason filter) re-fires this while an earlier
+    // request is still in flight; without the epoch the slower response wins and
+    // the list ends up showing results for a query that is no longer typed.
+    const request = ++requestRef.current;
     setError(null);
     setRefreshing(true);
     try {
       const result = await api.autoReplyDecisions({
         ...(reason ? { reason } : {}),
-        ...(query.trim() ? { query: query.trim() } : {}),
+        ...(debouncedQuery.trim() ? { query: debouncedQuery.trim() } : {}),
         limit: 200,
       });
+      if (request !== requestRef.current) return;
       setItems(result.items);
     } catch (requestError) {
+      if (request !== requestRef.current) return;
       setError(requestError instanceof ApiError
         ? requestError.message
         : t("autoReply.decisions.loadError"));
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (request === requestRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [t, reason, query]);
+  }, [t, reason, debouncedQuery]);
 
   useEffect(() => {
     void refresh();

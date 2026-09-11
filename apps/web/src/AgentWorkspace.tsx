@@ -240,6 +240,10 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const [agentSettingsPane, setAgentSettingsPane] = useState<AgentSettingsPane | null>(null);
   const [mobileConversationsOpen, setMobileConversationsOpen] = useState(false);
   const [confirmationErrors, setConfirmationErrors] = useState<Record<string, string>>({});
+  /** Confirmations whose card is playing its leave animation — the decision
+   *  itself is applied after the collapse finishes so real-mode removal gets
+   *  the same exit transition as demo mode. */
+  const [leavingConfirmationIds, setLeavingConfirmationIds] = useState<ReadonlySet<string>>(() => new Set());
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<ProcessedFile[]>([]);
   const [processingFileName, setProcessingFileName] = useState<string | null>(null);
@@ -636,9 +640,27 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     }
     return -1;
   }, [active?.messages]);
-  const userMessageIdsKey = userMessages.map((message) => message.id).join("|");
+  // Memoised: streaming replaces the transcript on every token, and rebuilding
+  // this list (then splitting the joined key back apart) on each of those
+  // renders was pure churn — the ids only change when the user rows do.
+  const userMessageIds = useMemo(() => userMessages.map((message) => message.id), [userMessages]);
+  // Stable placeholder row for a run picked up after the panel reopened. The
+  // transcript re-renders on every streamed token, and a fresh object literal
+  // here would defeat AgentMessageRow's memo each time.
+  const pickupThinkingRow = useMemo(() => (active?.id
+    ? {
+        id: `pickup-${active.id}`,
+        role: "assistant" as const,
+        content: "",
+        createdAt: currentTime(),
+        state: "streaming" as const,
+        citations: [],
+        toolActivities: [],
+      }
+    : undefined), [active?.id]);
+  const userMessageIdsKey = useMemo(() => userMessageIds.join("|"), [userMessageIds]);
   useEffect(() => {
-    const ids = userMessageIdsKey ? userMessageIdsKey.split("|") : [];
+    const ids = userMessageIds;
     const el = transcriptRef.current;
     if (!el || ids.length === 0) {
       setUserMarkerPositions([]);
@@ -652,7 +674,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       // so bars stay aligned regardless of where the transcript is scrolled.
       return node.getBoundingClientRect().top - containerRect.top + el.scrollTop;
     }));
-  }, [userMessageIdsKey]);
+  }, [userMessageIds]);
   // Initialise the scrubber viewport whenever the bar group changes or the
   // track resizes: centre the group when it fits, bottom-anchor it (newest
   // visible) once it overflows. Kept in sync with the ref the handlers read.
@@ -1010,6 +1032,12 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     // conversations discards whatever is undecided (a background session's
     // suggestions are replayed on re-entry).
     setPendingMemorySuggestions([]);
+    // References belong to the conversation they were introduced in: they ride
+    // along in the request body and are persisted with the user message, so
+    // keeping them across a switch would attach — and permanently store — mail
+    // the user never referenced here. Re-seed only the mail the panel was
+    // entered from, which is the same affordance a fresh mount has.
+    setMailReferences(currentMessage ? [mailReferenceFor(currentMessage)] : []);
     try {
       setLoadError(null);
       // Optimistic switch: jump to the conversation shell right away (title
@@ -1073,12 +1101,14 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     } catch (error) {
       if (token !== selectionTokenRef.current) return;
       setLoadingConversationId(null);
+      // The transcript could not be fetched, but this conversation's run (if any)
+      // is still streaming into its buffer. Re-arm its live indicators, or the
+      // shell looks idle — no spinner and no stop button — while a reply is
+      // still being generated, and the composer invites a second send.
+      restoreLiveRunIndicators(id);
       setLoadError(error instanceof Error ? error.message : t("agent.error.loadConversation"));
-      // The UI has already switched to the shell; the outgoing conversation's
-      // run (if any) keeps streaming in the background and restores its live
-      // indicators when replayed on re-entry.
     }
-  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, clearLiveRunIndicators, clearPendingFlush, conversationProviders, conversations, getSession, providers, replayBackgroundSession, syncBackgroundRuns, t, takeBackgroundError]);
+  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, clearLiveRunIndicators, clearPendingFlush, conversationProviders, conversations, getSession, providers, replayBackgroundSession, restoreLiveRunIndicators, syncBackgroundRuns, t, takeBackgroundError]);
 
   const createConversation = useCallback(async () => {
     // Starting a new conversation does not cancel the current one — a live run
@@ -1208,20 +1238,31 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
         setConfirmationErrors((current) => ({ ...current, [result.confirmationId]: t("agent.error.load") }));
         return;
       }
-      setConfirmationErrors((current) => {
-        if (!(result.confirmationId in current)) return current;
-        const { [result.confirmationId]: _discarded, ...remaining } = current;
-        return remaining;
-      });
-      setActive((current) => current ? {
-        ...current,
-        messages: current.messages.map((message) => applyConfirmationDecision(
-          message,
-          result.confirmationId,
-          result.decision === "approve" ? "approve" : "reject",
-          { approved: t("agent.confirmation.approved"), rejected: t("agent.confirmation.rejected") },
-        )),
-      } : current);
+      // Play the card's leave animation before the decision lands in the
+      // conversation: the preload-side bridge resolves instantly, and without
+      // this beat the card would vanish with no exit transition at all.
+      setLeavingConfirmationIds((current) => new Set(current).add(result.confirmationId));
+      window.setTimeout(() => {
+        setLeavingConfirmationIds((current) => {
+          const remaining = new Set(current);
+          remaining.delete(result.confirmationId);
+          return remaining;
+        });
+        setConfirmationErrors((current) => {
+          if (!(result.confirmationId in current)) return current;
+          const { [result.confirmationId]: _discarded, ...remaining } = current;
+          return remaining;
+        });
+        setActive((current) => current ? {
+          ...current,
+          messages: current.messages.map((message) => applyConfirmationDecision(
+            message,
+            result.confirmationId,
+            result.decision === "approve" ? "approve" : "reject",
+            { approved: t("agent.confirmation.approved"), rejected: t("agent.confirmation.rejected") },
+          )),
+        } : current);
+      }, 320);
     });
   }, [t]);
 
@@ -1360,6 +1401,20 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       }
     });
   }, [sendMessage]);
+  /** Selecting the slash menu's mail-reference entry hands the composer over
+   *  to the /@ mention flow: the menu closes (the composer no longer matches
+   *  the letter-only slash token) and the mail picker opens on a bare "/@". */
+  const startMailReference = useCallback(() => {
+    setMentionDismissed(false);
+    setComposer("/@");
+    window.requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    });
+  }, []);
   useEffect(() => {
     if (!slashMenu) setSlashIndex(0);
   }, [slashMenu]);
@@ -1518,13 +1573,25 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const expirePendingConfirmation = useCallback(() => {
     // Runs from the card's expiry tick when the pending confirmation can no
     // longer be resolved, so use the live state instead of a captured id.
+    // The leave animation plays first — an instant removal would read as the
+    // card (and its bottom fade) popping out of existence. An error shown on
+    // the card gets extra dwell time so it can actually be read.
     const confirmationId = pendingConfirmation?.id;
     if (!confirmationId) return;
-    setActive((current) => current ? {
-      ...current,
-      messages: current.messages.map((message) => expireConfirmation(message, confirmationId, t("agent.confirmation.expired"))),
-    } : current);
-  }, [pendingConfirmation, t]);
+    setLeavingConfirmationIds((current) => new Set(current).add(confirmationId));
+    const dwell = confirmationErrors[confirmationId] ? 2200 : 320;
+    window.setTimeout(() => {
+      setLeavingConfirmationIds((current) => {
+        const remaining = new Set(current);
+        remaining.delete(confirmationId);
+        return remaining;
+      });
+      setActive((current) => current ? {
+        ...current,
+        messages: current.messages.map((message) => expireConfirmation(message, confirmationId, t("agent.confirmation.expired"))),
+      } : current);
+    }, dwell);
+  }, [pendingConfirmation, t, confirmationErrors]);
   // "已撤回信息" notice above the composer: a countdown that clears on its own
   // or the moment the user sends a new message. The ticking countdown lives in
   // the notice itself; this just records the deadline.
@@ -1626,6 +1693,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
         <div className="agent-conversation-list" onContextMenu={(event) => { if ((event.target as HTMLElement).closest(".agent-conversation-row")) return; openConversationMenu(event, null); }}>
           {loading && <div className="agent-sidebar-state"><LoaderCircle className="spin" size={18} />{t("agent.loading")}</div>}
           {!loading && !filteredConversations.length && <div className="agent-sidebar-state"><MessageCircle size={18} />{t("agent.conversation.empty")}</div>}
+          {!loading && <>
           <div className={`agent-selection-bar-wrap${selectionMode ? " open" : ""}`} aria-hidden={!selectionMode}>
             <div className="agent-selection-bar">
               <span className="agent-selection-count">{t("agent.conversation.selected")} {selectedConversationIds.size}</span>
@@ -1640,6 +1708,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
               {!selectionMode && <button className="agent-row-delete" type="button" aria-label={t("agent.conversation.delete")} disabled={backgroundRunIds.has(conversation.id) || (active?.id === conversation.id && streaming)} onClick={() => setDeleteConfirm([conversation.id])}><Trash2 size={14} /></button>}
             </div>
           ))}
+          </>}
         </div>
         {sidebarMenu && (
           <div className="agent-context-menu" ref={sidebarMenuRef} style={{ left: Math.min(sidebarMenu.x, Math.max(8, window.innerWidth - 160)), top: Math.min(sidebarMenu.y, Math.max(8, window.innerHeight - 200)) }} role="menu" onClick={(e) => e.stopPropagation()}>
@@ -1755,7 +1824,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
               onUserMessageRef={registerUserMessageEl}
             />
           ))}
-          {ghostConversationId === active?.id && active && lastMessageIsUnanswered(active)
+          {ghostConversationId === active?.id && active && pickupThinkingRow && lastMessageIsUnanswered(active)
             && !active.messages.some((message) => message.role === "assistant" && message.state === "streaming") && (
             // A run being picked up after the panel reopened has no captured
             // tool events, so the local snapshot has no streaming row to show
@@ -1763,7 +1832,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             // Render a thinking row locally; the fold-in poll replaces it with
             // the server's in-flight row or the completed reply.
             <AgentMessageRow
-              message={{ id: `pickup-${active.id}`, role: "assistant", content: "", createdAt: currentTime(), state: "streaming", citations: [], toolActivities: [] }}
+              message={pickupThinkingRow}
               superseded={false}
               statusMessage={null}
               locale={locale}
@@ -1865,14 +1934,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
               <button type="button" className="agent-revoke-dismiss" onClick={() => setRevokeFailed(null)} aria-label={t("common.dismiss")}><X size={12} /></button>
             </div>
           )}
-          {pendingConfirmation && <AgentConfirmationCard
-            confirmation={pendingConfirmation}
-            desktopConfirmationAvailable={desktopConfirmationAvailable}
-            resolutionError={confirmationErrors[pendingConfirmation.id]}
-            onDecision={demoMode ? (decision) => resolveDemoConfirmation(pendingConfirmation.id, decision) : undefined}
-            expiresAt={Number.isFinite(confirmationDeadline) && confirmationDeadline > 0 ? confirmationDeadline : undefined}
-            onExpire={expirePendingConfirmation}
-          />}
           {mailReferences.length > 0 && (
             <div className="agent-reference-chips">
               {mailReferences.map((reference) => (
@@ -1883,6 +1944,24 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
               ))}
             </div>
           )}
+          {/* The confirmation card sits directly above the composer so its
+              bottom edge dissolves into the input box (slot-card look); the
+              reference chips stay above it, which is what resolves the old
+              quote/references positioning conflict. The grid slot collapses
+              its row when the decision lands, driving the exit animation. */}
+          <div className={`agent-confirmation-slot${pendingConfirmation && !leavingConfirmationIds.has(pendingConfirmation.id) ? "" : " collapsed"}`}>
+            <div className="agent-confirmation-collapse">
+              {pendingConfirmation && <AgentConfirmationCard
+                confirmation={pendingConfirmation}
+                desktopConfirmationAvailable={desktopConfirmationAvailable}
+                resolutionError={confirmationErrors[pendingConfirmation.id]}
+                onDecision={demoMode ? (decision) => resolveDemoConfirmation(pendingConfirmation.id, decision) : undefined}
+                expiresAt={Number.isFinite(confirmationDeadline) && confirmationDeadline > 0 ? confirmationDeadline : undefined}
+                onExpire={expirePendingConfirmation}
+                forceLeaving={leavingConfirmationIds.has(pendingConfirmation.id)}
+              />}
+            </div>
+          </div>
           <div className={`agent-composer${streaming ? " streaming" : ""}`}>
             <button className={`agent-scroll-to-bottom ${showScrollToBottom ? "visible" : ""}`} type="button" onClick={scrollToBottom} aria-label={t("agent.composer.scrollToBottom")}><ChevronDown size={17} /></button>
             <input ref={fileInputRef} type="file" multiple onChange={(e) => void handleFileSelect(e)} accept=".txt,.md,.markdown,.csv,.tsv,.json,.xml,.html,.htm,.py,.js,.ts,.tsx,.jsx,.css,.scss,.less,.yaml,.yml,.log,.rtf,.ini,.cfg,.conf,.sh,.bash,.zsh,.sql,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.vue,.svelte,.pdf,.docx,.pptx" style={{ display: "none" }} />
@@ -1903,7 +1982,8 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                   event.preventDefault();
                   const active = slashMenu[activeSlashIndex];
                   if (active) {
-                    if (active.kind === "sub") completeSlash(active.command, active.sub);
+                    if (active.kind === "mail-reference") startMailReference();
+                    else if (active.kind === "sub") completeSlash(active.command, active.sub);
                     else completeSlash(active.command);
                   }
                   return;
@@ -1954,13 +2034,22 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                     role="option"
                     id={`agent-slash-menu-item-${index}`}
                     aria-selected={index === activeSlashIndex}
-                    key={item.kind === "sub" ? `${item.command.id}.${item.sub.name}` : item.command.id}
+                    key={item.kind === "mail-reference" ? "mail-reference" : item.kind === "sub" ? `${item.command.id}.${item.sub.name}` : item.command.id}
                     className={`agent-slash-item${item.kind === "sub" ? " agent-slash-item-sub" : ""}${index === activeSlashIndex ? " selected" : ""}`}
-                    onMouseDown={(event) => { event.preventDefault(); if (item.kind === "sub") completeSlash(item.command, item.sub); else completeSlash(item.command); }}
+                    onMouseDown={(event) => { event.preventDefault(); if (item.kind === "mail-reference") startMailReference(); else if (item.kind === "sub") completeSlash(item.command, item.sub); else completeSlash(item.command); }}
                   >
-                    <span className="agent-slash-item-name">/{item.kind === "sub" ? `${item.command.name} ${item.sub.name}` : item.command.name}</span>
-                    <span className="agent-slash-item-desc">{item.kind === "sub" ? t(item.sub.descriptionKey) : t(item.command.descriptionKey)}</span>
-                    {item.kind === "sub" ? (item.sub.usageKey && <span className="agent-slash-item-usage">{t(item.sub.usageKey)}</span>) : (item.command.usageKey && <span className="agent-slash-item-usage">{t(item.command.usageKey)}</span>)}
+                    {item.kind === "mail-reference" ? (
+                      <>
+                        <span className="agent-slash-item-name">/@</span>
+                        <span className="agent-slash-item-desc">{t("agent.mention.label")}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="agent-slash-item-name">/{item.kind === "sub" ? `${item.command.name} ${item.sub.name}` : item.command.name}</span>
+                        <span className="agent-slash-item-desc">{item.kind === "sub" ? t(item.sub.descriptionKey) : t(item.command.descriptionKey)}</span>
+                        {item.kind === "sub" ? (item.sub.usageKey && <span className="agent-slash-item-usage">{t(item.sub.usageKey)}</span>) : (item.command.usageKey && <span className="agent-slash-item-usage">{t(item.command.usageKey)}</span>)}
+                      </>
+                    )}
                   </button>
                 ))}
               </div>

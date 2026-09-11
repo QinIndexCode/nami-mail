@@ -11,6 +11,7 @@ export function AgentConfirmationCard({
   onDecision,
   expiresAt,
   onExpire,
+  forceLeaving = false,
 }: {
   confirmation: AgentConfirmation;
   desktopConfirmationAvailable: boolean;
@@ -21,6 +22,10 @@ export function AgentConfirmationCard({
   expiresAt?: number;
   /** Called once when the deadline passes while the card is mounted. */
   onExpire?: () => void;
+  /** Real builds resolve through the desktop bridge, so the workspace collapses
+   *  the wrapping slot (grid 1fr→0fr) and removes the card after the collapse —
+   *  without this signal the card would vanish with no exit transition at all. */
+  forceLeaving?: boolean;
 }) {
   const { locale, t } = useI18n();
   const [leaving, setLeaving] = useState(false);
@@ -43,12 +48,12 @@ export function AgentConfirmationCard({
     if (leaving) return;
     setLeaving(true);
     // Let the collapse animation finish before the card unmounts.
-    window.setTimeout(() => onDecision?.(decision), 260);
+    window.setTimeout(() => onDecision?.(decision), 340);
   };
   const remainingMs = expiresAt !== undefined && Number.isFinite(expiresAt) ? expiresAt - now : 0;
   return (
     <section
-      className={`agent-confirmation-card${leaving ? " leaving" : ""}`}
+      className={`agent-confirmation-card${leaving || forceLeaving ? " leaving" : ""}`}
       aria-label={confirmation.title}
       data-nami-agent-confirmation-card
       data-nami-agent-confirmation-id={confirmation.id}

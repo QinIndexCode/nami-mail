@@ -96,6 +96,8 @@ export default function AutoReplyPendingDialog({ accounts, onClose, fallbackFocu
   const { t } = useI18n();
   const dialogRef = useRef<HTMLElement>(null);
   const refreshInFlightRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
+  const refreshRequestRef = useRef(0);
   const [items, setItems] = useState<AutoReplyPendingSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -111,25 +113,43 @@ export default function AutoReplyPendingDialog({ accounts, onClose, fallbackFocu
   const { closing, requestClose } = useDismissTransition(onClose);
 
   const refresh = useCallback(async () => {
-    // A refresh that outlives the poll interval races its successor; the
-    // slower response would then overwrite fresher items. Skip while running.
-    if (refreshInFlightRef.current) return;
+    // A refresh that outlives the poll interval races its successor, so requests
+    // are serialized rather than run in parallel. But a request that arrives
+    // meanwhile is queued, not dropped: an approve/reject decision asks for a
+    // refresh precisely because it needs the item it just resolved to disappear,
+    // and silently skipping it leaves a decided reply on screen until the next
+    // poll tick.
+    if (refreshInFlightRef.current) {
+      refreshQueuedRef.current = true;
+      return;
+    }
     refreshInFlightRef.current = true;
+    const request = ++refreshRequestRef.current;
     setError(null);
     setRefreshing(true);
     try {
       const result = await api.autoReplyPending();
-      setItems(result.items);
+      if (request === refreshRequestRef.current) setItems(result.items);
     } catch (requestError) {
-      setError(requestError instanceof ApiError
-        ? requestError.message
-        : t("autoReply.pending.loadError"));
+      if (request === refreshRequestRef.current) {
+        setError(requestError instanceof ApiError
+          ? requestError.message
+          : t("autoReply.pending.loadError"));
+      }
     } finally {
       refreshInFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
+      if (refreshQueuedRef.current) {
+        refreshQueuedRef.current = false;
+        void refreshRef.current();
+      }
     }
   }, [t]);
+  // `refresh` re-queues itself through this ref: calling it by name inside its
+  // own body would make the callback its own dependency.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
 
   const resolve = useCallback(async (confirmationId: string, decision: "approve" | "reject") => {
     // In the desktop runtime the Electron preload handles the trusted click

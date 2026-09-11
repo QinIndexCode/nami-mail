@@ -156,6 +156,13 @@ export function AgentProviderSettings({
   const initialDefaultProviderIdRef = useRef(initialDefaultProviderId);
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [form, setForm] = useState<ProviderForm>(() => providerFormFor(null, initialDefaultProviderId));
+  // Set by any form edit: a refresh that lands afterwards must keep what the user
+  // has typed — including an API key entered while the provider list was still
+  // loading — instead of rebuilding the form from the server snapshot.
+  const formDirtyRef = useRef(false);
+  // Only the newest list request may write state; the open-time load, a retry and
+  // the post-save refresh can overlap otherwise.
+  const listRequestRef = useRef(0);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -210,6 +217,7 @@ export function AgentProviderSettings({
 
   const selectProvider = useCallback((provider: AgentProviderSummary | null, nextDefaultProviderId = defaultProviderId) => {
     setSelectedProviderId(provider?.id ?? null);
+    formDirtyRef.current = false;
     setForm(providerFormFor(provider, nextDefaultProviderId));
     setDeletePendingId(null);
     setKeyVisible(false);
@@ -219,7 +227,11 @@ export function AgentProviderSettings({
   const onProvidersChangedRef = useRef(onProvidersChanged);
   onProvidersChangedRef.current = onProvidersChanged;
 
-  const applyProviderList = useCallback((snapshot: AgentProviderList, preferredProviderId: string | null = null) => {
+  const applyProviderList = useCallback((
+    snapshot: AgentProviderList,
+    preferredProviderId: string | null = null,
+    { resetForm = false }: { resetForm?: boolean } = {},
+  ) => {
     setProviders(snapshot.items);
     setDefaultProviderId(snapshot.defaultProviderId);
     onProvidersChangedRef.current(snapshot);
@@ -229,23 +241,38 @@ export function AgentProviderSettings({
       ?? snapshot.items[0]
       ?? null;
     setSelectedProviderId(selected?.id ?? null);
-    setForm(providerFormFor(selected, snapshot.defaultProviderId));
+    // Keep the form when the user is mid-edit (the open-time load can land after
+    // they started typing) unless they asked for a reset or the server-side
+    // selection no longer exists.
+    const keepForm = formDirtyRef.current && !resetForm && selected?.id === selectedProviderIdRef.current;
+    if (!keepForm) {
+      setForm(providerFormFor(selected, snapshot.defaultProviderId));
+      formDirtyRef.current = false;
+    }
     setDeletePendingId(null);
     setKeyVisible(false);
   }, []);
 
-  const refreshProviders = useCallback(async (preferredProviderId: string | null = null) => {
+  const refreshProviders = useCallback(async (
+    preferredProviderId: string | null = null,
+    options: { resetForm?: boolean } = {},
+  ) => {
+    // Two refreshes can overlap; only the newest may write state, or the older
+    // list wins and the panel shows providers it already replaced.
+    const request = ++listRequestRef.current;
     setLoading(true);
     setLoadError(null);
     try {
       const snapshot = await api.agentProviders();
-      applyProviderList(snapshot, preferredProviderId);
+      if (request !== listRequestRef.current) return snapshot;
+      applyProviderList(snapshot, preferredProviderId, options);
       return snapshot;
     } catch (error) {
+      if (request !== listRequestRef.current) return null;
       setLoadError(error instanceof Error ? error.message : t("agent.providers.loadFailed"));
       return null;
     } finally {
-      setLoading(false);
+      if (request === listRequestRef.current) setLoading(false);
     }
   }, [applyProviderList, t]);
 
@@ -282,12 +309,14 @@ export function AgentProviderSettings({
   useDialogFocus(open || closing, dialogRef, { restoreFocusRef });
 
   const updateForm = <Key extends keyof ProviderForm>(key: Key, value: ProviderForm[Key]) => {
+    formDirtyRef.current = true;
     setForm((current) => ({ ...current, [key]: value }));
     setNotice(null);
     setDeletePendingId(null);
   };
 
   const updateKind = (kind: AgentProviderKind) => {
+    formDirtyRef.current = true;
     setForm((current) => ({
       ...current,
       kind,
@@ -338,14 +367,15 @@ export function AgentProviderSettings({
         : await api.createAgentProvider(input);
       setForm((current) => ({ ...current, apiKey: "", clearApiKey: false }));
       const checked = await api.checkAgentProvider(saved.id);
-      await refreshProviders(saved.id);
+      // The save succeeded, so the server owns this form now: rebuild it.
+      await refreshProviders(saved.id, { resetForm: true });
       if (checked.health?.state === "ready") {
         setNotice(t("agent.providers.checked"));
       } else {
         setLoadError(healthFeedback(checked));
       }
     } catch (error) {
-      if (saved) await refreshProviders(saved.id);
+      if (saved) await refreshProviders(saved.id, { resetForm: true });
       setLoadError(requestFeedback(error, saved ? t("agent.providers.checkError.failed") : t("agent.providers.saveFailed")));
     } finally {
       setSaving(false);
@@ -367,7 +397,7 @@ export function AgentProviderSettings({
     setNotice(null);
     try {
       await api.deleteAgentProvider(providerId);
-      await refreshProviders();
+      await refreshProviders(null, { resetForm: true });
       setNotice(t("agent.providers.deleted"));
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : t("agent.providers.deleteFailed"));
