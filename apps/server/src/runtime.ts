@@ -58,6 +58,7 @@ import { loadOrCreateMasterKey } from "./crypto.js";
 import { openDatabase, type DatabaseHandle } from "./db.js";
 import { ServerEventBus, emitAccountSynced, emitSettingsChanged } from "./events.js";
 import { createIdleWatcher, type IdleWatcher } from "./idle.js";
+import { serverLog, setServerLogger } from "./logging.js";
 import { OAuthService } from "./oauth.js";
 import { cleanupExpiredOutboundAttachments, outboundAttachmentDirectory } from "./outbound-attachments.js";
 import { getAppSettings, getSyncMessageLimit, updateAppSettings, type AppSettings, type AppSettingsPatch } from "./settings.js";
@@ -135,6 +136,17 @@ export type ServerRuntimeOptions = {
    * startup-timings.json. Elapsed is measured from startServer entry.
    */
   onStartupTiming?: (stage: string, elapsedMs: number) => void;
+  /**
+   * Fired whenever app settings are persisted, whichever path made the change
+   * (the settings route, the Agent settings tool, or this runtime's own
+   * updateSettings). The desktop host runs the service in a separate process
+   * and mirrors settings into a synchronous cache for native menus and
+   * notifications, so it needs to hear about changes it did not initiate.
+   *
+   * Implemented as a bus subscription, which is the one funnel every settings
+   * write already goes through.
+   */
+  onSettingsChanged?: () => void;
 };
 
 export type SyncScheduler = {
@@ -362,6 +374,12 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     // a "custom" background preset is selectable, so the bus and the background
     // directory are resolved before the Agent service is constructed.
     const serverEvents = new ServerEventBus();
+    if (options.onSettingsChanged) {
+      const onSettingsChanged = options.onSettingsChanged;
+      serverEvents.subscribe((event) => {
+        if (event.type === "settings.changed") onSettingsChanged();
+      });
+    }
     const backgroundDirectory = path.join(path.dirname(config.databasePath), "backgrounds");
     const customBackgroundPattern = /^custom-background-[a-f0-9-]+\.(jpg|png|webp)$/;
     const agentLifecycle = new AccountLifecycleStore(database, runtimeMasterKey);
@@ -421,7 +439,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     try {
       cleanupExpiredOutboundAttachments(database, outboundDirectory);
     } catch (error) {
-      console.warn("Nami Mail could not clean stale outbound attachments", error);
+      serverLog.warn({}, "Nami Mail could not clean stale outbound attachments", error);
     }
     const broadcastNewInboxMessages = (messages: NewInboxMessage[]) => {
       if (!messages.length) return;
@@ -468,13 +486,16 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       try {
         newInboxMessages.push(...releaseDueSnoozedMessages(database, runtimeMasterKey));
       } catch (error) {
-        fastify.log.warn({ error }, "Could not release due snoozed messages");
+        // `fastify` is declared after this closure: logging through serverLog
+        // (and, for the error itself, under `err`) keeps a pass that runs during
+        // construction from hitting the temporal dead zone.
+        serverLog.warn({}, "Could not release due snoozed messages", error);
       }
       if (newInboxMessages.length && options.onNewInboxMessages) {
         try {
           await options.onNewInboxMessages(newInboxMessages);
         } catch (error) {
-          fastify.log.warn({ error }, "New-mail notification callback failed");
+          serverLog.warn({}, "New-mail notification callback failed", error);
         }
       }
       broadcastNewInboxMessages(newInboxMessages);
@@ -489,19 +510,19 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
             scheduleSentSubmissionVerification(database, runtimeMasterKey, submissionId, oauthService, {
               abortSignal: scheduledSendAbortController.signal,
               onDeferred: (error) => {
-                fastify.log.info({ submissionId, error }, "Scheduled-send Sent verification deferred");
+                serverLog.info({ submissionId }, "Scheduled-send Sent verification deferred", error);
               },
             });
           },
           onFailure: (submissionId, error) => {
-            fastify.log.error({ submissionId, error }, "Scheduled send failed");
+            serverLog.error({ submissionId }, "Scheduled send failed", error);
           },
         });
         if (outcome.submitted || outcome.failed) {
-          fastify.log.info({ ...outcome }, "Scheduled send pass completed");
+          serverLog.info({ ...outcome }, "Scheduled send pass completed");
         }
       } catch (error) {
-        fastify.log.error({ error }, "Scheduled-send pass failed");
+        serverLog.error({}, "Scheduled-send pass failed", error);
       }
     };
 
@@ -524,11 +545,11 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
             }
             emitAccountSynced(database, serverEvents, accountId);
           } catch (error) {
-            fastify.log.warn({ accountId, error }, "IDLE-triggered mailbox sync failed");
+            serverLog.warn({ accountId }, "IDLE-triggered mailbox sync failed", error);
           }
         })();
       },
-      log: { warn: (message, meta) => fastify.log.warn(meta ?? {}, message) },
+      log: { warn: (message, meta) => serverLog.warn(meta ?? {}, message) },
     });
 
     const runtimeContext: RuntimeContext = {
@@ -554,6 +575,9 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       onStartupTiming: options.onStartupTiming,
     });
     app = fastify;
+    // Background modules log through the facade; from here on their lines carry
+    // the same pid/level shape as request logs instead of plain console output.
+    setServerLogger(fastify.log);
     noteStartupPhase("server:build-app");
 
     scheduler = createSyncScheduler({
@@ -586,6 +610,9 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       closePromise ??= (async () => {
         translationAbortController.abort();
         scheduledSendAbortController.abort();
+        // Stop routing background logs into an app that is being torn down; the
+        // facade falls back to stderr for anything that still reports.
+        setServerLogger(undefined);
         try {
           await closeMicrosoftOAuthCallbackBridge(microsoftOAuthCallbackBridge);
         } finally {
