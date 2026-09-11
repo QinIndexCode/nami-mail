@@ -41,6 +41,7 @@ build/namimail-path.ps1
 build/nami-update-trust.json.package-win-original
 scripts/*.png
 .playwright-mcp/
+tmp-pw-out*/
 .zcode/
 
 # One-off diagnostics from the window-bar / icon investigation — kept on disk,
