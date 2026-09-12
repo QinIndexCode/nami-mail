@@ -757,8 +757,8 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(settings).toMatchObject({
       theme: "system",
       locale: "zh-CN",
-      backgroundPreset: "coast",
-      backgroundIntensity: 68,
+      backgroundPreset: "none",
+      backgroundIntensity: 80,
       notificationsEnabled: true,
       notifyWhenFocused: false,
       notificationSound: "soft",
@@ -831,7 +831,8 @@ it("keeps an Agent stream running after the client closes its response", async (
       { locale: "fr-FR" },
       { backgroundPreset: "aurora" },
       { backgroundIntensity: -1 },
-      { backgroundIntensity: 81 },
+      // The intensity range is 0-100, so the boundary one past the top is 101.
+      { backgroundIntensity: 101 },
       { notificationSound: "chime" },
       { refreshIntervalSeconds: 45 },
       { closeBehavior: "minimize" },
@@ -848,8 +849,8 @@ it("keeps an Agent stream running after the client closes its response", async (
     const settings = await app.inject({ method: "GET", url: "/api/settings" });
     expect(settings.json()).toMatchObject({
       theme: "system",
-      backgroundPreset: "coast",
-      backgroundIntensity: 68,
+      backgroundPreset: "none",
+      backgroundIntensity: 80,
       notificationSound: "soft",
       refreshIntervalSeconds: 60,
       closeBehavior: "ask",
