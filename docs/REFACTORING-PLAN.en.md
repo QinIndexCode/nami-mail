@@ -25,7 +25,9 @@ The goal is not a smaller line count but "changing one behaviour touches one fil
 - Rewiring: smoke bridge 418-434 (`getTray/getAppIcon/ensureTray/destroyTray/focusMainWindow`), close flow 874 and 927 (`destroyTray`), 1080 and 1302 (`applyTrayBadge`), 802 and 826 (`hideMainWindowToTray`), window shell 1216 (`appIcon`), 1248 (`mainWindowVisible`).
 - Caveat: tray code is interleaved with non-tray code (`applyLaunchAtStartup`, `applyGlobalShortcut`, `nativeCopy` sit between the tray functions), so move function by function rather than deleting a line range.
 
-### Step 2 · Agent pairing (about −110 lines)
+### Step 2 · Agent pairing (about −110 lines) — deferred to the future plan
+
+> **Deferred (2026-09-12)**: this block is not being done now. The mapping stays below so it can start straight away later. Current order: tray (done) → window shell → close flow.
 
 - Code: 1371-1473 (`recordPairingFailure` / `processAgentPairingRequest`), 1472-1478 `scheduleAgentPairingRequests`, 1480 `pairingScopeDriftNotified`, 1487-1512 `warnExternalPairingScopeDrift`.
 - Owns only `pairingRequestTail` (223) and `pairingScopeDriftNotified` (1480).
