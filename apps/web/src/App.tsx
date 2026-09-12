@@ -191,6 +191,16 @@ function retainedTranslationContent(state: TranslationPanelState): TranslationCo
 }
 
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
+// Only the desktop smoke uses this: it runs the renderer in demo mode, which
+// never reads the service's settings, so this is how it asks for a wallpaper
+// preset to exercise that rendering path.
+const demoBackgroundPreset = (() => {
+  if (!isDemo) return undefined;
+  const value = new URLSearchParams(window.location.search).get("background");
+  return value === "paper" || value === "mist" || value === "coast" || value === "dawn" || value === "night"
+    ? value
+    : undefined;
+})();
 const isDesktop = new URLSearchParams(window.location.search).get("desktop") === "1";
 const isDesktopSmoke = new URLSearchParams(window.location.search).get("desktopSmoke") === "1";
 // The desktop smoke probes read settled computed styles from a hidden,
@@ -261,13 +271,13 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => ({
     ...defaultAppSettings,
     locale,
-    // Demo mode never loads persisted settings (loadSettings returns early),
-    // so it pins its own presentation profile: the wallpaper keeps the
-    // wallpaper rendering path covered by the desktop smoke regardless of the
-    // shipped default preset.
-    // Demo mode deliberately ships the default plain surface: the presets are a
-    // user choice, and a decorated sample frame misrepresents what a new install
-    // looks like.
+    // Demo mode never loads persisted settings (loadSettings returns early), so
+    // it ships the same plain surface a real install starts with — the presets
+    // are a user choice, and a decorated sample frame misrepresents a new
+    // install. The desktop smoke renders in demo mode and still has to keep the
+    // wallpaper rendering path covered, so it requests a preset explicitly
+    // through ?background=<preset> instead of relying on a demo default.
+    ...(demoBackgroundPreset ? { backgroundPreset: demoBackgroundPreset } : {}),
   }));
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);

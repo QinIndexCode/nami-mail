@@ -306,7 +306,12 @@ try {
   const rendererUrl = new URL(renderer.rendererUrl);
   assert.deepEqual(
     [...rendererUrl.searchParams.entries()].sort(([left], [right]) => left.localeCompare(right)),
-    [["demo", "1"], ["desktop", "1"], ["desktopSmoke", "1"], ["platform", process.platform]],
+    // `background` is added by the wallpaper probe: the renderer runs in demo
+    // mode, which never reads the service's settings, so the probe has to ask
+    // for a preset through the URL. It is cosmetic like the rest - the point of
+    // this assertion is that no local API capability (token, key) is ever in the
+    // URL, so the set stays explicit rather than tolerant.
+    [["background", "coast"], ["demo", "1"], ["desktop", "1"], ["desktopSmoke", "1"], ["platform", process.platform]],
     "The desktop renderer URL must not expose a local API capability.",
   );
   const runtimePort = Number.parseInt(rendererUrl.port, 10);

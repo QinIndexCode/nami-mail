@@ -506,7 +506,13 @@ export async function inspectDesktopWallpaper(): Promise<DesktopWallpaperSmokeRe
         patchBody: (await response.text()).slice(0, 200)
       })).catch((error) => ({ patchOk: false, patchStatus: 0, patchBody: String(error).slice(0, 200) }))
     `);
-    await targetWindow.webContents.executeJavaScript("setTimeout(() => location.reload(), 30); undefined");
+    // The renderer runs in demo mode, where the client never reads the service's
+    // settings — the PATCH above is kept for diagnostics only. The wallpaper has
+    // to be requested through the URL the demo honours, or the layer never
+    // mounts and this probe would fail for the wrong reason.
+    const wallpaperUrl = new URL(targetWindow.webContents.getURL());
+    wallpaperUrl.searchParams.set("background", "coast");
+    void targetWindow.loadURL(wallpaperUrl.toString());
     const wallpaperDeadline = Date.now() + 12_000;
     let wallpaperMounted = false;
     while (Date.now() < wallpaperDeadline) {
