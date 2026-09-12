@@ -1283,6 +1283,8 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     });
   }, [t]);
 
+  /** Guards against a duplicate submit; see the window check inside `sendMessage`. */
+  const lastSendAtRef = useRef(0);
   const sendMessage = useCallback(async (contentOverride?: string) => {
     const userText = (contentOverride ?? composer).trim();
     if (!userText) return;
@@ -1290,6 +1292,23 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       setAgentSettingsPane("providers");
       return;
     }
+    // The keyboard path reaches this directly, so the send button's availability
+    // rule has to hold here too: pressing Enter used to send even while the
+    // button was disabled — with cloud mail content not consented, in demo mode,
+    // or while the conversation was still loading. Emptiness is already handled
+    // above, so the text a slash command passes in still works.
+    if (demoMode
+      || !bootstrap?.enabled
+      || (mode === "agent" && Boolean(selectedProvider.cloud && !selectedProvider.cloudContentConsent))
+      || loadingConversationId === active?.id) return;
+    // A double Enter (or Enter plus a click) would otherwise start a second turn
+    // and interrupt the run it had just begun — the composer is only cleared a
+    // few awaits later, so the second call still sees text. A deliberate
+    // interrupt-to-send is a second send much later in a run, so a short window
+    // separates the two without blocking it.
+    const now = Date.now();
+    if (now - lastSendAtRef.current < 400) return;
+    lastSendAtRef.current = now;
     // Interrupt-to-send: if the current conversation hosts a live run, sending
     // a new message folds the running reply into an "interrupted" state and
     // cancels that run (via its own controller) before the new one starts; a
@@ -1390,7 +1409,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       ...(mailReferences.length > 0 ? { references: mailReferences.map((reference) => ({ id: reference.id, subject: reference.subject })) } : {}),
     };
     await runStream({ conversation, assistantMessage, streamPayload });
-  }, [active, attachedFiles, composer, mailReferences, mode, prepareInterruptToSend, quoteContext, runStream, scope, selectedProvider, t]);
+  }, [active, attachedFiles, bootstrap?.enabled, composer, demoMode, loadingConversationId, mailReferences, mode, prepareInterruptToSend, quoteContext, runStream, scope, selectedProvider, t]);
 
   // Slash command menu: while the composer holds a bare "/token" the matching
   // commands are offered. Parameterless commands send immediately; commands
