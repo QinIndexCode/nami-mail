@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, safeStorage, session, shell, Tray, type NativeImage } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeTheme, Notification, powerMonitor, safeStorage, session, shell, type NativeImage } from "electron";
 import { parse as parseDotenv } from "dotenv";
 import { createHash, randomBytes } from "node:crypto";
 import { spawn as nodeSpawn } from "node:child_process";
@@ -21,17 +21,13 @@ import { nativeText, type NativeCopyKey, type NativeTranslationValues } from "./
 import {
   applyGlobalShortcut as applyGlobalShortcutPolicy,
   applyLaunchAtStartup as applyLaunchAtStartupPolicy,
-  applyTrayBadge as applyTrayBadgePolicy,
-  buildTrayMenuTemplate,
   extractMailtoUrl,
   FOCUS_GLOBAL_SHORTCUT_ACCELERATOR,
-  nextTrayBadge,
   type GlobalShortcutApi,
   type LaunchAtStartupApi,
-  type TrayBadgeEvent,
-  type TrayIconApi,
-  type TrayMenuAction,
 } from "./desktop-behaviors.mjs";
+// The tray icon, badge, menu and visibility flag live here now (see tray.mts).
+import { createTrayController, loadDesktopIcon } from "./tray.mjs";
 import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
 import { DesktopDiagnostics, formatConsoleArgs, serializeRuntimeError } from "./desktop-diagnostics.mjs";
 import { openInBrowser as openExternalUrl, isHttpUrl } from "./desktop-external-open.mjs";
@@ -185,13 +181,9 @@ function createExternalConfirmationBridge(): ExternalConfirmationRuntimeOptions 
     },
   };
 }
-let tray: Tray | undefined;
 let appIcon: NativeImage | undefined;
-// Reliable mirror of the main window's real on-screen visibility. We avoid
-// trusting `BrowserWindow.isVisible()` for the tray menu because its return
-// value is unreliable across some Windows/Electron combinations; instead we
-// maintain the flag at the exact points the window is shown or hidden.
-let mainWindowVisible = false;
+// The window's visibility mirror now lives inside the tray controller, which is
+// the only thing that reads it (see tray.mts).
 let isQuitting = false;
 let shutdownPromise: Promise<void> | undefined;
 let closePromptPending = false;
@@ -422,12 +414,12 @@ initializeDesktopSmoke({
   appUserModelId,
   getMainWindow: () => mainWindow,
   getLocalServer: () => localServer,
-  getTray: () => tray,
+  getTray: () => trayController.getTray(),
   getAppIcon: () => appIcon,
   loadAppIcon: loadDesktopIcon,
-  focusMainWindow,
-  ensureTray,
-  destroyTray,
+  focusMainWindow: () => trayController.focusWindow(),
+  ensureTray: () => trayController.ensure(),
+  destroyTray: () => trayController.destroy(),
   requestMainWindowClose,
   rememberCloseBehavior,
   redact: (message) => (localApiAccessToken ? message.replaceAll(localApiAccessToken, "[redacted]") : message),
@@ -561,44 +553,6 @@ function clearLocalApiAccessToken(): void {
   localApiAccessToken = undefined;
 }
 
-function applyTrayBadge(event: TrayBadgeEvent): void {
-  try {
-    applyTrayBadgePolicy(trayIconApi, nextTrayBadge(event));
-  } catch (error) {
-    // Tray icon APIs vary by desktop session; a failure must not take the
-    // mail client down with it.
-    console.warn("Nami Mail could not update its tray icon", error);
-  }
-}
-
-function setTrayIcon(icon: NativeImage | undefined): void {
-  if (!tray || tray.isDestroyed() || !icon) return;
-  tray.setImage(icon);
-}
-
-let trayBadgeIcon: NativeImage | undefined;
-
-function loadTrayBadgeIcon(): NativeImage | undefined {
-  if (trayBadgeIcon) return trayBadgeIcon;
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, "tray-badge-icon.png")
-    : path.join(app.getAppPath(), "build", "tray-badge-icon.png");
-  const icon = nativeImage.createFromPath(iconPath);
-  if (icon.isEmpty()) {
-    // Older installs do not ship the badge variant; the tray then keeps the
-    // plain icon and the new-mail dot is simply not shown.
-    console.warn(`Nami Mail tray badge icon could not be loaded: ${iconPath}`);
-    return undefined;
-  }
-  trayBadgeIcon = icon;
-  return icon;
-}
-
-const trayIconApi: TrayIconApi = {
-  setBadgeIcon: () => setTrayIcon(loadTrayBadgeIcon()),
-  setPlainIcon: () => setTrayIcon(appIcon ?? loadDesktopIcon()),
-};
-
 function applyLaunchAtStartup(enabled: boolean): void {
   try {
     applyLaunchAtStartupPolicy(launchAtStartupApi, enabled);
@@ -615,7 +569,7 @@ function applyGlobalShortcut(enabled: boolean): void {
       globalShortcutApi,
       enabled,
       FOCUS_GLOBAL_SHORTCUT_ACCELERATOR,
-      () => focusMainWindow(),
+      () => trayController.focusWindow(),
     );
     if (!registered) {
       console.warn(`Nami Mail could not register ${FOCUS_GLOBAL_SHORTCUT_ACCELERATOR} as a global shortcut.`);
@@ -637,30 +591,6 @@ function applyDesktopSettingsFromServer(): void {
   }
 }
 
-function focusMainWindow(): void {
-  if (!mainWindow) return;
-  mainWindowVisible = true;
-  if (tray && !tray.isDestroyed()) refreshTrayMenu(tray);
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
-  mainWindow.webContents.send("nami:settings-changed");
-}
-
-function loadDesktopIcon(): NativeImage {
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, "icon.ico")
-    : path.join(app.getAppPath(), "build", "icon.ico");
-  const icon = nativeImage.createFromPath(iconPath);
-  if (icon.isEmpty()) throw new Error(`Nami Mail icon could not be loaded: ${iconPath}`);
-  return icon;
-}
-
-function destroyTray(): void {
-  if (tray && !tray.isDestroyed()) tray.destroy();
-  tray = undefined;
-}
-
 function currentNativeLocale(): string | undefined {
   try {
     return localServer?.getSettings().locale;
@@ -673,82 +603,16 @@ function nativeCopy(key: NativeCopyKey, values?: NativeTranslationValues): strin
   return nativeText(currentNativeLocale(), key, values);
 }
 
-function refreshTrayMenu(targetTray: Tray): void {
-  targetTray.setToolTip(nativeCopy("trayTooltip"));
-  // Use the maintained visibility flag (see mainWindowVisible) rather than
-  // `BrowserWindow.isVisible()`, which is unreliable here. The label describes
-  // the action that will run on click: when the window is actually visible we
-  // show "hide to tray", otherwise "show Nami Mail".
-  const template = buildTrayMenuTemplate(
-    {
-      hide: nativeCopy("trayHide"),
-      show: nativeCopy("trayShow"),
-      newMail: nativeCopy("trayNewMail"),
-      inbox: nativeCopy("trayInbox"),
-      quit: nativeCopy("trayQuit"),
-    },
-    mainWindowVisible,
-  );
-  targetTray.setContextMenu(Menu.buildFromTemplate(template.map((item) => {
-    if (item.type === "separator") return { type: "separator" as const };
-    return { label: item.label, click: () => runTrayAction(item.action) };
-  })));
-}
-
-function runTrayAction(action: TrayMenuAction): void {
-  switch (action.kind) {
-    case "toggle-window": {
-      // Both branches refresh the menu (hide via ensureTray, show via
-      // focusMainWindow), so the visibility label stays accurate. Driven by the
-      // maintained mainWindowVisible flag rather than `isVisible()`.
-      if (mainWindowVisible) hideMainWindowToTray();
-      else focusMainWindow();
-      break;
-    }
-    case "compose-new":
-      focusMainWindow();
-      mainWindow?.webContents.send("nami:compose-new");
-      break;
-    case "open-inbox":
-      focusMainWindow();
-      mainWindow?.webContents.send("nami:open-inbox");
-      break;
-    case "quit":
-      app.quit();
-      break;
-  }
-}
-
-function ensureTray(): Tray {
-  if (tray && !tray.isDestroyed()) {
-    refreshTrayMenu(tray);
-    return tray;
-  }
-  const nextTray = new Tray(appIcon ?? loadDesktopIcon());
-  refreshTrayMenu(nextTray);
-  nextTray.on("click", focusMainWindow);
-  nextTray.on("double-click", focusMainWindow);
-  nextTray.on("right-click", () => refreshTrayMenu(nextTray));
-  tray = nextTray;
-  return nextTray;
-}
-
-function hideMainWindowToTray(): boolean {
-  if (!mainWindow) return false;
-  try {
-    mainWindowVisible = false;
-    ensureTray();
-    mainWindow.hide();
-    return true;
-  } catch (error) {
-    console.error("Nami Mail could not create its tray icon", error);
-    dialog.showErrorBox(
-      nativeCopy("trayFailureTitle"),
-      nativeCopy("trayFailureMessage"),
-    );
-    return false;
-  }
-}
+// The tray owns its icon, badge, menu and the maintained visibility flag;
+// everything it needs from the rest of the app arrives through these accessors
+// (see tray.mts).
+const trayController = createTrayController({
+  getMainWindow: () => mainWindow,
+  getAppIcon: () => appIcon,
+  loadAppIcon: loadDesktopIcon,
+  copy: nativeCopy,
+  showError: (title, message) => dialog.showErrorBox(title, message),
+});
 
 async function rememberCloseBehavior(closeBehavior: CloseBehavior): Promise<void> {
   if (!localServer) throw new Error("Nami Mail local service is not available.");
@@ -799,7 +663,7 @@ async function askHowToClose(): Promise<void> {
     if (result.response === 2) return;
 
     const closeBehavior: CloseBehavior = result.response === 0 ? "tray" : "quit";
-    if (closeBehavior === "tray" && !hideMainWindowToTray()) return;
+    if (closeBehavior === "tray" && !trayController.hideWindowToTray()) return;
     if (result.checkboxChecked) {
       try {
         await rememberCloseBehavior(closeBehavior);
@@ -823,7 +687,7 @@ async function requestMainWindowClose(event: Pick<Electron.Event, "preventDefaul
     return;
   }
   if (closeBehavior === "tray") {
-    hideMainWindowToTray();
+    trayController.hideWindowToTray();
     return;
   }
   await askHowToClose();
@@ -871,7 +735,7 @@ function closeLocalServerForExit(): Promise<void> {
       localServer = undefined;
       stopLocalServerProcess();
       clearLocalApiAccessToken();
-      destroyTray();
+      trayController.destroy();
     }
   })();
   return shutdownPromise;
@@ -924,7 +788,7 @@ async function prepareLocalServerForUpdateInstall(): Promise<boolean> {
     localServer = undefined;
     stopLocalServerProcess();
     clearLocalApiAccessToken();
-    destroyTray();
+    trayController.destroy();
     isQuitting = true;
     desktopAgentBrokerRecoveryGate = "closed";
     return true;
@@ -1077,7 +941,7 @@ function notifyNewMail(messages: NewMailPayload[]): void {
   // The tray dot marks "new mail while away" independently of the alert
   // settings: it lights only when the window is not focused and clears as
   // soon as the window is focused again.
-  applyTrayBadge({ type: "new-mail", windowFocused: mainWindow?.isFocused() ?? false });
+  trayController.applyBadge({ type: "new-mail", windowFocused: mainWindow?.isFocused() ?? false });
   // The renderer still needs a new-mail event to refresh its local list when
   // alerts are disabled. shouldAlert only controls user-facing interruption.
   const shouldAlert = settings.notificationsEnabled && (!mainWindow?.isFocused() || settings.notifyWhenFocused);
@@ -1116,7 +980,7 @@ function notifyNewMail(messages: NewMailPayload[]): void {
     body,
     silent: notificationSound === "none" || useMainProcessCustomSound,
   }, () => {
-    focusMainWindow();
+    trayController.focusWindow();
     mainWindow?.webContents.send("nami:open-message", first.id);
   });
 }
@@ -1245,7 +1109,7 @@ async function createMainWindowShell(): Promise<void> {
   // window independently of the busy main process.
   if (!smokeExitDelay) {
     mainWindow.show();
-    mainWindowVisible = true;
+    trayController.setWindowVisible(true);
   }
   mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
     if (!smokeResultPath) return;
@@ -1299,7 +1163,7 @@ async function createMainWindowShell(): Promise<void> {
   // Focusing the window clears the tray "new mail" dot; every restore path
   // (notification click, tray click, global shortcut) ends in focusMainWindow,
   // which shows and focuses the window and thus fires this event.
-  mainWindow.on("focus", () => applyTrayBadge({ type: "window-focused" }));
+  mainWindow.on("focus", () => trayController.applyBadge({ type: "window-focused" }));
   await mainWindow.loadURL(nativeSplashUrl());
 }
 
@@ -1364,7 +1228,7 @@ async function ensureMainWindowForAgentPairing(): Promise<BrowserWindow | undefi
     await createMainWindow();
     await startDesktopUpdaterIfNeeded();
   }
-  focusMainWindow();
+  trayController.focusWindow();
   return mainWindow;
 }
 
@@ -1507,7 +1371,7 @@ async function warnExternalPairingScopeDrift(): Promise<void> {
     body: nativeText(locale, "externalAccessDriftBody", { count: drifted.length }),
     silent: true,
   }, () => {
-    focusMainWindow();
+    trayController.focusWindow();
   });
 }
 
@@ -2126,7 +1990,7 @@ if (desktopCliArguments !== undefined) {
           await createMainWindow();
           await startDesktopUpdaterIfNeeded();
         }
-        focusMainWindow();
+        trayController.focusWindow();
         mainWindow?.webContents.send("nami:compose-new", mailtoUrl);
       })();
       return;
@@ -2154,7 +2018,7 @@ if (desktopCliArguments !== undefined) {
         await createMainWindow();
         await startDesktopUpdaterIfNeeded();
       }
-      focusMainWindow();
+      trayController.focusWindow();
     })();
   });
   app.on("window-all-closed", () => {
@@ -2168,7 +2032,7 @@ if (desktopCliArguments !== undefined) {
     const mailtoUrl = extractMailtoUrl([url]);
     if (!mailtoUrl) return;
     if (mainWindow) {
-      focusMainWindow();
+      trayController.focusWindow();
       mainWindow.webContents.send("nami:compose-new", mailtoUrl);
     } else {
       // macOS can deliver open-url before `ready`; createMainWindow drains it.
