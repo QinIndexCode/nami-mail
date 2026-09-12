@@ -30,7 +30,7 @@ These fifteen tools (eight read-only plus seven write) are the complete External
 | `mail.draft.create` | `draft create` | `namimail_draft_create` | `{ "accountId": "...", "to": [{ "address": "...", "name"? }], "cc"?, "subject": "...", "text": "...", "attachmentTokens"? }` | `write:drafts` |
 | `mail.draft.update` | `draft update` | `namimail_draft_update` | `{ "draftId": "...", "accountId": "...", "to": [{ "address": "...", "name"? }], "cc"?, "subject": "...", "text": "...", "attachmentTokens"? }` | `write:drafts` |
 | `mail.draft.delete` | `draft delete` | `namimail_draft_delete` | `{ "accountId": "...", "draftId": "..." }` | `write:drafts` |
-| `messages.move` | `messages move` | `namimail_messages_move` | `{ "messageId": "...", "target": "archive" \| "trash" }` | `write:mail` |
+| `messages.move` | `messages move` | `namimail_messages_move` | `{ "messageId": "...", "target": "archive" \| "trash" }` or `{ "messageId": "...", "folder": "<folder path>" }` (exactly one) | `write:mail` |
 | `messages.set-flag` | `messages set-flag` | `namimail_messages_set_flag` | `{ "messageId": "...", "flag": "seen" \| "flagged", "value": true \| false }` | `write:mail` |
 | `messages.send` | `messages send` | `namimail_messages_send` | `{ "accountId": "...", "to": [{ "address": "...", "name"? }], "cc"?, "subject": "...", "text": "...", "attachmentTokens"? }` | `write:mail` |
 | `mail.reply` | `mail reply` | `namimail_mail_reply` | `{ "accountId": "...", "messageId": "...", "to"?, "cc"?, "subject"?, "text": "...", "attachmentTokens"? }` | `write:mail` + `read:messages` |

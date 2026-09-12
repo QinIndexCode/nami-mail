@@ -108,6 +108,9 @@ test("MCP calls map each External Mail v1 tool to its exact broker command and i
     { name: "namimail_draft_update", command: "mail.draft.update", arguments: { accountId: "account-001", draftId: "draft-001", to: [{ address: "billing@example.com" }], subject: "Invoice", text: "Updated body" } },
     { name: "namimail_draft_delete", command: "mail.draft.delete", arguments: { accountId: "account-001", draftId: "draft-001" } },
     { name: "namimail_messages_move", command: "messages.move", arguments: { messageId: "message-001", target: "trash" } },
+    // An explicit folder reaches the same command: the archive/trash shortcuts
+    // are not the whole surface any more.
+    { name: "namimail_messages_move", command: "messages.move", arguments: { messageId: "message-001", folder: "Projects/2026" } },
     { name: "namimail_messages_set_flag", command: "messages.set-flag", arguments: { messageId: "message-001", flag: "seen", value: true } },
     { name: "namimail_messages_send", command: "messages.send", arguments: { accountId: "account-001", to: [{ address: "billing@example.com" }], subject: "Invoice", text: "Body text" } },
     { name: "namimail_mail_reply", command: "mail.reply", arguments: { accountId: "account-001", messageId: "message-001", text: "Reply body" } },
@@ -150,6 +153,10 @@ test("MCP rejects obsolete tools and malformed External Mail v1 inputs before br
     { name: "namimail_draft_create", arguments: {}, code: "TOOL_INPUT_INVALID" },
     { name: "namimail_messages_send", arguments: { accountId: "account-001" }, code: "TOOL_INPUT_INVALID" },
     { name: "namimail_messages_move", arguments: { messageId: "message-001", target: "delete" }, code: "TOOL_INPUT_INVALID" },
+    // A move needs exactly one destination: neither leaves it undefined, both
+    // leaves the intent ambiguous.
+    { name: "namimail_messages_move", arguments: { messageId: "message-001" }, code: "TOOL_INPUT_INVALID" },
+    { name: "namimail_messages_move", arguments: { messageId: "message-001", target: "archive", folder: "Projects" }, code: "TOOL_INPUT_INVALID" },
     { name: "namimail_messages_set_flag", arguments: { messageId: "message-001", flag: "seen", value: "yes" }, code: "TOOL_INPUT_INVALID" },
   ];
   for (const failure of failures) {

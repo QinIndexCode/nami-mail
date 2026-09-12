@@ -21,7 +21,7 @@ import {
   submissionRequestForId,
   type OutboundSubmissionRequest,
 } from "../outbox.js";
-import { syncAccount, updateMessageFlags, moveMessage } from "../sync.js";
+import { syncAccount, updateMessageFlags, moveMessage, moveMessageToFolder } from "../sync.js";
 import { ftsLikeEscape, MESSAGE_FTS_TABLE } from "../message-search.js";
 import { redactUrls } from "../message-links.js";
 import type { AccountRecord } from "../types.js";
@@ -36,6 +36,7 @@ import type {
   MailFolderView,
   MailListQuery,
   MailListResult,
+  MailMessageDestination,
   MailMessageDetail,
   MailMessageView,
   MailSearchQuery,
@@ -577,10 +578,16 @@ export class SqliteMailApplicationService implements MailApplicationService {
     await updateMessageFlags(this.options.db, this.options.masterKey, messageId, patch, this.options.oauthService, this.options.agentMailEvents);
   }
 
-  async moveMessage(context: MailApplicationContext, messageId: string, target: "archive" | "trash"): Promise<void> {
+  async moveMessage(context: MailApplicationContext, messageId: string, destination: MailMessageDestination): Promise<void> {
     const row = this.row(context, messageId);
     if (!row) throw new AgentMailApplicationError("not_found", "The requested message is no longer available.");
-    await moveMessage(this.options.db, this.options.masterKey, messageId, target, this.options.oauthService, this.options.agentMailEvents);
+    if ("folder" in destination) {
+      // An explicit folder goes through the same path filter rules already use,
+      // which checks the folder belongs to the message's own account.
+      await moveMessageToFolder(this.options.db, this.options.masterKey, messageId, destination.folder, this.options.oauthService, this.options.agentMailEvents);
+      return;
+    }
+    await moveMessage(this.options.db, this.options.masterKey, messageId, destination.target, this.options.oauthService, this.options.agentMailEvents);
   }
 
   async deleteAccount(context: MailApplicationContext, accountId: string): Promise<void> {

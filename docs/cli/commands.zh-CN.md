@@ -31,7 +31,7 @@ namimail <组> <操作> [选项]
 | `draft create` | 为已配对调用方范围内的账户创建草稿。 | 按权限档位 | `--account`、`--to`（至少 1 个）、`--cc`、`--subject`、`--body` |
 | `draft update` | 替换某封草稿的收件人、主题或正文。 | 按权限档位 | `--account`、`--draft`、`--to`、`--cc`、`--subject`、`--body` |
 | `draft delete` | 删除已配对调用方范围内的某封草稿。 | 按权限档位 | `--account`、`--draft` |
-| `messages move` | 将一封邮件移动到归档或废纸篓。 | 按权限档位 | `--message`、`--target`（`archive`\|`trash`） |
+| `messages move` | 将一封邮件移动到归档、废纸篓或同一账户下的指定文件夹。 | 按权限档位 | `--message`，以及 `--target`（`archive`\|`trash`）或 `--folder`（文件夹路径，取自 `folders list`）**二选一** |
 | `messages set-flag` | 设置一封邮件的已读或已标记状态。 | 按权限档位 | `--message`、`--flag`（`seen`\|`flagged`）、`--value`（`true`\|`false`） |
 | `messages send` | 撰写并发送一封邮件。 | 按权限档位 | `--account`、`--to`、`--cc`、`--subject`、`--body` |
 | `mail reply` | 为某封原邮件创建回复草稿。 | 按权限档位 | `--account`、`--message`、`--to`、`--cc`、`--subject`、`--body` |

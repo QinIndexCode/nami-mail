@@ -407,7 +407,8 @@ const commandOptionHints: Readonly<Record<string, readonly CliOptionHint[]>> = {
   ],
   "messages.move": [
     { name: "message", type: "string", required: true, description: "The message id to move." },
-    { name: "target", type: "string", required: true, description: "Destination mailbox: archive or trash." },
+    { name: "target", type: "string", required: false, description: "Destination shortcut: archive or trash. Provide exactly one of --target or --folder." },
+    { name: "folder", type: "string", required: false, description: "Destination folder path, as returned by folders list. Provide exactly one of --target or --folder." },
   ],
   "messages.set-flag": [
     { name: "message", type: "string", required: true, description: "The message id to update." },
@@ -648,10 +649,17 @@ function writeExternalInput(
       }
       break;
     case "messages.move":
-      unexpected = noUnexpectedOptions(invocation, ["message", "target"]);
+      unexpected = noUnexpectedOptions(invocation, ["message", "target", "folder"]);
       if (!unexpected) {
-        if (!invocation.options.message || !invocation.options.target) return invalidInput("The messages move command requires --message and --target.");
-        input = { messageId: invocation.options.message, target: invocation.options.target };
+        if (!invocation.options.message) return invalidInput("The messages move command requires --message.");
+        const target = invocation.options.target;
+        const folder = invocation.options.folder;
+        const exactlyOne = "The messages move command requires exactly one of --target (archive or trash) or --folder.";
+        if (target === undefined && folder === undefined) return invalidInput(exactlyOne);
+        if (target !== undefined && folder !== undefined) return invalidInput(exactlyOne);
+        input = target !== undefined
+          ? { messageId: invocation.options.message, target }
+          : { messageId: invocation.options.message, folder };
       }
       break;
     case "messages.set-flag":

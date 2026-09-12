@@ -10,6 +10,7 @@ This is the English translation of the Chinese source changelog. `CHANGELOG.zh-C
 
 - The desktop app now keeps a runtime log (`runtime-log.jsonl`): uncaught exceptions, renderer crashes, and local-service errors are written to disk (gated by `NAMI_MAIL_NO_STARTUP_LOG=1`), so it can be attached when reporting issues.
 - A broken auto-reply configuration (for example a missing API key) now shows a clear warning in Settings instead of failing silently.
+- The external MCP / CLI `messages move` command can now move a message to **any folder of the same account** (the `folder` argument), not only the archive and trash shortcuts; exactly one of `target` / `folder` is accepted, and the existing permission levels and confirmation flow are unchanged.
 
 ### Fixed
 

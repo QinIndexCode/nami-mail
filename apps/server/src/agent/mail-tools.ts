@@ -60,6 +60,7 @@ import type {
   MailAttachmentView,
   MailFolderView,
   MailListQuery,
+  MailMessageDestination,
   MailMessageDetail,
   MailMessageView,
   MailSearchQuery,
@@ -873,12 +874,24 @@ function deleteDraftTool(mailApplication: MailApplicationService): AgentTool<z.i
   };
 }
 
+/**
+ * Maps the validated request to the facade's destination shape. The contract
+ * requires exactly one of `target`/`folder`, so the last branch is unreachable —
+ * it throws rather than guessing a folder, because guessing would move mail the
+ * user never asked to move.
+ */
+function moveDestinationOf(input: { target?: "archive" | "trash"; folder?: string }): MailMessageDestination {
+  if (input.folder !== undefined) return { folder: input.folder };
+  if (input.target !== undefined) return { target: input.target };
+  throw new Error("messages.move requires either a target or a folder.");
+}
+
 function moveMessageTool(mailApplication: MailApplicationService): AgentTool<z.infer<typeof externalMoveMailInputSchema>, MoveMessageOutput> {
   return {
     descriptor: {
       name: "messages.move",
       title: "Move a mail message",
-      description: "Moves one mail message to Archive or Trash after a visible confirmation. Input: { messageId: string, target: \"archive\" | \"trash\" }.",
+      description: "Moves one mail message to Archive, Trash or an explicit folder of the same account after a visible confirmation. Input: { messageId: string, target?: \"archive\" | \"trash\", folder?: string } — provide exactly one of target/folder, and prefer listFolders before naming a folder.",
       category: "messages",
       executionMode: "write",
       requiredScopes: ["write:mail"],
@@ -895,11 +908,12 @@ function moveMessageTool(mailApplication: MailApplicationService): AgentTool<z.i
     execute: async (context, input) => {
       const messageDenied = requireMessage<MoveMessageOutput>(context, input.messageId);
       if (messageDenied) return messageDenied;
+      const destination = moveDestinationOf(input);
       const result = await fromMailApplication(context, async () => {
-        await mailApplication.moveMessage(scopedContext(context), input.messageId, input.target);
+        await mailApplication.moveMessage(scopedContext(context), input.messageId, destination);
       });
       return result.ok
-        ? { ok: true, value: { messageId: input.messageId, target: input.target } }
+        ? { ok: true, value: { messageId: input.messageId, ...destination } }
         : result;
     },
   };

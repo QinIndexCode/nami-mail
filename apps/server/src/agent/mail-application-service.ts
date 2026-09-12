@@ -112,6 +112,16 @@ export type DraftView = {
   updatedAt: string;
 };
 
+/**
+ * Destination for a single-message move: the archive/trash shortcut, or an
+ * explicit folder path of the message's own account. The two shapes are
+ * exclusive by construction, so a caller cannot express "archive, and also this
+ * folder" and have one of them silently win.
+ */
+export type MailMessageDestination =
+  | { target: "archive" | "trash" }
+  | { folder: string };
+
 export type PreparedMailSubmission = {
   submissionId: string;
   /** Present on prepare; omitted after submission because the key is consumed. */
@@ -139,7 +149,7 @@ export interface MailApplicationService {
   updateDraft(context: MailApplicationContext, input: DraftMutation & { draftId: string }): Promise<DraftView>;
   deleteDraft(context: MailApplicationContext, accountId: string, draftId: string): Promise<void>;
   updateMessageFlags(context: MailApplicationContext, messageId: string, patch: { seen?: boolean; flagged?: boolean }): Promise<void>;
-  moveMessage(context: MailApplicationContext, messageId: string, target: "archive" | "trash"): Promise<void>;
+  moveMessage(context: MailApplicationContext, messageId: string, destination: MailMessageDestination): Promise<void>;
 
   /** Wrap `prepareSubmission` and preserve its idempotency key for a later visible confirmation. */
   prepareSubmission(context: MailApplicationContext, input: DraftMutation & { idempotencyKey?: string }): Promise<PreparedMailSubmission>;

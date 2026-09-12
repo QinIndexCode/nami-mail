@@ -128,15 +128,18 @@ export function deleteAccountConfirmationPreview(
 
 export function moveMailConfirmationPreview(
   locale: string | undefined,
-  input: { messageId: string; target: string },
+  input: { messageId: string; target?: string; folder?: string },
 ): ConfirmationPreview {
   const resolved = localeOf(locale);
+  // An explicit folder is shown by its path so the user can check the
+  // destination; the shortcuts keep their own label.
+  const destination = input.folder ?? input.target ?? "";
   return {
     title: agentT(resolved, "confirmation.title.move_mail"),
-    summary: agentT(resolved, "confirmation.summary.move_mail", { target: input.target }),
+    summary: agentT(resolved, "confirmation.summary.move_mail", { target: destination }),
     fields: [
       field(resolved, "confirmation.field.message_id", input.messageId),
-      field(resolved, "confirmation.field.target", input.target),
+      field(resolved, "confirmation.field.target", destination),
     ],
   };
 }

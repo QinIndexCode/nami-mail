@@ -10,6 +10,7 @@
 
 - 桌面端新增运行日志 `runtime-log.jsonl`：未捕获异常、渲染进程异常退出与本地服务错误会落盘（受 `NAMI_MAIL_NO_STARTUP_LOG=1` 总开关控制），反馈问题时可随附。
 - 自动回复配置失效（如缺少 API Key）时，设置页给出明确警告而不是静默失败。
+- 外部 MCP / CLI 的 `messages move` 现在可以移动到同一账户下的**任意文件夹**（MCP 的 `folder` 参数、CLI 的 `--folder`），不再局限于归档与废纸篓这两个快捷目标；`target` 与 `folder` 二选一，权限档位与确认流程不变。
 
 ### 修复
 

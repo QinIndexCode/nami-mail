@@ -31,7 +31,7 @@ Every data command except `version` and `help` requires a running, paired host. 
 | `draft create` | Creates a draft for one account inside the paired caller's scope. | By access level | `--account`, `--to` (at least one), `--cc`, `--subject`, `--body` |
 | `draft update` | Replaces the recipients, subject, or body of one draft. | By access level | `--account`, `--draft`, `--to`, `--cc`, `--subject`, `--body` |
 | `draft delete` | Deletes one draft inside the paired caller's scope. | By access level | `--account`, `--draft` |
-| `messages move` | Moves one message to the archive or trash. | By access level | `--message`, `--target` (`archive`\|`trash`) |
+| `messages move` | Moves one message to the archive, the trash, or an explicit folder of the same account. | By access level | `--message`, plus exactly one of `--target` (`archive`\|`trash`) or `--folder` (a folder path from `folders list`) |
 | `messages set-flag` | Sets the seen or flagged state of one message. | By access level | `--message`, `--flag` (`seen`\|`flagged`), `--value` (`true`\|`false`) |
 | `messages send` | Composes and sends one message. | By access level | `--account`, `--to`, `--cc`, `--subject`, `--body` |
 | `mail reply` | Creates a reply draft for one original message. | By access level | `--account`, `--message`, `--to`, `--cc`, `--subject`, `--body` |

@@ -621,7 +621,7 @@ describe("Agent mail tools", () => {
     expect(fake.moveMessage).toHaveBeenCalledWith(
       expect.objectContaining({ accountIds: ["account-1"], allowedMessageIds: ["message-1"] }),
       "message-1",
-      "archive",
+      { target: "archive" },
     );
     expect(moveTool!.descriptor).toMatchObject({
       name: "messages.move",
@@ -635,6 +635,32 @@ describe("Agent mail tools", () => {
       fields: [
         { label: "Message ID", value: "message-1" },
         { label: "Target", value: "trash" },
+      ],
+    });
+  });
+
+  it("moves a scoped message to an explicit folder after confirmation", async () => {
+    const fake = fakeMailApplication();
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const moveTool = registry.get("messages.move");
+    expect(moveTool).toBeDefined();
+
+    const outcome = await moveTool!.execute(context(["account-1"], ["message-1"]), {
+      messageId: "message-1",
+      folder: "Projects/2026",
+    });
+
+    expect(outcome).toEqual({ ok: true, value: { messageId: "message-1", folder: "Projects/2026" } });
+    expect(fake.moveMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ accountIds: ["account-1"], allowedMessageIds: ["message-1"] }),
+      "message-1",
+      { folder: "Projects/2026" },
+    );
+    // The confirmation card names the real destination, not a shortcut label.
+    expect(moveTool!.confirmationPreview?.({ messageId: "message-1", folder: "Projects/2026" }, "en-US")).toMatchObject({
+      fields: [
+        { label: "Message ID", value: "message-1" },
+        { label: "Target", value: "Projects/2026" },
       ],
     });
   });
