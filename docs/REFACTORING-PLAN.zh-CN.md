@@ -25,7 +25,9 @@
 - 需改接线：smoke 桥 418-434（`getTray/getAppIcon/ensureTray/destroyTray/focusMainWindow`）、关闭流程 874 与 927（`destroyTray`）、1080 与 1302（`applyTrayBadge`）、802 与 826（`hideMainWindowToTray`）、窗口外壳 1216（`appIcon`）、1248（`mainWindowVisible`）。
 - 注意：托盘块与非托盘代码交错（`applyLaunchAtStartup` / `applyGlobalShortcut` / `nativeCopy` 夹在中间），不是连续区间，按函数搬而不是按行删。
 
-### 第 2 步 · Agent 配对（约 −110 行）
+### 第 2 步 · Agent 配对（约 −110 行）—— 已搁置，列入 futurePlan
+
+> **搁置说明（2026-09-12）**：这一块暂不实施，测绘结果保留在下面，便于以后直接开工。当前执行顺序为：托盘（已完成）→ 窗口外壳 → 关闭流程。
 
 - 代码：1371-1473（`recordPairingFailure` / `processAgentPairingRequest`）、1472-1478 `scheduleAgentPairingRequests`、1480 `pairingScopeDriftNotified`、1487-1512 `warnExternalPairingScopeDrift`。
 - 自有状态只有 `pairingRequestTail`(223) 与 `pairingScopeDriftNotified`(1480)。
