@@ -83,3 +83,18 @@ npm.cmd run package:win:github
 - 依赖和打包变更要同时检查 Node ABI、Electron ABI、安装/卸载、单实例和数据保留路径。
 
 贡献流程和代码审查要求见 [贡献指南](../CONTRIBUTING.zh-CN.md)。发布和签名流程见 [发布指南](RELEASING.zh-CN.md)，进程与数据边界见 [架构与信任边界](ARCHITECTURE.zh-CN.md)。
+
+## 文档语言与命名
+
+文档按语言分成独立文件，**承载正文的文件必须带语言后缀**：
+
+- 中文：`xxx.zh-CN.md`
+- 英文：`xxx.en.md`
+
+不带后缀的 `xxx.md` **只允许作为语言入口**——只有标题和语言切换链接，不承载正文。目前符合这个例外的只有各目录的 `README.md`，以及 GitHub 约定放在仓库根的 `CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`、`SUPPORT.md`、`CHANGELOG.md`（它们都已改成入口页，正文在对应的 `.zh-CN.md` / `.en.md`）。
+
+新增或改动文档时：
+
+1. 先写 `xxx.zh-CN.md`，并同步维护 `xxx.en.md`；
+2. 只有在需要统一入口时才建 `xxx.md`，且它只放语言链接；
+3. **即使只有一种语言也要带后缀**（例如 `ARCHITECTURE-ROADMAP.zh-CN.md`），不要为了省一个文件而省略后缀——省略后无法判断该文件的语言，也无法再补另一种语言而不改名。
