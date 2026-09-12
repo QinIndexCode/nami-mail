@@ -480,7 +480,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
         defaultProviderId: "demo-ollama",
         conversations: [],
       });
-      const demoConversation = createDemoConversation();
+      const demoConversation = createDemoConversation(locale);
       setActive(demoConversation);
       setConversations([{ id: demoConversation.id, title: demoConversation.title, preview: demoConversation.preview, updatedAt: demoConversation.updatedAt }]);
       setProviderId("demo-ollama");

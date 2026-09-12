@@ -265,7 +265,9 @@ export default function App() {
     // so it pins its own presentation profile: the wallpaper keeps the
     // wallpaper rendering path covered by the desktop smoke regardless of the
     // shipped default preset.
-    ...(isDemo ? { backgroundPreset: "coast" as const, backgroundIntensity: 80 } : {}),
+    // Demo mode deliberately ships the default plain surface: the presets are a
+    // user choice, and a decorated sample frame misrepresents what a new install
+    // looks like.
   }));
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
