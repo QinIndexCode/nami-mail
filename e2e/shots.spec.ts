@@ -5,8 +5,10 @@ import { expect, test } from "@playwright/test";
  *
  * Everything is captured from the running app in demo mode (`?demo=1`), so the
  * frames show the current UI with the mock dataset: no real mailbox, no real
- * account names, no addresses outside `example.com`. Run it on demand after a
- * UI change that makes the README images stale:
+ * account names, no addresses outside `example.com`. The theme follows the
+ * system preference, and the captures below force the dark scheme — that is the
+ * product's showcase theme. Run it on demand after a UI change that makes the
+ * README images stale:
  *
  *   $env:NAMI_MAIL_CAPTURE_SHOTS="1"; npx playwright test e2e/shots.spec.ts
  *
@@ -20,7 +22,7 @@ const targets = [
 ] as const;
 
 test.skip(!process.env.NAMI_MAIL_CAPTURE_SHOTS, "Set NAMI_MAIL_CAPTURE_SHOTS=1 to regenerate the README screenshots.");
-test.use({ colorScheme: "light" });
+test.use({ colorScheme: "dark" });
 
 for (const target of targets) {
   test(`captures the ${target.lang} screenshots`, async ({ page }) => {
