@@ -42,6 +42,8 @@ build/nami-update-trust.json.package-win-original
 scripts/*.png
 .playwright-mcp/
 tmp-pw-out*/
+# Agent working memory: local notes, never part of the product history.
+.codebuddy/
 .zcode/
 
 # One-off diagnostics from the window-bar / icon investigation — kept on disk,
