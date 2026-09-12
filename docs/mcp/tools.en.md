@@ -2,7 +2,7 @@
 
 [Chinese](tools.zh-CN.md) | [Output schema](output-schema.en.md) | [Security](security.en.md)
 
-> **Current-build status: available.** The 0.3.0 build ships the MCP server with a working `tools/list`. The fifteen tool names and schema semantics below are live (eight read-only plus seven write); `tools/list` is still the authoritative source for descriptions, input schemas, and availability.
+> **Current-build status: available.** The 0.3.0 build ships the MCP server with a working `tools/list`. The sixteen tool names and schema semantics below are live (nine read-only plus seven write); `tools/list` is still the authoritative source for descriptions, input schemas, and availability.
 
 ## Discovery first
 
@@ -15,6 +15,7 @@ Released read tools have execution mode `read`, require no confirmation, and eve
 | `namimail_accounts_list` | Lists accounts visible to the paired caller. | None. | `{ accounts, truncated }`. Bounded to 100 accounts. | `read:accounts` |
 | `namimail_folders_list` | Lists folders in one account. | `accountId` (required). | `{ folders, truncated }`. Bounded to 500 folders. | `read:folders` |
 | `namimail_messages_list` | Lists message metadata inside caller account scope. | `mailbox`, `unread`, `flagged`, `sender`, `after`, `before`, `limit`, `cursor`. | `{ messages, nextCursor?, truncated }`. Bounded to 50 messages. | `read:messages` |
+| `namimail_messages_search` | Full-text search across local mail (subject, sender, recipients, attachment names and body) inside caller account scope. The query is matched as a **phrase or a single keyword**, not as a boolean expression — two words look for them adjacent — and each result carries a bounded excerpt centred on it. | `query` (required), `accountId?`, `mailbox?`, `subject?`, `hasAttachments?`, `after?`, `before?`, `limit?` (1–20, default 10), `cursor?`. | `{ query, messages, total, nextCursor?, searchedFrom, newestLocalAt, truncated }`. Bounded to 20 matches; without `after` only the last ~90 days are searched, `searchedFrom` reports the window actually applied and `newestLocalAt` how current the local copy is. | `read:messages` |
 | `namimail_mail_summarize` | Fetches a compact digest (subject, sender, date, bounded excerpt) of recent matching mail, suitable for the model to summarize. | `mailbox`, `unread`, `sender`, `after`, `before`, `limit`. | `{ messages, truncated }`. Bounded to 10 messages with 2000-character excerpts. | `read:messages` |
 | `namimail_message_get` | Reads one authorized message's plain-text content. | `messageId` (required). | `{ message }`. Body bounded to 8000 characters with `bodyTruncated`. | `read:messages` |
 | `namimail_messages_batch_get` | Reads up to 10 authorized messages' full plain-text content in one call. | `messageIds` (required, 1..10). | `{ messages, notFound }`. Each message body bounded to 8000 characters with `bodyTruncated`; `notFound` lists requested ids that could not be located. | `read:messages` |

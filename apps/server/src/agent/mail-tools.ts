@@ -22,6 +22,8 @@ import {
   externalMessagesBatchGetOutputSchema,
   externalMessagesListInputSchema,
   externalMessagesListOutputSchema,
+  externalMessagesSearchInputSchema,
+  externalMessagesSearchOutputSchema,
   externalMailSummarizeInputSchema,
   externalMailSummarizeOutputSchema,
   externalSummarizeExcerptCharacters,
@@ -95,23 +97,11 @@ const messageInputSchema = externalMessageGetInputSchema;
 const threadInputSchema = externalThreadGetInputSchema;
 const attachmentsListInputSchema = externalAttachmentsListInputSchema;
 
-// messages.search is a free-text full-text-search tool; its schema is local
-// because there is no contract counterpart. `after`/`before` accept ISO
-// timestamps (UTC or offset-carrying), matching messages.list semantics.
-const searchMessagesInputSchema = z.object({
-  query: z.string().trim().min(1).max(200),
-  after: z.string().optional(),
-  before: z.string().optional(),
-  limit: z.number().int().min(1).max(20).optional(),
-}).strict();
-
-const searchMessagesOutputSchema = z.object({
-  query: z.string(),
-  messages: z.array(messageMetadataOutputSchema),
-  total: z.number().int().nonnegative(),
-  truncated: z.boolean(),
-  note: z.string().optional(),
-}).strict();
+// messages.search now has a published external counterpart, so it takes the
+// contract schemas themselves — the same rule every other external read tool
+// follows, and what the registry test asserts (identity, not just shape).
+const searchMessagesInputSchema = externalMessagesSearchInputSchema;
+const searchMessagesOutputSchema = externalMessagesSearchOutputSchema;
 
 const accountsOutputSchema = externalAccountsListOutputSchema;
 const foldersOutputSchema = externalFoldersListOutputSchema;
@@ -576,7 +566,7 @@ function messagesSearchTool(mailApplication: MailApplicationService): AgentTool<
     descriptor: {
       name: "messages.search",
       title: "Search mail messages",
-      description: "Full-text search across local mail (subject, sender, recipients, attachment names, and body) for a free-text keyword. Results are newest-first and each item is a short excerpt centred on the keyword, not the full body. Input: { query: string (a distinct keyword or short phrase), after?: ISO timestamp to bound the search to mail on/after it, before?: ISO timestamp, limit?: 1-20 (default 10) }. Use `after`/`before` together with a `limit` when the mail is known to be recent, and prefer messages.list for \"latest/today\" questions. Without a range, only mail from the last ~90 days is searched; the result's `note` reports the applied time window and the newest locally-synced timestamp, so if you need mail newer than the local sync you should tell the user the local copy may be behind. Returns truncated:true when more matches exist than the returned page.",
+      description: "Full-text search across local mail (subject, sender, recipients, attachment names, and body) for a free-text keyword. The keyword is matched as a phrase or a single keyword — two words look for them adjacent, not for mail containing both — and each result is a short excerpt centred on it, not the full body. Input: { query: string, accountId?, mailbox?, subject?, hasAttachments?, after?: ISO timestamp, before?: ISO timestamp, limit?: 1-20 (default 10), cursor? }. Prefer messages.list for \"latest/today\" questions, and use `after`/`before` with a `limit` when the mail is known to be recent. Without a range only the last ~90 days are searched: `searchedFrom` reports the window actually applied and `newestLocalAt` how current the local copy is — if the mail the user expects is newer than that, tell them the local copy may still be behind. `truncated` is true when more matches exist than the returned page; pass `nextCursor` back as `cursor` for the next page.",
       category: "messages",
       executionMode: "read",
       requiredScopes: ["read:messages"],
@@ -590,25 +580,24 @@ function messagesSearchTool(mailApplication: MailApplicationService): AgentTool<
     execute: async (context, input) => {
       const denied = requireScope<SearchMessagesOutput>(context);
       if (denied) return denied;
+      if (input.accountId && !scopedAccountIds(context).includes(input.accountId)) {
+        return scopeDenied("The requested account is outside the current Agent conversation scope.");
+      }
       const query: MailSearchQuery = {
-        accountIds: scopedAccountIds(context),
+        accountIds: input.accountId ? [input.accountId] : scopedAccountIds(context),
         query: input.query,
+        ...(input.mailbox ? { mailbox: input.mailbox } : {}),
+        ...(input.subject ? { subject: input.subject } : {}),
+        ...(input.hasAttachments !== undefined ? { hasAttachments: input.hasAttachments } : {}),
         ...(input.after ? { after: input.after } : {}),
         ...(input.before ? { before: input.before } : {}),
         limit: input.limit ?? 10,
+        ...(input.cursor ? { cursor: input.cursor } : {}),
       };
       const result = await fromMailApplication(context, () => mailApplication.searchMessages(scopedContext(context), query));
       if (!result.ok) return result;
       const returnedScopeDenied = requireReturnedMessages<SearchMessagesOutput>(context, result.value.items);
       if (returnedScopeDenied) return returnedScopeDenied;
-      const notes: string[] = [];
-      if (result.value.total === 0) notes.push("No messages matched the search query.");
-      if (result.value.searchedFrom && !input.after && !input.before) {
-        notes.push(`No time range was given, so only mail on/after ${result.value.searchedFrom} was searched`);
-      }
-      if (result.value.newestLocalAt) {
-        notes.push(`Local data is synced up to ${result.value.newestLocalAt}; newer mail may not be available yet`);
-      }
       return {
         ok: true,
         value: {
@@ -616,7 +605,9 @@ function messagesSearchTool(mailApplication: MailApplicationService): AgentTool<
           messages: result.value.items.slice(0, MAX_MESSAGE_RESULTS).map(messageMetadata),
           total: result.value.total,
           truncated: result.value.truncated || result.value.items.length > MAX_MESSAGE_RESULTS,
-          ...(notes.length ? { note: notes.join(" ") } : {}),
+          ...(result.value.nextCursor ? { nextCursor: result.value.nextCursor } : {}),
+          searchedFrom: result.value.searchedFrom ?? null,
+          newestLocalAt: result.value.newestLocalAt ?? null,
         },
       };
     },

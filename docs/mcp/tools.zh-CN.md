@@ -2,7 +2,7 @@
 
 [English](tools.en.md) | [输出 Schema](output-schema.zh-CN.md) | [安全](security.zh-CN.md)
 
-> **当前构建状态：可用。** 0.3.0 构建随附可用的 `tools/list`。下列十五个工具名和 schema 语义已生效（八个只读 + 七个写）；`tools/list` 返回的 `description`、`inputSchema` 和可用性仍是权威依据。
+> **当前构建状态：可用。** 0.3.0 构建随附可用的 `tools/list`。下列十六个工具名和 schema 语义已生效（九个只读 + 七个写）；`tools/list` 返回的 `description`、`inputSchema` 和可用性仍是权威依据。
 
 ## 发现优先
 
@@ -15,6 +15,7 @@ MCP 客户端必须先调用 `tools/list`，并以其返回的 `description`、`
 | `namimail_accounts_list` | 列出已配对调用方可见的账户。 | 无。 | `{ accounts, truncated }`。上限 100 个账户。 | `read:accounts` |
 | `namimail_folders_list` | 列出某个账户内的文件夹。 | `accountId`（必填）。 | `{ folders, truncated }`。上限 500 个文件夹。 | `read:folders` |
 | `namimail_messages_list` | 在调用方账户范围内列出邮件元数据。 | `mailbox`、`unread`、`flagged`、`sender`、`after`、`before`、`limit`、`cursor`。 | `{ messages, nextCursor?, truncated }`。上限 50 封邮件。 | `read:messages` |
+| `namimail_messages_search` | 在调用方账户范围内全文检索邮件（主题、发件人、收件人、附件名与正文）。查询按**短语或单个关键词**匹配，不是布尔表达式（两个词表示它们相邻出现）；每条结果给出以关键词为中心的有界摘要片段。 | `query`（必填）、`accountId?`、`mailbox?`、`subject?`、`hasAttachments?`、`after?`、`before?`、`limit?`（1–20，默认 10）、`cursor?`。 | `{ query, messages, total, nextCursor?, searchedFrom, newestLocalAt, truncated }`。上限 20 条；未传 `after` 时只检索最近约 90 天，`searchedFrom` 报告实际生效的窗口，`newestLocalAt` 报告本地同步进度。 | `read:messages` |
 | `namimail_mail_summarize` | 抓取近期匹配邮件的紧凑摘要（主题、发件人、日期、有界摘要片段），适合模型直接总结。 | `mailbox`、`unread`、`sender`、`after`、`before`、`limit`。 | `{ messages, truncated }`。上限 10 封邮件、每条摘要片段 2000 字符。 | `read:messages` |
 | `namimail_message_get` | 读取一封已授权邮件的纯文本内容。 | `messageId`（必填）。 | `{ message }`。正文上限 8000 字符，超出以 `bodyTruncated` 标记。 | `read:messages` |
 | `namimail_messages_batch_get` | 一次调用读取最多 10 封已授权邮件的完整纯文本内容。 | `messageIds`（必填，1..10）。 | `{ messages, notFound }`。每封正文上限 8000 字符，超出以 `bodyTruncated` 标记；`notFound` 列出无法定位的请求 ID。 | `read:messages` |

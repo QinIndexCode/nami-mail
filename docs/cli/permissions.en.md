@@ -18,7 +18,7 @@ For every request, the Broker creates caller context that command-line arguments
 
 The host constructs an access level for the external caller and clamps it to the configured level; a paired client cannot raise its own level. Requests that exceed the configured level return `PERMISSION_DENIED`. Interaction capability (`interactive` / `canRequestConfirmation`) is only `true` for external callers at the `send-confirmed` level.
 
-The external tool surface is 15 tools (v1): the eight read-only tools use the scopes `read:accounts`, `read:folders`, `read:messages`, and `read:attachments`; the seven write tools (`mail.draft.create`, `mail.draft.update`, `mail.draft.delete`, `messages.move`, `messages.set-flag`, `messages.send`, `mail.reply`) are available at `send-confirmed` and above. Calling a write tool at `read-only` returns `PERMISSION_DENIED`.
+The external tool surface is 16 tools (v1): the nine read-only tools use the scopes `read:accounts`, `read:folders`, `read:messages`, and `read:attachments`; the seven write tools (`mail.draft.create`, `mail.draft.update`, `mail.draft.delete`, `messages.move`, `messages.set-flag`, `messages.send`, `mail.reply`) are available at `send-confirmed` and above. Calling a write tool at `read-only` returns `PERMISSION_DENIED`.
 
 ## Error codes
 

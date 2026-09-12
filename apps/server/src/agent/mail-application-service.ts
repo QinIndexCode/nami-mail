@@ -74,15 +74,21 @@ export type MailSearchQuery = {
   accountIds: readonly string[];
   /** Free-text keyword matched against subject, sender, body, recipients, and attachment names. */
   query: string;
+  mailbox?: string;
+  subject?: string;
+  hasAttachments?: boolean;
   after?: string;
   before?: string;
   limit: number;
+  cursor?: string;
 };
 
 export type MailSearchResult = {
   items: readonly MailMessageView[];
   total: number;
   truncated: boolean;
+  /** Offset of the next page, absent when this page is the last one. */
+  nextCursor?: string;
   /** Effective lower bound (UTC ISO) actually applied to the search, or null when unbounded. */
   searchedFrom?: string | null;
   /** Newest message timestamp present in the local index for the searched accounts, or null if none. */

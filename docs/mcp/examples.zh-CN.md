@@ -16,7 +16,7 @@ MCP 客户端先完成标准初始化，再发送类似以下的逻辑请求：
 
 ## 只读调用
 
-在默认只读档位，受配对客户端可调用八个只读工具：`namimail_accounts_list`、`namimail_folders_list`、`namimail_messages_list`、`namimail_mail_summarize`、`namimail_message_get`、`namimail_messages_batch_get`、`namimail_threads_get` 和 `namimail_attachments_list`。在桌面设置的「权限」分组中将「外部 MCP 权限」提升为「操作前确认」或「完全自动」后，`tools/list` 还会额外列出七个写工具（草稿创建/更新/删除、移动、标记、发送、回复）：操作前确认档每次写操作都会在 Nami Mail 桌面端弹窗确认，完全自动档直接执行。每个请求都会被账户范围、scope、工具 schema 和 Broker 审计校验。账户 ID、查询文本和限制值只是示例数据，不能扩大权限。
+在默认只读档位，受配对客户端可调用九个只读工具：`namimail_accounts_list`、`namimail_folders_list`、`namimail_messages_list`、`namimail_messages_search`、`namimail_mail_summarize`、`namimail_message_get`、`namimail_messages_batch_get`、`namimail_threads_get` 和 `namimail_attachments_list`。在桌面设置的「权限」分组中将「外部 MCP 权限」提升为「操作前确认」或「完全自动」后，`tools/list` 还会额外列出七个写工具（草稿创建/更新/删除、移动、标记、发送、回复）：操作前确认档每次写操作都会在 Nami Mail 桌面端弹窗确认，完全自动档直接执行。每个请求都会被账户范围、scope、工具 schema 和 Broker 审计校验。账户 ID、查询文本和限制值只是示例数据，不能扩大权限。
 
 ```json
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"namimail_folders_list","arguments":{"accountId":"account_1"}}}

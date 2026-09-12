@@ -8,7 +8,7 @@ import { AgentService } from "../src/agent-service.js";
 
 // Assembled at runtime so secret scanners do not flag the synthetic test key.
 const SERVICE_TEST_KEY = ["test", "key"].join("-");
-import type { MailApplicationContext, MailApplicationService, MailListQuery } from "../src/agent/mail-application-service.js";
+import type { MailApplicationContext, MailApplicationService, MailListQuery, MailSearchQuery } from "../src/agent/mail-application-service.js";
 import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
 import { applyAgentStoreSchema } from "../src/agent/schema.js";
 import { AgentSourceEventOutbox } from "../src/agent/source-events.js";
@@ -56,6 +56,13 @@ function fakeMailApplication() {
     }],
   }));
   const getMessage = vi.fn(async () => undefined);
+  const searchMessages = vi.fn(async (_context: MailApplicationContext, _query: MailSearchQuery) => ({
+    items: [],
+    total: 0,
+    truncated: false,
+    searchedFrom: null,
+    newestLocalAt: null,
+  }));
   const getThread = vi.fn(async () => []);
   const listAttachments = vi.fn(async () => []);
   const syncAccount = vi.fn(async () => ({ synced: 0, failedFolders: 0 }));
@@ -92,6 +99,7 @@ function fakeMailApplication() {
     listAccounts,
     listFolders,
     listMessages,
+    searchMessages,
     getMessage,
     getThread,
     listAttachments,
@@ -104,7 +112,7 @@ function fakeMailApplication() {
     prepareSubmission,
     submitPreparedMail,
   };
-  return { service, createDraft, listFolders, listMessages, getMessage };
+  return { service, createDraft, listFolders, listMessages, searchMessages, getMessage };
 }
 
 function desktopConfirmation() {
@@ -327,7 +335,7 @@ describe("AgentService external read facade", () => {
     }
   });
 
-  it("exposes exactly the fifteen External Mail v1 tools at the read-only level", async () => {
+  it("exposes exactly the sixteen External Mail v1 tools at the read-only level", async () => {
     const value = fixture();
     try {
       value.mail.getMessage.mockResolvedValue(mailDetail("message-1"));
@@ -336,6 +344,7 @@ describe("AgentService external read facade", () => {
         "accounts.list": {},
         "folders.list": { accountId: "account-1" },
         "messages.list": {},
+        "messages.search": { query: "invoice" },
         "mail.summarize": { limit: 5 },
         "messages.get": { messageId: "message-1" },
         "messages.batch_get": { messageIds: ["message-1"] },
@@ -370,7 +379,7 @@ describe("AgentService external read facade", () => {
 
       const readNames = externalReadMailContracts.map((contract) => contract.toolName);
       const writeNames = externalWriteMailContracts.map((contract) => contract.toolName);
-      expect(readNames).toHaveLength(8);
+      expect(readNames).toHaveLength(9);
       expect(writeNames).toHaveLength(7);
 
       let index = 0;
@@ -445,14 +454,25 @@ describe("AgentService external read facade", () => {
       expect(invalidInput).toMatchObject({ success: false, error: { code: "TOOL_INPUT_INVALID" } });
       expect(value.mail.listMessages).not.toHaveBeenCalled();
 
+      // An internal-only tool stays unreachable from an external caller.
       const unpublished = await value.service.invokeExternalTool({
         requestId: "a65af4c0-3664-4056-9e65-95163975b760",
+        caller: externalCaller,
+        toolName: "calendar.list",
+        input: {},
+      });
+      expect(unpublished).toMatchObject({ success: false, error: { code: "NOT_SUPPORTED" } });
+      expect(value.mail.listMessages).not.toHaveBeenCalled();
+
+      // messages.search IS published, so the same call reaches the mail service.
+      const search = await value.service.invokeExternalTool({
+        requestId: "b1c2d3e4-5f60-4718-9a2b-3c4d5e6f7081",
         caller: externalCaller,
         toolName: "messages.search",
         input: { query: "invoice" },
       });
-      expect(unpublished).toMatchObject({ success: false, error: { code: "NOT_SUPPORTED" } });
-      expect(value.mail.listMessages).not.toHaveBeenCalled();
+      expect(search).toMatchObject({ success: true });
+      expect(value.mail.searchMessages).toHaveBeenCalledTimes(1);
     } finally {
       await closeFixture(value);
     }

@@ -367,14 +367,54 @@ export class SqliteMailApplicationService implements MailApplicationService {
     if (messageIds !== undefined && !messageIds.length) return { items: [], total: 0, truncated: false };
     const keyword = trimmed(query.query);
     if (!keyword) return { items: [], total: 0, truncated: false };
-    const where: string[] = [
-      `${MESSAGE_FTS_TABLE} MATCH ?`,
-      `m.account_id IN (${placeholders(requestedAccounts)})`,
-    ];
-    const params: unknown[] = [ftsPhraseQuery(keyword), ...requestedAccounts];
+    const where: string[] = [`m.account_id IN (${placeholders(requestedAccounts)})`];
+    const params: unknown[] = [...requestedAccounts];
+    // The trigram tokenizer indexes three-character sequences, so a one- or
+    // two-character query can never match through MATCH: it silently returns
+    // nothing. That is not a corner case — it is every 两字中文 keyword (发票,
+    // 报销, 账单). Those fall back to a LIKE scan over the same indexed columns,
+    // which keeps the substring semantics the tokenizer gives longer queries.
+    if ([...keyword].length < 3) {
+      const pattern = `%${ftsLikeEscape(keyword)}%`;
+      where.push(`EXISTS (
+        SELECT 1 FROM ${MESSAGE_FTS_TABLE} fts
+        WHERE fts.message_id = m.id
+          AND (fts.subject LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\' OR fts.from_address LIKE ? ESCAPE '\\'
+            OR fts."to" LIKE ? ESCAPE '\\' OR fts."cc" LIKE ? ESCAPE '\\' OR fts.attachment LIKE ? ESCAPE '\\' OR fts.body LIKE ? ESCAPE '\\')
+      )`);
+      params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern);
+    } else {
+      // The alias is required, not cosmetic: the optional filters below add
+      // EXISTS subqueries over the same FTS table, and a bare table name in
+      // MATCH would become ambiguous once another reference is in scope.
+      where.push("f MATCH ?");
+      params.push(ftsPhraseQuery(keyword));
+    }
     if (messageIds !== undefined) {
       where.push(`m.id IN (${placeholders(messageIds)})`);
       params.push(...messageIds);
+    }
+    const mailbox = trimmed(query.mailbox);
+    if (mailbox) {
+      where.push("m.mailbox = ?");
+      params.push(mailbox);
+    }
+    const subject = trimmed(query.subject);
+    if (subject) {
+      // subject is encrypted at rest but mirrored into the FTS index, so the
+      // filter runs on the index instead of decrypting candidate rows. LIKE
+      // keeps substring semantics for any query length.
+      const pattern = `%${ftsLikeEscape(subject.toLocaleLowerCase())}%`;
+      where.push(`EXISTS (
+        SELECT 1 FROM ${MESSAGE_FTS_TABLE} fts
+        WHERE fts.message_id = m.id AND fts.subject LIKE ? ESCAPE '\\'
+      )`);
+      params.push(pattern);
+    }
+    if (query.hasAttachments !== undefined) {
+      // The message view treats a missing flag as "no attachments", so the
+      // negative case has to include rows whose column is still NULL.
+      where.push(query.hasAttachments ? "m.has_attachments = 1" : "COALESCE(m.has_attachments, 0) <> 1");
     }
     // Stored timestamps use UTC ISO; normalize any offset-carrying bounds to
     // UTC so text comparison follows real time (see listMessages). Newest-first
@@ -397,6 +437,8 @@ export class SqliteMailApplicationService implements MailApplicationService {
       params.push(searchedFrom);
     }
     const limit = Math.max(1, Math.min(100, Math.floor(query.limit || 10)));
+    const offset = Number.parseInt(query.cursor ?? "0", 10);
+    const safeOffset = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
     const whereSql = where.join(" AND ");
     const total = Number((this.options.db.prepare(`
       SELECT COUNT(*) AS count
@@ -411,8 +453,8 @@ export class SqliteMailApplicationService implements MailApplicationService {
       JOIN accounts a ON a.id = m.account_id
       WHERE ${whereSql}
       ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id
-      LIMIT ?
-    `).all(...params, limit + 1) as MessageRowWithAccount[];
+      LIMIT ? OFFSET ?
+    `).all(...params, limit + 1, safeOffset) as MessageRowWithAccount[];
     const page = rows.slice(0, limit).map((row) => this.searchMessageView(row, keyword));
     // Report the newest timestamp available locally so a caller can tell whether
     // the "latest" mail is actually synced yet.
@@ -427,7 +469,14 @@ export class SqliteMailApplicationService implements MailApplicationService {
       FROM messages m
       WHERE ${newestScope.join(" AND ")}
     `).get(...newestParams) as { at: string | null }).at;
-    return { items: page, total, truncated: rows.length > limit, searchedFrom, newestLocalAt };
+    return {
+      items: page,
+      total,
+      truncated: rows.length > limit,
+      ...(rows.length > limit ? { nextCursor: String(safeOffset + limit) } : {}),
+      searchedFrom,
+      newestLocalAt,
+    };
   }
 
   async getMessage(context: MailApplicationContext, messageId: string): Promise<MailMessageDetail | undefined> {

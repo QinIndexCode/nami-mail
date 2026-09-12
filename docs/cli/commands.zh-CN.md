@@ -23,6 +23,7 @@ namimail <组> <操作> [选项]
 | `accounts list` | 列出已配对调用方获批的账户。 | 只读 | 无 |
 | `folders list` | 列出某个账户的文件夹。 | 只读 | `--account` |
 | `messages list` | 列出邮件元数据。 | 只读 | `--folder`、`--limit`、`--since`、`--before`、`--unread`、`--flagged`、`--sender`、`--cursor` |
+| `messages search` | 在账户范围内全文检索邮件（短语或单个关键词，不是布尔表达式）。 | 只读 | `--query`（必填）、`--account`、`--folder`、`--subject`、`--has-attachments`、`--since`、`--before`、`--limit`、`--cursor` |
 | `mail summarize` | 抓取近期匹配邮件的紧凑摘要。 | 只读 | `--folder`、`--limit`、`--since`、`--before`、`--unread`、`--sender` |
 | `messages get` | 读取一封邮件允许返回的受限纯文本内容。 | 只读 | `--message` |
 | `messages batch-get` | 一次调用读取最多 10 封邮件的受限纯文本内容。 | 只读 | `--message`（逗号分隔的 ID，1-10） |

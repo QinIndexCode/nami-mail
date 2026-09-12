@@ -2,7 +2,7 @@
 
 [简体中文](runtime.zh-CN.md) | [English](runtime.en.md)
 
-> **当前构建状态：可用。** 0.3.0 安装包随附 `namimail` 命令、PATH shim、CLI、MCP stdio 子进程、Broker、服务模式和配对 UI。Broker 使用已配对的当前用户 SID-DACL Windows 命名管道；安装器 smoke 会验证打包后的 MCP stdio 路径（协议 `2025-03-26`、serverInfo `NamiMail`、恰好十五个工具：八个只读 + 七个写）。独立的无界面服务模式仍会以 `BROKER_SECURITY_UNAVAILABLE` 在打开 GUI、SQLite、主密钥或翻译模型之前失败关闭。实验性的本地 NLLB-200 翻译保持独立、主动和可选。
+> **当前构建状态：可用。** 0.3.0 安装包随附 `namimail` 命令、PATH shim、CLI、MCP stdio 子进程、Broker、服务模式和配对 UI。Broker 使用已配对的当前用户 SID-DACL Windows 命名管道；安装器 smoke 会验证打包后的 MCP stdio 路径（协议 `2025-03-26`、serverInfo `NamiMail`、恰好十六个工具：九个只读 + 七个写）。独立的无界面服务模式仍会以 `BROKER_SECURITY_UNAVAILABLE` 在打开 GUI、SQLite、主密钥或翻译模型之前失败关闭。实验性的本地 NLLB-200 翻译保持独立、主动和可选。
 
 不要把外部 Agent 运行时与常规桌面/服务器运行时混为一谈。当前常规运行时会创建并启动嵌入式 `AgentService`；本地 Fastify GUI API、RAG 工作者和 React 工作区都在该路径中使用。它不是外部 IPC。打包桌面版 CLI/MCP 路径的发布级验证由安装器 smoke 覆盖；真实账户/Provider、删除与重建生命周期和安全确认流仍需实环境验证。
 

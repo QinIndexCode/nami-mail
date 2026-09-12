@@ -2,7 +2,7 @@
 
 [Chinese](README.zh-CN.md) | [Installation](installation.en.md) | [Configuration](configuration.en.md) | [Tools](tools.en.md) | [Output](output-schema.en.md) | [Security](security.en.md) | [Troubleshooting](troubleshooting.en.md)
 
-> **Current-build status: available.** The 0.3.0 installer ships a managed `namimail` command and PATH shim, and the desktop main process runs a paired SID-DACL named-pipe Broker that routes MCP stdio sessions. The installer smoke test starts `namimail mcp start` through `cmd.exe`, performs MCP initialization, and verifies that `tools/list` returns exactly fifteen tools (eight read-only plus seven write tools with matching annotations). Data tools require a running, paired Agent host. Experimental local NLLB-200 translation remains separate, explicit, and outside MCP.
+> **Current-build status: available.** The 0.3.0 installer ships a managed `namimail` command and PATH shim, and the desktop main process runs a paired SID-DACL named-pipe Broker that routes MCP stdio sessions. The installer smoke test starts `namimail mcp start` through `cmd.exe`, performs MCP initialization, and verifies that `tools/list` returns exactly sixteen tools (nine read-only plus seven write tools with matching annotations). Data tools require a running, paired Agent host. Experimental local NLLB-200 translation remains separate, explicit, and outside MCP.
 
 NamiMail MCP Server documents how MCP-stdio-capable local developer tools and Agents securely read authorized mail data. It is a paired Broker adapter for the desktop `AgentHost`, not an independent mail service.
 

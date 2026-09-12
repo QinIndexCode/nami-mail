@@ -70,6 +70,13 @@ function fakeMailApplication() {
   const listAccounts = vi.fn(async () => []);
   const listFolders = vi.fn(async () => []);
   const listMessages = vi.fn(async () => ({ items: [] }));
+  const searchMessages = vi.fn(async () => ({
+    items: [],
+    total: 0,
+    truncated: false,
+    searchedFrom: null,
+    newestLocalAt: null,
+  }));
   const getMessage = vi.fn(async () => undefined);
   const getThread = vi.fn(async () => []);
   const listAttachments = vi.fn(async () => []);
@@ -109,6 +116,7 @@ function fakeMailApplication() {
     listAccounts,
     listFolders,
     listMessages,
+    searchMessages,
     getMessage,
     getThread,
     listAttachments,
@@ -122,7 +130,7 @@ function fakeMailApplication() {
     prepareSubmission,
     submitPreparedMail,
   };
-  return { service, listAccounts, listFolders, listMessages, getMessage, getThread, listAttachments, createDraft, updateDraft, deleteDraft, deleteAccount, moveMessage, updateMessageFlags, prepareSubmission, submitPreparedMail };
+  return { service, listAccounts, listFolders, listMessages, searchMessages, getMessage, getThread, listAttachments, createDraft, updateDraft, deleteDraft, deleteAccount, moveMessage, updateMessageFlags, prepareSubmission, submitPreparedMail };
 }
 
 describe("Agent mail tools", () => {
@@ -605,6 +613,78 @@ describe("Agent mail tools", () => {
 
     expect(outcome).toMatchObject({ ok: false, error: { code: "SCOPE_DENIED" } });
     expect(fake.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it("searches mail through the published contract schema and reports freshness structurally", async () => {
+    const fake = fakeMailApplication();
+    fake.searchMessages.mockResolvedValueOnce({
+      items: [mailMessage("message-1")],
+      total: 3,
+      truncated: true,
+      nextCursor: "20",
+      searchedFrom: "2026-04-01T00:00:00.000Z",
+      newestLocalAt: "2026-07-10T09:00:00.000Z",
+    });
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const tool = registry.get("messages.search");
+    expect(tool).toBeDefined();
+
+    const outcome = await tool!.execute(context(["account-1"]), {
+      query: "invoice",
+      accountId: "account-1",
+      mailbox: "INBOX",
+      subject: "July",
+      hasAttachments: true,
+      after: "2026-04-01T00:00:00.000Z",
+      limit: 5,
+      cursor: "0",
+    });
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: {
+        query: "invoice",
+        total: 3,
+        truncated: true,
+        nextCursor: "20",
+        searchedFrom: "2026-04-01T00:00:00.000Z",
+        newestLocalAt: "2026-07-10T09:00:00.000Z",
+      },
+    });
+    // Every filter reaches the facade unchanged, and `accountId` narrows the
+    // search's own account scope rather than the conversation scope.
+    expect(fake.searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ accountIds: ["account-1"] }),
+      {
+        accountIds: ["account-1"],
+        query: "invoice",
+        mailbox: "INBOX",
+        subject: "July",
+        hasAttachments: true,
+        after: "2026-04-01T00:00:00.000Z",
+        limit: 5,
+        cursor: "0",
+      },
+    );
+    expect(tool!.descriptor).toMatchObject({
+      name: "messages.search",
+      executionMode: "read",
+      requiredScopes: ["read:messages"],
+      confirmationPolicy: "never",
+      availableToExternal: true,
+    });
+  });
+
+  it("refuses to search an account outside the conversation scope", async () => {
+    const fake = fakeMailApplication();
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const tool = registry.get("messages.search");
+    expect(tool).toBeDefined();
+
+    const outcome = await tool!.execute(context(["account-1"]), { query: "invoice", accountId: "account-2" });
+
+    expect(outcome).toMatchObject({ ok: false, error: { code: "SCOPE_DENIED" } });
+    expect(fake.searchMessages).not.toHaveBeenCalled();
   });
 
   it("moves a scoped message to archive or trash after confirmation", async () => {    const fake = fakeMailApplication();

@@ -181,9 +181,14 @@ test("CLI rejects unsupported options, obsolete search, invalid dates, and missi
   assert.equal(unknownOption.ok, false);
   if (!unknownOption.ok) assert.equal(unknownOption.error.code, "INVALID_ARGUMENT");
 
-  const obsoleteSearch = parseCliArguments(["messages", "search", "--query", "invoice"]);
+  // The old `mail search` spelling is gone; free-text search now lives under
+  // `messages search`, which parses (and is exercised by its own test).
+  const obsoleteSearch = parseCliArguments(["mail", "search", "--query", "invoice"]);
   assert.equal(obsoleteSearch.ok, false);
   if (!obsoleteSearch.ok) assert.equal(obsoleteSearch.error.code, "INVALID_ARGUMENT");
+
+  const search = parseCliArguments(["messages", "search", "--query", "invoice", "--has-attachments", "true"]);
+  assert.equal(search.ok, true);
 
   const deniedWrite = parseCliArguments(["mail", "send", "--yes"]);
   assert.equal(deniedWrite.ok, false);

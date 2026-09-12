@@ -16,6 +16,7 @@ const expectedToolNames = [
   "namimail_accounts_list",
   "namimail_folders_list",
   "namimail_messages_list",
+  "namimail_messages_search",
   "namimail_mail_summarize",
   "namimail_message_get",
   "namimail_messages_batch_get",
@@ -44,16 +45,16 @@ function listedSchema(adapter: NamiMailMcpToolAdapter, name: string) {
   return tool.inputSchema as { additionalProperties?: unknown; required?: unknown; properties?: unknown };
 }
 
-test("MCP exposes exactly the fifteen External Mail v1 read and write tools with strict schemas", () => {
+test("MCP exposes exactly the sixteen External Mail v1 read and write tools with strict schemas", () => {
   const adapter = adapterWith({
     transport: "windows-named-pipe",
     async invoke() { return null; },
   });
-  assert.deepEqual([...mcpReadOnlyToolNames], expectedToolNames.slice(0, 8));
-  assert.deepEqual([...mcpWriteToolNames], expectedToolNames.slice(8));
+  assert.deepEqual([...mcpReadOnlyToolNames], expectedToolNames.slice(0, 9));
+  assert.deepEqual([...mcpWriteToolNames], expectedToolNames.slice(9));
   assert.deepEqual(adapter.listTools().map((tool) => tool.name), expectedToolNames);
-  const readTools = adapter.listTools().slice(0, 8);
-  const writeTools = adapter.listTools().slice(8);
+  const readTools = adapter.listTools().slice(0, 9);
+  const writeTools = adapter.listTools().slice(9);
   assert.equal(readTools.every((tool) => tool.annotations.readOnlyHint && !tool.annotations.destructiveHint), true);
   assert.equal(writeTools.every((tool) => !tool.annotations.readOnlyHint), true);
   assert.equal(writeTools.find((tool) => tool.name === "namimail_draft_delete")?.annotations.destructiveHint, true);
@@ -94,6 +95,25 @@ test("MCP calls map each External Mail v1 tool to its exact broker command and i
         flagged: false,
         sender: "billing@example.com",
         cursor: "page-002",
+      },
+    },
+    {
+      name: "namimail_messages_search",
+      command: "messages.search",
+      arguments: { query: "invoice" },
+    },
+    {
+      name: "namimail_messages_search",
+      command: "messages.search",
+      arguments: {
+        query: "invoice",
+        accountId: "account-001",
+        mailbox: "INBOX",
+        subject: "July",
+        hasAttachments: true,
+        after: "2026-07-01T00:00:00Z",
+        limit: 5,
+        cursor: "20",
       },
     },
     { name: "namimail_message_get", command: "messages.get", arguments: { messageId: "message-001" } },
@@ -139,7 +159,9 @@ test("MCP rejects obsolete tools and malformed External Mail v1 inputs before br
     },
   });
   const failures = [
-    { name: "namimail_messages_search", arguments: {}, code: "TOOL_NOT_FOUND" },
+    // Free-text search IS available; semantic search is deliberately not part
+    // of the v1 surface, so an unknown name still fails closed.
+    { name: "namimail_messages_semantic_search", arguments: {}, code: "TOOL_NOT_FOUND" },
     { name: "namimail_accounts_list", arguments: { unexpected: true }, code: "TOOL_INPUT_INVALID" },
     { name: "namimail_folders_list", arguments: {}, code: "TOOL_INPUT_INVALID" },
     { name: "namimail_message_get", arguments: {}, code: "TOOL_INPUT_INVALID" },
@@ -150,6 +172,9 @@ test("MCP rejects obsolete tools and malformed External Mail v1 inputs before br
     { name: "namimail_messages_list", arguments: { after: "tomorrow" }, code: "TOOL_INPUT_INVALID" },
     { name: "namimail_messages_list", arguments: { after: "2026-07-02T00:00:00Z", before: "2026-07-01T00:00:00Z" }, code: "TOOL_INPUT_INVALID" },
     { name: "namimail_messages_list", arguments: [], code: "TOOL_INPUT_INVALID" },
+    { name: "namimail_messages_search", arguments: {}, code: "TOOL_INPUT_INVALID" },
+    { name: "namimail_messages_search", arguments: { query: "invoice", limit: 21 }, code: "TOOL_INPUT_INVALID" },
+    { name: "namimail_messages_search", arguments: { query: "invoice", unexpected: true }, code: "TOOL_INPUT_INVALID" },
     { name: "namimail_draft_create", arguments: {}, code: "TOOL_INPUT_INVALID" },
     { name: "namimail_messages_send", arguments: { accountId: "account-001" }, code: "TOOL_INPUT_INVALID" },
     { name: "namimail_messages_move", arguments: { messageId: "message-001", target: "delete" }, code: "TOOL_INPUT_INVALID" },

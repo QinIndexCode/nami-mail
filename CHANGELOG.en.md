@@ -11,6 +11,7 @@ This is the English translation of the Chinese source changelog. `CHANGELOG.zh-C
 - The desktop app now keeps a runtime log (`runtime-log.jsonl`): uncaught exceptions, renderer crashes, and local-service errors are written to disk (gated by `NAMI_MAIL_NO_STARTUP_LOG=1`), so it can be attached when reporting issues.
 - A broken auto-reply configuration (for example a missing API key) now shows a clear warning in Settings instead of failing silently.
 - The external MCP / CLI `messages move` command can now move a message to **any folder of the same account** (the `folder` argument), not only the archive and trash shortcuts; exactly one of `target` / `folder` is accepted, and the existing permission levels and confirmation flow are unchanged.
+- Added external **full-text search**, `messages search` (MCP `namimail_messages_search`): search local mail (subject, sender, recipients, attachment names and body) with account, folder, subject, attachment, date-range and cursor filters, returning a bounded excerpt centred on the keyword. Results report `searchedFrom` (only the last ~90 days are searched unless a range is given) and `newestLocalAt` (how current the local copy is), so a caller can tell "no match" apart from "not synced yet"; one- and two-character keywords, which used to silently return nothing, now fall back to substring matching.
 
 ### Fixed
 
@@ -57,7 +58,7 @@ This is the English translation of the Chinese source changelog. `CHANGELOG.zh-C
 - Added the installer-provided `namimail` PATH shim and direct `"Nami Mail.exe" --cli <args>` invocation.
 - Added `namimail service start`, `status`, and `doctor` to explicitly start or inspect the local AgentHost. Ordinary reads and MCP stdio never start a host implicitly.
 - Added desktop-visible `namimail pair --profile <name>` and `namimail revoke --profile <name>` flows. First pairing fixes the current account-ID snapshot, and an account added later never enters an old profile automatically.
-- Added local MCP stdio access via `namimail mcp start --profile <name>`: it supports MCP protocols `2025-03-26` and `2025-06-18` (the server echoes the client's requested version) and publishes fifteen External Mail v1 tools from `tools/list` (eight read-only plus seven bounded writes).
+- Added local MCP stdio access via `namimail mcp start --profile <name>`: it supports MCP protocols `2025-03-26` and `2025-06-18` (the server echoes the client's requested version) and publishes sixteen External Mail v1 tools from `tools/list` (nine read-only plus seven bounded writes).
 - External Mail v1 reads accounts, folders, message lists, message detail (single and batch), threads, and attachment metadata, and provides bounded writes: draft create/update/delete, message move (archive/trash), seen/flagged state, send, and reply. Successful data is validated by versioned strict schemas; mail bodies are bounded plain text and attachments are never exported as files.
 - Added a local mail template library: manage frequently used subjects and bodies in Settings and insert one into a compose or reply with a single click.
 - Added inline attachment preview: PDFs and images render in a read-only viewer; DOCX / PPTX / XLSX and common text files get a read-only text preview without exporting the original file.

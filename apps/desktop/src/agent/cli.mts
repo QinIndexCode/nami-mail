@@ -48,7 +48,7 @@ const cliCommands: readonly CliCommandDefinition[] = [
 const commandByLength = [...cliCommands].sort((left, right) => right.words.length - left.words.length);
 const valueOptions = new Set([
   "output", "profile", "account", "folder", "limit", "since", "before", "unread", "flagged", "sender", "cursor", "message", "thread",
-  "draft", "to", "cc", "subject", "body", "target", "flag", "value",
+  "draft", "to", "cc", "subject", "body", "target", "flag", "value", "query", "has-attachments",
 ]);
 const outputFormats = new Set<CliOutputFormat>(["table", "json", "jsonl", "text"]);
 const profilePattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -80,6 +80,8 @@ export type ParsedCliInvocation = {
     target?: string;
     flag?: string;
     value?: boolean;
+    query?: string;
+    hasAttachments?: boolean;
   };
   /** Option names explicitly supplied by the caller, excluding defaults. */
   providedOptions: readonly string[];
@@ -244,8 +246,8 @@ function parseBoolean(value: string): boolean | undefined {
   return undefined;
 }
 
-function optionPropertyName(option: string): Exclude<keyof ParsedCliInvocation["options"], "profile" | "limit" | "unread" | "flagged" | "value"> | undefined {
-  const names: Record<string, Exclude<keyof ParsedCliInvocation["options"], "profile" | "limit" | "unread" | "flagged" | "value">> = {
+function optionPropertyName(option: string): Exclude<keyof ParsedCliInvocation["options"], "profile" | "limit" | "unread" | "flagged" | "value" | "hasAttachments"> | undefined {
+  const names: Record<string, Exclude<keyof ParsedCliInvocation["options"], "profile" | "limit" | "unread" | "flagged" | "value" | "hasAttachments">> = {
     account: "account",
     folder: "folder",
     since: "since",
@@ -261,6 +263,7 @@ function optionPropertyName(option: string): Exclude<keyof ParsedCliInvocation["
     body: "body",
     target: "target",
     flag: "flag",
+    query: "query",
   };
   return names[option];
 }
@@ -320,6 +323,12 @@ export function parseCliArguments(argv: readonly string[]): CliParseResult {
       options[parsed.name] = value;
       continue;
     }
+    if (parsed.name === "has-attachments") {
+      const value = parseBoolean(parsed.value);
+      if (value === undefined) return parseFailure("The --has-attachments value must be true or false.");
+      options.hasAttachments = value;
+      continue;
+    }
     const property = optionPropertyName(parsed.name);
     if (!property) return parseFailure(`The option --${parsed.name} is not valid for NamiMail.`);
     options[property] = parsed.value;
@@ -364,6 +373,17 @@ const commandOptionHints: Readonly<Record<string, readonly CliOptionHint[]>> = {
     { name: "unread", type: "boolean", required: false, description: "Filter unread (true) or read (false) messages." },
     { name: "flagged", type: "boolean", required: false, description: "Filter flagged (true) or unflagged (false) messages." },
     { name: "sender", type: "string", required: false, description: "Filter by sender email address." },
+    { name: "cursor", type: "string", required: false, description: "Pagination cursor from a previous response." },
+  ],
+  "messages.search": [
+    { name: "query", type: "string", required: true, description: "Keyword or short phrase to search for; matched as a phrase, not as a boolean expression." },
+    { name: "account", type: "string", required: false, description: "Restrict the search to one account id from accounts list." },
+    { name: "folder", type: "string", required: false, description: "Restrict the search to one mailbox path." },
+    { name: "subject", type: "string", required: false, description: "Only match messages whose subject contains this text." },
+    { name: "has-attachments", type: "boolean", required: false, description: "Only match messages with (true) or without (false) attachments." },
+    { name: "since", type: "string", required: false, description: "ISO 8601 timestamp; only messages on/after this date." },
+    { name: "before", type: "string", required: false, description: "ISO 8601 timestamp; only messages on/before this date." },
+    { name: "limit", type: "integer", required: false, description: "Maximum number of matches to return (1-20, default 10)." },
     { name: "cursor", type: "string", required: false, description: "Pagination cursor from a previous response." },
   ],
   "messages.get": [
@@ -483,7 +503,11 @@ function invalidInput(message: string): { ok: false; error: AgentError } {
   return { ok: false, error: createAgentError({ code: "INVALID_ARGUMENT", message, retryable: false }) };
 }
 
-function noUnexpectedOptions(invocation: ParsedCliInvocation, allowed: readonly (keyof ParsedCliInvocation["options"])[]): AgentError | undefined {
+/**
+ * `allowed` holds the CLI flag spellings, because that is what
+ * `providedOptions` records — "has-attachments", not "hasAttachments".
+ */
+function noUnexpectedOptions(invocation: ParsedCliInvocation, allowed: readonly string[]): AgentError | undefined {
   if (invocation.positionals.length) return invalidInput("NamiMail commands do not accept positional arguments.").error;
   const allowedOptions = new Set<string>(["output", "profile", ...allowed]);
   const unexpected = invocation.providedOptions.find((option) => !allowedOptions.has(option));
@@ -537,6 +561,21 @@ function readExternalInput(
         ...(invocation.options.unread === undefined ? {} : { unread: invocation.options.unread }),
         ...(invocation.options.flagged === undefined ? {} : { flagged: invocation.options.flagged }),
         ...(invocation.options.sender ? { sender: invocation.options.sender } : {}),
+        ...(invocation.options.cursor ? { cursor: invocation.options.cursor } : {}),
+      };
+      break;
+    case "messages.search":
+      unexpected = noUnexpectedOptions(invocation, ["query", "account", "folder", "subject", "has-attachments", "limit", "since", "before", "cursor"]);
+      if (!unexpected && !invocation.options.query) return invalidInput("The messages search command requires --query.");
+      input = {
+        query: invocation.options.query ?? "",
+        ...(invocation.options.account ? { accountId: invocation.options.account } : {}),
+        ...(invocation.options.folder ? { mailbox: invocation.options.folder } : {}),
+        ...(invocation.options.subject ? { subject: invocation.options.subject } : {}),
+        ...(invocation.options.hasAttachments === undefined ? {} : { hasAttachments: invocation.options.hasAttachments }),
+        ...(invocation.options.since ? { after: invocation.options.since } : {}),
+        ...(invocation.options.before ? { before: invocation.options.before } : {}),
+        ...(invocation.options.limit === undefined ? {} : { limit: invocation.options.limit }),
         ...(invocation.options.cursor ? { cursor: invocation.options.cursor } : {}),
       };
       break;
@@ -651,15 +690,14 @@ function writeExternalInput(
     case "messages.move":
       unexpected = noUnexpectedOptions(invocation, ["message", "target", "folder"]);
       if (!unexpected) {
-        if (!invocation.options.message) return invalidInput("The messages move command requires --message.");
+        const message = invocation.options.message;
+        if (!message) return invalidInput("The messages move command requires --message.");
         const target = invocation.options.target;
         const folder = invocation.options.folder;
         const exactlyOne = "The messages move command requires exactly one of --target (archive or trash) or --folder.";
-        if (target === undefined && folder === undefined) return invalidInput(exactlyOne);
-        if (target !== undefined && folder !== undefined) return invalidInput(exactlyOne);
-        input = target !== undefined
-          ? { messageId: invocation.options.message, target }
-          : { messageId: invocation.options.message, folder };
+        if (target !== undefined && folder === undefined) input = { messageId: message, target };
+        else if (folder !== undefined && target === undefined) input = { messageId: message, folder };
+        else return invalidInput(exactlyOne);
       }
       break;
     case "messages.set-flag":

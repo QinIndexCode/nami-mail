@@ -12,7 +12,7 @@ Nami Mail currently ships a Windows x64 desktop app. This page organizes the pub
 - [Email provider setup](EMAIL-PROVIDERS.en.md): OAuth, app passwords, manual IMAP/SMTP setup, and connection troubleshooting.
 - [Message translation](TRANSLATION.en.md): optional free translation and AI translation configuration, explicit-send boundary, and privacy considerations.
 - [Local Mail API contract](LOCAL-API.en.md): the protected protocol between the desktop UI and the local service, translation status, and model-readiness endpoints; not a public network API.
-- [External Mail interface](EXTERNAL-MAIL-INTERFACE.en.md): pairing, revocation, eight read-only tools, security boundary, and recovery.
+- [External Mail interface](EXTERNAL-MAIL-INTERFACE.en.md): pairing, revocation, nine read-only tools, security boundary, and recovery.
 - [NamiMail Agent usage](agent/usage.en.md): conversations, mail scope, source citations, and confirmations.
 - [NamiMail Agent model providers](agent/providers.en.md): OpenAI-compatible/Ollama/Claude/Gemini models, API keys, and cloud mail-content consent.
 - [NamiMail Agent external MCP servers](agent/mcp-servers.en.md): connecting external MCP servers to extend the assistant's tools.

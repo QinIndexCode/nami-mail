@@ -23,6 +23,7 @@ Every data command except `version` and `help` requires a running, paired host. 
 | `accounts list` | Lists the accounts approved for the paired caller. | Read-only | None |
 | `folders list` | Lists folders for one account. | Read-only | `--account` |
 | `messages list` | Lists message metadata. | Read-only | `--folder`, `--limit`, `--since`, `--before`, `--unread`, `--flagged`, `--sender`, `--cursor` |
+| `messages search` | Full-text search across mail (phrase or single keyword, not a boolean expression). | Read-only | `--query` (required), `--account`, `--folder`, `--subject`, `--has-attachments`, `--since`, `--before`, `--limit`, `--cursor` |
 | `mail summarize` | Fetches a compact digest of recent matching mail. | Read-only | `--folder`, `--limit`, `--since`, `--before`, `--unread`, `--sender` |
 | `messages get` | Reads bounded plain-text content for one message. | Read-only | `--message` |
 | `messages batch-get` | Reads bounded plain-text content for up to 10 messages. | Read-only | `--message` (comma-separated ids, 1-10) |

@@ -38,7 +38,7 @@ The Broker constructs, rather than accepts from the client, entry point `mcp`, c
 
 | Level | Available operations | Confirmation policy |
 | --- | --- | --- |
-| `read-only` | The eight read-only tools only (account, folder, message digest, single and batch message read, thread, attachment metadata). | None. |
+| `read-only` | The nine read-only tools only (account, folder, message digest, single and batch message read, thread, attachment metadata). | None. |
 | `send-confirmed` | Read tools plus the seven write tools (draft create/update/delete, move, flag, send, reply). | Every write operation requires a one-time immutable confirmation raised in the Nami Mail desktop app (the tool returns a confirmation flow; the client cannot approve on its own). |
 | `full-access` | Read tools plus the seven write tools. | Write tools execute automatically (send, delete, and all others), without per-operation confirmation. |
 

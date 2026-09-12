@@ -11,6 +11,7 @@
 - 桌面端新增运行日志 `runtime-log.jsonl`：未捕获异常、渲染进程异常退出与本地服务错误会落盘（受 `NAMI_MAIL_NO_STARTUP_LOG=1` 总开关控制），反馈问题时可随附。
 - 自动回复配置失效（如缺少 API Key）时，设置页给出明确警告而不是静默失败。
 - 外部 MCP / CLI 的 `messages move` 现在可以移动到同一账户下的**任意文件夹**（MCP 的 `folder` 参数、CLI 的 `--folder`），不再局限于归档与废纸篓这两个快捷目标；`target` 与 `folder` 二选一，权限档位与确认流程不变。
+- 外部 MCP / CLI 新增 **全文检索** `messages search`（MCP `namimail_messages_search`）：可按账户、文件夹、主题、有无附件、时间范围与游标翻页检索本地邮件（主题、发件人、收件人、附件名与正文），每条返回以关键词为中心的有界摘要片段。结果同时报告 `searchedFrom`（未指定时间范围时默认只搜最近约 90 天）与 `newestLocalAt`（本地同步进度），便于区分「没有匹配」与「尚未同步」；一至两个字符的中文关键词此前会静默搜不到，现已改为回退子串匹配。
 
 ### 修复
 
@@ -57,7 +58,7 @@
 - 新增安装包提供的 `namimail` PATH shim，并支持直接以 `"Nami Mail.exe" --cli <args>` 调用；
 - 新增 `namimail service start`、`status`、`doctor`，用于显式启动或检查本机 AgentHost；普通读取命令与 MCP stdio 不会隐式启动宿主；
 - 新增桌面可见确认的 `namimail pair --profile <name>` 与 `namimail revoke --profile <name>` 流程；首次配对固定当前账户 ID 快照，后续新增的账户不会自动进入旧 profile；
-- 新增 `namimail mcp start --profile <name>` 本机 MCP stdio 接入：支持 MCP `2025-03-26` 与 `2025-06-18` 两种协议（服务端回显客户端所请求的版本），`tools/list` 发布 15 个 External Mail v1 工具（8 个只读 + 7 个受限写入）；
+- 新增 `namimail mcp start --profile <name>` 本机 MCP stdio 接入：支持 MCP `2025-03-26` 与 `2025-06-18` 两种协议（服务端回显客户端所请求的版本），`tools/list` 发布 15 个 External Mail v1 工具（9 个只读 + 7 个受限写入）；
 - External Mail v1 提供账户、文件夹、邮件列表、邮件详情（单个与批量）、线程与附件元数据的读取，以及受限写入：草稿创建/更新/删除、邮件移动（归档/废纸篓）、已读/星标设置、发送与回复；成功数据由版本化严格 schema 验证，邮件正文为受限纯文本，附件不会导出为文件；
 - 新增邮件模板库：可在设置中管理常用主题与正文模板，撰写或回复邮件时一键插入；
 - 新增附件内联预览：PDF 与图片在只读预览中渲染，DOCX / PPTX / XLSX 与常见文本文件提供只读文本预览，不导出原始文件。
