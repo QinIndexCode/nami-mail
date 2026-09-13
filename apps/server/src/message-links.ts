@@ -18,13 +18,13 @@ const TRAILING_PUNCTUATION = /[.,;:!?)\]}>]+$/;
  */
 const URL_PATTERNS: readonly RegExp[] = [
   // scheme URLs (http, https, ftp)
-  /(?:https?|ftp):\/\/[^\s<>"'(){}\[\]]+/gi,
+  /(?:https?|ftp):\/\/[^\s<>"'(){}[\]]+/gi,
   // www. prefixed domains
-  /(?:www\.)[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d+)?(?:\/[^\s<>"'(){}\[\]]*)?/gi,
+  /(?:www\.)[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d+)?(?:\/[^\s<>"'(){}[\]]*)?/gi,
   // mailto: links
   /(?:mailto:)[^\s<>"']+/gi,
   // bare domains with a common TLD (never inside an email address / hostname)
-  /(?<![\w@.])(?:[a-z0-9-]+\.)+(?:com|net|org|io|co|me|dev|info|biz|cc|tv|app|ai|cn)(?:\/[^\s<>"'(){}\[\]]*)?/gi,
+  /(?<![\w@.])(?:[a-z0-9-]+\.)+(?:com|net|org|io|co|me|dev|info|biz|cc|tv|app|ai|cn)(?:\/[^\s<>"'(){}[\]]*)?/gi,
 ];
 
 /** Replaces every URL in `text` with a single sentinel per occurrence. */

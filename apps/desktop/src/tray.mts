@@ -1,4 +1,4 @@
-import { Menu, Tray, app, dialog, nativeImage, type BrowserWindow, type NativeImage } from "electron";
+import { Menu, Tray, app, nativeImage, type BrowserWindow, type NativeImage } from "electron";
 import path from "node:path";
 import {
   applyTrayBadge as applyTrayBadgePolicy,
