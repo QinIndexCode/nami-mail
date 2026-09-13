@@ -1,9 +1,15 @@
-name: Deploy landing page
+name: Deploy site
 
 on:
   push:
     branches: [main]
-    paths: ["site/**", "docs/**", "scripts/build-docs-site.mjs"]
+    # A change to this workflow is itself worth deploying, so the deploy that a
+    # fix produces is the one that proves the fix.
+    paths:
+      - "site/**"
+      - "docs/**"
+      - "scripts/build-docs-site.mjs"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
@@ -28,7 +34,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.14.0
-      - name: Build the documentation pages
+          cache: npm
+      # The pages are pre-rendered from `docs/`, which needs the Markdown parser
+      # declared in the root package. `--ignore-scripts` skips the repository's
+      # postinstall, which downloads the Electron runtime that a static site
+      # build has no use for.
+      - name: Install the build dependencies
+        run: npm ci --ignore-scripts
+      - name: Build the site from docs/
         run: node scripts/build-docs-site.mjs
       - name: Setup Pages
         uses: actions/configure-pages@v5

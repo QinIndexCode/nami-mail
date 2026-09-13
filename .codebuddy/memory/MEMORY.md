@@ -83,6 +83,7 @@
 - **语言机制**：落地页与文档总览是**双语同页 + CSS 隐藏**（`data-bilingual` + `data-lang`，`theme-init.js` 首屏按 localStorage/navigator 决定）；单篇文档是单语言页面，右上角切换是**真实 `<a>` 指向另一语言的同名页**（`docs.js` 只记偏好），无 JS 也能跳。
 - **可复用校验手法**：构建脚本自己的报告看不到页面骨架的链接，必须另写独立检查器遍历 `site/**/*.html` 解析 href/src 与锚点 id（本轮靠它抓到 149 页全体前缀少一层的 bug）。设计核验用 Playwright 截图 + DOM 指标（`getComputedStyle(...).gridTemplateColumns` 列数、`offsetParent` 计数、`html.lang`），比逐张看图省 token；临时脚本用完即删。
 - 构建期新增根 devDependencies：`unified` / `remark-parse` / `remark-gfm` / `remark-rehype`（`--offline` 装不上，需联网）。GitHub Pages 站点已启用（`build_type: workflow`）。
+- **`site/docs/` 是 gitignore 的生成物 → 任何依赖它的测试/断言必须在"未构建"状态验证一次**（临时改名 `site/docs` 再跑）：首轮 CI 就抓到"本地 13/13 全绿、全新检出直接失败"的假通过。改动 `site/` 后本地要重建才能预览 `./docs/...` 链接。
 
 ### 文档配图（2026-09-12 重做）
 - README 里嵌的截图：`docs/nami-mail-inbox-{zh-CN,en}.png`、`docs/nami-mail-agent-{zh-CN,en}.png`（另有 `nami-mail-wordmark.png` 是 logo，非截图）。**未被引用的 `nami-mail-inbox.png` 已删除**。
