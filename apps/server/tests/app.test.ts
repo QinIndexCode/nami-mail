@@ -403,7 +403,7 @@ it("keeps an Agent stream running after the client closes its response", async (
         expect(post.statusCode).toBe(200);
 
         const deadline = Date.now() + 10_000;
-        let persisted: { references?: Array<{ id: string; subject?: string }> } | undefined;
+        let persisted: { content?: string; references?: Array<{ id: string; subject?: string }> } | undefined;
         while (Date.now() < deadline) {
           const snapshot = await streamingApp.inject({ method: "GET", url: `/api/agent/conversations/${conversation.id}` });
           persisted = snapshot.json().messages.find((message: { role: string }) => message.role === "user");
@@ -1182,8 +1182,8 @@ it("keeps an Agent stream running after the client closes its response", async (
       const payload = JSON.parse(row.payload_json) as { accountId: string; entries: Array<{ id: string; mailbox: string; uid: number; add: string[]; remove: string[] }> };
       expect(payload.accountId).toBe(row.account_id);
       expect(payload.entries.length).toBe(1);
-      expect(payload.entries[0].add).toEqual(["\\Seen"]);
-      expect(payload.entries[0].remove).toEqual([]);
+      expect(payload.entries[0]?.add).toEqual(["\\Seen"]);
+      expect(payload.entries[0]?.remove).toEqual([]);
     }
     expect(flagged).toEqual(["\\Seen"]);
   });

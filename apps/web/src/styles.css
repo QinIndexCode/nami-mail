@@ -7671,6 +7671,7 @@ color:var(--text);
 text-align:center;
 font-variant-numeric:tabular-nums;
 -moz-appearance:textfield;
+appearance:textfield;
 background:0 0;
 outline:none;
 font-family:inherit;
@@ -8845,6 +8846,7 @@ color:var(--text-soft)
 }
 .template-preview
 {
+line-clamp:2;
 -webkit-line-clamp:2;
 color:var(--text-faint);
 -webkit-box-orient:vertical;
@@ -11764,6 +11766,7 @@ overflow:hidden
 }
 .agent-citation-card small
 {
+line-clamp:2;
 -webkit-line-clamp:2;
 text-overflow:ellipsis;
 overflow-wrap:anywhere;

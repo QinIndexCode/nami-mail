@@ -18,12 +18,21 @@ export const MESSAGE_FTS_SCHEMA_SQL =
   `CREATE VIRTUAL TABLE IF NOT EXISTS ${MESSAGE_FTS_TABLE} USING fts5(subject, from_name, from_address, "to", "cc", attachment, body, message_id UNINDEXED, tokenize = 'trigram');`;
 
 /**
+ * The payload the FTS mirror needs. Only the four text columns every search
+ * relies on are required: `ftsTextForPayload` treats missing recipients and
+ * attachments as empty, and sync indexes a message as soon as its text is
+ * decrypted, which is before attachments are parsed.
+ */
+export type FtsPayload = Pick<MessagePayload, "subject" | "fromName" | "fromAddress" | "textBody">
+  & Partial<Pick<MessagePayload, "to" | "cc" | "attachments">>;
+
+/**
  * Text fields mirrored from the decrypted message payload. They intentionally
  * mirror the historical substring semantics over subject, sender, and body, and
  * additionally index recipient addresses/names and attachment filenames so a
  * search can locate "who was mailed at X" or "message with the report.pdf".
  */
-export function ftsTextForPayload(payload: Pick<MessagePayload, "subject" | "fromName" | "fromAddress" | "to" | "cc" | "textBody" | "attachments">): {
+export function ftsTextForPayload(payload: FtsPayload): {
   subject: string;
   fromName: string;
   fromAddress: string;
@@ -73,7 +82,7 @@ export function ensureFtsSchemaColumns(db: DatabaseHandle): boolean {
 }
 
 /** Deletes then re-inserts the index row so re-synced payload text stays current. */
-export function indexMessageFts(db: DatabaseHandle, messageId: string, payload: Pick<MessagePayload, "subject" | "fromName" | "fromAddress" | "to" | "cc" | "textBody" | "attachments">): void {
+export function indexMessageFts(db: DatabaseHandle, messageId: string, payload: FtsPayload): void {
   const text = ftsTextForPayload(payload);
   db.transaction(() => {
     deleteStatement(db).run(messageId);

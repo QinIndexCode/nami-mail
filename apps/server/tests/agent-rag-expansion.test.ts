@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentRagWorker } from "../src/agent-rag-worker.js";
+import { AgentRagWorker, type AgentRagExpansionReason } from "../src/agent-rag-worker.js";
 import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
 import { applyAgentStoreSchema } from "../src/agent/schema.js";
 import { AgentSourceEventOutbox } from "../src/agent/source-events.js";
@@ -79,7 +79,11 @@ describe("Agent RAG query expansion", () => {
         },
       });
     }
-    const spy = vi.fn(async (query: string) => expand ? expand(query) : []);
+    // The full call shape, so the test can assert on the reason the worker passes.
+    const spy = vi.fn(
+      async (query: string, _signal?: AbortSignal, _reason?: AgentRagExpansionReason) =>
+        (expand ? expand(query) : []),
+    );
     const worker = new AgentRagWorker({
       db: database,
       masterKey,
