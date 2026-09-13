@@ -14,6 +14,7 @@ export type AgentProviderSummary = {
   kind: AgentProviderKind;
   endpoint: string;
   model: string;
+  /** Tolerated for older records; retrieval no longer uses embeddings. */
   embeddingModel?: string;
   timeoutMs: number;
   apiKeyConfigured: boolean;
@@ -42,6 +43,7 @@ export type AgentProviderInput = {
   kind: AgentProviderKind;
   endpoint: string;
   model: string;
+  /** Tolerated for older records; retrieval no longer uses embeddings. */
   embeddingModel?: string;
   apiKey?: string;
   clearApiKey?: boolean;

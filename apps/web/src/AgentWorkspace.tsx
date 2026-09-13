@@ -464,7 +464,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
         kind: "ollama",
         endpoint: "http://127.0.0.1:11434/v1",
         model: "llama3.2",
-        embeddingModel: "nomic-embed-text",
         timeoutMs: 120000,
         apiKeyConfigured: true,
         configured: true,

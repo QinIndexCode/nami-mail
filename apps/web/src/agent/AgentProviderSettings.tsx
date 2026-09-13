@@ -35,7 +35,6 @@ type ProviderKindMetadata = {
   endpointSuggestion: string;
   endpointHintKey: string;
   modelPlaceholder: string;
-  embeddingModelPlaceholder?: string;
 };
 
 /** Per-protocol defaults shown in the provider form (placeholders and pre-fill). */
@@ -44,13 +43,11 @@ const providerKindMetadata: Record<AgentProviderKind, ProviderKindMetadata> = {
     endpointSuggestion: "",
     endpointHintKey: "agent.providers.fields.endpointHint",
     modelPlaceholder: "gpt-4.1-mini",
-    embeddingModelPlaceholder: "text-embedding-3-small",
   },
   ollama: {
     endpointSuggestion: ollamaEndpointSuggestion,
     endpointHintKey: "agent.providers.fields.ollamaEndpointHint",
     modelPlaceholder: "llama3.2",
-    embeddingModelPlaceholder: "nomic-embed-text",
   },
   anthropic: {
     endpointSuggestion: "https://api.anthropic.com",
@@ -74,7 +71,6 @@ export type ProviderForm = {
   kind: AgentProviderKind;
   endpoint: string;
   model: string;
-  embeddingModel: string;
   apiKey: string;
   clearApiKey: boolean;
   timeoutMs: string;
@@ -96,7 +92,6 @@ export function providerFormFor(provider: AgentProviderSummary | null, defaultPr
       kind: "openai-compatible",
       endpoint: "",
       model: "",
-      embeddingModel: "",
       apiKey: "",
       clearApiKey: false,
       timeoutMs: "45000",
@@ -109,7 +104,6 @@ export function providerFormFor(provider: AgentProviderSummary | null, defaultPr
     kind: provider.kind,
     endpoint: provider.endpoint,
     model: provider.model,
-    embeddingModel: provider.embeddingModel ?? "",
     apiKey: "",
     clearApiKey: false,
     timeoutMs: String(provider.timeoutMs),
@@ -185,9 +179,6 @@ export function AgentProviderSettings({
       return false;
     }
   }, [form.endpoint]);
-  // These kinds serve the OpenAI-compatible /embeddings endpoint on the same
-  // origin as chat, so the optional embedding model is exposed for them.
-  const embeddingCapable = form.kind === "openai-compatible" || form.kind === "ollama";
   const kindMeta = providerKindMetadata[form.kind];
 
   const healthFeedback = (provider: AgentProviderSummary | undefined): string => {
@@ -350,7 +341,6 @@ export function AgentProviderSettings({
       kind: form.kind,
       endpoint: form.endpoint.trim(),
       model: form.model.trim(),
-      ...(form.embeddingModel.trim() ? { embeddingModel: form.embeddingModel.trim() } : {}),
       timeoutMs,
       allowCloudMailContent: isOllama || isLocalEndpoint ? false : form.allowCloudMailContent,
       ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
@@ -463,7 +453,6 @@ export function AgentProviderSettings({
             <label className="agent-provider-field"><span><strong>{t("agent.providers.fields.label")}</strong></span><input value={form.label} maxLength={128} disabled={saving} onChange={(event) => updateForm("label", event.target.value)} autoComplete="off" /></label>
             <label className="agent-provider-field"><span><strong>{t("agent.providers.fields.endpoint")}</strong><button className="agent-provider-help" type="button" aria-label={t(kindMeta.endpointHintKey)} data-tooltip={t(kindMeta.endpointHintKey)}><CircleHelp size={12} /></button></span><input value={form.endpoint} placeholder={kindMeta.endpointSuggestion || t("agent.providers.fields.endpointPlaceholder")} disabled={saving} onChange={(event) => updateForm("endpoint", event.target.value)} autoComplete="url" spellCheck={false} /></label>
             <label className="agent-provider-field"><span><strong>{t("agent.providers.fields.model")}</strong></span><input value={form.model} placeholder={kindMeta.modelPlaceholder} maxLength={256} disabled={saving} onChange={(event) => updateForm("model", event.target.value)} autoComplete="off" spellCheck={false} /></label>
-{embeddingCapable && <label className="agent-provider-field"><span><strong>{t("agent.providers.fields.embeddingModel")}</strong><button className="agent-provider-help" type="button" aria-label={t("agent.providers.fields.embeddingModelHint")} data-tooltip={t("agent.providers.fields.embeddingModelHint")}><CircleHelp size={12} /></button></span><input value={form.embeddingModel} placeholder={kindMeta.embeddingModelPlaceholder} maxLength={256} disabled={saving} onChange={(event) => updateForm("embeddingModel", event.target.value)} autoComplete="off" spellCheck={false} /></label>}
 <label className="agent-provider-field agent-provider-timeout"><span><strong>{t("agent.providers.fields.timeout")}</strong><button className="agent-provider-help" type="button" aria-label={t("agent.providers.fields.timeoutHint")} data-tooltip={t("agent.providers.fields.timeoutHint")}><CircleHelp size={12} /></button></span><input type="text" inputMode="numeric" pattern="[0-9]*" value={form.timeoutMs} disabled={saving} onChange={(event) => updateForm("timeoutMs", event.target.value)} autoComplete="off" /></label>
             <div className="agent-provider-field"><span><strong>{t("agent.providers.fields.apiKey")}</strong><button className="agent-provider-help" type="button" aria-label={selectedProvider?.apiKeyConfigured ? t("agent.providers.fields.apiKeyConfigured") : t("agent.providers.fields.apiKeyOptional")} data-tooltip={selectedProvider?.apiKeyConfigured ? t("agent.providers.fields.apiKeyConfigured") : t("agent.providers.fields.apiKeyOptional")}><CircleHelp size={12} /></button></span><div className="agent-provider-secret"><input type={keyVisible ? "text" : "password"} value={form.apiKey} disabled={saving || form.clearApiKey} onChange={(event) => updateForm("apiKey", event.target.value)} placeholder={selectedProvider?.apiKeyConfigured ? t("agent.providers.fields.apiKeyKeep") : t("agent.providers.fields.apiKeyPlaceholder")} autoComplete="new-password" spellCheck={false} /><button className="icon-button" type="button" disabled={saving || form.clearApiKey} aria-label={keyVisible ? t("agent.providers.fields.hideKey") : t("agent.providers.fields.showKey")} data-tooltip={keyVisible ? t("agent.providers.fields.hideKey") : t("agent.providers.fields.showKey")} onClick={() => setKeyVisible((visible) => !visible)}>{keyVisible ? <EyeOff size={15} /> : <Eye size={15} />}</button></div>{selectedProvider?.apiKeyConfigured && <button className={`agent-provider-inline-toggle ${form.clearApiKey ? "active" : ""}`} type="button" role="switch" aria-checked={form.clearApiKey} disabled={saving || Boolean(form.apiKey)} onClick={() => updateForm("clearApiKey", !form.clearApiKey)}><span aria-hidden="true" /><span>{t("agent.providers.fields.clearApiKey")}</span></button>}</div>
             <button className={`agent-provider-toggle-row ${form.allowCloudMailContent ? "active" : ""}`} type="button" role="switch" aria-checked={form.allowCloudMailContent} disabled={saving || isOllama || isLocalEndpoint} onClick={() => updateForm("allowCloudMailContent", !form.allowCloudMailContent)}><span><strong>{t("agent.providers.cloud.title")}</strong><button className="agent-provider-help" type="button" aria-label={isOllama || isLocalEndpoint ? t("agent.providers.cloud.localOnly") : t("agent.providers.cloud.description")} data-tooltip={isOllama || isLocalEndpoint ? t("agent.providers.cloud.localOnly") : t("agent.providers.cloud.description")}><CircleHelp size={12} /></button></span><span className="agent-provider-switch" aria-hidden="true"><span /></span></button>

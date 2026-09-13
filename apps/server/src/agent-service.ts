@@ -14,7 +14,6 @@ import {
   type CallerContext,
   type ConfirmationDecision,
   type ConfirmationRequest,
-  type EmbeddingProvider,
   type LlmProvider,
   type ProviderChatMessage,
   type ProviderChatRequest,
@@ -73,7 +72,6 @@ import { decryptRootAgentRecord, encryptRootAgentRecord, canonicalAgentJson } fr
 import type { AgentSourceEventOutbox } from "./agent/source-events.js";
 import {
   AgentRagWorker,
-  type AgentRagEmbeddingOptions,
   type AgentRagSearchResult,
   type RagVerifyReport,
 } from "./agent-rag-worker.js";
@@ -83,6 +81,59 @@ import { supportedLocale, type SupportedLocale } from "./localization.js";
 import type { AutoReplyEvaluationInput, AutoReplyEvaluationResult } from "./agent/auto-reply.js";
 
 const providerConfigurationVersion = 1;
+/**
+ * Hard cap for the second retrieval arm's provider call. It runs before the
+ * first streamed token, so a slow model may never be the reason a reply feels
+ * slow: a timeout simply means lexical-only retrieval.
+ */
+const ragExpansionTimeoutMs = 800;
+const ragExpansionMaxTerms = 8;
+const ragExpansionMaxAnswerCharacters = 4_000;
+const ragExpansionCacheEntries = 64;
+/**
+ * The expander is a retrieval aid, not a conversation partner: it must return
+ * terms likely to occur literally in mail, in whichever language the mailbox
+ * uses, and nothing else. Anything the user typed is data here, never an
+ * instruction.
+ */
+const ragExpansionSystemPrompt = [
+  "You help a local mail search engine find messages whose wording differs from the user's question.",
+  "Given the user's question, list up to 8 search terms that are likely to appear literally in the messages being looked for.",
+  "Include synonyms, domain terms, and the key concept in other likely languages (for example both Chinese and English, and both a formal and a colloquial name).",
+  "Prefer nouns and proper nouns over verbs. Never include punctuation, dates, or the question repeated verbatim.",
+  'Reply with a JSON array of strings only, for example: ["invoice", "billing", "发票", "报销"].',
+].join(" ");
+
+/**
+ * Pulls the terms out of an answer that should be a JSON array, tolerating the
+ * prose or bulleted list a model sometimes returns instead. Returning nothing is
+ * always safe: retrieval simply stays lexical.
+ */
+function parseRagExpansionTerms(answer: string): string[] {
+  const text = answer.trim();
+  if (!text) return [];
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start !== -1 && end > start) {
+    try {
+      const parsed = JSON.parse(text.slice(start, end + 1)) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .slice(0, ragExpansionMaxTerms);
+      }
+    } catch {
+      // Fall through to the separator split below.
+    }
+  }
+  return text
+    .split(/[\n,;、，]+/)
+    .map((line) => line.replace(/^[\s\-*\d.]+/, "").trim())
+    .filter(Boolean)
+    .slice(0, ragExpansionMaxTerms);
+}
 const defaultProviderRecordId = "agent-provider-default";
 const maximumConversationTitleLength = 120;
 const maximumMessageLength = 16_000;
@@ -932,6 +983,8 @@ export class AgentService {
    *  reopens while the agent is still answering render the partial reply and
    *  its tool activity immediately instead of waiting for the turn to persist. */
   private readonly activeRuns = new Map<string, ActiveRun>();
+  /** Question → paraphrases, so asking the same thing twice costs one call. */
+  private readonly ragExpansionCache = new Map<string, readonly string[]>();
   private readonly confirmationStore?: ImmutableGuiConfirmationStore;
   private readonly pendingConfirmations = new Map<string, PendingAgentConfirmation>();
   private readonly confirmationPayloadScopes = new WeakMap<ToolCall, ConfirmationPayloadScope>();
@@ -956,6 +1009,9 @@ export class AgentService {
       masterKey: options.masterKey,
       lifecycle: options.lifecycle,
       sourceEvents: options.sourceEvents,
+      // The second retrieval arm resolves its provider on every call, so a
+      // consent or configuration change takes effect without re-wiring.
+      expansion: { expand: (query, signal) => this.expandRagQuery(query, signal) },
     });
     this.tools = createToolRegistry([
       ...(options.mailApplication
@@ -1010,35 +1066,80 @@ export class AgentService {
   }
 
   start(): void {
-    this.refreshRagEmbedding();
     this.rag.start();
   }
 
   /**
-   * Resolves the embedding provider for RAG semantic retrieval from the
-   * current default provider. Semantic indexing is enabled only when the
-   * provider kind can serve embeddings, a model id is available, and cloud
-   * mail content is explicitly authorized (for cloud endpoints). The returned
-   * options carry the same consent boundary the worker enforces for lexical
-   * retrieval; when they are absent the worker never sends mail text anywhere.
+   * Second retrieval arm: asks the configured model for paraphrases of the
+   * user's question, so mail that never contains the user's own wording can
+   * still be found (「报销」 and 「费用申请」 share no character, which no amount of
+   * keyword indexing can bridge).
+   *
+   * Deliberately best-effort and strictly capped: this call lands before the
+   * first streamed token, so a slow provider must not be able to make a reply
+   * feel slow — a timeout, a refusal, a malformed answer or a mid-flight cancel
+   * all return "no extra terms", leaving retrieval exactly as it was. Only the
+   * user's own question is ever sent; mail content never leaves the process
+   * because the index is local.
    */
-  private embeddingForRag(): AgentRagEmbeddingOptions | undefined {
+  private async expandRagQuery(query: string, signal?: AbortSignal): Promise<readonly string[]> {
+    const question = query.trim();
+    if (!question) return [];
+    const cached = this.ragExpansionCache.get(question);
+    if (cached) return cached;
     const defaultProviderId = this.providers.list().defaultProviderId;
-    if (!defaultProviderId) return undefined;
+    if (!defaultProviderId) return [];
     const configuration = this.providers.get(defaultProviderId);
-    if (!configuration) return undefined;
-    if (configuration.kind !== "openai-compatible" && configuration.kind !== "ollama") return undefined;
+    if (!configuration) return [];
     const summary = providerSummary(configuration);
-    if (summary.cloud && !summary.cloudContentConsent) return undefined;
-    const model = configuration.embeddingModel?.trim() || configuration.model.trim();
-    if (!model) return undefined;
+    // This arm exists only to read the user's mailbox, so it obeys the same
+    // boundary as retrieval itself: no cloud endpoint without explicit consent.
+    if (summary.cloud && !summary.cloudContentConsent) return [];
     const provider = this.providerForConfiguration(configuration);
-    if (typeof (provider as Partial<EmbeddingProvider>).embed !== "function") return undefined;
-    return { provider: provider as unknown as EmbeddingProvider, model };
+    if (!provider.streamChat) return [];
+    const chat: ProviderChatRequest = {
+      requestId: `rag-expansion-${randomUUID()}`,
+      providerId: configuration.id,
+      model: configuration.model,
+      messages: [
+        { role: "system", content: ragExpansionSystemPrompt },
+        { role: "user", content: question },
+      ],
+      tools: [],
+      allowToolCalls: false,
+      responseFormat: "text",
+      temperature: 0,
+    };
+    const controller = new AbortController();
+    const unlink = linkAbortSignals(controller, [signal]);
+    const timer = setTimeout(() => controller.abort(), ragExpansionTimeoutMs);
+    let answer = "";
+    try {
+      for await (const event of provider.streamChat(chat, { signal: controller.signal })) {
+        if (event.type === "text_delta") {
+          answer += event.delta;
+          if (answer.length >= ragExpansionMaxAnswerCharacters) break;
+        }
+        if (event.type === "error") return [];
+      }
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timer);
+      unlink();
+    }
+    const terms = parseRagExpansionTerms(answer);
+    if (terms.length) this.rememberRagExpansion(question, terms);
+    return terms;
   }
 
-  private refreshRagEmbedding(): void {
-    this.rag.setEmbedding(this.embeddingForRag());
+  /** Bounded FIFO: the point is to avoid a repeat provider call, not to keep history. */
+  private rememberRagExpansion(question: string, terms: readonly string[]): void {
+    if (this.ragExpansionCache.size >= ragExpansionCacheEntries) {
+      const oldest = this.ragExpansionCache.keys().next().value;
+      if (oldest !== undefined) this.ragExpansionCache.delete(oldest);
+    }
+    this.ragExpansionCache.set(question, terms);
   }
 
   async close(): Promise<void> {
@@ -1052,9 +1153,15 @@ export class AgentService {
     await this.rag.stop();
   }
 
-  /** Read-only RAG consistency maintenance check. */
+  /**
+   * Read-only RAG consistency maintenance check, plus the second arm's counters:
+   * `triggered` counts the searches where the lexical arm came back empty,
+   * `recovered` those the expansion actually rescued, and `empty` those it could
+   * not. This is the evidence needed before widening the arm (for example by
+   * lowering its score threshold), so it is reported rather than logged.
+   */
   verifyRag(): RagVerifyReport {
-    return this.rag.verify();
+    return { ...this.rag.verify(), expansion: this.rag.expansionStats() };
   }
 
   providerList(): AgentProviderList {
@@ -1062,16 +1169,12 @@ export class AgentService {
   }
 
   createProvider(input: AgentProviderInput): AgentProviderSummary {
-    const summary = this.providers.save(input);
-    this.refreshRagEmbedding();
-    return summary;
+    return this.providers.save(input);
   }
 
   updateProvider(id: string, input: AgentProviderInput): AgentProviderSummary {
     if (!this.providers.get(id)) throw new AgentServiceError("NOT_FOUND", "模型配置不存在。", 404);
-    const summary = this.providers.save(input, id);
-    this.refreshRagEmbedding();
-    return summary;
+    return this.providers.save(input, id);
   }
 
   async checkProvider(id: string, signal?: AbortSignal): Promise<AgentProviderSummary> {
@@ -1087,7 +1190,6 @@ export class AgentService {
 
   deleteProvider(id: string): void {
     if (!this.providers.remove(id)) throw new AgentServiceError("NOT_FOUND", "模型配置不存在。", 404);
-    this.refreshRagEmbedding();
   }
 
   mcpServerList(): AgentMcpServerList {
@@ -2043,33 +2145,49 @@ export class AgentService {
         toolActivities = [...toolActivities.filter((activity) => activity.id !== activityId), runningActivity];
         yield { type: "tool", activity: runningActivity };
         syncInFlight();
-        // The drain does not observe a signal itself; race it so a cancel or
-        // the run watchdog can break a stuck drain instead of hanging the
-        // activeRuns slot forever (every later send would be refused).
-        await awaitWithSignal(this.rag.drainOnce(), controller.signal);
-        this.assertRunCurrent(lifecycleTasks, controller.signal);
-        ragResults.push(...await this.rag.search(
-          state.metadata.scope.accountIds,
-          providerContent,
-          6,
-          controller.signal,
-        ));
-        this.assertRunCurrent(lifecycleTasks, controller.signal);
-        // No confidence floor here: lexical and semantic scores live on
-        // different scales, so a fixed threshold would silently drop valid
-        // semantic matches. Redundancy is instead mitigated by the explicit
-        // "retrieved candidates, not user input" labelling below, which lets
-        // the model decide what is actually relevant to the user's question.
+        let ragFailure: string | undefined;
+        try {
+          // The drain does not observe a signal itself; race it so a cancel or
+          // the run watchdog can break a stuck drain instead of hanging the
+          // activeRuns slot forever (every later send would be refused).
+          await awaitWithSignal(this.rag.drainOnce(), controller.signal);
+          this.assertRunCurrent(lifecycleTasks, controller.signal);
+          ragResults.push(...await this.rag.search(
+            state.metadata.scope.accountIds,
+            providerContent,
+            6,
+            controller.signal,
+          ));
+          this.assertRunCurrent(lifecycleTasks, controller.signal);
+        } catch (error) {
+          // Retrieval is an accessory, not the answer: a failure here must not
+          // abort the turn. It must not leave the activity spinning either — the
+          // transcript would show a search that never finished.
+          ragFailure = error instanceof Error ? error.message : t("status.rag_failed");
+          ragResults.length = 0;
+        }
+        // No confidence floor here: BM25 sums are not comparable across queries,
+        // so a fixed threshold would silently drop valid matches. Redundancy is
+        // instead mitigated by the explicit "retrieved candidates, not user
+        // input" labelling below, which lets the model decide what is relevant.
         citations = ragResults.map(messageForRag);
         for (const citation of citations) yield { type: "citation", citation };
         syncInFlight();
-        const completedActivity: AgentToolActivity = {
-          id: activityId,
-          toolName: "rag.search",
-          title: "Search local mail",
-          state: "completed",
-          summary: ragResults.length ? t("status.rag_found", { count: ragResults.length }) : t("status.rag_empty"),
-        };
+        const completedActivity: AgentToolActivity = ragFailure
+          ? {
+            id: activityId,
+            toolName: "rag.search",
+            title: "Search local mail",
+            state: "failed",
+            summary: ragFailure,
+          }
+          : {
+            id: activityId,
+            toolName: "rag.search",
+            title: "Search local mail",
+            state: "completed",
+            summary: ragResults.length ? t("status.rag_found", { count: ragResults.length }) : t("status.rag_empty"),
+          };
         toolActivities = [...toolActivities.filter((activity) => activity.id !== activityId), completedActivity];
         yield { type: "tool", activity: completedActivity };
         syncInFlight();

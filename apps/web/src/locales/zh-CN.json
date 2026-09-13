@@ -1634,8 +1634,7 @@
     "agent.providers.fields.endpointPlaceholder": "https://api.example.com/v1",
     "agent.providers.fields.model": "模型名称",
     "agent.providers.fields.modelHint": "填写服务提供的准确模型 ID。",
-    "agent.providers.fields.embeddingModel": "嵌入模型",
-    "agent.providers.fields.embeddingModelHint": "选填。用于本地语义检索的嵌入模型 ID；留空则不启用语义检索。若服务未单独提供嵌入模型，可留空以使用对话模型。",
+
     "agent.providers.fields.timeout": "请求超时",
     "agent.providers.fields.timeoutHint": "单位为毫秒，可设置 1,000 到 120,000。",
     "agent.providers.fields.apiKey": "API 密钥",

@@ -20,7 +20,7 @@ Check schema, cleaner, chunker, and page-revision versions. Unsupported migratio
 
 ## Memory or performance is too high
 
-Bound query/backfill scope, candidates, and concurrency; check for an unfinished full backfill or duplicate events. Memory structures can be released and rebuilt from decryptable pages. Do not persist plaintext vector caches or delete pages belonging to active accounts just to reduce memory.
+Bound query/backfill scope, candidates, and concurrency; check for an unfinished full backfill or duplicate events. Memory structures can be released and rebuilt from decryptable pages. Do not persist plaintext caches or delete pages belonging to active accounts just to reduce memory.
 
 ## Reporting an issue
 
