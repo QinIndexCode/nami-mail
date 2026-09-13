@@ -256,15 +256,16 @@ test("the landing page only links at documents and assets that exist", () => {
     assert.ok(existsSync(join(repoRoot, `${source}.md`)), `landing page links at a missing document: ${document}`);
   }
 
-  // Every local stylesheet, script and image the landing page loads. Directory
-  // links are excluded: the only one is `./docs/`, which the build generates.
+  // Every local stylesheet, script and image the landing page loads. Links into
+  // the documentation are covered by the check above, and `site/docs/` does not
+  // exist until the build runs — so they must not be looked for on disk here.
   const links = [...html.matchAll(/(?:href|src)="\.\/([^"#]*)"/g)].map((match) => match[1]);
   assert.deepEqual(
     links.filter((link) => link.endsWith("/")),
     ["docs/"],
     "the only directory the landing page links to must be the generated documentation root",
   );
-  const assets = links.filter((link) => link !== "" && !link.endsWith("/"));
+  const assets = links.filter((link) => link !== "" && !link.endsWith("/") && !link.startsWith("docs/"));
   assert.ok(assets.length > 0, "expected the landing page to load local assets");
   for (const asset of assets) {
     assert.ok(existsSync(join(repoRoot, "site", asset)), `landing page references a missing asset: ${asset}`);
