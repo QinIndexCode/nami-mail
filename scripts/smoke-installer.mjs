@@ -392,6 +392,29 @@ async function waitForNamiMailPids(expectedPids, description) {
   assert.deepEqual(currentPids, expectedPids, `${description} left Nami Mail processes running.`);
 }
 
+/**
+ * Windows can keep a freshly written executable busy for a moment after the
+ * writer exits: Defender scans it, and the last handle of an exiting process
+ * outlives the process-exit event the waiter above saw. The corruption probe
+ * therefore retries the overwrite a few times before giving up. EBUSY and
+ * EPERM are the two codes Windows reports for that window; anything else is a
+ * real failure.
+ */
+async function overwriteFileWithRetry(filePath, contents, attempts = 10) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await fs.writeFile(filePath, contents, "utf8");
+      return;
+    } catch (error) {
+      if (error?.code !== "EBUSY" && error?.code !== "EPERM") throw error;
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  throw lastError;
+}
+
 async function smokeInstalledExecutable(executable) {
   const { stdout, stderr } = await execFileAsync(
     process.execPath,
@@ -571,8 +594,9 @@ try {
 
   // NSIS silent reinstalls are idempotent: the same-version reinstall must
   // perform a real overwrite and restore the packaged executable.
+  await waitForNamiMailPids(processesBefore, "Executable corruption probe");
   const pristineExecutableBytes = (await fs.stat(installedExecutable)).size;
-  await fs.writeFile(installedExecutable, "nami-installer-smoke-corruption", "utf8");
+  await overwriteFileWithRetry(installedExecutable, "nami-installer-smoke-corruption");
   assert.ok((await fs.stat(installedExecutable)).size < pristineExecutableBytes);
   await execFileAsync(installer, ["/S", `/D=${installDirectory}`], {
     cwd: projectRoot,
