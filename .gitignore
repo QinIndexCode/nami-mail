@@ -36,8 +36,6 @@ site/docs/
 tools/
 test-results/
 gui-test-screenshots/
-build/namimail.cmd
-build/namimail-path.ps1
 build/nami-update-trust.json.package-win-original
 scripts/*.png
 .playwright-mcp/

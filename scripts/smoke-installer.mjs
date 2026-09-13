@@ -155,14 +155,33 @@ function escapeRegularExpression(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Child environment for a command that must resolve `namimail` through the
+ * registered current-user Path and nothing else, so the smoke cannot pass by
+ * accident because the build machine already had the CLI on its Path.
+ *
+ * The registered value alone is not runnable though: `where.exe` — and nearly
+ * everything a `cmd /c` shells out to — lives in System32, which belongs to the
+ * *machine* Path, not the user one. A developer box usually carries System32 in
+ * its user Path as well, which is why this only failed on a clean CI runner with
+ * "where is not recognized". Appending the two system directories keeps the
+ * assertion honest: `where namimail.cmd` can still only resolve through the
+ * registry entry this installation registered.
+ */
+function cliCommandEnvironment(pathRecord) {
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment)) {
+    if (key.toLowerCase() === "path") delete environment[key];
+  }
+  const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
+  environment.Path = [pathRecord.value, path.join(systemRoot, "System32"), systemRoot].join(path.delimiter);
+  return environment;
+}
+
 async function smokeInstalledCli(launcher, pathRecord, version) {
   assert.equal(pathRecord.exists, true, "Nami Mail installation did not register a current-user Path value.");
   assert.equal(typeof pathRecord.value, "string", "Nami Mail installation registered an invalid current-user Path value.");
-  const commandEnvironment = { ...process.env };
-  for (const key of Object.keys(commandEnvironment)) {
-    if (key.toLowerCase() === "path") delete commandEnvironment[key];
-  }
-  commandEnvironment.Path = pathRecord.value;
+  const commandEnvironment = cliCommandEnvironment(pathRecord);
   const commandProcessor = process.env.ComSpec ?? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe");
   const { stdout, stderr } = await execFileAsync(
     commandProcessor,
@@ -189,11 +208,7 @@ const smokeMcpProtocolVersion = "2025-03-26";
 async function smokeInstalledMcp(launcher, pathRecord) {
   assert.equal(pathRecord.exists, true, "Nami Mail installation did not register a current-user Path value.");
   assert.equal(typeof pathRecord.value, "string", "Nami Mail installation registered an invalid current-user Path value.");
-  const commandEnvironment = { ...process.env };
-  for (const key of Object.keys(commandEnvironment)) {
-    if (key.toLowerCase() === "path") delete commandEnvironment[key];
-  }
-  commandEnvironment.Path = pathRecord.value;
+  const commandEnvironment = cliCommandEnvironment(pathRecord);
   const commandProcessor = process.env.ComSpec ?? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe");
   const initializeRequest = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: smokeMcpProtocolVersion } });
   const initializedNotification = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" });
@@ -377,6 +392,29 @@ async function waitForNamiMailPids(expectedPids, description) {
   assert.deepEqual(currentPids, expectedPids, `${description} left Nami Mail processes running.`);
 }
 
+/**
+ * Windows can keep a freshly written executable busy for a moment after the
+ * writer exits: Defender scans it, and the last handle of an exiting process
+ * outlives the process-exit event the waiter above saw. The corruption probe
+ * therefore retries the overwrite a few times before giving up. EBUSY and
+ * EPERM are the two codes Windows reports for that window; anything else is a
+ * real failure.
+ */
+async function overwriteFileWithRetry(filePath, contents, attempts = 10) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await fs.writeFile(filePath, contents, "utf8");
+      return;
+    } catch (error) {
+      if (error?.code !== "EBUSY" && error?.code !== "EPERM") throw error;
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  throw lastError;
+}
+
 async function smokeInstalledExecutable(executable) {
   const { stdout, stderr } = await execFileAsync(
     process.execPath,
@@ -403,6 +441,23 @@ async function smokeInstalledExecutable(executable) {
   assert.equal(result.isolatedDataDirectory, true);
   assert.equal(result.contentSecurityPolicy, true);
   return result;
+}
+
+/**
+ * NSIS runs the real uninstall from a %TEMP% copy and exits the original
+ * process immediately, so "the uninstaller returned" means nothing on its own.
+ * The directory and process waits narrow the window, but the registry delete
+ * lands last in the uninstall script: poll for the record to disappear instead
+ * of racing it with a single immediate check.
+ */
+async function waitForUninstallRecordRemoved() {
+  const deadline = Date.now() + 60_000;
+  let installations = await existingNamiMailInstallations();
+  while (installations.length > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    installations = await existingNamiMailInstallations();
+  }
+  return installations;
 }
 
 async function runUninstaller(uninstallerExecutable) {
@@ -539,8 +594,9 @@ try {
 
   // NSIS silent reinstalls are idempotent: the same-version reinstall must
   // perform a real overwrite and restore the packaged executable.
+  await waitForNamiMailPids(processesBefore, "Executable corruption probe");
   const pristineExecutableBytes = (await fs.stat(installedExecutable)).size;
-  await fs.writeFile(installedExecutable, "nami-installer-smoke-corruption", "utf8");
+  await overwriteFileWithRetry(installedExecutable, "nami-installer-smoke-corruption");
   assert.ok((await fs.stat(installedExecutable)).size < pristineExecutableBytes);
   await execFileAsync(installer, ["/S", `/D=${installDirectory}`], {
     cwd: projectRoot,
@@ -563,7 +619,7 @@ try {
   await runUninstaller(uninstaller);
   assert.equal(await waitForAbsent(installDirectory), true, "The NSIS uninstaller did not remove the test installation directory.");
   await waitForNamiMailPids(processesBefore, "Installer smoke");
-  assert.deepEqual(await existingNamiMailInstallations(), [], "The NSIS uninstall left a Nami Mail uninstall record behind.");
+  assert.deepEqual(await waitForUninstallRecordRemoved(), [], "The NSIS uninstall left a Nami Mail uninstall record behind.");
   const pathAfterUninstall = await currentUserPathRecord();
   assertCliPathRemoved(pathAfterUninstall, installDirectory);
   assert.deepEqual(pathAfterUninstall, pathBeforeInstall, "Nami Mail uninstall did not restore the original current-user Path record.");
