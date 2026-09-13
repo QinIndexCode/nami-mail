@@ -33,6 +33,13 @@ const REMOTE_ID_REPAIR_BATCH = 20;
  */
 const LEXICAL_CONFIDENCE_TERM_WEIGHT = 2.25;
 /**
+ * Why the second arm is being consulted, which decides how long its provider
+ * call may take. The two cases have very different budgets: on an empty lexical
+ * result the alternative to waiting is answering with no mail context at all,
+ * while on a weak one the answer already has candidates and must not be delayed.
+ */
+export type AgentRagExpansionReason = "empty" | "weak";
+/**
  * Lexical score at or below which the second arm is consulted as well.
  *
  * BM25 sums are not comparable across queries, so this stays at its disabled
@@ -163,11 +170,15 @@ export type AgentRagWorkerOptions = {
  * is resolved by the caller (AgentService) on every call, so cloud-content
  * consent and provider eligibility are enforced at the moment of use, and no
  * mail text is ever indexed or shipped anywhere. The implementation owns its own
- * timeout and must not throw: a slow or missing expander degrades to
- * lexical-only retrieval.
+ * timeout — sized from `reason`, see `AgentRagExpansionReason` — and must not
+ * throw: a slow or missing expander degrades to lexical-only retrieval.
  */
 export type AgentRagQueryExpansion = {
-  expand: (query: string, signal?: AbortSignal) => Promise<readonly string[]>;
+  expand: (
+    query: string,
+    signal: AbortSignal | undefined,
+    reason: AgentRagExpansionReason,
+  ) => Promise<readonly string[]>;
 };
 
 type IndexedPage = {
@@ -545,7 +556,7 @@ export class AgentRagWorker {
     // trigger that fuses both rankings instead.
     if (this.expansion && (candidates.length === 0 || best <= ragExpansionScoreThreshold)) {
       this.expansionCounters.triggered += 1;
-      const expandedTerms = await this.expandTerms(query, signal);
+      const expandedTerms = await this.expandTerms(query, signal, candidates.length === 0 ? "empty" : "weak");
       if (signal?.aborted) return [];
       if (expandedTerms.length) {
         const rescued = await this.searchHybrid(accountSet, messageSet, query, expandedTerms, effectiveLimit, signal);
@@ -769,10 +780,14 @@ export class AgentRagWorker {
    * before the second arm existed. The returned terms pass through `searchTerms`
    * so they are normalised and CJK-split exactly like the indexed text.
    */
-  private async expandTerms(query: string, signal?: AbortSignal): Promise<readonly string[]> {
+  private async expandTerms(
+    query: string,
+    signal: AbortSignal | undefined,
+    reason: AgentRagExpansionReason,
+  ): Promise<readonly string[]> {
     if (!this.expansion) return [];
     try {
-      const terms = await this.expansion.expand(query, signal);
+      const terms = await this.expansion.expand(query, signal, reason);
       return searchTerms(terms.join(" "));
     } catch {
       return [];

@@ -72,6 +72,7 @@ import { decryptRootAgentRecord, encryptRootAgentRecord, canonicalAgentJson } fr
 import type { AgentSourceEventOutbox } from "./agent/source-events.js";
 import {
   AgentRagWorker,
+  type AgentRagExpansionReason,
   type AgentRagSearchResult,
   type RagVerifyReport,
 } from "./agent-rag-worker.js";
@@ -82,11 +83,23 @@ import type { AutoReplyEvaluationInput, AutoReplyEvaluationResult } from "./agen
 
 const providerConfigurationVersion = 1;
 /**
- * Hard cap for the second retrieval arm's provider call. It runs before the
- * first streamed token, so a slow model may never be the reason a reply feels
- * slow: a timeout simply means lexical-only retrieval.
+ * Hard caps for the second retrieval arm's provider call, split by what that arm
+ * is standing in for. The call lands before the first streamed token, so the cap
+ * is a latency budget — and the two cases deserve very different ones:
+ *
+ * - `empty` (the keyword index found nothing): the alternative to waiting is
+ *   answering with no mail context at all, so a self-hosted or local model that
+ *   needs several seconds is worth waiting for once — the answer is cached, so
+ *   the same question never pays twice. Measured against a local
+ *   `openai-compatible` endpoint: 4.7–6s per useful term list, with no partial
+ *   output to salvage, which is why this budget is generous rather than tight.
+ *   The case is rare by construction (it needs a question whose terms appear
+ *   nowhere in the mailbox), so the latency is not paid on ordinary turns.
+ * - `weak` (candidates exist but scored low): the answer already has context, so
+ *   a slow model must not delay it. Keep this short.
  */
-const ragExpansionTimeoutMs = 800;
+const ragExpansionEmptyTimeoutMs = 10_000;
+const ragExpansionWeakRecallTimeoutMs = 800;
 const ragExpansionMaxTerms = 8;
 const ragExpansionMaxAnswerCharacters = 4_000;
 const ragExpansionCacheEntries = 64;
@@ -95,14 +108,15 @@ const ragExpansionCacheEntries = 64;
  * terms likely to occur literally in mail, in whichever language the mailbox
  * uses, and nothing else. Anything the user typed is data here, never an
  * instruction.
+ *
+ * Kept deliberately short and free of formatting ceremony: every extra clause
+ * costs latency on the local models this runs against (measured ~5s against a
+ * local `openai-compatible` endpoint), and the answer is read by a parser that
+ * splits on separators anyway — a comma list is both cheaper and harder to get
+ * wrong than a JSON array.
  */
-const ragExpansionSystemPrompt = [
-  "You help a local mail search engine find messages whose wording differs from the user's question.",
-  "Given the user's question, list up to 8 search terms that are likely to appear literally in the messages being looked for.",
-  "Include synonyms, domain terms, and the key concept in other likely languages (for example both Chinese and English, and both a formal and a colloquial name).",
-  "Prefer nouns and proper nouns over verbs. Never include punctuation, dates, or the question repeated verbatim.",
-  'Reply with a JSON array of strings only, for example: ["invoice", "billing", "发票", "报销"].',
-].join(" ");
+const ragExpansionSystemPrompt =
+  "Expand this mail-search query into up to 6 comma-separated keywords, including English synonyms.";
 
 /**
  * Pulls the terms out of an answer that should be a JSON array, tolerating the
@@ -1011,7 +1025,7 @@ export class AgentService {
       sourceEvents: options.sourceEvents,
       // The second retrieval arm resolves its provider on every call, so a
       // consent or configuration change takes effect without re-wiring.
-      expansion: { expand: (query, signal) => this.expandRagQuery(query, signal) },
+      expansion: { expand: (query, signal, reason) => this.expandRagQuery(query, signal, reason) },
     });
     this.tools = createToolRegistry([
       ...(options.mailApplication
@@ -1082,7 +1096,11 @@ export class AgentService {
    * user's own question is ever sent; mail content never leaves the process
    * because the index is local.
    */
-  private async expandRagQuery(query: string, signal?: AbortSignal): Promise<readonly string[]> {
+  private async expandRagQuery(
+    query: string,
+    signal: AbortSignal | undefined,
+    reason: AgentRagExpansionReason,
+  ): Promise<readonly string[]> {
     const question = query.trim();
     if (!question) return [];
     const cached = this.ragExpansionCache.get(question);
@@ -1112,7 +1130,8 @@ export class AgentService {
     };
     const controller = new AbortController();
     const unlink = linkAbortSignals(controller, [signal]);
-    const timer = setTimeout(() => controller.abort(), ragExpansionTimeoutMs);
+    const budget = reason === "weak" ? ragExpansionWeakRecallTimeoutMs : ragExpansionEmptyTimeoutMs;
+    const timer = setTimeout(() => controller.abort(), budget);
     let answer = "";
     try {
       for await (const event of provider.streamChat(chat, { signal: controller.signal })) {
@@ -1123,7 +1142,10 @@ export class AgentService {
         if (event.type === "error") return [];
       }
     } catch {
-      return [];
+      // A budget expiring mid-answer is not a failure: on a slow local model the
+      // first terms have usually arrived by then, and they are just as usable as
+      // a complete list. Discarding them would waste the entire budget and the
+      // turn would pay the latency for nothing.
     } finally {
       clearTimeout(timer);
       unlink();

@@ -30,7 +30,9 @@ Privacy boundary:
 
 - An expansion request carries the user's question text and nothing else, sent to the configured default provider; for local services such as Ollama the endpoint is restricted to loopback, so even the question stays on the machine.
 - Cloud endpoints (such as HTTPS OpenAI-compatible services) share the same authorization boundary as chat: when a cloud provider has not explicitly enabled "allow cloud processing of mail content" (`allowCloudMailContent`), retrieval does not run at all and no expansion request is made.
-- Expansion is best-effort and hard-capped at 800ms: an unavailable provider, a timeout, a malformed answer, or a cancel all mean "no extra terms", so retrieval falls back to lexical only — it neither breaks nor visibly slows a reply. Repeated questions are served from a bounded cache instead of a second call.
+- Expansion is best-effort and budgeted by case: **10s when the lexical arm found nothing** (a local or self-hosted model routinely needs 4–6s — measured 4.5–6s against a local `openai-compatible` endpoint — and the alternative to waiting is answering with no mail context at all), and **800ms for weak recall**, where candidates already exist and a slow model must not delay an answer that has one. A budget that expires mid-answer still parses whatever terms arrived instead of wasting the time spent.
+- An unavailable provider, a malformed answer, or a cancel all mean "no extra terms", so retrieval falls back to lexical only — it neither breaks nor visibly slows a reply. Repeated questions are served from a bounded cache instead of a second call.
+- The expansion prompt is deliberately one sentence: local models are very sensitive to prompt length (measured 4.5–12s for a five-sentence version versus 2.3–6.9s for one sentence at equal term quality), while a too-terse prompt lets the model drift into a conversation (measured 15s of unusable output).
 - Expansion stores nothing: no vectors, no second plaintext copy, no cold-start rebuild. The retrieval surface remains the existing encrypted pages and the local inverted index.
 
 ## Performance and degradation

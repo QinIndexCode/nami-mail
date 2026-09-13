@@ -104,12 +104,16 @@ describe("Agent RAG query expansion", () => {
 
   it("rescues a search whose wording never appears in the mail", async () => {
     const expand = vi.fn(async () => ["费用申请"]);
-    const { worker } = await fixture(expand);
+    const { worker, expand: spy } = await fixture(expand);
 
     // Nothing in either message contains 报/销/的/规/定.
     const results = await worker.search(["account-1"], "报销的规定", 5);
 
-    expect(expand.mock.calls[0]?.[0]).toBe("报销的规定");
+    expect(spy.mock.calls[0]?.[0]).toBe("报销的规定");
+    // The arm is told why it is being consulted, because an empty lexical result
+    // buys a much larger provider budget than a weak one — on a local model the
+    // difference between "no context" and "wait 5s for context".
+    expect(spy.mock.calls[0]?.[2]).toBe("empty");
     expect(results.map((result) => result.citation.messageId)).toEqual(["message-1"]);
     expect(worker.expansionStats()).toEqual({ triggered: 1, recovered: 1, empty: 0 });
   });
