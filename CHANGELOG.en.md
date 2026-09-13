@@ -1,17 +1,40 @@
-# Changelog
-
-[简体中文](CHANGELOG.zh-CN.md) | [English](CHANGELOG.en.md)
-
-This is the English translation of the Chinese source changelog. `CHANGELOG.zh-CN.md` remains the authoritative version history. It follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories and Semantic Versioning.
-
 ## [Unreleased]
+
+## [0.3.0] - 2026-09-13
 
 ### Added
 
+- Introduced the first formal External Mail v1 local interface (Windows desktop only), for paired local scripts and MCP clients while preserving local-first, default-deny, and read-only boundaries.
+- Added the installer-provided `namimail` PATH shim and direct `"Nami Mail.exe" --cli <args>` invocation.
+- Added `namimail service start`, `status`, and `doctor` to explicitly start or inspect the local AgentHost. Ordinary reads and MCP stdio never start a host implicitly.
+- Added desktop-visible `namimail pair --profile <name>` and `namimail revoke --profile <name>` flows. First pairing fixes the current account-ID snapshot, and an account added later never enters an old profile automatically.
+- Added local MCP stdio access via `namimail mcp start --profile <name>`: it supports MCP protocols `2025-03-26` and `2025-06-18` (the server echoes the client's requested version) and publishes sixteen External Mail v1 tools from `tools/list` (nine read-only plus seven bounded writes).
+- External Mail v1 reads accounts, folders, message lists, message detail (single and batch), threads, and attachment metadata, and provides bounded writes: draft create/update/delete, message move (archive/trash), seen/flagged state, send, and reply. Successful data is validated by versioned strict schemas; mail bodies are bounded plain text and attachments are never exported as files.
+- Added a local mail template library: manage frequently used subjects and bodies in Settings and insert one into a compose or reply with a single click.
+- Added inline attachment preview: PDFs and images render in a read-only viewer; DOCX / PPTX / XLSX and common text files get a read-only text preview without exporting the original file.
 - The desktop app now keeps a runtime log (`runtime-log.jsonl`): uncaught exceptions, renderer crashes, and local-service errors are written to disk (gated by `NAMI_MAIL_NO_STARTUP_LOG=1`), so it can be attached when reporting issues.
 - A broken auto-reply configuration (for example a missing API key) now shows a clear warning in Settings instead of failing silently.
 - The external MCP / CLI `messages move` command can now move a message to **any folder of the same account** (the `folder` argument), not only the archive and trash shortcuts; exactly one of `target` / `folder` is accepted, and the existing permission levels and confirmation flow are unchanged.
 - Added external **full-text search**, `messages search` (MCP `namimail_messages_search`): search local mail (subject, sender, recipients, attachment names and body) with account, folder, subject, attachment, date-range and cursor filters, returning a bounded excerpt centred on the keyword. Results report `searchedFrom` (only the last ~90 days are searched unless a range is given) and `newestLocalAt` (how current the local copy is), so a caller can tell "no match" apart from "not synced yet"; one- and two-character keywords, which used to silently return nothing, now fall back to substring matching.
+
+### Improved
+
+- Added stable success/failure envelopes, error codes, account scope, and update-drain recovery semantics for scripts and MCP. The GUI main instance actively rebuilds the named-pipe Broker after an abnormal exit, avoiding a false "running but unavailable" state.
+- CLI/MCP reach the running host only through a paired Windows named-pipe Broker restricted to the current user SID. A Fastify token, HTTP/TCP, SQLite, a file URI, mail credentials, or a database path cannot be reused as an integration channel.
+- Retained the experimental local NLLB-200 translation. It remains prepared and triggered explicitly in the desktop reader and is not a CLI/MCP tool.
+- The calendar palette and attachment icons are desaturated to match the muted semantic colours, and small labels on them now meet WCAG AA — the worst case went from 2.2:1 to ≥4.5:1 (dark theme adjusted too).
+- Popover and card shadows now come from the design tokens (one level for menus/popovers/filter panels, one for cards and status bars), so they switch consistently with the theme and no longer drift between similar overlays.
+- Performance: single-pass stats, newest-first sync, batched RAG backfill, and event-delegated scroll reveal.
+- The local mail service now runs in its own process: SQLite sync, IMAP traffic and decryption no longer share the window's event loop, so the UI no longer freezes during mailbox sync or bulk operations.
+- Keyboard accessibility: focus restore after attachment preview, title focus ring, keyboard navigation for slash/mention menus and recipient suggestions, and Shift+J/K range selection.
+- Startup and runtime logs are trimmed to a fixed line count instead of growing forever.
+- The Agent session lifecycle is now driven by a state machine with steadier background buffering and replay.
+- Switching account, folder, view or search no longer replaces the whole list with a six-row skeleton: the current mail stays until the new list arrives and fades in then, so the list no longer shrinks, the layout no longer jumps and the reading position is kept.
+- Desktop test scripts are explicitly registered and run in CI.
+
+### Documentation
+
+- Added the paired `v0.3.0` release notes and honestly noted: public-network auto-update acceptance from `0.2.3` to `0.3.0` is still pending, and the `0.3.0` Windows installer is not Authenticode-signed.
 
 ### Changed
 
@@ -42,41 +65,6 @@ This is the English translation of the Chinese source changelog. `CHANGELOG.zh-C
 - Desktop new mail: the notification subscription is no longer torn down and re-created on every refresh, so mail arriving during one no longer misses its alert and toast.
 - Agent: a streaming reply no longer rewinds when an earlier server snapshot arrives - switching back into a conversation and the background pickup poll now keep whichever copy of a row is further along - and a retry rejected by the server no longer carries the previous attempt's leftovers into the new reply.
 - Agent: pressing Stop drops the generating state immediately instead of waiting for the server to confirm, and renaming a conversation applies instantly and rolls back if the rename fails.
-
-### Improved
-
-- The calendar palette and attachment icons are desaturated to match the muted semantic colours, and small labels on them now meet WCAG AA — the worst case went from 2.2:1 to ≥4.5:1 (dark theme adjusted too).
-- Popover and card shadows now come from the design tokens (one level for menus/popovers/filter panels, one for cards and status bars), so they switch consistently with the theme and no longer drift between similar overlays.
-- Performance: single-pass stats, newest-first sync, batched RAG backfill, and event-delegated scroll reveal.
-- The local mail service now runs in its own process: SQLite sync, IMAP traffic and decryption no longer share the window's event loop, so the UI no longer freezes during mailbox sync or bulk operations.
-- Keyboard accessibility: focus restore after attachment preview, title focus ring, keyboard navigation for slash/mention menus and recipient suggestions, and Shift+J/K range selection.
-- Startup and runtime logs are trimmed to a fixed line count instead of growing forever.
-- The Agent session lifecycle is now driven by a state machine with steadier background buffering and replay.
-- Switching account, folder, view or search no longer replaces the whole list with a six-row skeleton: the current mail stays until the new list arrives and fades in then, so the list no longer shrinks, the layout no longer jumps and the reading position is kept.
-- Desktop test scripts are explicitly registered and run in CI.
-
-## [0.3.0] - 2026-08-09
-
-### Added
-
-- Introduced the first formal External Mail v1 local interface (Windows desktop only), for paired local scripts and MCP clients while preserving local-first, default-deny, and read-only boundaries.
-- Added the installer-provided `namimail` PATH shim and direct `"Nami Mail.exe" --cli <args>` invocation.
-- Added `namimail service start`, `status`, and `doctor` to explicitly start or inspect the local AgentHost. Ordinary reads and MCP stdio never start a host implicitly.
-- Added desktop-visible `namimail pair --profile <name>` and `namimail revoke --profile <name>` flows. First pairing fixes the current account-ID snapshot, and an account added later never enters an old profile automatically.
-- Added local MCP stdio access via `namimail mcp start --profile <name>`: it supports MCP protocols `2025-03-26` and `2025-06-18` (the server echoes the client's requested version) and publishes sixteen External Mail v1 tools from `tools/list` (nine read-only plus seven bounded writes).
-- External Mail v1 reads accounts, folders, message lists, message detail (single and batch), threads, and attachment metadata, and provides bounded writes: draft create/update/delete, message move (archive/trash), seen/flagged state, send, and reply. Successful data is validated by versioned strict schemas; mail bodies are bounded plain text and attachments are never exported as files.
-- Added a local mail template library: manage frequently used subjects and bodies in Settings and insert one into a compose or reply with a single click.
-- Added inline attachment preview: PDFs and images render in a read-only viewer; DOCX / PPTX / XLSX and common text files get a read-only text preview without exporting the original file.
-
-### Improved
-
-- Added stable success/failure envelopes, error codes, account scope, and update-drain recovery semantics for scripts and MCP. The GUI main instance actively rebuilds the named-pipe Broker after an abnormal exit, avoiding a false "running but unavailable" state.
-- CLI/MCP reach the running host only through a paired Windows named-pipe Broker restricted to the current user SID. A Fastify token, HTTP/TCP, SQLite, a file URI, mail credentials, or a database path cannot be reused as an integration channel.
-- Retained the experimental local NLLB-200 translation. It remains prepared and triggered explicitly in the desktop reader and is not a CLI/MCP tool.
-
-### Documentation
-
-- Added the paired `v0.3.0` release notes and honestly noted: public-network auto-update acceptance from `0.2.3` to `0.3.0` is still pending, and the `0.3.0` Windows installer is not Authenticode-signed.
 
 ## [0.2.3] - 2026-07-28
 
