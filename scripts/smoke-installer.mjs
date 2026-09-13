@@ -420,6 +420,23 @@ async function smokeInstalledExecutable(executable) {
   return result;
 }
 
+/**
+ * NSIS runs the real uninstall from a %TEMP% copy and exits the original
+ * process immediately, so "the uninstaller returned" means nothing on its own.
+ * The directory and process waits narrow the window, but the registry delete
+ * lands last in the uninstall script: poll for the record to disappear instead
+ * of racing it with a single immediate check.
+ */
+async function waitForUninstallRecordRemoved() {
+  const deadline = Date.now() + 60_000;
+  let installations = await existingNamiMailInstallations();
+  while (installations.length > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    installations = await existingNamiMailInstallations();
+  }
+  return installations;
+}
+
 async function runUninstaller(uninstallerExecutable) {
   // /S silences the uninstaller. Without _?=, NSIS copies the uninstaller to
   // $TEMP before running, so that copy can delete the original executable and
@@ -578,7 +595,7 @@ try {
   await runUninstaller(uninstaller);
   assert.equal(await waitForAbsent(installDirectory), true, "The NSIS uninstaller did not remove the test installation directory.");
   await waitForNamiMailPids(processesBefore, "Installer smoke");
-  assert.deepEqual(await existingNamiMailInstallations(), [], "The NSIS uninstall left a Nami Mail uninstall record behind.");
+  assert.deepEqual(await waitForUninstallRecordRemoved(), [], "The NSIS uninstall left a Nami Mail uninstall record behind.");
   const pathAfterUninstall = await currentUserPathRecord();
   assertCliPathRemoved(pathAfterUninstall, installDirectory);
   assert.deepEqual(pathAfterUninstall, pathBeforeInstall, "Nami Mail uninstall did not restore the original current-user Path record.");
