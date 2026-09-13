@@ -119,6 +119,36 @@ describe("database schema versioning", () => {
     }
   });
 
+  it("rolls back the whole migration when one step fails, leaving no half-applied schema", () => {
+    const databasePath = blankDatabasePath("atomic");
+    const legacy = new Database(databasePath);
+    // `applied_by` is a NOT NULL column the current schema never fills, so the
+    // data_migrations insert near the end of the migration fails after dozens
+    // of earlier ALTER/CREATE INDEX statements have already run.
+    legacy.exec(`
+      CREATE TABLE app_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        theme TEXT NOT NULL DEFAULT 'system',
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO app_settings (id, theme, updated_at) VALUES (1, 'light', '2026-01-01T00:00:00.000Z');
+      CREATE TABLE data_migrations (id TEXT PRIMARY KEY, completed_at TEXT NOT NULL, applied_by TEXT NOT NULL);
+    `);
+    legacy.close();
+
+    expect(() => openDatabase(databasePath)).toThrow();
+
+    const after = new Database(databasePath, { readonly: true });
+    try {
+      const columns = after.prepare("PRAGMA table_info(app_settings)").all() as Array<{ name: string }>;
+      expect(columns.some((column) => column.name === "sync_message_limit")).toBe(false);
+      const version = after.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").pluck().get();
+      expect(version).toBeUndefined();
+    } finally {
+      after.close();
+    }
+  });
+
   it("refuses to open a database written by a newer build before any migration runs", () => {
     const databasePath = blankDatabasePath("newer");
     const newer = new Database(databasePath);

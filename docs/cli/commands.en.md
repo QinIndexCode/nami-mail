@@ -23,6 +23,7 @@ Every data command except `version` and `help` requires a running, paired host. 
 | `accounts list` | Lists the accounts approved for the paired caller. | Read-only | None |
 | `folders list` | Lists folders for one account. | Read-only | `--account` |
 | `messages list` | Lists message metadata. | Read-only | `--folder`, `--limit`, `--since`, `--before`, `--unread`, `--flagged`, `--sender`, `--cursor` |
+| `messages search` | Full-text search across mail (phrase or single keyword, not a boolean expression). | Read-only | `--query` (required), `--account`, `--folder`, `--subject`, `--has-attachments`, `--since`, `--before`, `--limit`, `--cursor` |
 | `mail summarize` | Fetches a compact digest of recent matching mail. | Read-only | `--folder`, `--limit`, `--since`, `--before`, `--unread`, `--sender` |
 | `messages get` | Reads bounded plain-text content for one message. | Read-only | `--message` |
 | `messages batch-get` | Reads bounded plain-text content for up to 10 messages. | Read-only | `--message` (comma-separated ids, 1-10) |
@@ -31,7 +32,7 @@ Every data command except `version` and `help` requires a running, paired host. 
 | `draft create` | Creates a draft for one account inside the paired caller's scope. | By access level | `--account`, `--to` (at least one), `--cc`, `--subject`, `--body` |
 | `draft update` | Replaces the recipients, subject, or body of one draft. | By access level | `--account`, `--draft`, `--to`, `--cc`, `--subject`, `--body` |
 | `draft delete` | Deletes one draft inside the paired caller's scope. | By access level | `--account`, `--draft` |
-| `messages move` | Moves one message to the archive or trash. | By access level | `--message`, `--target` (`archive`\|`trash`) |
+| `messages move` | Moves one message to the archive, the trash, or an explicit folder of the same account. | By access level | `--message`, plus exactly one of `--target` (`archive`\|`trash`) or `--folder` (a folder path from `folders list`) |
 | `messages set-flag` | Sets the seen or flagged state of one message. | By access level | `--message`, `--flag` (`seen`\|`flagged`), `--value` (`true`\|`false`) |
 | `messages send` | Composes and sends one message. | By access level | `--account`, `--to`, `--cc`, `--subject`, `--body` |
 | `mail reply` | Creates a reply draft for one original message. | By access level | `--account`, `--message`, `--to`, `--cc`, `--subject`, `--body` |
@@ -50,12 +51,14 @@ Recipient options accept `address` or `Name <address>` and are comma-separated. 
 
 ## Write commands rejected by default (only when the CLI permission is read-only)
 
-The following seven write commands return `PERMISSION_DENIED` and are not forwarded to the Broker when the CLI permission is `read-only` (the default level):
+The following write commands return `PERMISSION_DENIED` and are not forwarded to the Broker when the CLI permission is `read-only` (the default level):
 
 ```text
 draft create | draft update | draft delete
 messages move | messages set-flag | messages send
-mail reply
+mail reply | mail forward | mail send
+mail archive | mail trash | mail mark-read | mail mark-unread
+rag rebuild
 ```
 
 After raising the CLI permission in desktop settings to "confirm before operations" (`send-confirmed`), these commands are available, but every write raises a visible confirmation in the Nami Mail desktop app; the confirmation binds an immutable content digest, account generation, and one-time token, and must be approved by the user in the UI. `--yes` is not an authorization token: the parser rejects `--yes` for external commands, so confirmation cannot be bypassed. At the "fully automatic" (`full-access`) level, writes execute automatically without per-item confirmation, but scope and audit still apply.

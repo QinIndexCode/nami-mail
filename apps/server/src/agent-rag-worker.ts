@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { AgentSourceEvent, Citation, EmbeddingProvider } from "@nami/agent-contracts";
+import type { AgentSourceEvent, Citation } from "@nami/agent-contracts";
 import type { DatabaseHandle } from "./db.js";
 import { messagePayloadById } from "./message-storage.js";
 import { chunkMailContent, cleanMailContent } from "./agent/index.js";
@@ -10,7 +10,6 @@ import { EncryptedRagPageStore, type DecryptedRagPage, type RagPageMetadata } fr
 import { SqliteRagIndex, bm25TermScore, effectiveTermFrequency, tokenCounts, type RagIndexedTerm } from "./agent/rag-index.js";
 import {
   HybridRagRetriever,
-  InMemorySemanticIndex,
   type MetadataRetriever,
   type RagRetrievalCandidate,
   type RagRetrievalQuery,
@@ -27,6 +26,34 @@ const maximumInitialBackfillScan = 100;
 /** Pages repaired per warm-up pass by the remote-id migration, so a first search
  * on a large mailbox never blocks the event loop on a full re-encryption sweep. */
 const REMOTE_ID_REPAIR_BATCH = 20;
+/**
+ * Divisor that turns a BM25 sum into a 0..1 confidence. A single very selective
+ * term can reach a full match; the per-term factor keeps a long query from being
+ * penalised for the extra terms it brought along.
+ */
+const LEXICAL_CONFIDENCE_TERM_WEIGHT = 2.25;
+/**
+ * Why the second arm is being consulted, which decides how long its provider
+ * call may take. The two cases have very different budgets: on an empty lexical
+ * result the alternative to waiting is answering with no mail context at all,
+ * while on a weak one the answer already has candidates and must not be delayed.
+ */
+export type AgentRagExpansionReason = "empty" | "weak";
+/**
+ * Lexical score at or below which the second arm is consulted as well.
+ *
+ * BM25 sums are not comparable across queries, so this stays at its disabled
+ * value — −1, unreachable for a nonnegative sum — until the expansion counters
+ * in the RAG report can calibrate it: at that value only an empty lexical result
+ * triggers expansion. Raising it enables the weak-recall trigger, which fuses
+ * both rankings instead of replacing one with the other.
+ */
+const ragExpansionScoreThreshold = -1;
+
+/** Confidence for a lexical hit, normalised so it can be read across queries. */
+function lexicalConfidence(score: number, termCount: number): number {
+  return Math.min(1, score / Math.max(termCount * LEXICAL_CONFIDENCE_TERM_WEIGHT, 1));
+}
 
 export type AgentRagPagePayload = {
   version: typeof RAG_PAYLOAD_VERSION;
@@ -116,6 +143,11 @@ export type RagVerifyReport = {
     indexEntries: number;
     indexEntriesWithoutReadablePage: number;
   };
+  /**
+   * Second retrieval arm counters. Supplied by AgentService, which owns the
+   * expander; the worker itself only ever produces the consistency part.
+   */
+  expansion?: { triggered: number; recovered: number; empty: number };
 };
 
 export type AgentRagWorkerOptions = {
@@ -125,20 +157,28 @@ export type AgentRagWorkerOptions = {
   sourceEvents: AgentSourceEventOutbox;
   pollIntervalMs?: number;
   now?: () => string;
-  /** Enables process-local semantic indexing and hybrid retrieval. */
-  embedding?: AgentRagEmbeddingOptions;
+  /** Enables the second retrieval arm; absent means lexical-only search. */
+  expansion?: AgentRagQueryExpansion;
 };
 
 /**
- * When present, page content is embedded into the process-local semantic index
- * and retrieval fuses lexical and semantic scores. The provider is resolved by
- * the caller (AgentService) so cloud-content consent and model eligibility are
- * enforced before any mail text leaves the machine. Embedding failures degrade
- * silently to lexical-only retrieval.
+ * Returns alternative search terms for a user query.
+ *
+ * The lexical arm cannot fix a vocabulary mismatch — in Chinese especially,
+ * 「报销」 and 「费用申请」 share no character at all — so the second arm asks the
+ * model for paraphrases and re-runs the same BM25 search with them. The provider
+ * is resolved by the caller (AgentService) on every call, so cloud-content
+ * consent and provider eligibility are enforced at the moment of use, and no
+ * mail text is ever indexed or shipped anywhere. The implementation owns its own
+ * timeout — sized from `reason`, see `AgentRagExpansionReason` — and must not
+ * throw: a slow or missing expander degrades to lexical-only retrieval.
  */
-export type AgentRagEmbeddingOptions = {
-  provider: EmbeddingProvider;
-  model: string;
+export type AgentRagQueryExpansion = {
+  expand: (
+    query: string,
+    signal: AbortSignal | undefined,
+    reason: AgentRagExpansionReason,
+  ) => Promise<readonly string[]>;
 };
 
 type IndexedPage = {
@@ -370,13 +410,12 @@ export class AgentRagWorker {
   private readonly pageStore: EncryptedRagPageStore;
   private readonly citations: CitationRevalidator;
   private readonly ragIndex: SqliteRagIndex;
-  private readonly semantic = new InMemorySemanticIndex();
   /** Latest sentAt per index key observed while scoring the current query. */
   private readonly sentAtByKey = new Map<string, string>();
-  private embedding: AgentRagEmbeddingOptions | undefined;
-  // Latest requested page per semantic key; a re-embed supersedes a stale one.
-  private readonly pendingSemantic = new Map<string, IndexedPage>();
-  private semanticPump: Promise<void> | undefined;
+  /** Second retrieval arm; absent means lexical-only search. */
+  private readonly expansion: AgentRagQueryExpansion | undefined;
+  /** Evidence for whether the second arm earns its cost; see `expansionStats`. */
+  private readonly expansionCounters = { triggered: 0, recovered: 0, empty: 0 };
   private readonly workerId = `nami-rag-${randomUUID()}`;
   private readonly pollIntervalMs: number;
   private readonly now: () => string;
@@ -397,58 +436,64 @@ export class AgentRagWorker {
     this.pageStore = new EncryptedRagPageStore(options.db, options.masterKey, options.lifecycle, options.now);
     this.citations = new CitationRevalidator(new SqliteCitationAuthority(options.db, options.masterKey));
     this.ragIndex = new SqliteRagIndex(options.db);
-    this.embedding = options.embedding;
+    this.expansion = options.expansion;
     this.pollIntervalMs = Math.max(250, Math.min(30_000, options.pollIntervalMs ?? workerIntervalMs));
     this.now = options.now ?? (() => new Date().toISOString());
-  }
-
-  /**
-   * Switches the embedding provider/model at runtime (for example after the
-   * default provider or its consent changes). A different provider or model
-   * changes the vector space, so the semantic index is rebuilt lazily from the
-   * already-warmed lexical index. Passing `undefined` disables semantic search.
-   */
-  setEmbedding(embedding: AgentRagEmbeddingOptions | undefined): void {
-    const changed = this.embedding?.provider.id !== embedding?.provider.id
-      || this.embedding?.model !== embedding?.model;
-    this.embedding = embedding;
-    if (!embedding || !changed) {
-      if (!embedding) {
-        this.semantic.clear();
-        this.pendingSemantic.clear();
-      }
-      return;
-    }
-    this.semantic.clear();
-    this.pendingSemantic.clear();
-    for (const account of this.options.db.prepare(`
-      SELECT DISTINCT account_id, account_generation FROM agent_rag_index
-    `).all() as Array<{ account_id: string; account_generation: number }>) {
-      let lease: AccountGenerationLease;
-      try {
-        lease = this.options.lifecycle.acquireLease(account.account_id);
-      } catch {
-        continue;
-      }
-      for (const ref of this.ragIndex.distinctPagesFor(account.account_id, account.account_generation)) {
-        const page = this.pageStore.get(lease, ref.pageId);
-        if (!page || page.pageRevision !== ref.pageRevision) continue;
-        const payload = parsePayload(page.payload);
-        if (!payload) continue;
-        this.scheduleSemanticIndex({
-          accountId: lease.accountId,
-          accountGeneration: lease.generation,
-          pageId: ref.pageId,
-          pageRevision: ref.pageRevision,
-          payload,
-        });
-      }
-    }
+    // A generation repaired in a previous process is skipped on the next boot,
+    // so the (expensive) decrypt-and-check scan for missing remote ids runs
+    // once per generation instead of once per process.
+    this.loadRemoteIdRepairState();
   }
 
   start(): void {
     if (this.stopped) return;
     this.schedule(0);
+    void this.warmActiveAccountsOnStartup();
+  }
+
+  /**
+   * Counters for the second retrieval arm: `triggered` counts searches where the
+   * lexical arm came back empty, `recovered` those the expansion rescued anyway,
+   * and `empty` those it could not. Reported through `AgentService.verifyRag()`
+   * so the arm's value is observable before anyone widens it.
+   */
+  expansionStats(): { triggered: number; recovered: number; empty: number } {
+    return { ...this.expansionCounters };
+  }
+
+  /**
+   * Warm up the persisted index for every active account once at startup so a
+   * first agent search does not stall on a cold-decryption pass. This is
+   * best-effort and non-blocking: warmAccount only repairs the delta (already
+   * in its own yielded batches) and is safe to run concurrently with the
+   * regular poll cycle. A failure degrades to the existing lazy warm-up that
+   * runs on the first search.
+   */
+  private async warmActiveAccountsOnStartup(): Promise<void> {
+    if (this.stopped) return;
+    let accountIds: string[];
+    try {
+      accountIds = this.options.lifecycle.listActiveAccounts();
+    } catch {
+      return;
+    }
+    for (const accountId of accountIds) {
+      if (this.stopped) return;
+      let lease: AccountGenerationLease;
+      try {
+        lease = this.options.lifecycle.acquireLease(accountId);
+      } catch {
+        continue; // account was removed or is being deleted; skip its warm-up
+      }
+      try {
+        await this.warmAccount(lease);
+      } catch {
+        // A warm-up failure is not fatal; the first search retries it lazily.
+      }
+      // Breathe between accounts so a very large mailbox cannot monopolize the
+      // event loop at startup.
+      await new Promise<void>((resolve) => setImmediate(() => resolve()));
+    }
   }
 
   async stop(): Promise<void> {
@@ -456,9 +501,6 @@ export class AgentRagWorker {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     await this.draining;
-    await this.semanticPump;
-    this.semantic.clear();
-    this.pendingSemantic.clear();
     this.sentAtByKey.clear();
     this.backfillCursors.clear();
     this.remoteIdRepairCursor.clear();
@@ -473,17 +515,6 @@ export class AgentRagWorker {
     });
     this.draining = work;
     return work;
-  }
-
-  /** Awaits all queued page embeddings so semantic state can be asserted deterministically. */
-  async flushSemantic(): Promise<void> {
-    while (this.pendingSemantic.size > 0 || this.semanticPump !== undefined) {
-      if (this.semanticPump === undefined) {
-        void this.pumpSemantic();
-        continue;
-      }
-      await this.semanticPump;
-    }
   }
 
   /**
@@ -511,36 +542,54 @@ export class AgentRagWorker {
       } catch {
         continue;
       }
-      this.warmAccount(lease);
+      await this.warmAccount(lease);
     }
-    if (this.embedding) {
-      // Semantic retrieval is best-effort: a failed query embedding or a
-      // failed hybrid merge degrades to the pure lexical path below.
-      try {
-        const queryVector = await this.embedQuery(query, signal);
-        if (queryVector && !signal?.aborted) {
-          return await this.searchHybrid(accountSet, messageSet, query, queryVector, limit, signal);
-        }
-      } catch {
-        // Fall through to lexical-only retrieval.
-      }
-    }
-    const candidates = await this.lexCandidatesFor(accountSet, messageSet, terms, limit, signal);
+    const effectiveLimit = Math.max(1, Math.min(30, limit));
+    const candidates = await this.lexCandidatesFor(accountSet, messageSet, terms, effectiveLimit, signal);
     if (signal?.aborted) return [];
-    const maximum = Math.max(1, Math.min(30, limit));
+    const best = candidates.reduce((highest, candidate) => Math.max(highest, candidate.score), 0);
+    // The second arm exists for the one failure a keyword index cannot fix: the
+    // words the user typed do not occur in the mail (「报销」 and 「费用申请」 share no
+    // character at all). Consulting it only when the lexical arm came back empty
+    // keeps the extra provider call — which lands before the first streamed token
+    // — off every ordinary turn; see ragExpansionScoreThreshold for the weak-recall
+    // trigger that fuses both rankings instead.
+    if (this.expansion && (candidates.length === 0 || best <= ragExpansionScoreThreshold)) {
+      this.expansionCounters.triggered += 1;
+      const expandedTerms = await this.expandTerms(query, signal, candidates.length === 0 ? "empty" : "weak");
+      if (signal?.aborted) return [];
+      if (expandedTerms.length) {
+        const rescued = await this.searchHybrid(accountSet, messageSet, query, expandedTerms, effectiveLimit, signal);
+        if (rescued.length) this.expansionCounters.recovered += 1;
+        else this.expansionCounters.empty += 1;
+        return rescued;
+      }
+      this.expansionCounters.empty += 1;
+    }
+    return this.toResults(candidates, terms, effectiveLimit, signal);
+  }
+
+  /**
+   * Turns scored candidates into results. A single message can span many chunks;
+   * keep only its best chunk so the top results stay diverse across messages
+   * instead of one long mail. The dedupe key is the provider-stable id when
+   * available, so Gmail's label copies of the same physical mail also collapse
+   * into a single result.
+   */
+  private toResults(
+    candidates: readonly ResolvedLexicalCandidate[],
+    terms: readonly string[],
+    maximum: number,
+    signal?: AbortSignal,
+  ): AgentRagSearchResult[] {
     const results: AgentRagSearchResult[] = [];
-    // A single message can span many chunks; keep only its best chunk so the
-    // top results stay diverse across messages instead of one long mail. The
-    // key is the provider-stable id when available so Gmail's label copies of
-    // the same physical mail also collapse into a single result.
     const seenMessages = new Set<string>();
     for (const candidate of candidates) {
       if (signal?.aborted || results.length >= maximum) break;
       const key = dedupeKey(candidate.entry.payload);
       if (seenMessages.has(key)) continue;
       seenMessages.add(key);
-      const confidence = Math.min(1, candidate.score / Math.max(terms.length * 2.25, 1));
-      const reference = asCitation(candidate.entry, confidence);
+      const reference = asCitation(candidate.entry, lexicalConfidence(candidate.score, terms.length));
       const validated = this.citations.revalidate(reference);
       if (!validated.valid) continue;
       results.push({ citation: validated.citation, content: candidate.entry.payload.content, score: candidate.score });
@@ -549,15 +598,15 @@ export class AgentRagWorker {
   }
 
   /**
-   * Fuses lexical and semantic candidates with reciprocal-rank fusion and
-   * returns the validated citations. The allowed-message boundary is enforced
-   * on both candidate sets before merging.
+   * Fuses the query's own terms with the model's paraphrases using
+   * reciprocal-rank fusion and returns the validated citations. The
+   * allowed-message boundary is enforced on both candidate sets before merging.
    */
   private async searchHybrid(
     accountSet: ReadonlySet<string>,
     messageSet: ReadonlySet<string> | undefined,
     query: string,
-    queryVector: readonly number[],
+    expandedTerms: readonly string[],
     limit: number,
     signal?: AbortSignal,
   ): Promise<AgentRagSearchResult[]> {
@@ -565,14 +614,16 @@ export class AgentRagWorker {
     const lexical: MetadataRetriever = {
       searchMetadata: async (ragQuery) => this.lexicalCandidates(ragQuery, accountSet, messageSet),
     };
-    const semantic: SemanticRetriever = {
-      searchSemantic: async (ragQuery, ragSignal) => {
-        const candidates = await this.semantic.searchSemantic({ ...ragQuery, vector: queryVector }, ragSignal);
-        if (!messageSet) return candidates;
-        return candidates.filter((candidate) => messageSet.has(candidate.citation.citation.messageId));
-      },
+    // The second arm searches the same persisted index with the model's
+    // paraphrase of the query, so mail that never contains the user's own
+    // wording can still rank. RRF fuses the two by rank, so the arms need no
+    // shared scale, and each keeps its own failure mode: exact terms versus
+    // paraphrases. The terms go through `searchTerms` in the shared helper, so
+    // they align with the index exactly like the user's own words do.
+    const expanded: SemanticRetriever = {
+      searchSemantic: async (ragQuery) => this.candidatesForTerms(expandedTerms, ragQuery.limit, accountSet, messageSet),
     };
-    const hybrid = new HybridRagRetriever(lexical, semantic, this.citations, 60);
+    const hybrid = new HybridRagRetriever(lexical, expanded, this.citations, 60);
     const results = await hybrid.search({ text: query, filter: { accountIds: [...accountSet] }, limit }, signal);
     if (signal?.aborted) return [];
     const resolved: AgentRagSearchResult[] = [];
@@ -603,18 +654,28 @@ export class AgentRagWorker {
     accountSet: ReadonlySet<string>,
     messageSet: ReadonlySet<string> | undefined,
   ): Promise<readonly RagRetrievalCandidate[]> {
-    const queryTerms = searchTerms(ragQuery.text);
-    if (!queryTerms.length) return [];
-    const pool = Math.max(1, Math.min(30, ragQuery.limit * 4));
-    const candidates = await this.lexCandidatesFor(accountSet, messageSet, queryTerms, pool);
-    return candidates.map(({ key, entry, score }) => {
-      const confidence = Math.min(1, score / Math.max(queryTerms.length * 2.25, 1));
-      return {
-        id: key,
-        citation: asCitation(entry, confidence),
-        ...(score > 0 ? { metadataScore: score } : {}),
-      } satisfies RagRetrievalCandidate;
-    });
+    return this.candidatesForTerms(searchTerms(ragQuery.text), ragQuery.limit, accountSet, messageSet);
+  }
+
+  /**
+   * Scores the persisted index for an explicit term list and adapts the result
+   * to the shape the fuser expects. Both retrieval arms share it: the lexical
+   * arm passes the query's own terms, the expansion arm the model's paraphrases.
+   */
+  private async candidatesForTerms(
+    terms: readonly string[],
+    limit: number,
+    accountSet: ReadonlySet<string>,
+    messageSet: ReadonlySet<string> | undefined,
+  ): Promise<readonly RagRetrievalCandidate[]> {
+    if (!terms.length) return [];
+    const pool = Math.max(1, Math.min(30, limit * 4));
+    const candidates = await this.lexCandidatesFor(accountSet, messageSet, terms, pool);
+    return candidates.map(({ key, entry, score }) => ({
+      id: key,
+      citation: asCitation(entry, lexicalConfidence(score, terms.length)),
+      ...(score > 0 ? { metadataScore: score } : {}),
+    } satisfies RagRetrievalCandidate));
   }
 
   /**
@@ -713,26 +774,23 @@ export class AgentRagWorker {
     return resolved;
   }
 
-  private async embedQuery(query: string, signal?: AbortSignal): Promise<readonly number[] | undefined> {
-    if (!this.embedding) return undefined;
+  /**
+   * Best-effort paraphrase step. Anything unexpected here — no expander, a
+   * throwing provider, a slow model — means lexical-only retrieval, exactly as
+   * before the second arm existed. The returned terms pass through `searchTerms`
+   * so they are normalised and CJK-split exactly like the indexed text.
+   */
+  private async expandTerms(
+    query: string,
+    signal: AbortSignal | undefined,
+    reason: AgentRagExpansionReason,
+  ): Promise<readonly string[]> {
+    if (!this.expansion) return [];
     try {
-      const response = await this.embedding.provider.embed({
-        requestId: `rag-embed-${randomUUID()}`,
-        providerId: this.embedding.provider.id,
-        model: this.embedding.model,
-        inputs: [query.slice(0, 500_000) || " "],
-      }, { signal, timeoutMs: 60_000 });
-      const vector = response.vectors[0];
-      return vector?.length ? vector : undefined;
+      const terms = await this.expansion.expand(query, signal, reason);
+      return searchTerms(terms.join(" "));
     } catch {
-      return undefined;
-    }
-  }
-
-  evictAccount(accountId: string, generationAtMost = Number.MAX_SAFE_INTEGER): void {
-    this.semantic.removeAccount(accountId, generationAtMost);
-    for (const [key, entry] of this.pendingSemantic) {
-      if (entry.accountId === accountId && entry.accountGeneration <= generationAtMost) this.pendingSemantic.delete(key);
+      return [];
     }
   }
 
@@ -977,10 +1035,14 @@ export class AgentRagWorker {
           this.backfillCursors.set(account.id, cursor);
           continue;
         }
+        // One existence probe per batch instead of per row: the unique index
+        // on (account_id, account_generation, source_locator_opaque, ...)
+        // serves the whole IN list, turning an N+1 scan into two queries.
+        const existingLocators = this.hasSourceEventLocators(lease, rows.map((row) => this.sourceEventLocator(lease, row.id)));
         for (const row of rows) {
           cursor.lastRowId = row.row_id;
           task.assertCurrent();
-          if (this.hasSourceEvent(lease, row.id)) continue;
+          if (existingLocators.has(this.sourceEventLocator(lease, row.id))) continue;
           const occurredAt = this.now();
           this.options.sourceEvents.enqueue({
             lease,
@@ -1011,18 +1073,23 @@ export class AgentRagWorker {
     }
   }
 
-  private hasSourceEvent(lease: AccountGenerationLease, messageId: string): boolean {
-    const sourceLocatorOpaque = agentOpaqueDigest(
+  private sourceEventLocator(lease: AccountGenerationLease, messageId: string): string {
+    return agentOpaqueDigest(
       this.options.masterKey,
       "source-locator",
       canonicalAgentJson({ accountId: lease.accountId, source: { kind: "message", messageId } }),
     );
-    return Boolean(this.options.db.prepare(`
-      SELECT 1 FROM agent_source_events
+  }
+
+  private hasSourceEventLocators(lease: AccountGenerationLease, locators: string[]): Set<string> {
+    if (!locators.length) return new Set();
+    const placeholders = locators.map(() => "?").join(",");
+    const rows = this.options.db.prepare(`
+      SELECT source_locator_opaque FROM agent_source_events
       WHERE account_id = ? AND account_generation = ?
-        AND source_locator_opaque = ? AND event_type = 'message-upserted'
-      LIMIT 1
-    `).get(lease.accountId, lease.generation, sourceLocatorOpaque));
+        AND source_locator_opaque IN (${placeholders}) AND event_type = 'message-upserted'
+    `).all(lease.accountId, lease.generation, ...locators) as Array<{ source_locator_opaque: string }>;
+    return new Set(rows.map((row) => row.source_locator_opaque));
   }
 
   private backfillRevision(row: BackfillMessageRow): string {
@@ -1071,7 +1138,6 @@ export class AgentRagWorker {
   }
 
   private processLifecycleEvent(event: AgentSourceEvent): void {
-    this.evictAccount(event.accountId, event.accountGeneration);
     if (event.type !== "account-deleted" && event.type !== "account-generation-advanced") return;
     // The lifecycle event may run after its DEK was deliberately discarded,
     // so deletion uses only identifiers and never attempts decryption.
@@ -1185,7 +1251,7 @@ export class AgentRagWorker {
     return row.page_revision + 1;
   }
 
-  private warmAccount(lease: AccountGenerationLease): void {
+  private async warmAccount(lease: AccountGenerationLease): Promise<void> {
     // The persisted index is a derived cache of the authoritative encrypted
     // page store. Warm-up only repairs the delta: pages whose latest active
     // revision is missing from the index are decrypted and indexed, and index
@@ -1196,18 +1262,40 @@ export class AgentRagWorker {
     const indexedByPageId = new Map(
       this.ragIndex.distinctPagesFor(lease.accountId, lease.generation).map((ref) => [ref.pageId, ref.pageRevision]),
     );
+    // Decrypting the missing delta is synchronous AES work on the caller's
+    // thread — and this server runs inside the Electron main process, so a
+    // long unbroken pass freezes the whole window (input, cursor) until the
+    // first agent search finishes. Yield to the event loop every few pages
+    // (same pattern as the semantic rescan above) so the app stays responsive
+    // while warm-up proceeds.
+    const warmYieldBatch = 32;
+    let iterations = 0;
     for (const page of pages) {
+      iterations += 1;
       const indexedRevision = indexedByPageId.get(page.pageId);
-      if (indexedRevision !== undefined && indexedRevision >= page.pageRevision) continue;
+      if (indexedRevision !== undefined && indexedRevision >= page.pageRevision) {
+        // A fully warm index never runs the decrypt branch, so gating the yield
+        // on processed-missing pages would let the whole pass (including the
+        // synchronous repair scan below) execute in one block and freeze startup.
+        // Yield by visit count instead so an all-warm warm-up still surrenders
+        // the event loop promptly.
+        if (iterations % warmYieldBatch === 0) {
+          await new Promise<void>((resolve) => setImmediate(() => resolve()));
+        }
+        continue;
+      }
       const decrypted = this.pageStore.get(lease, page.pageId);
       if (decrypted) this.upsertIndex(decrypted);
+      if (iterations % warmYieldBatch === 0) {
+        await new Promise<void>((resolve) => setImmediate(() => resolve()));
+      }
     }
     for (const pageId of indexedByPageId.keys()) {
       if (!activeByPageId.has(pageId)) this.removeIndex(lease.accountId, lease.generation, pageId);
     }
     this.ragIndex.reconcileStats(lease.accountId, lease.generation);
     this.purgeAccountGeneration(lease);
-    this.repairRemoteIdLookup(lease);
+    await this.repairRemoteIdLookup(lease);
   }
 
   /**
@@ -1216,9 +1304,43 @@ export class AgentRagWorker {
    * message now carries one is re-encrypted in place with the SAME source
    * revision and content (a new page revision) so Gmail label copies of one
    * physical mail collapse during dedup. Runs once per account generation,
-   * lazily on warm-up; a failure is retried on the next warm-up.
+   * lazily on warm-up; a failure is retried on the next warm-up. The completed
+   * state is persisted so a fully scanned generation is skipped on later boots.
    */
-  private repairRemoteIdLookup(lease: AccountGenerationLease): void {
+  private remoteIdRepairKey(accountId: string, generation: number): string {
+    return `${accountId}:${generation}`;
+  }
+
+  private loadRemoteIdRepairState(): void {
+    try {
+      const rows = this.options.db.prepare(`
+        SELECT account_id, account_generation
+        FROM agent_rag_repair_state
+        WHERE repaired = 1
+      `).all() as Array<{ account_id: string; account_generation: number }>;
+      for (const row of rows) {
+        this.remoteIdRepairedGenerations.add(this.remoteIdRepairKey(row.account_id, row.account_generation));
+      }
+    } catch {
+      // Best-effort: if the repair-state table is unavailable the scan simply
+      // re-runs rather than failing startup.
+    }
+  }
+
+  private persistRemoteIdRepairComplete(accountId: string, generation: number): void {
+    try {
+      this.options.db.prepare(`
+        INSERT INTO agent_rag_repair_state (account_id, account_generation, repaired, updated_at)
+        VALUES (?, ?, 1, ?)
+        ON CONFLICT(account_id, account_generation)
+        DO UPDATE SET repaired = 1, updated_at = excluded.updated_at
+      `).run(accountId, generation, this.now());
+    } catch {
+      // A failed persist only costs a re-scan on the next warm-up.
+    }
+  }
+
+  private async repairRemoteIdLookup(lease: AccountGenerationLease): Promise<void> {
     const generationKey = `${lease.accountId}:${lease.generation}`;
     if (this.remoteIdRepairedGenerations.has(generationKey)) return;
     try {
@@ -1239,6 +1361,7 @@ export class AgentRagWorker {
         if (candidates.length === 0) {
           this.remoteIdRepairedGenerations.add(generationKey);
           this.remoteIdRepairCursor.delete(generationKey);
+          this.persistRemoteIdRepairComplete(lease.accountId, lease.generation);
           return;
         }
       }
@@ -1248,7 +1371,13 @@ export class AgentRagWorker {
         .sort((left, right) => left.pageId.localeCompare(right.pageId));
       let repaired = 0;
       let scannedToEnd = true;
+      // Yield by visit count too: even when every page is already repaired the
+      // scan still decrypts each one to check, so a large account must not hold
+      // the event loop in one long synchronous stretch.
+      const repairYieldBatch = 32;
+      let visited = 0;
       for (const page of pages) {
+        visited += 1;
         if (page.pageId <= cursor) continue;
         // Advance the cursor on every inspected page so a later warm-up resumes
         // right after it, whether or not this page needed a repair.
@@ -1272,6 +1401,9 @@ export class AgentRagWorker {
         });
         this.upsertIndex({ ...revised, payload: nextPayload });
         repaired += 1;
+        if (visited % repairYieldBatch === 0) {
+          await new Promise<void>((resolve) => setImmediate(() => resolve()));
+        }
         if (repaired >= REMOTE_ID_REPAIR_BATCH) {
           scannedToEnd = false;
           break;
@@ -1281,6 +1413,7 @@ export class AgentRagWorker {
         this.remoteIdRepairedGenerations.add(generationKey);
         this.remoteIdRepairCursor.delete(generationKey);
         this.remoteIdCandidatePrefixes.delete(generationKey);
+        this.persistRemoteIdRepairComplete(lease.accountId, lease.generation);
       }
     } catch {
       // Best-effort migration; a failure keeps the cursor so the next warm-up
@@ -1309,19 +1442,6 @@ export class AgentRagWorker {
   private upsertIndex(page: DecryptedRagPage): void {
     const payload = parsePayload(page.payload);
     if (!payload) return;
-    // A re-ingested page supersedes its older revisions everywhere.
-    for (const revision of this.ragIndex.pageRevisionsFor(page.accountId, page.accountGeneration, page.pageId)) {
-      if (revision !== page.pageRevision) {
-        this.semantic.removeMany([indexKey(page.accountId, page.accountGeneration, page.pageId, revision)]);
-      }
-    }
-    const entry: IndexedPage = {
-      accountId: page.accountId,
-      accountGeneration: page.accountGeneration,
-      pageId: page.pageId,
-      pageRevision: page.pageRevision,
-      payload,
-    };
     this.ragIndex.replacePage({
       accountId: page.accountId,
       accountGeneration: page.accountGeneration,
@@ -1332,81 +1452,9 @@ export class AgentRagWorker {
       termCount: indexTermCount(payload),
       ...(typeof payload.sentAt === "string" ? { sentAt: payload.sentAt } : {}),
     });
-    this.scheduleSemanticIndex(entry);
   }
 
   private removeIndex(accountId: string, generation: number, pageId: string): void {
-    for (const [key, entry] of this.pendingSemantic) {
-      if (entry.accountId === accountId && entry.accountGeneration === generation && entry.pageId === pageId) {
-        this.pendingSemantic.delete(key);
-      }
-    }
     this.ragIndex.removePage(accountId, generation, pageId);
-  }
-
-  /**
-   * Queues an incremental embedding of a page. Embeddings are fire-and-forget:
-   * the query path and lexical retrieval never wait for them, and a failed
-   * embed simply leaves the page out of the semantic index. A newer page
-   * revision supersedes a pending or in-flight embed for the same page.
-   */
-  private scheduleSemanticIndex(entry: IndexedPage): void {
-    if (!this.embedding) return;
-    const key = metadataKey(entry.accountId, entry.accountGeneration, entry.pageId);
-    this.pendingSemantic.set(key, entry);
-    void this.pumpSemantic();
-  }
-
-  private async pumpSemantic(): Promise<void> {
-    if (this.semanticPump) return;
-    const run = async () => {
-      while (!this.stopped && this.pendingSemantic.size > 0) {
-        const first = this.pendingSemantic.entries().next().value;
-        if (!first) break;
-        const [key, entry] = first;
-        this.pendingSemantic.delete(key);
-        try {
-          const vector = await this.embedPage(entry);
-          if (!vector) continue;
-          // Publish only when the page revision is still the current active one.
-          const current = this.options.db.prepare(`
-            SELECT 1 FROM agent_rag_pages
-            WHERE account_id = ? AND account_generation = ? AND page_id = ? AND page_revision = ? AND state = 'active'
-            LIMIT 1
-          `).get(entry.accountId, entry.accountGeneration, entry.pageId, entry.pageRevision);
-          if (!current) continue;
-          const indexKeyValue = indexKey(entry.accountId, entry.accountGeneration, entry.pageId, entry.pageRevision);
-          this.semantic.upsert({
-            id: indexKeyValue,
-            accountId: entry.accountId,
-            accountGeneration: entry.accountGeneration,
-            vector,
-            candidate: {
-              id: indexKeyValue,
-              citation: asCitation(entry, 0),
-            },
-          });
-        } catch {
-          // Embedding failures are silent: lexical retrieval still covers the page.
-        }
-      }
-    };
-    this.semanticPump = run().finally(() => {
-      this.semanticPump = undefined;
-    });
-    return this.semanticPump;
-  }
-
-  private async embedPage(entry: IndexedPage): Promise<readonly number[] | undefined> {
-    if (!this.embedding) return undefined;
-    const text = `${entry.payload.subject}\n${entry.payload.sender}\n${entry.payload.content}`.slice(0, 500_000) || " ";
-    const response = await this.embedding.provider.embed({
-      requestId: `rag-index-${randomUUID()}`,
-      providerId: this.embedding.provider.id,
-      model: this.embedding.model,
-      inputs: [text],
-    });
-    const vector = response.vectors[0];
-    return vector?.length ? vector : undefined;
   }
 }

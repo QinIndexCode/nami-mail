@@ -19,6 +19,8 @@ function baseSnapshot(overrides: Partial<DialogKeydownSnapshot> = {}): DialogKey
     addOpen: false,
     mobileSidebar: false,
     sendingStatusOpen: false,
+    translationTermsOpen: false,
+    attachmentPreviewOpen: false,
     selectedId: null,
     selected: false,
     keyboardSelectionAnchorId: null,
@@ -170,9 +172,23 @@ describe("dialogKeydownDecision · shortcut gate", () => {
     ["compose", { composeOpen: true }],
     ["add account", { addOpen: true }],
     ["mobile sidebar", { mobileSidebar: true }],
+    ["translation terms", { translationTermsOpen: true }],
+    ["attachment preview", { attachmentPreviewOpen: true }],
   ] as const)("freezes shortcuts while %s is open", (_name, open) => {
     expect(dialogKeydownDecision(key("n"), baseSnapshot({ ...open, accountsLength: 1 }))).toBeNull();
     expect(dialogKeydownDecision(key("k", { metaKey: true }), baseSnapshot(open))).toBeNull();
+  });
+
+  it("blocks reply/forward/navigation behind the terms dialog and attachment preview", () => {
+    const terms = { translationTermsOpen: true };
+    const preview = { attachmentPreviewOpen: true, selected: true, filteredMessages: [message("m1"), message("m2")] };
+    for (const open of [terms, preview]) {
+      expect(dialogKeydownDecision(key("n"), baseSnapshot({ ...open, accountsLength: 1 }))).toBeNull();
+      expect(dialogKeydownDecision(key("r"), baseSnapshot(open))).toBeNull();
+      expect(dialogKeydownDecision(key("f"), baseSnapshot(open))).toBeNull();
+      expect(dialogKeydownDecision(key("j"), baseSnapshot(open))).toBeNull();
+      expect(dialogKeydownDecision(key("k"), baseSnapshot(open))).toBeNull();
+    }
   });
 
   it("lets plain letters through when nothing is open", () => {

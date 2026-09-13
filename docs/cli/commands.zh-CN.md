@@ -23,6 +23,7 @@ namimail <组> <操作> [选项]
 | `accounts list` | 列出已配对调用方获批的账户。 | 只读 | 无 |
 | `folders list` | 列出某个账户的文件夹。 | 只读 | `--account` |
 | `messages list` | 列出邮件元数据。 | 只读 | `--folder`、`--limit`、`--since`、`--before`、`--unread`、`--flagged`、`--sender`、`--cursor` |
+| `messages search` | 在账户范围内全文检索邮件（短语或单个关键词，不是布尔表达式）。 | 只读 | `--query`（必填）、`--account`、`--folder`、`--subject`、`--has-attachments`、`--since`、`--before`、`--limit`、`--cursor` |
 | `mail summarize` | 抓取近期匹配邮件的紧凑摘要。 | 只读 | `--folder`、`--limit`、`--since`、`--before`、`--unread`、`--sender` |
 | `messages get` | 读取一封邮件允许返回的受限纯文本内容。 | 只读 | `--message` |
 | `messages batch-get` | 一次调用读取最多 10 封邮件的受限纯文本内容。 | 只读 | `--message`（逗号分隔的 ID，1-10） |
@@ -31,7 +32,7 @@ namimail <组> <操作> [选项]
 | `draft create` | 为已配对调用方范围内的账户创建草稿。 | 按权限档位 | `--account`、`--to`（至少 1 个）、`--cc`、`--subject`、`--body` |
 | `draft update` | 替换某封草稿的收件人、主题或正文。 | 按权限档位 | `--account`、`--draft`、`--to`、`--cc`、`--subject`、`--body` |
 | `draft delete` | 删除已配对调用方范围内的某封草稿。 | 按权限档位 | `--account`、`--draft` |
-| `messages move` | 将一封邮件移动到归档或废纸篓。 | 按权限档位 | `--message`、`--target`（`archive`\|`trash`） |
+| `messages move` | 将一封邮件移动到归档、废纸篓或同一账户下的指定文件夹。 | 按权限档位 | `--message`，以及 `--target`（`archive`\|`trash`）或 `--folder`（文件夹路径，取自 `folders list`）**二选一** |
 | `messages set-flag` | 设置一封邮件的已读或已标记状态。 | 按权限档位 | `--message`、`--flag`（`seen`\|`flagged`）、`--value`（`true`\|`false`） |
 | `messages send` | 撰写并发送一封邮件。 | 按权限档位 | `--account`、`--to`、`--cc`、`--subject`、`--body` |
 | `mail reply` | 为某封原邮件创建回复草稿。 | 按权限档位 | `--account`、`--message`、`--to`、`--cc`、`--subject`、`--body` |
@@ -50,12 +51,14 @@ namimail <组> <操作> [选项]
 
 ## 默认拒绝的写命令（仅当 CLI 权限为只读时）
 
-下列 7 个写命令在 CLI 权限为 `read-only`（默认档位）时返回 `PERMISSION_DENIED`，请求不会转发给 Broker：
+下列写命令在 CLI 权限为 `read-only`（默认档位）时返回 `PERMISSION_DENIED`，请求不会转发给 Broker：
 
 ```text
 draft create | draft update | draft delete
 messages move | messages set-flag | messages send
-mail reply
+mail reply | mail forward | mail send
+mail archive | mail trash | mail mark-read | mail mark-unread
+rag rebuild
 ```
 
 在桌面设置中把 CLI 权限提升为"操作前确认"（`send-confirmed`）后，这些命令可用，但每次写操作都会在 Nami Mail 桌面端弹出可见确认；确认绑定不可变内容摘要、账户代际和一次性 token，必须由用户在界面中批准。`--yes` 不是授权令牌——解析器对外部命令一律拒绝 `--yes`，因此无法绕过确认。提升为"完全自动"（`full-access`）后自动执行，不再逐项确认，但范围与审计仍然生效。

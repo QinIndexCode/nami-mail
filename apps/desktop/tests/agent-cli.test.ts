@@ -5,6 +5,7 @@ import {
   formatCliEnvelope,
   NamiMailCliClient,
   parseCliArguments,
+  type CliEnvelope,
   type NamiMailBrokerClient,
 } from "../src/agent/cli.mts";
 import { asAgentDesktopError } from "../src/agent/contracts.mts";
@@ -14,8 +15,28 @@ const requestId = "123e4567-e89b-12d3-a456-426614174004";
 function parse(argv: string[]) {
   const parsed = parseCliArguments(argv);
   assert.equal(parsed.ok, true, `Expected CLI parsing to succeed: ${argv.join(" ")}`);
-  if (!parsed.ok) throw new Error(parsed.error.message);
+  if (!parsed.ok) throw new Error("CLI parsing failed");
   return parsed.invocation;
+}
+
+type HelpCommand = {
+  command: string;
+  id: string;
+  aliases?: string[];
+  options?: Array<{ name: string; type: string; required: boolean; description: string }>;
+};
+
+/** Narrows a help envelope payload to its command list. */
+function helpCommands(envelope: { data: unknown }, label: string): HelpCommand[] {
+  const payload = envelope.data as { commands?: HelpCommand[] } | null;
+  assert.ok(payload?.commands, `${label} must include a command list.`);
+  return payload.commands;
+}
+
+function firstHelpCommand(envelope: { data: unknown }, label: string): HelpCommand {
+  const [first] = helpCommands(envelope, label);
+  assert.ok(first, `${label} must include at least one command.`);
+  return first;
 }
 
 test("CLI parses the eight External Mail v1 reads with their published options", () => {
@@ -160,9 +181,14 @@ test("CLI rejects unsupported options, obsolete search, invalid dates, and missi
   assert.equal(unknownOption.ok, false);
   if (!unknownOption.ok) assert.equal(unknownOption.error.code, "INVALID_ARGUMENT");
 
-  const obsoleteSearch = parseCliArguments(["messages", "search", "--query", "invoice"]);
+  // The old `mail search` spelling is gone; free-text search now lives under
+  // `messages search`, which parses (and is exercised by its own test).
+  const obsoleteSearch = parseCliArguments(["mail", "search", "--query", "invoice"]);
   assert.equal(obsoleteSearch.ok, false);
   if (!obsoleteSearch.ok) assert.equal(obsoleteSearch.error.code, "INVALID_ARGUMENT");
+
+  const search = parseCliArguments(["messages", "search", "--query", "invoice", "--has-attachments", "true"]);
+  assert.equal(search.ok, true);
 
   const deniedWrite = parseCliArguments(["mail", "send", "--yes"]);
   assert.equal(deniedWrite.ok, false);
@@ -375,7 +401,7 @@ test("CLI accepts --version and -v as standard version aliases", async () => {
   for (const argv of [["--version"], ["-v"]]) {
     const parsed = parseCliArguments(argv);
     assert.equal(parsed.ok, true, `Expected --version alias to parse: ${argv.join(" ")}`);
-    if (!parsed.ok) throw new Error(parsed.error.message);
+    if (!parsed.ok) throw new Error("CLI parsing failed");
     assert.equal(parsed.invocation.command.id, "version");
     assert.equal(parsed.invocation.output, "table");
     assert.deepEqual(parsed.invocation.options, { profile: "default" });
@@ -420,7 +446,7 @@ test("CLI help output includes standard flag aliases for help and version", asyn
 
   const helpResult = await client.invoke(parse(["help"]));
   assert.equal(helpResult.success, true);
-  const commands = helpResult.data.commands as Array<{ command: string; id: string; aliases?: string[] }>;
+  const commands = helpCommands(helpResult, "General help");
   const helpCommand = commands.find((c) => c.id === "help");
   assert.ok(helpCommand, "Help payload must include the help command.");
   assert.deepEqual(helpCommand.aliases, ["--help", "-h"], "Help command must list --help and -h aliases.");
@@ -434,10 +460,11 @@ test("CLI help output includes standard flag aliases for help and version", asyn
 
   const helpVersionTopic = await client.invoke(parse(["help", "version"]));
   assert.equal(helpVersionTopic.success, true);
-  const topicCommands = helpVersionTopic.data.commands as Array<{ command: string; id: string; aliases?: string[] }>;
+  const topicCommands = helpCommands(helpVersionTopic, "Topic help");
   assert.equal(topicCommands.length, 1);
-  assert.equal(topicCommands[0].id, "version");
-  assert.deepEqual(topicCommands[0].aliases, ["--version", "-v"]);
+  const topicCommand = firstHelpCommand(helpVersionTopic, "Topic help");
+  assert.equal(topicCommand.id, "version");
+  assert.deepEqual(topicCommand.aliases, ["--version", "-v"]);
 });
 
 test("CLI help lists accepted options for each read-only command", async () => {
@@ -446,40 +473,37 @@ test("CLI help lists accepted options for each read-only command", async () => {
     createRequestId: () => requestId,
   });
 
-  type OptionHint = { name: string; type: string; required: boolean; description: string };
-  type CommandWithOptions = { command: string; id: string; options: OptionHint[] };
-
   // Per-command help: messages list should show all 8 specific options + 2 common options.
   const messagesHelp = await client.invoke(parse(["help", "messages", "list"]));
   assert.equal(messagesHelp.success, true);
-  const messagesCmd = (messagesHelp.data.commands as CommandWithOptions[])[0];
+  const messagesCmd = firstHelpCommand(messagesHelp, "messages list help");
   assert.equal(messagesCmd.id, "messages.list");
-  const messageOptionNames = messagesCmd.options.map((o) => o.name);
+  const messageOptionNames = (messagesCmd.options ?? []).map((o) => o.name);
   assert.deepEqual(messageOptionNames, [
     "folder", "limit", "since", "before", "unread", "flagged", "sender", "cursor",
     "output", "profile",
   ]);
-  const folderOption = messagesCmd.options.find((o) => o.name === "folder");
+  const folderOption = (messagesCmd.options ?? []).find((o) => o.name === "folder");
   assert.equal(folderOption?.required, false);
   assert.equal(folderOption?.type, "string");
   assert.ok(folderOption?.description, "folder option must have a description");
 
   // Per-command help: folders list should show --account as required.
   const foldersHelp = await client.invoke(parse(["help", "folders", "list"]));
-  const foldersCmd = (foldersHelp.data.commands as CommandWithOptions[])[0];
+  const foldersCmd = firstHelpCommand(foldersHelp, "folders list help");
   assert.equal(foldersCmd.id, "folders.list");
-  const accountOption = foldersCmd.options.find((o) => o.name === "account");
+  const accountOption = (foldersCmd.options ?? []).find((o) => o.name === "account");
   assert.equal(accountOption?.required, true, "account option must be marked required for folders list");
 
   // Per-command help: accounts list should only show common options.
   const accountsHelp = await client.invoke(parse(["help", "accounts", "list"]));
-  const accountsCmd = (accountsHelp.data.commands as CommandWithOptions[])[0];
+  const accountsCmd = firstHelpCommand(accountsHelp, "accounts list help");
   assert.equal(accountsCmd.id, "accounts.list");
-  assert.deepEqual(accountsCmd.options.map((o) => o.name), ["output", "profile"]);
+  assert.deepEqual((accountsCmd.options ?? []).map((o) => o.name), ["output", "profile"]);
 
   // General help: all commands should have an options array.
   const generalHelp = await client.invoke(parse(["help"]));
-  const allCommands = generalHelp.data.commands as CommandWithOptions[];
+  const allCommands = helpCommands(generalHelp, "General help");
   for (const cmd of allCommands) {
     assert.ok(Array.isArray(cmd.options), `Command ${cmd.id} must have an options array`);
   }
@@ -520,7 +544,7 @@ test("CLI maps stable error codes to documented exit codes, including counter fa
   });
   const exitCodeFor = async (code: string) => {
     const envelope = await client.invoke(parse(["accounts", "list"]));
-    const withCode = { ...envelope, error: { code, message: "test", retryable: false } };
+    const withCode = { ...envelope, error: { code, message: "test", retryable: false } } as CliEnvelope;
     return formatCliEnvelope(withCode, "json").exitCode;
   };
   assert.equal(await exitCodeFor("INVALID_ARGUMENT"), 2);

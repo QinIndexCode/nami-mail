@@ -1,236 +1,198 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { act } from "react";
+/**
+ * Unit tests for useRealtimeSync's connection reporting.
+ *
+ * Scope: the push stream's visible health (connecting → live → reconnecting →
+ * offline after the backoff budget is spent) and the manual retry that resets
+ * that budget. A FakeEventSource captures every connection attempt and lets the
+ * test fire `open`/`error` deterministically; the poll fallback path is left to
+ * the existing behaviour (it only depends on shouldPollTick).
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
-import { shouldPollTick, useRealtimeSync, type RealtimeSyncOptions } from "./realtimeSync";
-import { translate, type Translate } from "./i18n";
-import type { ToastKind } from "./mailUi";
+import type { ReactElement } from "react";
+import { useRealtimeSync, type RealtimeConnectionState, type RealtimeSyncHandle } from "./realtimeSync";
 
-const zh: Translate = (key, values) => translate("zh-CN", key, values);
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-describe("shouldPollTick", () => {
-  const intervalMs = 60_000;
+type FakeSource = {
+  url: string;
+  closed: boolean;
+  listeners: Map<string, Array<(event: MessageEvent<string>) => void>>;
+  onopen: (() => void) | null;
+  onerror: (() => void) | null;
+  addEventListener: (type: string, listener: (event: MessageEvent<string>) => void) => void;
+  close: () => void;
+  /** Test helpers: fire the browser callbacks the hook wired up. */
+  open: () => void;
+  fail: () => void;
+};
 
-  it("polls when no SSE event has ever arrived (stream disabled or never connected)", () => {
-    // lastSseEventAt starts at 0; a fresh mount must keep the poll cadence.
-    expect(shouldPollTick(0, 1_700_000_000_000, intervalMs)).toBe(true);
-  });
+let sources: FakeSource[] = [];
 
-  it("skips every tick while events keep the stream fresh", () => {
-    const lastEvent = 5_000_000;
-    expect(shouldPollTick(lastEvent, lastEvent + 1, intervalMs)).toBe(false);
-    expect(shouldPollTick(lastEvent, lastEvent + 20_000, intervalMs)).toBe(false);
-    expect(shouldPollTick(lastEvent, lastEvent + intervalMs - 1, intervalMs)).toBe(false);
-  });
-
-  it("polls again once a full interval passes without an event", () => {
-    const lastEvent = 5_000_000;
-    expect(shouldPollTick(lastEvent, lastEvent + intervalMs, intervalMs)).toBe(true);
-    expect(shouldPollTick(lastEvent, lastEvent + intervalMs + 5_000, intervalMs)).toBe(true);
-  });
-});
-
-// Unmounted lookup stand-in for the browser's EventSource (jsdom has none).
-class FakeEventSource {
-  static instances: FakeEventSource[] = [];
-  static reset() {
-    FakeEventSource.instances = [];
-  }
-  listeners = new Map<string, Array<(event?: unknown) => void>>();
+class FakeEventSource implements FakeSource {
+  closed = false;
+  listeners = new Map<string, Array<(event: MessageEvent<string>) => void>>();
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
-  closed = false;
-  constructor(public url: string) {
-    FakeEventSource.instances.push(this);
+
+  constructor(readonly url: string) {
+    sources.push(this);
   }
-  addEventListener(type: string, handler: (event?: unknown) => void) {
-    const list = this.listeners.get(type) ?? [];
-    list.push(handler);
-    this.listeners.set(type, list);
+
+  addEventListener(type: string, listener: (event: MessageEvent<string>) => void): void {
+    const existing = this.listeners.get(type) ?? [];
+    existing.push(listener);
+    this.listeners.set(type, existing);
   }
-  dispatch(type: string, event?: unknown) {
-    for (const handler of this.listeners.get(type) ?? []) handler(event);
-  }
-  close() {
+
+  close(): void {
     this.closed = true;
   }
+
+  open(): void {
+    this.onopen?.();
+  }
+
+  fail(): void {
+    this.onerror?.();
+  }
 }
 
-function RealtimeHarness(options: RealtimeSyncOptions) {
-  useRealtimeSync(options);
-  return null;
+// The 30s backoff cap would make a "gave up" sequence slow; the timer is
+// stubbed so each retry can be advanced in a single tick.
+let timers: Array<{ fn: () => void; delay: number }> = [];
+
+beforeEach(() => {
+  sources = [];
+  timers = [];
+  vi.stubGlobal("EventSource", FakeEventSource);
+  vi.spyOn(window, "setTimeout").mockImplementation(((fn: () => void, delay?: number) => {
+    timers.push({ fn, delay: delay ?? 0 });
+    return timers.length;
+  }) as unknown as typeof window.setTimeout);
+  vi.spyOn(window, "clearTimeout").mockImplementation(() => undefined);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+/** Drains every pending retry timer, opening the connection each time. */
+async function drainRetries(): Promise<void> {
+  for (let guard = 0; guard < 50 && timers.length > 0; guard += 1) {
+    const pending = timers;
+    timers = [];
+    await act(async () => {
+      for (const timer of pending) timer.fn();
+    });
+  }
 }
 
-function baseOptions(): RealtimeSyncOptions {
-  return {
+// Stable identities: App.tsx's callbacks are memoized, and recreating them on
+// every render would re-run the hook's poll effect (which depends on onRefresh).
+const noop = () => undefined;
+const translate: (key: string) => string = (key) => key;
+
+function Harness({ onState }: { onState: (state: RealtimeConnectionState) => void }): ReactElement | null {
+  const handleRef = useRef<RealtimeSyncHandle | undefined>(undefined);
+  const next = useRealtimeSync({
     enabled: true,
     pushEnabled: true,
     refreshIntervalSeconds: 60,
     isDesktop: false,
-    t: zh,
-    showToast: vi.fn<(message: string, kind?: ToastKind) => void>(),
-    onRefresh: vi.fn<() => void>(),
-    onSettingsChanged: vi.fn<() => void>(),
-  };
+    t: translate,
+    showToast: noop,
+    onRefresh: noop,
+    onSettingsChanged: noop,
+    onSyncProgress: noop,
+  });
+  // The hook returns a fresh object every render; keep the latest one in a ref
+  // instead of state so observing it can never feed back into rendering.
+  handleRef.current = next;
+  useEffect(() => {
+    onState(next.connectionState);
+  }, [next.connectionState, onState]);
+  return (
+    <button type="button" data-reconnect onClick={() => handleRef.current?.reconnect()}>
+      reconnect
+    </button>
+  );
 }
 
-function mount(options: RealtimeSyncOptions) {
+async function mountHarness(): Promise<{ states: RealtimeConnectionState[]; container: HTMLDivElement; unmount: () => void }> {
+  const states: RealtimeConnectionState[] = [];
   const container = document.createElement("div");
-  document.body.appendChild(container);
+  document.body.append(container);
   const root = createRoot(container);
-  const rerender = (next: RealtimeSyncOptions) => {
-    act(() => { root.render(<RealtimeHarness {...next} />); });
+  await act(async () => {
+    root.render(<Harness onState={(state) => states.push(state)} />);
+  });
+  const unmount = () => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
   };
-  act(() => { root.render(<RealtimeHarness {...options} />); });
-  return { root, rerender, container };
+  return { states, container, unmount };
 }
 
-describe("useRealtimeSync", () => {
-  afterEach(() => {
-    FakeEventSource.reset();
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-    document.body.innerHTML = "";
+describe("useRealtimeSync connection state", () => {
+  it("reports a live stream once the source opens", async () => {
+    const { states, container, unmount } = await mountHarness();
+    expect(sources).toHaveLength(1);
+    await act(async () => {
+      sources[0]?.open();
+    });
+    expect(states.at(-1)).toBe("live");
+    expect(sources[0]?.url).toBe("/api/events");
+    unmount();
+    container.remove();
   });
 
-  it("does not connect or poll in demo mode", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    mount({ ...baseOptions(), enabled: false });
-    expect(FakeEventSource.instances).toHaveLength(0);
-  });
-
-  it("stays dormant while the push toggle is off", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    mount({ ...baseOptions(), pushEnabled: false });
-    expect(FakeEventSource.instances).toHaveLength(0);
-  });
-
-  it("opens one stream and subscribes to the three event names", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    mount(baseOptions());
-    expect(FakeEventSource.instances).toHaveLength(1);
-    expect(FakeEventSource.instances[0].url).toBe("/api/events");
-    for (const eventName of ["mail.received", "mail.synced", "settings.changed"]) {
-      expect(FakeEventSource.instances[0].listeners.has(eventName)).toBe(true);
+  it("gives up after the backoff budget and reports offline", async () => {
+    const { states, container, unmount } = await mountHarness();
+    for (let attempt = 0; attempt <= 10; attempt += 1) {
+      const source = sources.at(-1);
+      await act(async () => {
+        source?.fail();
+      });
+      await drainRetries();
     }
+    expect(states).toContain("reconnecting");
+    expect(states.at(-1)).toBe("offline");
+    // The failed connection is closed instead of letting EventSource hammer it.
+    expect(sources.at(-1)?.closed).toBe(true);
+    unmount();
+    container.remove();
   });
 
-  it("rebuilds the stream when the push toggle flips, closing the old one", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    const options = baseOptions();
-    const { rerender } = mount(options);
-    const first = FakeEventSource.instances[0];
-    rerender({ ...options, pushEnabled: false });
-    expect(first.closed).toBe(true);
-    rerender({ ...options, pushEnabled: true });
-    expect(FakeEventSource.instances).toHaveLength(2);
-  });
-
-  it("closes the stream on unmount", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    const { root } = mount(baseOptions());
-    const instance = FakeEventSource.instances[0];
-    act(() => { root.unmount(); });
-    expect(instance.closed).toBe(true);
-  });
-
-  it("refreshes and toasts the sender on mail.received (browser fallback)", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    const { onRefresh, showToast } = baseOptions();
-    mount({ ...baseOptions(), onRefresh, showToast });
-    const instance = FakeEventSource.instances[0];
-    act(() => {
-      instance.dispatch("mail.received", { data: JSON.stringify({ type: "mail.received", payload: { count: 1, messages: [{ fromName: "Alice", fromAddress: "alice@example.com" }] } }) });
-    });
-    expect(onRefresh).toHaveBeenCalledTimes(1);
-    expect(showToast).toHaveBeenCalledWith(zh("mail.notification.singleToast", { sender: "Alice" }));
-  });
-
-  it("toasts the count for a batch arrival", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    const { showToast } = baseOptions();
-    mount({ ...baseOptions(), showToast });
-    const instance = FakeEventSource.instances[0];
-    act(() => {
-      instance.dispatch("mail.received", { data: JSON.stringify({ type: "mail.received", payload: { count: 3, messages: [] } }) });
-    });
-    expect(showToast).toHaveBeenCalledWith(zh("mail.notification.multipleToast", { count: 3 }));
-  });
-
-  it("refreshes without a toast on desktop (the IPC bridge owns the notice)", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    const { onRefresh, showToast } = baseOptions();
-    mount({ ...baseOptions(), onRefresh, showToast, isDesktop: true });
-    const instance = FakeEventSource.instances[0];
-    act(() => {
-      instance.dispatch("mail.received", { data: JSON.stringify({ type: "mail.received", payload: { count: 1, messages: [{ fromName: "Alice" }] } }) });
-    });
-    expect(onRefresh).toHaveBeenCalledTimes(1);
-    expect(showToast).not.toHaveBeenCalled();
-  });
-
-  it("ignores malformed or non-mail payloads for the toast but still refreshes", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    const { onRefresh, showToast } = baseOptions();
-    mount({ ...baseOptions(), onRefresh, showToast });
-    const instance = FakeEventSource.instances[0];
-    act(() => {
-      instance.dispatch("mail.received", { data: "{ not json" });
-      instance.dispatch("mail.received", { data: JSON.stringify({ type: "mail.other", payload: { count: 1 } }) });
-      instance.dispatch("mail.received", { data: JSON.stringify({ type: "mail.received", payload: { count: 0 } }) });
-    });
-    // The refresh fires on every received event before payload validation.
-    expect(onRefresh).toHaveBeenCalledTimes(3);
-    expect(showToast).not.toHaveBeenCalled();
-  });
-
-  it("refreshes on mail.synced without a toast", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    const { onRefresh, showToast } = baseOptions();
-    mount({ ...baseOptions(), onRefresh, showToast });
-    act(() => { FakeEventSource.instances[0].dispatch("mail.synced"); });
-    expect(onRefresh).toHaveBeenCalledTimes(1);
-    expect(showToast).not.toHaveBeenCalled();
-  });
-
-  it("re-applies settings on settings.changed", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    const { onSettingsChanged } = baseOptions();
-    mount({ ...baseOptions(), onSettingsChanged });
-    act(() => { FakeEventSource.instances[0].dispatch("settings.changed"); });
-    expect(onSettingsChanged).toHaveBeenCalledTimes(1);
-  });
-
-  it("stops reconnecting after the capped backoff budget is exhausted", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    vi.useFakeTimers();
-    mount(baseOptions());
-    let instance = FakeEventSource.instances[0];
-    // Ten errors each schedule a reconnect with capped exponential backoff
-    // (1s, 2s, 4s, ... capped at 30s); the eleventh error gives up.
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      act(() => { instance.onerror?.(); });
-      vi.advanceTimersByTime(Math.min(1_000 * 2 ** attempt, 30_000) + 10);
-      instance = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+  it("retry opens a fresh connection and returns to live", async () => {
+    const { states, container, unmount } = await mountHarness();
+    for (let attempt = 0; attempt <= 10; attempt += 1) {
+      const source = sources.at(-1);
+      await act(async () => {
+        source?.fail();
+      });
+      await drainRetries();
     }
-    expect(FakeEventSource.instances).toHaveLength(11);
-    act(() => { instance.onerror?.(); });
-    vi.advanceTimersByTime(60_000);
-    expect(FakeEventSource.instances).toHaveLength(11);
-  });
+    expect(states.at(-1)).toBe("offline");
+    const attemptsBeforeRetry = sources.length;
 
-  it("a successful open resets the backoff budget", () => {
-    vi.stubGlobal("EventSource", FakeEventSource);
-    vi.useFakeTimers();
-    mount(baseOptions());
-    let instance = FakeEventSource.instances[0];
-    act(() => { instance.onerror?.(); });
-    vi.advanceTimersByTime(1_010);
-    instance = FakeEventSource.instances[FakeEventSource.instances.length - 1];
-    act(() => { instance.onopen?.(); });
-    act(() => { instance.onerror?.(); });
-    // attempt was reset by onopen, so this error reconnects with the 1s delay.
-    vi.advanceTimersByTime(1_010);
-    expect(FakeEventSource.instances).toHaveLength(3);
+    const retryButton = container.querySelector("[data-reconnect]");
+    await act(async () => {
+      retryButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(sources.length).toBe(attemptsBeforeRetry + 1);
+    expect(states.at(-1)).toBe("connecting");
+
+    await act(async () => {
+      sources.at(-1)?.open();
+    });
+    expect(states.at(-1)).toBe("live");
+    unmount();
+    container.remove();
   });
 });

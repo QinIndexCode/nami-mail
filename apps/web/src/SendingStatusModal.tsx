@@ -9,9 +9,9 @@ import {
   submissionStatusPresentation,
 } from "./sendingStatus";
 import type { Account, OutboundSubmission } from "./types";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
-import { useStablePagedListHeight } from "./useStablePagedListHeight";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
+import { useStablePagedListHeight } from "./hooks/useStablePagedListHeight";
 
 type SendingStatusModalProps = {
   accounts: Account[];

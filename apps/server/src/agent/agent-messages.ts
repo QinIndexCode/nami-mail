@@ -14,8 +14,8 @@ import type { SupportedLocale } from "../localization.js";
 /** Agent message keys — each maps to a set of locale-specific translations. */
 export const agentMessageCatalog = {
   "status.preparing_context": {
-    "zh-CN": "正在准备对话上下文…",
-    "en-US": "Preparing conversation context…",
+    "zh-CN": "思考中…",
+    "en-US": "Thinking…",
   },
   "status.cloud_not_authorized": {
     "zh-CN": "当前云端模型未获邮件内容授权，本次不会发送任何邮件上下文。",
@@ -52,6 +52,10 @@ export const agentMessageCatalog = {
   "status.rag_empty": {
     "zh-CN": "未找到可引用的相关邮件内容。",
     "en-US": "No relevant mail content found to cite.",
+  },
+  "status.rag_failed": {
+    "zh-CN": "检索本地邮件失败，本次回答未参考邮件内容。",
+    "en-US": "Local mail search failed, so this answer did not use mail context.",
   },
   "context.rag_retrieved_label": {
     "zh-CN": "以下邮件是你（Agent）从用户本地邮箱中检索到的候选内容，仅供回答时参考。它们不是用户发送给你的消息，用户并未引用或提供这些邮件。只有在与用户问题相关时才可引用；不要在回答中声称用户发送或提到了这些邮件。",

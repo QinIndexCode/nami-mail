@@ -31,8 +31,11 @@ Nami Mail 当前发布 Windows x64 桌面版。本页按任务整理公开文档
 - [社区行为准则](../CODE_OF_CONDUCT.zh-CN.md)：协作和报告行为问题的规则。
 - [开发说明](DEVELOPMENT.zh-CN.md)：运行模式、目录和验证基线。
 - [架构与信任边界](ARCHITECTURE.zh-CN.md)：进程、数据和更新边界。
+- [设计规范](DESIGN-SYSTEM.zh-CN.md)：阅读字宽、圆角、阴影、字号、配色与交互状态的视觉基线。
 - [Windows 发布指南](RELEASING.zh-CN.md)：维护者的签名、Release 和真实更新验证步骤。
 - [Agent 开发实施计划](development/implementation-plan.zh-CN.md)：模块职责、分期、验收与回滚边界。
+- [交互约定](INTERACTION.zh-CN.md)：多选收尾、乐观更新、即时反馈与快照合并的跨模块规则。
+- [大文件拆分计划](REFACTORING-PLAN.zh-CN.md)：四个大文件已测绘的接缝、推进顺序与验证门禁。
 
 ## 语言与版本
 

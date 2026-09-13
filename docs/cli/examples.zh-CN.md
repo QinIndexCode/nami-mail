@@ -18,12 +18,13 @@ namimail version
 
 ## 只读查询
 
-CLI 仅允许已配对、范围受限的读取。外部只读命令共有八个：`accounts list`、`folders list`、`messages list`、`mail summarize`、`messages get`、`messages batch-get`、`threads get` 和 `attachments list`。`acct_work` 和日期范围只是示例值；账户 ID 必须处于已批准的账户范围内。
+CLI 仅允许已配对、范围受限的读取。外部只读命令共有九个：`accounts list`、`folders list`、`messages list`、`messages search`、`mail summarize`、`messages get`、`messages batch-get`、`threads get` 和 `attachments list`。`acct_work` 和日期范围只是示例值；账户 ID 必须处于已批准的账户范围内。
 
 ```text
 namimail accounts list --output json
 namimail folders list --account acct_work --output json
 namimail messages list --folder INBOX --since 2026-07-01T00:00:00Z --limit 20 --output json
+namimail messages search --query "invoice" --folder INBOX --output json
 namimail mail summarize --folder INBOX --since 2026-07-01T00:00:00Z --limit 10 --output json
 namimail messages get --message msg_1 --output json
 namimail threads get --thread thr_1 --output json

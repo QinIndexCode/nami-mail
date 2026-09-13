@@ -15,6 +15,30 @@ describe("api transport errors", () => {
     });
   });
 
+  it("reports a distinct timeout code instead of local_service_unavailable", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      })));
+      const pending = api.accounts();
+      const assertion = expect(pending).rejects.toMatchObject({
+        name: "ApiError",
+        code: "local_service_timeout",
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an AbortError as-is rather than converting it to a timeout", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new DOMException("stopped", "AbortError")));
+
+    await expect(api.accounts()).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("keeps renderer API requests free of a desktop token (injected by the main process)", async () => {
     vi.stubGlobal("window", {});
     const fetchMock = vi.fn().mockResolvedValue(new Response("[]", {

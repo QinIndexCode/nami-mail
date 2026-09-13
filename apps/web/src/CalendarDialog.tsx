@@ -21,9 +21,10 @@ import { useI18n } from "./i18n";
 import type { CalendarEvent, CalendarEventColor, CalendarEventInput } from "./types";
 import { calendarEventColors } from "./types";
 import DatePicker from "./DatePicker";
+import { demoTranslate } from "./demo";
 import { ManagementDialogShell } from "./ManagementDialogs";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 import { calendarCache } from "./dialogPrefetch";
 
 type Notice = { kind: "success" | "error"; message: string } | null;
@@ -121,16 +122,16 @@ function emptyDraft(dayKey: string, now = new Date()): EventDraft {
   };
 }
 
-function demoCalendarEvents(now = new Date()): CalendarEvent[] {
+function demoCalendarEvents(locale: string, now = new Date()): CalendarEvent[] {
   const iso = (offsetDays: number, hours: number, minutes = 0): string =>
     new Date(now.getFullYear(), now.getMonth(), now.getDate() + offsetDays, hours, minutes, 0, 0).toISOString();
   const id = (index: number) => `demo-event-${index}`;
   return [
     {
       id: id(1),
-      title: "晨会",
-      description: "每日同步",
-      location: "线上",
+      title: demoTranslate(locale, "demo.calendar.event1.title", "晨会"),
+      description: demoTranslate(locale, "demo.calendar.event1.description", "每日同步"),
+      location: demoTranslate(locale, "demo.calendar.event1.location", "线上"),
       startAt: iso(0, 9, 0),
       endAt: iso(0, 9, 30),
       allDay: false,
@@ -140,9 +141,9 @@ function demoCalendarEvents(now = new Date()): CalendarEvent[] {
     },
     {
       id: id(2),
-      title: "设计评审",
-      description: "产品迭代设计稿评审",
-      location: "会议室 A",
+      title: demoTranslate(locale, "demo.calendar.event2.title", "设计评审"),
+      description: demoTranslate(locale, "demo.calendar.event2.description", "产品迭代设计稿评审"),
+      location: demoTranslate(locale, "demo.calendar.event2.location", "会议室 A"),
       startAt: iso(2, 14, 0),
       endAt: iso(2, 15, 30),
       allDay: false,
@@ -152,8 +153,8 @@ function demoCalendarEvents(now = new Date()): CalendarEvent[] {
     },
     {
       id: id(3),
-      title: "产品发布",
-      description: "月度版本上线",
+      title: demoTranslate(locale, "demo.calendar.event3.title", "产品发布"),
+      description: demoTranslate(locale, "demo.calendar.event3.description", "月度版本上线"),
       location: "",
       startAt: iso(7, 0, 0),
       endAt: iso(7, 23, 59),
@@ -164,9 +165,9 @@ function demoCalendarEvents(now = new Date()): CalendarEvent[] {
     },
     {
       id: id(4),
-      title: "团队建设",
-      description: "季度团建",
-      location: "郊野公园",
+      title: demoTranslate(locale, "demo.calendar.event4.title", "团队建设"),
+      description: demoTranslate(locale, "demo.calendar.event4.description", "季度团建"),
+      location: demoTranslate(locale, "demo.calendar.event4.location", "郊野公园"),
       startAt: iso(10, 0, 0),
       endAt: iso(11, 23, 59),
       allDay: true,
@@ -194,9 +195,9 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
   const confirmationDialog = useRef<HTMLElement>(null);
   const jumpWrapRef = useRef<HTMLDivElement>(null);
   const [viewMonth, setViewMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
-  const [events, setEvents] = useState<CalendarEvent[]>(() => (demoMode ? demoCalendarEvents() : []));
+  const [events, setEvents] = useState<CalendarEvent[]>(() => (demoMode ? demoCalendarEvents(locale) : []));
   const [view, setView] = useState<"month" | "list">("month");
-  const [listEvents, setListEvents] = useState<CalendarEvent[]>(() => (demoMode ? demoCalendarEvents() : []));
+  const [listEvents, setListEvents] = useState<CalendarEvent[]>(() => (demoMode ? demoCalendarEvents(locale) : []));
   const [loading, setLoading] = useState(!demoMode);
   const [listLoading, setListLoading] = useState(!demoMode);
   const [loadError, setLoadError] = useState<unknown>(null);
@@ -223,8 +224,11 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     setLoadError(null);
     const rangeStart = new Date(viewMonth.getFullYear(), viewMonth.getMonth() - 1, 1).getTime();
     const rangeEnd = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 2, 0, 23, 59, 59, 999).getTime();
+    // Capture the cache revision before waiting: a refresh started by an edit
+    // means this response is already stale.
+    const revision = calendarCache.revision();
     void calendarCache.get().then((all) => {
-      if (!active) return;
+      if (!active || calendarCache.revision() !== revision) return;
       const inRange = all.filter((event) => {
         const start = new Date(event.startAt).getTime();
         return start >= rangeStart && start <= rangeEnd;
@@ -244,7 +248,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
   // The event list spans every month; it shows the cached full calendar.
   useEffect(() => {
     if (demoMode) {
-      setListEvents(demoCalendarEvents());
+      setListEvents(demoCalendarEvents(locale));
       setListLoading(false);
       return undefined;
     }
@@ -252,8 +256,9 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     let active = true;
     setListLoading(true);
     setLoadError(null);
+    const revision = calendarCache.revision();
     void calendarCache.get().then((all) => {
-      if (!active) return;
+      if (!active || calendarCache.revision() !== revision) return;
       setListEvents(all);
     }).catch((error: unknown) => {
       if (!active) return;

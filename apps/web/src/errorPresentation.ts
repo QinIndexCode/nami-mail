@@ -141,7 +141,7 @@ export function presentMailError(error: unknown, t: Translate = defaultTranslate
   if (code === "connection_failed" || /(?:econnreset|socket hang up|连接邮箱服务器失败|连接被拒绝|与邮件服务器的连接在完成前中断|connection failed)/i.test(normalized)) {
     return localizedPresentation("connection", "connectionFailed", true, t);
   }
-  if (code === "local_service_unavailable" || /failed to fetch|networkerror|err_connection_refused|无法连接本地服务/i.test(normalized)) {
+  if (code === "local_service_unavailable" || code === "local_service_timeout" || /failed to fetch|networkerror|err_connection_refused|无法连接本地服务/i.test(normalized)) {
     return localizedPresentation("local-service", "localServiceUnavailable", true, t);
   }
   if (status && status >= 500) return localizedPresentation("local-service", "localServiceError", true, t);

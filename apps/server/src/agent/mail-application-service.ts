@@ -70,6 +70,31 @@ export type MailListResult = {
   nextCursor?: string;
 };
 
+export type MailSearchQuery = {
+  accountIds: readonly string[];
+  /** Free-text keyword matched against subject, sender, body, recipients, and attachment names. */
+  query: string;
+  mailbox?: string;
+  subject?: string;
+  hasAttachments?: boolean;
+  after?: string;
+  before?: string;
+  limit: number;
+  cursor?: string;
+};
+
+export type MailSearchResult = {
+  items: readonly MailMessageView[];
+  total: number;
+  truncated: boolean;
+  /** Offset of the next page, absent when this page is the last one. */
+  nextCursor?: string;
+  /** Effective lower bound (UTC ISO) actually applied to the search, or null when unbounded. */
+  searchedFrom?: string | null;
+  /** Newest message timestamp present in the local index for the searched accounts, or null if none. */
+  newestLocalAt?: string | null;
+};
+
 export type DraftMutation = {
   accountId: string;
   draftId?: string;
@@ -93,6 +118,16 @@ export type DraftView = {
   updatedAt: string;
 };
 
+/**
+ * Destination for a single-message move: the archive/trash shortcut, or an
+ * explicit folder path of the message's own account. The two shapes are
+ * exclusive by construction, so a caller cannot express "archive, and also this
+ * folder" and have one of them silently win.
+ */
+export type MailMessageDestination =
+  | { target: "archive" | "trash" }
+  | { folder: string };
+
 export type PreparedMailSubmission = {
   submissionId: string;
   /** Present on prepare; omitted after submission because the key is consumed. */
@@ -110,6 +145,7 @@ export interface MailApplicationService {
   listAccounts(context: MailApplicationContext): Promise<readonly MailAccountView[]>;
   listFolders(context: MailApplicationContext, accountId: string): Promise<readonly MailFolderView[]>;
   listMessages(context: MailApplicationContext, query: MailListQuery): Promise<MailListResult>;
+  searchMessages(context: MailApplicationContext, query: MailSearchQuery): Promise<MailSearchResult>;
   getMessage(context: MailApplicationContext, messageId: string): Promise<MailMessageDetail | undefined>;
   getThread(context: MailApplicationContext, threadId: string): Promise<readonly MailMessageDetail[]>;
   listAttachments(context: MailApplicationContext, messageId: string): Promise<readonly MailAttachmentView[]>;
@@ -119,7 +155,7 @@ export interface MailApplicationService {
   updateDraft(context: MailApplicationContext, input: DraftMutation & { draftId: string }): Promise<DraftView>;
   deleteDraft(context: MailApplicationContext, accountId: string, draftId: string): Promise<void>;
   updateMessageFlags(context: MailApplicationContext, messageId: string, patch: { seen?: boolean; flagged?: boolean }): Promise<void>;
-  moveMessage(context: MailApplicationContext, messageId: string, target: "archive" | "trash"): Promise<void>;
+  moveMessage(context: MailApplicationContext, messageId: string, destination: MailMessageDestination): Promise<void>;
 
   /** Wrap `prepareSubmission` and preserve its idempotency key for a later visible confirmation. */
   prepareSubmission(context: MailApplicationContext, input: DraftMutation & { idempotencyKey?: string }): Promise<PreparedMailSubmission>;

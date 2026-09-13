@@ -40,11 +40,13 @@ const statusKeyByReason: Record<DesktopUpdateSnapshot["reason"], string> = {
   mailDataBusy: "update.status.mailDataBusy",
   installerNotStarted: "update.status.installerNotStarted",
   installResult: "update.status.installResult",
+  installNotApplied: "update.status.installNotApplied",
   unknown: "update.status.unknown",
 };
 
 function expectedValues(reason: DesktopUpdateSnapshot["reason"]): Record<string, string | number> | undefined {
   if (reason === "upToDate" || reason === "releaseAvailable" || reason === "downloadReady") return { version: "0.1.1" };
+  if (reason === "installNotApplied") return { version: "0.1.1" };
   if (reason === "downloading") return { version: "0.1.1", percent: 0 };
   if (reason === "installResult") return { stage: translate("zh-CN", "update.installStage.install") };
   return undefined;

@@ -21,7 +21,9 @@ import {
   submissionRequestForId,
   type OutboundSubmissionRequest,
 } from "../outbox.js";
-import { syncAccount, updateMessageFlags, moveMessage } from "../sync.js";
+import { syncAccount, updateMessageFlags, moveMessage, moveMessageToFolder } from "../sync.js";
+import { ftsLikeEscape, MESSAGE_FTS_TABLE } from "../message-search.js";
+import { redactUrls } from "../message-links.js";
 import type { AccountRecord } from "../types.js";
 import type { AgentMailStateEvents } from "./mail-state-events.js";
 import type {
@@ -34,8 +36,11 @@ import type {
   MailFolderView,
   MailListQuery,
   MailListResult,
+  MailMessageDestination,
   MailMessageDetail,
   MailMessageView,
+  MailSearchQuery,
+  MailSearchResult,
   PreparedMailSubmission,
 } from "./mail-application-service.js";
 
@@ -92,6 +97,39 @@ function rowFlags(row: Record<string, unknown>): string[] {
   } catch {
     return [];
   }
+}
+
+/** Search excerpt cap — generous enough to carry a useful summary, bounded so a
+ * long body never floods the model context. URLs are redacted to a neutral
+ * sentinel, then rendered with a localized label by the tool output. */
+const SEARCH_SNIPPET_MAX_LENGTH = 300;
+function searchSnippet(value: string, keyword: string): string {
+  const compact = redactUrls(value.replace(/\s+/g, " ").trim());
+  if (compact.length <= SEARCH_SNIPPET_MAX_LENGTH) return compact;
+  const needle = keyword.trim().toLocaleLowerCase("en-US");
+  const pos = compact.toLocaleLowerCase("en-US").indexOf(needle);
+  if (pos < 0) {
+    // Keyword not found verbatim (e.g. split across punctuation); take the head.
+    return `${compact.slice(0, SEARCH_SNIPPET_MAX_LENGTH).trimEnd()}…`;
+  }
+  // Center the excerpt on the first hit instead of the body head, so the Agent
+  // sees the relevant context rather than noise from the message opening.
+  const BEFORE = Math.floor(SEARCH_SNIPPET_MAX_LENGTH * 0.4);
+  const start = Math.max(0, pos - BEFORE);
+  const end = Math.min(compact.length, start + SEARCH_SNIPPET_MAX_LENGTH);
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < compact.length ? "…" : "";
+  return `${prefix}${compact.slice(start, end).trim()}${suffix}`;
+}
+
+/**
+ * FTS5 MATCH phrase from a free-text keyword. Wrapping in double quotes makes
+ * embedded spaces and reserved operators literal; the trigram tokenizer then
+ * performs substring matching, which is the same fuzzy semantics the existing
+ * message search relies on.
+ */
+function ftsPhraseQuery(keyword: string): string {
+  return `"${keyword.trim().replace(/"/g, '""')}"`;
 }
 
 /**
@@ -156,6 +194,25 @@ export class SqliteMailApplicationService implements MailApplicationService {
       from: { name: payload.fromName, address: payload.fromAddress },
       sentAt,
       snippet: payload.snippet,
+      flags: rowFlags(row),
+      hasAttachments: row.has_attachments === 1 || row.has_attachments === true,
+    };
+  }
+
+  /** A search result view whose excerpt is a fresh, redacted, keyword-centred
+   * snippet (up to SEARCH_SNIPPET_MAX_LENGTH) cut from the raw body rather than
+   * the short stored preview, so the Agent gets a useful summary in one round. */
+  private searchMessageView(row: MessageRowWithAccount, keyword: string): MailMessageView {
+    const payload = messagePayloadForRow(row, this.options.masterKey);
+    return {
+      id: row.id,
+      accountId: row.account_id,
+      mailbox: row.mailbox,
+      threadId: payload.inReplyTo ?? payload.messageId ?? null,
+      subject: payload.subject,
+      from: { name: payload.fromName, address: payload.fromAddress },
+      sentAt: rowString(row, "sent_at"),
+      snippet: searchSnippet(payload.textBody || payload.snippet || "", keyword),
       flags: rowFlags(row),
       hasAttachments: row.has_attachments === 1 || row.has_attachments === true,
     };
@@ -253,8 +310,6 @@ export class SqliteMailApplicationService implements MailApplicationService {
     }
     if (query.unread !== undefined) where.push(query.unread ? "m.flags_json NOT LIKE '%\\Seen%'" : "m.flags_json LIKE '%\\Seen%'");
     if (query.flagged !== undefined) where.push(query.flagged ? "m.flags_json LIKE '%\\Flagged%'" : "m.flags_json NOT LIKE '%\\Flagged%'");
-    // Note: sender filter is applied post-decryption because from_address is
-    // cleared by the encryption migration (clearPlaintextColumns).
     // Stored timestamps use UTC ISO (sync.ts writes toISOString output). The
     // caller may pass an offset-carrying timestamp, so normalize both bounds
     // to the same UTC form before comparing, otherwise text order diverges
@@ -275,35 +330,23 @@ export class SqliteMailApplicationService implements MailApplicationService {
     const senderQuery = trimmed(query.sender)?.toLocaleLowerCase();
 
     if (senderQuery) {
-      // Sender filter requires decryption (from_address is encrypted), so scan
-      // the matching rows in bounded batches, decrypt, filter, then paginate in
-      // memory. Scanning continues until the requested window is filled or all
-      // rows have been read, so results are never silently truncated at a fixed
-      // row limit regardless of account size.
-      const batchSize = 1_000;
-      const matched: MessageRowWithAccount[] = [];
-      const required = safeOffset + limit + 1;
-      for (let batchOffset = 0; ; batchOffset += batchSize) {
-        const batch = this.options.db.prepare(`
-          SELECT m.*, a.email AS account_email, a.provider_name
-          FROM messages m JOIN accounts a ON a.id = m.account_id
-          WHERE ${where.join(" AND ")}
-          ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id
-          LIMIT ? OFFSET ?
-        `).all(...params, batchSize, batchOffset) as MessageRowWithAccount[];
-        if (!batch.length) break;
-        for (const row of batch) {
-          const payload = messagePayloadForRow(row, this.options.masterKey);
-          if (payload.fromAddress.toLowerCase().includes(senderQuery)
-            || payload.fromName.toLowerCase().includes(senderQuery)) {
-            matched.push(row);
-            if (matched.length >= required) break;
-          }
-        }
-        if (matched.length >= required || batch.length < batchSize) break;
-      }
-      const page = matched.slice(safeOffset, safeOffset + limit).map((row) => this.messageView(row));
-      return { items: page, ...(matched.length > safeOffset + limit ? { nextCursor: String(safeOffset + limit) } : {}) };
+      // from_address is encrypted at rest, but its text is mirrored into the
+      // FTS index (from_address / from_name columns, written from the
+      // decrypted payload at sync time — the same index the user-facing
+      // search runs on). Filter through the index instead of decrypting every
+      // candidate row on the main process. LIKE keeps the historical
+      // substring semantics for any query length (a MATCH phrase would
+      // silently drop 1-2 character filters below the trigram floor) and
+      // stays ASCII-case-insensitive like the rest of the search paths. This
+      // assumes the FTS row always exists for a message row — the same
+      // invariant the user search already relies on (message-fts-v2 rebuild).
+      const pattern = `%${ftsLikeEscape(senderQuery)}%`;
+      where.push(`EXISTS (
+        SELECT 1 FROM ${MESSAGE_FTS_TABLE} fts
+        WHERE fts.message_id = m.id
+          AND (fts.from_address LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\')
+      )`);
+      params.push(pattern, pattern);
     }
 
     const rows = this.options.db.prepare(`
@@ -315,6 +358,125 @@ export class SqliteMailApplicationService implements MailApplicationService {
     `).all(...params, limit + 1, safeOffset) as MessageRowWithAccount[];
     const page = rows.slice(0, limit).map((row) => this.messageView(row));
     return { items: page, ...(rows.length > limit ? { nextCursor: String(safeOffset + limit) } : {}) };
+  }
+
+  async searchMessages(context: MailApplicationContext, query: MailSearchQuery): Promise<MailSearchResult> {
+    const requestedAccounts = query.accountIds.length ? unique(query.accountIds) : this.authorizedAccountIds(context);
+    for (const accountId of requestedAccounts) this.assertAccount(context, accountId);
+    const messageIds = this.authorizedMessageIds(context);
+    if (messageIds !== undefined && !messageIds.length) return { items: [], total: 0, truncated: false };
+    const keyword = trimmed(query.query);
+    if (!keyword) return { items: [], total: 0, truncated: false };
+    const where: string[] = [`m.account_id IN (${placeholders(requestedAccounts)})`];
+    const params: unknown[] = [...requestedAccounts];
+    // The trigram tokenizer indexes three-character sequences, so a one- or
+    // two-character query can never match through MATCH: it silently returns
+    // nothing. That is not a corner case — it is every 两字中文 keyword (发票,
+    // 报销, 账单). Those fall back to a LIKE scan over the same indexed columns,
+    // which keeps the substring semantics the tokenizer gives longer queries.
+    if ([...keyword].length < 3) {
+      const pattern = `%${ftsLikeEscape(keyword)}%`;
+      where.push(`EXISTS (
+        SELECT 1 FROM ${MESSAGE_FTS_TABLE} fts
+        WHERE fts.message_id = m.id
+          AND (fts.subject LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\' OR fts.from_address LIKE ? ESCAPE '\\'
+            OR fts."to" LIKE ? ESCAPE '\\' OR fts."cc" LIKE ? ESCAPE '\\' OR fts.attachment LIKE ? ESCAPE '\\' OR fts.body LIKE ? ESCAPE '\\')
+      )`);
+      params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern);
+    } else {
+      // The alias is required, not cosmetic: the optional filters below add
+      // EXISTS subqueries over the same FTS table, and a bare table name in
+      // MATCH would become ambiguous once another reference is in scope.
+      where.push("f MATCH ?");
+      params.push(ftsPhraseQuery(keyword));
+    }
+    if (messageIds !== undefined) {
+      where.push(`m.id IN (${placeholders(messageIds)})`);
+      params.push(...messageIds);
+    }
+    const mailbox = trimmed(query.mailbox);
+    if (mailbox) {
+      where.push("m.mailbox = ?");
+      params.push(mailbox);
+    }
+    const subject = trimmed(query.subject);
+    if (subject) {
+      // subject is encrypted at rest but mirrored into the FTS index, so the
+      // filter runs on the index instead of decrypting candidate rows. LIKE
+      // keeps substring semantics for any query length.
+      const pattern = `%${ftsLikeEscape(subject.toLocaleLowerCase())}%`;
+      where.push(`EXISTS (
+        SELECT 1 FROM ${MESSAGE_FTS_TABLE} fts
+        WHERE fts.message_id = m.id AND fts.subject LIKE ? ESCAPE '\\'
+      )`);
+      params.push(pattern);
+    }
+    if (query.hasAttachments !== undefined) {
+      // The message view treats a missing flag as "no attachments", so the
+      // negative case has to include rows whose column is still NULL.
+      where.push(query.hasAttachments ? "m.has_attachments = 1" : "COALESCE(m.has_attachments, 0) <> 1");
+    }
+    // Stored timestamps use UTC ISO; normalize any offset-carrying bounds to
+    // UTC so text comparison follows real time (see listMessages). Newest-first
+    // ordering keeps the search responsive to "latest" intent within a range.
+    const afterIso = query.after ? utcIsoOf(query.after) : undefined;
+    const beforeIso = query.before ? utcIsoOf(query.before) : undefined;
+    // A bounded window keeps "latest" queries responsive and stops the archive
+    // tail from dominating. The effective lower bound is reported on the result
+    // so callers know how far back the search actually went.
+    let searchedFrom: string | null = null;
+    if (afterIso) {
+      where.push("COALESCE(m.sent_at, m.created_at) >= ?");
+      params.push(afterIso);
+      searchedFrom = afterIso;
+    } else if (!beforeIso) {
+      const ninetyDaysAgo = new Date();
+      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+      searchedFrom = ninetyDaysAgo.toISOString();
+      where.push("COALESCE(m.sent_at, m.created_at) >= ?");
+      params.push(searchedFrom);
+    }
+    const limit = Math.max(1, Math.min(100, Math.floor(query.limit || 10)));
+    const offset = Number.parseInt(query.cursor ?? "0", 10);
+    const safeOffset = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
+    const whereSql = where.join(" AND ");
+    const total = Number((this.options.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM ${MESSAGE_FTS_TABLE} f
+      JOIN messages m ON m.id = f.message_id
+      WHERE ${whereSql}
+    `).get(...params) as { count: number }).count);
+    const rows = this.options.db.prepare(`
+      SELECT m.*, a.email AS account_email, a.provider_name
+      FROM ${MESSAGE_FTS_TABLE} f
+      JOIN messages m ON m.id = f.message_id
+      JOIN accounts a ON a.id = m.account_id
+      WHERE ${whereSql}
+      ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id
+      LIMIT ? OFFSET ?
+    `).all(...params, limit + 1, safeOffset) as MessageRowWithAccount[];
+    const page = rows.slice(0, limit).map((row) => this.searchMessageView(row, keyword));
+    // Report the newest timestamp available locally so a caller can tell whether
+    // the "latest" mail is actually synced yet.
+    const newestScope: string[] = [`m.account_id IN (${placeholders(requestedAccounts)})`];
+    const newestParams: unknown[] = [...requestedAccounts];
+    if (messageIds !== undefined) {
+      newestScope.push(`m.id IN (${placeholders(messageIds)})`);
+      newestParams.push(...messageIds);
+    }
+    const newestLocalAt = (this.options.db.prepare(`
+      SELECT MAX(COALESCE(m.sent_at, m.created_at)) AS at
+      FROM messages m
+      WHERE ${newestScope.join(" AND ")}
+    `).get(...newestParams) as { at: string | null }).at;
+    return {
+      items: page,
+      total,
+      truncated: rows.length > limit,
+      ...(rows.length > limit ? { nextCursor: String(safeOffset + limit) } : {}),
+      searchedFrom,
+      newestLocalAt,
+    };
   }
 
   async getMessage(context: MailApplicationContext, messageId: string): Promise<MailMessageDetail | undefined> {
@@ -331,6 +493,12 @@ export class SqliteMailApplicationService implements MailApplicationService {
     // bounded batches instead of truncating at a fixed row limit.
     const matches: MessageRowWithAccount[] = [];
     const batchSize = 1_000;
+    // Per-row header decryption is synchronous AES work, and this server runs
+    // inside the Electron main process: an unbroken pass over a large mailbox
+    // freezes the whole window until the scan completes. Yield to the event
+    // loop every few rows so the app stays responsive while the scan proceeds.
+    const decryptYieldBatch = 64;
+    let decryptedInBatch = 0;
     for (let batchOffset = 0; ; batchOffset += batchSize) {
       const rows = this.options.db.prepare(`
         SELECT m.*, a.email AS account_email, a.provider_name
@@ -344,6 +512,10 @@ export class SqliteMailApplicationService implements MailApplicationService {
         const payload = messagePayloadForRow(row, this.options.masterKey);
         if (payload.messageId === threadId || payload.inReplyTo === threadId || (payload.references ?? []).includes(threadId)) {
           matches.push(row);
+        }
+        decryptedInBatch += 1;
+        if (decryptedInBatch % decryptYieldBatch === 0) {
+          await new Promise<void>((resolve) => setImmediate(() => resolve()));
         }
       }
       if (rows.length < batchSize) break;
@@ -455,10 +627,16 @@ export class SqliteMailApplicationService implements MailApplicationService {
     await updateMessageFlags(this.options.db, this.options.masterKey, messageId, patch, this.options.oauthService, this.options.agentMailEvents);
   }
 
-  async moveMessage(context: MailApplicationContext, messageId: string, target: "archive" | "trash"): Promise<void> {
+  async moveMessage(context: MailApplicationContext, messageId: string, destination: MailMessageDestination): Promise<void> {
     const row = this.row(context, messageId);
     if (!row) throw new AgentMailApplicationError("not_found", "The requested message is no longer available.");
-    await moveMessage(this.options.db, this.options.masterKey, messageId, target, this.options.oauthService, this.options.agentMailEvents);
+    if ("folder" in destination) {
+      // An explicit folder goes through the same path filter rules already use,
+      // which checks the folder belongs to the message's own account.
+      await moveMessageToFolder(this.options.db, this.options.masterKey, messageId, destination.folder, this.options.oauthService, this.options.agentMailEvents);
+      return;
+    }
+    await moveMessage(this.options.db, this.options.masterKey, messageId, destination.target, this.options.oauthService, this.options.agentMailEvents);
   }
 
   async deleteAccount(context: MailApplicationContext, accountId: string): Promise<void> {

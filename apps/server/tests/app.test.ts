@@ -403,7 +403,7 @@ it("keeps an Agent stream running after the client closes its response", async (
         expect(post.statusCode).toBe(200);
 
         const deadline = Date.now() + 10_000;
-        let persisted: { references?: Array<{ id: string; subject?: string }> } | undefined;
+        let persisted: { content?: string; references?: Array<{ id: string; subject?: string }> } | undefined;
         while (Date.now() < deadline) {
           const snapshot = await streamingApp.inject({ method: "GET", url: `/api/agent/conversations/${conversation.id}` });
           persisted = snapshot.json().messages.find((message: { role: string }) => message.role === "user");
@@ -757,8 +757,8 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(settings).toMatchObject({
       theme: "system",
       locale: "zh-CN",
-      backgroundPreset: "coast",
-      backgroundIntensity: 68,
+      backgroundPreset: "none",
+      backgroundIntensity: 80,
       notificationsEnabled: true,
       notifyWhenFocused: false,
       notificationSound: "soft",
@@ -831,7 +831,8 @@ it("keeps an Agent stream running after the client closes its response", async (
       { locale: "fr-FR" },
       { backgroundPreset: "aurora" },
       { backgroundIntensity: -1 },
-      { backgroundIntensity: 81 },
+      // The intensity range is 0-100, so the boundary one past the top is 101.
+      { backgroundIntensity: 101 },
       { notificationSound: "chime" },
       { refreshIntervalSeconds: 45 },
       { closeBehavior: "minimize" },
@@ -848,8 +849,8 @@ it("keeps an Agent stream running after the client closes its response", async (
     const settings = await app.inject({ method: "GET", url: "/api/settings" });
     expect(settings.json()).toMatchObject({
       theme: "system",
-      backgroundPreset: "coast",
-      backgroundIntensity: 68,
+      backgroundPreset: "none",
+      backgroundIntensity: 80,
       notificationSound: "soft",
       refreshIntervalSeconds: 60,
       closeBehavior: "ask",
@@ -1053,6 +1054,20 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(response.json()).toEqual({ ok: true, updated: 0, failed: 2, changedIds: [] });
   });
 
+  it("accepts large selections in one batch request so the write slot is taken once", async () => {
+    // The renderer sends a whole selection in one request: splitting it
+    // client-side reacquired the account write slot per chunk and stalled
+    // later user operations behind the remainder of the batch.
+    const ids = Array.from({ length: 150 }, (_, index) => `missing-bulk-${index}`);
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/batch/flags",
+      payload: { ids, patch: { seen: true } },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, updated: 0, failed: 150, changedIds: [] });
+  });
+
   it("validates batch message moves and reports per-message outcomes", async () => {
     const malformed = await app.inject({
       method: "POST",
@@ -1122,7 +1137,7 @@ it("keeps an Agent stream running after the client closes its response", async (
     return { now, insertMessage };
   }
 
-  it("routes batch flag updates through the durable operation queue per account", async () => {
+  it("commits batch flags locally and records one durable push per account", async () => {
     imapClientForAccount.mockReturnValue(readyMailClient());
     const { now, insertMessage } = seedJobAccount("flag-batch-a");
     const { insertMessage: insertMessageB } = seedJobAccount("flag-batch-b");
@@ -1142,25 +1157,42 @@ it("keeps an Agent stream running after the client closes its response", async (
       changedIds: expect.arrayContaining(["flag-a-1", "flag-b-1"]),
     });
 
-    // The route must record one durable operation row per affected account
-    // (kind "flags", settled by the queue executor) instead of bypassing the
-    // queue: a shutdown mid-batch would otherwise lose the writes.
-    const rows = db
-      .prepare("SELECT kind, status, payload_json FROM operation_queue WHERE account_id IN (?, ?) ORDER BY account_id")
-      .all("flag-batch-a", "flag-batch-b") as Array<{ kind: string; status: string; payload_json: string }>;
-    expect(rows).toHaveLength(2);
-    for (const row of rows) {
-      expect(row.kind).toBe("flags");
-      expect(row.status).toBe("completed");
-      expect(JSON.parse(row.payload_json)).toEqual({ ids: expect.any(Array), patch: { seen: true } });
-    }
+    // The flags are visible locally immediately (write-behind), and one
+    // durable flags-push row per account carries the remote delta — a
+    // shutdown mid-push is recovered by resumePending on startup.
     const flagged = JSON.parse(
       (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("flag-a-1") as { flags_json: string }).flags_json,
     );
-    expect(flagged).toContain("\\Seen");
+    expect(flagged).toEqual(["\\Seen"]);
+    for (const attempt of [0, 0, 0, 0, 0]) {
+      const pending = db.prepare(`
+        SELECT COUNT(*) c FROM operation_queue
+        WHERE kind = 'flags-push' AND status IN ('pending', 'running')
+      `).get() as { c: number };
+      if (pending.c === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const rows = db
+      .prepare("SELECT account_id, kind, status, payload_json FROM operation_queue WHERE account_id IN (?, ?) ORDER BY account_id")
+      .all("flag-batch-a", "flag-batch-b") as Array<{ account_id: string; kind: string; status: string; payload_json: string }>;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.kind).toBe("flags-push");
+      expect(row.status).toBe("completed");
+      const payload = JSON.parse(row.payload_json) as { accountId: string; entries: Array<{ id: string; mailbox: string; uid: number; add: string[]; remove: string[] }> };
+      expect(payload.accountId).toBe(row.account_id);
+      expect(payload.entries.length).toBe(1);
+      expect(payload.entries[0]?.add).toEqual(["\\Seen"]);
+      expect(payload.entries[0]?.remove).toEqual([]);
+    }
+    expect(flagged).toEqual(["\\Seen"]);
   });
 
-  it("counts every message as failed for batch flags when the provider is unreachable", async () => {
+  it("commits batch flags locally even when the provider is unreachable, deferring the push", async () => {
+    // Write-behind contract: the response is the local commit (milliseconds,
+    // no provider round-trip). A dead provider shows up as a retrying
+    // flags-push row with the per-message marker set — never as a failed
+    // user action.
     imapClientForAccount.mockReturnValue(undefined as never);
     const { now, insertMessage } = seedJobAccount("flag-batch-dead");
     insertMessage.run("flag-dead-1", "flag-batch-dead", "INBOX", 61, "Stuck", "Demo", "demo@example.com", "[]", now, "s", "s", "", "[]", 0, 10, now);
@@ -1171,11 +1203,38 @@ it("keeps an Agent stream running after the client closes its response", async (
       payload: { ids: ["flag-dead-1"], patch: { seen: true } },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ ok: true, updated: 0, failed: 1, changedIds: [] });
-    const stale = JSON.parse(
-      (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("flag-dead-1") as { flags_json: string }).flags_json,
+    expect(response.json()).toEqual({ ok: true, updated: 1, failed: 0, changedIds: ["flag-dead-1"] });
+    const local = JSON.parse(
+      (db.prepare("SELECT flags_json, pending_flags_push FROM messages WHERE id = ?").get("flag-dead-1") as { flags_json: string; pending_flags_push: number }).flags_json,
     );
-    expect(stale).toEqual([]);
+    expect(local).toEqual(["\\Seen"]);
+    const marker = db.prepare("SELECT pending_flags_push FROM messages WHERE id = ?").get("flag-dead-1") as { pending_flags_push: number };
+    expect(marker.pending_flags_push).toBe(1);
+    const queued = db.prepare("SELECT COUNT(*) c FROM operation_queue WHERE kind = 'flags-push' AND status IN ('pending','running')").get() as { c: number };
+    expect(queued.c).toBeGreaterThanOrEqual(1);
+  });
+
+  it("clears the push marker once the background flags-push lands", async () => {
+    imapClientForAccount.mockReturnValue(readyMailClient());
+    const { now, insertMessage } = seedJobAccount("flag-push-ok");
+    insertMessage.run("flag-push-1", "flag-push-ok", "INBOX", 62, "Push", "Demo", "demo@example.com", "[]", now, "s", "s", "", "[]", 0, 10, now);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/batch/flags",
+      payload: { ids: ["flag-push-1"], patch: { seen: true } },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, updated: 1, failed: 0, changedIds: ["flag-push-1"] });
+    // The background chain runs on the next macrotask; poll briefly.
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const row = db.prepare("SELECT pending_flags_push FROM messages WHERE id = ?").get("flag-push-1") as { pending_flags_push: number };
+      if (row.pending_flags_push === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const marker = db.prepare("SELECT pending_flags_push, flags_json FROM messages WHERE id = ?").get("flag-push-1") as { pending_flags_push: number; flags_json: string };
+    expect(marker.pending_flags_push).toBe(0);
+    expect(JSON.parse(marker.flags_json)).toEqual(["\\Seen"]);
   });
 
   async function waitForJob(jobId: string, tries = 120) {

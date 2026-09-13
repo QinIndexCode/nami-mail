@@ -14,6 +14,7 @@ export type AgentProviderSummary = {
   kind: AgentProviderKind;
   endpoint: string;
   model: string;
+  /** Tolerated for older records; retrieval no longer uses embeddings. */
   embeddingModel?: string;
   timeoutMs: number;
   apiKeyConfigured: boolean;
@@ -42,6 +43,7 @@ export type AgentProviderInput = {
   kind: AgentProviderKind;
   endpoint: string;
   model: string;
+  /** Tolerated for older records; retrieval no longer uses embeddings. */
   embeddingModel?: string;
   apiKey?: string;
   clearApiKey?: boolean;
@@ -170,6 +172,11 @@ export type AgentMessageRequest = {
   providerId: string;
   mode: "agent" | "chat";
   scope: AgentConversationScope;
+  /** The client-generated id of the optimistic user row. The server persists
+   *  the turn under this id, so mid-session revokes (and any later server
+   *  snapshot replacing the transcript) address the SAME row instead of a
+   *  server-random id the client has never seen. */
+  clientMessageId?: string;
   quote?: string;
   /** Files uploaded by the user; token is present when usable as a mail attachment. */
   attachments?: AgentMessageAttachment[];

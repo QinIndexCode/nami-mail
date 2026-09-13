@@ -74,10 +74,34 @@ export const externalDraftDeleteInputSchema = z.object({
   accountId: accountIdSchema,
   draftId: draftIdentifierSchema,
 }).strict();
+/**
+ * Where `messages.move` should put the message: one of the two shortcuts the
+ * surface has always exposed, or an explicit folder path of the message's own
+ * account. Exactly one is required — "archive" is a shortcut, not a folder name,
+ * so accepting both would leave the intent ambiguous.
+ */
+const moveDestinationShape = {
+  target: z.enum(["archive", "trash"]).optional(),
+  folder: z.string().trim().min(1).max(externalMailReadBounds.mailboxCharacters).optional(),
+};
+
+function validateMoveDestination(
+  input: { target?: string; folder?: string },
+  context: z.RefinementCtx,
+): void {
+  if ((input.target === undefined) === (input.folder === undefined)) {
+    context.addIssue({
+      code: "custom",
+      path: ["target"],
+      message: 'Provide either "target" ("archive" or "trash") or "folder", and not both.',
+    });
+  }
+}
+
 export const externalMoveMailInputSchema = z.object({
   messageId: messageIdSchema,
-  target: z.enum(["archive", "trash"]),
-}).strict();
+  ...moveDestinationShape,
+}).strict().superRefine(validateMoveDestination);
 export const externalSetFlagInputSchema = z.object({
   messageId: messageIdSchema,
   flag: z.enum(["seen", "flagged"]),
@@ -110,8 +134,8 @@ export const externalDraftDeleteOutputSchema = z.object({
 }).strict();
 export const externalMoveMailOutputSchema = z.object({
   messageId: messageIdSchema,
-  target: z.enum(["archive", "trash"]),
-}).strict();
+  ...moveDestinationShape,
+}).strict().superRefine(validateMoveDestination);
 export const externalSetFlagOutputSchema = z.object({
   messageId: messageIdSchema,
   flag: z.enum(["seen", "flagged"]),
@@ -152,7 +176,7 @@ export const externalWriteMailContracts = [
     toolName: "messages.move",
     cliWords: ["messages", "move"],
     mcpToolName: "namimail_messages_move",
-    description: "Move one message to the archive or trash inside the paired caller's scope.",
+    description: "Move one message to the archive, the trash or an explicit folder inside the paired caller's scope.",
     inputSchema: externalMoveMailInputSchema,
     outputSchema: externalMoveMailOutputSchema,
   },

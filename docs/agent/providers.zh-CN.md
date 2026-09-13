@@ -21,6 +21,7 @@
 | Anthropic Claude（原生协议） | Anthropic Messages API，例如 `https://api.anthropic.com` |
 | Google Gemini（原生协议） | 例如 `https://generativelanguage.googleapis.com/v1beta` |
 | OpenAI Responses（原生协议） | 例如 `https://api.openai.com/v1` |
+| 自定义（Custom） | 预留类型，用于未来或用户自定义的 Provider 适配器 |
 
 ## 字段说明
 

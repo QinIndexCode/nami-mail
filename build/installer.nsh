@@ -2,16 +2,15 @@
 ; electron-builder loads this include for both the installer and its generated
 ; uninstaller. Keep data deletion deliberately scoped to Electron's default
 ; per-user userData directory: %APPDATA%\Nami Mail.
-
-; Register the project-local NSIS plugin directory before any plugin call.
-; electron-builder appends its own !addplugindir AFTER this include, but NSIS
-; resolves plugin functions while the script is parsed, so the first use
-; (customWelcomePage -> ${isUpdated} -> StdUtils::TestParameter below) would
-; otherwise run before the plugin directory is on the search path.
-!addplugindir /x86-unicode "${BUILD_RESOURCES_DIR}\x86-unicode"
+;
+; The installer UI is the stock assisted (MUI2) flow: the MUI welcome page
+; (branded sidebar via MUI_WELCOMEFINISHPAGE_BITMAP = build/installerSidebar.bmp,
+; a 164x314 BMP that matches MUI2's own layout), the MUI license and directory
+; pages, instfiles, and the stock MUI finish page with its run checkbox.
+; No custom page geometry and no WebView2 / HTML layer are involved — native
+; pages keep startup instant and scale proportionally at every DPI setting.
 
 !include "WordFunc.nsh"
-!include "nsDialogs.nsh"
 
 ; electron-builder's generic --delete-app-data handler also considers the npm
 ; package-name directory. Nami Mail deliberately has one production userData
@@ -48,10 +47,16 @@
 !macroend
 
 !macro namiUnregisterCliPath
+  ; PATH cleanup is best-effort and must never fail the surrounding operation.
+  ; Losing the namimail.cmd shell alias only means the user re-adds the path;
+  ; it has no relation to whether the app can be updated/uninstalled. Making it
+  ; fatal would make the old uninstaller exit non-zero during an in-place
+  ; update (--updated), which electron-builder's uninstallOldVersion retries
+  ; 5x and then aborts the whole install with the misleading "cannot be closed"
+  ; prompt.
   !insertmacro namiApplyCliPath "unregister"
   ${If} $R0 != "0"
-    DetailPrint "Nami Mail CLI PATH cleanup failed: $R0"
-    SetErrorLevel 6
+    DetailPrint "Nami Mail CLI PATH cleanup failed (non-fatal): $R0"
   ${EndIf}
 !macroend
 
@@ -63,8 +68,21 @@
 !macroend
 
 !ifndef BUILD_UNINSTALLER
+; StrContains.nsh defines an install-time function; including it in the
+; uninstaller build leaves it unreferenced, which -WX (warnings as errors)
+; rejects. Its only consumer (namiNormalizeInstDir) is installer-only.
+!include "StrContains.nsh"
 Var /GLOBAL namiInstalledVersion
 Var /GLOBAL namiVersionComparison
+
+; Keep the app-name suffix behaviour of electron-builder's stock instfiles pre
+; hook: when the user picks a bare folder, append the product folder name to it.
+!macro namiNormalizeInstDir
+  ${StrContains} $0 "${APP_FILENAME}" $INSTDIR
+  ${If} $0 == ""
+    StrCpy $INSTDIR "$INSTDIR\${APP_FILENAME}"
+  ${EndIf}
+!macroend
 
 !macro namiReadInstalledVersion ROOT_KEY OUTPUT
   StrCpy ${OUTPUT} ""
@@ -95,6 +113,37 @@ Var /GLOBAL namiVersionComparison
   !insertmacro namiConsiderInstalledVersion $R0
 !macroend
 
+; Returns in $R0 "" when the directory stored in $INSTDIR is NOT reachable, or
+; "1" when it is (either it exists now or one of its ancestors does). initMultiUser
+; reuses a leftover registry InstallLocation as INSTDIR; if that path lives on a
+; drive/partition that no longer exists (e.g. the user manually deleted the app
+; folder and then repartitioned the data drive), the SetOutPath/File writes below
+; would fail and block the whole install with raw write errors. Probed here so
+; customInit can fall back to a reachable default directory before any page shows.
+!macro namiCheckInstDirReachable
+  Push $R1
+  Push $R2
+  StrCpy $R0 "$INSTDIR"
+  nami_reach_up:
+    StrLen $R2 $R0
+    ${If} $R2 <= 3
+      Goto nami_reach_probe
+    ${EndIf}
+    IfFileExists "$R0\*.*" nami_reach_ok
+    ${StdUtils.GetParentPath} $R1 $R0
+    StrCpy $R0 $R1
+    Goto nami_reach_up
+  nami_reach_probe:
+    IfFileExists "$R0\*.*" nami_reach_ok
+    StrCpy $R0 ""
+    Goto nami_reach_done
+  nami_reach_ok:
+    StrCpy $R0 "1"
+  nami_reach_done:
+  Pop $R2
+  Pop $R1
+!macroend
+
 ; initMultiUser runs before this hook. Reject machine-wide invocations and old
 ; machine-wide installs before the assisted page forces the current-user mode.
 ; Interactive installs explain the exact per-user version transition. Silent
@@ -119,6 +168,19 @@ Var /GLOBAL namiVersionComparison
     Quit
   ${EndIf}
 
+  ; initMultiUser has already copied the leftover registry InstallLocation into
+  ; INSTDIR. If that path is now unreachable (deleted + drive repartitioned), the
+  ; writes below would fail and block the install with raw errors. Fall back to
+  ; the per-user default directory instead; InstallLocation is later refreshed to
+  ; the new path on a successful install, so the stale entry stops mattering.
+  !insertmacro namiCheckInstDirReachable
+  ${If} $R0 == ""
+    ${IfNot} ${Silent}
+      MessageBox MB_OK|MB_ICONINFORMATION "检测到上次安装目录不再可达（所在磁盘分区可能已变更或已被删除）。$\r$\n$\r$\n安装程序将改用到默认目录：$\r$\n$LocalAppData\Programs\${APP_FILENAME}"
+    ${EndIf}
+    StrCpy $INSTDIR "$LocalAppData\Programs\${APP_FILENAME}"
+  ${EndIf}
+
   !insertmacro namiFindCurrentUserInstalledVersion
   ${If} $namiInstalledVersion == ""
     Goto nami_install_version_done
@@ -127,7 +189,7 @@ Var /GLOBAL namiVersionComparison
   ${VersionCompare} "$namiInstalledVersion" "${VERSION}" $namiVersionComparison
   ${If} $namiVersionComparison == "0"
     ${IfNot} ${Silent}
-      MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "Nami Mail ${VERSION} 已安装。$\r$\n$\r$\n选择“是”重新安装此版本；选择“否”关闭安装程序并继续使用现有版本。" IDYES nami_install_version_done
+      MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "Nami Mail ${VERSION} 已安装。$\r$\n$\r$\n选择$\"是$\"重新安装此版本；选择$\"否$\"关闭安装程序并继续使用现有版本。" IDYES nami_install_version_done
       SetErrorLevel 0
       Quit
     ${EndIf}
@@ -166,7 +228,12 @@ Var /GLOBAL namiVersionComparison
 ; process tree, so no orphan child process is left behind.
 !macro customCheckAppRunning
   nami_check_app_loop:
-  nsExec::Exec `"$CmdPath" /C tasklist /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
+  ; Only consider the current user's own app processes. A same-named process
+  ; owned by another session/user (e.g. an elevated orphan, or an instance left
+  ; by a different logged-on user) is not the per-user instance this installer
+  ; must close, and this non-elevated installer cannot terminate one that runs
+  ; at a higher integrity level anyway.
+  nsExec::ExecToLog `"$CmdPath" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
   Pop $R0
   ${If} $R0 != 0
     Goto nami_check_app_done
@@ -180,15 +247,33 @@ Var /GLOBAL namiVersionComparison
   nami_check_app_graceful:
   DetailPrint "$(appClosing)"
 
-  ; Graceful close request (taskkill without /F posts WM_CLOSE).
-  nsExec::Exec `"$CmdPath" /C taskkill /IM "${APP_EXECUTABLE_FILENAME}"`
-  Sleep 3000
+  ; Graceful close request (taskkill without /F posts WM_CLOSE). Log the output
+  ; so a failure (access denied, not found, etc.) is recorded in the install
+  ; log instead of being silently swallowed.
+  nsExec::ExecToLog `"$CmdPath" /C taskkill /IM "${APP_EXECUTABLE_FILENAME}" /FI "USERNAME eq %USERNAME%"`
+  ; Poll for a clean self-exit (up to 5s, 250ms steps) instead of a fixed
+  ; Sleep: an app that exits quickly no longer pays the full wait.
+  StrCpy $R1 0
+  nami_wait_close:
+    Sleep 250
+    nsExec::ExecToLog `"$CmdPath" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
+    Pop $R0
+    ${If} $R0 != 0
+      Goto nami_check_app_done
+    ${EndIf}
+    IntOp $R1 $R1 + 1
+    ${If} $R1 < 20
+      Goto nami_wait_close
+    ${EndIf}
 
-  ; Force close the whole process tree so no orphan child process remains.
-  nsExec::Exec `"$CmdPath" /C taskkill /T /F /IM "${APP_EXECUTABLE_FILENAME}"`
-  Sleep 1500
+  ; Force close the whole process tree so no orphan child process remains. If
+  ; the target itself runs elevated while this installer is not, taskkill logs
+  ; "ERROR: The process ... could not be terminated." (access denied) and the
+  ; process survives; the logged message below is what makes that case visible.
+  nsExec::ExecToLog `"$CmdPath" /C taskkill /T /F /IM "${APP_EXECUTABLE_FILENAME}" /FI "USERNAME eq %USERNAME%"`
+  Sleep 500
 
-  nsExec::Exec `"$CmdPath" /C tasklist /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
+  nsExec::ExecToLog `"$CmdPath" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
   Pop $R0
   ${If} $R0 == 0
     MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY nami_check_app_loop
@@ -198,85 +283,70 @@ Var /GLOBAL namiVersionComparison
   nami_check_app_done:
 !macroend
 
-; --- Branded welcome and finish pages (assisted installer only) ---
-; Defining these macros replaces the stock MUI pages. The welcome page shows a
-; product summary next to the branded sidebar bitmap; the finish page mirrors
-; the default run-after-finish behaviour with its own launch checkbox.
-;
-; The page functions live INSIDE the macros on purpose: the generated script
-; includes this file before MUI2.nsh, and NSIS expands !insertmacro at parse
-; time, so a top-level MUI_HEADER_TEXT call here would run before MUI2 defines
-; it. Expanding together with the Page directive defers that to the point where
-; electron-builder inserts the custom pages (after MUI2.nsh is loaded).
+; --- Pages (assisted installer only) ---
+; customWelcomePage feeds the stock MUI2 pages: electron-builder already sets
+; MUI_WELCOMEFINISHPAGE_BITMAP to build/installerSidebar.bmp (164x314), so the
+; welcome page shows the branded sidebar at MUI2's own coordinates with zero
+; custom geometry. customFinishPage is deliberately NOT defined: the stock
+; template then inserts the MUI finish page with its run-after-install
+; checkbox and the StdUtils launch function. The MUI_* defines must appear
+; before the respective !insertmacro MUI_PAGE_* to take effect.
 !macro customWelcomePage
-  Page custom namiWelcomeCreate namiWelcomeLeave
-  Var /GLOBAL namiWelcomeImage
+  !define MUI_WELCOMEPAGE_TITLE "欢迎使用 Nami Mail 安装向导"
+  !define MUI_WELCOMEPAGE_TEXT "Nami Mail 是一款本地优先的多账户桌面邮件客户端。$\r$\n$\r$\n您的邮件数据、账户凭据与加密密钥只保存在本机，应用直连您的邮箱服务商，不经过任何第三方服务器。$\r$\n$\r$\n点击$\"下一步$\"继续。"
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE namiWelcomePre
+  !insertmacro MUI_PAGE_WELCOME
+  ; The MUI license and directory pages are the primary flow. Both are skipped
+  ; for silent installs and in-place updates (--updated keeps the previous
+  ; directory choice and reuses it directly).
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE namiLicensePre
+  !insertmacro MUI_PAGE_LICENSE "${BUILD_RESOURCES_DIR}\..\LICENSE"
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE namiDirectoryPre
+  !define MUI_PAGE_CUSTOMFUNCTION_LEAVE namiDirectoryLeave
+  !insertmacro MUI_PAGE_DIRECTORY
 
-  Function namiWelcomeCreate
+  Function namiWelcomePre
     ${If} ${Silent}
       Abort
     ${EndIf}
     ${If} ${isUpdated}
       Abort
     ${EndIf}
-    InitPluginsDir
-    File /oname=$PLUGINSDIR\installerSidebar.bmp "${BUILD_RESOURCES_DIR}\installerSidebar.bmp"
-    !insertmacro MUI_HEADER_TEXT "欢迎使用 Nami Mail" "本地优先的多账户桌面邮件客户端"
-    nsDialogs::Create 1018
-    Pop $0
-    ${NSD_CreateBitmap} 8u 0u 96u 184u ""
-    Pop $namiWelcomeImage
-    ${NSD_SetImage} $namiWelcomeImage "$PLUGINSDIR\installerSidebar.bmp" $0
-    ${NSD_CreateLabel} 118u 30u 300u 26u "欢迎使用 Nami Mail ${VERSION}"
-    Pop $0
-    ${NSD_CreateLabel} 118u 64u 310u 130u "Nami Mail 是一款本地优先的桌面邮件客户端。$\r$\n$\r$\n您的邮件数据、账户凭据与加密密钥只保存在本机，应用直连您的邮箱服务商，不经过任何第三方服务器。$\r$\n$\r$\n点击“下一步”开始安装。"
-    Pop $0
-    nsDialogs::Show
   FunctionEnd
 
-  Function namiWelcomeLeave
-  FunctionEnd
-!macroend
-
-!macro customFinishPage
-  Page custom namiFinishCreate namiFinishLeave
-  Var /GLOBAL namiFinishImage
-  Var /GLOBAL namiLaunchCheckbox
-
-  Function namiFinishCreate
+  Function namiLicensePre
     ${If} ${Silent}
       Abort
     ${EndIf}
-    InitPluginsDir
-    File /oname=$PLUGINSDIR\installerSidebar.bmp "${BUILD_RESOURCES_DIR}\installerSidebar.bmp"
-    !insertmacro MUI_HEADER_TEXT "安装完成" "Nami Mail 已就绪"
-    nsDialogs::Create 1018
-    Pop $0
-    ${NSD_CreateBitmap} 8u 0u 96u 184u ""
-    Pop $namiFinishImage
-    ${NSD_SetImage} $namiFinishImage "$PLUGINSDIR\installerSidebar.bmp" $0
-    ${NSD_CreateLabel} 118u 30u 300u 26u "Nami Mail ${VERSION} 安装完成"
-    Pop $0
-    ${NSD_CreateLabel} 118u 64u 310u 90u "感谢您安装 Nami Mail。$\r$\n$\r$\n您的邮件数据始终保存在本机，可随时通过“设置”管理账户。"
-    Pop $0
-    ${NSD_CreateCheckBox} 118u 176u 300u 20u "立即运行 Nami Mail"
-    Pop $namiLaunchCheckbox
-    ${NSD_SetState} $namiLaunchCheckbox ${BST_CHECKED}
-    nsDialogs::Show
+    ${If} ${isUpdated}
+      Abort
+    ${EndIf}
   FunctionEnd
 
-  Function namiFinishLeave
-    ${NSD_GetState} $namiLaunchCheckbox $0
-    ${If} $0 == ${BST_CHECKED}
-      ${If} ${isUpdated}
-        StrCpy $1 "--updated"
-      ${Else}
-        StrCpy $1 ""
-      ${EndIf}
-      ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" "$1"
+  Function namiDirectoryPre
+    ${If} ${Silent}
+      Abort
+    ${EndIf}
+    ${If} ${isUpdated}
+      Abort
+    ${EndIf}
+  FunctionEnd
+
+  Function namiDirectoryLeave
+    !insertmacro namiNormalizeInstDir
+    ; The user picked this folder from the directory page. Reuse the same
+    ; reachability probe as customInit: if the selected path lives on a
+    ; drive/partition that no longer exists, setout/write would fail with a raw
+    ; error and block the whole install. Reject it here so the user can pick a
+    ; reachable directory before any file is written.
+    !insertmacro namiCheckInstDirReachable
+    ${If} $R0 == ""
+      MessageBox MB_OK|MB_ICONEXCLAMATION "所选目录不可达（所在磁盘分区可能已变更或已被删除）。$\r$\n$\r$\n请选择其它可用的目录以继续安装。"
+      Abort
     ${EndIf}
   FunctionEnd
 !macroend
+
 !endif
 
 !ifdef BUILD_UNINSTALLER
@@ -328,7 +398,7 @@ Var /GLOBAL namiVersionComparison
       Goto nami_uninstall_data_done
     ${EndIf}
 
-    MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "是否同时永久删除当前 Windows 用户的 Nami Mail 本地数据？$\r$\n$\r$\n这只会删除 $APPDATA\${PRODUCT_FILENAME}，其中包括本地数据库、账户凭据、设置和加密密钥；不会删除邮箱服务商上的邮件。$\r$\n$\r$\n选择“否”可保留数据（推荐）。" IDYES nami_uninstall_delete_data
+    MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "是否同时永久删除当前 Windows 用户的 Nami Mail 本地数据？$\r$\n$\r$\n这只会删除 $APPDATA\${PRODUCT_FILENAME}，其中包括本地数据库、账户凭据、设置和加密密钥；不会删除邮箱服务商上的邮件。$\r$\n$\r$\n选择$\"否$\"可保留数据（推荐）。" IDYES nami_uninstall_delete_data
     Goto nami_uninstall_data_done
 
     nami_uninstall_delete_data:

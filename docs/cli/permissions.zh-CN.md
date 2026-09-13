@@ -32,8 +32,6 @@
 - `BROKER_REPLAY_DETECTED` / `BROKER_COUNTER_INVALID` / `BROKER_SECURITY_UNAVAILABLE`：Broker 安全校验失败。
 - `HOST_UNAVAILABLE`、`UPDATE_IN_PROGRESS`、`PAIRING_REQUIRED` / `PAIRING_REVOKED`：宿主、更新或配对状态异常。
 
-`READ_ONLY` 错误码已不再使用。
-
 ## 账户范围
 
 配对记录可允许所有账户、选定账户或无账户。任意请求的账户 ID 都必须属于该范围：

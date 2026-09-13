@@ -16,7 +16,7 @@ Install dependencies from the repository root:
 npm.cmd ci
 ```
 
-Copy [`.env.example`](../.env.example) to `.env` and change only the development-service configuration you need. Installed builds read only limited OAuth public configuration from `nami-mail.env`; see the [README](../README.en.md#oauth-configuration) for the complete rules.
+Copy [`.env.example`](../.env.example) to `.env` and change only the development-service configuration you need. Installed builds read only limited OAuth public configuration from `nami-mail.env`; see the [Email Provider Setup](EMAIL-PROVIDERS.en.md) for the complete OAuth rules.
 
 ## Run Modes
 
@@ -83,3 +83,18 @@ The variable must be a repository-relative path. It does not replace the require
 - For dependency and packaging changes, check the Node ABI, Electron ABI, installation/uninstallation, single-instance behavior, and data-retention paths together.
 
 See the [Contributing Guide](../CONTRIBUTING.en.md) for contribution and review requirements. See the [Release Guide](RELEASING.en.md) for release and signing, and [Architecture and Trust Boundaries](ARCHITECTURE.en.md) for process and data boundaries.
+
+## Documentation languages and naming
+
+Documentation is kept as one file per language, and **any file that carries prose must have a language suffix**:
+
+- Chinese: `xxx.zh-CN.md`
+- English: `xxx.en.md`
+
+An unsuffixed `xxx.md` is **only allowed as a language entry** — a title plus language links and nothing else. The only files that use this exception today are each directory's `README.md`, and `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md` and `CHANGELOG.md` at the repository root, which GitHub expects unsuffixed; all of them are now entry pages whose prose lives in the matching `.zh-CN.md` / `.en.md`.
+
+When adding or editing documentation:
+
+1. Write `xxx.zh-CN.md` first and maintain `xxx.en.md` alongside it.
+2. Only create `xxx.md` when a single entry point is needed, and keep it to language links.
+3. **Keep the suffix even when only one language exists** (for example `ARCHITECTURE-ROADMAP.zh-CN.md`). Dropping it means the file's language cannot be told from its name, and a second language cannot be added later without renaming.

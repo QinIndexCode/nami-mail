@@ -11,7 +11,7 @@ export type RendererCacheSession = {
 export type RendererCacheCleanupResult = {
   cacheSizeBefore: number | null;
   cacheSizeAfter: number | null;
-  httpCacheCleared: true;
+  httpCacheCleared: boolean;
   storageTypesCleared: CacheStorageType[];
 };
 
@@ -38,6 +38,24 @@ export async function clearLegacyRendererMailCache(cacheSession: RendererCacheSe
     httpCacheCleared: true,
     storageTypesCleared,
   };
+}
+
+export const skippedRendererCacheCleanup: RendererCacheCleanupResult = Object.freeze({
+  cacheSizeBefore: null,
+  cacheSizeAfter: null,
+  httpCacheCleared: false,
+  storageTypesCleared: [],
+});
+
+/**
+ * The renderer cache is cleared so an app upgrade can never present stale
+ * (old-mail) responses; a build whose version is unchanged introduces no new
+ * code and the local API is already served no-store, so re-clearing it on every
+ * identical launch only adds fixed startup cost (amplified by AV scanners on
+ * Windows). Clear only when the version differs from the last cleared run.
+ */
+export function rendererCacheClearRequired(lastClearedVersion: string | null, currentVersion: string): boolean {
+  return lastClearedVersion !== currentVersion;
 }
 
 export type HttpHeaders = Record<string, string | string[]>;

@@ -38,7 +38,7 @@ Nami Mail 当前只实现 Google 和 Microsoft 的 OAuth 登录入口。OAuth �
 - **Microsoft**：使用 Microsoft Entra 的 Mobile and desktop applications / public client 配置。组织账号如提示 IMAP 或权限限制，需要管理员启用相应能力。
 - **按钮不可用**：这通常表示当前安装版没有配置对应的公共 client ID，或该账号的发现结果不支持该入口。不要用普通账号密码代替 Microsoft OAuth；对 Gmail 仅可在服务商允许时使用应用专用密码兼容路径。
 
-开发者配置回调、client ID 和租户的方式见 [README 的 OAuth 配置](../README.md#oauth-配置)。普通用户不应把 client secret 写入 `nami-mail.env`、Issue、日志或截图。
+开发者配置回调、client ID 和租户的方式见 [README.en.md](../README.en.md#oauth-configuration) 的 OAuth 配置章节。普通用户不应把 client secret 写入 `nami-mail.env`、Issue、日志或截图。
 
 ## 手动 IMAP / SMTP 配置
 

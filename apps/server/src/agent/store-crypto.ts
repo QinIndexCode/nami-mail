@@ -12,6 +12,41 @@ const accountDekWrappingPurpose = "agent/account-dek-wrapper/v1";
 const recordKeyPrefix = "agent/record/";
 const digestKeyPrefix = "agent/digest/";
 
+/** Upper bound on cached derived record keys. HKDF is deterministic, so a
+ *  bounded cache removes the per-decrypt derivation cost without ever
+ *  weakening the crypto — the same input always yields the same key. */
+const derivedRecordKeyCacheSize = 256;
+
+/** Deterministic HKDF-derived record keys, keyed by the hex of the source key
+ *  (master key or account DEK) followed by the purpose. A Map keeps
+ *  insertion order, so this behaves as a coarse LRU: evicting the oldest entry
+ *  when the bound is exceeded. */
+function deriveRecordKey(sourceKey: Buffer, purpose: string): Buffer {
+  const cache = recordKeyCacheForSize();
+  const cacheKey = `${sourceKey.toString("hex")}\u0000${purpose}`;
+  const hit = cache.get(cacheKey);
+  if (hit) {
+    cache.delete(cacheKey); // refresh recency
+    cache.set(cacheKey, hit);
+    return hit;
+  }
+  const derived = deriveEncryptionKey(sourceKey, purpose);
+  if (cache.size >= derivedRecordKeyCacheSize) {
+    const oldest = cache.keys().next();
+    if (!oldest.done) cache.delete(oldest.value);
+  }
+  cache.set(cacheKey, derived);
+  return derived;
+}
+
+let recordKeyCache: Map<string, Buffer> | undefined;
+/** Lazily allocated cache — never retained when store-crypto is imported but
+ *  unused, and never shared across derivation purposes that are unrelated. */
+function recordKeyCacheForSize(): Map<string, Buffer> {
+  recordKeyCache ??= new Map<string, Buffer>();
+  return recordKeyCache;
+}
+
 export class AgentStoreCryptoError extends Error {
   constructor(message: string) {
     super(message);
@@ -136,8 +171,7 @@ export function encryptAccountAgentRecord(
   validateIdentifier(recordType, "Record type");
   validateIdentifier(recordId, "Record id");
   validateGeneration(generation);
-  return withDerivedKey(accountDek, `${recordKeyPrefix}${recordType}/v1`, (key) =>
-    encryptTextEnvelope(plaintext, key, accountRecordAad(accountId, generation, recordType, recordId)));
+  return encryptTextEnvelope(plaintext, deriveRecordKey(accountDek, `${recordKeyPrefix}${recordType}/v1`), accountRecordAad(accountId, generation, recordType, recordId));
 }
 
 /** Rejects missing, unauthenticated, or cross-account Agent record payloads. */
@@ -156,8 +190,7 @@ export function decryptAccountAgentRecord(
   validateGeneration(generation);
   if (!encryptedPayload) throw new AgentStoreCryptoError("Encrypted Agent record is missing.");
   try {
-    return withDerivedKey(accountDek, `${recordKeyPrefix}${recordType}/v1`, (key) =>
-      decryptTextEnvelope(encryptedPayload, key, accountRecordAad(accountId, generation, recordType, recordId)));
+    return decryptTextEnvelope(encryptedPayload, deriveRecordKey(accountDek, `${recordKeyPrefix}${recordType}/v1`), accountRecordAad(accountId, generation, recordType, recordId));
   } catch {
     throw new AgentStoreCryptoError("Agent record could not be authenticated.");
   }

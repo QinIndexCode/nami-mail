@@ -15,13 +15,14 @@ Do not copy the database, discovery file, pipe name, pairing state, or local API
 
 ## V1 Tool Surface
 
-These fifteen tools (eight read-only plus seven write) are the complete External Mail v1 surface. Input objects use strict schemas and reject unknown fields. The account-ID snapshot from first pairing determines scope, and request values can never expand it. An account added later is not accessible by the old profile until it is revoked and paired again.
+These sixteen tools (nine read-only plus seven write) are the complete External Mail v1 surface. Input objects use strict schemas and reject unknown fields. The account-ID snapshot from first pairing determines scope, and request values can never expand it. An account added later is not accessible by the old profile until it is revoked and paired again.
 
 | Tool | CLI | MCP | Strict input | Scope |
 | --- | --- | --- | --- | --- |
 | `accounts.list` | `accounts list` | `namimail_accounts_list` | `{}` | `read:accounts` |
 | `folders.list` | `folders list --account <accountId>` | `namimail_folders_list` | `{ "accountId": "..." }` | `read:folders` |
 | `messages.list` | `messages list` | `namimail_messages_list` | Optional `mailbox`, `unread`, `flagged`, `sender`, `after`, `before`, `limit`, `cursor` | `read:messages` |
+| `messages.search` | `messages search` | `namimail_messages_search` | `query` (required), optional `accountId`, `mailbox`, `subject`, `hasAttachments`, `after`, `before`, `limit`, `cursor` | `read:messages` |
 | `mail.summarize` | `mail summarize` | `namimail_mail_summarize` | Optional `mailbox`, `unread`, `sender`, `after`, `before`, `limit` | `read:messages` |
 | `messages.get` | `messages get --message <messageId>` | `namimail_message_get` | `{ "messageId": "..." }` | `read:messages` |
 | `messages.batch_get` | `messages batch-get --message <id1,id2,...>` | `namimail_messages_batch_get` | `{ "messageIds": ["...", ...] }` (1..10) | `read:messages` |
@@ -30,7 +31,7 @@ These fifteen tools (eight read-only plus seven write) are the complete External
 | `mail.draft.create` | `draft create` | `namimail_draft_create` | `{ "accountId": "...", "to": [{ "address": "...", "name"? }], "cc"?, "subject": "...", "text": "...", "attachmentTokens"? }` | `write:drafts` |
 | `mail.draft.update` | `draft update` | `namimail_draft_update` | `{ "draftId": "...", "accountId": "...", "to": [{ "address": "...", "name"? }], "cc"?, "subject": "...", "text": "...", "attachmentTokens"? }` | `write:drafts` |
 | `mail.draft.delete` | `draft delete` | `namimail_draft_delete` | `{ "accountId": "...", "draftId": "..." }` | `write:drafts` |
-| `messages.move` | `messages move` | `namimail_messages_move` | `{ "messageId": "...", "target": "archive" \| "trash" }` | `write:mail` |
+| `messages.move` | `messages move` | `namimail_messages_move` | `{ "messageId": "...", "target": "archive" \| "trash" }` or `{ "messageId": "...", "folder": "<folder path>" }` (exactly one) | `write:mail` |
 | `messages.set-flag` | `messages set-flag` | `namimail_messages_set_flag` | `{ "messageId": "...", "flag": "seen" \| "flagged", "value": true \| false }` | `write:mail` |
 | `messages.send` | `messages send` | `namimail_messages_send` | `{ "accountId": "...", "to": [{ "address": "...", "name"? }], "cc"?, "subject": "...", "text": "...", "attachmentTokens"? }` | `write:mail` |
 | `mail.reply` | `mail reply` | `namimail_mail_reply` | `{ "accountId": "...", "messageId": "...", "to"?, "cc"?, "subject"?, "text": "...", "attachmentTokens"? }` | `write:mail` + `read:messages` |
@@ -41,7 +42,7 @@ These fifteen tools (eight read-only plus seven write) are the complete External
 
 The external CLI and external MCP each configure their access level independently in the "Permissions" group of the desktop settings (`agentCliAccessLevel` and `agentMcpAccessLevel`, both `read-only` by default), using the same levels as the built-in Agent: `read-only` / `send-confirmed` / `full-access`.
 
-- `read-only`: all seven write tools are unavailable and return `PERMISSION_DENIED`; the eight read-only tools are available at every level and never require confirmation.
+- `read-only`: all seven write tools are unavailable and return `PERMISSION_DENIED`; the nine read-only tools are available at every level and never require confirmation.
 - `send-confirmed`: every write (draft create/update/delete, move, set-flag, send, reply) pops a visible, one-time, immutable confirmation in the Nami Mail desktop app before it runs.
 - `full-access`: the user must read an explicit warning in the UI and confirm before enabling; after that, all operations (including sending and deletion) run automatically within the approved account scope without per-action confirmation. Scope and audit still apply.
 
@@ -56,6 +57,7 @@ Every successful response `data` is strictly validated by the shared v1 schema a
 | `accounts.list` | `{ "accounts": [...] }` | Each entry has `id`, `email`, `provider`, `displayName`, `status`, and `lastSyncedAt`. |
 | `folders.list` | `{ "folders": [...] }` | Each entry has `accountId`, `path`, `name`, `specialUse`, `total`, and `unseen`. |
 | `messages.list` | `{ "messages": [...], "nextCursor"?, "truncated": boolean }` | Metadata has `id`, `accountId`, `mailbox`, `threadId`, `subject`, `from`, `sentAt`, `snippet`, `flags`, and `hasAttachments`. |
+| `messages.search` | `{ "query": string, "messages": [...], "total": number, "nextCursor"?, "searchedFrom": string \| null, "newestLocalAt": string \| null, "truncated": boolean }` | Items share the `messages.list` shape, but `snippet` is a bounded excerpt centred on the keyword; `searchedFrom` reports the window actually applied and `newestLocalAt` how current the local copy is. |
 | `mail.summarize` | `{ "messages": [...], "truncated": boolean }` | Each entry has `messageId`, `threadId`, `mailbox`, `subject`, `from`, `sentAt`, and a bounded `excerpt`. |
 | `messages.get` | `{ "message": { ... } }` | Message detail adds `to`, `cc`, plain-text `text`, and `bodyTruncated` to metadata. |
 | `messages.batch_get` | `{ "messages": [...], "notFound": [...] }` | `messages` contains the bounded message detail above (1..10); `notFound` lists requested ids that could not be located. |

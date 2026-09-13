@@ -68,7 +68,6 @@ test("Agent host launch accepts only one exact flag before the option separator"
 test("unavailable service mode reports a structured security failure before runtime startup", () => {
   const launch = resolveDesktopAgentLaunch(["NamiMail.exe", "--agent-host"]);
   assert.equal(launch.kind, "service");
-  if (launch.kind === "gui") return;
   const error = startupErrorForDesktopAgentLaunch(launch);
   assert.equal(error.code, "BROKER_SECURITY_UNAVAILABLE");
   assert.equal(error.retryable, false);
@@ -101,7 +100,7 @@ test("update drain rejects a claimed host until both pipe shape and native SID-D
     },
   };
   assert.equal(await new AgentHostUpdateDrainLifecycle(() => invalidShape).prepareForUpdateInstall(), false);
-  assert.deepEqual(events, []);
+  assert.equal(events.length, 0);
 
   const unverified: VerifiedAgentHost = {
     controller: createController(events),
