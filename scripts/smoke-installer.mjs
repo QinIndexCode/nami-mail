@@ -155,14 +155,33 @@ function escapeRegularExpression(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Child environment for a command that must resolve `namimail` through the
+ * registered current-user Path and nothing else, so the smoke cannot pass by
+ * accident because the build machine already had the CLI on its Path.
+ *
+ * The registered value alone is not runnable though: `where.exe` — and nearly
+ * everything a `cmd /c` shells out to — lives in System32, which belongs to the
+ * *machine* Path, not the user one. A developer box usually carries System32 in
+ * its user Path as well, which is why this only failed on a clean CI runner with
+ * "where is not recognized". Appending the two system directories keeps the
+ * assertion honest: `where namimail.cmd` can still only resolve through the
+ * registry entry this installation registered.
+ */
+function cliCommandEnvironment(pathRecord) {
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment)) {
+    if (key.toLowerCase() === "path") delete environment[key];
+  }
+  const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
+  environment.Path = [pathRecord.value, path.join(systemRoot, "System32"), systemRoot].join(path.delimiter);
+  return environment;
+}
+
 async function smokeInstalledCli(launcher, pathRecord, version) {
   assert.equal(pathRecord.exists, true, "Nami Mail installation did not register a current-user Path value.");
   assert.equal(typeof pathRecord.value, "string", "Nami Mail installation registered an invalid current-user Path value.");
-  const commandEnvironment = { ...process.env };
-  for (const key of Object.keys(commandEnvironment)) {
-    if (key.toLowerCase() === "path") delete commandEnvironment[key];
-  }
-  commandEnvironment.Path = pathRecord.value;
+  const commandEnvironment = cliCommandEnvironment(pathRecord);
   const commandProcessor = process.env.ComSpec ?? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe");
   const { stdout, stderr } = await execFileAsync(
     commandProcessor,
@@ -189,11 +208,7 @@ const smokeMcpProtocolVersion = "2025-03-26";
 async function smokeInstalledMcp(launcher, pathRecord) {
   assert.equal(pathRecord.exists, true, "Nami Mail installation did not register a current-user Path value.");
   assert.equal(typeof pathRecord.value, "string", "Nami Mail installation registered an invalid current-user Path value.");
-  const commandEnvironment = { ...process.env };
-  for (const key of Object.keys(commandEnvironment)) {
-    if (key.toLowerCase() === "path") delete commandEnvironment[key];
-  }
-  commandEnvironment.Path = pathRecord.value;
+  const commandEnvironment = cliCommandEnvironment(pathRecord);
   const commandProcessor = process.env.ComSpec ?? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe");
   const initializeRequest = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: smokeMcpProtocolVersion } });
   const initializedNotification = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" });
