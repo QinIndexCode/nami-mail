@@ -3,7 +3,7 @@ name: Deploy landing page
 on:
   push:
     branches: [main]
-    paths: ["site/**", "docs/**", "scripts/sync-docs.mjs"]
+    paths: ["site/**", "docs/**", "scripts/build-docs-site.mjs"]
   workflow_dispatch:
 
 permissions:
@@ -28,8 +28,8 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.14.0
-      - name: Sync docs into site
-        run: node scripts/sync-docs.mjs
+      - name: Build the documentation pages
+        run: node scripts/build-docs-site.mjs
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact

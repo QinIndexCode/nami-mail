@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-lang="zh" data-theme="light">
+<html lang="zh-CN" data-lang="zh" data-theme="light" data-bilingual="true">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -10,7 +10,9 @@
     />
     <link rel="canonical" href="https://qinindexcode.github.io/nami-mail/" />
     <link rel="icon" href="./assets/brand/icon.svg" />
+    <link rel="stylesheet" href="./base.css" />
     <link rel="stylesheet" href="./styles.css" />
+    <script src="./theme-init.js"></script>
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ececef" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#050506" />
     <meta property="og:type" content="website" />
@@ -22,41 +24,13 @@
     />
     <meta property="og:url" content="https://qinindexcode.github.io/nami-mail/" />
     <meta property="og:image" content="https://qinindexcode.github.io/nami-mail/assets/nami-mail-inbox-en.png" />
-    <script>
-      // Applied before first paint so the page never flashes the wrong language
-      // or theme. Content itself is language-tagged in the markup, so only this
-      // switch needs scripting; the CSS does the hiding.
-      (function () {
-        var root = document.documentElement;
-        try {
-          var storedLang = localStorage.getItem("nami-site-lang");
-          root.dataset.lang =
-            storedLang === "zh" || storedLang === "en"
-              ? storedLang
-              : (navigator.language || "").toLowerCase().indexOf("zh") === 0
-                ? "zh"
-                : "en";
-          root.lang = root.dataset.lang === "zh" ? "zh-CN" : "en";
-
-          var storedTheme = localStorage.getItem("nami-site-theme");
-          if (storedTheme === "dark" || storedTheme === "light") {
-            root.dataset.theme = storedTheme;
-          } else {
-            root.dataset.theme =
-              window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-          }
-        } catch (error) {
-          root.dataset.lang = "zh";
-          root.dataset.theme = "light";
-        }
-      })();
-    </script>
   </head>
   <body>
     <header class="site-header">
       <div class="wrap">
         <a class="brand" href="./">
-          <img src="./assets/brand/mark-light.png" alt="" width="26" height="26" />
+          <img class="mark mark-light" src="./assets/brand/mark-light.png" alt="" width="26" height="26" />
+          <img class="mark mark-dark" src="./assets/brand/mark-dark.png" alt="" width="26" height="26" />
           <span>Nami Mail</span>
         </a>
         <nav class="site-nav" aria-label="Main">
@@ -487,46 +461,73 @@
           <div class="section-head">
             <h2 data-lang="zh">文档</h2>
             <h2 data-lang="en">Documentation</h2>
-            <p data-lang="zh">文档由仓库里的 <code>docs/</code> 目录生成，与桌面应用使用同一套设计规范。</p>
+            <p data-lang="zh">
+              安装、账户、隐私、检索、Agent、MCP 与 CLI 的完整说明，与代码同仓库维护，随站点一起构建。
+            </p>
             <p data-lang="en">
-              The docs are generated from the repository's <code>docs/</code> directory and follow the same design
-              system as the app.
+              Everything from installation and accounts to retrieval, the Agent, MCP and the CLI — maintained in the same
+              repository and built together with this site.
             </p>
           </div>
           <div class="docs-grid">
-            <a class="doc-link" href="https://github.com/QinIndexCode/nami-mail/blob/main/docs/README.zh-CN.md" data-lang="zh">
-              <strong>文档总览</strong><span>安装、账户、隐私与各功能的说明入口</span>
+            <a class="doc-link" href="./docs/INSTALLING.zh-CN.html" data-lang="zh">
+              <strong>安装与升级</strong><span>从 Release 安装、就地升级、卸载与本地数据位置。</span>
             </a>
-            <a class="doc-link" href="https://github.com/QinIndexCode/nami-mail/blob/main/docs/README.en.md" data-lang="en">
-              <strong>Overview</strong><span>Entry point for install, accounts, privacy and every feature</span>
+            <a class="doc-link" href="./docs/INSTALLING.en.html" data-lang="en">
+              <strong>Install and upgrade</strong><span>Install from a release, upgrade in place, uninstall, and where local data lives.</span>
             </a>
-            <a class="doc-link" href="https://github.com/QinIndexCode/nami-mail/blob/main/docs/cli/README.zh-CN.md" data-lang="zh">
-              <strong>CLI 参考</strong><span><code>namimail</code> 的完整命令、参数与示例</span>
+            <a class="doc-link" href="./docs/PRIVACY.zh-CN.html" data-lang="zh">
+              <strong>隐私说明</strong><span>哪些数据留在本机，哪些会发往你配置的服务。</span>
             </a>
-            <a class="doc-link" href="https://github.com/QinIndexCode/nami-mail/blob/main/docs/cli/README.en.md" data-lang="en">
-              <strong>CLI reference</strong><span>Every <code>namimail</code> command, argument and example</span>
+            <a class="doc-link" href="./docs/PRIVACY.en.html" data-lang="en">
+              <strong>Privacy</strong><span>What stays on your machine and what goes to the services you configure.</span>
             </a>
-            <a class="doc-link" href="https://github.com/QinIndexCode/nami-mail/blob/main/docs/mcp/README.zh-CN.md" data-lang="zh">
-              <strong>MCP 接入</strong><span>把 Nami Mail 接成 MCP 服务器，含权限档与配对</span>
+            <a class="doc-link" href="./docs/agent/usage.zh-CN.html" data-lang="zh">
+              <strong>Agent 工作区</strong><span>授权范围、工具确认、来源引用与审计记录。</span>
             </a>
-            <a class="doc-link" href="https://github.com/QinIndexCode/nami-mail/blob/main/docs/mcp/README.en.md" data-lang="en">
-              <strong>MCP setup</strong><span>Use Nami Mail as an MCP server, with access levels and pairing</span>
+            <a class="doc-link" href="./docs/agent/usage.en.html" data-lang="en">
+              <strong>The Agent workspace</strong><span>Scopes, tool confirmations, citations and the audit trail.</span>
             </a>
-            <a class="doc-link" href="https://github.com/QinIndexCode/nami-mail/blob/main/docs/PRIVACY.zh-CN.md" data-lang="zh">
-              <strong>隐私说明</strong><span>哪些数据留在本机，哪些会发往你配置的服务</span>
+            <a class="doc-link" href="./docs/rag/retrieval.zh-CN.html" data-lang="zh">
+              <strong>本地检索</strong><span>BM25 索引、页面切分与查询扩展的取舍。</span>
             </a>
-            <a class="doc-link" href="https://github.com/QinIndexCode/nami-mail/blob/main/docs/PRIVACY.en.md" data-lang="en">
-              <strong>Privacy</strong><span>What stays local and what goes to the services you configure</span>
+            <a class="doc-link" href="./docs/rag/retrieval.en.html" data-lang="en">
+              <strong>Local retrieval</strong><span>The BM25 index, page chunking and query expansion in practice.</span>
+            </a>
+            <a class="doc-link" href="./docs/cli/README.zh-CN.html" data-lang="zh">
+              <strong>CLI 参考</strong><span><code>namimail</code> 的命令、参数、输出与退出码。</span>
+            </a>
+            <a class="doc-link" href="./docs/cli/README.en.html" data-lang="en">
+              <strong>CLI reference</strong><span>Every <code>namimail</code> command, argument, output and exit code.</span>
+            </a>
+            <a class="doc-link" href="./docs/mcp/README.zh-CN.html" data-lang="zh">
+              <strong>MCP 接入</strong><span>配对、权限档，以及外露的 16 个邮件域工具。</span>
+            </a>
+            <a class="doc-link" href="./docs/mcp/README.en.html" data-lang="en">
+              <strong>MCP setup</strong><span>Pairing, access levels and the sixteen mail-domain tools.</span>
+            </a>
+          </div>
+          <div class="docs-actions">
+            <a class="button" href="./docs/">
+              <span data-lang="zh">浏览全部文档</span>
+              <span data-lang="en">Browse all documentation</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <path d="M5 12h13m0 0-5-5m5 5-5 5" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </a>
+            <a class="button secondary" href="https://github.com/QinIndexCode/nami-mail/tree/main/docs" rel="noopener">
+              <span data-lang="zh">在 GitHub 上查看源文件</span>
+              <span data-lang="en">View the source on GitHub</span>
             </a>
           </div>
           <p class="footnote" data-lang="zh">
-            同一个 <code>docs/</code> 目录也会同步到
-            <a href="https://github.com/QinIndexCode/nami-mail/wiki" rel="noopener">GitHub Wiki</a> 作为镜像；站点上的文档浏览将在后续版本接入。
+            文档在部署时由仓库的 <code>docs/</code> 目录预渲染成静态页面（不依赖运行时脚本或 CDN），同一份内容也镜像到
+            <a href="https://github.com/QinIndexCode/nami-mail/wiki" rel="noopener">GitHub Wiki</a>。
           </p>
           <p class="footnote" data-lang="en">
-            The same <code>docs/</code> directory is mirrored to the
-            <a href="https://github.com/QinIndexCode/nami-mail/wiki" rel="noopener">GitHub Wiki</a>; in-site docs browsing
-            arrives in a later version.
+            The pages are pre-rendered at deploy time from the repository's <code>docs/</code> directory — no runtime
+            scripting and no CDN. The same content is mirrored to the
+            <a href="https://github.com/QinIndexCode/nami-mail/wiki" rel="noopener">GitHub Wiki</a>.
           </p>
         </div>
       </section>
@@ -536,7 +537,8 @@
       <div class="wrap">
         <div class="footer-grid">
           <div class="footer-brand">
-            <img src="./assets/brand/mark-light.png" alt="" width="22" height="22" />
+            <img class="mark mark-light" src="./assets/brand/mark-light.png" alt="" width="22" height="22" />
+            <img class="mark mark-dark" src="./assets/brand/mark-dark.png" alt="" width="22" height="22" />
             <span>Nami Mail</span>
           </div>
           <nav class="footer-nav" aria-label="Footer">

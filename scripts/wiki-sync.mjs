@@ -47,7 +47,7 @@ const HOME_PAGES = { en: "Home.md", zh: "Home.zh-CN.md" };
 const SIDEBAR_PAGE = "_Sidebar.md";
 const MANIFEST = ".wiki-sync.json";
 
-// Topic groups and labels (zh / en), matching scripts/sync-docs.mjs. Unknown
+// Topic groups and labels (zh / en), matching scripts/build-docs-site.mjs. Unknown
 // directories fall back to "misc". "root" is not used here: the wiki tree
 // never includes repository-root documents.
 const GROUPS = [

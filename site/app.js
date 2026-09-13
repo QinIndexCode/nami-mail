@@ -39,12 +39,10 @@
     if (toggle) toggle.setAttribute("aria-label", lang === "zh" ? "Switch to English" : "切换到中文");
   }
 
-  /* The brand mark has a light and a dark cut; swapping keeps the header legible
-   * on both themes, which is what the two files exist for. */
+  /* The two cuts of the brand mark are both in the markup and CSS picks one, so
+   * switching the theme never has to touch an image source. */
   function applyTheme(theme) {
     root.dataset.theme = theme;
-    var mark = document.querySelector(".brand img");
-    if (mark) mark.src = theme === "dark" ? "./assets/brand/mark-dark.png" : "./assets/brand/mark-light.png";
     var button = document.getElementById("theme-toggle");
     if (button) button.setAttribute("aria-label", theme === "dark" ? "Switch to light theme" : "Switch to dark theme");
   }

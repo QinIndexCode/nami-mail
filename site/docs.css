@@ -1,0 +1,669 @@
+/* Nami Mail documentation pages.
+ *
+ * Loaded after `base.css`, which supplies the tokens, the header and the footer.
+ * Three columns: the document tree, the article, and the in-page outline. The
+ * article is the only place on the site that sets long-form prose, so the reading
+ * rules (measure, rhythm, code and tables) live here rather than in the shared
+ * layer. */
+
+/* --- layout -------------------------------------------------------------- */
+
+.docs-body {
+  background: var(--canvas);
+}
+
+.docs-layout {
+  display: grid;
+  grid-template-columns: 244px minmax(0, 1fr) 196px;
+  gap: var(--s-12) var(--s-10);
+  align-items: start;
+  max-width: var(--shell-docs);
+  padding-top: var(--s-10);
+  padding-bottom: var(--s-20);
+}
+
+.docs-main {
+  min-width: 0;
+}
+
+/* --- sidebar ------------------------------------------------------------- */
+
+.docs-sidebar {
+  position: sticky;
+  top: calc(var(--header-height) + var(--s-6));
+  max-height: calc(100vh - var(--header-height) - var(--s-12));
+  padding-right: var(--s-5);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.docs-nav > summary {
+  display: none;
+}
+
+.docs-nav-home {
+  display: block;
+  margin-bottom: var(--s-4);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-muted);
+  color: var(--text);
+  font-size: var(--step-0);
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.docs-nav-home:hover {
+  background: var(--hover);
+  border-color: var(--line-strong);
+}
+
+.docs-nav-group + .docs-nav-group {
+  margin-top: var(--s-5);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--line);
+}
+
+.docs-nav-group h2 {
+  margin-bottom: var(--s-2);
+  padding: 0 var(--s-3);
+  color: var(--text-faint);
+  font-size: var(--step--1);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.docs-nav-group ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.docs-nav-group a {
+  display: block;
+  padding: 5px var(--s-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-soft);
+  font-size: var(--step-0);
+  line-height: 1.45;
+  text-decoration: none;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.docs-nav-group a:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.docs-nav-group a.is-current {
+  background: var(--selected);
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* --- breadcrumb ---------------------------------------------------------- */
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-bottom: var(--s-5);
+  color: var(--text-faint);
+  font-size: var(--step--1);
+}
+
+.crumbs a {
+  color: var(--text-soft);
+  text-decoration: none;
+}
+
+.crumbs a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/* --- prose --------------------------------------------------------------- */
+
+/* The column is as wide as the layout allows; the reading measure is applied to
+ * the text blocks instead. That way code blocks and tables — the two things the
+ * docs lean on hardest — can use the extra width rather than being squeezed into
+ * 74 characters and scrolling for no reason. */
+.prose {
+  font-size: var(--step-1);
+  line-height: 1.72;
+}
+
+.prose > :where(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, hr) {
+  max-width: 74ch;
+}
+
+.prose > h1 {
+  margin-bottom: var(--s-5);
+  font-size: clamp(var(--step-4), 3vw, var(--step-5));
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+}
+
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+  position: relative;
+  scroll-margin-top: calc(var(--header-height) + var(--s-6));
+}
+
+.prose h2 {
+  margin: var(--s-12) 0 var(--s-4);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--line);
+  font-size: var(--step-3);
+  line-height: 1.3;
+}
+
+.prose h3 {
+  margin: var(--s-8) 0 var(--s-3);
+  font-size: var(--step-2);
+}
+
+.prose h4 {
+  margin: var(--s-6) 0 var(--s-2);
+  font-size: var(--step-1);
+}
+
+.prose h5,
+.prose h6 {
+  margin: var(--s-5) 0 var(--s-2);
+  color: var(--text-soft);
+  font-size: var(--step-0);
+}
+
+.prose p {
+  margin-bottom: var(--s-4);
+}
+
+.prose p:last-child,
+.prose ul:last-child,
+.prose ol:last-child {
+  margin-bottom: 0;
+}
+
+.prose a {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 34%, transparent);
+  text-decoration-thickness: 1px;
+  transition: text-decoration-color 120ms ease, background-color 120ms ease;
+}
+
+.prose a:hover {
+  text-decoration-color: currentColor;
+  background: var(--hover);
+}
+
+.prose a.is-external::after {
+  content: "↗";
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--text-faint);
+  font-size: 0.85em;
+  text-decoration: none;
+}
+
+/* The link GitHub shows next to a heading, revealed on hover or keyboard focus. */
+.heading-anchor {
+  position: absolute;
+  left: calc(var(--s-5) * -1);
+  top: inherit;
+  width: var(--s-5);
+  color: var(--text-faint);
+  font-weight: 400;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.prose h2 .heading-anchor,
+.prose h3 .heading-anchor,
+.prose h4 .heading-anchor {
+  top: auto;
+}
+
+.prose h2:hover .heading-anchor,
+.prose h3:hover .heading-anchor,
+.prose h4:hover .heading-anchor,
+.prose h5:hover .heading-anchor,
+.prose h6:hover .heading-anchor,
+.heading-anchor:focus-visible {
+  opacity: 1;
+}
+
+.prose ul,
+.prose ol {
+  margin: 0 0 var(--s-4);
+  padding-left: var(--s-6);
+}
+
+.prose li {
+  margin-bottom: var(--s-2);
+}
+
+.prose li > ul,
+.prose li > ol {
+  margin-top: var(--s-2);
+  margin-bottom: 0;
+}
+
+.prose li::marker {
+  color: var(--text-faint);
+}
+
+.prose blockquote {
+  margin: 0 0 var(--s-4);
+  padding: var(--s-2) 0 var(--s-2) var(--s-4);
+  border-left: 2px solid var(--line-strong);
+  color: var(--text-soft);
+}
+
+.prose blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.prose hr {
+  margin: var(--s-10) 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.prose img {
+  margin: var(--s-6) 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.prose del {
+  color: var(--text-faint);
+}
+
+.prose strong {
+  font-weight: 600;
+}
+
+/* The language switch at the top of a couple of documents. */
+.prose p[align="center"] {
+  text-align: center;
+  color: var(--text-soft);
+  font-size: var(--step-0);
+}
+
+.prose code {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel-muted);
+  white-space: break-spaces;
+}
+
+.prose pre {
+  margin: 0 0 var(--s-5);
+  padding: var(--s-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-inset);
+  overflow-x: auto;
+  line-height: 1.6;
+}
+
+.prose pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: var(--step-0);
+  white-space: pre;
+}
+
+/* --- tables -------------------------------------------------------------- */
+
+.table-scroll {
+  margin: 0 0 var(--s-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  overflow-x: auto;
+}
+
+.table-scroll:focus-visible {
+  border-color: var(--text-faint);
+}
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--step-0);
+}
+
+.prose th,
+.prose td {
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+/* Headers wrap: several tables in the docs use long field names, and a nowrap
+ * header alone can push the table past the reading measure. */
+.prose th {
+  background: var(--panel-muted);
+  color: var(--text);
+  font-weight: 600;
+}
+
+
+
+.prose tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--panel-muted) 45%, transparent);
+}
+
+.prose tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* --- task lists (GFM) ---------------------------------------------------- */
+
+.prose li.task-list-item {
+  list-style: none;
+}
+
+.prose li.task-list-item input {
+  margin: 0 var(--s-2) 0 calc(var(--s-5) * -1);
+  vertical-align: middle;
+}
+
+/* --- pager --------------------------------------------------------------- */
+
+.pager {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-4);
+  max-width: 74ch;
+  margin-top: var(--s-12);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--line);
+}
+
+.pager-link {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-4) var(--s-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
+  text-decoration: none;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.pager-link:last-child {
+  text-align: right;
+  align-items: flex-end;
+}
+
+.pager-link:hover {
+  transform: translateY(-2px);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-raised), var(--shadow-inset);
+}
+
+.pager-label {
+  color: var(--text-faint);
+  font-size: var(--step--1);
+}
+
+.pager-title {
+  color: var(--text);
+  font-size: var(--step-0);
+  font-weight: 500;
+}
+
+/* --- in-page outline ----------------------------------------------------- */
+
+.docs-toc {
+  position: sticky;
+  top: calc(var(--header-height) + var(--s-6));
+  max-height: calc(100vh - var(--header-height) - var(--s-12));
+  padding-left: var(--s-5);
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.docs-toc h2 {
+  margin-bottom: var(--s-3);
+  color: var(--text-faint);
+  font-size: var(--step--1);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.docs-toc ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.docs-toc a {
+  display: block;
+  padding: 3px 0 3px var(--s-3);
+  border-left: 2px solid transparent;
+  color: var(--text-soft);
+  font-size: var(--step--1);
+  line-height: 1.5;
+  text-decoration: none;
+}
+
+.docs-toc a:hover {
+  border-left-color: var(--line-strong);
+  color: var(--text);
+}
+
+/* --- documentation overview ----------------------------------------------
+ * The landing-shaped entry point to the tree: shortcuts, then one row per group
+ * with the group's topics in a column grid. */
+
+.docs-overview {
+  padding-top: var(--s-16);
+  padding-bottom: var(--s-20);
+}
+
+.overview-intro {
+  max-width: 68ch;
+  margin-bottom: var(--s-10);
+}
+
+.overview-intro .eyebrow {
+  margin-bottom: var(--s-5);
+}
+
+.overview-intro h1 {
+  margin-bottom: var(--s-4);
+  font-size: clamp(var(--step-5), 4vw, var(--step-6));
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.overview-intro .lede {
+  max-width: 60ch;
+  margin-bottom: 0;
+}
+
+.quick-links {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(224px, 1fr));
+  gap: var(--s-3);
+  margin-bottom: var(--s-12);
+}
+
+.quick-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-5);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
+  text-decoration: none;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.quick-link:hover {
+  transform: translateY(-2px);
+  border-color: var(--text-faint);
+  box-shadow: var(--shadow-raised), var(--shadow-inset);
+}
+
+.quick-link-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.quick-link-title {
+  color: var(--text);
+  font-size: var(--step-0);
+  font-weight: 500;
+}
+
+.quick-link-blurb {
+  color: var(--text-soft);
+  font-size: var(--step--1);
+}
+
+.quick-link-arrow {
+  color: var(--text-faint);
+  transition: transform 160ms ease, color 160ms ease;
+}
+
+.quick-link:hover .quick-link-arrow {
+  color: var(--text);
+  transform: translateX(2px);
+}
+
+.overview-group {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: var(--s-8);
+  padding: var(--s-8) 0;
+  border-top: 1px solid var(--line);
+}
+
+.overview-head h2 {
+  margin-bottom: var(--s-2);
+  font-size: var(--step-2);
+}
+
+.overview-head p {
+  color: var(--text-soft);
+  font-size: var(--step-0);
+}
+
+.overview-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  gap: 2px var(--s-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  align-content: start;
+}
+
+.overview-list a {
+  display: block;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-soft);
+  font-size: var(--step-0);
+  text-decoration: none;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.overview-list a:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* --- responsive ---------------------------------------------------------- */
+
+@media (max-width: 1180px) {
+  .docs-layout {
+    grid-template-columns: 244px minmax(0, 1fr);
+  }
+
+  .docs-toc {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .docs-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s-6);
+    padding-top: var(--s-6);
+  }
+
+  .docs-sidebar {
+    position: static;
+    max-height: none;
+    padding-right: 0;
+    border-right: 0;
+  }
+
+  .docs-nav {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--panel);
+    box-shadow: var(--shadow-sm), var(--shadow-inset);
+  }
+
+  .docs-nav > summary {
+    display: block;
+    padding: var(--s-3) var(--s-5);
+    color: var(--text);
+    font-size: var(--step-0);
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .docs-nav > nav {
+    padding: 0 var(--s-4) var(--s-5);
+  }
+
+  .docs-nav[open] > summary {
+    border-bottom: 1px solid var(--line);
+    margin-bottom: var(--s-4);
+  }
+
+  .overview-group {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s-4);
+  }
+
+  .pager {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pager-link:last-child {
+    text-align: left;
+    align-items: flex-start;
+  }
+}
