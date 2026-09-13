@@ -11,7 +11,8 @@ import { bootDemoShell } from "./helpers";
  * numbers that matter:
  *
  * - the shell columns at each breakpoint (238 → 220 → drawer → phone),
- * - the reading measure (the whole point of the reading-pane column),
+ * - the reading column filling the reader pane (the whole point of the
+ *   reading-pane column), with plain-text prose still capped at the measure,
  * - the list row height that the density setting produces,
  * - and the global invariant that nothing ever overflows horizontally.
  *
@@ -20,10 +21,8 @@ import { bootDemoShell } from "./helpers";
  * review step this file exists to force.
  */
 
-/** The prose column must never exceed this; it comes from `--measure`. */
-const MEASURE = 672;
-/** Reader side padding is `clamp(20px, 6vw, 48px)`. */
-const MIN_READER_PADDING = 20;
+/** Plain-text prose is capped here; the reading column itself fills the pane. */
+const PROSE_MEASURE = 960;
 const WIDE_SIDEBAR = 238;
 const NARROW_DESKTOP_SIDEBAR = 220;
 /** Measured row height for the default "comfortable" density. */
@@ -71,15 +70,19 @@ for (const layout of layouts) {
       const row = await page.locator(".message-item").first().boundingBox();
       expect(Math.abs((row?.height ?? 0) - COMFORTABLE_ROW_HEIGHT), `comfortable density row height was ${row?.height}`).toBeLessThanOrEqual(ROW_HEIGHT_TOLERANCE);
 
-      // 3. The reader keeps its column width, and the prose stays inside the measure.
+      // 3. The reading column fills the reader pane, and only prose is measured.
       await page.locator(".message-item", { hasText: DEMO_SUBJECT }).first().click();
       await expect(page.locator(".reader-column")).toBeVisible();
 
       const content = await page.locator(".mail-content").boundingBox();
       const prose = await page.locator(".mail-text, .mail-html").first().boundingBox();
       const reader = await page.locator(".reader-column").boundingBox();
-      expect(content?.width ?? 0, "the reading column must not exceed the measure").toBeLessThanOrEqual(MEASURE + 1);
-      expect(prose?.width ?? 0, "the prose must fit inside the measure minus padding").toBeLessThanOrEqual(MEASURE - MIN_READER_PADDING * 2 + 1);
+      // Provider-authored HTML carries its own layout, so the column follows the
+      // pane the way Gmail does: capping it squeezed 600px newsletter tables
+      // until their words broke.
+      expect(content?.width ?? 0, "the reading column fills the reader pane").toBeGreaterThanOrEqual((reader?.width ?? 0) - 2);
+      expect(content?.width ?? 0, "the reading column does not exceed the reader pane").toBeLessThanOrEqual((reader?.width ?? 0) + 1);
+      expect(prose?.width ?? 0, "plain-text prose stays inside the measure").toBeLessThanOrEqual(PROSE_MEASURE + 1);
       expect(prose?.width ?? 0, "the prose must be present").toBeGreaterThan(200);
 
       if (layout.readerFillsColumn) {
@@ -87,11 +90,6 @@ for (const layout of layouts) {
         // of being squeezed.
         expect(reader?.width ?? 0, "the phone reader is fullscreen").toBeGreaterThanOrEqual(layout.viewport.width - 2);
         await expect(page.locator(".message-column")).not.toBeVisible();
-        // At phone width the column is the viewport (minus padding), so the
-        // measure cap is what keeps lines readable rather than the column width.
-        expect(content?.width ?? 0, "the phone reader column still respects the measure").toBeLessThanOrEqual(MEASURE + 1);
-      } else {
-        expect(content?.width ?? 0, "the reader column is wider than the measure on desktop").toBeGreaterThan(MEASURE - 1);
       }
 
       await expectNoHorizontalOverflow(page);
@@ -113,7 +111,11 @@ test.describe("geometry across themes", () => {
     });
     const dark = await page.locator(".mail-content").boundingBox();
     expect(dark?.width).toBeCloseTo(light?.width ?? 0, 0);
-    expect(dark?.width ?? 0).toBeLessThanOrEqual(MEASURE + 1);
+
+    // The measure now lives on the plain-text prose — the column itself fills the
+    // pane — so a theme switch must not move that width either.
+    const darkProse = await page.locator(".mail-text, .mail-html").first().boundingBox();
+    expect(darkProse?.width ?? 0).toBeLessThanOrEqual(PROSE_MEASURE + 1);
 
     // The theme must actually be applied to the prose (a token regression would
     // otherwise leave dark text on a dark panel unnoticed).

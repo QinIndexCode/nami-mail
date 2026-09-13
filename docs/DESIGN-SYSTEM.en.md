@@ -13,15 +13,23 @@ converged while the whole drifted. Read this before changing styles.
 
 | token | value | used for |
 |---|---|---|
-| `--measure` | `672px` | every centred column in the reading pane |
+| `--measure` | `960px` | **plain-text prose only** (`.mail-text`); the reading column itself fills the pane |
 
 The reading pane (`.mail-title`, `.mail-content`, `.translation-panel`, `.verification-code-list`,
-`.attachment-list`) is **one centred column**, so all five blocks must share `--measure`; giving any
-one of them its own width makes the text edges stop lining up.
+`.attachment-list`) is still **one column**, but that column no longer has a fixed width: it fills
+the reading pane, the way Gmail does.
 
-**How the value is derived**: 672px minus 48px of padding on each side leaves ~576px of text. The
-body font is Georgia 16px, averaging ~8px per character in mixed prose, so that is about
-**72 characters per line** — inside the comfortable 45–75 range for long-form reading.
+The reason is that provider-authored HTML carries its own layout. Capping the column squeezes a
+600px-wide template table into a narrower box and, together with `overflow-wrap:anywhere` on
+`.mail-html :is(td,th)`, breaks words in the middle (which is exactly how Apple's promo mail
+displayed its broken line wraps). The width has to come from the pane, not from the body font.
+
+Only **plain text** — which has no layout of its own — needs a line-length cap. It starts at the
+column's left padding, so its edge still lines up with the subject above it.
+
+**How the value is derived**: at 960px with the Georgia 16px body font and ~8px per character in
+mixed prose, that is about **105 characters per line** — past the comfortable 45–75 range, but the
+price of matching Gmail; on narrower windows the column width takes over and caps it anyway.
 
 > If the body font or size changes (`.mail-text, .mail-html` `font-family` / `font-size`), **recompute
 > `--measure`**. This is also why `ch` is not used here: `ch` resolves against the element that
@@ -234,12 +242,14 @@ Rules only hold if something watches them, so the baseline is **executable** and
 
 ### Geometry baseline (`e2e/geometry.spec.ts`)
 
-| breakpoint | sidebar | reading column | prose | row height |
+| breakpoint | sidebar | reading column (the content block fills it) | plain-text prose | row height |
 |---|---|---|---|---|
-| 1440px | 238px | 1116px | `--measure` 672 → prose 576 | 105px |
-| 1000px | 220px | 694px | 672 → 612 | 105px |
-| 800px | drawer (280px, off-canvas) | 744px | 672 → 612 | 105px |
-| 600px | drawer (off-canvas) | 600px (fullscreen) | 556 | 105px |
+| 1440px | 238px | 1116px | 960 (`--measure` applies) | 105px |
+| 1000px | 220px | 694px | 634 (limited by the column) | 105px |
+| 800px | drawer (280px, off-canvas) | 744px | 684 (limited by the column) | 105px |
+| 600px | drawer (off-canvas) | 600px (fullscreen) | 528 (limited by the column) | 105px |
+
+(Prose width = `min(--measure, reading column − side padding)`; the padding is `clamp(20px, 6vw, 48px)`, or 30px at the ≤1050px breakpoint.)
 
 The assertions are **tight (±2px)**: if a change moves one of these numbers it is a *deliberate* edit to the
 constant here, with a reason — that is the review step this file exists to force. Use it to judge whether a

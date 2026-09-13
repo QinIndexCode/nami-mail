@@ -344,24 +344,26 @@ describe("mail reader title wrapping", () => {
     // horizontally; the rule lives in the same block as the other title
     // typography.
     //
-    // Width comes from the reader measure on .mail-title (--measure), so the h2
-    // must not re-impose a second column width of its own — it only has to
-    // break inside long words.
+    // The title block fills the reader pane now, so the h2 must not re-impose a
+    // second column width of its own — it only has to break inside long words.
     expect(stylesheet).toContain(
       ".mail-title h2\n{\nletter-spacing:0;\nfont-variant-numeric:lining-nums;\nmax-width:100%;\nmargin:0;\nfont-family:Georgia,Songti SC,serif;\nfont-size:32px;\nfont-weight:400;\nline-height:1.24;\noverflow-wrap:anywhere\n}",
     );
   });
 
-  it("gives the whole reading column one shared prose measure", () => {
-    // Title, body, translation, verification codes and attachments are five
-    // centred blocks in the same column; if they do not share the measure their
-    // text edges stop lining up (and the body line runs past a comfortable
-    // 45–75 characters at 16px).
-    expect(stylesheet).toContain("--measure:672px");
+  it("lets the reading column fill the pane and measures only plain-text prose", () => {
+    // Provider-authored HTML carries its own layout, so the reading column
+    // follows the reader pane instead of a fixed measure: capping it squeezed a
+    // 600px-wide newsletter table into a narrower box and broke its words. Plain
+    // text has no layout of its own, so it is the one block still held to a
+    // readable line length.
+    expect(stylesheet).toContain("--measure:960px");
     for (const selector of [".mail-title\n{", ".mail-content\n{", ".translation-panel\n{", ".verification-code-list\n{", ".attachment-list\n{"]) {
       const block = stylesheet.match(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^}]*\\}`))?.[0] ?? "";
-      expect(block, selector).toContain("max-width:var(--measure)");
+      expect(block, selector).not.toContain("max-width:var(--measure)");
     }
+    const prose = stylesheet.match(/\.mail-text\n\{[^}]*\}/)?.[0] ?? "";
+    expect(prose, ".mail-text").toContain("max-width:var(--measure)");
   });
 
   it("keeps the recipient line ellipsized instead of wrapping", () => {

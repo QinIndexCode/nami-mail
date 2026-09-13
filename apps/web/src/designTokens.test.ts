@@ -316,9 +316,11 @@ describe("documented baselines", () => {
   });
 
   it("keeps the reading measure aligned with the body font", () => {
-    // The measure is derived from the 16px Georgia body text; if that changes the
-    // column has to be recomputed (documented in the design system).
-    expect(stylesheet).toMatch(/--measure:\s*672px/);
+    // The measure now caps plain-text prose only — the reading column itself is
+    // fluid, because provider-authored HTML has its own layout — and it is
+    // derived from the 16px Georgia body text, so it must be recomputed if that
+    // changes (documented in the design system).
+    expect(stylesheet).toMatch(/--measure:\s*960px/);
     expect(stylesheet).toMatch(/\.mail-text,\.mail-html\n\{[^}]*font-size:16px/s);
   });
 });

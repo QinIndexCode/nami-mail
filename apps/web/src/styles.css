@@ -44,12 +44,13 @@ font-synthesis:none;
 --radius-md:12px;
 --radius-lg:20px;
 --radius-pill:999px;
-/* Prose measure for the reading pane: the whole reader (title, body,
-   translation, verification codes, attachments) is one centred column, so all
-   five blocks share this width or their text edges stop lining up. 672px minus
-   the 48px side padding leaves ~576px of text, i.e. ~72 characters at the
-   16px Georgia body font. Recompute if that font or size changes. */
---measure:672px;
+/* Prose measure for plain-text mail only. The reading column itself is fluid —
+   it fills the reader pane the way Gmail does — because capping it reflows
+   provider-authored HTML: a 600px-wide newsletter table squeezed into a narrower
+   column breaks words (which is what Apple's promo mail did). Only plain text,
+   which has no layout of its own, is held to a readable line length: 960px is
+   ~105 characters at the 16px Georgia body font. Recompute if that changes. */
+--measure:960px;
 --dur-fast:.12s;
 --dur-base:.16s;
 --dur-slow:.32s;
@@ -2545,7 +2546,6 @@ overflow-y:auto
 .mail-title
 {
 border-bottom:1px solid var(--line);
-max-width:var(--measure);
 margin:0 auto;
 padding:clamp(20px,4vw,30px) clamp(20px,6vw,48px) 20px
 }
@@ -2663,7 +2663,6 @@ font-size:10px
 }
 .translation-panel
 {
-max-width:var(--measure);
 margin:0 auto;
 padding:18px 48px 0
 }
@@ -3009,7 +3008,6 @@ display:flex
 }
 .mail-content
 {
-max-width:var(--measure);
 min-height:380px;
 margin:0 auto;
 padding:clamp(20px,4vw,28px) clamp(20px,6vw,48px) 34px
@@ -3022,6 +3020,13 @@ font-variant-numeric:lining-nums;
 font-family:Georgia,Songti SC,serif;
 font-size:16px;
 line-height:1.7
+}
+/* Plain text is prose with no layout of its own, so it is the one thing in the
+   reader that is kept to a comfortable line length. It starts at the column's
+   left padding, so its edge still lines up with the subject above it. */
+.mail-text
+{
+max-width:var(--measure)
 }
 .mail-html
 {
@@ -3101,7 +3106,6 @@ object-fit:contain
 }
 .verification-code-list
 {
-max-width:var(--measure);
 margin:0 auto;
 padding:18px 48px 0
 }
@@ -3237,7 +3241,6 @@ font-size:8px
 }
 .attachment-list
 {
-max-width:var(--measure);
 margin:2px auto 24px;
 padding:0 48px
 }
