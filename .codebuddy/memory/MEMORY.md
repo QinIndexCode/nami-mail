@@ -75,6 +75,15 @@
 - **重命名是乐观的**：先本地改标题 + 关输入框，失败还原（`renameConversation`）。
 - 尚未改为乐观：**自动回复审批**（`AutoReplyPendingDialog` 等 `resolve` 回包后才刷新）。
 
+### 站点与文档站（2026-09-13 建立，改 `site/` 或写文档前先读）
+- **一个构建脚本**：`scripts/build-docs-site.mjs`（已取代 `scripts/sync-docs.mjs`）把 `docs/` 预渲染成 `site/docs/**`；`site/docs/` 被 gitignore（部署时生成），**改 docs 后本地需 `node scripts/build-docs-site.mjs` 才能在 site/ 里预览**，落地页的 `./docs/...` 链接依赖它。
+- **只发布带语言后缀的文档**：`X.zh-CN.md`/`X.en.md` → 同路径 `.html`；`docs/README.md` 这类无后缀文件是导航壳，不进站点（指向它的链接落到总览页）；根级 README/SUPPORT/SECURITY/CONTRIBUTING/CODE_OF_CONDUCT/CHANGELOG 发布到 `site/docs/_root/`。
+- **链接与锚点在构建时强制**：`.md` 互链改写成目标页；锚点用自实现的 GitHub slug（CJK 保留、百分号编码可解码比对）；仓库内非文档文件与源码路径指向 GitHub blob。**任何解析不了的链接或标题锚点都会让构建失败**，`validate.yml` 与 `release-windows.yml` 都跑它 → 文档 PR 不可能合入断链。`scripts/release-policy.test.mjs` 钉死这两份 validate 步骤清单，新增步骤必须同步（现有 16 个用例）。
+- **站点 CSS 分三层**：`site/base.css`（设计 token/页头页脚/语言切换，落地页与文档页共用）+ `site/styles.css`（落地页）+ `site/docs.css`（文档版面）。品牌 mark 明暗两版都写进 HTML、**由 CSS 切换**，不要再用脚本改 `img.src`。文档正文宽度规则：文字 74ch、代码块与表格用满列。
+- **语言机制**：落地页与文档总览是**双语同页 + CSS 隐藏**（`data-bilingual` + `data-lang`，`theme-init.js` 首屏按 localStorage/navigator 决定）；单篇文档是单语言页面，右上角切换是**真实 `<a>` 指向另一语言的同名页**（`docs.js` 只记偏好），无 JS 也能跳。
+- **可复用校验手法**：构建脚本自己的报告看不到页面骨架的链接，必须另写独立检查器遍历 `site/**/*.html` 解析 href/src 与锚点 id（本轮靠它抓到 149 页全体前缀少一层的 bug）。设计核验用 Playwright 截图 + DOM 指标（`getComputedStyle(...).gridTemplateColumns` 列数、`offsetParent` 计数、`html.lang`），比逐张看图省 token；临时脚本用完即删。
+- 构建期新增根 devDependencies：`unified` / `remark-parse` / `remark-gfm` / `remark-rehype`（`--offline` 装不上，需联网）。GitHub Pages 站点已启用（`build_type: workflow`）。
+
 ### 文档配图（2026-09-12 重做）
 - README 里嵌的截图：`docs/nami-mail-inbox-{zh-CN,en}.png`、`docs/nami-mail-agent-{zh-CN,en}.png`（另有 `nami-mail-wordmark.png` 是 logo，非截图）。**未被引用的 `nami-mail-inbox.png` 已删除**。
 - **截图主题固定为暗色**（`test.use({ colorScheme: "dark" })`）——用户明确要求，暗色是产品展示主题。
@@ -149,6 +158,18 @@
 - 文档 backlog（docs/ROADMAP）：vision/图片上传、错误日志落盘、Compose 富文本、收件人建议完整键盘导航。
 
 ## 本地服务已拆到 utility process（Batch AE，2026-09-11 完成，未提交）
+
+### 2026-09-13 要点（本文件受 git 跟踪：reset --hard 会回滚未提交笔记；当天明细见 2026-09-13.md）
+- **发布**：推送 `v<version>` tag → `release-windows.yml`；`validate`（只读）→ `release`（**`release` 环境需人工在网页批准**，gh 不能批准）→ 草稿 Release + 5 项资源 + 回校 SHA-256 → 转正。提升脚本读 **`docs/releases/<tag>.md`（无后缀）**。信任根只有 **Ed25519**（无 Authenticode → SmartScreen 警告，必须写进说明）。
+- **发布前必须本地跑 `npm run package:win`**：validate job **不构建 NSIS 安装程序**。0.3.0 首发布败于此：`build/namimail.cmd` 与 `build/namimail-path.ps1` 被 `.gitignore` 忽略、本地有而 CI 没有，makensis 报 `no files found`（无脚本生成它们，smoke 还以其为基准）→ 已提交为产品资产。
+- **smoke-installer 的四连坑（0.3.0 发了五轮才过，每轮卡不同阶段，诊断 JSON 是关键）**：① 安装资源缺失（上条）；② `cliCommandEnvironment` 只把**用户 Path** 给子进程 → `where.exe`（在 System32，属机器 Path）不可用 → 已追加 System32/SystemRoot（开发机用户 Path 常含 System32 所以只在干净 runner 挂）；③ 卸载记录竞态——NSIS 卸载器复制到 %TEMP% 后**原进程立即返回**，等目录和进程消失不够，`DeleteRegKey` 最后才执行 → 已改 `waitForUninstallRecordRemoved()` 轮询；④ EBUSY——损坏探测要写已安装的 `Nami Mail.exe`，而 MCP smoke 刚拉起过它 + Defender 扫描新 exe → 写前等进程回基线 + EBUSY/EPERM 重试 10×500ms。②③④ 都是 0.3.0 新增 CLI/MCP smoke 阶段引入的时序（0.2.3 没有这些阶段）。**失败时下载 `release-smoke-diagnostics-v0.3.0` artifact 看 stage 字段**，比读日志快得多。
+- **0.3.0 已于 2026-09-13 正式发布**（run 34752955428，五项资源齐全）。清理：4 轮失败运行记录已删（`gh api -X DELETE .../actions/runs/<id>`）；分支只剩 main / backup/2026-09-12-techdebt（28 个未合并提交的备份）/ perf/startup-sync（PR #56）/ 3 个有打开 PR 的 dependabot。**后续发布重读本节即可。**
+- **main 要求签名提交** → 本地提交 push 被拒；绕法：PR + **squash merge**（GitHub 签名）。tag 不受保护，可"先打 tag 发布、再 PR 同步回 main"。
+- **发布前必跑 `npm run lint` 与 `node --test scripts/release-policy.test.mjs`**（这两处会与工作流/代码漂移：validate 步骤清单、`main.mts` 的 `backgroundThrottling`）。
+- **RAG 第二条臂 = 查询扩展**（commit `bd0e17e`）：预算分档（词法空结果 10s / 低分召回 800ms）、超时也解析已到达的词、prompt 必须**短**（五句 4.5–12s、一句 2.3–6.9s、过简跑偏 15s）。中文是 char-bag：`验证码/订阅` 命中好，`发票/会议` 有噪声。真实本机 provider（localhost:8081）单次 4.5–6s。
+- **阅读区宽度**（commit `0a64560`）：五个块**没有** `max-width:var(--measure)`，列流体填充；`--measure:960px` 只管 `.mail-text`。
+- **服务端测试不入类型检查**：`apps/server/tsconfig.json` 只 include `src`；已加 `tsconfig.test.json` + 可选脚本 `typecheck:tests`（**178 个既存错误，非回归**，未接进 `typecheck`）。
+- **本地主密钥解锁路径**：`master.key.dpapi` = `v10` + AES-256-GCM；AES 密钥在 `Local State` 的 `os_crypt.encrypted_key`（"DPAPI" 前缀 → DPAPI(CurrentUser)）。**Electron 的 safeStorage 解不开**（非应用进程）。
 架构：`main.mts` fork `server-host.mjs`（`server-process.mts` 提供 Electron `utilityProcess` 传输）→ `server-bridge.mts` 做请求关联/事件/反向请求。动因是 09-10 卡顿诊断（SQLite 同步 + 解密跑在主进程 → GET /api/messages 258–426ms 冻结窗口、PATCH flags 16s）。
 
 必须记住的设计约束（改动前先读，否则会踩同一批坑）：

@@ -1,0 +1,484 @@
+/* Nami Mail landing page.
+ *
+ * Tokens, the header, the footer and the language switch live in `base.css`,
+ * which the documentation pages load too. Everything here is landing-page
+ * layout: the hero, the trust strip, the feature grid, the retrieval steps, the
+ * screenshot split, the download band and the documentation hub.
+ *
+ * Layout rules stay on the same 4px grid the app uses. */
+
+/* --- hero --------------------------------------------------------------- */
+
+.hero {
+  padding: var(--s-20) 0 var(--s-12);
+}
+
+.hero .wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.02fr);
+  gap: var(--s-16);
+  align-items: center;
+}
+
+.hero .eyebrow {
+  margin-bottom: var(--s-6);
+}
+
+.display {
+  font-size: clamp(var(--step-6), 5.1vw, var(--step-7));
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+  margin-bottom: var(--s-6);
+}
+
+/* Each language supplies its own deliberate break; CJK would otherwise balance
+ * the wrap into the middle of a word. */
+.display > span {
+  display: block;
+}
+
+.lede {
+  max-width: 44ch;
+  margin-bottom: var(--s-8);
+  color: var(--text-soft);
+  font-family: var(--font-prose);
+  font-size: var(--step-2);
+  line-height: 1.62;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  margin-bottom: var(--s-6);
+}
+
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--text-faint);
+  font-size: var(--step--1);
+}
+
+/* The product shot sits on a glass plate with its own coloured lift. */
+.shot {
+  position: relative;
+}
+
+.shot::after {
+  content: "";
+  position: absolute;
+  inset: 12% 8% -6% 8%;
+  z-index: -1;
+  border-radius: 50%;
+  background: radial-gradient(50% 50% at 50% 50%, var(--glow-a), transparent 70%);
+  filter: blur(22px);
+}
+
+.shot-plate {
+  padding: var(--s-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background-color: var(--frame);
+  background-image: linear-gradient(to bottom, #ffffff12, transparent 40%);
+  box-shadow: var(--shadow), var(--shadow-inset);
+}
+
+.shot-plate img {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+/* --- trust strip -------------------------------------------------------- */
+
+.trust {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
+}
+
+.trust .wrap {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--s-6);
+  padding-top: var(--s-6);
+  padding-bottom: var(--s-6);
+}
+
+.trust-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  color: var(--text-soft);
+  font-size: var(--step-0);
+}
+
+.trust-item svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--text-faint);
+}
+
+.trust-item strong {
+  display: block;
+  color: var(--text);
+  font-size: var(--step-0);
+  font-weight: 600;
+}
+
+/* --- sections ----------------------------------------------------------- */
+
+section {
+  padding: var(--s-20) 0;
+  scroll-margin-top: calc(var(--header-height) + var(--s-4));
+}
+
+.section-head {
+  max-width: 62ch;
+  margin-bottom: var(--s-10);
+}
+
+.section-head h2 {
+  margin-bottom: var(--s-3);
+  font-size: clamp(var(--step-4), 2.8vw, var(--step-5));
+}
+
+.section-head p {
+  color: var(--text-soft);
+  font-size: var(--step-2);
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--s-4);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-raised), var(--shadow-inset);
+}
+
+.card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: var(--s-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--selected);
+  color: var(--text);
+}
+
+.card h3 {
+  margin-bottom: var(--s-2);
+  font-size: var(--step-2);
+}
+
+.card p {
+  color: var(--text-soft);
+  font-size: var(--step-0);
+}
+
+.card code,
+.step code,
+.panel code,
+.doc-link code {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel-muted);
+}
+
+/* --- retrieval steps ---------------------------------------------------- */
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.step {
+  position: relative;
+  padding: var(--s-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
+}
+
+.step::before {
+  counter-increment: step;
+  content: counter(step);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-bottom: var(--s-4);
+  border-radius: var(--radius-pill);
+  background: var(--button);
+  color: var(--button-text);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+}
+
+.step h3 {
+  margin-bottom: var(--s-2);
+  font-size: var(--step-1);
+}
+
+.step p {
+  color: var(--text-soft);
+  font-size: var(--step-0);
+}
+
+/* Connector between steps, hidden when the grid wraps. */
+.step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: calc(var(--s-6) + 12px);
+  right: calc(var(--s-4) * -1);
+  width: var(--s-4);
+  height: 1px;
+  background: var(--line-strong);
+}
+
+/* --- screens ------------------------------------------------------------ */
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr);
+  gap: var(--s-8);
+  align-items: center;
+}
+
+.panel {
+  padding: var(--s-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
+}
+
+.panel h3 {
+  margin-bottom: var(--s-4);
+  font-size: var(--step-3);
+}
+
+.checklist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-soft);
+  font-size: var(--step-0);
+}
+
+.checklist li {
+  position: relative;
+  margin-bottom: var(--s-3);
+  padding-left: var(--s-6);
+}
+
+.checklist li:last-child {
+  margin-bottom: 0;
+}
+
+.checklist li::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 9px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+/* --- download band ------------------------------------------------------
+ * A deliberate tonal break: dark on the light theme, raised panel on the dark
+ * one. It separates "decide to install" from the informational sections. */
+
+.band {
+  padding: var(--s-20) 0;
+  background: var(--button);
+  color: var(--button-text);
+}
+
+:root[data-theme="dark"] .band {
+  background: var(--panel-muted);
+  color: var(--text);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.band h2 {
+  margin-bottom: var(--s-3);
+  font-size: clamp(var(--step-4), 2.8vw, var(--step-5));
+}
+
+.band .lede {
+  color: color-mix(in srgb, var(--button-text) 72%, transparent);
+  font-family: var(--font-ui);
+  font-size: var(--step-1);
+}
+
+:root[data-theme="dark"] .band .lede {
+  color: var(--text-soft);
+}
+
+.band .split {
+  align-items: start;
+}
+
+.band .button.primary-inverse {
+  background: var(--button-text);
+  color: var(--button);
+  box-shadow: 0 1px 2px #00000033;
+}
+
+.band .button.primary-inverse:hover {
+  opacity: 0.94;
+  transform: translateY(-1px);
+}
+
+:root[data-theme="dark"] .band .button.primary-inverse {
+  background: var(--button);
+  color: var(--button-text);
+}
+
+.band ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--step-0);
+}
+
+.band li {
+  position: relative;
+  margin-bottom: var(--s-3);
+  padding-left: var(--s-6);
+  color: color-mix(in srgb, var(--button-text) 84%, transparent);
+}
+
+:root[data-theme="dark"] .band li {
+  color: var(--text-soft);
+}
+
+.band li::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 9px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.65;
+}
+
+.band li strong {
+  color: var(--button-text);
+}
+
+:root[data-theme="dark"] .band li strong {
+  color: var(--text);
+}
+
+/* --- documentation hub --------------------------------------------------
+ * Shortcut cards that lead into the generated documentation site. */
+
+/* Three across at the default shell width, so the six entry cards land as two
+ * even rows rather than four and a straggler. */
+.docs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--s-4);
+}
+
+.doc-link {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-5) var(--s-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
+  text-decoration: none;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.doc-link:hover {
+  transform: translateY(-2px);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-raised), var(--shadow-inset);
+}
+
+.doc-link strong {
+  font-size: var(--step-1);
+}
+
+.doc-link span {
+  color: var(--text-soft);
+  font-size: var(--step-0);
+}
+
+.docs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  margin-top: var(--s-8);
+}
+
+.footnote {
+  margin-top: var(--s-6);
+  color: var(--text-faint);
+  font-size: var(--step--1);
+}
+
+/* --- responsive --------------------------------------------------------- */
+
+@media (max-width: 1050px) {
+  .hero {
+    padding-top: var(--s-16);
+  }
+
+  .hero .wrap,
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s-10);
+  }
+
+  .steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .step:not(:last-child)::after {
+    content: none;
+  }
+
+  .lede {
+    max-width: 60ch;
+  }
+}

@@ -4,7 +4,7 @@
 
 ## 已接线的工具
 根目录下的脚本都是活跃工具：构建、打包、SQLite ABI 验证、smoke、locale catalog、
-wiki/docs 同步、发布策略等。`*.test.mjs` 由 `.github/workflows/validate.yml`
+文档站构建（`build-docs-site.mjs`）、wiki 同步、发布策略等。`*.test.mjs` 由 `.github/workflows/validate.yml`
 与 `release-windows.yml` 逐一显式运行（没有 glob，新增测试必须手动登记）。
 
 ## attic/ — 归档的一次性脚本
