@@ -9,6 +9,9 @@
  * - Generates `site/docs/docs-manifest.json`: grouped topic list with
  *   per-language file paths and h1 titles, used by the docs site sidebar,
  *   routing and search.
+ * - Copies the brand marks, the app icon and the product screenshots into
+ *   `site/assets/`: the landing page references those paths, so it does not
+ *   break when the docs tree is reorganised.
  *
  * Usage:  node scripts/sync-docs.mjs
  */
@@ -21,6 +24,38 @@ const srcDocs = join(root, "docs");
 const siteDocs = join(root, "site", "docs");
 
 const ROOT_DOCS = ["SUPPORT", "SECURITY", "CONTRIBUTING", "CODE_OF_CONDUCT", "CHANGELOG"];
+
+/**
+ * Assets the landing page references, as [source, destination] pairs relative
+ * to the repository root. The screenshots live in docs/ as well and are copied
+ * there by the docs sync; copying them here keeps the landing page independent
+ * of how the docs tree is laid out.
+ */
+const SITE_ASSETS = [
+  ["apps/web/public/brand/mark-light.png", "brand/mark-light.png"],
+  ["apps/web/public/brand/mark-dark.png", "brand/mark-dark.png"],
+  ["build/icon.svg", "brand/icon.svg"],
+  ["docs/nami-mail-inbox-zh.png", "nami-mail-inbox-zh.png"],
+  ["docs/nami-mail-inbox-en.png", "nami-mail-inbox-en.png"],
+  ["docs/nami-mail-agent-zh.png", "nami-mail-agent-zh.png"],
+  ["docs/nami-mail-agent-en.png", "nami-mail-agent-en.png"],
+];
+
+function syncSiteAssets() {
+  const siteAssets = join(root, "site", "assets");
+  let copied = 0;
+  for (const [from, to] of SITE_ASSETS) {
+    const source = join(root, from);
+    if (!existsSync(source)) {
+      throw new Error(`site asset is missing: ${from}`);
+    }
+    const target = join(siteAssets, to);
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(source, target);
+    copied += 1;
+  }
+  return copied;
+}
 
 const LANG_EXT = { zh: ".zh-CN.md", en: ".en.md" };
 
@@ -154,9 +189,13 @@ function main() {
   const manifest = buildManifest();
   writeFileSync(join(siteDocs, "docs-manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf8");
 
+  // 4. Landing page assets.
+  const assetCount = syncSiteAssets();
+
   const count = manifest.groups.reduce((n, g) => n + g.items.length, 0);
   console.log(`docs synced -> ${relative(root, siteDocs)}`);
   console.log(`${count} topics in ${manifest.groups.length} groups; manifest written.`);
+  console.log(`${assetCount} landing-page assets synced -> ${relative(root, join(root, "site", "assets"))}.`);
 }
 
 main();
