@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   buildManifest,
   collectDocs,
@@ -239,6 +240,35 @@ test("buildManifest lists only groups that have topics", () => {
       false,
     );
   });
+});
+
+test("the landing page only links at documents and assets that exist", () => {
+  const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+  const html = readFileSync(join(repoRoot, "site", "index.html"), "utf8");
+
+  // Documentation shortcuts: `./docs/<topic>.<lang>.html` has to correspond to a
+  // real document, or the landing page is advertising a page the build will not
+  // produce.
+  const documents = [...html.matchAll(/href="\.\/docs\/([^"#]+)\.html"/g)].map((match) => match[1]);
+  assert.ok(documents.length >= 8, `expected the documentation section to link at real pages, saw ${documents.length}`);
+  for (const document of documents) {
+    const source = document.startsWith("_root/") ? document.slice("_root/".length) : `docs/${document}`;
+    assert.ok(existsSync(join(repoRoot, `${source}.md`)), `landing page links at a missing document: ${document}`);
+  }
+
+  // Every local stylesheet, script and image the landing page loads. Directory
+  // links are excluded: the only one is `./docs/`, which the build generates.
+  const links = [...html.matchAll(/(?:href|src)="\.\/([^"#]*)"/g)].map((match) => match[1]);
+  assert.deepEqual(
+    links.filter((link) => link.endsWith("/")),
+    ["docs/"],
+    "the only directory the landing page links to must be the generated documentation root",
+  );
+  const assets = links.filter((link) => link !== "" && !link.endsWith("/"));
+  assert.ok(assets.length > 0, "expected the landing page to load local assets");
+  for (const asset of assets) {
+    assert.ok(existsSync(join(repoRoot, "site", asset)), `landing page references a missing asset: ${asset}`);
+  }
 });
 
 test("summarizeReport counts by kind", () => {
