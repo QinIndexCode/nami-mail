@@ -14,6 +14,11 @@
   var root = document.documentElement;
   var THEME_KEY = "nami-site-theme";
   var LANG_KEY = "nami-site-lang";
+  /* The copy button is an icon, but a screen reader still needs words. */
+  var COPY_LABEL = {
+    zh: { copy: "复制代码", done: "已复制" },
+    en: { copy: "Copy code", done: "Copied" },
+  };
 
   function remember(key, value) {
     try {
@@ -50,6 +55,14 @@
     var zh = root.dataset.titleZh;
     var en = root.dataset.titleEn;
     if (zh && en) document.title = lang === "zh" ? zh : en;
+    var labels = COPY_LABEL[lang] || COPY_LABEL.en;
+    var buttons = document.querySelectorAll(".copy-button");
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].setAttribute(
+        "aria-label",
+        buttons[i].classList.contains("is-copied") ? labels.done : labels.copy,
+      );
+    }
   }
 
   /* Below the three-column breakpoint the whole document tree would push the
@@ -88,8 +101,59 @@
     }
   }
 
+  /* Restore the version shown on the landing page, and label every control that
+   * depends on the language the page settled on. */
   var year = document.getElementById("year");
   if (year) year.textContent = String(new Date().getFullYear());
+
+  /**
+   * Add a copy button to every code block on the page. The button is created
+   * here rather than in the markup so that it cannot appear — or sit there doing
+   * nothing — with scripting disabled, and so the documentation pages get it for
+   * free from the build.
+   */
+  var COPY_ICON =
+    '<svg class="copy-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">' +
+    '<rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M15 5.5A2.5 2.5 0 0 0 12.5 3h-6A3.5 3.5 0 0 0 3 6.5v6A2.5 2.5 0 0 0 5.5 15" stroke-linecap="round"/></svg>' +
+    '<svg class="copy-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">' +
+    '<path d="m5 12.5 4.5 4.5L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return Promise.reject(new Error("clipboard unavailable"));
+  }
+
+  function initCopyButtons() {
+    var blocks = document.querySelectorAll("pre");
+    for (var i = 0; i < blocks.length; i++) {
+      (function (block) {
+        var code = block.querySelector("code");
+        if (!code || block.querySelector(".copy-button")) return;
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "copy-button";
+        button.innerHTML = COPY_ICON;
+        button.addEventListener("click", function () {
+          copyText(code.textContent).then(
+            function () {
+              button.classList.add("is-copied");
+              applyLanguage(root.dataset.lang === "en" ? "en" : "zh");
+              window.setTimeout(function () {
+                button.classList.remove("is-copied");
+                applyLanguage(root.dataset.lang === "en" ? "en" : "zh");
+              }, 1600);
+            },
+            function () {
+              /* Nothing to restore: the reader can still select the text. */
+            },
+          );
+        });
+        block.appendChild(button);
+      })(blocks[i]);
+    }
+  }
+
+  initCopyButtons();
 
   /* Settle the labels that depend on the language the page ended up in — the
    * stored preference or the browser's, applied by `theme-init.js`. */
