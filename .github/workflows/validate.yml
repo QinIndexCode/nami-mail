@@ -50,6 +50,11 @@ jobs:
       # release private key.
       - run: node --test scripts/github-update-assets.test.mjs
       - run: node --test scripts/wiki-sync.test.mjs
+      # The documentation site is generated from `docs/` at deploy time; build it
+      # here too, so a pull request cannot merge a broken internal link or a
+      # heading anchor that no longer exists.
+      - run: node --test scripts/build-docs-site.test.mjs
+      - run: node scripts/build-docs-site.mjs
       - run: node scripts/build-locale-catalog.mjs --check
       - run: npm run lint
       - run: npm run typecheck

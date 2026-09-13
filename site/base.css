@@ -1,0 +1,532 @@
+/* Nami Mail site — shared foundation.
+ *
+ * Tokens are copied from the desktop app's design system
+ * (docs/DESIGN-SYSTEM.zh-CN.md) rather than imported: the app stylesheet is
+ * ~17k lines of application layout, none of which applies to a site. Keeping the
+ * same names and values makes the site and the product read as one design
+ * without sharing a build.
+ *
+ * This file holds everything the landing page and the documentation pages share:
+ * tokens, resets, the language switch, the header and the footer. `styles.css`
+ * carries the landing page, `docs.css` the documentation layout. */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --canvas: #ececef;
+  --canvas-tint: #d9dce2;
+  --frame: #f8f8f9eb;
+  --panel: #ffffffdb;
+  --panel-solid: #fff;
+  --panel-muted: #f7f7f8db;
+  --hover: #1212140b;
+  --selected: #12121413;
+
+  /* Ink */
+  --text: #151517;
+  --text-soft: #5f5f66;
+  --text-faint: #66666c;
+  --line: #12121417;
+  --line-strong: #12121424;
+
+  /* Actions */
+  --button: #171719;
+  --button-text: #fff;
+  --danger: #b43838;
+  --success: #347a4a;
+  --warning: #9a6510;
+  --info: #4f7294;
+
+  /* Atmosphere: the app's canvas carries a tinted glow behind its glass frame;
+    the site borrows the same restraint (two low-alpha washes, no image). */
+  --glow-a: #6f8fd41f;
+  --glow-b: #8f6fd41a;
+  --vignette: radial-gradient(120% 70% at 50% 0%, transparent 55%, #17171b0a 100%);
+
+  --shadow: 0 28px 80px #17171b26, 0 2px 10px #17171b0f;
+  --shadow-raised: 0 16px 38px #17171b2e, 0 2px 8px #17171b12;
+  --shadow-sm: 0 6px 16px #17171b1a, 0 1px 3px #17171b0d;
+  --shadow-inset: inset 0 1px 0 #ffffffb3;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+
+  /* Type scale */
+  --step--1: 12.5px;
+  --step-0: 14.5px;
+  --step-1: 16px;
+  --step-2: 17.5px;
+  --step-3: 20px;
+  --step-4: 24px;
+  --step-5: 32px;
+  --step-6: 44px;
+  --step-7: 56px;
+
+  /* Spacing (4px grid) */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --s-12: 48px;
+  --s-16: 64px;
+  --s-20: 80px;
+  --s-24: 96px;
+
+  --font-ui: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  /* The product sets mail bodies in Georgia; the site uses it for prose accents
+    so a reading product reads like one. */
+  --font-prose: Georgia, "Songti SC", "SimSun", "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --shell: 1140px;
+  --shell-docs: 1320px;
+  --header-height: 60px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #050506;
+  --canvas-tint: #0b0b0e;
+  --frame: #0e0e0ff0;
+  --panel: #141416e0;
+  --panel-solid: #171719;
+  --panel-muted: #19191be0;
+  --hover: #ffffff0e;
+  --selected: #ffffff18;
+  --text: #f5f5f6;
+  --text-soft: #b8b8be;
+  --text-faint: #9898a0;
+  --line: #ffffff17;
+  --line-strong: #ffffff26;
+  --button: #f1f1f2;
+  --button-text: #111113;
+  --danger: #e47070;
+  --success: #75b98a;
+  --warning: #d49233;
+  --info: #7ba1c4;
+  --glow-a: #7ea9dd1f;
+  --glow-b: #b88ee11a;
+  --vignette: none;
+  --shadow: 0 32px 90px #00000094, 0 2px 14px #00000057;
+  --shadow-raised: 0 16px 38px #0000008c, 0 2px 8px #0000004d;
+  --shadow-sm: 0 6px 16px #00000073, 0 1px 3px #00000040;
+  --shadow-inset: inset 0 1px 0 #ffffff14;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--step-1);
+  line-height: 1.6;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* Atmosphere sits behind everything and never intercepts input. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: radial-gradient(58% 48% at 12% -4%, var(--glow-a), transparent 72%),
+    radial-gradient(52% 44% at 88% 4%, var(--glow-b), transparent 74%), var(--vignette);
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+a {
+  color: inherit;
+  text-underline-offset: 3px;
+}
+
+::selection {
+  background: var(--button);
+  color: var(--button-text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Anchor targets should not land flush against the sticky header. */
+:target {
+  scroll-margin-top: calc(var(--header-height) + var(--s-6));
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+p {
+  margin: 0;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+/* Language switching: every translatable node carries its language and CSS hides
+ * the other one, so a bilingual page reads correctly with scripting disabled —
+ * only the toggle itself needs JavaScript. Single-language pages simply do not
+ * carry the attribute they are not. */
+html[data-lang="zh"] [data-lang="en"],
+html[data-lang="en"] [data-lang="zh"] {
+  display: none !important;
+}
+
+/* The brand mark ships in a light and a dark cut; CSS picks one so the header
+ * never flashes the wrong ink the way a scripted swap would. */
+.mark-dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .mark-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .mark-dark {
+  display: block;
+}
+
+.wrap {
+  width: 100%;
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 0 var(--s-6);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--s-6);
+  top: -100px;
+  z-index: 40;
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel-solid);
+  color: var(--text);
+  font-size: var(--step-0);
+  text-decoration: none;
+  transition: top 120ms ease;
+}
+
+.skip-link:focus-visible {
+  top: var(--s-3);
+}
+
+/* --- header ------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background-color: var(--frame);
+  background-image: linear-gradient(to bottom, #ffffff0a, transparent);
+  border-bottom: 1px solid var(--line);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+}
+
+.site-header .wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--s-6);
+  min-height: var(--header-height);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--step-2);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  text-decoration: none;
+}
+
+.brand img {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  box-shadow: var(--shadow-sm);
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  margin-left: auto;
+}
+
+.site-nav a {
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-soft);
+  font-size: var(--step-0);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.site-nav a:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.site-nav a.is-current {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.icon-button,
+.lang-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  color: var(--text-soft);
+  font: inherit;
+  font-size: var(--step--1);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.icon-button {
+  width: 32px;
+  padding: 0;
+}
+
+.icon-button:hover,
+.lang-button:hover {
+  background: var(--hover);
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+
+/* --- buttons ------------------------------------------------------------ */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 44px;
+  padding: 0 var(--s-6);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--button);
+  color: var(--button-text);
+  font: inherit;
+  font-size: var(--step-0);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  box-shadow: var(--shadow-inset), 0 1px 2px #17171b1f;
+  transition: transform 120ms ease, box-shadow 160ms ease, opacity 120ms ease;
+}
+
+.button:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-inset), var(--shadow-raised);
+}
+
+.button:active {
+  transform: translateY(0);
+}
+
+.button.secondary {
+  background: var(--panel);
+  border-color: var(--line-strong);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.button.secondary:hover {
+  background: var(--hover);
+}
+
+/* --- summary chip ------------------------------------------------------- */
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  box-shadow: var(--shadow-inset);
+  color: var(--text-soft);
+  font-size: var(--step--1);
+}
+
+.eyebrow .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 2px var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- footer ------------------------------------------------------------- */
+
+.site-footer {
+  padding: var(--s-16) 0 var(--s-12);
+  border-top: 1px solid var(--line);
+  color: var(--text-faint);
+  font-size: var(--step--1);
+}
+
+.footer-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--s-8);
+}
+
+.footer-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  color: var(--text);
+  font-size: var(--step-0);
+  font-weight: 600;
+}
+
+.footer-brand img {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.footer-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-6);
+  margin-left: auto;
+  max-width: 620px;
+}
+
+.footer-nav a {
+  color: var(--text-soft);
+  text-decoration: none;
+}
+
+.footer-nav a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.footer-legal {
+  margin-top: var(--s-8);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-6);
+}
+
+.footer-legal code {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel-muted);
+}
+
+/* --- responsive --------------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .site-nav a[data-nav="secondary"] {
+    display: none;
+  }
+
+  .wrap {
+    padding: 0 var(--s-5);
+  }
+
+  .footer-nav {
+    margin-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
