@@ -55,6 +55,8 @@ function shellKeydown(event: KeyboardEvent): void {
     addOpen: state.addOpen,
     mobileSidebar: state.mobileSidebar,
     sendingStatusOpen: state.sendingStatusOpen,
+    translationTermsOpen: state.translationTermsOpen,
+    attachmentPreviewOpen: state.attachmentPreview !== null,
     selectedId: null,
     selected: false,
     keyboardSelectionAnchorId: null,
@@ -187,8 +189,27 @@ describe("useDialogRouting · modal transitions", () => {
 });
 
 describe("useDialogRouting · sentinels", () => {
-  it("anyModalOpen turns on with any of the eight core modals", async () => {
+  /** Mounts past the fresh-origin terms gate, i.e. how the app runs in practice. */
+  async function mountWithGateAccepted(): Promise<void> {
     await mount();
+    if (latest!.state.translationTermsOpen) {
+      await act(async () => {
+        latest!.actions.setTranslationTermsOpen(false);
+      });
+    }
+  }
+
+  it("counts the first-run terms gate as an open modal", async () => {
+    // The gate must push the toast stack behind it: otherwise a toast painted
+    // over "agree and continue" on a narrow window and the click never landed.
+    await mount();
+    expect(latest!.state.translationTermsOpen).toBe(true);
+    expect(latest!.state.anyModalOpen).toBe(true);
+    expect(latest!.state.anyModalOrSidebar).toBe(true);
+  });
+
+  it("anyModalOpen turns on with any of the eight core modals", async () => {
+    await mountWithGateAccepted();
     expect(latest!.state.anyModalOpen).toBe(false);
     await act(async () => {
       latest!.actions.openSettings();
@@ -202,7 +223,7 @@ describe("useDialogRouting · sentinels", () => {
   });
 
   it("the mobile sidebar alone does not count as a core modal", async () => {
-    await mount();
+    await mountWithGateAccepted();
     await act(async () => {
       latest!.actions.openMobileSidebar();
     });
@@ -294,6 +315,9 @@ describe("assembly · App executor over the routed decisions", () => {
   it("n with no accounts opens the add-account dialog", async () => {
     await mount();
     await act(async () => {
+      latest!.actions.setTranslationTermsOpen(false);
+    });
+    await act(async () => {
       shellKeydown(keyOnDocument("n"));
     });
     expect(latest!.state.addOpen).toBe(true);
@@ -302,6 +326,9 @@ describe("assembly · App executor over the routed decisions", () => {
 
   it("Cmd+K reports preventDefault so the App effect stops the browser", async () => {
     await mount();
+    await act(async () => {
+      latest!.actions.setTranslationTermsOpen(false);
+    });
     const event = keyOnDocument("k", { metaKey: true });
     await act(async () => {
       shellKeydown(event);
@@ -311,6 +338,9 @@ describe("assembly · App executor over the routed decisions", () => {
 
   it("after the close action the same gateway re-arms", async () => {
     await mount();
+    await act(async () => {
+      latest!.actions.setTranslationTermsOpen(false);
+    });
     await act(async () => {
       latest!.actions.openSettings();
     });

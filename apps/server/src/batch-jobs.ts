@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseHandle } from "./db.js";
 import { buildMessageListSql, type MessageListFilterQuery } from "./message-filters.js";
+import { serverLog } from "./logging.js";
 import {
   batchMoveMessages,
   moveMessageToFolder,
@@ -195,7 +196,9 @@ async function runJob(record: BatchJobRecord, deps: BatchJobDeps): Promise<void>
           // a lost response). Reconcile in the background so the cache shows
           // the verified destination instead of a stale local snapshot.
           void syncAccount(deps.db, deps.masterKey, accountId, getSyncMessageLimit(deps.db), deps.oauthService, deps.agentMailEvents)
-            .catch(() => console.warn(`Batch job ${record.id}: background move reconciliation failed for account ${accountId}`));
+            .catch((error) => {
+              serverLog.warn({ batchJobId: record.id, accountId }, "Background move reconciliation failed", error);
+            });
         }
         record.done += chunk.length;
       }

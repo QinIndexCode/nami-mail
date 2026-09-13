@@ -146,7 +146,7 @@ test("requires a valid Ed25519 signature when the installed app uses the unsigne
       }), privateKey).toString("base64"),
     },
   });
-  const fetchImpl = async (input: RequestInfo | URL) => {
+  const fetchImpl = async (input: string | URL | Request) => {
     const url = String(input);
     if (url.startsWith("https://api.github.com/")) {
       return new Response(JSON.stringify({

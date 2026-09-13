@@ -1,10 +1,12 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type RefObject } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { Archive, Layers3, Mail, MailOpen, MousePointerClick, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
 import type { MessageListQuery } from "./mailListState";
 import { useI18n } from "./i18n";
 import type { MailErrorPresentation } from "./errorPresentation";
 import { SenderAvatar, accountTone } from "./SenderAvatar";
+import { contextMenuItemIndexForKey } from "./contextMenu";
+import { localizeMessageLinks } from "./app/app-utils";
 import type { Account, AppSettings, Message } from "./types";
 
 // `Intl.DateTimeFormat` construction is not free; per-row-per-frame allocation
@@ -40,6 +42,12 @@ export type MessageListEmptyState = {
 
 type MessageListProps = {
   loading: boolean;
+  /**
+   * Identity of the list being shown (account/folder/view/search). Changing it
+   * means a different list, so the viewport is a new element and can fade in
+   * instead of hard-swapping.
+   */
+  listKey?: string;
   fatalError: MailErrorPresentation | null;
   accounts: Account[];
   messages: Message[];
@@ -125,14 +133,14 @@ export const MessageListRow = memo(function MessageListRow(props: MessageListRow
   const className = `message-item ${selected ? "selected" : ""} ${unread ? "unread" : ""} ${selectionMode ? "selection-mode" : ""} ${multiSelected ? "multi-selected" : ""} ${recentlyReadInUnread ? "recently-read-in-unread" : ""}`;
   return (
     <div className="message-list-row" style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualStart}px)` }}>
-      <button data-index={index} ref={buttonRefCallback} className={className} aria-pressed={selectionMode ? multiSelected : undefined} onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
+      <button data-index={index} data-message-id={message.id} ref={buttonRefCallback} className={className} aria-pressed={selectionMode ? multiSelected : undefined} aria-haspopup="menu" onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
         <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
         {selectionMode && <span className={`selection-checkbox ${multiSelected ? "checked" : ""}`} aria-hidden="true" />}
         <SenderAvatar name={message.from.name} address={message.from.address} tone={accountTone(message.from.address)} gravatarEnabled={gravatarEnabled} />
         <span className="message-copy">
           <span className="message-meta"><strong>{message.from.name || message.from.address}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
           <span className="message-subject">{message.subject}</span>
-          <span className="message-snippet">{message.snippet}</span>
+          <span className="message-snippet">{localizeMessageLinks(message.snippet, locale)}</span>
           <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
         </span>
         {!message.seen && <span className="unread-dot" />}
@@ -157,6 +165,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
   const { locale, t } = useI18n();
   const {
     loading,
+    listKey,
     fatalError,
     accounts,
     messages,
@@ -186,12 +195,19 @@ function MessageList(props: MessageListProps): React.JSX.Element {
   // viewport once measured, closed by the backdrop, Escape or a list scroll.
   const [contextMenu, setContextMenu] = useState<{ message: Message; x: number; y: number } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  /** The row that opened the menu, so Escape/Tab can hand focus back to it. */
+  const contextMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   useLayoutEffect(() => {
     const menu = contextMenu;
     if (!menu) return;
     const node = contextMenuRef.current;
     if (!node) return;
+    // A menu without a focused item is unreachable by keyboard; move focus in
+    // once, and leave it alone on re-positions (e.g. a later clamp pass).
+    if (!node.contains(document.activeElement)) {
+      node.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    }
     const rect = node.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
     setContextMenu((current) => {
@@ -201,14 +217,36 @@ function MessageList(props: MessageListProps): React.JSX.Element {
     });
   }, [contextMenu]);
 
+  const closeContextMenu = useCallback((restoreFocus: boolean) => {
+    setContextMenu(null);
+    if (!restoreFocus) return;
+    const trigger = contextMenuTriggerRef.current;
+    contextMenuTriggerRef.current = null;
+    trigger?.focus();
+  }, []);
+
   useEffect(() => {
     if (!contextMenu) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setContextMenu(null);
+      if (event.key === "Escape") closeContextMenu(true);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [contextMenu]);
+  }, [contextMenu, closeContextMenu]);
+
+  // Arrow/Home/End move within the menu; Tab leaves it and returns focus to the
+  // row the menu belongs to, so tab order never dead-ends inside the popup.
+  const handleMenuKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Tab") {
+      closeContextMenu(true);
+      return;
+    }
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+    const index = contextMenuItemIndexForKey(event.key, items.indexOf(document.activeElement as HTMLElement), items.length);
+    if (index === null) return;
+    event.preventDefault();
+    items[index]?.focus();
+  }, [closeContextMenu]);
 
   // Gmail-style range selection: the anchor is the last row touched by a
   // selection click; Shift+click extends the selection from it. Reset it when
@@ -256,8 +294,24 @@ function MessageList(props: MessageListProps): React.JSX.Element {
   }, []);
 
   const handleOpenContextMenu = useCallback((message: Message, x: number, y: number) => {
+    contextMenuTriggerRef.current = messageButtonRefs.current.get(message.id) ?? null;
     setContextMenu({ message, x, y });
-  }, []);
+  }, [messageButtonRefs]);
+
+  // Keyboard users reach the row menu with Shift+F10 or the dedicated
+  // ContextMenu key while a row has focus — otherwise the menu is mouse-only.
+  const handleListKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+    const row = (event.target as HTMLElement).closest<HTMLElement>("button[data-message-id]");
+    const id = row?.dataset.messageId;
+    if (!row || !id) return;
+    const message = messages.find((item) => item.id === id);
+    if (!message) return;
+    event.preventDefault();
+    const rect = row.getBoundingClientRect();
+    contextMenuTriggerRef.current = messageButtonRefs.current.get(id) ?? null;
+    setContextMenu({ message, x: rect.left + 12, y: Math.max(8, rect.top + 12) });
+  }, [messageButtonRefs, messages]);
 
   // Rows are measured lazily (their height varies with snippet line count and
   // density); estimateSize only seeds the initial layout.
@@ -269,10 +323,23 @@ function MessageList(props: MessageListProps): React.JSX.Element {
     overscan: 8,
   });
 
+  // A list switch keeps the rows already on screen until the new snapshot
+  // lands. Replacing them with a six-row skeleton made every account/folder/
+  // view switch — and every search-debounce tick — flash a shorter list, jump
+  // the layout and discard the position the user was holding. The skeleton is
+  // now only for a list that has nothing to show yet (first load / cold start);
+  // a switch instead dims the outgoing rows and fades the incoming ones in.
+  const hasRows = accounts.length > 0 && messages.length > 0;
+  const showSkeleton = loading && !hasRows && !fatalError;
+  const showList = hasRows && !fatalError;
+  const showError = !loading && Boolean(fatalError);
+  const showFirstAccount = !loading && !fatalError && accounts.length === 0;
+  const showEmpty = !loading && !fatalError && accounts.length > 0 && messages.length === 0;
+
   return (
     <>
-      <div className="message-list" ref={messageListRef} onScroll={() => { if (contextMenu) setContextMenu(null); }}>
-      {loading && (
+      <div className="message-list" ref={messageListRef} onKeyDown={handleListKeyDown} onScroll={() => { if (contextMenu) closeContextMenu(false); }}>
+      {showSkeleton && (
         <div className="message-skeleton-list" role="status" aria-label={t("mail.loading")} data-density={listDensity}>
           {Array.from({ length: 6 }, (_, index) => (
             <div className="message-skeleton-row" key={index}>
@@ -287,11 +354,11 @@ function MessageList(props: MessageListProps): React.JSX.Element {
           ))}
         </div>
       )}
-      {!loading && fatalError && <div className="center-state error-state"><X size={24} /><h3>{fatalError.title}</h3><p>{fatalError.message} {fatalError.guidance}</p><button className="secondary-button" onClick={onReconnect}>{t("mail.reconnect")}</button></div>}
-      {!loading && !fatalError && !accounts.length && (
+      {showError && fatalError && <div className="center-state error-state"><X size={24} /><h3>{fatalError.title}</h3><p>{fatalError.message} {fatalError.guidance}</p><button className="secondary-button" onClick={onReconnect}>{t("mail.reconnect")}</button></div>}
+      {showFirstAccount && (
         <div className="center-state empty-state"><div className="empty-orb"><Mail size={28} /></div><h3>{t("mail.empty.firstAccountTitle")}</h3><p>{t("mail.empty.firstAccountDescription")}</p><button className="primary-button" onClick={onAddAccount}><Plus size={17} />{t("account.add")}</button></div>
       )}
-      {!loading && accounts.length > 0 && messages.length === 0 && (
+      {showEmpty && (
         <div className="center-state empty-state">
           {emptyMessageList.canClearSearch ? <Search size={24} /> : <Mail size={24} />}
           <h3>{emptyMessageList.title}</h3>
@@ -299,8 +366,16 @@ function MessageList(props: MessageListProps): React.JSX.Element {
           {emptyMessageList.canClearSearch && <button className="secondary-button" type="button" onClick={onClearSearch}>{t("mail.clearSearch")}</button>}
         </div>
       )}
-      {!loading && accounts.length > 0 && messages.length > 0 && (
-        <div className="message-list-viewport" style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
+      {showList && (
+        <div
+          className="message-list-viewport"
+          data-switching={loading ? "true" : undefined}
+          // Remount when the *arriving* list settles, not when the request
+          // starts, so the fade-in lands on the new rows rather than on the
+          // outgoing ones.
+          key={`${listKey ?? "list"}${loading ? ":pending" : ":ready"}`}
+          style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}
+        >
           {rowVirtualizer.getVirtualItems().map((virtualItem) => {
             const message = messages[virtualItem.index];
             const threadSize = threadById.get(message.id)?.length ?? 1;
@@ -331,8 +406,8 @@ function MessageList(props: MessageListProps): React.JSX.Element {
       </div>
       {contextMenu && (
         <>
-          <div className="context-menu-backdrop" onClick={() => setContextMenu(null)} onContextMenu={(event) => { event.preventDefault(); setContextMenu(null); }} />
-          <div ref={contextMenuRef} className="context-menu" role="menu" aria-label={t("mail.contextMenu.label")} style={{ left: contextMenu.x, top: contextMenu.y }}>
+          <div className="context-menu-backdrop" onClick={() => closeContextMenu(false)} onContextMenu={(event) => { event.preventDefault(); closeContextMenu(false); }} />
+          <div ref={contextMenuRef} className="context-menu" role="menu" tabIndex={-1} aria-label={t("mail.contextMenu.label")} style={{ left: contextMenu.x, top: contextMenu.y }} onKeyDown={handleMenuKeyDown}>
             <button type="button" role="menuitem" className="context-menu-item" onClick={() => { const target = contextMenu.message; setContextMenu(null); onOpenMessage(target); }}>
               <MousePointerClick size={15} /><span>{t("mail.action.open")}</span>
             </button>

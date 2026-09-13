@@ -3,10 +3,10 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 import { contactsCache } from "./dialogPrefetch";
-import { useStablePagedListHeight } from "./useStablePagedListHeight";
+import { useStablePagedListHeight } from "./hooks/useStablePagedListHeight";
 import type { Contact, ContactInput } from "./types";
 import { getAvatar, setAvatar } from "./avatarStore";
 import { AvatarEditor } from "./AvatarEditor";
@@ -85,8 +85,12 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
     let active = true;
     setLoading(true);
     setLoadError(null);
+    // Capture the cache revision before waiting: a refresh started by an edit
+    // (delete/save) means this response is already stale, and applying it would
+    // put the deleted contact back.
+    const revision = contactsCache.revision();
     void contactsCache.get().then((items) => {
-      if (!active) return;
+      if (!active || contactsCache.revision() !== revision) return;
       setContacts(items);
     }).catch((error: unknown) => {
       if (!active) return;

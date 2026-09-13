@@ -4,7 +4,7 @@
 
 ## Goal
 
-Chunking turns cleaned mail into stable, citeable, budget-bounded retrieval pages. It is not arbitrary character slicing and does not depend on a remote tokenizer for reproducibility; pages serve both lexical retrieval and the optional local semantic index, and semantic embeddings do not change the chunking rules.
+Chunking turns cleaned mail into stable, citeable, budget-bounded retrieval pages. It is not arbitrary character slicing and does not depend on a remote tokenizer for reproducibility; pages serve lexical retrieval and query expansion, neither of which changes the chunking rules.
 
 ## Current rules
 

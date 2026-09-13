@@ -139,6 +139,7 @@ export function translationErrorMessage(error: unknown, t: Translate): string {
     case "translation_response_too_large":
       return t("translation.error.responseTooLarge");
     case "local_service_unavailable":
+    case "local_service_timeout":
       return t("translation.error.localServiceUnavailable");
     default:
       return t("translation.error.failed");
@@ -151,6 +152,7 @@ const sharedTranslationErrorCodes = new Set([
   "translation_invalid_target",
   "translation_content_unavailable",
   "local_service_unavailable",
+  "local_service_timeout",
 ]);
 
 /**
@@ -184,6 +186,7 @@ export function translationConfigurationErrorMessage(
     case "translation_configuration_managed":
       return t("settings.translation.configurationManaged");
     case "local_service_unavailable":
+    case "local_service_timeout":
       return t("translation.error.localServiceUnavailable");
     default:
       return t(fallbackKey);

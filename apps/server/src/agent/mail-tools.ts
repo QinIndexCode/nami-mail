@@ -22,6 +22,8 @@ import {
   externalMessagesBatchGetOutputSchema,
   externalMessagesListInputSchema,
   externalMessagesListOutputSchema,
+  externalMessagesSearchInputSchema,
+  externalMessagesSearchOutputSchema,
   externalMailSummarizeInputSchema,
   externalMailSummarizeOutputSchema,
   externalSummarizeExcerptCharacters,
@@ -60,8 +62,10 @@ import type {
   MailAttachmentView,
   MailFolderView,
   MailListQuery,
+  MailMessageDestination,
   MailMessageDetail,
   MailMessageView,
+  MailSearchQuery,
 } from "./mail-application-service.js";
 
 const MAX_ACCOUNT_RESULTS = externalMailReadBounds.accountResults;
@@ -93,6 +97,12 @@ const messageInputSchema = externalMessageGetInputSchema;
 const threadInputSchema = externalThreadGetInputSchema;
 const attachmentsListInputSchema = externalAttachmentsListInputSchema;
 
+// messages.search now has a published external counterpart, so it takes the
+// contract schemas themselves — the same rule every other external read tool
+// follows, and what the registry test asserts (identity, not just shape).
+const searchMessagesInputSchema = externalMessagesSearchInputSchema;
+const searchMessagesOutputSchema = externalMessagesSearchOutputSchema;
+
 const accountsOutputSchema = externalAccountsListOutputSchema;
 const foldersOutputSchema = externalFoldersListOutputSchema;
 const messagesOutputSchema = externalMessagesListOutputSchema;
@@ -114,6 +124,7 @@ type MoveMessageOutput = z.infer<typeof externalMoveMailOutputSchema>;
 type SetFlagOutput = z.infer<typeof externalSetFlagOutputSchema>;
 type SendMailOutput = z.infer<typeof externalSendMailOutputSchema>;
 type ReplyDraftInput = z.infer<typeof externalReplyMailInputSchema>;
+type SearchMessagesOutput = z.infer<typeof searchMessagesOutputSchema>;
 
 function clipped(value: string, maximum: number): string {
   return value.length > maximum ? value.slice(0, maximum) : value;
@@ -550,6 +561,59 @@ function messagesBatchGetTool(mailApplication: MailApplicationService): AgentToo
   };
 }
 
+function messagesSearchTool(mailApplication: MailApplicationService): AgentTool<z.infer<typeof searchMessagesInputSchema>, SearchMessagesOutput> {
+  return {
+    descriptor: {
+      name: "messages.search",
+      title: "Search mail messages",
+      description: "Full-text search across local mail (subject, sender, recipients, attachment names, and body) for a free-text keyword. The keyword is matched as a phrase or a single keyword — two words look for them adjacent, not for mail containing both — and each result is a short excerpt centred on it, not the full body. Input: { query: string, accountId?, mailbox?, subject?, hasAttachments?, after?: ISO timestamp, before?: ISO timestamp, limit?: 1-20 (default 10), cursor? }. Prefer messages.list for \"latest/today\" questions, and use `after`/`before` with a `limit` when the mail is known to be recent. Without a range only the last ~90 days are searched: `searchedFrom` reports the window actually applied and `newestLocalAt` how current the local copy is — if the mail the user expects is newer than that, tell them the local copy may still be behind. `truncated` is true when more matches exist than the returned page; pass `nextCursor` back as `cursor` for the next page.",
+      category: "messages",
+      executionMode: "read",
+      requiredScopes: ["read:messages"],
+      accountAccess: "optional",
+      confirmationPolicy: "never",
+      availableToExternal: true,
+      timeoutMs: 20_000,
+    },
+    inputSchema: searchMessagesInputSchema,
+    outputSchema: searchMessagesOutputSchema,
+    execute: async (context, input) => {
+      const denied = requireScope<SearchMessagesOutput>(context);
+      if (denied) return denied;
+      if (input.accountId && !scopedAccountIds(context).includes(input.accountId)) {
+        return scopeDenied("The requested account is outside the current Agent conversation scope.");
+      }
+      const query: MailSearchQuery = {
+        accountIds: input.accountId ? [input.accountId] : scopedAccountIds(context),
+        query: input.query,
+        ...(input.mailbox ? { mailbox: input.mailbox } : {}),
+        ...(input.subject ? { subject: input.subject } : {}),
+        ...(input.hasAttachments !== undefined ? { hasAttachments: input.hasAttachments } : {}),
+        ...(input.after ? { after: input.after } : {}),
+        ...(input.before ? { before: input.before } : {}),
+        limit: input.limit ?? 10,
+        ...(input.cursor ? { cursor: input.cursor } : {}),
+      };
+      const result = await fromMailApplication(context, () => mailApplication.searchMessages(scopedContext(context), query));
+      if (!result.ok) return result;
+      const returnedScopeDenied = requireReturnedMessages<SearchMessagesOutput>(context, result.value.items);
+      if (returnedScopeDenied) return returnedScopeDenied;
+      return {
+        ok: true,
+        value: {
+          query: input.query,
+          messages: result.value.items.slice(0, MAX_MESSAGE_RESULTS).map(messageMetadata),
+          total: result.value.total,
+          truncated: result.value.truncated || result.value.items.length > MAX_MESSAGE_RESULTS,
+          ...(result.value.nextCursor ? { nextCursor: result.value.nextCursor } : {}),
+          searchedFrom: result.value.searchedFrom ?? null,
+          newestLocalAt: result.value.newestLocalAt ?? null,
+        },
+      };
+    },
+  };
+}
+
 function summarizeMailTool(mailApplication: MailApplicationService): AgentTool<z.infer<typeof summarizeInputSchema>, SummarizeOutput> {
   return {
     descriptor: {
@@ -801,12 +865,24 @@ function deleteDraftTool(mailApplication: MailApplicationService): AgentTool<z.i
   };
 }
 
+/**
+ * Maps the validated request to the facade's destination shape. The contract
+ * requires exactly one of `target`/`folder`, so the last branch is unreachable —
+ * it throws rather than guessing a folder, because guessing would move mail the
+ * user never asked to move.
+ */
+function moveDestinationOf(input: { target?: "archive" | "trash"; folder?: string }): MailMessageDestination {
+  if (input.folder !== undefined) return { folder: input.folder };
+  if (input.target !== undefined) return { target: input.target };
+  throw new Error("messages.move requires either a target or a folder.");
+}
+
 function moveMessageTool(mailApplication: MailApplicationService): AgentTool<z.infer<typeof externalMoveMailInputSchema>, MoveMessageOutput> {
   return {
     descriptor: {
       name: "messages.move",
       title: "Move a mail message",
-      description: "Moves one mail message to Archive or Trash after a visible confirmation. Input: { messageId: string, target: \"archive\" | \"trash\" }.",
+      description: "Moves one mail message to Archive, Trash or an explicit folder of the same account after a visible confirmation. Input: { messageId: string, target?: \"archive\" | \"trash\", folder?: string } — provide exactly one of target/folder, and prefer listFolders before naming a folder.",
       category: "messages",
       executionMode: "write",
       requiredScopes: ["write:mail"],
@@ -823,11 +899,12 @@ function moveMessageTool(mailApplication: MailApplicationService): AgentTool<z.i
     execute: async (context, input) => {
       const messageDenied = requireMessage<MoveMessageOutput>(context, input.messageId);
       if (messageDenied) return messageDenied;
+      const destination = moveDestinationOf(input);
       const result = await fromMailApplication(context, async () => {
-        await mailApplication.moveMessage(scopedContext(context), input.messageId, input.target);
+        await mailApplication.moveMessage(scopedContext(context), input.messageId, destination);
       });
       return result.ok
-        ? { ok: true, value: { messageId: input.messageId, target: input.target } }
+        ? { ok: true, value: { messageId: input.messageId, ...destination } }
         : result;
     },
   };
@@ -999,6 +1076,7 @@ export function createMailTools(
     messagesListTool(mailApplication),
     messageGetTool(mailApplication),
     messagesBatchGetTool(mailApplication),
+    messagesSearchTool(mailApplication),
     summarizeMailTool(mailApplication),
     threadGetTool(mailApplication),
     attachmentsListTool(mailApplication),

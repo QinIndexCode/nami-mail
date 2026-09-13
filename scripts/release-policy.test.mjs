@@ -155,7 +155,11 @@ test("Windows packaging reuses a local Electron distribution only when its execu
   assert.match(desktopSmokeScript, /lastStage=\$\{progress\?\.stage \?\? "unavailable"\}/);
   assert.match(desktopSmokeScript, /redactSmokeDiagnosticText\(stderrTail\)/);
   assert.match(desktopSmokeScript, /redactSmokeDiagnosticText\(stdoutTail\)/);
-  assert.match(desktopMainSource, /backgroundThrottling: !isDesktopSmoke/);
+  // Background throttling must stay off: a hidden desktop-smoke window has to
+  // keep responding, and so does a mail client fetching mail in the background
+  // (a throttled window queues its timers and floods the main thread the moment
+  // it regains focus, which the desktop source documents next to the flag).
+  assert.match(desktopMainSource, /backgroundThrottling:\s*(?:false|!isDesktopSmoke)/);
   assert.match(desktopMainSource, /writeDesktopSmokeProgress\("settings-ui-probe"\)/);
   assert.match(packageSmokeScript, /const diagnosticReportPath = path\.join\(projectRoot, "output", "package-smoke-diagnostic\.json"\);/);
   assert.match(packageSmokeScript, /await writePackageSmokeDiagnostic\(error\)/);
@@ -661,6 +665,7 @@ test("release workflow isolates read-only validation from credential-minimized p
     "node --test scripts/release-policy.test.mjs",
     "node --test scripts/build-locale-catalog.test.mjs",
     "node --test scripts/dev-server-backoff.test.mjs scripts/package-win-trust.test.mjs scripts/dev-port-sync.test.mjs",
+    "node --test scripts/github-update-assets.test.mjs",
     "node --test scripts/wiki-sync.test.mjs",
     "node scripts/build-locale-catalog.mjs --check",
     "npm run lint",
@@ -735,6 +740,7 @@ test("pull request validation runs the release gate without write credentials", 
     "node --test scripts/release-policy.test.mjs",
     "node --test scripts/build-locale-catalog.test.mjs",
     "node --test scripts/dev-server-backoff.test.mjs scripts/package-win-trust.test.mjs scripts/dev-port-sync.test.mjs",
+    "node --test scripts/github-update-assets.test.mjs",
     "node --test scripts/wiki-sync.test.mjs",
     "node scripts/build-locale-catalog.mjs --check",
     "npm run lint",

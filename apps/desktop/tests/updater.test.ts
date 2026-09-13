@@ -24,7 +24,7 @@ const manifest = JSON.stringify({
   installer: assetNames.installerName,
 });
 
-function updateFetch(input: RequestInfo | URL): Promise<Response> {
+function updateFetch(input: string | URL | Request): Promise<Response> {
   const url = String(input);
   if (url.startsWith("https://api.github.com/")) {
     return Promise.resolve(new Response(JSON.stringify({
@@ -272,7 +272,7 @@ test("uses the embedded Ed25519 release trust when the installed executable is u
       }), privateKey).toString("base64"),
     },
   });
-  const fetchImpl = async (input: RequestInfo | URL) => {
+  const fetchImpl = async (input: string | URL | Request) => {
     const url = String(input);
     if (url.startsWith("https://api.github.com/")) {
       return new Response(JSON.stringify({
@@ -432,5 +432,119 @@ test("does not launch an installer when local mail data cannot close safely", as
   assert.equal(installed.snapshot.reason, "mailDataBusy");
   assert.deepEqual(installed.snapshot.args, {});
   assert.deepEqual(calls, []);
+  updater.dispose();
+});
+
+function pendingInstallRecordPath(profile: string): string {
+  return path.join(profile, "updates", "pending-install.json");
+}
+
+/** Starts an updater over a profile that already holds an install record. */
+async function startWithPendingRecord(
+  t: test.TestContext,
+  record: { fromVersion: string; toVersion: string; startedAt: string },
+  currentVersion = "1.2.2",
+) {
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), "nami-desktop-updater-pending-"));
+  t.after(() => fs.rm(profile, { recursive: true, force: true }));
+  const configPath = path.join(profile, "app-update.yml");
+  await fs.writeFile(configPath, sourceConfig, "utf8");
+  const recordPath = pendingInstallRecordPath(profile);
+  await fs.mkdir(path.dirname(recordPath), { recursive: true });
+  await fs.writeFile(recordPath, JSON.stringify({ schemaVersion: 1, ...record }), "utf8");
+  const updater = new DesktopUpdater({
+    currentVersion,
+    isPackaged: true,
+    updateConfigPath: configPath,
+    updateTrustPath: path.join(profile, "nami-update-trust.json"),
+    userDataPath: profile,
+    executablePath: path.join(profile, "Nami Mail.exe"),
+    disabled: false,
+    platform: "win32",
+    now: () => Date.UTC(2026, 6, 22, 8, 0, 0),
+    automaticCheckDelayMs: 3_600_000,
+    periodicCheckIntervalMs: 3_600_000,
+    fetchImpl: updateFetch,
+    readTrustedSigner: async () => ({ publisher: "Nami Mail", thumbprint: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }),
+    broadcast: () => undefined,
+    prepareForInstall: async () => true,
+    recoverAfterInstallFailure: () => undefined,
+    quitForInstall: () => undefined,
+  });
+  return { updater, recordPath, snapshot: await updater.start() };
+}
+
+test("records the install intent before the helper takes over", async (t) => {
+  let observed: unknown;
+  const { updater, profile } = await createUpdater(t, {
+    launchInstaller: async () => {
+      // The record must exist by the time the helper is started: it is the only
+      // evidence a later launch has that an install was ever attempted.
+      observed = JSON.parse(await fs.readFile(pendingInstallRecordPath(profile), "utf8")) as unknown;
+      return true;
+    },
+  });
+  await updater.checkForUpdates();
+  await updater.downloadAvailableUpdate();
+  assert.equal((await updater.installDownloadedUpdate()).accepted, true);
+  assert.deepEqual(observed, {
+    schemaVersion: 1,
+    fromVersion: "1.2.2",
+    toVersion: targetVersion,
+    startedAt: "2026-07-22T08:00:00.000Z",
+  });
+  updater.dispose();
+});
+
+test("clears the install record when the installer never starts", async (t) => {
+  const { updater, profile } = await createUpdater(t, { launchInstaller: async () => false });
+  await updater.checkForUpdates();
+  await updater.downloadAvailableUpdate();
+  const installed = await updater.installDownloadedUpdate();
+  assert.equal(installed.accepted, false);
+  assert.equal(installed.snapshot.reason, "installerNotStarted");
+  // Nothing was handed over, so the next launch must not warn about it.
+  await assert.rejects(fs.access(pendingInstallRecordPath(profile)), /ENOENT/);
+  updater.dispose();
+});
+
+test("reports a recorded install that never changed the running version", async (t) => {
+  const { updater, recordPath, snapshot } = await startWithPendingRecord(t, {
+    fromVersion: "1.2.2",
+    toVersion: targetVersion,
+    startedAt: "2026-07-22T06:00:00.000Z",
+  });
+  assert.equal(snapshot.phase, "error");
+  assert.equal(snapshot.reason, "installNotApplied");
+  assert.equal(snapshot.targetVersion, targetVersion);
+  assert.equal(snapshot.checkedAt, "2026-07-22T06:00:00.000Z");
+  assert.deepEqual(snapshot.args, {});
+  // One-shot notice: the record is consumed once it has been reported.
+  await assert.rejects(fs.access(recordPath), /ENOENT/);
+  updater.dispose();
+});
+
+test("leaves a fresh install record for a later launch to judge", async (t) => {
+  const { updater, recordPath, snapshot } = await startWithPendingRecord(t, {
+    fromVersion: "1.2.2",
+    toVersion: targetVersion,
+    // Inside the helper's own 90s hand-over window plus install time.
+    startedAt: "2026-07-22T07:59:30.000Z",
+  });
+  assert.equal(snapshot.phase, "idle");
+  assert.equal(snapshot.reason, "scheduled");
+  await fs.access(recordPath);
+  updater.dispose();
+});
+
+test("discards the install record once the target version is running", async (t) => {
+  const { updater, recordPath, snapshot } = await startWithPendingRecord(t, {
+    fromVersion: "1.2.1",
+    toVersion: "1.2.2",
+    startedAt: "2026-07-22T06:00:00.000Z",
+  });
+  assert.equal(snapshot.phase, "idle");
+  assert.equal(snapshot.reason, "scheduled");
+  await assert.rejects(fs.access(recordPath), /ENOENT/);
   updater.dispose();
 });

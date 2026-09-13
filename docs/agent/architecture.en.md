@@ -6,7 +6,7 @@
 
 This page defines NamiMail Agent's production boundary and distinguishes the embedded GUI implementation from the shipped external CLI/MCP entry points and the standalone service mode that still fails closed.
 
-> **Current-build status: external interfaces are available.** The 0.3.0 installer ships the `namimail` command, PATH shim, CLI, MCP stdio launcher, Broker, and pairing UI, and the installer smoke verifies the packaged MCP stdio path (protocol `2025-03-26`, serverInfo `NamiMail`, exactly fifteen tools: eight read-only and seven write). The CLI, MCP, and Broker in the diagram are working entry points behind a paired current-user SID-DACL named pipe. Standalone headless service mode still fails closed with `BROKER_SECURITY_UNAVAILABLE`. Experimental local NLLB-200 translation is unaffected and remains separate, explicit, and opt-in.
+> **Current-build status: external interfaces are available.** The 0.3.0 installer ships the `namimail` command, PATH shim, CLI, MCP stdio launcher, Broker, and pairing UI, and the installer smoke verifies the packaged MCP stdio path (protocol `2025-03-26`, serverInfo `NamiMail`, exactly sixteen tools: nine read-only and seven write). The CLI, MCP, and Broker in the diagram are working entry points behind a paired current-user SID-DACL named pipe. Standalone headless service mode still fails closed with `BROKER_SECURITY_UNAVAILABLE`. Experimental local NLLB-200 translation is unaffected and remains separate, explicit, and opt-in.
 
 The normal server/runtime in the current source creates and starts an embedded `AgentService`, with GUI-facing `/api/agent` routes, an RAG worker, and a React workspace. Packaged-desktop validation of the CLI/MCP path is covered by the installer smoke. Real account/provider paths, deletion and rebuild lifecycle checks, and security confirmation-flow validation still need live-environment evidence.
 
@@ -67,7 +67,7 @@ agent-contracts <- agent-core <- server/agent <- server runtime
 
 ## Providers and translation
 
-Providers are authorized by capability, not vendor name. The current source contains an OpenAI-compatible/Ollama adapter; other provider kinds are contract reservations and must not be presented as available before implementation and verification.
+Providers are authorized by capability, not vendor name. The current source ships four provider adapters: OpenAI-compatible (also covers Ollama and custom kinds), Anthropic Claude, Google Gemini, and OpenAI Responses. All support streaming, tool calling, and health checks.
 
 - Cloud mail-content egress is off by default. A user must explicitly consent in visible settings, and UI must name the provider, model, scope, and outgoing context.
 - API keys belong only in secure credential storage or DPAPI-protected configuration, never ordinary settings, logs, browser state, or IPC output.

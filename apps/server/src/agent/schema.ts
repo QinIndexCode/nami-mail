@@ -1,7 +1,7 @@
 import type { DatabaseHandle } from "../db.js";
 
-export const AGENT_STORE_SCHEMA_VERSION = 6;
-export const AGENT_STORE_MINIMUM_READER_VERSION = 6;
+export const AGENT_STORE_SCHEMA_VERSION = 7;
+export const AGENT_STORE_MINIMUM_READER_VERSION = 7;
 
 export class AgentStoreVersionError extends Error {
   constructor(message: string) {
@@ -349,6 +349,14 @@ CREATE TABLE IF NOT EXISTS agent_rag_index_stats (
   term_total INTEGER NOT NULL CHECK (term_total >= 0),
   PRIMARY KEY (account_id, account_generation)
 );
+
+CREATE TABLE IF NOT EXISTS agent_rag_repair_state (
+  account_id TEXT NOT NULL,
+  account_generation INTEGER NOT NULL CHECK (account_generation >= 0),
+  repaired INTEGER NOT NULL CHECK (repaired IN (0, 1)),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (account_id, account_generation)
+);
 `;
 
 const agentTableNames = [
@@ -367,6 +375,7 @@ const agentTableNames = [
   "agent_memory_records",
   "agent_rag_index",
   "agent_rag_index_stats",
+  "agent_rag_repair_state",
 ] as const;
 
 function tableExists(db: DatabaseHandle, name: string): boolean {
@@ -696,6 +705,20 @@ function migrateAgentStoreV5ToV6(db: DatabaseHandle): void {
   db.exec(agentStoreSchemaSql);
 }
 
+/** v6 → v7 adds the durable remote-id repair state used to skip re-scanning a done generation. */
+function migrateAgentStoreV6ToV7(db: DatabaseHandle): void {
+  if (tableExists(db, "agent_rag_repair_state")) {
+    requireColumns(db, "agent_rag_repair_state", [
+      "account_id",
+      "account_generation",
+      "repaired",
+      "updated_at",
+    ]);
+    return;
+  }
+  db.exec(agentStoreSchemaSql);
+}
+
 function versionRow(db: DatabaseHandle): AgentStoreVersionRow | undefined {
   return db.prepare(`
     SELECT schema_version, minimum_reader_version
@@ -741,6 +764,8 @@ export function applyAgentStoreSchema(db: DatabaseHandle, now = new Date().toISO
       migrateAgentStoreV4ToV5(db);
     } else if (row.schema_version === 5) {
       migrateAgentStoreV5ToV6(db);
+    } else if (row.schema_version === 6) {
+      migrateAgentStoreV6ToV7(db);
     } else if (row.schema_version !== AGENT_STORE_SCHEMA_VERSION) {
       throw new AgentStoreVersionError("The Agent store schema is not supported by this Runtime.");
     }

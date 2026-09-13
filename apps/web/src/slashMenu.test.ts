@@ -15,12 +15,13 @@ const unread = byId.get("unread")!;
 const sub = { name: "update", descriptionKey: "agent.commands.memory.sub.update", usageKey: "agent.commands.memory.sub.update.usage" };
 
 describe("buildSlashMenu", () => {
-  it("opens with a bare slash and lists every command without sub-operations", () => {
+  it("opens with a bare slash, offers the /@ mail reference first, and lists every command without sub-operations", () => {
     const menu = buildSlashMenu("/");
-    expect(menu?.map((item) => item.kind === "command" ? `/${item.command.name}` : "")).toEqual(
+    expect(menu?.[0]).toEqual({ kind: "mail-reference" });
+    expect(menu?.slice(1).map((item) => item.kind === "command" ? `/${item.command.name}` : "")).toEqual(
       AGENT_SLASH_COMMANDS.map((command) => `/${command.name}`),
     );
-    expect(menu?.every((item) => item.kind === "command")).toBe(true);
+    expect(menu?.slice(1).every((item) => item.kind === "command")).toBe(true);
   });
 
   it("ignores trailing whitespace and stays closed for plain text", () => {
@@ -34,7 +35,7 @@ describe("buildSlashMenu", () => {
   });
 
   it("expands sub-operations under a typed command prefix", () => {
-    const names = (menu: ReturnType<typeof buildSlashMenu>) => menu?.map((item) => item.kind === "command" ? `/${item.command.name}` : `/${item.command.name} ${item.sub.name}`);
+    const names = (menu: ReturnType<typeof buildSlashMenu>) => menu?.map((item) => item.kind === "command" ? `/${item.command.name}` : item.kind === "sub" ? `/${item.command.name} ${item.sub.name}` : "");
     expect(names(buildSlashMenu("/memory"))).toEqual([
       "/memory",
       "/memory save",

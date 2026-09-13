@@ -63,7 +63,7 @@ function waitForChildExit(child: ChildProcess, description: string, timeoutMs = 
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(child.exitCode);
   return new Promise((resolve, reject) => {
     let settled = false;
-    const finish = (callback: (value: number | null | Error) => void, value: number | null | Error) => {
+    const finish = <T>(callback: (value: T) => void, value: T) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);

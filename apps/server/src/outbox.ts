@@ -691,21 +691,31 @@ export function recoverInterruptedSubmissions(db: DatabaseHandle, masterKey: Buf
 
 /** Marks SMTP-accepted or uncertain submissions confirmed after Sent sync finds the exact RFC Message-ID. */
 export function confirmSubmissionsInSent(db: DatabaseHandle, masterKey: Buffer, accountId: string): number {
+  const candidates = db.prepare(`
+    SELECT * FROM outbound_submissions
+    WHERE account_id = ? AND status IN ('submitted', 'unknown_delivery')
+  `).all(accountId) as StoredSubmission[];
+  // Fast path: with nothing awaiting confirmation there is no reason to touch
+  // the Sent folder at all (previously every sync decrypted all of Sent).
+  if (!candidates.length) return 0;
+  // Bound the Sent scan to the candidate window: a Sent copy confirming a
+  // candidate is written at send time, i.e. no earlier than the submission
+  // itself (minus a generous clock-skew margin). Legacy rows without sent_at
+  // stay included so an old confirmation can never be missed by the bound.
+  const oldestCreatedAt = candidates.reduce<string | null>((min, row) => (min === null || row.created_at < min ? row.created_at : min), null) ?? new Date().toISOString();
+  const windowStart = new Date(Date.parse(oldestCreatedAt) - 7 * 86_400_000).toISOString();
   const sentRows = db.prepare(`
     SELECT m.* FROM messages m
     JOIN folders f ON f.account_id = m.account_id AND f.path = m.mailbox
     WHERE m.account_id = ? AND f.special_use = '\\Sent'
-  `).all(accountId) as MessageStorageRow[];
+      AND (m.sent_at IS NULL OR m.sent_at >= ?)
+  `).all(accountId, windowStart) as MessageStorageRow[];
   const sentMessageIds = new Set(sentRows.flatMap((row) => {
     const messageId = messagePayloadForRow(row, masterKey).messageId;
     return messageId ? [messageId] : [];
   }));
   if (!sentMessageIds.size) return 0;
 
-  const candidates = db.prepare(`
-    SELECT * FROM outbound_submissions
-    WHERE account_id = ? AND status IN ('submitted', 'unknown_delivery')
-  `).all(accountId) as StoredSubmission[];
   const confirmed = candidates.filter((row) => sentMessageIds.has(detailsForRow(row, masterKey).rfcMessageId));
   if (!confirmed.length) return 0;
   db.transaction(() => {

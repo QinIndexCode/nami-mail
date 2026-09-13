@@ -25,6 +25,8 @@ export interface DialogKeydownSnapshot {
   addOpen: boolean;
   mobileSidebar: boolean;
   sendingStatusOpen: boolean;
+  translationTermsOpen: boolean;
+  attachmentPreviewOpen: boolean;
   selectedId: string | null;
   selected: boolean;
   /** The message shift+J/K expands from; null until the first expansion. */
@@ -78,7 +80,7 @@ export function dialogKeydownDecision(event: KeyboardEvent, snapshot: DialogKeyd
     if (snapshot.selectedId) return { action: { kind: "close_reader" }, preventDefault: false };
     return null;
   }
-  if (snapshot.settingsOpen || snapshot.calendarOpen || snapshot.contactsOpen || snapshot.templatesOpen || snapshot.accountsOpen || snapshot.sendingStatusOpen || snapshot.composeOpen || snapshot.addOpen || snapshot.mobileSidebar) return null;
+  if (snapshot.settingsOpen || snapshot.calendarOpen || snapshot.contactsOpen || snapshot.templatesOpen || snapshot.accountsOpen || snapshot.sendingStatusOpen || snapshot.composeOpen || snapshot.addOpen || snapshot.mobileSidebar || snapshot.translationTermsOpen || snapshot.attachmentPreviewOpen) return null;
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     return { action: { kind: "focus_search" }, preventDefault: true };
   }
@@ -238,7 +240,11 @@ export function useDialogRouting(): DialogRouting {
   }, []);
   const closeAttachmentPreview = useCallback(() => setAttachmentPreview(null), []);
 
-  const anyModalOpen = addOpen || composeOpen || settingsOpen || contactsOpen || templatesOpen || calendarOpen || accountsOpen || sendingStatusOpen;
+  // The first-run translation-terms gate renders in the same backdrop +
+  // aria-modal shell, so it counts too. Leaving it out kept the toast stack at
+  // its raised z-index while the gate was open, and at narrow widths a toast
+  // painted over "agree and continue" and swallowed the click.
+  const anyModalOpen = addOpen || composeOpen || settingsOpen || contactsOpen || templatesOpen || calendarOpen || accountsOpen || sendingStatusOpen || translationTermsOpen;
   const anyModalOrSidebar = anyModalOpen || mobileSidebar;
 
   return {

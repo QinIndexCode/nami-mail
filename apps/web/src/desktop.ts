@@ -78,6 +78,7 @@ const updateReasons = [
   "mailDataBusy",
   "installerNotStarted",
   "installResult",
+  "installNotApplied",
   "unknown",
 ] as const;
 

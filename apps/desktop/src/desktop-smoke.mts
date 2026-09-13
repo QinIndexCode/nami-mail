@@ -49,6 +49,8 @@ export type DesktopWallpaperSmokeResult = {
   sidebarPanelOpacity: number;
   messagePanelOpacity: number;
   readerPanelOpacity: number;
+  seed?: { patchOk: boolean; patchStatus: number; patchBody: string; preset: string };
+  settingsAfter?: { preset?: string; intensity?: number } | string;
 };
 
 export type DesktopSettingsUiSmokeResult = {
@@ -234,7 +236,8 @@ export type DesktopSmokeHost = {
   getLocalServer: () => {
     url: string;
     getSettings: () => { closeBehavior: CloseBehavior };
-    updateSettings: (patch: { closeBehavior: CloseBehavior }) => { closeBehavior: CloseBehavior };
+    // The service runs in its own process, so a write is a round-trip.
+    updateSettings: (patch: { closeBehavior: CloseBehavior }) => Promise<{ closeBehavior: CloseBehavior }>;
   } | undefined;
   getTray: () => Tray | undefined;
   getAppIcon: () => NativeImage | undefined;
@@ -477,6 +480,50 @@ export async function inspectDesktopWallpaper(): Promise<DesktopWallpaperSmokeRe
   if (!targetWindow) return fallback;
 
   try {
+    // The shipped default is background "none" (plain theme surface), so the
+    // wallpaper path is exercised deliberately here: apply the coast preset
+    // through the local API — the session-level header injection authorizes
+    // this page-scoped fetch — and wait for the element to mount.
+    await targetWindow.webContents.executeJavaScript(`
+      fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ backgroundPreset: "coast", backgroundIntensity: 80 })
+      }).then((response) => response.ok)
+    `);
+    // External settings PATCHes are not broadcast into a running renderer
+    // (nami:settings-changed only fires from desktop-host paths), so the page
+    // reloads to boot with the seeded wallpaper settings. The main-side poll
+    // survives the navigation and waits for the wallpaper element to mount.
+    const seed = await targetWindow.webContents.executeJavaScript(`
+      fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ backgroundPreset: "coast", backgroundIntensity: 80 })
+      }).then(async (response) => ({
+        patchOk: response.ok,
+        patchStatus: response.status,
+        patchBody: (await response.text()).slice(0, 200)
+      })).catch((error) => ({ patchOk: false, patchStatus: 0, patchBody: String(error).slice(0, 200) }))
+    `);
+    // The renderer runs in demo mode, where the client never reads the service's
+    // settings — the PATCH above is kept for diagnostics only. The wallpaper has
+    // to be requested through the URL the demo honours, or the layer never
+    // mounts and this probe would fail for the wrong reason.
+    const wallpaperUrl = new URL(targetWindow.webContents.getURL());
+    wallpaperUrl.searchParams.set("background", "coast");
+    void targetWindow.loadURL(wallpaperUrl.toString());
+    const wallpaperDeadline = Date.now() + 12_000;
+    let wallpaperMounted = false;
+    while (Date.now() < wallpaperDeadline) {
+      await new Promise((resolveTimer) => setTimeout(resolveTimer, 200));
+      try {
+        wallpaperMounted = await targetWindow.webContents.executeJavaScript("Boolean(document.querySelector('.workspace-background'))");
+        if (wallpaperMounted) break;
+      } catch {
+        // Navigation swaps the execution context; retry until the deadline.
+      }
+    }
     // The smoke window stays hidden so it does not interrupt an operator. In
     // that state Chromium can throttle the decorative reveal animation and
     // retain its zero-opacity first keyframe. Finish only that animation so
@@ -526,7 +573,10 @@ export async function inspectDesktopWallpaper(): Promise<DesktopWallpaperSmokeRe
         };
       })()
     `) as DesktopWallpaperSmokeResult;
-    return result;
+    const settingsAfter = await targetWindow.webContents.executeJavaScript(`
+      fetch("/api/settings").then((response) => response.json()).then((settings) => ({ preset: settings.backgroundPreset, intensity: settings.backgroundIntensity })).catch((error) => String(error).slice(0, 120))
+    `);
+    return { ...result, seed, settingsAfter };
   } catch {
     return fallback;
   }
@@ -701,7 +751,7 @@ export async function inspectDesktopDeepDiagnostic(): Promise<DesktopDeepDiagnos
 }
 
 /**
- * Temporary reference-mail chip vs rail overlap sweep. Gated behind
+ * Opt-in reference-mail chip vs rail overlap sweep. Gated behind
  * NAMI_CHIP_OVERLAP_PROBE so the normal smoke run keeps its exact probe
  * sequence; the app is driven through several window widths in both the
  * desktop and the browser layout and every sample records the chip's and
@@ -1120,7 +1170,7 @@ export async function inspectDesktopSettingsSync(): Promise<DesktopSettingsSyncS
 
     // Simulate a setting changed outside React, then use the same focus path
     // as a tray restore to request the authoritative settings again.
-    service.updateSettings({ closeBehavior: "ask" });
+    await service.updateSettings({ closeBehavior: "ask" });
     host.focusMainWindow();
     const restoredCloseBehavior = await waitForCloseBehavior("ask");
     return { initialCloseBehavior, updatedCloseBehavior, restoredCloseBehavior };
@@ -1130,7 +1180,7 @@ export async function inspectDesktopSettingsSync(): Promise<DesktopSettingsSyncS
       error: error instanceof Error ? error.message : "Desktop settings synchronization smoke failed.",
     };
   } finally {
-    service.updateSettings({ closeBehavior: "ask" });
+    await service.updateSettings({ closeBehavior: "ask" });
     targetWindow.webContents.send("nami:settings-changed");
     await targetWindow.webContents.executeJavaScript(`
       document.querySelector('.settings-heading .icon-button')?.click();
@@ -1169,7 +1219,7 @@ export async function inspectDesktopClosePrompt(): Promise<DesktopClosePromptSmo
       simulatedNativeDialogCalls: 0,
       quitRequested: false,
     };
-    service.updateSettings({ closeBehavior: "ask" });
+    await service.updateSettings({ closeBehavior: "ask" });
     host.focusMainWindow();
     closePromptSmokeSession = session;
     try {
@@ -1192,12 +1242,12 @@ export async function inspectDesktopClosePrompt(): Promise<DesktopClosePromptSmo
   };
 
   try {
-    service.updateSettings({ closeBehavior: "ask" });
+    await service.updateSettings({ closeBehavior: "ask" });
     const initialCloseBehavior = service.getSettings().closeBehavior;
     const cancel = await runScenario({ response: 2, checkboxChecked: true });
     const minimizeAndRemember = await runScenario({ response: 0, checkboxChecked: true });
     const quitAndRemember = await runScenario({ response: 1, checkboxChecked: true });
-    service.updateSettings({ closeBehavior: "ask" });
+    await service.updateSettings({ closeBehavior: "ask" });
     targetWindow.webContents.send("nami:settings-changed");
     host.focusMainWindow();
     return {
@@ -1214,7 +1264,7 @@ export async function inspectDesktopClosePrompt(): Promise<DesktopClosePromptSmo
     };
   } finally {
     closePromptSmokeSession = undefined;
-    service.updateSettings({ closeBehavior: "ask" });
+    await service.updateSettings({ closeBehavior: "ask" });
     targetWindow.webContents.send("nami:settings-changed");
     host.focusMainWindow();
   }

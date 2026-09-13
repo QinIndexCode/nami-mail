@@ -35,6 +35,8 @@ export const externalMailReadBounds = {
   flagCharacters: 128,
   specialUseCharacters: 128,
   batchMessages: 10,
+  searchQueryCharacters: 200,
+  searchResults: 20,
 } as const;
 
 export const externalMailThreadIdSchema = z.string().trim().min(1).max(1_024);
@@ -45,19 +47,15 @@ export const externalFoldersListInputSchema = z.object({
   accountId: accountIdSchema,
 }).strict();
 
-export const externalMessagesListInputSchema = z.object({
-  mailbox: z.string().trim().min(1).max(externalMailReadBounds.mailboxCharacters).optional(),
-  unread: z.boolean().optional(),
-  flagged: z.boolean().optional(),
-  sender: z.string().trim().min(1).max(externalMailReadBounds.contactAddressCharacters).optional(),
-  after: z.string().datetime({ offset: true }).optional(),
-  before: z.string().datetime({ offset: true }).optional(),
-  limit: z.number().int().min(1).max(externalMailReadBounds.messageResults).optional(),
-  cursor: z.string().trim().min(1).max(externalMailReadBounds.cursorCharacters).optional(),
-}).strict().superRefine((input, context) => {
-  // Compare actual instants, not text order: an offset-bearing timestamp such
-  // as 2026-07-01T10:00:00+08:00 sorts after 2026-07-01T03:00:00Z lexically
-  // while both denote times on the same day. Date.parse normalizes the offset.
+/**
+ * Compare actual instants, not text order: an offset-bearing timestamp such as
+ * 2026-07-01T10:00:00+08:00 sorts after 2026-07-01T03:00:00Z lexically while
+ * both denote times on the same day. Date.parse normalizes the offset.
+ */
+function validateOrderedRange(
+  input: { after?: string; before?: string },
+  context: z.RefinementCtx,
+): void {
   const after = input.after === undefined ? Number.NaN : Date.parse(input.after);
   const before = input.before === undefined ? Number.NaN : Date.parse(input.before);
   if (Number.isFinite(after) && Number.isFinite(before) && after > before) {
@@ -67,7 +65,35 @@ export const externalMessagesListInputSchema = z.object({
       message: "The before timestamp must not precede the after timestamp.",
     });
   }
-});
+}
+
+export const externalMessagesListInputSchema = z.object({
+  mailbox: z.string().trim().min(1).max(externalMailReadBounds.mailboxCharacters).optional(),
+  unread: z.boolean().optional(),
+  flagged: z.boolean().optional(),
+  sender: z.string().trim().min(1).max(externalMailReadBounds.contactAddressCharacters).optional(),
+  after: z.string().datetime({ offset: true }).optional(),
+  before: z.string().datetime({ offset: true }).optional(),
+  limit: z.number().int().min(1).max(externalMailReadBounds.messageResults).optional(),
+  cursor: z.string().trim().min(1).max(externalMailReadBounds.cursorCharacters).optional(),
+}).strict().superRefine(validateOrderedRange);
+
+/**
+ * Free-text mail search. `query` is matched as a **phrase or single keyword**
+ * (the index does substring matching), not as a boolean expression: passing two
+ * words looks for them adjacent, not for mail containing both.
+ */
+export const externalMessagesSearchInputSchema = z.object({
+  query: z.string().trim().min(1).max(externalMailReadBounds.searchQueryCharacters),
+  accountId: accountIdSchema.optional(),
+  mailbox: z.string().trim().min(1).max(externalMailReadBounds.mailboxCharacters).optional(),
+  subject: z.string().trim().min(1).max(externalMailReadBounds.subjectCharacters).optional(),
+  hasAttachments: z.boolean().optional(),
+  after: z.string().datetime({ offset: true }).optional(),
+  before: z.string().datetime({ offset: true }).optional(),
+  limit: z.number().int().min(1).max(externalMailReadBounds.searchResults).optional(),
+  cursor: z.string().trim().min(1).max(externalMailReadBounds.cursorCharacters).optional(),
+}).strict().superRefine(validateOrderedRange);
 
 export const externalMessageGetInputSchema = z.object({
   messageId: messageIdSchema,
@@ -160,6 +186,19 @@ export const externalFoldersListOutputSchema = z.object({
 export const externalMessagesListOutputSchema = z.object({
   messages: z.array(externalMailMessageMetadataOutputSchema).max(externalMailReadBounds.messageResults),
   nextCursor: z.string().max(externalMailReadBounds.cursorCharacters).optional(),
+  truncated: z.boolean(),
+}).strict();
+
+export const externalMessagesSearchOutputSchema = z.object({
+  query: z.string().max(externalMailReadBounds.searchQueryCharacters),
+  messages: z.array(externalMailMessageMetadataOutputSchema).max(externalMailReadBounds.searchResults),
+  total: z.number().int().nonnegative(),
+  nextCursor: z.string().max(externalMailReadBounds.cursorCharacters).optional(),
+  // How far back the search actually looked, and how current the local copy is.
+  // Without them a caller cannot tell "nothing matched" apart from "not synced
+  // yet" or "outside the window the search applies by default".
+  searchedFrom: externalOutputTextSchema(externalMailReadBounds.timestampCharacters).nullable(),
+  newestLocalAt: externalOutputTextSchema(externalMailReadBounds.timestampCharacters).nullable(),
   truncated: z.boolean(),
 }).strict();
 
@@ -260,6 +299,14 @@ export const externalReadMailContracts = [
     description: "List message metadata inside the paired caller's authorized account scope.",
     inputSchema: externalMessagesListInputSchema,
     outputSchema: externalMessagesListOutputSchema,
+  },
+  {
+    toolName: "messages.search",
+    cliWords: ["messages", "search"],
+    mcpToolName: "namimail_messages_search",
+    description: "Full-text search across local mail (subject, sender, recipients, attachment names and body) inside the paired caller's authorized account scope. The query is matched as a phrase or a single keyword, and each result carries a bounded excerpt centred on it.",
+    inputSchema: externalMessagesSearchInputSchema,
+    outputSchema: externalMessagesSearchOutputSchema,
   },
   {
     toolName: "mail.summarize",

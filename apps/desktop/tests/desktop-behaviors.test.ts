@@ -8,6 +8,7 @@ import {
   extractMailtoUrl,
   nextTrayBadge,
   resolveTrayVisibilityAction,
+  type TrayMenuItem,
 } from "../src/desktop-behaviors.mts";
 
 function callRecorder<T extends (...args: never[]) => unknown>(): { calls: Parameters<T>[]; fn: (...args: Parameters<T>) => void } {
@@ -122,14 +123,22 @@ const trayLabels = {
   quit: "Quit Nami Mail",
 };
 
+/** Narrows a template slot to a real menu entry so assertions stay readable. */
+function trayItem(template: TrayMenuItem[], index: number): { label: string; action: { kind: string } } {
+  const item = template[index];
+  assert.ok(item, `Expected a tray menu entry at index ${index}.`);
+  assert.equal(item.type, "item", `Expected index ${index} to be a menu item, not a separator.`);
+  if (item.type !== "item") throw new Error("unreachable");
+  return item as { label: string; action: { kind: string } };
+}
+
 test("tray menu leads with the visibility toggle whose label follows the window state", () => {
   const visibleTemplate = buildTrayMenuTemplate(trayLabels, true);
-  assert.equal(visibleTemplate[0].type, "item");
-  assert.equal(visibleTemplate[0].type === "item" && visibleTemplate[0].label, trayLabels.hide);
-  assert.deepEqual(visibleTemplate[0].type === "item" && visibleTemplate[0].action, { kind: "toggle-window" });
+  assert.equal(trayItem(visibleTemplate, 0).label, trayLabels.hide);
+  assert.deepEqual(trayItem(visibleTemplate, 0).action, { kind: "toggle-window" });
 
   const hiddenTemplate = buildTrayMenuTemplate(trayLabels, false);
-  assert.equal(hiddenTemplate[0].type === "item" && hiddenTemplate[0].label, trayLabels.show);
+  assert.equal(trayItem(hiddenTemplate, 0).label, trayLabels.show);
 });
 
 test("tray menu offers compose and inbox between the toggle and quit separators", () => {
@@ -138,10 +147,10 @@ test("tray menu offers compose and inbox between the toggle and quit separators"
     template.map((item) => (item.type === "item" ? item.action.kind : item.type)),
     ["toggle-window", "separator", "compose-new", "open-inbox", "separator", "quit"],
   );
-  assert.equal(template[0].type === "item" && template[0].label, "Show Nami Mail");
-  assert.equal(template[2].type === "item" && template[2].label, "New mail");
-  assert.equal(template[3].type === "item" && template[3].label, "Open inbox");
-  assert.equal(template[5].type === "item" && template[5].label, "Quit Nami Mail");
+  assert.equal(trayItem(template, 0).label, "Show Nami Mail");
+  assert.equal(trayItem(template, 2).label, "New mail");
+  assert.equal(trayItem(template, 3).label, "Open inbox");
+  assert.equal(trayItem(template, 5).label, "Quit Nami Mail");
 });
 
 test("resolveTrayVisibilityAction hides a visible window and shows a hidden one", () => {

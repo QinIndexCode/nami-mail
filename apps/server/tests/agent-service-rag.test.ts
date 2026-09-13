@@ -54,6 +54,23 @@ describe("Agent service encrypted state", () => {
     masterKey = undefined;
   });
 
+  it("reports the second retrieval arm's counters alongside the consistency report", async () => {
+    db = openDatabase(":memory:");
+    masterKey = randomBytes(32);
+    insertAccount(db);
+    applyAgentStoreSchema(db, "2026-07-27T10:00:00.000Z");
+    const lifecycle = new AccountLifecycleStore(db, masterKey);
+    const outbox = new AgentSourceEventOutbox(db, masterKey, lifecycle);
+    const service = new AgentService({ db, masterKey, lifecycle, sourceEvents: outbox });
+
+    const report = service.verifyRag();
+
+    // These counters are the evidence needed before widening the second arm, so
+    // the published verification endpoint must carry them even when idle.
+    expect(report.expansion).toEqual({ triggered: 0, recovered: 0, empty: 0 });
+    expect(report.generatedAt).toBeTruthy();
+  });
+
   it("persists provider secrets and conversation metadata in encrypted Agent records", async () => {
     db = openDatabase(":memory:");
     masterKey = randomBytes(32);

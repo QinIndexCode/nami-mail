@@ -248,16 +248,16 @@ async function smokeInstalledMcp(launcher, pathRecord) {
   const toolsListResponse = responses.find((candidate) => candidate?.id === 2 && candidate.result);
   assert.ok(toolsListResponse, "MCP tools/list did not return a result.");
   assert.ok(Array.isArray(toolsListResponse.result.tools), "MCP tools/list must return a tools array.");
-  // The External Mail v1 surface exposes eight read-only tools (accounts,
-  // folders, messages, summarize, message get, batch get, threads,
+  // The External Mail v1 surface exposes nine read-only tools (accounts,
+  // folders, messages list/search, summarize, message get, batch get, threads,
   // attachments) plus seven write tools (draft create/update/delete, move,
   // set-flag, send, reply); the desktop agent-mcp unit test pins the same
-  // fifteen-name contract.
+  // sixteen-name contract.
   const tools = toolsListResponse.result.tools;
   const readTools = tools.filter((tool) => tool?.annotations?.readOnlyHint === true);
   const writeTools = tools.filter((tool) => tool?.annotations?.readOnlyHint === false);
-  assert.equal(tools.length, 15, "MCP tools/list must return exactly fifteen External Mail v1 tools.");
-  assert.equal(readTools.length, 8, "MCP tools/list must return exactly eight read-only tools.");
+  assert.equal(tools.length, 16, "MCP tools/list must return exactly sixteen External Mail v1 tools.");
+  assert.equal(readTools.length, 9, "MCP tools/list must return exactly nine read-only tools.");
   assert.equal(writeTools.length, 7, "MCP tools/list must return exactly seven write tools.");
   assert.equal(
     writeTools.find((tool) => tool?.name === "namimail_draft_delete")?.annotations?.destructiveHint,

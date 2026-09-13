@@ -15,13 +15,14 @@ Nami Mail 外部 Mail v1 是 Windows 桌面版提供的本机、已配对接口�
 
 ## v1 工具面
 
-这 15 项工具（8 个只读 + 7 个写）是外部 Mail v1 的完整能力集。输入对象使用严格 schema，未知字段会被拒绝；首次配对固化的账户 ID 快照决定账户范围，请求参数不能扩大权限。之后新增的账户不可由旧配置文件访问，需撤销并重新配对。
+这 15 项工具（9 个只读 + 7 个写）是外部 Mail v1 的完整能力集。输入对象使用严格 schema，未知字段会被拒绝；首次配对固化的账户 ID 快照决定账户范围，请求参数不能扩大权限。之后新增的账户不可由旧配置文件访问，需撤销并重新配对。
 
 | Tool | CLI | MCP | 严格输入 | Scope |
 | --- | --- | --- | --- | --- |
 | `accounts.list` | `accounts list` | `namimail_accounts_list` | `{}` | `read:accounts` |
 | `folders.list` | `folders list --account <accountId>` | `namimail_folders_list` | `{ "accountId": "..." }` | `read:folders` |
 | `messages.list` | `messages list` | `namimail_messages_list` | 可选 `mailbox`、`unread`、`flagged`、`sender`、`after`、`before`、`limit`、`cursor` | `read:messages` |
+| `messages.search` | `messages search` | `namimail_messages_search` | `query`（必填）、可选 `accountId`、`mailbox`、`subject`、`hasAttachments`、`after`、`before`、`limit`、`cursor` | `read:messages` |
 | `mail.summarize` | `mail summarize` | `namimail_mail_summarize` | 可选 `mailbox`、`unread`、`sender`、`after`、`before`、`limit` | `read:messages` |
 | `messages.get` | `messages get --message <messageId>` | `namimail_message_get` | `{ "messageId": "..." }` | `read:messages` |
 | `messages.batch_get` | `messages batch-get --message <id1,id2,...>` | `namimail_messages_batch_get` | `{ "messageIds": ["...", ...] }`（1..10） | `read:messages` |
@@ -30,7 +31,7 @@ Nami Mail 外部 Mail v1 是 Windows 桌面版提供的本机、已配对接口�
 | `mail.draft.create` | `draft create` | `namimail_draft_create` | `{ "accountId": "...", "to": [{ "address": "...", "name"? }], "cc"?, "subject": "...", "text": "...", "attachmentTokens"? }` | `write:drafts` |
 | `mail.draft.update` | `draft update` | `namimail_draft_update` | `{ "draftId": "...", "accountId": "...", "to": [{ "address": "...", "name"? }], "cc"?, "subject": "...", "text": "...", "attachmentTokens"? }` | `write:drafts` |
 | `mail.draft.delete` | `draft delete` | `namimail_draft_delete` | `{ "accountId": "...", "draftId": "..." }` | `write:drafts` |
-| `messages.move` | `messages move` | `namimail_messages_move` | `{ "messageId": "...", "target": "archive" \| "trash" }` | `write:mail` |
+| `messages.move` | `messages move` | `namimail_messages_move` | `{ "messageId": "...", "target": "archive" \| "trash" }` 或 `{ "messageId": "...", "folder": "<文件夹路径>" }`（二选一） | `write:mail` |
 | `messages.set-flag` | `messages set-flag` | `namimail_messages_set_flag` | `{ "messageId": "...", "flag": "seen" \| "flagged", "value": true \| false }` | `write:mail` |
 | `messages.send` | `messages send` | `namimail_messages_send` | `{ "accountId": "...", "to": [{ "address": "...", "name"? }], "cc"?, "subject": "...", "text": "...", "attachmentTokens"? }` | `write:mail` |
 | `mail.reply` | `mail reply` | `namimail_mail_reply` | `{ "accountId": "...", "messageId": "...", "to"?, "cc"?, "subject"?, "text": "...", "attachmentTokens"? }` | `write:mail` + `read:messages` |
@@ -56,6 +57,7 @@ Nami Mail 外部 Mail v1 是 Windows 桌面版提供的本机、已配对接口�
 | `accounts.list` | `{ "accounts": [...] }` | 每项含 `id`、`email`、`provider`、`displayName`、`status`、`lastSyncedAt`。 |
 | `folders.list` | `{ "folders": [...] }` | 每项含 `accountId`、`path`、`name`、`specialUse`、`total`、`unseen`。 |
 | `messages.list` | `{ "messages": [...], "nextCursor"?, "truncated": boolean }` | 元数据含 `id`、`accountId`、`mailbox`、`threadId`、`subject`、`from`、`sentAt`、`snippet`、`flags`、`hasAttachments`。 |
+| `messages.search` | `{ "query": string, "messages": [...], "total": number, "nextCursor"?, "searchedFrom": string \| null, "newestLocalAt": string \| null, "truncated": boolean }` | 条目与 `messages.list` 同形，但 `snippet` 是以关键词为中心的有界摘要；`searchedFrom` 报告实际生效的时间窗口，`newestLocalAt` 报告本地同步进度。 |
 | `mail.summarize` | `{ "messages": [...], "truncated": boolean }` | 每项含 `messageId`、`threadId`、`mailbox`、`subject`、`from`、`sentAt` 和受限 `excerpt`。 |
 | `messages.get` | `{ "message": { ... } }` | 消息详情在元数据外增加 `to`、`cc`、纯文本 `text` 和 `bodyTruncated`。 |
 | `messages.batch_get` | `{ "messages": [...], "notFound": [...] }` | `messages` 为受限消息详情（1..10 条）；`notFound` 列出无法定位的请求 ID。 |

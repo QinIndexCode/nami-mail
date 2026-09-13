@@ -4,8 +4,22 @@ import { readFileSync } from "node:fs";
 
 const appVersion = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
 
+// The splash logo ships inline as a data URL so the app page's splash paints
+// the logo on its very first frame: an async <img src> re-fetches it after
+// the desktop's native splash hands over, and the logo visibly blinks off and
+// back on (install-test feedback).
+const splashLogoDataUrl = `data:image/png;base64,${readFileSync(new URL("./public/splash-logo.png", import.meta.url)).toString("base64")}`;
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: "nami-splash-logo-inline",
+      transformIndexHtml(html) {
+        return html.replace("__NAMI_SPLASH_LOGO_SRC__", splashLogoDataUrl);
+      },
+    },
+  ],
   test: {
     setupFiles: ["./src/test-setup.ts"],
   },

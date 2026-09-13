@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef } from "react";
 import { useI18n } from "./i18n";
-import { useDialogFocus } from "./useDialogFocus";
-import { useDismissTransition } from "./useDismissTransition";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 
 export type TranslationTermsDialogProps = {
   open: boolean;

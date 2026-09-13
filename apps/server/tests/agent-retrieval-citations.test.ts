@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { CitationRevalidator, SqliteCitationAuthority, type StoredCitationReference } from "../src/agent/citations.js";
 import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
-import { HybridRagRetriever, InMemorySemanticIndex } from "../src/agent/retrieval.js";
+import { HybridRagRetriever, type SemanticRetriever } from "../src/agent/retrieval.js";
 import { applyAgentStoreSchema } from "../src/agent/schema.js";
 import { AgentSourceEventOutbox } from "../src/agent/source-events.js";
 
@@ -84,26 +84,19 @@ describe("citation revalidation and hybrid retrieval", () => {
         ? { accountId: "account-1", accountGeneration: 0, sourceRevision: "revision-1", deleted: false }
         : { accountId: "account-1", accountGeneration: 0, sourceRevision: "revision-1", deleted: true },
     });
-    const semantic = new InMemorySemanticIndex();
-    semantic.upsert({
-      id: "valid-result",
-      accountId: "account-1",
-      accountGeneration: 0,
-      vector: [1, 0],
-      candidate: { id: "valid-result", citation: valid, semanticScore: 1 },
-    });
+    // The second arm is any independent ranker; the fuser only cares about the
+    // rank it returns, not how it was produced.
+    const secondArm: SemanticRetriever = {
+      searchSemantic: async () => [{ id: "valid-result", citation: valid, semanticScore: 1 }],
+    };
     const retriever = new HybridRagRetriever({
       searchMetadata: async () => [
         { id: "valid-result", citation: valid, metadataScore: 1 },
         { id: "stale-result", citation: stale, metadataScore: 0.9 },
       ],
-    }, {
-      searchSemantic: (query, signal) => semantic.searchSemantic({ ...query, vector: [1, 0] }, signal),
-    }, revalidator);
+    }, secondArm, revalidator);
     const results = await retriever.search({ text: "project", filter: { accountIds: ["account-1"] }, limit: 10 });
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ id: "valid-result", citation: { id: "citation-1" } });
-    semantic.removeAccount("account-1");
-    expect(await semantic.searchSemantic({ text: "project", filter: { accountIds: ["account-1"] }, limit: 10, vector: [1, 0] })).toEqual([]);
   });
 });

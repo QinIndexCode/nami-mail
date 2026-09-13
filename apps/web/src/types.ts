@@ -302,7 +302,7 @@ export type CalendarEventInput = {
 
 export type CalendarEventUpdate = Partial<CalendarEventInput>;
 
-export type Stats = { accounts: number; messages: number; unread: number };
+export type Stats = { accounts: number; messages: number; unread: number; starred?: number; snoozed?: number; attachments?: number };
 
 export type AppTheme = "system" | "light" | "dark";
 export type BackgroundPreset = "none" | "paper" | "mist" | "coast" | "dawn" | "night" | "custom";
@@ -379,7 +379,7 @@ export type AppSettings = {
   notificationSound: NotificationSound;
   refreshIntervalSeconds: 30 | 60 | 180 | 300;
   realtimePushEnabled: boolean;
-  /** Per-folder mailbox sync cap: 0 syncs the whole mailbox (Gmail-style, no cap). */
+  /** Per-folder mailbox sync cap: 0 syncs the whole mailbox. */
   syncMessageLimit: 0 | 200 | 500 | 1000 | 2000 | 5000;
   /** The cap actually applied, after the SYNC_MESSAGE_LIMIT environment override. */
   effectiveSyncMessageLimit: number | null;
@@ -395,6 +395,8 @@ export type AppSettings = {
   agentCliAccessLevel: AgentAccessLevel;
   agentMcpAccessLevel: AgentAccessLevel;
   autoReply: AutoReplyConfig;
+  /** True when the stored auto-reply config failed to parse; autoReply carries defaults. Output-only, never patched. */
+  autoReplyInvalid: boolean;
   customBackgroundUrl: string | null;
   updatedAt: string;
 };
@@ -407,8 +409,8 @@ export type AppSettingsPatch = Partial<Pick<
 export const defaultAppSettings: AppSettings = {
   theme: "system",
   locale: "zh-CN",
-  backgroundPreset: "coast",
-  backgroundIntensity: 68,
+  backgroundPreset: "none",
+  backgroundIntensity: 80,
   notificationsEnabled: true,
   notifyWhenFocused: false,
   notificationSound: "soft",
@@ -434,6 +436,7 @@ export const defaultAppSettings: AppSettings = {
     requireConfirmation: true,
     dailyLimitPerAccount: 30,
   },
+  autoReplyInvalid: false,
   customBackgroundUrl: null,
   updatedAt: "",
 };

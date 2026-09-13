@@ -6,6 +6,8 @@ import {
   isLocalApiRequestUrl,
   localApiNoStoreRequestHeaders,
   localApiNoStoreResponseHeaders,
+  rendererCacheClearRequired,
+  skippedRendererCacheCleanup,
 } from "../src/renderer-cache-policy.mts";
 
 test("clears historical HTTP and CacheStorage data without touching authentication or unrelated storage", async () => {
@@ -36,6 +38,7 @@ test("clears historical HTTP and CacheStorage data without touching authenticati
   assert.ok(!result.storageTypesCleared.includes("localstorage" as never));
   assert.ok(!result.storageTypesCleared.includes("indexdb" as never));
 });
+
 test("still performs mandatory cleanup when cache-size diagnostics are unavailable", async () => {
   let clearCacheCalls = 0;
   let clearStorageCalls = 0;
@@ -54,6 +57,29 @@ test("still performs mandatory cleanup when cache-size diagnostics are unavailab
   assert.equal(clearStorageCalls, 1);
   assert.equal(result.cacheSizeBefore, null);
   assert.equal(result.cacheSizeAfter, null);
+});
+
+test("version gating clears when the persisted version is missing (first run)", () => {
+  assert.equal(rendererCacheClearRequired(null, "0.3.0"), true);
+});
+
+test("version gating clears when the persisted version differs (upgrade)", () => {
+  assert.equal(rendererCacheClearRequired("0.2.3", "0.3.0"), true);
+});
+
+test("version gating skips when the persisted version matches the current build", () => {
+  assert.equal(rendererCacheClearRequired("0.3.0", "0.3.0"), false);
+});
+
+test("version gating treats an empty persisted version as absent", () => {
+  assert.equal(rendererCacheClearRequired("", "0.3.0"), true);
+});
+
+test("skipped cleanup reports that no cache surface was touched", () => {
+  assert.equal(skippedRendererCacheCleanup.httpCacheCleared, false);
+  assert.deepEqual(skippedRendererCacheCleanup.storageTypesCleared, []);
+  assert.equal(skippedRendererCacheCleanup.cacheSizeBefore, null);
+  assert.equal(skippedRendererCacheCleanup.cacheSizeAfter, null);
 });
 
 test("replaces conflicting cache headers while preserving content and authentication headers", () => {

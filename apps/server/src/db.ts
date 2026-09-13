@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type Database from "better-sqlite3";
 import { loadDatabaseConstructor } from "./native-sqlite.js";
+import { MESSAGE_FTS_SCHEMA_SQL } from "./message-search.js";
 
 export type DatabaseHandle = Database.Database;
 
@@ -210,8 +211,8 @@ CREATE TABLE IF NOT EXISTS data_migrations (
 CREATE TABLE IF NOT EXISTS app_settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   theme TEXT NOT NULL DEFAULT 'system' CHECK (theme IN ('system', 'light', 'dark')),
-  background_preset TEXT NOT NULL DEFAULT 'coast' CHECK (background_preset IN ('none', 'paper', 'mist', 'coast', 'dawn', 'night', 'custom')),
-  background_intensity INTEGER NOT NULL DEFAULT 68 CHECK (background_intensity BETWEEN 0 AND 80),
+  background_preset TEXT NOT NULL DEFAULT 'none' CHECK (background_preset IN ('none', 'paper', 'mist', 'coast', 'dawn', 'night', 'custom')),
+  background_intensity INTEGER NOT NULL DEFAULT 80 CHECK (background_intensity BETWEEN 0 AND 100),
   notifications_enabled INTEGER NOT NULL DEFAULT 1 CHECK (notifications_enabled IN (0, 1)),
   notify_when_focused INTEGER NOT NULL DEFAULT 0 CHECK (notify_when_focused IN (0, 1)),
   notification_sound TEXT NOT NULL DEFAULT 'soft' CHECK (notification_sound IN ('system', 'soft', 'bright', 'none')),
@@ -355,7 +356,7 @@ CREATE INDEX IF NOT EXISTS idx_calendar_events_end ON calendar_events(end_at);
 CREATE TABLE IF NOT EXISTS operation_queue (
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('move', 'batch-move', 'flags')),
+  kind TEXT NOT NULL CHECK (kind IN ('move', 'batch-move', 'flags', 'flags-push')),
   payload_json TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed')),
   attempt_count INTEGER NOT NULL DEFAULT 0,
@@ -374,18 +375,13 @@ CREATE INDEX IF NOT EXISTS idx_operation_queue_account
 
 -- Full-text search over the decrypted message payload. The messages table keeps
 -- the encrypted envelope; this FTS5 table holds the plaintext searchable text
--- (subject, sender, body) so substring/token matching never needs to decrypt
--- the whole candidate set. It is maintained from application code at payload
--- write time, rebuilt on migration for legacy rows, and pruned by the delete
--- trigger below (which also covers ON DELETE CASCADE from accounts).
-CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-  subject,
-  from_name,
-  from_address,
-  body,
-  message_id UNINDEXED,
-  tokenize = 'trigram'
-);
+-- (subject, sender, recipients, attachment names, body) so substring/token
+-- matching never needs to decrypt the whole candidate set. It is maintained
+-- from application code at payload write time, pruned by the delete trigger
+-- below (which also covers ON DELETE CASCADE from accounts), and rebuilt for
+-- legacy rows by ensureMessageFtsIndex. The DDL is shared with message-search
+-- so an older table missing the v2 columns can be recreated identically.
+${MESSAGE_FTS_SCHEMA_SQL}
 
 -- Keep the search index aligned when messages disappear through any delete
 -- path, including a cascading account deletion.
@@ -426,9 +422,22 @@ export function openDatabase(databasePath: string): DatabaseHandle {
       + "). Please update Nami Mail before opening it.",
     );
   }
-  migrateDatabase(db);
-  if (currentSchemaVersion < SCHEMA_VERSION) {
-    writeSchemaVersion.run(String(SCHEMA_VERSION));
+  // Migrations and the schema-version stamp are one unit of work: SQLite
+  // applies DDL transactionally, so a failure part-way through rolls the file
+  // back to its pre-migration state instead of leaving half-applied columns,
+  // indexes or a half-rebuilt table behind for the next launch to trip over.
+  try {
+    db.transaction(() => {
+      migrateDatabase(db);
+      if (currentSchemaVersion < SCHEMA_VERSION) {
+        writeSchemaVersion.run(String(SCHEMA_VERSION));
+      }
+    })();
+  } catch (error) {
+    // Never leak the handle: on Windows an open connection keeps the database
+    // file locked, so a failed migration would also break the next launch.
+    try { db.close(); } catch { /* already closed */ }
+    throw error;
   }
   return db;
 }
@@ -482,6 +491,12 @@ function migrateDatabase(db: DatabaseHandle): void {
     // exactly once, matching the pre-column decrypt-and-check behavior.
     db.exec("ALTER TABLE messages ADD COLUMN payload_metadata_ready INTEGER");
   }
+  if (!messageColumns.some((column) => column.name === "pending_flags_push")) {
+    // Write-behind flags: 1 while a locally-committed flag change still waits
+    // for its background IMAP STORE. The sync path must not overwrite
+    // flags_json from the (stale) remote while the marker is set.
+    db.exec("ALTER TABLE messages ADD COLUMN pending_flags_push INTEGER");
+  }
   if (!messageColumns.some((column) => column.name === "cc_json")) {
     // Keep legacy rows NULL so the next normal sync can hydrate their Cc
     // recipients instead of silently treating the missing field as empty.
@@ -523,6 +538,10 @@ function migrateDatabase(db: DatabaseHandle): void {
     db.exec("ALTER TABLE messages ADD COLUMN snoozed_until TEXT");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_snoozed_until ON messages(snoozed_until) WHERE snoozed_until IS NOT NULL");
+  // Partial index for the cross-folder Attachments view and its sidebar
+  // count: only attachment-carrying rows are indexed, so both stay cheap no
+  // matter how large the mailbox grows.
+  db.exec("CREATE INDEX IF NOT EXISTS idx_messages_has_attachments ON messages(has_attachments) WHERE has_attachments = 1");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_account_mailbox_remote_id ON messages(account_id, mailbox, remote_id_lookup)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_pending_move_remote_id ON messages(account_id, pending_move_destination, remote_id_lookup)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_pending_move_candidate ON messages(account_id, pending_move_destination, pending_move_candidate_uid)");
@@ -599,7 +618,7 @@ function migrateDatabase(db: DatabaseHandle): void {
   // user set on purpose are left untouched.
   db.prepare("UPDATE app_settings SET agent_tool_round_limit = 30 WHERE agent_tool_round_limit = 15").run();
   if (!settingsColumns.some((column) => column.name === "sync_message_limit")) {
-    // Per-folder mailbox sync cap: 0 = whole mailbox (Gmail-style, no cap).
+    // Per-folder mailbox sync cap: 0 syncs the whole mailbox.
     // The CHECK mirrors the UI picker ladder in settings.ts. The default never
     // existed in the database before (the old 200 lived in the environment), so
     // the ALTER's DEFAULT covers every upgrading row without a follow-up update.
@@ -619,6 +638,122 @@ function migrateDatabase(db: DatabaseHandle): void {
   // write capabilities by the upgrade (the SQLite CHECK still permits the old
   // value, so the UPDATE passes; new writes only ever use the three levels).
   db.exec("UPDATE app_settings SET agent_access_level = 'read-only' WHERE agent_access_level = 'draft-only'");
+
+  // The background intensity range widened from 0-80 to 0-100 together with
+  // the "no background" shipped default. SQLite cannot ALTER a CHECK
+  // constraint, so databases still carrying the old 0-80 table rebuild into
+  // the current shape once. The INSERT/SELECT column lists are written out
+  // literally: every column of the current schema is guaranteed to exist on
+  // the legacy table by the ALTER blocks above, and selecting by name keeps
+  // the copy correct regardless of the legacy table's column order.
+  const APP_SETTINGS_INTENSITY_MIGRATION_ID = "app_settings_intensity_check_0_100";
+  const intensityMigrationDone = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?").get(APP_SETTINGS_INTENSITY_MIGRATION_ID);
+  if (!intensityMigrationDone) {
+    const appSettingsSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'").get() as { sql?: string } | undefined)?.sql ?? "";
+    if (appSettingsSql.includes("background_intensity BETWEEN 0 AND 80")) {
+      db.prepare(`
+        CREATE TABLE app_settings_rebuilt (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          theme TEXT NOT NULL DEFAULT 'system' CHECK (theme IN ('system', 'light', 'dark')),
+          background_preset TEXT NOT NULL DEFAULT 'none' CHECK (background_preset IN ('none', 'paper', 'mist', 'coast', 'dawn', 'night', 'custom')),
+          background_intensity INTEGER NOT NULL DEFAULT 80 CHECK (background_intensity BETWEEN 0 AND 100),
+          notifications_enabled INTEGER NOT NULL DEFAULT 1 CHECK (notifications_enabled IN (0, 1)),
+          notify_when_focused INTEGER NOT NULL DEFAULT 0 CHECK (notify_when_focused IN (0, 1)),
+          notification_sound TEXT NOT NULL DEFAULT 'soft' CHECK (notification_sound IN ('system', 'soft', 'bright', 'none')),
+          refresh_interval_seconds INTEGER NOT NULL DEFAULT 60 CHECK (refresh_interval_seconds IN (30, 60, 180, 300)),
+          realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1)),
+          sync_message_limit INTEGER NOT NULL DEFAULT 2000 CHECK (sync_message_limit IN (0, 200, 500, 1000, 2000, 5000)),
+          close_behavior TEXT NOT NULL DEFAULT 'ask' CHECK (close_behavior IN ('ask', 'tray', 'quit')),
+          launch_at_startup INTEGER NOT NULL DEFAULT 0 CHECK (launch_at_startup IN (0, 1)),
+          global_shortcut_enabled INTEGER NOT NULL DEFAULT 0 CHECK (global_shortcut_enabled IN (0, 1)),
+          locale TEXT NOT NULL DEFAULT 'zh-CN',
+          translation_configuration TEXT,
+          translation_configuration_version INTEGER NOT NULL DEFAULT 0,
+          agent_tool_round_limit INTEGER NOT NULL DEFAULT 30 CHECK (agent_tool_round_limit BETWEEN 1 AND 50),
+          list_density TEXT NOT NULL DEFAULT 'comfortable' CHECK (list_density IN ('comfortable', 'compact')),
+          avatar_gravatar_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_gravatar_enabled IN (0, 1)),
+          agent_access_level TEXT NOT NULL DEFAULT 'send-confirmed' CHECK (agent_access_level IN ('read-only', 'send-confirmed', 'full-access')),
+          agent_cli_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_cli_access_level IN ('read-only', 'send-confirmed', 'full-access')),
+          agent_mcp_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_mcp_access_level IN ('read-only', 'send-confirmed', 'full-access')),
+          custom_background_filename TEXT,
+          auto_reply_config TEXT,
+          builtin_templates_seeded INTEGER NOT NULL DEFAULT 0 CHECK (builtin_templates_seeded IN (0, 1)),
+          updated_at TEXT NOT NULL
+        )
+      `).run();
+      db.prepare(`
+        INSERT INTO app_settings_rebuilt (
+          id, theme, background_preset, background_intensity, notifications_enabled,
+          notify_when_focused, notification_sound, refresh_interval_seconds,
+          realtime_push_enabled, sync_message_limit, close_behavior, launch_at_startup,
+          global_shortcut_enabled, locale, translation_configuration,
+          translation_configuration_version, agent_tool_round_limit, list_density,
+          avatar_gravatar_enabled, agent_access_level, agent_cli_access_level,
+          agent_mcp_access_level, custom_background_filename, auto_reply_config,
+          builtin_templates_seeded, updated_at
+        )
+        SELECT
+          id, theme, background_preset, background_intensity, notifications_enabled,
+          notify_when_focused, notification_sound, refresh_interval_seconds,
+          realtime_push_enabled, sync_message_limit, close_behavior, launch_at_startup,
+          global_shortcut_enabled, locale, translation_configuration,
+          translation_configuration_version, agent_tool_round_limit, list_density,
+          avatar_gravatar_enabled, agent_access_level, agent_cli_access_level,
+          agent_mcp_access_level, custom_background_filename, auto_reply_config,
+          builtin_templates_seeded, updated_at
+        FROM app_settings
+      `).run();
+      db.prepare("DROP TABLE app_settings").run();
+      db.prepare("ALTER TABLE app_settings_rebuilt RENAME TO app_settings").run();
+    }
+    db.prepare(`
+      INSERT INTO data_migrations (id, completed_at) VALUES (?, ?)
+      ON CONFLICT(id) DO UPDATE SET completed_at = excluded.completed_at
+    `).run(APP_SETTINGS_INTENSITY_MIGRATION_ID, new Date().toISOString());
+  }
+
+  // Write-behind flags pushes add a fourth operation kind. Databases created
+  // before it carried a CHECK constraint that would reject the row, so the
+  // table is rebuilt in place (rows preserved verbatim) exactly once.
+  const OPERATION_QUEUE_PUSH_MIGRATION_ID = "operation_queue_flags_push_kind";
+  const opQueueMigrationDone = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?").get(OPERATION_QUEUE_PUSH_MIGRATION_ID);
+  if (!opQueueMigrationDone) {
+    const opQueueSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'operation_queue'").get() as { sql?: string } | undefined)?.sql ?? "";
+    if (opQueueSql && !opQueueSql.includes("'flags-push'")) {
+      db.exec(`
+        CREATE TABLE operation_queue_rebuilt (
+          id TEXT PRIMARY KEY,
+          account_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('move', 'batch-move', 'flags', 'flags-push')),
+          payload_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          error_code TEXT,
+          error_message TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          completed_at TEXT,
+          FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+        );
+        INSERT INTO operation_queue_rebuilt (
+          id, account_id, kind, payload_json, status, attempt_count,
+          error_code, error_message, created_at, updated_at, completed_at
+        )
+        SELECT
+          id, account_id, kind, payload_json, status, attempt_count,
+          error_code, error_message, created_at, updated_at, completed_at
+        FROM operation_queue;
+        DROP TABLE operation_queue;
+        ALTER TABLE operation_queue_rebuilt RENAME TO operation_queue;
+        CREATE INDEX IF NOT EXISTS idx_operation_queue_ready ON operation_queue(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_operation_queue_account ON operation_queue(account_id, status, created_at);
+      `);
+    }
+    db.prepare(`
+      INSERT INTO data_migrations (id, completed_at) VALUES (?, ?)
+      ON CONFLICT(id) DO UPDATE SET completed_at = excluded.completed_at
+    `).run(OPERATION_QUEUE_PUSH_MIGRATION_ID, new Date().toISOString());
+  }
 
   // Built-in mail templates: the app ships with a few starter templates. Older
   // databases created the table without the builtin column; upgrading rows as

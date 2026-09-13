@@ -52,11 +52,13 @@ const webConfirmationVerifier: TrustedDesktopConfirmationVerifier = Object.freez
 import { applyAgentStoreSchema } from "./agent/schema.js";
 import { AgentSourceEventOutbox } from "./agent/source-events.js";
 import { buildApp } from "./app.js";
+import { startCacheCleanupTimer } from "./image-proxy.js";
 import { config } from "./config.js";
 import { loadOrCreateMasterKey } from "./crypto.js";
 import { openDatabase, type DatabaseHandle } from "./db.js";
 import { ServerEventBus, emitAccountSynced, emitSettingsChanged } from "./events.js";
 import { createIdleWatcher, type IdleWatcher } from "./idle.js";
+import { serverLog, setServerLogger } from "./logging.js";
 import { OAuthService } from "./oauth.js";
 import { cleanupExpiredOutboundAttachments, outboundAttachmentDirectory } from "./outbound-attachments.js";
 import { getAppSettings, getSyncMessageLimit, updateAppSettings, type AppSettings, type AppSettingsPatch } from "./settings.js";
@@ -128,6 +130,23 @@ export type ServerRuntimeOptions = {
    * development hosts omit it and fall back to the unset-token loopback rule.
    */
   localApiAccessToken?: string;
+  /**
+   * Desktop-only startup instrumentation. Fired for each measured phase inside
+   * startServer so the desktop can fold server-side timings into its own
+   * startup-timings.json. Elapsed is measured from startServer entry.
+   */
+  onStartupTiming?: (stage: string, elapsedMs: number) => void;
+  /**
+   * Fired whenever app settings are persisted, whichever path made the change
+   * (the settings route, the Agent settings tool, or this runtime's own
+   * updateSettings). The desktop host runs the service in a separate process
+   * and mirrors settings into a synchronous cache for native menus and
+   * notifications, so it needs to hear about changes it did not initiate.
+   *
+   * Implemented as a bus subscription, which is the one funnel every settings
+   * write already goes through.
+   */
+  onSettingsChanged?: () => void;
 };
 
 export type SyncScheduler = {
@@ -302,7 +321,19 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
       closed = true;
       if (timer) clearTimeout(timer);
       timer = undefined;
-      await activeSync;
+      // A running poll pass performs network IMAP work and must not delay
+      // shutdown: give it a short grace window, then stop waiting. The pass
+      // re-checks `closed` before any new work and its DB writes are
+      // transactional, so abandoning the wait is safe for the final close().
+      if (activeSync) {
+        await Promise.race([
+          activeSync,
+          new Promise<void>((resolve) => {
+            const grace = setTimeout(resolve, 750);
+            grace.unref?.();
+          }),
+        ]);
+      }
     },
   };
 }
@@ -319,10 +350,17 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
   let autoReplyEngine: AutoReplyEngine | undefined;
   const translationAbortController = new AbortController();
   const scheduledSendAbortController = new AbortController();
+  // Startup instrumentation: fold per-phase timings into the desktop's
+  // startup-timings.json via onStartupTiming (if provided).
+  const startupPhaseStart = performance.now();
+  const noteStartupPhase = (stage: string): void => {
+    options.onStartupTiming?.(stage, Math.round(performance.now() - startupPhaseStart));
+  };
 
   try {
     const database = openDatabase(config.databasePath);
     db = database;
+    noteStartupPhase("server:open-database");
     const runtimeMasterKey = options.masterKey ? Buffer.from(options.masterKey) : loadOrCreateMasterKey(config.masterKeyPath);
     if (runtimeMasterKey.length !== 32) throw new Error("Master key must be exactly 32 bytes.");
     masterKey = runtimeMasterKey;
@@ -331,10 +369,17 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     migrateAccountCredentialStorage(database, runtimeMasterKey);
     migrateKnownProviderUsernameCredentials(database, runtimeMasterKey);
     applyAgentStoreSchema(database);
+    noteStartupPhase("server:migrations");
     // The settings tool needs to broadcast changes over SSE and decide whether
     // a "custom" background preset is selectable, so the bus and the background
     // directory are resolved before the Agent service is constructed.
     const serverEvents = new ServerEventBus();
+    if (options.onSettingsChanged) {
+      const onSettingsChanged = options.onSettingsChanged;
+      serverEvents.subscribe((event) => {
+        if (event.type === "settings.changed") onSettingsChanged();
+      });
+    }
     const backgroundDirectory = path.join(path.dirname(config.databasePath), "backgrounds");
     const customBackgroundPattern = /^custom-background-[a-f0-9-]+\.(jpg|png|webp)$/;
     const agentLifecycle = new AccountLifecycleStore(database, runtimeMasterKey);
@@ -349,6 +394,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       syncMessageLimit: getSyncMessageLimit(database),
       outboundAttachmentDirectory: outboundAttachmentDirectory({}),
     });
+    noteStartupPhase("server:mail-application");
     agentService = new AgentService({
       db: database,
       masterKey: runtimeMasterKey,
@@ -360,7 +406,9 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       ...(options.desktopConfirmation ? { desktopConfirmation: options.desktopConfirmation } : {}),
       ...(options.externalConfirmation ? { externalConfirmation: options.externalConfirmation } : {}),
     });
+    noteStartupPhase("server:agent-service-construct");
     agentService.start();
+    noteStartupPhase("server:agent-service-start");
     const autoReplyConfirmationAuthority = options.desktopConfirmation ?? {
       capability: webConfirmationCapability,
       verifier: webConfirmationVerifier,
@@ -386,11 +434,12 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       onEvent: options.onAutoReplyEvent,
     });
     registerAutoReplyEngine(autoReplyEngine);
+    noteStartupPhase("server:auto-reply-engine");
     const outboundDirectory = outboundAttachmentDirectory({});
     try {
       cleanupExpiredOutboundAttachments(database, outboundDirectory);
     } catch (error) {
-      console.warn("Nami Mail could not clean stale outbound attachments", error);
+      serverLog.warn({}, "Nami Mail could not clean stale outbound attachments", error);
     }
     const broadcastNewInboxMessages = (messages: NewInboxMessage[]) => {
       if (!messages.length) return;
@@ -437,13 +486,16 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       try {
         newInboxMessages.push(...releaseDueSnoozedMessages(database, runtimeMasterKey));
       } catch (error) {
-        fastify.log.warn({ error }, "Could not release due snoozed messages");
+        // `fastify` is declared after this closure: logging through serverLog
+        // (and, for the error itself, under `err`) keeps a pass that runs during
+        // construction from hitting the temporal dead zone.
+        serverLog.warn({}, "Could not release due snoozed messages", error);
       }
       if (newInboxMessages.length && options.onNewInboxMessages) {
         try {
           await options.onNewInboxMessages(newInboxMessages);
         } catch (error) {
-          fastify.log.warn({ error }, "New-mail notification callback failed");
+          serverLog.warn({}, "New-mail notification callback failed", error);
         }
       }
       broadcastNewInboxMessages(newInboxMessages);
@@ -458,19 +510,19 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
             scheduleSentSubmissionVerification(database, runtimeMasterKey, submissionId, oauthService, {
               abortSignal: scheduledSendAbortController.signal,
               onDeferred: (error) => {
-                fastify.log.info({ submissionId, error }, "Scheduled-send Sent verification deferred");
+                serverLog.info({ submissionId }, "Scheduled-send Sent verification deferred", error);
               },
             });
           },
           onFailure: (submissionId, error) => {
-            fastify.log.error({ submissionId, error }, "Scheduled send failed");
+            serverLog.error({ submissionId }, "Scheduled send failed", error);
           },
         });
         if (outcome.submitted || outcome.failed) {
-          fastify.log.info({ ...outcome }, "Scheduled send pass completed");
+          serverLog.info({ ...outcome }, "Scheduled send pass completed");
         }
       } catch (error) {
-        fastify.log.error({ error }, "Scheduled-send pass failed");
+        serverLog.error({}, "Scheduled-send pass failed", error);
       }
     };
 
@@ -493,11 +545,11 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
             }
             emitAccountSynced(database, serverEvents, accountId);
           } catch (error) {
-            fastify.log.warn({ accountId, error }, "IDLE-triggered mailbox sync failed");
+            serverLog.warn({ accountId }, "IDLE-triggered mailbox sync failed", error);
           }
         })();
       },
-      log: { warn: (message, meta) => fastify.log.warn(meta ?? {}, message) },
+      log: { warn: (message, meta) => serverLog.warn(meta ?? {}, message) },
     });
 
     const runtimeContext: RuntimeContext = {
@@ -520,8 +572,13 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     const fastify = await buildApp(runtimeContext, {
       localApiAccessToken: options.localApiAccessToken?.trim() || config.localApiAccessToken || undefined,
       translationAbortSignal: translationAbortController.signal,
+      onStartupTiming: options.onStartupTiming,
     });
     app = fastify;
+    // Background modules log through the facade; from here on their lines carry
+    // the same pid/level shape as request logs instead of plain console output.
+    setServerLogger(fastify.log);
+    noteStartupPhase("server:build-app");
 
     scheduler = createSyncScheduler({
       getIntervalSeconds: () => getAppSettings(database).refreshIntervalSeconds,
@@ -530,6 +587,8 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     });
 
     await fastify.listen({ host: config.host, port: config.port });
+    noteStartupPhase("server:listen");
+    startCacheCleanupTimer();
     const address = fastify.server.address();
     if (!address || typeof address === "string") {
       throw new Error("Nami Mail local service did not provide a TCP address.");
@@ -545,11 +604,15 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
         fastify.log.warn({ error }, "Microsoft OAuth callback bridge unavailable");
       }
     }
+    noteStartupPhase("server:startServer-complete");
 
     const close = () => {
       closePromise ??= (async () => {
         translationAbortController.abort();
         scheduledSendAbortController.abort();
+        // Stop routing background logs into an app that is being torn down; the
+        // facade falls back to stderr for anything that still reports.
+        setServerLogger(undefined);
         try {
           await closeMicrosoftOAuthCallbackBridge(microsoftOAuthCallbackBridge);
         } finally {

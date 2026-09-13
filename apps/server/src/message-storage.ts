@@ -6,6 +6,19 @@ export const MESSAGE_PAYLOAD_VERSION = 1;
 export const MAX_ENCRYPTED_SEARCH_CANDIDATES = 5_000;
 export const PENDING_MOVE_RECONCILIATION_ERROR = "邮件正在同步移动后的新位置，请稍后重试。";
 export const MOVE_LOCATION_UNVERIFIED_ERROR = "邮件已移动，但邮箱服务器未提供可验证的新位置。请刷新目标文件夹后再修改邮件或下载附件。";
+/**
+ * The account is busy (a mailbox sync pass or another move is in flight) and the
+ * wait budget ran out. Deliberately distinct from the two messages above:
+ * nothing is wrong with this message, the operation only has to wait its turn,
+ * and a retry is expected to succeed.
+ */
+export const MAILBOX_SYNCING_ERROR = "邮箱正在同步，请稍后重试。";
+/**
+ * A previous move on the same account is still dispatching. Kept separate from
+ * MAILBOX_SYNCING_ERROR so a report of "the delete failed" can be traced to the
+ * right condition without re-deriving it from the database.
+ */
+export const MAIL_MOVE_IN_FLIGHT_ERROR = "上一条移动操作仍在处理中，请稍后重试。";
 
 const MESSAGE_MIGRATION_ID = "message-payload-v1";
 const ATTACHMENT_KINDS_MIGRATION_ID = "attachment-kinds-v1";
@@ -20,6 +33,7 @@ export type StoredAttachmentMetadata = {
   size: number;
   related: boolean;
   disposition: "attachment" | "inline";
+  contentId?: string;
 };
 
 /**
@@ -237,8 +251,13 @@ export function encryptMessagePayload(masterKey: Buffer, id: string, accountId: 
 // changes the ciphertext, and the full ciphertext in the key forces a fresh
 // authenticated decrypt instead of a stale hit. Callers treat payloads as
 // read-only, so the cached object is shared.
-const PAYLOAD_CACHE_MAX_ENTRIES = 128;
-const PAYLOAD_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+// Sizing against a real 2400-message mailbox (avg payload ~48KB): the old
+// 128-entry/16MB bounds held only ~340 rows, so every silent refresh
+// re-decrypted the visible page inside the Electron main process (measured
+// 258-426ms per GET /api/messages). 512/64MB keeps several views' pages hot;
+// the cache is plaintext and stays in process memory only.
+const PAYLOAD_CACHE_MAX_ENTRIES = 512;
+const PAYLOAD_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const payloadCache = new Map<string, { payload: MessagePayload; bytes: number }>();
 let payloadCacheBytes = 0;
 

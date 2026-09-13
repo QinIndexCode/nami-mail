@@ -1,12 +1,11 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, powerMonitor, safeStorage, session, shell, Tray, type NativeImage } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeTheme, Notification, powerMonitor, safeStorage, session, shell, type NativeImage } from "electron";
 import { parse as parseDotenv } from "dotenv";
-import type { AgentResponseEnvelope, BrokerJsonValue, CallerContext, ExternalPairingSummary } from "@nami/agent-contracts";
 import { createHash, randomBytes } from "node:crypto";
-import { exec, spawn as nodeSpawn } from "node:child_process";
-import { writeFileSync, existsSync, createReadStream } from "node:fs";
+import { spawn as nodeSpawn } from "node:child_process";
+import { readFileSync, writeFileSync, existsSync, createReadStream } from "node:fs";
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { desktopLocalConfigurationFiles } from "./local-configuration.mjs";
 import { minimalSpawnEnvironment } from "./spawn-environment.mjs";
 import {
@@ -14,24 +13,25 @@ import {
   isLocalApiRequestUrl,
   localApiNoStoreRequestHeaders,
   localApiNoStoreResponseHeaders,
+  rendererCacheClearRequired,
+  skippedRendererCacheCleanup,
   type RendererCacheCleanupResult,
 } from "./renderer-cache-policy.mjs";
 import { nativeText, type NativeCopyKey, type NativeTranslationValues } from "./native-localization.mjs";
 import {
   applyGlobalShortcut as applyGlobalShortcutPolicy,
   applyLaunchAtStartup as applyLaunchAtStartupPolicy,
-  applyTrayBadge as applyTrayBadgePolicy,
-  buildTrayMenuTemplate,
   extractMailtoUrl,
   FOCUS_GLOBAL_SHORTCUT_ACCELERATOR,
-  nextTrayBadge,
   type GlobalShortcutApi,
   type LaunchAtStartupApi,
-  type TrayBadgeEvent,
-  type TrayIconApi,
-  type TrayMenuAction,
 } from "./desktop-behaviors.mjs";
+// The tray icon, badge, menu and visibility flag live here now (see tray.mts).
+import { createTrayController, loadDesktopIcon } from "./tray.mjs";
 import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
+import { DesktopDiagnostics, formatConsoleArgs, serializeRuntimeError } from "./desktop-diagnostics.mjs";
+import { openInBrowser as openExternalUrl, isHttpUrl } from "./desktop-external-open.mjs";
+import { playCustomNotificationSound } from "./desktop-notification-sound.mjs";
 import {
   getClosePromptSmokeSession,
   getDesktopSmokeDiagnostics,
@@ -72,38 +72,13 @@ import { runDesktopCli } from "./agent/cli-entry.mjs";
 import {
   agentConfirmationIpcChannel,
   createAgentConfirmationIpcHandler,
-  type AgentConfirmationDecision,
 } from "./agent/confirmation-ipc.mjs";
-
-type RunningServer = {
-  url: string;
-  invokeExternalAgentTool: (input: {
-    requestId: string;
-    caller: CallerContext;
-    toolName: string;
-    input: unknown;
-  }) => Promise<AgentResponseEnvelope<BrokerJsonValue>>;
-  listExternalPairingAccountIds: () => string[];
-  resolveAgentConfirmation?: (confirmationId: string, decision: AgentConfirmationDecision) => Promise<unknown>;
-  getSettings: () => {
-    locale: string;
-    notificationsEnabled: boolean;
-    notifyWhenFocused: boolean;
-    notificationSound: NotificationSound;
-    closeBehavior: CloseBehavior;
-    launchAtStartup: boolean;
-    globalShortcutEnabled: boolean;
-  };
-  updateSettings: (patch: { closeBehavior: CloseBehavior }) => { closeBehavior: CloseBehavior };
-  close: () => Promise<void>;
-};
-
-type DesktopConfirmationRuntimeOptions = Readonly<{
-  capability: unknown;
-  verifier: Readonly<{
-    verify: (input: unknown) => Readonly<{ principalId: string; surfaceId: string }> | undefined;
-  }>;
-}>;
+import {
+  createServerBridgeClient,
+  type ServerBridgeHandle,
+  type ServerStartParams,
+} from "./server-bridge.mjs";
+import { forkServerProcess, type ServerProcessHandle } from "./server-process.mjs";
 
 type ExternalConfirmationRuntimeOptions = Readonly<{
   request: (input: {
@@ -117,17 +92,8 @@ type ExternalConfirmationRuntimeOptions = Readonly<{
   }) => Promise<"approve" | "reject">;
 }>;
 
-type ServerRuntimeModule = {
-  startServer: (options?: {
-    onNewInboxMessages?: (messages: NewMailPayload[]) => void;
-    onAutoReplyEvent?: (event: DesktopAutoReplyEvent) => void;
-    masterKey?: Buffer;
-    localApiAccessToken?: string;
-    desktopConfirmation?: DesktopConfirmationRuntimeOptions;
-    externalConfirmation?: ExternalConfirmationRuntimeOptions;
-    listExternalPairings?: () => Promise<ExternalPairingSummary[]>;
-  }) => Promise<RunningServer>;
-};
+/** Payload the service sends back over the bridge for a confirmation request. */
+type ExternalConfirmationInput = Parameters<ExternalConfirmationRuntimeOptions["request"]>[0];
 
 type NewMailPayload = {
   id: string;
@@ -168,33 +134,20 @@ type NativeNotificationPayload = {
   silent: boolean;
 };
 
-type NotificationSound = "system" | "soft" | "bright" | "none";
-
 let mainWindow: BrowserWindow | undefined;
-let localServer: RunningServer | undefined;
-// This capability never crosses IPC, preload, HTTP, or persistent storage.
-const desktopConfirmationCapability = Symbol("nami-desktop-confirmation");
-const desktopConfirmationVerifier: DesktopConfirmationRuntimeOptions["verifier"] = Object.freeze({
-  verify: (input: unknown) => {
-    if (!input || typeof input !== "object") return undefined;
-    const candidate = input as {
-      capability?: unknown;
-      caller?: { kind?: unknown; interactive?: unknown };
-      confirmationId?: unknown;
-      requestId?: unknown;
-      operation?: unknown;
-    };
-    if (
-      candidate.capability !== desktopConfirmationCapability
-      || candidate.caller?.kind !== "desktop-ui"
-      || candidate.caller?.interactive !== true
-      || typeof candidate.confirmationId !== "string"
-      || typeof candidate.requestId !== "string"
-      || (candidate.operation !== "record-decision" && candidate.operation !== "consume-approval")
-    ) return undefined;
-    return { principalId: "nami-desktop-main", surfaceId: "nami-main-window" };
-  },
-});
+let localServer: ServerBridgeHandle | undefined;
+// The local mail service runs in an Electron utility process: SQLite's
+// synchronous native calls, IMAP round-trips, payload decryption and the Agent
+// loop no longer share the event loop that paints the window (measured before
+// the split: 258-426ms of main-thread work per list request, 16s flag batches).
+let serverProcess: ServerProcessHandle | undefined;
+// Set before an intentional kill so the exit hook does not report a healthy
+// shutdown as a crash.
+let serverProcessExpectedExit = false;
+// The desktop confirmation capability is minted *inside* the service process
+// (see server-host.mts): a Symbol cannot cross the structured-clone boundary,
+// and it only ever needs to distinguish the service's own UI call path from a
+// web caller — a property that is local to the process by definition.
 
 /**
  * Native-dialog bridge for paired CLI/MCP write confirmations. The request has
@@ -228,8 +181,9 @@ function createExternalConfirmationBridge(): ExternalConfirmationRuntimeOptions 
     },
   };
 }
-let tray: Tray | undefined;
 let appIcon: NativeImage | undefined;
+// The window's visibility mirror now lives inside the tray controller, which is
+// the only thing that reads it (see tray.mts).
 let isQuitting = false;
 let shutdownPromise: Promise<void> | undefined;
 let closePromptPending = false;
@@ -445,6 +399,13 @@ const smokeResultPath = process.env.NAMI_MAIL_SMOKE_RESULT_PATH?.trim()
 const smokeProgressPath = process.env.NAMI_MAIL_SMOKE_PROGRESS_PATH?.trim()
   ? path.resolve(process.env.NAMI_MAIL_SMOKE_PROGRESS_PATH)
   : undefined;
+// Probe code ships inside the asar (there is no bundler to shake it out), so
+// the activation gate must stay narrow: both the unpackaged smoke harness and
+// the release pipeline's installer smoke set NAMI_MAIL_SMOKE plus a dedicated
+// result path, and the probes only ever read from that path.
+// The gate must stay env-scoped: the release pipeline's installer smoke
+// (scripts/smoke-package.mjs) legitimately runs the *installed* app, where
+// app.isPackaged is true — an `!app.isPackaged` hardening broke it.
 const isDesktopSmoke = process.env.NAMI_MAIL_SMOKE === "1" && Boolean(smokeResultPath);
 initializeDesktopSmoke({
   smokeResultPath,
@@ -453,19 +414,77 @@ initializeDesktopSmoke({
   appUserModelId,
   getMainWindow: () => mainWindow,
   getLocalServer: () => localServer,
-  getTray: () => tray,
+  getTray: () => trayController.getTray(),
   getAppIcon: () => appIcon,
   loadAppIcon: loadDesktopIcon,
-  focusMainWindow,
-  ensureTray,
-  destroyTray,
+  focusMainWindow: () => trayController.focusWindow(),
+  ensureTray: () => trayController.ensure(),
+  destroyTray: () => trayController.destroy(),
   requestMainWindowClose,
   rememberCloseBehavior,
   redact: (message) => (localApiAccessToken ? message.replaceAll(localApiAccessToken, "[redacted]") : message),
 });
 const desktopLoopbackPort = "0";
-const desktopShutdownTimeoutMs = 8_000;
+const desktopShutdownTimeoutMs = 2_000;
 const desktopUpdateCloseTimeoutMs = 30_000;
+// Startup/shutdown timing and crash logging live in desktop-diagnostics.mts.
+// Every write there is bounded and best-effort: the smoke harness runs with an
+// isolated data directory and cannot reveal where a real launch spends its
+// time, and a field failure must leave evidence without ever breaking boot.
+const desktopDiagnostics = new DesktopDiagnostics();
+let desktopDiagnosticsInstalled = false;
+
+/**
+ * Crash and log capture for the packaged app. Installed once per boot; console
+ * output is mirrored because that is how the in-process service reports errors.
+ */
+function installDesktopRuntimeDiagnostics(): void {
+  if (desktopDiagnosticsInstalled) return;
+  desktopDiagnosticsInstalled = true;
+
+  const originalError = console.error.bind(console);
+  const originalWarn = console.warn.bind(console);
+  console.error = (...args: unknown[]) => {
+    desktopDiagnostics.appendRuntimeLog("console.error", { message: formatConsoleArgs(args) });
+    originalError(...args);
+  };
+  console.warn = (...args: unknown[]) => {
+    desktopDiagnostics.appendRuntimeLog("console.warn", { message: formatConsoleArgs(args) });
+    originalWarn(...args);
+  };
+
+  process.on("uncaughtException", (error) => {
+    desktopDiagnostics.appendRuntimeLog("uncaught-exception", serializeRuntimeError(error));
+    originalError("Uncaught exception:", error);
+    // Process state is unknown after an uncaught exception: stop deliberately
+    // rather than keep syncing and sending mail from a half-built runtime.
+    try {
+      dialog.showErrorBox(
+        "Nami Mail stopped unexpectedly",
+        "Nami Mail hit an unrecoverable error and will close. Details were written to runtime-log.jsonl in the Nami Mail user data folder.",
+      );
+    } catch {
+      // A dialog must never block shutdown.
+    }
+    app.quit();
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    desktopDiagnostics.appendRuntimeLog("unhandled-rejection", serializeRuntimeError(reason));
+  });
+
+  app.on("render-process-gone", (_event, _contents, details) => {
+    desktopDiagnostics.appendRuntimeLog("render-process-gone", { reason: details.reason, exitCode: details.exitCode });
+  });
+
+  app.on("child-process-gone", (_event, details) => {
+    desktopDiagnostics.appendRuntimeLog("child-process-gone", {
+      type: details.type,
+      reason: details.reason,
+      exitCode: details.exitCode,
+    });
+  });
+}
 async function loadDesktopLocalConfiguration(): Promise<void> {
   // The installed app cannot rely on a project-root .env. Restrict the
   // user-data file to public OAuth settings and non-secret translation
@@ -491,6 +510,27 @@ async function loadDesktopLocalConfiguration(): Promise<void> {
   }
 }
 
+// Persists the app version whose renderer cache was last cleared so a version
+// bump still triggers the one-time stale-cache purge while identical launches
+// skip it entirely. Both helpers are best-effort: a missing/corrupt marker just
+// re-enables the clear once for that boot.
+function readRendererCacheClearedVersion(filePath: string): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as { version?: unknown };
+    return typeof parsed.version === "string" && parsed.version.length > 0 ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRendererCacheClearedVersion(filePath: string, version: string): void {
+  try {
+    writeFileSync(filePath, JSON.stringify({ version }), "utf8");
+  } catch {
+    // A failed persist only re-clears the cache once on the next launch.
+  }
+}
+
 function configureLocalService(): void {
   const dataDirectory = path.join(app.getPath("userData"), "data");
   // This is a process-only capability. It is never written to userData,
@@ -513,44 +553,6 @@ function clearLocalApiAccessToken(): void {
   localApiAccessToken = undefined;
 }
 
-function applyTrayBadge(event: TrayBadgeEvent): void {
-  try {
-    applyTrayBadgePolicy(trayIconApi, nextTrayBadge(event));
-  } catch (error) {
-    // Tray icon APIs vary by desktop session; a failure must not take the
-    // mail client down with it.
-    console.warn("Nami Mail could not update its tray icon", error);
-  }
-}
-
-function setTrayIcon(icon: NativeImage | undefined): void {
-  if (!tray || tray.isDestroyed() || !icon) return;
-  tray.setImage(icon);
-}
-
-let trayBadgeIcon: NativeImage | undefined;
-
-function loadTrayBadgeIcon(): NativeImage | undefined {
-  if (trayBadgeIcon) return trayBadgeIcon;
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, "tray-badge-icon.png")
-    : path.join(app.getAppPath(), "build", "tray-badge-icon.png");
-  const icon = nativeImage.createFromPath(iconPath);
-  if (icon.isEmpty()) {
-    // Older installs do not ship the badge variant; the tray then keeps the
-    // plain icon and the new-mail dot is simply not shown.
-    console.warn(`Nami Mail tray badge icon could not be loaded: ${iconPath}`);
-    return undefined;
-  }
-  trayBadgeIcon = icon;
-  return icon;
-}
-
-const trayIconApi: TrayIconApi = {
-  setBadgeIcon: () => setTrayIcon(loadTrayBadgeIcon()),
-  setPlainIcon: () => setTrayIcon(appIcon ?? loadDesktopIcon()),
-};
-
 function applyLaunchAtStartup(enabled: boolean): void {
   try {
     applyLaunchAtStartupPolicy(launchAtStartupApi, enabled);
@@ -567,7 +569,7 @@ function applyGlobalShortcut(enabled: boolean): void {
       globalShortcutApi,
       enabled,
       FOCUS_GLOBAL_SHORTCUT_ACCELERATOR,
-      () => focusMainWindow(),
+      () => trayController.focusWindow(),
     );
     if (!registered) {
       console.warn(`Nami Mail could not register ${FOCUS_GLOBAL_SHORTCUT_ACCELERATOR} as a global shortcut.`);
@@ -589,29 +591,6 @@ function applyDesktopSettingsFromServer(): void {
   }
 }
 
-function focusMainWindow(): void {
-  if (!mainWindow) return;
-  if (tray && !tray.isDestroyed()) refreshTrayMenu(tray);
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
-  mainWindow.webContents.send("nami:settings-changed");
-}
-
-function loadDesktopIcon(): NativeImage {
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, "icon.ico")
-    : path.join(app.getAppPath(), "build", "icon.ico");
-  const icon = nativeImage.createFromPath(iconPath);
-  if (icon.isEmpty()) throw new Error(`Nami Mail icon could not be loaded: ${iconPath}`);
-  return icon;
-}
-
-function destroyTray(): void {
-  if (tray && !tray.isDestroyed()) tray.destroy();
-  tray = undefined;
-}
-
 function currentNativeLocale(): string | undefined {
   try {
     return localServer?.getSettings().locale;
@@ -624,80 +603,20 @@ function nativeCopy(key: NativeCopyKey, values?: NativeTranslationValues): strin
   return nativeText(currentNativeLocale(), key, values);
 }
 
-function refreshTrayMenu(targetTray: Tray): void {
-  targetTray.setToolTip(nativeCopy("trayTooltip"));
-  const template = buildTrayMenuTemplate(
-    {
-      hide: nativeCopy("trayHide"),
-      show: nativeCopy("trayShow"),
-      newMail: nativeCopy("trayNewMail"),
-      inbox: nativeCopy("trayInbox"),
-      quit: nativeCopy("trayQuit"),
-    },
-    mainWindow?.isVisible() ?? false,
-  );
-  targetTray.setContextMenu(Menu.buildFromTemplate(template.map((item) => {
-    if (item.type === "separator") return { type: "separator" as const };
-    return { label: item.label, click: () => runTrayAction(item.action) };
-  })));
-}
-
-function runTrayAction(action: TrayMenuAction): void {
-  switch (action.kind) {
-    case "toggle-window": {
-      // Both branches refresh the menu (hide via ensureTray, show via
-      // focusMainWindow), so the visibility label stays accurate.
-      if (mainWindow?.isVisible()) hideMainWindowToTray();
-      else focusMainWindow();
-      break;
-    }
-    case "compose-new":
-      focusMainWindow();
-      mainWindow?.webContents.send("nami:compose-new");
-      break;
-    case "open-inbox":
-      focusMainWindow();
-      mainWindow?.webContents.send("nami:open-inbox");
-      break;
-    case "quit":
-      app.quit();
-      break;
-  }
-}
-
-function ensureTray(): Tray {
-  if (tray && !tray.isDestroyed()) {
-    refreshTrayMenu(tray);
-    return tray;
-  }
-  const nextTray = new Tray(appIcon ?? loadDesktopIcon());
-  refreshTrayMenu(nextTray);
-  nextTray.on("click", focusMainWindow);
-  nextTray.on("double-click", focusMainWindow);
-  nextTray.on("right-click", () => refreshTrayMenu(nextTray));
-  tray = nextTray;
-  return nextTray;
-}
-
-function hideMainWindowToTray(): boolean {
-  if (!mainWindow) return false;
-  try {
-    ensureTray();
-    mainWindow.hide();
-    return true;
-  } catch (error) {
-    console.error("Nami Mail could not create its tray icon", error);
-    dialog.showErrorBox(
-      nativeCopy("trayFailureTitle"),
-      nativeCopy("trayFailureMessage"),
-    );
-    return false;
-  }
-}
+// The tray owns its icon, badge, menu and the maintained visibility flag;
+// everything it needs from the rest of the app arrives through these accessors
+// (see tray.mts).
+const trayController = createTrayController({
+  getMainWindow: () => mainWindow,
+  getAppIcon: () => appIcon,
+  loadAppIcon: loadDesktopIcon,
+  copy: nativeCopy,
+  showError: (title, message) => dialog.showErrorBox(title, message),
+});
 
 async function rememberCloseBehavior(closeBehavior: CloseBehavior): Promise<void> {
   if (!localServer) throw new Error("Nami Mail local service is not available.");
-  localServer.updateSettings({ closeBehavior });
+  await localServer.updateSettings({ closeBehavior });
   mainWindow?.webContents.send("nami:settings-changed");
 }
 
@@ -744,7 +663,7 @@ async function askHowToClose(): Promise<void> {
     if (result.response === 2) return;
 
     const closeBehavior: CloseBehavior = result.response === 0 ? "tray" : "quit";
-    if (closeBehavior === "tray" && !hideMainWindowToTray()) return;
+    if (closeBehavior === "tray" && !trayController.hideWindowToTray()) return;
     if (result.checkboxChecked) {
       try {
         await rememberCloseBehavior(closeBehavior);
@@ -768,7 +687,7 @@ async function requestMainWindowClose(event: Pick<Electron.Event, "preventDefaul
     return;
   }
   if (closeBehavior === "tray") {
-    hideMainWindowToTray();
+    trayController.hideWindowToTray();
     return;
   }
   await askHowToClose();
@@ -778,31 +697,45 @@ function handleMainWindowClose(event: Electron.Event): void {
   void requestMainWindowClose(event);
 }
 
+/**
+ * Terminates the local-service utility process. Called after a graceful
+ * `close()` round-trip, and unconditionally on the teardown/update paths so a
+ * service that failed to answer can never outlive the window.
+ */
+function stopLocalServerProcess(): void {
+  serverProcessExpectedExit = true;
+  serverProcess?.kill();
+  serverProcess = undefined;
+}
+
 function closeLocalServerForExit(): Promise<void> {
   if (shutdownPromise) return shutdownPromise;
   const server = localServer;
   shutdownPromise = (async () => {
     let timeout: NodeJS.Timeout | undefined;
     try {
-      await closeDesktopAgentBroker().catch((error) => {
+      // Broker and server shutdown run in parallel, both bounded by the same
+      // overall budget: a hung agent request or a stuck server.close() must
+      // never keep the process from exiting.
+      const brokerClosed = closeDesktopAgentBroker().catch((error) => {
         console.error("Nami Mail Agent Broker shutdown failed", error);
       });
-      if (server) {
-        await Promise.race([
-          server.close(),
-          new Promise<never>((_resolve, reject) => {
-            timeout = setTimeout(() => reject(new Error(`Desktop shutdown exceeded ${desktopShutdownTimeoutMs} ms.`)), desktopShutdownTimeoutMs);
-            timeout.unref?.();
-          }),
-        ]);
-      }
+      const serverClosed = server ? server.close() : undefined;
+      await Promise.race([
+        Promise.all([brokerClosed, serverClosed]),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error(`Desktop shutdown exceeded ${desktopShutdownTimeoutMs} ms.`)), desktopShutdownTimeoutMs);
+          timeout.unref?.();
+        }),
+      ]);
     } catch (error) {
       console.error("Nami Mail shutdown failed", error);
     } finally {
       if (timeout) clearTimeout(timeout);
       localServer = undefined;
+      stopLocalServerProcess();
       clearLocalApiAccessToken();
-      destroyTray();
+      trayController.destroy();
     }
   })();
   return shutdownPromise;
@@ -812,6 +745,13 @@ function shutdownLocalServerAndQuit(): void {
   if (isQuitting) return;
   desktopAgentBrokerRecoveryGate = "closed";
   isQuitting = true;
+  // Close the window before tearing the local service down. The renderer
+  // keeps a long-lived SSE stream open to /api/events and fastify.close()
+  // waits for open connections, so leaving the window alive would stall the
+  // teardown until the shutdown budget expires. Destroying it (destroy()
+  // bypasses the close handler that routes back into this path) also makes
+  // the window disappear immediately instead of freezing during teardown.
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
   void closeLocalServerForExit().finally(() => app.quit());
 }
 
@@ -846,8 +786,9 @@ async function prepareLocalServerForUpdateInstall(): Promise<boolean> {
     }
     setDesktopAgentBroker(undefined);
     localServer = undefined;
+    stopLocalServerProcess();
     clearLocalApiAccessToken();
-    destroyTray();
+    trayController.destroy();
     isQuitting = true;
     desktopAgentBrokerRecoveryGate = "closed";
     return true;
@@ -882,53 +823,9 @@ function quitForUpdateInstall(): void {
   app.quit();
 }
 
-function isHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:";
-  } catch {
-    return false;
-  }
-}
-
-let cachedSystemBrowser: string | null | undefined;
-
-function resolveChromePath(): Promise<string | null> {
-  const candidates = [
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe") : "",
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return Promise.resolve(candidate);
-  }
-  return new Promise((resolve) => {
-    exec('reg query "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe" /ve', { env: minimalSpawnEnvironment() }, (error, stdout) => {
-      if (error || !stdout) {
-        resolve(null);
-        return;
-      }
-      const match = /REG_SZ\s+(.+)\r?$/.exec(stdout.trim());
-      resolve(match ? match[1]!.trim() : null);
-    });
-  });
-}
-
-/**
- * Opens external URLs in a real browser. On Windows the OAuth authorization
- * page is handed to Chrome when installed (matching the "log in with
- * Google" flow), falling back to the OS default browser otherwise.
- */
-async function openInBrowser(url: string): Promise<void> {
-  if (process.platform === "win32") {
-    if (cachedSystemBrowser === undefined) cachedSystemBrowser = await resolveChromePath();
-    if (cachedSystemBrowser !== null) {
-      const child = nodeSpawn(cachedSystemBrowser, [url], { detached: true, env: minimalSpawnEnvironment(), stdio: "ignore" });
-      child.unref();
-      return;
-    }
-  }
-  await shell.openExternal(url);
+/** Opens external URLs through the shared opener, which prefers Chrome on Windows. */
+function openInBrowser(url: string): Promise<void> {
+  return openExternalUrl(url, { openExternal: (target) => shell.openExternal(target) });
 }
 
 function isLocalAppUrl(value: string): boolean {
@@ -1021,115 +918,6 @@ function normalizeVerificationCode(value: unknown): string | undefined {
   return typeof value === "string" && /^\d{4,8}$/.test(value) ? value : undefined;
 }
 
-// --- Main-process notification sound playback ---
-// The renderer's Web Audio API can only play when the window is focused and
-// the AudioContext has been unlocked by a user gesture. New-mail notifications
-// almost always arrive when the window is NOT focused, so the custom sound
-// never plays and Windows falls back to its default. To fix this, we generate
-// WAV files in the main process and play them via a system command, which
-// works regardless of window focus or AudioContext state.
-
-type ToneSpec = { freq: number; start: number; duration: number; volume: number };
-
-const softTones: ToneSpec[] = [
-  { freq: 659.25, start: 0.025, duration: 0.23, volume: 0.055 },
-  { freq: 783.99, start: 0.145, duration: 0.34, volume: 0.042 },
-];
-
-const brightTones: ToneSpec[] = [
-  { freq: 880, start: 0.025, duration: 0.14, volume: 0.06 },
-  { freq: 1174.66, start: 0.125, duration: 0.18, volume: 0.052 },
-  { freq: 1567.98, start: 0.245, duration: 0.28, volume: 0.04 },
-];
-
-/** Generates a 16-bit PCM mono WAV buffer for the given tone specification. */
-function generateNotificationSoundWav(sound: "soft" | "bright"): Buffer {
-  const sampleRate = 44100;
-  const tones = sound === "soft" ? softTones : brightTones;
-  const totalDuration = Math.max(...tones.map((t) => t.start + t.duration)) + 0.03;
-  const totalSamples = Math.ceil(totalDuration * sampleRate);
-  const dataSize = totalSamples * 2; // 16-bit mono
-
-  const samples = new Float32Array(totalSamples);
-  for (const tone of tones) {
-    const startSample = Math.floor(tone.start * sampleRate);
-    const durationSamples = Math.floor(tone.duration * sampleRate);
-    const fadeSamples = Math.floor(0.015 * sampleRate);
-    for (let i = 0; i < durationSamples; i++) {
-      const idx = startSample + i;
-      if (idx >= totalSamples) break;
-      const t = i / sampleRate;
-      // Exponential envelope: ramp up over 15ms, then ramp down to silence.
-      let envelope: number;
-      if (i < fadeSamples) {
-        envelope = 0.0001 * Math.pow(tone.volume / 0.0001, i / fadeSamples);
-      } else {
-        const progress = (i - fadeSamples) / (durationSamples - fadeSamples);
-        envelope = tone.volume * Math.pow(0.0001 / tone.volume, progress);
-      }
-      samples[idx] = (samples[idx] ?? 0) + Math.sin(2 * Math.PI * tone.freq * t) * envelope;
-    }
-  }
-
-  const buffer = Buffer.alloc(44 + dataSize);
-  buffer.write("RIFF", 0);
-  buffer.writeUInt32LE(36 + dataSize, 4);
-  buffer.write("WAVE", 8);
-  buffer.write("fmt ", 12);
-  buffer.writeUInt32LE(16, 16);
-  buffer.writeUInt16LE(1, 20); // PCM
-  buffer.writeUInt16LE(1, 22); // mono
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(sampleRate * 2, 28); // byte rate
-  buffer.writeUInt16LE(2, 32); // block align
-  buffer.writeUInt16LE(16, 34); // bits per sample
-  buffer.write("data", 36);
-  buffer.writeUInt32LE(dataSize, 40);
-  for (let i = 0; i < totalSamples; i++) {
-    const s = Math.max(-1, Math.min(1, samples[i] ?? 0));
-    buffer.writeInt16LE(Math.round(s * 32767), 44 + i * 2);
-  }
-  return buffer;
-}
-
-const soundFilePathCache: Partial<Record<"soft" | "bright", string>> = {};
-
-/** Lazily generates and caches the WAV file for the given sound. */
-function getNotificationSoundFile(sound: "soft" | "bright"): string | undefined {
-  const cached = soundFilePathCache[sound];
-  if (cached) return cached;
-  try {
-    const filePath = path.join(tmpdir(), `nami-notification-${sound}.wav`);
-    if (!existsSync(filePath)) {
-      const wav = generateNotificationSoundWav(sound);
-      writeFileSync(filePath, wav);
-    }
-    soundFilePathCache[sound] = filePath;
-    return filePath;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Plays a notification sound from the main process using a system command. */
-function playCustomNotificationSound(sound: "soft" | "bright"): void {
-  const filePath = getNotificationSoundFile(sound);
-  if (!filePath) return;
-  // Escape single quotes for shell safety.
-  const safePath = filePath.replace(/'/g, `'\\''`);
-  let command: string;
-  if (process.platform === "win32") {
-    // PowerShell SoundPlayer.PlaySync blocks until the sound finishes, but
-    // exec runs it in a child process so the main process is not blocked.
-    command = `powershell -NoProfile -NonInteractive -Command "(New-Object Media.SoundPlayer '${safePath}').PlaySync()"`;
-  } else if (process.platform === "darwin") {
-    command = `afplay '${safePath}'`;
-  } else {
-    command = `aplay '${safePath}' 2>/dev/null || paplay '${safePath}' 2>/dev/null`;
-  }
-  exec(command, { env: minimalSpawnEnvironment() }, () => undefined);
-}
-
 function showNativeNotification(payload: NativeNotificationPayload, onClick?: () => void): boolean {
   if (!Notification.isSupported()) return false;
   try {
@@ -1153,7 +941,7 @@ function notifyNewMail(messages: NewMailPayload[]): void {
   // The tray dot marks "new mail while away" independently of the alert
   // settings: it lights only when the window is not focused and clears as
   // soon as the window is focused again.
-  applyTrayBadge({ type: "new-mail", windowFocused: mainWindow?.isFocused() ?? false });
+  trayController.applyBadge({ type: "new-mail", windowFocused: mainWindow?.isFocused() ?? false });
   // The renderer still needs a new-mail event to refresh its local list when
   // alerts are disabled. shouldAlert only controls user-facing interruption.
   const shouldAlert = settings.notificationsEnabled && (!mainWindow?.isFocused() || settings.notifyWhenFocused);
@@ -1192,7 +980,7 @@ function notifyNewMail(messages: NewMailPayload[]): void {
     body,
     silent: notificationSound === "none" || useMainProcessCustomSound,
   }, () => {
-    focusMainWindow();
+    trayController.focusWindow();
     mainWindow?.webContents.send("nami:open-message", first.id);
   });
 }
@@ -1202,14 +990,81 @@ function notifyAutoReplyEvent(event: DesktopAutoReplyEvent): void {
   mainWindow?.webContents.send("nami:auto-reply", event);
 }
 
-async function createMainWindow(): Promise<void> {
-  if (!localServer) throw new Error("Nami Mail local service was not started.");
+// Resolved by the shell's ready-to-show so boot can yield to the renderer
+// before the service's synchronous startup work claims the main thread.
+let resolveSplashPresented: (() => void) | undefined;
+
+// Waits for the native splash to actually reach the screen (ready-to-show),
+// bounded by budgetMs: frame presentation is scheduled by the main process,
+// so once the service's migrations and agent construction hog the main
+// thread, a not-yet-presented splash stays a blank surface for seconds
+// (measured ~3s on a real profile). The bounded wait keeps a degraded launch
+// from stalling when the signal never arrives.
+function waitForSplashPresentation(budgetMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      resolveSplashPresented = undefined;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(settle, budgetMs);
+    timer.unref?.();
+    resolveSplashPresented = settle;
+  });
+}
+
+// The web app's inline splash (apps/web/index.html) paints #ececef in light
+// mode and #1a1a1e in dark mode; the native splash mirrors that surface, the
+// logo/wordmark row and the dark variants, so navigating from the native
+// splash to the app URL never flashes a different frame.
+function nativeSplashUrl(): string {
+  const dark = nativeTheme.shouldUseDarkColors;
+  const surfaceColor = dark ? "#1a1a1e" : "#ececef";
+  const wordmarkColor = dark ? "#e8e8ec" : "#2b2b30";
+  const dividerColor = dark ? "rgba(200,200,210,.2)" : "rgba(128,128,128,.25)";
+  let logoBase64 = "";
+  try {
+    // The splash logo ships inside the packaged web dist (the local service
+    // serves it from there), so one relative path resolves in dev and in the
+    // packaged asar alike: <app>/apps/desktop/dist -> <app>/apps/web/dist.
+    const logo = readFileSync(path.join(import.meta.dirname, "../../web/dist/splash-logo.png"));
+    logoBase64 = logo.toString("base64");
+  } catch {
+    // A missing logo still leaves a faithful wordmark splash.
+  }
+  const image = logoBase64 ? `<img class="logo" src="data:image/png;base64,${logoBase64}" alt=""/>` : "";
+  const html = `<!doctype html><html><head><meta charset="utf-8"/><style>
+html,body{margin:0;height:100%}
+body{display:flex;align-items:center;justify-content:center;background:${surfaceColor}}
+.content{display:flex;align-items:center;justify-content:center}
+.logo{width:64px;height:64px}
+.divider{width:1px;height:30px;margin-left:14px;background:${dividerColor}}
+.wordmark{margin-left:14px;font-family:"Segoe UI Variable","Segoe UI",system-ui,sans-serif;font-size:25px;font-weight:400;letter-spacing:.3px;color:${wordmarkColor}}
+</style></head><body><div class="content">${image}<span class="divider"></span><span class="wordmark">Nami Mail</span></div></body></html>`;
+  return `data:text/html;base64,${Buffer.from(html, "utf8").toString("base64")}`;
+}
+
+// Creates the window and shows the native splash immediately. This runs before
+// the local service exists so the launch paints the app surface in well under
+// a second instead of staying dark for the whole server boot;
+// `loadMainWindowApp` navigates to the real app once the service is up.
+async function createMainWindowShell(): Promise<void> {
+  desktopDiagnostics.appendStartupLog("main-window-create-start", desktopDiagnostics.elapsedMs, "main");
 
   // Windows/Linux draw their own window bar (the web app's WindowBar with
   // minimize/maximize/close buttons), so the OS frame is dropped. macOS keeps
   // the native traffic lights behind a hidden title bar; the renderer reserves
   // a leading slot for them and draws no controls.
   const frameless = process.platform !== "darwin";
+  // The renderer's splash overlay (apps/web/index.html) paints #ececef in
+  // light mode and #1a1a1e in dark mode. Matching the native window surface
+  // to that exact color prevents a white/black flash between the OS frame
+  // paint and the splash's first render, which is what users see as a flicker
+  // right as the window appears.
+  const splashSurfaceColor = nativeTheme.shouldUseDarkColors ? "#1a1a1e" : "#ececef";
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -1223,7 +1078,7 @@ async function createMainWindow(): Promise<void> {
     show: false,
     title: "Nami Mail",
     icon: appIcon,
-    backgroundColor: "#ececef",
+    backgroundColor: splashSurfaceColor,
     autoHideMenuBar: true,
     ...(frameless
       ? { frame: false }
@@ -1233,22 +1088,50 @@ async function createMainWindow(): Promise<void> {
       nodeIntegration: false,
       sandbox: true,
       preload: path.join(import.meta.dirname, "preload.cjs"),
-      // The smoke window is intentionally hidden. Keep its polling probes on
-      // their normal timer cadence without changing production window behavior.
-      backgroundThrottling: !isDesktopSmoke,
+      // Never throttle the renderer when the window loses focus. With
+      // Chromium's default background throttling the SSE event handlers (and
+      // the poll fallback) queue up while the window is hidden and then flood
+      // the main thread the instant focus returns, producing a visible
+      // multi-second freeze. A mail client has to stay responsive in the
+      // background anyway, so keep timers and rAF on their normal cadence.
+      backgroundThrottling: false,
     },
   });
 
   mainWindow.setMenuBarVisibility(false);
-  // CSS image loads do not pass through the renderer's fetch wrapper. The
-  // session-level injection covers those API resources without ever placing
-  // the capability in a URL.
-  installLocalApiHeaderInjection(mainWindow);
+  // Show the shell immediately: the window surface is the splash color, so
+  // the first thing the user sees is the splash surface instead of a
+  // multi-second void. Gating the show on ready-to-show is wrong on real
+  // profiles — the local service's synchronous migrations and agent
+  // construction hold the main-process event loop for seconds, delaying the
+  // show IPC long after the renderer painted the splash (measured 5.9s vs
+  // 0.5s on a cold real profile). The renderer paints and updates the visible
+  // window independently of the busy main process.
+  if (!smokeExitDelay) {
+    mainWindow.show();
+    trayController.setWindowVisible(true);
+  }
   mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
     if (!smokeResultPath) return;
     noteDesktopSmokeDiagnostic(`Preload ${preloadPath}: ${error.message}`);
   });
   mainWindow.webContents.on("console-message", (event) => {
+    // Renderer startup instrumentation: the web app logs "[nami-startup] <stage>"
+    // markers at its key milestones (React mounted, first data load done, splash
+    // dismissed). Forward them into the same startup log so a slow renderer boot
+    // can be dissected alongside the main/server stages. Renderer content is
+    // untrusted for sizing: cap a single line so one huge console message
+    // cannot bloat the file and stall the next boot's synchronous prune.
+    if (typeof event.message === "string" && event.message.startsWith("[nami-startup]")) {
+      const stage = event.message.slice("[nami-startup]".length).trim().slice(0, 512);
+      desktopDiagnostics.appendStartupLog(stage, desktopDiagnostics.elapsedMs, "renderer");
+    }
+    if (typeof event.message === "string" && event.message.startsWith("[nami-perf]")) {
+      // Renderer perf telemetry (slow spans / api calls / commits / long
+      // tasks) lands in the runtime log so a janky session can be dissected
+      // after the fact instead of being observed only in a live console.
+      desktopDiagnostics.appendRuntimeLog("renderer-perf", { message: event.message.slice(0, 512) });
+    }
     if (!smokeResultPath || !["warning", "error"].includes(event.level)) return;
     noteDesktopSmokeDiagnostic(`Renderer ${event.level}: ${event.message}`);
   });
@@ -1262,7 +1145,12 @@ async function createMainWindow(): Promise<void> {
     if (isHttpUrl(url)) void openInBrowser(url);
   });
   mainWindow.once("ready-to-show", () => {
-    if (!smokeExitDelay) mainWindow?.show();
+    // Purely diagnostic since the shell shows itself at creation: the
+    // renderer's first splash paint, however late the busy main process
+    // delivers the event. Also releases boot's presentation wait.
+    desktopDiagnostics.appendStartupLog("window-splash-ready-to-show", desktopDiagnostics.elapsedMs, "main");
+    desktopDiagnostics.recordStartupTiming("window-splash-visible");
+    resolveSplashPresented?.();
   });
   mainWindow.on("close", handleMainWindowClose);
   mainWindow.on("closed", () => {
@@ -1275,9 +1163,24 @@ async function createMainWindow(): Promise<void> {
   // Focusing the window clears the tray "new mail" dot; every restore path
   // (notification click, tray click, global shortcut) ends in focusMainWindow,
   // which shows and focuses the window and thus fires this event.
-  mainWindow.on("focus", () => applyTrayBadge({ type: "window-focused" }));
+  mainWindow.on("focus", () => trayController.applyBadge({ type: "window-focused" }));
+  await mainWindow.loadURL(nativeSplashUrl());
+}
 
+// Navigates the existing window shell from the native splash to the app URL
+// once the local service is listening. The splash phase consumed the first
+// ready-to-show (the window is already visible by then), so the real app's
+// first paint is recorded at did-finish-load here.
+async function loadMainWindowApp(): Promise<void> {
+  if (!mainWindow) throw new Error("Nami Mail window shell was not created.");
+  if (!localServer) throw new Error("Nami Mail local service was not started.");
+  // CSS image loads do not pass through the renderer's fetch wrapper. The
+  // session-level injection covers those API resources without ever placing
+  // the capability in a URL. It needs the listening server's origin and the
+  // per-launch token, so it installs here rather than at shell creation.
+  installLocalApiHeaderInjection(mainWindow);
   const appUrl = new URL(localServer.url);
+  desktopDiagnostics.appendStartupLog("main-window-loadurl-start", desktopDiagnostics.elapsedMs, "main");
   appUrl.searchParams.set("desktop", "1");
   // The renderer needs the host platform to pick the window-bar layout: the
   // macOS native traffic lights leave a leading slot, other platforms draw
@@ -1299,7 +1202,24 @@ async function createMainWindow(): Promise<void> {
       mainWindow?.webContents.send("nami:compose-new", coldMailtoUrl);
     });
   }
+  // did-finish-load fires after the renderer bundle ran and the app mounted;
+  // it precedes the splash dismissal (which waits for the first data load).
+  // The listener must be attached before loadURL: the load event and
+  // did-finish-load are the same navigation milestone, so a late once()
+  // would miss it.
+  mainWindow.webContents.once("did-finish-load", () => {
+    desktopDiagnostics.recordStartupTiming("window-did-finish-load");
+    desktopDiagnostics.recordStartupTiming("window-first-paint");
+  });
   await mainWindow.loadURL(appUrl.toString());
+}
+
+// Pairing flows can bring the window up on demand after the service is
+// already running: shell first, then straight into the app.
+async function createMainWindow(): Promise<void> {
+  if (!localServer) throw new Error("Nami Mail local service was not started.");
+  await createMainWindowShell();
+  await loadMainWindowApp();
 }
 
 async function ensureMainWindowForAgentPairing(): Promise<BrowserWindow | undefined> {
@@ -1308,7 +1228,7 @@ async function ensureMainWindowForAgentPairing(): Promise<BrowserWindow | undefi
     await createMainWindow();
     await startDesktopUpdaterIfNeeded();
   }
-  focusMainWindow();
+  trayController.focusWindow();
   return mainWindow;
 }
 
@@ -1340,7 +1260,7 @@ async function processAgentPairingRequest(requestId: string): Promise<void> {
     return;
   }
   const fingerprint = agentPairingFingerprint(request.clientPublicKeyPem);
-  const accountIds = server.listExternalPairingAccountIds();
+  const accountIds = await server.listExternalPairingAccountIds();
   if (request.operation === "pair" && accountIds.length === 0) {
     await dialog.showMessageBox(window, {
       type: "info",
@@ -1434,7 +1354,7 @@ async function warnExternalPairingScopeDrift(): Promise<void> {
   if (pairingScopeDriftNotified || !server || !broker) return;
   const [pairings, currentIds] = await Promise.all([
     broker.describePairings(),
-    Promise.resolve(server.listExternalPairingAccountIds()),
+    server.listExternalPairingAccountIds(),
   ]);
   const current = new Set(currentIds);
   const drifted = pairings.filter((pairing) => {
@@ -1451,14 +1371,114 @@ async function warnExternalPairingScopeDrift(): Promise<void> {
     body: nativeText(locale, "externalAccessDriftBody", { count: drifted.length }),
     silent: true,
   }, () => {
-    focusMainWindow();
+    trayController.focusWindow();
   });
+}
+
+// The renderer keeps a splash overlay up until its animation, the first mail
+// load, and the agent bootstrap preload all finish. Polling for the overlay's
+// "done" class (or removal) gives the real "app is usable" timestamp. The poll
+// runs only during startup and stops once the overlay is gone (or after 20s).
+function observeSplashDismissal(): void {
+  const timer = setInterval(() => {
+    const target = mainWindow;
+    if (!target || target.isDestroyed() || desktopDiagnostics.elapsedMs > 20_000) {
+      clearInterval(timer);
+      return;
+    }
+    void target.webContents
+      .executeJavaScript("(() => { const el = document.getElementById('nami-splash'); return el === null || el.classList.contains('done'); })()")
+      .then((dismissed) => {
+        if (!dismissed) return;
+        clearInterval(timer);
+        desktopDiagnostics.recordStartupTiming("splash-dismissed");
+      })
+      .catch(() => undefined);
+  }, 500);
+}
+
+/** Absolute path to the compiled utility-process entry shipped next to main. */
+function serverHostModulePath(): string {
+  return fileURLToPath(new URL("./server-host.mjs", import.meta.url));
+}
+
+/**
+ * Forwards the service's pino output into the bounded runtime log. A packaged
+ * install has no console attached, so without this the child's logs — the only
+ * place sync, IMAP and Agent failures surface — would be lost.
+ */
+function forwardServerProcessOutput(stream: "stdout" | "stderr", chunk: string): void {
+  for (const line of chunk.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    desktopDiagnostics.appendRuntimeLog("server-process-output", { stream, message: trimmed });
+  }
+}
+
+/**
+ * Boots the local mail service in its own utility process and returns the
+ * bridge handle main talks to. Call sites keep the shape they had when the
+ * service ran in-process; only settings reads are served from a snapshot the
+ * service pushes, because native menus and dialogs are synchronous.
+ */
+async function startLocalServiceInUtilityProcess(options: {
+  dataDirectory: string;
+  masterKey: Buffer;
+}): Promise<ServerBridgeHandle> {
+  const forked = forkServerProcess({
+    modulePath: serverHostModulePath(),
+    env: { WEB_DIST_PATH: path.join(app.getAppPath(), "apps", "web", "dist") },
+    onOutput: forwardServerProcessOutput,
+    onExit: (code) => {
+      if (!serverProcessExpectedExit) {
+        desktopDiagnostics.appendRuntimeLog("server-process-exited", { code });
+      }
+    },
+  });
+  serverProcess = forked;
+  serverProcessExpectedExit = false;
+
+  const bridge = createServerBridgeClient(forked.transport, {
+    onNewInboxMessages: notifyNewMail,
+    onAutoReplyEvent: (event) => notifyAutoReplyEvent(event as DesktopAutoReplyEvent),
+    onStartupTiming: (stage, elapsedMs) => {
+      desktopDiagnostics.appendStartupLog(stage, elapsedMs, "server");
+      desktopDiagnostics.recordStartupTiming(stage, elapsedMs);
+    },
+    // The service persisted settings (settings page or Agent tool); re-apply
+    // the desktop-only bits that main owns.
+    onSettingsChanged: () => applyDesktopSettingsFromServer(),
+    listExternalPairings: () => (desktopAgentBroker ? desktopAgentBroker.describePairings() : Promise.resolve([])),
+    requestExternalConfirmation: (input) => createExternalConfirmationBridge().request(input as ExternalConfirmationInput),
+  });
+
+  const startParams: ServerStartParams = {
+    host: "127.0.0.1",
+    port: desktopLoopbackPort,
+    databasePath: path.join(options.dataDirectory, "nami-mail.db"),
+    masterKey: new Uint8Array(options.masterKey),
+    localApiAccessToken,
+    userDataPath: app.getPath("userData"),
+    env: {},
+  };
+  try {
+    await bridge.start(startParams);
+  } catch (error) {
+    // A service that failed to start must not linger as an orphan process.
+    stopLocalServerProcess();
+    throw error;
+  }
+  return bridge.handle;
 }
 
 async function boot(): Promise<void> {
   desktopAgentBrokerRecoveryGate = "accepting";
+  desktopDiagnostics.initialize(app.getPath("userData"));
+  installDesktopRuntimeDiagnostics();
+  desktopDiagnostics.recordStartupTiming("boot-start");
   await writeDesktopSmokeProgress("waiting-for-electron-ready");
   await app.whenReady();
+  desktopDiagnostics.recordStartupTiming("electron-ready");
   installRendererPermissionPolicy();
   await writeDesktopSmokeProgress("electron-ready");
   appIcon = loadDesktopIcon();
@@ -1478,36 +1498,64 @@ async function boot(): Promise<void> {
   }
   await loadDesktopLocalConfiguration();
   configureLocalService();
+  // Prune once the configuration is final so a kill switch from nami-mail.env
+  // is honored for this same launch; earlier appends (boot-start, at most a
+  // couple of lines) are trimmed here when appending stays enabled.
+  desktopDiagnostics.pruneStartupLog();
+  desktopDiagnostics.recordStartupTiming("configuration-loaded");
   await writeDesktopSmokeProgress("configuration-loaded");
+
+  // The window shell with the native splash needs no local service: create it
+  // before the service boot so the launch shows the app surface immediately
+  // instead of a dark desktop for the whole server start.
+  if (desktopHostMode === "gui") {
+    await createMainWindowShell();
+    // Yield to the renderer so the splash is actually on screen before the
+    // service's synchronous startup claims the main thread (see
+    // waitForSplashPresentation).
+    await waitForSplashPresentation(1200);
+    await writeDesktopSmokeProgress("window-splash-visible");
+  }
 
   try {
     // The session exists only after `ready`. Clear historical HTTP and
-    // Service Worker cache before creating or loading any renderer window.
-    // This deliberately excludes cookies, auth cache, localStorage and IDB.
-    rendererCacheCleanup = await clearLegacyRendererMailCache(session.defaultSession);
-    await writeDesktopSmokeProgress("renderer-cache-cleared");
-    const runtimePath = "../../server/dist/runtime.js";
-    const runtime = await import(runtimePath) as ServerRuntimeModule;
+    // Service Worker cache before creating or loading any renderer window only
+    // when the app version changed since the last cleared run. On an identical
+    // version there is no new code to serve stale and the local API is already
+    // no-store, so every-launch re-clearing only adds fixed startup cost
+    // (amplified by AV scanners on Windows). This deliberately excludes cookies,
+    // auth cache, localStorage and IDB.
+    //
+    // These operations are independent — run them in parallel to
+    // shorten the startup critical path before the window can appear.
     const dataDirectory = path.join(app.getPath("userData"), "data");
-    const desktopMasterKey = await loadOrCreateDesktopMasterKey(dataDirectory, safeStorage);
+    const rendererCacheClearVersionPath = path.join(app.getPath("userData"), "renderer-cache-clear-version.json");
+    const lastClearedVersion = readRendererCacheClearedVersion(rendererCacheClearVersionPath);
+    const currentAppVersion = app.getVersion();
+    const clearDue = rendererCacheClearRequired(lastClearedVersion, currentAppVersion);
+    const [rendererCacheCleanupResult, desktopMasterKey] = await Promise.all([
+      clearDue
+        ? clearLegacyRendererMailCache(session.defaultSession).then((result) => {
+            writeRendererCacheClearedVersion(rendererCacheClearVersionPath, currentAppVersion);
+            return result;
+          })
+        : Promise.resolve(skippedRendererCacheCleanup),
+      loadOrCreateDesktopMasterKey(dataDirectory, safeStorage),
+    ]);
+    rendererCacheCleanup = rendererCacheCleanupResult;
+    desktopDiagnostics.recordStartupTiming("renderer-cache-cleared");
+    await writeDesktopSmokeProgress("renderer-cache-cleared");
     try {
-      localServer = await runtime.startServer({
+      localServer = await startLocalServiceInUtilityProcess({
+        dataDirectory,
         masterKey: desktopMasterKey.key,
-        localApiAccessToken,
-        onNewInboxMessages: notifyNewMail,
-        onAutoReplyEvent: notifyAutoReplyEvent,
-        desktopConfirmation: {
-          capability: desktopConfirmationCapability,
-          verifier: desktopConfirmationVerifier,
-        },
-        externalConfirmation: createExternalConfirmationBridge(),
-        listExternalPairings: () => (desktopAgentBroker ? desktopAgentBroker.describePairings() : Promise.resolve([])),
       });
+      desktopDiagnostics.recordStartupTiming("local-service-ready");
       await writeDesktopSmokeProgress("local-service-ready");
       applyDesktopSettingsFromServer();
     } finally {
-      // startServer copies the key for its own lifetime. This copy exists only
-      // to cross the Electron-to-runtime boundary and is no longer needed.
+      // The key copy exists only to cross the process boundary into the
+      // service; the service holds its own copy for its lifetime.
       desktopMasterKey.key.fill(0);
     }
     if (desktopHostMode === "gui") {
@@ -1519,8 +1567,10 @@ async function boot(): Promise<void> {
       const brokerReady = startDesktopAgentBroker().catch((error) => {
         noteDesktopSmokeDiagnostic(`Desktop Agent Broker unavailable: ${error instanceof Error ? error.message : String(error)}`);
       });
-      await createMainWindow();
+      await loadMainWindowApp();
+      desktopDiagnostics.recordStartupTiming("window-loaded");
       await writeDesktopSmokeProgress("window-loaded");
+      observeSplashDismissal();
       await brokerReady;
       scheduleAgentPairingRequests(initialPairingRequestIds);
       void warnExternalPairingScopeDrift().catch(() => undefined);
@@ -1544,14 +1594,20 @@ async function boot(): Promise<void> {
             if (!bar || !sidebar) return null;
             const barStyle = getComputedStyle(bar);
             const sidebarStyle = getComputedStyle(sidebar);
+            const colorAlpha = (cssColor) => {
+              const match = /rgba?\\(([^)]+)\\)/.exec(cssColor);
+              if (!match) return 1;
+              const channels = match[1].split(",").map((channel) => Number.parseFloat(channel));
+              return channels.length > 3 ? channels[3] : 1;
+            };
             return {
-              // The window bar must share the sidebar's translucent surface
-              // instead of drawing its own opaque strip over the workspace
-              // backdrop (or the plain frame without one).
+              // The floating window bar must be fully transparent so it blends
+              // into whatever sits behind it and never paints an opaque strip
+              // of its own over the workspace backdrop.
               backgroundColor: barStyle.backgroundColor,
               sidebarBackgroundColor: sidebarStyle.backgroundColor,
               borderBottomWidth: barStyle.borderBottomWidth,
-              matchesSidebar: barStyle.backgroundColor === sidebarStyle.backgroundColor,
+              isTransparent: colorAlpha(barStyle.backgroundColor) === 0,
               hasBottomSeparator: Number.parseFloat(barStyle.borderBottomWidth) > 0,
             };
           })()`).catch(() => null);
@@ -1636,6 +1692,25 @@ async function boot(): Promise<void> {
               // it never crosses the window controls' background.
               railBorderLeftColor: railStyle ? railStyle.borderLeftColor : null,
               railBackgroundColor: railStyle ? railStyle.backgroundColor : null,
+              // The whole chrome circle (sidebar + header + window bar +
+              // rail) must share one translucent surface that follows
+              // --bg-panel-opacity, so no corner reads as an opaque strip.
+              railBackgroundMatchesSidebar: rail && sidebar ? getComputedStyle(sidebar).backgroundColor === railStyle?.backgroundColor : null,
+              // The rail column's top strip behind the window controls is
+              // painted by the mail-shell ::before; it must carry the same
+              // panel surface as the message column so no bare canvas shows
+              // through the transparent window bar.
+              controlsStripBackdrop: (() => {
+                const stripStyle = getComputedStyle(shell, "::before");
+                const messageColumn = document.querySelector(".message-column");
+                const columnStyle = messageColumn ? getComputedStyle(messageColumn) : null;
+                return {
+                  content: stripStyle.content,
+                  gridColumn: stripStyle.gridColumn,
+                  backgroundColor: stripStyle.backgroundColor,
+                  matchesColumnSurface: columnStyle ? stripStyle.backgroundColor === columnStyle.backgroundColor : null,
+                };
+              })(),
               railTop: rail ? rail.getBoundingClientRect().top : null,
               // The header row must end flush at the window's right edge and
               // the rail must start exactly on the header's bottom edge —
@@ -1769,6 +1844,7 @@ async function boot(): Promise<void> {
     await closeDesktopAgentBroker().catch(() => undefined);
     await localServer?.close().catch(() => undefined);
     localServer = undefined;
+    stopLocalServerProcess();
     clearLocalApiAccessToken();
     dialog.showErrorBox(
       nativeText(locale, "startupFailureTitle"),
@@ -1914,7 +1990,7 @@ if (desktopCliArguments !== undefined) {
           await createMainWindow();
           await startDesktopUpdaterIfNeeded();
         }
-        focusMainWindow();
+        trayController.focusWindow();
         mainWindow?.webContents.send("nami:compose-new", mailtoUrl);
       })();
       return;
@@ -1942,18 +2018,21 @@ if (desktopCliArguments !== undefined) {
         await createMainWindow();
         await startDesktopUpdaterIfNeeded();
       }
-      focusMainWindow();
+      trayController.focusWindow();
     })();
   });
   app.on("window-all-closed", () => {
-    if (desktopHostMode === "gui") app.quit();
+    // While shutdown teardown is in flight the window is deliberately
+    // destroyed first (see shutdownLocalServerAndQuit); window-all-closed
+    // must not quit the app until the local service finished closing.
+    if (desktopHostMode === "gui" && !isQuitting) app.quit();
   });
   app.on("open-url", (event, url) => {
     event.preventDefault();
     const mailtoUrl = extractMailtoUrl([url]);
     if (!mailtoUrl) return;
     if (mainWindow) {
-      focusMainWindow();
+      trayController.focusWindow();
       mainWindow.webContents.send("nami:compose-new", mailtoUrl);
     } else {
       // macOS can deliver open-url before `ready`; createMainWindow drains it.
@@ -1962,12 +2041,14 @@ if (desktopCliArguments !== undefined) {
   });
   app.on("before-quit", (event) => {
     desktopAgentBrokerRecoveryGate = "closed";
+    desktopDiagnostics.recordStartupTiming("quit-requested");
     if (!localServer || isQuitting) return;
     event.preventDefault();
     shutdownLocalServerAndQuit();
   });
   app.on("will-quit", () => {
     desktopAgentBrokerRecoveryGate = "closed";
+    desktopDiagnostics.recordStartupTiming("quit-complete");
     globalShortcut.unregisterAll();
     powerMonitor.removeListener("resume", checkForUpdatesAfterExternalTrigger);
     desktopUpdater?.dispose();
