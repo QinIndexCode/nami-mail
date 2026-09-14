@@ -40,9 +40,20 @@ build/nami-update-trust.json.package-win-original
 scripts/*.png
 .playwright-mcp/
 tmp-pw-out*/
-# Agent working memory: local notes, never part of the product history.
+# Agent and editor workspaces: local notes, never part of the product history.
+# `.codebuddy/` and `.trae/` were committed before this rule existed, so being
+# ignored did not remove them — untracking is a separate step (`git rm --cached`).
+# If one of these ever has to ship with the product, force-add that path.
 .codebuddy/
 .zcode/
+.trae/
+.claude/
+.cursor/
+.windsurf/
+.continue/
+.gemini/
+.qoder/
+.aider*
 
 # One-off diagnostics from the window-bar / icon investigation — kept on disk,
 # intentionally not version-controlled.
