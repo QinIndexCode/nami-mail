@@ -38,12 +38,6 @@
   --warning: #9a6510;
   --info: #4f7294;
 
-  /* Atmosphere: the app's canvas carries a tinted glow behind its glass frame;
-    the site borrows the same restraint (two low-alpha washes, no image). */
-  --glow-a: #6f8fd41f;
-  --glow-b: #8f6fd41a;
-  --vignette: radial-gradient(120% 70% at 50% 0%, transparent 55%, #17171b0a 100%);
-
   --shadow: 0 28px 80px #17171b26, 0 2px 10px #17171b0f;
   --shadow-raised: 0 16px 38px #17171b2e, 0 2px 8px #17171b12;
   --shadow-sm: 0 6px 16px #17171b1a, 0 1px 3px #17171b0d;
@@ -86,7 +80,12 @@
   --font-prose: Georgia, "Songti SC", "SimSun", "Times New Roman", serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
-  --shell: 1140px;
+  /* The marketing display size. The application's scale deliberately stops at
+     --step-7 (56px) for interface type; a landing headline is the one place that
+     needs more room, so it gets its own value rather than an eighth step. */
+  --display-size: 64px;
+
+  --shell: 1200px;
   --shell-docs: 1320px;
   --header-height: 60px;
 }
@@ -112,9 +111,6 @@
   --success: #75b98a;
   --warning: #d49233;
   --info: #7ba1c4;
-  --glow-a: #7ea9dd1f;
-  --glow-b: #b88ee11a;
-  --vignette: none;
   --shadow: 0 32px 90px #00000094, 0 2px 14px #00000057;
   --shadow-raised: 0 16px 38px #0000008c, 0 2px 8px #0000004d;
   --shadow-sm: 0 6px 16px #00000073, 0 1px 3px #00000040;
@@ -143,17 +139,6 @@ body {
   font-synthesis: none;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
-}
-
-/* Atmosphere sits behind everything and never intercepts input. */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background-image: radial-gradient(58% 48% at 12% -4%, var(--glow-a), transparent 72%),
-    radial-gradient(52% 44% at 88% 4%, var(--glow-b), transparent 74%), var(--vignette);
 }
 
 img {
@@ -268,7 +253,6 @@ html[data-lang="en"] [data-lang="zh"] {
   top: 0;
   z-index: 20;
   background-color: var(--frame);
-  background-image: linear-gradient(to bottom, #ffffff0a, transparent);
   border-bottom: 1px solid var(--line);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   backdrop-filter: blur(20px) saturate(180%);
@@ -295,7 +279,6 @@ html[data-lang="en"] [data-lang="zh"] {
   width: 26px;
   height: 26px;
   border-radius: 7px;
-  box-shadow: var(--shadow-sm);
 }
 
 .site-nav {
@@ -378,43 +361,53 @@ html[data-lang="en"] [data-lang="zh"] {
   font-weight: 500;
   text-decoration: none;
   cursor: pointer;
-  box-shadow: var(--shadow-inset), 0 1px 2px #17171b1f;
-  transition: transform 120ms ease, box-shadow 160ms ease, opacity 120ms ease;
+  transition: opacity 120ms ease, background-color 120ms ease, border-color 120ms ease;
 }
 
 .button:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-inset), var(--shadow-raised);
-}
-
-.button:active {
-  transform: translateY(0);
+  opacity: 0.88;
 }
 
 .button.secondary {
-  background: var(--panel);
+  background: transparent;
   border-color: var(--line-strong);
   color: var(--text);
-  box-shadow: var(--shadow-sm);
 }
 
 .button.secondary:hover {
+  opacity: 1;
   background: var(--hover);
+  border-color: var(--text-faint);
 }
 
-/* --- summary chip ------------------------------------------------------- */
+/* --- micro type ---------------------------------------------------------
+ * Small monospaced labels carry the section structure, the way the products
+ * this site is measured against label their sections: one deliberate line of
+ * uppercase type, no decorative container around it. */
+
+.section-label,
+.eyebrow,
+.chip,
+.fact-label {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+
+.section-label {
+  display: block;
+  margin-bottom: var(--s-3);
+  color: var(--text-faint);
+}
 
 .eyebrow {
   display: inline-flex;
   align-items: center;
   gap: var(--s-2);
-  padding: var(--s-1) var(--s-4);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-pill);
-  background: var(--panel);
-  box-shadow: var(--shadow-inset);
   color: var(--text-soft);
-  font-size: var(--step--1);
 }
 
 .eyebrow .dot {
@@ -422,7 +415,29 @@ html[data-lang="en"] [data-lang="zh"] {
   height: 6px;
   border-radius: 50%;
   background: var(--success);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel-muted);
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+
+/* The opening paragraph under a page's main heading. Serif, because the product
+ * sets mail bodies in a serif face and this is the site's prose voice; it lives
+ * here rather than in `styles.css` because the documentation overview uses it
+ * too. */
+.lede {
+  max-width: 60ch;
+  color: var(--text-soft);
+  font-family: var(--font-prose);
+  font-size: var(--step-2);
+  line-height: 1.62;
 }
 
 .pill {
@@ -434,6 +449,60 @@ html[data-lang="en"] [data-lang="zh"] {
   border-radius: var(--radius-pill);
   background: var(--panel-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* --- copy button --------------------------------------------------------
+ * Injected by `site.js` into every code block, so it never appears (or does
+ * nothing) without scripting. Icon only, because a code block is the same
+ * thing on a page in either language. */
+
+pre {
+  position: relative;
+}
+
+.copy-button {
+  position: absolute;
+  top: var(--s-2);
+  right: var(--s-2);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel-solid);
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.copy-button:hover,
+.copy-button:focus-visible {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+.copy-button .copy-check {
+  display: none;
+}
+
+.copy-button.is-copied {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  opacity: 1;
+}
+
+.copy-button.is-copied .copy-check {
+  display: block;
+}
+
+.copy-button.is-copied .copy-icon {
+  display: none;
 }
 
 /* --- footer ------------------------------------------------------------- */
@@ -496,7 +565,6 @@ html[data-lang="en"] [data-lang="zh"] {
 
 .footer-legal code {
   padding: 1px 5px;
-  border: 1px solid var(--line);
   border-radius: 5px;
   background: var(--panel-muted);
 }
@@ -504,8 +572,15 @@ html[data-lang="en"] [data-lang="zh"] {
 /* --- responsive --------------------------------------------------------- */
 
 @media (max-width: 720px) {
-  .site-nav a[data-nav="secondary"] {
+  /* The header holds the brand and the two controls; the section links would
+   * wrap the brand onto a second line and push the language switch off-screen.
+   * The page's own sections carry the navigation on a phone. */
+  .site-nav {
     display: none;
+  }
+
+  .brand {
+    white-space: nowrap;
   }
 
   .wrap {

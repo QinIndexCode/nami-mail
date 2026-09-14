@@ -160,6 +160,18 @@ export const GROUPS = [
 
 const PAGE_STYLESHEETS = ["base.css", "docs.css"];
 
+/**
+ * The language control on a page that carries both languages: a button, because
+ * there is no second URL to link to. Its label is switched by the same CSS that
+ * switches the content, so it reads correctly whatever the page settled on.
+ */
+const LANGUAGE_BUTTON = `<button class="lang-button" id="lang-toggle" type="button">
+            <span data-lang="zh" aria-hidden="true">EN</span>
+            <span data-lang="en" aria-hidden="true">中文</span>
+            <span class="sr-only" data-lang="zh">Switch to English</span>
+            <span class="sr-only" data-lang="en">切换到中文</span>
+          </button>`;
+
 // ---------------------------------------------------------------------------
 // Markdown -> hast -> HTML
 // ---------------------------------------------------------------------------
@@ -618,11 +630,16 @@ function themeToggle(lang) {
           </button>`;
 }
 
-function pageHead({ title, description, canonical, alternates, prefix, bilingual }) {
+function pageHead({ title, description, canonical, alternates, prefix, bilingual, locale, alternateLocale }) {
   const alternateLinks = alternates
     .map((alt) => `    <link rel="alternate" hreflang="${alt.hreflang}" href="${alt.href}" />`)
     .join("\n");
   const styleLinks = PAGE_STYLESHEETS.map((file) => `    <link rel="stylesheet" href="${prefix}${file}" />`).join("\n");
+  // A page that carries one language states it; a bilingual one would have to
+  // pick arbitrarily, so it says nothing.
+  const localeTags = locale
+    ? `    <meta property="og:locale" content="${locale}" />\n    <meta property="og:locale:alternate" content="${alternateLocale}" />\n`
+    : "";
   return `    <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(title)}</title>
@@ -631,16 +648,18 @@ function pageHead({ title, description, canonical, alternates, prefix, bilingual
 ${alternateLinks}
     <link rel="icon" href="${prefix}assets/brand/icon.svg" />
 ${styleLinks}
-    <script src="${prefix}theme-init.js"></script>
-
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ececef" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#050506" />
+    <script src="${prefix}theme-init.js"></script>
     <meta property="og:type" content="${bilingual ? "website" : "article"}" />
     <meta property="og:site_name" content="Nami Mail" />
-    <meta property="og:title" content="${escapeHtml(title)}" />
+${localeTags}    <meta property="og:title" content="${escapeHtml(title)}" />
     <meta property="og:description" content="${escapeHtml(description)}" />
     <meta property="og:url" content="${canonical}" />`;
 }
+
+/** Open Graph locales for a page that carries exactly one language. */
+const OG_LOCALE = { zh: "zh_CN", en: "en_US" };
 
 function siteHeader({ prefix, lang, languageControl, current }) {
   return `    <header class="site-header">
@@ -785,6 +804,8 @@ ${pageHead({
   alternates,
   prefix,
   bilingual: false,
+  locale: OG_LOCALE[page.lang],
+  alternateLocale: OG_LOCALE[otherLang],
 })}
   </head>
   <body class="docs-body">
@@ -816,7 +837,7 @@ ${renderPager(page, topics, page.lang)}
 ${renderToc(page.headings, page.lang)}
     </div>
 ${siteFooter({ prefix, lang: page.lang, editHref: REPO_BLOB + page.repoPath })}
-    <script src="${prefix}docs.js" defer></script>
+    <script src="${prefix}site.js" defer></script>
   </body>
 </html>
 `;
@@ -886,7 +907,7 @@ ${pageHead({
   </head>
   <body class="docs-body">
     <a class="skip-link" href="#content">跳到正文 / Skip to content</a>
-${siteHeader({ prefix: "../", lang: "zh", current: "docs", languageControl: "" })}
+${siteHeader({ prefix: "../", lang: "zh", current: "docs", languageControl: LANGUAGE_BUTTON })}
     <main class="docs-overview wrap" id="content">
       <header class="overview-intro">
         <p class="eyebrow">
@@ -911,7 +932,7 @@ ${columns}
       </div>
     </main>
 ${siteFooter({ prefix: "../", lang: "zh", editHref: `${REPO_URL}/tree/main/docs` })}
-    <script src="../docs.js" defer></script>
+    <script src="../site.js" defer></script>
   </body>
 </html>
 `;

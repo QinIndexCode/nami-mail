@@ -21,7 +21,7 @@
       root.dataset.theme =
         window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     }
-  } catch (error) {
+  } catch {
     /* A blocked storage layer must not break the page. */
   }
 
@@ -36,7 +36,7 @@
     }
     root.dataset.lang = storedLang;
     root.lang = storedLang === "zh" ? "zh-CN" : "en";
-  } catch (error) {
+  } catch {
     /* Keep the language written in the markup. */
   }
 })();

@@ -12,6 +12,8 @@ import {
   groupedTopics,
   prepareDocument,
   relativeSiteHref,
+  renderOverviewPage,
+  renderTopicPage,
   rewriteHref,
   serializeHast,
   slugify,
@@ -239,6 +241,83 @@ test("buildManifest lists only groups that have topics", () => {
       manifest.groups.some((group) => group.id === "misc"),
       false,
     );
+  });
+});
+
+/** Render every fixture topic the way the build does. */
+function renderedFixturePages(root, docs) {
+  const topics = collectDocs({ docsDirectory: docs, repoDirectory: root });
+  const pages = [];
+  for (const topic of topics) {
+    for (const lang of ["zh", "en"]) {
+      const file = topic.files[lang];
+      if (!file) continue;
+      const prepared = prepareDocument(readFileSync(join(root, file.repoPath), "utf8"));
+      pages.push({
+        topic,
+        lang,
+        group: topic.group,
+        repoPath: file.repoPath,
+        sitePath: file.sitePath,
+        title: topic.title[lang],
+        description: prepared.description,
+        headings: prepared.headings,
+        tree: prepared.tree,
+      });
+    }
+  }
+  return { topics, pages };
+}
+
+test("every documentation page carries a language control that resolves", () => {
+  withFixture(({ root, docs, write }) => {
+    // One document that exists in both languages, one that only exists in Chinese.
+    write("docs/lone.zh-CN.md", "# 单独的中文文档\n\n这一段足够长，可以当作描述使用。\n");
+    const { topics, pages } = renderedFixturePages(root, docs);
+
+    for (const page of pages) {
+      const html = renderTopicPage(page, topics);
+      const control = html.match(/<a class="lang-button" id="lang-toggle" href="([^"]*)" data-lang-switch="([^"]*)"/);
+      assert.ok(control, `${page.sitePath} must carry a language control`);
+
+      const other = page.lang === "zh" ? "en" : "zh";
+      const sibling = page.topic.files[other];
+      if (sibling) {
+        assert.equal(control[1], relativeSiteHref(page.sitePath, sibling.sitePath));
+        assert.equal(control[2], other === "zh" ? "zh-CN" : "en");
+      } else {
+        // Nothing to switch to: send the reader to the overview rather than
+        // pretending a counterpart exists, and record no language preference.
+        assert.equal(control[1], relativeSiteHref(page.sitePath, "index.html"));
+        assert.equal(control[2], "");
+      }
+
+      // One shared script drives both page types; the page it replaced is gone.
+      assert.match(html, /<script src="[^"]*site\.js" defer><\/script>/);
+      assert.doesNotMatch(html, /docs\.js|app\.js/);
+    }
+  });
+});
+
+test("the overview carries both languages behind one button", () => {
+  withFixture(({ root, docs }) => {
+    const { topics } = renderedFixturePages(root, docs);
+    const html = renderOverviewPage(topics);
+    assert.match(html, /<html lang="zh-CN" data-lang="zh"[^>]*data-bilingual="true"/);
+    assert.match(html, /<button class="lang-button" id="lang-toggle" type="button">/);
+    assert.equal((html.match(/<div class="overview-column" data-lang="/g) || []).length, 2);
+    // A page that carries two languages must not claim one of them.
+    assert.doesNotMatch(html, /og:locale/);
+  });
+});
+
+test("a single-language page declares its locale", () => {
+  withFixture(({ root, docs }) => {
+    const { topics, pages } = renderedFixturePages(root, docs);
+    const zh = pages.find((page) => page.sitePath === "usage.zh-CN.html");
+    const en = pages.find((page) => page.sitePath === "usage.en.html");
+    assert.match(renderTopicPage(zh, topics), /<meta property="og:locale" content="zh_CN" \/>\s*<meta property="og:locale:alternate" content="en_US" \/>/);
+    assert.match(renderTopicPage(en, topics), /<meta property="og:locale" content="en_US" \/>\s*<meta property="og:locale:alternate" content="zh_CN" \/>/);
   });
 });
 
