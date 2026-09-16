@@ -675,6 +675,20 @@ function shortPreview(value: string): string {
   return compact.length <= 120 ? compact : `${compact.slice(0, 117).trimEnd()}...`;
 }
 
+/** The query a search-class tool was invoked with, defensively extracted from
+ *  the model-provided tool input (arrives as unknown). */
+function searchQueryDetail(input: unknown): string | undefined {
+  const query = (input as { query?: unknown } | null | undefined)?.query;
+  return typeof query === "string" && query.trim() !== "" ? shortPreview(query) : undefined;
+}
+
+/** The result count a search tool reported, defensively extracted from the
+ *  tool output (arrives as unknown). */
+function searchResultCount(output: unknown): number | undefined {
+  const total = (output as { total?: unknown } | null | undefined)?.total;
+  return typeof total === "number" && Number.isFinite(total) ? total : undefined;
+}
+
 function titleForMessage(value: string): string {
   const title = value.replace(/\s+/g, " ").trim();
   return title.length <= maximumConversationTitleLength ? title : `${title.slice(0, maximumConversationTitleLength - 3).trimEnd()}...`;
@@ -2163,7 +2177,8 @@ export class AgentService {
       if (input.mode === "agent" && canUseMailContext) {
         this.assertRunCurrent(lifecycleTasks, controller.signal);
         const activityId = `tool-${randomUUID()}`;
-        const runningActivity: AgentToolActivity = { id: activityId, toolName: "rag.search", title: "Search local mail", state: "running" };
+        const ragQueryDetail = shortPreview(providerContent);
+        const runningActivity: AgentToolActivity = { id: activityId, toolName: "rag.search", title: "Search local mail", state: "running", detail: ragQueryDetail };
         toolActivities = [...toolActivities.filter((activity) => activity.id !== activityId), runningActivity];
         yield { type: "tool", activity: runningActivity };
         syncInFlight();
@@ -2209,6 +2224,7 @@ export class AgentService {
             title: "Search local mail",
             state: "completed",
             summary: ragResults.length ? t("status.rag_found", { count: ragResults.length }) : t("status.rag_empty"),
+            detail: t("status.search_detail", { query: ragQueryDetail, count: ragResults.length }),
           };
         toolActivities = [...toolActivities.filter((activity) => activity.id !== activityId), completedActivity];
         yield { type: "tool", activity: completedActivity };
@@ -2410,11 +2426,13 @@ export class AgentService {
           this.assertRunCurrent(lifecycleTasks, controller.signal);
           const descriptor = this.tools.get(call.toolName)?.descriptor;
           const activityId = `tool-${randomUUID()}`;
+          const searchDetail = call.toolName === "web.search" ? searchQueryDetail(call.input) : undefined;
           const runningActivity: AgentToolActivity = {
             id: activityId,
             toolName: call.toolName,
             title: descriptor?.title ?? "Processing mail action",
             state: "running",
+            ...(searchDetail ? { detail: searchDetail } : {}),
           };
           toolActivities = [...toolActivities.filter((activity) => activity.id !== activityId), runningActivity];
           yield { type: "tool", activity: runningActivity };
@@ -2542,10 +2560,15 @@ export class AgentService {
           // as mail-derived before it is persisted so a later cloud provider
           // without explicit mail-content consent never receives that history.
           if (succeeded) mailContextIncluded = true;
+          const searchCount = call.toolName === "web.search" && succeeded ? searchResultCount(result.output) : undefined;
+          const searchResultDetail = searchCount !== undefined
+            ? t("status.search_detail", { query: searchQueryDetail(call.input) ?? "", count: searchCount })
+            : undefined;
           const completedActivity: AgentToolActivity = {
             ...runningActivity,
             state: succeeded ? "completed" : "failed",
             summary: succeeded ? t("status.operation_completed") : result.error.message,
+            ...(searchResultDetail ? { detail: searchResultDetail } : {}),
             ...(succeeded ? {} : { error: stableUserFacingError(result.error) }),
           };
           toolActivities = [...toolActivities.filter((activity) => activity.id !== activityId), completedActivity];
@@ -2611,6 +2634,16 @@ export class AgentService {
           serverLog.error({ conversationId }, "Agent failed to persist the assistant turn", error);
         }
       }
+      // Release the conversation slot as soon as the turn is persisted. The
+      // best-effort tail below (memory suggestions, the first-turn title
+      // generation) can await a full provider request timeout on a slow or
+      // broken provider; holding the slot through it refused every resend in
+      // this window with CONFLICT, so the client's optimistic user message was
+      // never persisted and a revoke seconds later 404'd ("消息不存在").
+      // Revoke's in-flight cascade and getConversation's in-flight append both
+      // degrade gracefully without the run registered: the persisted transcript
+      // is already complete at this point.
+      if (this.activeRuns.get(conversationId)?.controller === controller) this.activeRuns.delete(conversationId);
       for (const summary of suggestions) {
         try {
           yield { type: "memory_suggestion", summary };
@@ -2644,7 +2677,6 @@ export class AgentService {
       unlinkAbortSignals();
       for (const task of lifecycleTasks) task.release();
       clearTimeout(deadlineTimer);
-      if (this.activeRuns.get(conversationId)?.controller === controller) this.activeRuns.delete(conversationId);
     }
   }
 

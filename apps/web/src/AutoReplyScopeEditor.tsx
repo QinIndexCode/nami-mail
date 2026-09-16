@@ -89,7 +89,6 @@ export default function AutoReplyScopeEditor({
       <div className="setting-row setting-switch-row">
         <div>
           <strong>{t("settings.agent.autoReplyScopeContactsOnly")}</strong>
-          <span>{t("settings.agent.autoReplyScopeContactsOnlyDesc")}</span>
         </div>
         <Check
           checked={scope.contactsOnly}
@@ -114,7 +113,6 @@ export default function AutoReplyScopeEditor({
       <div className="setting-row setting-switch-row">
         <div>
           <strong>{t("settings.agent.autoReplyScopeThreadOnce")}</strong>
-          <span>{t("settings.agent.autoReplyScopeThreadOnceDesc")}</span>
         </div>
         <Check
           checked={scope.threadOnce}

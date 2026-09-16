@@ -8,16 +8,17 @@ export type UpdateFooterAction =
 
 /**
  * The sidebar footer shows a compact update entry point alongside the startup
- * prompt: an available release can be downloaded right away, a ready release
- * can be installed (restarting the app), a failed check can be retried, and an
- * in-flight download reports its progress. Skip/snooze suppression hides the
- * button — the user has already chosen how to handle this release.
+ * prompt: a ready release can be installed (restarting the app), a failed
+ * check can be retried, and an in-flight download reports its progress. The
+ * "available" phase is NOT listed here — it is surfaced by the expandable
+ * circular update badge instead. Skip/snooze suppression hides everything —
+ * the user has already chosen how to handle this release.
  */
 export function resolveUpdateFooter(snapshot: DesktopUpdateSnapshot | null): UpdateFooterAction | null {
   if (!snapshot || snapshot.suppression !== "none") return null;
   switch (snapshot.phase) {
     case "available":
-      return { kind: "download" };
+      return null;
     case "downloading":
       return { kind: "downloading", percent: snapshot.percent ?? 0 };
     case "ready":

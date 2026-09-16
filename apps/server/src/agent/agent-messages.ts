@@ -45,6 +45,10 @@ export const agentMessageCatalog = {
     "zh-CN": "操作已完成。",
     "en-US": "Operation completed.",
   },
+  "status.search_detail": {
+    "zh-CN": "“{query}” · {count} 条结果",
+    "en-US": "“{query}” · {count} result(s)",
+  },
   "status.rag_found": {
     "zh-CN": "找到 {count} 条相关邮件内容。",
     "en-US": "Found {count} relevant mail message(s).",

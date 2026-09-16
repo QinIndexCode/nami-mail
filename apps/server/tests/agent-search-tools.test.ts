@@ -2,15 +2,29 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentToolExecutionContext } from "@nami/agent-core";
 import { createSearchTools } from "../src/agent/search-tools.js";
 
+// Fixed from a real DuckDuckGo Lite response (2026-09): result anchors now use
+// single-quoted attributes with href BEFORE class plus a rel attribute — a
+// form the previous double-quote/order-sensitive regex silently matched zero
+// of. The older double-quoted variant and a wrapped anchor stay in the sample
+// so both markup generations and line breaks remain covered.
 const htmlSample = `
 <html><body>
 <div class="result">
-  <a rel="nofollow" class="result-link" href="https://example.com/intro">Example Intro</a>
-  <table><tr><td class="result-snippet">A sample &amp; page about <b>Nami</b> mail.</td></tr></table>
+  <a rel="nofollow" href="https://example.com/intro" class='result-link'>Example Intro</a>
+  <table><tr><td class='result-snippet'>A sample &amp; page about <b>Nami</b> mail.</td></tr></table>
 </div>
 <div class="result">
-  <a rel="nofollow" class="result-link" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.example.com%2Fguide&amp;rut=abc">Docs Guide</a>
-  <table><tr><td class="result-snippet">How to set it up.</td></tr></table>
+  <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.example.com%2Fguide&amp;rut=abc" class='result-link'>Docs Guide</a>
+  <table><tr><td class='result-snippet'>How to set it up.</td></tr></table>
+</div>
+<div class="result">
+  <a rel="nofollow" class="result-link" href="https://legacy.example.com/old">Legacy Markup</a>
+  <table><tr><td class="result-snippet">Older double-quoted markup still parses.</td></tr></table>
+</div>
+<div class="result">
+  <a rel="nofollow" class="result-link"
+     href="https://multiline.example.com/page">Multiline Anchor</a>
+  <table><tr><td class='result-snippet'>Anchors can wrap across lines.</td></tr></table>
 </div>
 </body></html>
 `;
@@ -62,13 +76,16 @@ describe("web.search tool", () => {
     expect(String(fetchMock.mock.calls[0]![0])).toContain("q=nami%20mail");
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.value.total).toBe(2);
+    expect(outcome.value.total).toBe(4);
     expect(outcome.value.results[0]).toEqual({
       title: "Example Intro",
       url: "https://example.com/intro",
       snippet: "A sample & page about Nami mail.",
     });
     expect(outcome.value.results[1]?.url).toBe("https://docs.example.com/guide");
+    // The legacy double-quoted markup and the wrapped anchor must keep parsing.
+    expect(outcome.value.results[2]).toMatchObject({ title: "Legacy Markup", url: "https://legacy.example.com/old" });
+    expect(outcome.value.results[3]).toMatchObject({ title: "Multiline Anchor", url: "https://multiline.example.com/page" });
   });
 
   it("caps results at maxResults", async () => {

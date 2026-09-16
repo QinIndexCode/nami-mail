@@ -32,6 +32,9 @@ export const agentToolActivitySchema = z.object({
   title: z.string(),
   state: z.enum(["running", "completed", "failed", "awaiting_confirmation"]),
   summary: z.string().optional(),
+  /** Human-readable "what did this tool do" line (e.g. a search query, or
+   *  "query · N results"). Optional; older transcripts omit it. */
+  detail: z.string().optional(),
   error: agentToolActivityErrorSchema.optional(),
 }).strict();
 

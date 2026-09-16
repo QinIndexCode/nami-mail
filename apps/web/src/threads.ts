@@ -25,6 +25,16 @@ export function sortThreadByTimeline(messages: readonly Message[]): Message[] {
   return [...messages].sort((a, b) => new Date(a.sentAt).getTime() - new Date(b.sentAt).getTime());
 }
 
+/** Gmail-style conversation strip: the locally grouped members are merged
+ *  with the server-resolved thread (which adds members stored outside the
+ *  currently loaded view, e.g. the user's own replies in Sent). Local state
+ *  wins on id collisions so fresh flags/seen values are never stale. */
+export function mergeThreadMembers(local: readonly Message[], extras: readonly Message[]): Message[] {
+  if (!extras.length) return [...local];
+  const known = new Set(local.map((message) => message.id));
+  return [...local, ...extras.filter((message) => !known.has(message.id))];
+}
+
 /** Whether the thread strip should render collapsed: only long conversations,
  *  and only while the open message sits at an endpoint of the timeline, so
  *  collapsing never hides the message being read. */

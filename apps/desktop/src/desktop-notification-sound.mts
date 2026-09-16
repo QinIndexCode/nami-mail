@@ -99,21 +99,63 @@ export function getNotificationSoundFile(sound: CustomNotificationSound): string
   }
 }
 
-/** Plays a notification sound from the main process using a system command. */
-export function playCustomNotificationSound(sound: CustomNotificationSound): void {
-  const filePath = getNotificationSoundFile(sound);
-  if (!filePath) return;
-  // Escape single quotes for shell safety.
-  const safePath = filePath.replace(/'/g, `'\\''`);
-  let command: string;
-  if (process.platform === "win32") {
-    // PowerShell SoundPlayer.PlaySync blocks until the sound finishes, but
-    // exec runs it in a child process so the main process is not blocked.
-    command = `powershell -NoProfile -NonInteractive -Command "(New-Object Media.SoundPlayer '${safePath}').PlaySync()"`;
-  } else if (process.platform === "darwin") {
-    command = `afplay '${safePath}'`;
-  } else {
-    command = `aplay '${safePath}' 2>/dev/null || paplay '${safePath}' 2>/dev/null`;
+/** Injectable player command runner (defaults to child_process.exec). */
+export type PlayerRunner = (
+  command: string,
+  options: { env?: NodeJS.ProcessEnv; timeout?: number },
+  callback: (error: Error | null) => void,
+) => unknown;
+
+/** Plays a notification sound from the main process using a system command.
+ * Resolves true when the playback command completed successfully, false when
+ * the file could not be written or the player command failed — the caller must
+ * fall back to the OS notification sound instead of staying silent. */
+export function playCustomNotificationSound(
+  sound: CustomNotificationSound,
+  runExec: PlayerRunner = exec,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const filePath = getNotificationSoundFile(sound);
+    if (!filePath) {
+      resolve(false);
+      return;
+    }
+    // Escape single quotes for shell safety.
+    const safePath = filePath.replace(/'/g, `'\\''`);
+    let command: string;
+    if (process.platform === "win32") {
+      // PowerShell SoundPlayer.PlaySync blocks until the sound finishes, but
+      // exec runs it in a child process so the main process is not blocked.
+      command = `powershell -NoProfile -NonInteractive -Command "(New-Object Media.SoundPlayer '${safePath}').PlaySync()"`;
+    } else if (process.platform === "darwin") {
+      command = `afplay '${safePath}'`;
+    } else {
+      command = `aplay '${safePath}' 2>/dev/null || paplay '${safePath}' 2>/dev/null`;
+    }
+    // Hard cap so a wedged player process can never delay the notification
+    // indefinitely; the caller shows the notification once this settles.
+    runExec(command, { env: minimalSpawnEnvironment(), timeout: 4000 }, (error) => {
+      resolve(!error);
+    });
+  });
+}
+
+const WIN32_PLAYER_WARMUP_MS = 10_000;
+
+/** Prepares the sound pipeline before the first real notification arrives:
+ * generates both WAV files up front (so a later tmp-dir failure surfaces in
+ * the diagnostics log immediately instead of silently at notification time)
+ * and, on Windows, pre-starts PowerShell once so the first real playback
+ * skips its ~1.5s cold start. Best effort — failures are ignored because the
+ * caller logs them again when an actual notification needs the sound. */
+export function warmUpNotificationSoundPlayer(runExec: PlayerRunner = exec): void {
+  for (const sound of ["soft", "bright"] as const) {
+    getNotificationSoundFile(sound);
   }
-  exec(command, { env: minimalSpawnEnvironment() }, () => undefined);
+  if (process.platform !== "win32") return;
+  runExec(
+    "powershell -NoProfile -NonInteractive -Command \"exit 0\"",
+    { env: minimalSpawnEnvironment(), timeout: WIN32_PLAYER_WARMUP_MS },
+    () => undefined,
+  );
 }

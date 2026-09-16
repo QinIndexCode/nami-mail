@@ -65,7 +65,7 @@ describe("settings per-folder sync limit picker", () => {
   it("renders the sync cap picker in the sync section with the default selected", () => {
     const markup = renderSettings(false);
 
-    expect(markup).toContain('data-settings-nav="sync"');
+    expect(markup).toContain('aria-labelledby="sync-settings"');
     expect(markup).toContain('id="sync-message-limit"');
     expect(markup).toContain(`aria-label="${zh("settings.sync.limit.label")}"`);
     expect(markup).toContain(zh("settings.sync.limit.description"));

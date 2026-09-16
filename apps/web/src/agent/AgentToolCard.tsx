@@ -19,10 +19,14 @@ function AgentToolCardInner({ activity }: { activity: AgentToolActivity }) {
       : activity.state === "awaiting_confirmation"
         ? t("agent.confirmation.waiting")
         : t("agent.tool.running");
+  // A search-class activity carries a "what was searched" detail (the query
+  // while running, "query · N results" once done); prefer it over the generic
+  // state text so the user can see what the agent actually looked up.
+  const line = activity.detail ?? summary;
   return (
     <div className={`agent-tool-card ${activity.state}`}>
       <span className="agent-tool-icon" aria-hidden="true">{icon}</span>
-      <span className="agent-tool-copy"><strong>{title}</strong><small>{summary}</small></span>
+      <span className="agent-tool-copy"><strong>{title}</strong><small>{line}</small></span>
       {activity.state === "awaiting_confirmation" && <span className="agent-tool-waiting">{t("agent.confirmation.waiting")}</span>}
     </div>
   );
@@ -51,6 +55,9 @@ export const AgentToolList = memo(function AgentToolListInner({ activities, supe
   const open = expanded || autoExpanded;
   const failedCount = activities.filter((activity) => activity.state === "failed").length;
   const runningCount = activities.filter((activity) => activity.state === "running" || activity.state === "awaiting_confirmation").length;
+  // A running search surfaces its query on the collapsed row (the list itself
+  // stays folded): the newest running activity with a detail line wins.
+  const runningSearchQuery = [...activities].reverse().find((activity) => activity.state === "running" && activity.detail)?.detail;
   // Only a DONE failure can be dismissed; a running tool that fails later must
   // still pop the list open again.
   const collapse = () => {
@@ -80,7 +87,7 @@ export const AgentToolList = memo(function AgentToolListInner({ activities, supe
             <span className="agent-tool-summary-suffix">{t("agent.tool.summarySuffix")}</span>
           </span>
         </span>
-        <span className="agent-tool-summary-chips">{failedCount > 0 && <em className="agent-tool-summary-failed">{t("agent.tool.failedCount", { count: failedCount })}</em>}{runningCount > 0 && <em className="agent-tool-summary-running">{t("agent.tool.runningCount", { count: runningCount })}</em>}</span>
+        <span className="agent-tool-summary-chips">{failedCount > 0 && <em className="agent-tool-summary-failed">{t("agent.tool.failedCount", { count: failedCount })}</em>}{runningSearchQuery !== undefined ? <em className="agent-tool-summary-running agent-tool-summary-searching">{t("agent.tool.searching", { query: runningSearchQuery })}</em> : runningCount > 0 && <em className="agent-tool-summary-running">{t("agent.tool.runningCount", { count: runningCount })}</em>}</span>
         <ChevronDown size={13} className="agent-tool-summary-chevron" />
       </button>
       <div className="agent-tool-collapse" aria-hidden={!open}>

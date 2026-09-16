@@ -35,7 +35,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import { AttachmentFileIcon } from "./mailUi";
 import { presentAttachment } from "./attachmentPresentation";
 import { type AgentSlashCommand, type AgentSlashSubcommand } from "@nami/agent-contracts";
@@ -1690,6 +1690,39 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     // Server reconciliation: idempotent, duplicates ignored while in flight.
     pendingRevokeIdsRef.current = new Set(pendingRevokeIdsRef.current).add(messageId);
     void api.revokeAgentMessage(conversationId, messageId, true).catch((error) => {
+      // NOT_FOUND: the server has no such row. The optimistic turn was refused
+      // before it was ever persisted (e.g. CONFLICT while the previous turn was
+      // still releasing the conversation slot), so the transcript holds phantom
+      // rows the server never recorded. Rolling the marks back would keep those
+      // phantoms visible — the "identical duplicate messages until re-entry"
+      // divergence. Adopt the server snapshot instead. The refilled composer
+      // text is kept on purpose: the message never reached the server, so it
+      // stays available to edit and resend.
+      if (error instanceof ApiError && error.code === "NOT_FOUND") {
+        void api.agentConversation(conversationId).then((fresh) => {
+          if (activeIdRef.current !== conversationId) return;
+          // NOT_FOUND proves this revoke never landed server-side, so the
+          // marks written a moment ago are wrong: applying them to the
+          // adopted snapshot would hide rows the server still shows (the
+          // whole transcript vanishes). Drop exactly those ids; marks from
+          // earlier, real revokes stay.
+          const revokedIds = readRevokedIds(conversationId);
+          revokedSet.forEach((id) => revokedIds.delete(id));
+          writeRevokedIds(conversationId, revokedIds);
+          const conversationView = applyRevokedMarks(purgeStaleErrors(fresh));
+          const session = getSession(conversationId);
+          const live = Boolean(session && !session.done);
+          setActive((current) => current && current.id === conversationId
+            ? keepAheadTranscript(current, conversationView, live)
+            : current);
+        }).catch(() => {
+          // The server is unreachable; keep the optimistic marks rather than
+          // guessing which rows exist server-side.
+        });
+        setRevokeNoticeUntil(null);
+        setRevokeFailed(revokeFailureMessage(error, t));
+        return;
+      }
       // Roll back the optimistic marks so the transcript matches the server.
       setActive((current) => {
         if (!current) return current;
