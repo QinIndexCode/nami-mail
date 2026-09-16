@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Bot,
+  ChevronDown,
   LoaderCircle,
   MessageSquareReply,
   MessageSquareX,
@@ -113,7 +114,6 @@ export default function SettingsAgentSection({
             checked={currentSettings.autoReply.enabled}
             disabled={controlsBusy}
               label={t("settings.agent.autoReplyEnabled")}
-              description={t("settings.agent.autoReplyEnabledDesc")}
               onChange={() => void applyOptimisticSettings(
                 { autoReply: { ...currentSettings.autoReply, enabled: !currentSettings.autoReply.enabled } },
                 null,
@@ -153,7 +153,6 @@ export default function SettingsAgentSection({
                 <div className="setting-row setting-column-row">
                   <div>
                     <strong>{t("settings.agent.autoReplyMode")}</strong>
-                    <span>{t("settings.agent.autoReplyModeDesc")}</span>
                   </div>
                   <div className="auto-reply-mode-toggle" role="group" aria-label={t("settings.agent.autoReplyMode")}>
                     <button
@@ -185,7 +184,6 @@ export default function SettingsAgentSection({
                     <div className="setting-row setting-column-row">
                       <div>
                         <strong>{t("settings.agent.autoReplyTemplate")}</strong>
-                        <span>{t("settings.agent.autoReplyTemplateDesc")}</span>
                       </div>
                       <textarea
                         className="auto-reply-template-input"
@@ -245,7 +243,6 @@ export default function SettingsAgentSection({
             <div className="setting-row agent-tools-row">
               <div>
                 <strong>{t("settings.agent.autoReplyTools")}</strong>
-                <span>{t("settings.agent.autoReplyToolsDesc")}</span>
               </div>
               <div className="agent-tools-actions">
                 <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setAutoReplyDialogOpen(true)}>
@@ -261,9 +258,9 @@ export default function SettingsAgentSection({
             </div>
         </>
       )}
-      <div className="setting-subheading"><span>{t("settings.agent.accessLevelGroup")}</span><small>{t("settings.agent.accessLevelGroupDesc")}</small></div>
+      <div className="setting-subheading"><span>{t("settings.agent.accessLevelGroup")}</span></div>
       <label className="setting-select-row" htmlFor="agent-access-level">
-        <span><strong>{t("settings.agent.builtinAccessLevel")}</strong><small>{t("settings.agent.builtinAccessLevelDesc")}</small></span>
+        <span><strong>{t("settings.agent.builtinAccessLevel")}</strong></span>
         <ThemedSelect
           id="agent-access-level"
           value={currentSettings.agentAccessLevel}
@@ -277,7 +274,7 @@ export default function SettingsAgentSection({
         </ThemedSelect>
       </label>
       <label className="setting-select-row" htmlFor="agent-cli-access-level">
-        <span><strong>{t("settings.agent.cliAccessLevel")}</strong><small>{t("settings.agent.cliAccessLevelDesc")}</small></span>
+        <span><strong>{t("settings.agent.cliAccessLevel")}</strong></span>
         <ThemedSelect
           id="agent-cli-access-level"
           value={currentSettings.agentCliAccessLevel}
@@ -291,7 +288,7 @@ export default function SettingsAgentSection({
         </ThemedSelect>
       </label>
       <label className="setting-select-row" htmlFor="agent-mcp-access-level">
-        <span><strong>{t("settings.agent.mcpAccessLevel")}</strong><small>{t("settings.agent.mcpAccessLevelDesc")}</small></span>
+        <span><strong>{t("settings.agent.mcpAccessLevel")}</strong></span>
         <ThemedSelect
           id="agent-mcp-access-level"
           value={currentSettings.agentMcpAccessLevel}
@@ -304,81 +301,88 @@ export default function SettingsAgentSection({
           ))}
         </ThemedSelect>
       </label>
-      <div className="setting-subheading"><span>{t("settings.agent.externalGuide.title")}</span><small>{t("settings.agent.externalGuide.desc")}</small></div>
-      <div className="external-guide">
-        <p className="external-guide-note">{t("settings.agent.externalGuide.steps.intro")}</p>
-        <ol className="external-guide-steps">
-          <li>{t("settings.agent.externalGuide.steps.1")}</li>
-          <li>{t("settings.agent.externalGuide.steps.2")} <code>namimail service start</code></li>
-          <li>{t("settings.agent.externalGuide.steps.3")}</li>
-          <li>{t("settings.agent.externalGuide.steps.4")}</li>
-        </ol>
-        <ExternalGuideBlock
-          id="cli"
-          label={t("settings.agent.externalGuide.cli.label")}
-          hint={t("settings.agent.externalGuide.cli.hint", { cmd: "namimail accounts list" })}
-          code={externalCliGuideCode}
-          copiedId={externalGuideCopied}
-          onCopy={copyExternalGuide}
-        />
-        <ExternalGuideBlock
-          id="mcp"
-          label={t("settings.agent.externalGuide.mcp.label")}
-          hint={t("settings.agent.externalGuide.mcp.hint")}
-          code={externalMcpGuideCode}
-          copiedId={externalGuideCopied}
-          onCopy={copyExternalGuide}
-        />
-        <ExternalGuideBlock
-          id="service"
-          label={t("settings.agent.externalGuide.service.label")}
-          hint={t("settings.agent.externalGuide.service.hint")}
-          code={externalServiceGuideCode}
-          copiedId={externalGuideCopied}
-          onCopy={copyExternalGuide}
-        />
-        <p className="external-guide-docs">{t("settings.agent.externalGuide.docs")}<a href={externalDocsUrl} target="_blank" rel="noopener noreferrer">github.com/QinIndexCode/nami-mail</a></p>
-      </div>
-      <div className="setting-subheading">
-        <span>{t("settings.agent.externalPairings.title")}</span>
-        <small>{t("settings.agent.externalPairings.desc")}</small>
-      </div>
-      <div className="external-pairings">
-        {externalPairingsError ? (
-          <p className="external-pairings-empty">{t("settings.agent.externalPairings.loadError")}</p>
-        ) : externalPairings === null ? (
-          <p className="external-pairings-empty" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("common.loading")}</p>
-        ) : externalPairings.length === 0 ? (
-          <p className="external-pairings-empty">{t("settings.agent.externalPairings.empty", { cmd: "namimail pair" })}</p>
-        ) : (
-          <ul className="external-pairings-list">
-            {externalPairings.map((pairing) => {
-              const currentIds = new Set(accounts.map((account) => account.id));
-              const drifted = pairing.status === "active"
-                && (pairing.accountIds.length !== currentIds.size || pairing.accountIds.some((id) => !currentIds.has(id)));
-              return (
-                <li key={pairing.clientId} className={`external-pairing-row external-pairing-${pairing.status}`}>
-                  <span className="external-pairing-id" title={pairing.clientId}>{pairing.clientId.slice(0, 20)}</span>
-                  <span className="external-pairing-meta">
-                    {t("settings.agent.externalPairings.created", { date: formatDate(pairing.createdAt) })}
-                    {pairing.expiresAt ? ` · ${t("settings.agent.externalPairings.expires", { date: formatDate(pairing.expiresAt) })}` : ""}
-                    {` · ${t("settings.agent.externalPairings.accountCount", { count: pairing.accountIds.length })}`}
-                  </span>
-                  <span className="external-pairing-status">{t(`settings.agent.externalPairings.status.${pairing.status}`)}</span>
-                  {drifted ? <span className="external-pairing-drift">{t("settings.agent.externalPairings.drift")}</span> : null}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-      <button
-        className="secondary-button external-pairings-refresh"
-        type="button"
-        onClick={() => setExternalPairingsReload((value) => value + 1)}
-      >
-        {t("settings.agent.externalPairings.refresh")}
-      </button>
+      {/* Developer-facing access (CLI / MCP guides, pairings) stays collapsed
+          by default so the common permission controls remain above the fold. */}
+      <details className="settings-advanced">
+        <summary>
+          <span className="setting-subheading"><span>{t("settings.agent.externalGuide.title")}</span><small>{t("settings.agent.externalGuide.desc")}</small></span>
+          <ChevronDown className="settings-advanced-chevron" size={15} aria-hidden="true" />
+        </summary>
+        <div className="external-guide">
+          <p className="external-guide-note">{t("settings.agent.externalGuide.steps.intro")}</p>
+          <ol className="external-guide-steps">
+            <li>{t("settings.agent.externalGuide.steps.1")}</li>
+            <li>{t("settings.agent.externalGuide.steps.2")} <code>namimail service start</code></li>
+            <li>{t("settings.agent.externalGuide.steps.3")}</li>
+            <li>{t("settings.agent.externalGuide.steps.4")}</li>
+          </ol>
+          <ExternalGuideBlock
+            id="cli"
+            label={t("settings.agent.externalGuide.cli.label")}
+            hint={t("settings.agent.externalGuide.cli.hint", { cmd: "namimail accounts list" })}
+            code={externalCliGuideCode}
+            copiedId={externalGuideCopied}
+            onCopy={copyExternalGuide}
+          />
+          <ExternalGuideBlock
+            id="mcp"
+            label={t("settings.agent.externalGuide.mcp.label")}
+            hint={t("settings.agent.externalGuide.mcp.hint")}
+            code={externalMcpGuideCode}
+            copiedId={externalGuideCopied}
+            onCopy={copyExternalGuide}
+          />
+          <ExternalGuideBlock
+            id="service"
+            label={t("settings.agent.externalGuide.service.label")}
+            hint={t("settings.agent.externalGuide.service.hint")}
+            code={externalServiceGuideCode}
+            copiedId={externalGuideCopied}
+            onCopy={copyExternalGuide}
+          />
+          <p className="external-guide-docs">{t("settings.agent.externalGuide.docs")}<a href={externalDocsUrl} target="_blank" rel="noopener noreferrer">github.com/QinIndexCode/nami-mail</a></p>
+        </div>
+        <div className="setting-subheading">
+          <span>{t("settings.agent.externalPairings.title")}</span>
+          <small>{t("settings.agent.externalPairings.desc")}</small>
+        </div>
+        <div className="external-pairings">
+          {externalPairingsError ? (
+            <p className="external-pairings-empty">{t("settings.agent.externalPairings.loadError")}</p>
+          ) : externalPairings === null ? (
+            <p className="external-pairings-empty" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("common.loading")}</p>
+          ) : externalPairings.length === 0 ? (
+            <p className="external-pairings-empty">{t("settings.agent.externalPairings.empty", { cmd: "namimail pair" })}</p>
+          ) : (
+            <ul className="external-pairings-list">
+              {externalPairings.map((pairing) => {
+                const currentIds = new Set(accounts.map((account) => account.id));
+                const drifted = pairing.status === "active"
+                  && (pairing.accountIds.length !== currentIds.size || pairing.accountIds.some((id) => !currentIds.has(id)));
+                return (
+                  <li key={pairing.clientId} className={`external-pairing-row external-pairing-${pairing.status}`}>
+                    <span className="external-pairing-id" title={pairing.clientId}>{pairing.clientId.slice(0, 20)}</span>
+                    <span className="external-pairing-meta">
+                      {t("settings.agent.externalPairings.created", { date: formatDate(pairing.createdAt) })}
+                      {pairing.expiresAt ? ` · ${t("settings.agent.externalPairings.expires", { date: formatDate(pairing.expiresAt) })}` : ""}
+                      {` · ${t("settings.agent.externalPairings.accountCount", { count: pairing.accountIds.length })}`}
+                    </span>
+                    <span className="external-pairing-status">{t(`settings.agent.externalPairings.status.${pairing.status}`)}</span>
+                    {drifted ? <span className="external-pairing-drift">{t("settings.agent.externalPairings.drift")}</span> : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+        <button
+          className="secondary-button external-pairings-refresh"
+          type="button"
+          onClick={() => setExternalPairingsReload((value) => value + 1)}
+        >
+          {t("settings.agent.externalPairings.refresh")}
+        </button>
+      </details>
     </section>
   );
 }

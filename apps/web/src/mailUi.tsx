@@ -1,5 +1,5 @@
 import { type ReactNode, type RefObject } from "react";
-import { Archive, FileArchive, FileAudio, FileCode2, FileImage, FilePenLine, FileSpreadsheet, FileText, Flag, Folder, Inbox, MailWarning, Mails, SendHorizontal, Star, Trash2 } from "lucide-react";
+import { Archive, FileArchive, FileAudio, FileCode2, FileImage, FilePenLine, FileSpreadsheet, FileText, Flag, Folder, Inbox, Layers, SendHorizontal, ShieldAlert, Star, Trash2 } from "lucide-react";
 import type { AttachmentKind } from "./attachmentPresentation";
 import type { OutboundAttachment } from "./types";
 
@@ -77,7 +77,7 @@ export function FolderNavigationIcon({ specialUse, name }: { specialUse: string 
     : specialUse === "\\Archive"
       ? <Archive size={15} />
       : specialUse === "\\All"
-        ? <Mails size={15} />
+        ? <Layers size={15} />
         : specialUse === "\\Sent"
           ? <SendHorizontal size={15} />
           : specialUse === "\\Drafts"
@@ -85,11 +85,13 @@ export function FolderNavigationIcon({ specialUse, name }: { specialUse: string 
             : specialUse === "\\Trash"
               ? <Trash2 size={15} />
               : specialUse === "\\Junk" || specialUse === "\\Spam"
-                ? <MailWarning size={15} />
+                ? <ShieldAlert size={15} />
                 : specialUse === "\\Flagged"
                   ? <Star size={15} />
                   : specialUse === "\\Important" || looksImportant
                     ? <Flag size={15} />
                     : <Folder size={15} />;
-  return <span aria-hidden="true">{icon}</span>;
+  // Flex-centering the inline svg kills the baseline/line-height drift that
+  // made the icon sit visibly higher than the label text.
+  return <span className="folder-nav-icon" aria-hidden="true">{icon}</span>;
 }

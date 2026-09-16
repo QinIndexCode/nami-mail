@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type RefObject } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { Archive, Layers3, Mail, MailOpen, MousePointerClick, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
 import type { MessageListQuery } from "./mailListState";
@@ -7,6 +7,7 @@ import type { MailErrorPresentation } from "./errorPresentation";
 import { SenderAvatar, accountTone } from "./SenderAvatar";
 import { contextMenuItemIndexForKey } from "./contextMenu";
 import { localizeMessageLinks } from "./app/app-utils";
+import { isOwnSentMessage } from "./mailActions";
 import type { Account, AppSettings, Message } from "./types";
 
 // `Intl.DateTimeFormat` construction is not free; per-row-per-frame allocation
@@ -42,12 +43,11 @@ export type MessageListEmptyState = {
 
 type MessageListProps = {
   loading: boolean;
-  /**
-   * Identity of the list being shown (account/folder/view/search). Changing it
-   * means a different list, so the viewport is a new element and can fade in
-   * instead of hard-swapping.
-   */
-  listKey?: string;
+  /** Identity of the settled data snapshot. App bumps it in the same batch
+   *  that swaps the row data, so the viewport is a fresh element that can
+   *  fade in, and it remounts exactly once per switch — never per request
+   *  lifecycle step. */
+  listKey?: string | number;
   fatalError: MailErrorPresentation | null;
   accounts: Account[];
   messages: Message[];
@@ -107,6 +107,9 @@ type MessageListRowProps = {
   recentlyReadInUnread: boolean;
   threadSize: number;
   gravatarEnabled: boolean;
+  /** Lowercaseable account emails used to detect the user's own sent mail;
+   *  owned by the list via a stable memo so row memoization stays effective. */
+  accountEmails: readonly string[];
   buttonRefs: RefObject<Map<string, HTMLButtonElement>>;
   rowVirtualizer: Virtualizer<HTMLDivElement, Element>;
   onRowClick: (message: Message, index: number, event: MouseEvent<HTMLButtonElement>) => void;
@@ -124,21 +127,26 @@ type MessageListRowProps = {
  */
 export const MessageListRow = memo(function MessageListRow(props: MessageListRowProps): React.JSX.Element {
   const { locale, t } = useI18n();
-  const { message, index, virtualStart, selected, unread, selectionMode, multiSelected, recentlyReadInUnread, threadSize, gravatarEnabled, buttonRefs, rowVirtualizer, onRowClick, onOpenContextMenu, onQuickToggleStar, onQuickMoveMessage } = props;
+  const { message, index, virtualStart, selected, unread, selectionMode, multiSelected, recentlyReadInUnread, threadSize, gravatarEnabled, accountEmails, buttonRefs, rowVirtualizer, onRowClick, onOpenContextMenu, onQuickToggleStar, onQuickMoveMessage } = props;
   const buttonRefCallback = useCallback((node: HTMLButtonElement | null) => {
     rowVirtualizer.measureElement(node);
     if (node) buttonRefs.current.set(message.id, node);
     else buttonRefs.current.delete(message.id);
   }, [rowVirtualizer, buttonRefs, message.id]);
   const className = `message-item ${selected ? "selected" : ""} ${unread ? "unread" : ""} ${selectionMode ? "selection-mode" : ""} ${multiSelected ? "multi-selected" : ""} ${recentlyReadInUnread ? "recently-read-in-unread" : ""}`;
+  // The user's own sent mail renders recipient-first (Gmail style): the row
+  // shows "To <recipient>" with the recipient's avatar instead of presenting
+  // the user as the sender. Falls back to the sender when `to` is empty.
+  const ownSent = isOwnSentMessage(message, accountEmails);
+  const rowPerson = ownSent && message.to[0] ? message.to[0] : message.from;
   return (
     <div className="message-list-row" style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualStart}px)` }}>
       <button data-index={index} data-message-id={message.id} ref={buttonRefCallback} className={className} aria-pressed={selectionMode ? multiSelected : undefined} aria-haspopup="menu" onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
         <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
         {selectionMode && <span className={`selection-checkbox ${multiSelected ? "checked" : ""}`} aria-hidden="true" />}
-        <SenderAvatar name={message.from.name} address={message.from.address} tone={accountTone(message.from.address)} gravatarEnabled={gravatarEnabled} />
+        <SenderAvatar name={rowPerson.name} address={rowPerson.address} tone={accountTone(rowPerson.address)} gravatarEnabled={gravatarEnabled} />
         <span className="message-copy">
-          <span className="message-meta"><strong>{message.from.name || message.from.address}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
+          <span className="message-meta"><strong>{ownSent && message.to[0] ? t("mail.reader.toRecipient", { recipient: rowPerson.name || rowPerson.address }) : (rowPerson.name || rowPerson.address)}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
           <span className="message-subject">{message.subject}</span>
           <span className="message-snippet">{localizeMessageLinks(message.snippet, locale)}</span>
           <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
@@ -190,6 +198,10 @@ function MessageList(props: MessageListProps): React.JSX.Element {
     onQuickToggleSeen,
     onQuickMoveMessage,
   } = props;
+
+  // Stable identity for row memoization: rows receive this array to detect
+  // the user's own sent mail, so it must not change on every list render.
+  const accountEmails = useMemo(() => accounts.map((account) => account.email), [accounts]);
 
   // Right-click context menu: opened at the pointer position, clamped to the
   // viewport once measured, closed by the backdrop, Escape or a list scroll.
@@ -326,11 +338,11 @@ function MessageList(props: MessageListProps): React.JSX.Element {
   // A list switch keeps the rows already on screen until the new snapshot
   // lands. Replacing them with a six-row skeleton made every account/folder/
   // view switch — and every search-debounce tick — flash a shorter list, jump
-  // the layout and discard the position the user was holding. The skeleton is
-  // now only for a list that has nothing to show yet (first load / cold start);
-  // a switch instead dims the outgoing rows and fades the incoming ones in.
+  // the layout and discard the position the user was holding. A cold-start
+  // wait shows nothing — a skeleton that appears for a beat and is immediately
+  // replaced reads as flicker — while a switch dims the outgoing rows and
+  // fades the incoming ones in.
   const hasRows = accounts.length > 0 && messages.length > 0;
-  const showSkeleton = loading && !hasRows && !fatalError;
   const showList = hasRows && !fatalError;
   const showError = !loading && Boolean(fatalError);
   const showFirstAccount = !loading && !fatalError && accounts.length === 0;
@@ -338,22 +350,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
 
   return (
     <>
-      <div className="message-list" ref={messageListRef} onKeyDown={handleListKeyDown} onScroll={() => { if (contextMenu) closeContextMenu(false); }}>
-      {showSkeleton && (
-        <div className="message-skeleton-list" role="status" aria-label={t("mail.loading")} data-density={listDensity}>
-          {Array.from({ length: 6 }, (_, index) => (
-            <div className="message-skeleton-row" key={index}>
-              <span className="message-skeleton-avatar" />
-              <span className="message-skeleton-copy">
-                <span className="message-skeleton-meta"><span className="message-skeleton-line meta-sender" /><span className="message-skeleton-line meta-time" /></span>
-                <span className="message-skeleton-line subject" />
-                <span className="message-skeleton-line snippet" />
-                <span className="message-skeleton-tags"><span className="message-skeleton-line tag" /></span>
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="message-list" ref={messageListRef} onKeyDown={handleListKeyDown} onScroll={() => { if (contextMenu) closeContextMenu(false); }} aria-busy={loading || undefined}>
       {showError && fatalError && <div className="center-state error-state"><X size={24} /><h3>{fatalError.title}</h3><p>{fatalError.message} {fatalError.guidance}</p><button className="secondary-button" onClick={onReconnect}>{t("mail.reconnect")}</button></div>}
       {showFirstAccount && (
         <div className="center-state empty-state"><div className="empty-orb"><Mail size={28} /></div><h3>{t("mail.empty.firstAccountTitle")}</h3><p>{t("mail.empty.firstAccountDescription")}</p><button className="primary-button" onClick={onAddAccount}><Plus size={17} />{t("account.add")}</button></div>
@@ -370,10 +367,13 @@ function MessageList(props: MessageListProps): React.JSX.Element {
         <div
           className="message-list-viewport"
           data-switching={loading ? "true" : undefined}
-          // Remount when the *arriving* list settles, not when the request
-          // starts, so the fade-in lands on the new rows rather than on the
-          // outgoing ones.
-          key={`${listKey ?? "list"}${loading ? ":pending" : ":ready"}`}
+          // The key follows the identity of the SETTLED data snapshot, which
+          // App bumps in the same commit that swaps the rows in. While a
+          // switch request is in flight the key is stable, so the outgoing
+          // rows keep their DOM (dimmed via data-switching) instead of being
+          // torn down and re-faded per lifecycle step; the arriving list
+          // remounts exactly once, at the data swap.
+          key={listKey ?? "list"}
           style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}
         >
           {rowVirtualizer.getVirtualItems().map((virtualItem) => {
@@ -392,6 +392,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
               recentlyReadInUnread={view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id)}
               threadSize={threadSize}
               gravatarEnabled={avatarGravatarEnabled}
+              accountEmails={accountEmails}
               buttonRefs={messageButtonRefs}
               rowVirtualizer={rowVirtualizer}
               onRowClick={handleRowClick}

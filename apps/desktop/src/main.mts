@@ -31,7 +31,7 @@ import { createTrayController, loadDesktopIcon } from "./tray.mjs";
 import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
 import { DesktopDiagnostics, formatConsoleArgs, serializeRuntimeError } from "./desktop-diagnostics.mjs";
 import { openInBrowser as openExternalUrl, isHttpUrl } from "./desktop-external-open.mjs";
-import { playCustomNotificationSound } from "./desktop-notification-sound.mjs";
+import { playCustomNotificationSound, warmUpNotificationSoundPlayer } from "./desktop-notification-sound.mjs";
 import {
   getClosePromptSmokeSession,
   getDesktopSmokeDiagnostics,
@@ -933,7 +933,7 @@ function showNativeNotification(payload: NativeNotificationPayload, onClick?: ()
   }
 }
 
-function notifyNewMail(messages: NewMailPayload[]): void {
+async function notifyNewMail(messages: NewMailPayload[]): Promise<void> {
   const settings = localServer?.getSettings();
   if (!settings) return;
   const first = messages[0];
@@ -946,7 +946,7 @@ function notifyNewMail(messages: NewMailPayload[]): void {
   // alerts are disabled. shouldAlert only controls user-facing interruption.
   const shouldAlert = settings.notificationsEnabled && (!mainWindow?.isFocused() || settings.notifyWhenFocused);
   const { notificationSound } = settings;
-  // Custom sounds (soft/bright) are now played from the main process via a
+  // Custom sounds (soft/bright) are played from the main process via a
   // generated WAV file, which works regardless of window focus or AudioContext
   // state. The renderer no longer needs to play the custom sound.
   const useMainProcessCustomSound = shouldAlert && (notificationSound === "soft" || notificationSound === "bright");
@@ -957,15 +957,8 @@ function notifyNewMail(messages: NewMailPayload[]): void {
     fromAddress: first.fromAddress,
     count: messages.length,
     shouldAlert,
-    playCustomSound: false,
   });
   if (!shouldAlert) return;
-
-  // Play the custom sound from the main process before showing the notification.
-  // The native notification is silenced so only the custom sound is heard.
-  if (useMainProcessCustomSound) {
-    playCustomNotificationSound(notificationSound);
-  }
 
   const locale = currentNativeLocale();
   const sender = first.fromName || first.fromAddress || nativeText(locale, "notificationUnknownSender");
@@ -973,12 +966,30 @@ function notifyNewMail(messages: NewMailPayload[]): void {
     ? nativeText(locale, "notificationSingleTitle", { sender })
     : nativeText(locale, "notificationMultipleTitle", { count: messages.length });
   const body = messages.length === 1 ? first.subject : nativeText(locale, "notificationMultipleBody", { sender });
-  // silent: true when "none" (no sound at all) or when the custom sound was
-  // already played by the main process. Otherwise let the OS play its default.
+
+  // Play the custom sound BEFORE showing the notification so the notification
+  // can reflect the actual outcome: silenced when the custom sound really
+  // played, audible with the OS default when it did not. Without this, a
+  // failed playback (tmp-dir or player error) used to leave the user with a
+  // silent banner — "a notification with no sound" — and nothing in the logs.
+  let customSoundPlayed = false;
+  if (useMainProcessCustomSound) {
+    customSoundPlayed = await playCustomNotificationSound(notificationSound);
+    if (!customSoundPlayed) {
+      desktopDiagnostics.appendRuntimeLog("notification-sound-failed", {
+        sound: notificationSound,
+        fallback: "os-default",
+      });
+    }
+  }
+
+  // silent: true when "none" (no sound at all) or when the custom sound really
+  // played. On any playback failure let the OS play its default sound so the
+  // alert is never completely silent.
   showNativeNotification({
     title,
     body,
-    silent: notificationSound === "none" || useMainProcessCustomSound,
+    silent: notificationSound === "none" || customSoundPlayed,
   }, () => {
     trayController.focusWindow();
     mainWindow?.webContents.send("nami:open-message", first.id);
@@ -1480,6 +1491,11 @@ async function boot(): Promise<void> {
   await app.whenReady();
   desktopDiagnostics.recordStartupTiming("electron-ready");
   installRendererPermissionPolicy();
+  // Prime the notification-sound pipeline early: generate the WAV files and
+  // pre-start the OS player so the first real notification does not pay a
+  // multi-second player cold start (and any tmp-dir failure shows up in the
+  // diagnostics log right away instead of silently at notification time).
+  void warmUpNotificationSoundPlayer();
   await writeDesktopSmokeProgress("electron-ready");
   appIcon = loadDesktopIcon();
   // Windows/Linux register the mailto protocol with the OS; macOS receives
@@ -1912,6 +1928,36 @@ if (desktopCliArguments !== undefined) {
     const normalized = normalizeNotificationPayload(payload);
     if (!normalized) return { shown: false };
     return { shown: showNativeNotification(normalized) };
+  });
+  // The settings page's "test notification" button runs the SAME pipeline as a
+  // real new-mail alert (main-process custom sound paired with a matching
+  // notification silence state), so what the user hears in the test is exactly
+  // what a real notification will do. The title/body texts arrive localized
+  // from the renderer; everything else mirrors notifyNewMail.
+  ipcMain.handle("nami:test-native-notification", async (event, payload: unknown) => {
+    if (!isCurrentRenderer(event)) return { shown: false };
+    const normalized = normalizeNotificationPayload(payload);
+    if (!normalized) return { shown: false };
+    const settings = localServer?.getSettings();
+    const sound = settings?.notificationSound;
+    let customSoundPlayed = false;
+    if (sound === "soft" || sound === "bright") {
+      customSoundPlayed = await playCustomNotificationSound(sound);
+      if (!customSoundPlayed) {
+        desktopDiagnostics.appendRuntimeLog("notification-sound-failed", {
+          sound,
+          fallback: "os-default",
+          context: "settings-test",
+        });
+      }
+    }
+    const shown = showNativeNotification({
+      ...normalized,
+      // Mirror the real alert: silenced when the custom sound really played
+      // or when sound is "none"; audible with the OS default otherwise.
+      silent: normalized.silent || sound === "none" || customSoundPlayed,
+    });
+    return { shown, soundPlayed: customSoundPlayed };
   });
   ipcMain.handle("nami:copy-verification-code", (event, value: unknown) => {
     if (!isCurrentRenderer(event)) return { copied: false };

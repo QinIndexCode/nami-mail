@@ -77,7 +77,7 @@ export function WindowBar({ t, theme, onToggleTheme, platform, isDesktop }: Wind
     <div className="window-bar" onDoubleClick={handleBarDoubleClick}>
       <span className="window-title">Nami Mail</span>
       <div className="window-actions">
-        <span className="local-pill"><span /> {t("app.localEncryption")}</span>
+        <span className="local-pill"><span /> {t("app.dataStaysLocal")}</span>
         <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={onToggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>
         {controls}
       </div>

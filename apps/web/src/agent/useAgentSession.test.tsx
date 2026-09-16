@@ -232,6 +232,45 @@ describe("useAgentSession", () => {
     expect(refreshSpy).toHaveBeenCalled();
   });
 
+  it("keeps deltas beyond the frame budget: overflow pieces are backfilled, not dropped", async () => {
+    const cid = "c1b";
+    const mId = "ma1b";
+    const initial = conv(cid, [userQ("u1b", "pace"), assistant(mId, "", "streaming")]);
+    renderHarness(initial);
+    // Two deltas land inside the SAME frame; together (200 chars) they far
+    // exceed a fresh pacing budget (~24 chars/s x 250ms ≈ 6 chars). The first
+    // delta still renders (front-piece rule); the second must be backfilled
+    // into the pending queue and drain on later frames — not orphaned by the
+    // flush (which used to silently drop the text until a re-entry rebuild).
+    let emit!: (event: AgentStreamEvent) => void;
+    h.streamAgentMessage.mockImplementation(async (_id, _payload, onEvent, signal) => {
+      emit = onEvent;
+      await new Promise<void>((_, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    });
+    let runP!: Promise<void>;
+    await act(async () => {
+      runP = ctx.box.result!.runStream({ conversation: initial, assistantMessage: { id: mId }, streamPayload });
+    });
+    runP.catch(() => undefined);
+
+    act(() => {
+      emit({ type: "text_delta", delta: "A".repeat(100) });
+      emit({ type: "text_delta", delta: "B".repeat(100) });
+    });
+    await drain();
+
+    const row = ctx.box.active!.messages.find((m) => m.id === mId)!;
+    expect(row.content).toBe("A".repeat(100) + "B".repeat(100));
+
+    ctx.box.result!.stopStreaming();
+    await act(async () => {
+      await runP;
+    });
+    await drain();
+  });
+
   it("retries on CONFLICT until the superseded run releases, then finishes the turn", async () => {
     const cid = "c2";
     const mId = "ma2";

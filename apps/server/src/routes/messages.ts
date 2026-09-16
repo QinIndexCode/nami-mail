@@ -426,6 +426,85 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     return messageRow(row, context.masterKey);
   });
 
+  // Gmail-style conversation: the web reader shows every message of the
+  // thread, including members stored outside the currently loaded view (e.g.
+  // the user's own replies in the Sent folder). The web only loads one
+  // folder at a time and groups threads client-side, so it asks the server
+  // for the complete membership instead. Resolution walks the RFC reply
+  // graph (Message-ID / In-Reply-To / References) transitively in both
+  // directions within the anchor's account; drafts are excluded because an
+  // unsent reply is not part of the conversation yet.
+  app.get<{ Params: { id: string } }>("/api/messages/:id/thread", async (request, reply) => {
+    const anchor = context.db
+      .prepare(`
+        SELECT m.*, a.email AS account_email, a.provider_name
+        FROM messages m JOIN accounts a ON a.id = m.account_id WHERE m.id = ?
+      `)
+      .get(request.params.id) as MessageStorageRow | undefined;
+    if (!anchor) return reply.code(404).send({ ok: false, message: "邮件不存在。" });
+    const anchorPayload = messagePayloadForRow(anchor, context.masterKey);
+    const knownIds = new Set<string>();
+    if (anchorPayload.messageId) knownIds.add(anchorPayload.messageId);
+    if (anchorPayload.inReplyTo) knownIds.add(anchorPayload.inReplyTo);
+    for (const reference of anchorPayload.references ?? []) knownIds.add(reference);
+    // A headerless anchor forms a single-message conversation on its own.
+    if (knownIds.size === 0) return { items: [messageRow(anchor, context.masterKey)] };
+    // Header values are encrypted, so membership needs one decrypting pass
+    // over the account. That is synchronous AES work in the Electron main
+    // process — yield to the event loop periodically, mirroring the agent's
+    // thread reader, so the window stays responsive on large mailboxes.
+    const entries: Array<{ row: MessageStorageRow; messageId: string | null; parentIds: string[] }> = [];
+    const rows = context.db
+      .prepare(`
+        SELECT m.*, a.email AS account_email, a.provider_name
+        FROM messages m
+        JOIN accounts a ON a.id = m.account_id
+        LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.mailbox
+        WHERE m.account_id = ? AND (f.special_use IS NULL OR f.special_use != '\\Drafts')
+        ORDER BY COALESCE(m.sent_at, m.created_at), m.id
+      `)
+      .all(anchor.account_id) as MessageStorageRow[];
+    let processed = 0;
+    for (const row of rows) {
+      const payload = messagePayloadForRow(row, context.masterKey);
+      entries.push({
+        row,
+        messageId: payload.messageId ?? null,
+        parentIds: [payload.inReplyTo, ...(payload.references ?? [])].filter((value): value is string => Boolean(value)),
+      });
+      processed += 1;
+      if (processed % 64 === 0) await new Promise<void>((resolve) => setImmediate(() => resolve()));
+    }
+    // Breadth-first closure: a message joins when it links to a known
+    // Message-ID (as a reply) or is itself a known Message-ID (as a parent);
+    // newly joined ids seed the next round until the graph stops growing.
+    const included = new Set<string>([anchor.id]);
+    let frontier = new Set(knownIds);
+    while (frontier.size > 0) {
+      const nextFrontier = new Set<string>();
+      for (const entry of entries) {
+        if (included.has(entry.row.id)) continue;
+        const linked = (entry.messageId !== null && frontier.has(entry.messageId))
+          || entry.parentIds.some((parent) => frontier.has(parent));
+        if (!linked) continue;
+        included.add(entry.row.id);
+        if (entry.messageId && !knownIds.has(entry.messageId)) {
+          knownIds.add(entry.messageId);
+          nextFrontier.add(entry.messageId);
+        }
+        for (const parent of entry.parentIds) {
+          if (!knownIds.has(parent)) {
+            knownIds.add(parent);
+            nextFrontier.add(parent);
+          }
+        }
+      }
+      frontier = nextFrontier;
+    }
+    // `entries` came back in chronological order and the filter preserves it.
+    return { items: entries.filter((entry) => included.has(entry.row.id)).map((entry) => messageRow(entry.row, context.masterKey)) };
+  });
+
   app.get<{ Params: { id: string } }>("/api/messages/:id/outbound-attachments", async (request, reply) => {
     const stored = messagePayloadById(context.db, context.masterKey, request.params.id);
     const row = context.db.prepare(`
