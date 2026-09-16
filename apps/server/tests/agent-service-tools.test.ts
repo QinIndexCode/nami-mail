@@ -732,6 +732,63 @@ describe("AgentService model tool loop", () => {
     }
   });
 
+  it("surfaces the web.search query while running and the query with result count once done", async () => {
+    const value = fixture();
+    try {
+      const internals = internalRuntime(value.service);
+      const providerRequests: ProviderChatRequest[] = [];
+      vi.spyOn(internals.rag, "search").mockResolvedValue([]);
+      vi.spyOn(internals.runtime, "invokeTool").mockResolvedValue({
+        status: "completed",
+        result: {
+          toolCallId: "tool-call-web",
+          toolName: "web.search",
+          status: "succeeded",
+          output: { query: "Trae", results: [], total: 3 },
+          error: null,
+          completedAt: timestamp,
+        },
+      });
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* ({ chat }) {
+        providerRequests.push(chat);
+        if (providerRequests.length === 1) {
+          yield {
+            type: "tool_call",
+            call: {
+              id: "tool-call-web",
+              toolName: "web.search",
+              input: { query: "Trae" },
+              requestedAt: timestamp,
+            },
+          };
+          yield { type: "completed", reason: "stop" };
+          return;
+        }
+        yield { type: "text_delta", delta: "Here is what I found on the web." };
+        yield { type: "completed", reason: "stop" };
+      });
+
+      const events = await streamWithAgent(value.service, value.conversation, value.provider.id);
+
+      // Running activity carries the raw query so the UI can show what is
+      // being searched while it runs.
+      expect(events).toContainEqual({
+        type: "tool",
+        activity: expect.objectContaining({ toolName: "web.search", state: "running", detail: "Trae" }),
+      });
+      expect(events).not.toContainEqual(expect.objectContaining({ type: "error" }));
+
+      // The persisted completed activity carries "query · N results".
+      const saved = value.service.getConversation(value.conversation.id);
+      const activity = saved.messages.at(-1)?.toolActivities.find((item) => item.toolName === "web.search");
+      expect(activity).toMatchObject({ state: "completed", toolName: "web.search" });
+      expect(activity?.detail).toContain("Trae");
+      expect(activity?.detail).toContain("3");
+    } finally {
+      await closeFixture(value);
+    }
+  });
+
   it("records rejected and unknown tool calls as failed activity and continues the model loop", async () => {
     const value = fixture();
     try {

@@ -31,7 +31,7 @@ import AgentMemoryDialog from "./AgentMemoryDialog";
 import AutoReplyPendingDialog from "./AutoReplyPendingDialog";
 import AutoReplyDecisionsDialog from "./AutoReplyDecisionsDialog";
 import { useI18n } from "./i18n";
-import { canPlayCustomNotificationSound, playNotificationSound, primeNotificationSound } from "./sounds";
+import { playNotificationSound, primeNotificationSound } from "./sounds";
 import ThemedSelect from "./ThemedSelect";
 import {
   hasUnsavedTranslationConfiguration,
@@ -599,8 +599,8 @@ export default function SettingsModal({
       await onTestSound(currentSettings.notificationSound);
       return;
     }
-    const ready = await primeNotificationSound() && canPlayCustomNotificationSound();
-    if (ready && playNotificationSound(currentSettings.notificationSound)) return;
+    const primed = await primeNotificationSound();
+    if (primed && playNotificationSound(currentSettings.notificationSound)) return;
     await notifyInBrowser(false);
   };
 
@@ -609,23 +609,24 @@ export default function SettingsModal({
     setBusyAction("notification-test");
     setNotice(null);
     try {
-      const customSound = currentSettings.notificationSound === "soft" || currentSettings.notificationSound === "bright";
       if (onTestNotification) {
+        // The App-level test runs the FULL pipeline (banner plus the main-
+        // process custom sound on desktop), so nothing extra to play here.
         await onTestNotification(currentSettings);
-        if (customSound) {
-          if (onTestSound) {
-            await onTestSound(currentSettings.notificationSound);
-          } else {
-            const ready = await primeNotificationSound() && canPlayCustomNotificationSound();
-            if (!ready || !playNotificationSound(currentSettings.notificationSound)) await notifyInBrowser(false);
-          }
-        }
-      } else if (customSound) {
-        const ready = await primeNotificationSound() && canPlayCustomNotificationSound();
-        await notifyInBrowser(ready);
-        if (ready && !playNotificationSound(currentSettings.notificationSound)) await notifyInBrowser(false);
       } else {
-        await notifyInBrowser(currentSettings.notificationSound === "none");
+        const customSound = currentSettings.notificationSound === "soft" || currentSettings.notificationSound === "bright";
+        if (customSound) {
+          const primed = await primeNotificationSound();
+          const audible = primed && playNotificationSound(currentSettings.notificationSound);
+          await notifyInBrowser(!audible);
+          if (!audible) {
+            // The prime failed (e.g. blocked audio device): the banner above
+            // already fell back to the audible default — no extra tone.
+            return;
+          }
+        } else {
+          await notifyInBrowser(currentSettings.notificationSound === "none");
+        }
       }
       setNotice({ kind: "success", message: t("settings.notifications.testSent") });
     } catch (error) {
@@ -954,7 +955,7 @@ export default function SettingsModal({
             <section className="settings-section" data-settings-nav="language" aria-labelledby="language-settings">
               <div className="settings-section-title">
                 <Languages size={16} />
-                <div><span>{t("language.title")}</span><p id="language-settings">{t("language.description")}</p></div>
+                <div><span id="language-settings">{t("language.title")}</span></div>
               </div>
               <label className="setting-select-row" htmlFor="interface-language">
                 <span><strong>{t("language.label")}</strong><small>{t("settings.language.applyImmediately")}</small></span>
@@ -992,24 +993,22 @@ export default function SettingsModal({
             <section className="settings-section" data-settings-nav="notifications" aria-labelledby="notification-settings">
               <div className="settings-section-title">
                 <Bell size={16} />
-                <div><span>{t("settings.notifications.title")}</span><p id="notification-settings">{t("settings.notifications.description")}</p></div>
+                <div><span id="notification-settings">{t("settings.notifications.title")}</span></div>
               </div>
               <Switch
                 checked={currentSettings.notificationsEnabled}
                 disabled={controlsBusy}
                 label={t("settings.notifications.desktop.label")}
-                description={t("settings.notifications.desktop.description")}
                 onChange={() => void applyOptimisticSettings({ notificationsEnabled: !currentSettings.notificationsEnabled }, null)}
               />
               <Switch
                 checked={currentSettings.notifyWhenFocused}
                 disabled={controlsBusy || !currentSettings.notificationsEnabled}
                 label={t("settings.notifications.focused.label")}
-                description={t("settings.notifications.focused.description")}
                 onChange={() => void applyOptimisticSettings({ notifyWhenFocused: !currentSettings.notifyWhenFocused }, null)}
               />
 
-              <div className={`setting-subheading${currentSettings.notificationsEnabled ? "" : " muted"}`}><span>{t("settings.sound.title")}</span><small>{currentSettings.notificationsEnabled ? t("settings.sound.description") : t("settings.sound.enableNotificationsFirst")}</small></div>
+              <div className={`setting-subheading${currentSettings.notificationsEnabled ? "" : " muted"}`}><span>{t("settings.sound.title")}</span>{!currentSettings.notificationsEnabled && <small>{t("settings.sound.enableNotificationsFirst")}</small>}</div>
               <div className="settings-option-grid sound-option-grid" role="group" aria-label={t("settings.sound.groupLabel")}>
                 {soundOptions.map((option) => (
                   <button
@@ -1063,7 +1062,6 @@ export default function SettingsModal({
                   checked={currentSettings.launchAtStartup}
                   disabled={controlsBusy}
                   label={t("settings.launchAtStartup.label")}
-                  description={t("settings.launchAtStartup.description")}
                   onChange={() => void applyOptimisticSettings({ launchAtStartup: !currentSettings.launchAtStartup }, null)}
                 />
                 <Switch
@@ -1141,10 +1139,10 @@ export default function SettingsModal({
             <section className="settings-section" data-settings-nav="sync" aria-labelledby="sync-settings">
               <div className="settings-section-title">
                 <RefreshCw size={16} />
-                <div><span>{t("settings.sync.title")}</span><p id="sync-settings">{t("settings.sync.description")}</p></div>
+                <div><span id="sync-settings">{t("settings.sync.title")}</span></div>
               </div>
               <label className="setting-select-row" htmlFor="refresh-interval">
-                <span><strong>{t("settings.sync.refresh.label")}</strong><small>{t("settings.sync.refresh.description")}</small></span>
+                <span><strong>{t("settings.sync.refresh.label")}</strong></span>
                 <ThemedSelect
                   id="refresh-interval"
                   value={currentSettings.refreshIntervalSeconds}

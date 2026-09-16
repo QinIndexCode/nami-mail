@@ -62,7 +62,7 @@ export default function SettingsAppearanceSection({
     <section className="settings-section" data-settings-nav="appearance" aria-labelledby="appearance-settings">
       <div className="settings-section-title">
         <Palette size={16} />
-        <div><span>{t("settings.appearance.title")}</span><p id="appearance-settings">{t("settings.appearance.description")}</p></div>
+        <div><span id="appearance-settings">{t("settings.appearance.title")}</span></div>
       </div>
 
       <div className="settings-option-grid theme-option-grid" role="group" aria-label={t("settings.theme.groupLabel")}>
@@ -83,7 +83,7 @@ export default function SettingsAppearanceSection({
       </div>
 
       <label className="setting-select-row" htmlFor="list-density">
-        <span><strong>{t("settings.density.title")}</strong><small>{t("settings.density.description")}</small></span>
+        <span><strong>{t("settings.density.title")}</strong></span>
         <ThemedSelect
           id="list-density"
           value={currentSettings.listDensity}
@@ -101,7 +101,7 @@ export default function SettingsAppearanceSection({
         checked={currentSettings.avatarGravatarEnabled}
         disabled={controlsBusy}
         label={t("settings.avatars.gravatar.label")}
-        description={t("settings.avatars.gravatar.description")}
+        privacyNote={t("settings.avatars.gravatar.privacy")}
         onChange={() => void applyOptimisticSettings({ avatarGravatarEnabled: !currentSettings.avatarGravatarEnabled }, null)}
       />
 

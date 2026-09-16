@@ -44,10 +44,6 @@ export async function primeNotificationSound(): Promise<boolean> {
   return isAudioContextRunning(context);
 }
 
-export function canPlayCustomNotificationSound(): boolean {
-  return typeof document !== "undefined" && document.hasFocus() && Boolean(audioContext && isAudioContextRunning(audioContext));
-}
-
 /** Returns false instead of attempting a suspended-context playback. */
 export function playNotificationSound(sound: NotificationSound): boolean {
   if (sound === "none" || sound === "system") return false;

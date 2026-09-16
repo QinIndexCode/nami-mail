@@ -274,6 +274,84 @@ export function textFromSanitizedMailHtml(html: string): string {
   return template.content.textContent ?? "";
 }
 
+/** Quote markers that identify quoted message bodies inside sanitized HTML.
+ *  Gmail wraps its quotes in a gmail_quote div (with the "On … wrote:"
+ *  attribution inside); most other clients emit plain blockquotes. */
+const QUOTE_WRAPPER_SELECTOR = "blockquote, div.gmail_quote";
+
+/** Folds the outermost quoted blocks of a sanitized HTML body into native
+ *  <details> elements so long reply chains collapse to a one-line toggle
+ *  (Gmail-style "Show quoted text"). Runs AFTER sanitization and only on the
+ *  already-safe string. Nested quotes are left untouched — their outer fold
+ *  hides them anyway, and doubly-nested toggles just add noise. Returns the
+ *  input unchanged when there is nothing to fold. */
+export function collapseQuotedMailHtml(html: string, summaryLabel: string): string {
+  if (!html) return html;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  // Decide the fold set against the pristine tree, then mutate once — doing
+  // both interleaved would re-match quotes that a previous pass just nested
+  // inside a <details>.
+  const foldables = [...template.content.querySelectorAll(QUOTE_WRAPPER_SELECTOR)]
+    .filter((element) => !element.parentElement?.closest(QUOTE_WRAPPER_SELECTOR));
+  if (!foldables.length) return html;
+  for (const element of foldables) {
+    const details = document.createElement("details");
+    details.className = "mail-quote";
+    const summary = document.createElement("summary");
+    summary.textContent = summaryLabel;
+    details.append(summary);
+    element.replaceWith(details);
+    details.append(element);
+  }
+  return template.innerHTML;
+}
+
+const QUOTE_LINE_PATTERN = /^\s*>/;
+/** Classic separator headers ("----- 原始邮件 -----") that old clients use
+ *  instead of "> " prefixes to introduce quoted content. */
+const QUOTE_SEPARATOR_PATTERN = /^\s*[-—–]{2,}\s*(?:原始邮件|Original Message)\s*[-——–]{2,}\s*$/i;
+
+/** Splits a plain-text body into its own content and a trailing quoted
+ *  block. The fold is deliberately conservative: only a block that runs to
+ *  the end of the message is treated as the quote (interleaved replies stay
+ *  inline), a separator line swallows everything below it, and the fold
+ *  never consumes the whole message. */
+export function splitQuotedMailText(text: string): { body: string; quote: string } {
+  if (!text) return { body: "", quote: "" };
+  const lines = text.split(/\r?\n/);
+  let end = lines.length;
+  while (end > 0 && lines[end - 1].trim() === "") end -= 1;
+  if (end === 0) return { body: text, quote: "" };
+  // Walk backwards over the trailing quote-prefixed block, allowing blank
+  // lines between quoted paragraphs but not a blank line before a non-quote.
+  let quoteStart = end;
+  while (quoteStart > 0) {
+    const previous = lines[quoteStart - 1];
+    if (QUOTE_LINE_PATTERN.test(previous)) {
+      quoteStart -= 1;
+      continue;
+    }
+    if (previous.trim() === "" && quoteStart - 2 >= 0 && QUOTE_LINE_PATTERN.test(lines[quoteStart - 2])) {
+      quoteStart -= 1;
+      continue;
+    }
+    break;
+  }
+  // A separator header sits above the quoted content it introduces (which
+  // itself need not use "> " prefixes), so it wins when it sits earlier.
+  let separatorStart = -1;
+  for (let index = 0; index < end; index += 1) {
+    if (QUOTE_SEPARATOR_PATTERN.test(lines[index])) separatorStart = index;
+  }
+  const start = separatorStart >= 0 && separatorStart < quoteStart ? separatorStart : quoteStart;
+  if (start <= 0 || start >= end) return { body: text, quote: "" };
+  return {
+    body: lines.slice(0, start).join("\n").replace(/\n+$/, ""),
+    quote: lines.slice(start, end).join("\n"),
+  };
+}
+
 export function replyBody(message: Message, accounts: readonly Account[], locale: string, t: Translate, safeHtml: string): string {
   const signature = accounts.find((account) => account.id === message.accountId)?.signature ?? "";
   const body = message.textBody || textFromSanitizedMailHtml(safeHtml) || message.snippet;

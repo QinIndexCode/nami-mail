@@ -4,6 +4,7 @@ import { AgentService } from "../src/agent-service.js";
 import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
 import { applyAgentStoreSchema } from "../src/agent/schema.js";
 import { AgentSourceEventOutbox } from "../src/agent/source-events.js";
+import { OpenAiCompatibleProvider } from "../src/agent/openai-compatible-provider.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 
 const timestamp = "2026-08-19T12:00:00.000Z";
@@ -161,6 +162,51 @@ describe("AgentService run watchdog", () => {
     // the user message (existing behavior, preserved by the watchdog change).
     const messages = service.getConversation(conversation.id).messages;
     expect(messages.filter((message) => message.role === "assistant")).toHaveLength(0);
+    await service.close();
+  });
+
+  it("frees the conversation slot before the first-turn title generation finishes", async () => {
+    const { service, provider, conversation } = fixture();
+    const internals = internalRuntime(service);
+    vi.spyOn(internals.rag, "drainOnce").mockResolvedValue(undefined);
+    vi.spyOn(internals.rag, "search").mockResolvedValue([]);
+    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+      yield { type: "text_delta", delta: "Partial reply." };
+      yield { type: "completed", reason: "stop" };
+    });
+    // The first-turn title generation rides a separate provider call. Gate it:
+    // on a slow provider it can outrun the provider request timeout, and while
+    // it hangs the conversation must already accept new sends.
+    const { gate, release } = gatedStream();
+    const titleStream = vi.spyOn(OpenAiCompatibleProvider.prototype, "streamChat").mockImplementation(async function* () {
+      await gate;
+      yield { type: "text_delta", delta: "Conversation title" };
+      yield { type: "completed", reason: "stop" };
+    });
+
+    const runPromise = drain(service, conversation, provider.id);
+    // The terminal events were consumed and the run persists its turn; the
+    // title generation (call 2) is now hanging on the gate.
+    await vi.waitFor(() => expect(titleStream).toHaveBeenCalledTimes(1));
+
+    // A resend issued while the title generation is still hanging must NOT be
+    // refused with CONFLICT: the slot was released right after the turn was
+    // persisted. This is what keeps the revoke-and-resend flow from leaving a
+    // user message that was never persisted (its later revoke would 404).
+    const followUp = await drain(service, conversation, provider.id);
+    expect(followUp).not.toContainEqual(expect.objectContaining({
+      type: "error",
+      error: expect.objectContaining({ code: "CONFLICT" }),
+    }));
+    expect(followUp).toContainEqual({ type: "text_delta", delta: "Partial reply." });
+    expect(followUp).toContainEqual({ type: "completed", reason: "stop" });
+    const messages = service.getConversation(conversation.id).messages;
+    expect(messages.filter((message) => message.role === "user")).toHaveLength(2);
+
+    release();
+    await runPromise;
+    expect(titleStream).toHaveBeenCalledTimes(1);
+    titleStream.mockRestore();
     await service.close();
   });
 });

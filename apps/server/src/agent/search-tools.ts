@@ -77,12 +77,34 @@ function normalizeUrl(href: string): string {
   return href;
 }
 
+/**
+ * DuckDuckGo Lite's markup has shifted between quoting styles and attribute
+ * orders over time (e.g. `class="result-link" href="…"` vs `rel="nofollow"
+ * href='…' class='result-link'`). A single regex that fixes both the quote
+ * character and the attribute order silently matches zero results on the
+ * other variant while the request itself succeeds. So: match the opening tag
+ * first, then inspect its attribute string independently of order and quote
+ * style.
+ */
+
+/** True when the attribute string declares the given class, whatever quote
+ *  style wraps it. */
+function hasClass(attrs: string, className: string): boolean {
+  const classMatch = attrs.match(/class\s*=\s*(["'])([^"']*)\1/i);
+  if (!classMatch?.[2]) return false;
+  return classMatch[2].split(/\s+/).includes(className);
+}
+
 function parseResultLinks(html: string): Array<{ title: string; url: string }> {
   const links: Array<{ title: string; url: string }> = [];
-  const linkPattern = /<a[^>]*class="[^"]*result-link[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gi;
-  for (const match of html.matchAll(linkPattern)) {
-    const rawUrl = decodeHtmlEntities(match[1]!.trim());
-    const title = stripHtmlTags(decodeHtmlEntities(match[2]!)).trim();
+  const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  for (const match of html.matchAll(anchorPattern)) {
+    const attrs = match[1] ?? "";
+    if (!hasClass(attrs, "result-link")) continue;
+    const hrefMatch = attrs.match(/href\s*=\s*(["'])([^"']*)\1/i);
+    if (!hrefMatch?.[2]) continue;
+    const rawUrl = decodeHtmlEntities(hrefMatch[2]!.trim());
+    const title = stripHtmlTags(decodeHtmlEntities(match[2] ?? "")).trim();
     if (!title || !rawUrl) continue;
     links.push({ title, url: normalizeUrl(rawUrl) });
   }
@@ -91,9 +113,10 @@ function parseResultLinks(html: string): Array<{ title: string; url: string }> {
 
 function parseResultSnippets(html: string): string[] {
   const snippets: string[] = [];
-  const snippetPattern = /<td[^>]*class="[^"]*result-snippet[^"]*"[^>]*>(.*?)<\/td>/gi;
-  for (const match of html.matchAll(snippetPattern)) {
-    const snippet = stripHtmlTags(decodeHtmlEntities(match[1]!)).trim();
+  const cellPattern = /<td\b([^>]*)>([\s\S]*?)<\/td>/gi;
+  for (const match of html.matchAll(cellPattern)) {
+    if (!hasClass(match[1] ?? "", "result-snippet")) continue;
+    const snippet = stripHtmlTags(decodeHtmlEntities(match[2] ?? "")).trim();
     snippets.push(snippet);
   }
   return snippets;

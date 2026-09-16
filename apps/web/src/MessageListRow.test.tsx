@@ -81,6 +81,7 @@ describe("MessageListRow", () => {
             recentlyReadInUnread={false}
             threadSize={1}
             gravatarEnabled
+            accountEmails={["me@example.com"]}
             buttonRefs={buttonRefs}
             rowVirtualizer={virtualizerStub as never}
             onRowClick={onRowClick}
@@ -182,5 +183,22 @@ describe("MessageListRow", () => {
     renderRow(message);
     expect(buttonRefs.current.get("msg-1")).toBe(firstButton);
     expect(measureElement).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the user's own sent mail recipient-first with a To-line, and incoming mail as the sender", () => {
+    const sent = makeMessage({
+      mailbox: "Sent",
+      from: { name: "Me", address: "me@example.com" },
+      to: [{ name: "Bob", address: "bob@example.com" }, { name: "Carol", address: "carol@example.com" }],
+    });
+    renderRow(sent);
+    expect(container.querySelector(".message-meta strong")?.textContent).toBe("发送给 Bob");
+
+    renderRow(makeMessage());
+    expect(container.querySelector(".message-meta strong")?.textContent).toBe("Sender");
+
+    // Own-sent mail without recipients falls back to the sender rendering.
+    renderRow(makeMessage({ mailbox: "Sent", from: { name: "Me", address: "me@example.com" }, to: [] }));
+    expect(container.querySelector(".message-meta strong")?.textContent).toBe("Me");
   });
 });

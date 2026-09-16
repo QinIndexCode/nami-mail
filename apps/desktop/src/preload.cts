@@ -28,7 +28,6 @@ type NewMailPayload = {
   fromAddress: string;
   count: number;
   shouldAlert: boolean;
-  playCustomSound: boolean;
 };
 
 const updatePhases = [
@@ -330,6 +329,7 @@ if (contextBridge && ipcRenderer) {
 
   contextBridge.exposeInMainWorld("namiDesktop", {
     notify: (payload: NativeNotification) => ipcRenderer.invoke("nami:notify", payload),
+    testNativeNotification: (payload: NativeNotification) => ipcRenderer.invoke("nami:test-native-notification", payload),
     copyVerificationCode: (code: string) => ipcRenderer.invoke("nami:copy-verification-code", code),
     showItemInFolder: (path: string) => ipcRenderer.invoke("nami:show-item-in-folder", path),
     setLaunchAtStartup: (enabled: boolean) => {
@@ -352,7 +352,6 @@ if (contextBridge && ipcRenderer) {
     skipUpdate: (): Promise<DesktopUpdateSnapshot | undefined> => invokeUpdateSnapshot("nami:update-skip"),
     snoozeUpdate: (durationMinutes: number): Promise<DesktopUpdateSnapshot | undefined> => invokeUpdateSnapshot("nami:update-snooze", durationMinutes),
     installUpdate: (): Promise<DesktopUpdateInstallResult> => ipcRenderer.invoke("nami:update-install").then(normalizeDesktopUpdateInstallResult),
-    setCustomNotificationSoundReady: (ready: boolean) => ipcRenderer.send("nami:custom-notification-sound-ready", ready),
     quit: () => ipcRenderer.send("nami:quit"),
     onNewMail: (listener: (payload: NewMailPayload) => void) => {
       const wrapped = (_event: Electron.IpcRendererEvent, payload: NewMailPayload) => listener(payload);

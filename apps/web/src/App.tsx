@@ -2,6 +2,7 @@ import { lazy, Profiler, Suspense, useCallback, useEffect, useLayoutEffect, useM
 import { computePosition, flip, offset, shift } from "@floating-ui/dom";
 import {
   Archive,
+  ArrowDown,
   ArrowLeft,
   AtSign,
   Calendar,
@@ -68,10 +69,10 @@ import { AccountHealthBanner, accountShowsFreshness, accountStatusDotClass, useA
 import { useRealtimeSync, type SyncProgressPayload } from "./realtimeSync";
 import { useCoalescedRefresh } from "./useCoalescedRefresh";
 import { resolveScrollAnchor, type ScrollAnchorRow } from "./scrollAnchor";
-import { buildForwardDraft, buildReplyDraft } from "./mailActions";
+import { buildForwardDraft, buildReplyDraft, isOwnSentMessage } from "./mailActions";
 import { ComposeModal } from "./ComposeModal";
 import { sortMessages } from "./mailImportance";
-import { groupMessagesByThread, shouldCollapseThread, sortThreadByTimeline } from "./threads";
+import { groupMessagesByThread, mergeThreadMembers, shouldCollapseThread, sortThreadByTimeline } from "./threads";
 import { ErrorBoundary } from "./ErrorBoundary";
 import {
   applyBatchSeenChange as applyBatchSeenChangeState,
@@ -103,7 +104,7 @@ import {
 import { beginSpan, markInterval, recordCommit } from "./perfTelemetry";
 import { mergeSubmissionSnapshots, sortSubmissions, submissionStatusNeedsRefresh } from "./sendingStatus";
 import { providerDisplayName } from "./providerOnboarding";
-import { canPlayCustomNotificationSound, playNotificationSound, primeNotificationSound } from "./sounds";
+import { playNotificationSound, primeNotificationSound } from "./sounds";
 import { saveLocalePreference } from "./localePreference";
 import { createSettingsLoadCoordinator } from "./settingsLoadCoordinator";
 import TranslationPanel, { type TranslationAvailability, type TranslationContent, type TranslationPanelState } from "./TranslationPanel";
@@ -131,7 +132,9 @@ import {
   currentSystemTheme,
   resolveTheme,
   backgroundUrl,
+  collapseQuotedMailHtml,
   sanitizeMailHtml,
+  splitQuotedMailText,
   textFromSanitizedMailHtml,
   replyBody,
   SWITCH_FADE_MS,
@@ -172,6 +175,8 @@ type ToastNotice = { kind: ToastKind; message: string; action?: ToastAction } | 
 // either direction.
 type AgentPhase = "idle" | "mail-leaving" | "agent-entering" | "agent-leaving" | "mail-entering";
 const MAIL_SWITCH_TOTAL_MS = SWITCH_FADE_MS + MAIL_FADE_STAGGER_MS;
+/** Sidebar spinner grace period: faster loads show no spinner at all. */
+const SIDEBAR_LOADING_SPINNER_DELAY_MS = 250;
 const AGENT_SWITCH_TOTAL_MS = SWITCH_FADE_MS + AGENT_FADE_STAGGER_MS;
 type TranslationSession = {
   messageId: string;
@@ -212,11 +217,6 @@ if (isDesktopSmoke) document.documentElement.classList.add("desktop-smoke");
 // so the window bar can pick the frameless layout (own controls vs. the
 // macOS traffic-light slot).
 const desktopPlatform = new URLSearchParams(window.location.search).get("platform") ?? undefined;
-
-
-function reportCustomNotificationSoundAvailability(): void {
-  desktopBridge()?.setCustomNotificationSoundReady(canPlayCustomNotificationSound());
-}
 
 
 /**
@@ -362,6 +362,25 @@ export default function App() {
   /** Whether the header search box is expanded (icon-only when collapsed). */
   const [searchOpen, setSearchOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Identity of the list DOM. Bumped in the SAME batch as a full row swap in
+  // `load`, so the list viewport remounts exactly once per switch — at the
+  // data change — instead of following the request lifecycle (which tore the
+  // rows down and replayed the fade twice on stale data: the flicker on
+  // view/account/folder/search switches). Silent refreshes merge in place and
+  // never bump it.
+  const [listSnapshotKey, setListSnapshotKey] = useState(0);
+  // Sidebar spinner: appears only when a load actually takes a beat — below
+  // the threshold a spinner would just flash in and out (the same flicker the
+  // list skeleton had). Both entrance and exit transition in CSS.
+  const [sidebarLoading, setSidebarLoading] = useState(false);
+  useEffect(() => {
+    if (!loading) {
+      setSidebarLoading(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSidebarLoading(true), SIDEBAR_LOADING_SPINNER_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
   const [syncing, setSyncing] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>("idle");
@@ -485,18 +504,9 @@ export default function App() {
       : settings.backgroundIntensity / 100;
   const accountIdsKey = accounts.map((account) => account.id).sort().join("|");
   // Identity of the list on screen. The list component keys its viewport on
-  // this so switching accounts/folders/views/search swaps elements (and can
-  // fade the arriving rows in) instead of mutating one list in place.
-  const listIdentity = [
-    selectedAccount,
-    selectedFolder,
-    view,
-    debouncedQuery,
-    searchScope,
-    attachmentKindFilter,
-    dateBounds.after ?? "",
-    dateBounds.before ?? "",
-  ].join("\u0000");
+  // `listSnapshotKey` (bumped with each settled row swap above) so a switch
+  // remounts the viewport once, at the data change, and can fade the arriving
+  // rows in instead of mutating one list in place.
   const pendingMoveVerificationKey = [...new Set([
     ...pendingMoveVerifications,
     ...pendingArchiveMoves.map((move) => move.id),
@@ -851,6 +861,7 @@ export default function App() {
           setAccounts(demo.createDemoAccounts(locale));
           setProviders(demo.demoProviders);
           setMessages(demo.demoMessages);
+          setListSnapshotKey((value) => value + 1);
           setMessagePage(1);
           setStats(demo.demoStats);
         }
@@ -902,6 +913,9 @@ export default function App() {
         setProviders(nextProviders);
         messagesRef.current = nextMessages;
         setMessages(nextMessages);
+        // Same batch as the row swap: the viewport remounts here, and only
+        // here, so the fade-in plays on the arriving rows.
+        setListSnapshotKey((value) => value + 1);
         setMessageTotal(nextMessageTotalForSnapshot(messagePage.total, pendingMerge.items.length, messageView === "unread"));
         setMessagePage(messagePage.page);
         setStats(counts.stats);
@@ -1241,6 +1255,20 @@ await refreshSubmissions(nextAccounts, { silent: true });
     }
   }, [updateFooterBusy, showToast, t]);
   const updateFooterAction = resolveUpdateFooter(desktopUpdateStatus);
+  // Update badge (available phase): a circular arrow chip that expands into a
+  // pill on hover. Dismissing fades the pill back into the circle and then
+  // out entirely; any phase/version change brings a fresh badge back.
+  const [updateBadgeDismissed, setUpdateBadgeDismissed] = useState(false);
+  const [updateBadgeHidden, setUpdateBadgeHidden] = useState(false);
+  const dismissUpdateBadge = useCallback(() => {
+    setUpdateBadgeDismissed(true);
+    window.setTimeout(() => setUpdateBadgeHidden(true), 560);
+  }, []);
+  const updateBadgeVersion = desktopUpdateStatus?.phase === "available" ? desktopUpdateStatus.targetVersion : null;
+  useEffect(() => {
+    setUpdateBadgeDismissed(false);
+    setUpdateBadgeHidden(false);
+  }, [updateBadgeVersion]);
   useEffect(() => {
     const bridge = desktopBridge();
     if (!bridge || isDemo) return undefined;
@@ -1561,8 +1589,34 @@ await refreshSubmissions(nextAccounts, { silent: true });
     return () => el.removeEventListener("scroll", maybeLoadMore);
   }, [currentMessageTotal, filteredMessages.length, loadedServerMessageCount, loading]);
 
-  const selected = filteredMessages.find((message) => message.id === selectedId) ?? null;
-  const selectedThread = selected ? sortThreadByTimeline(threadById.get(selected.id) ?? []) : null;
+  // Gmail-style conversation: the server resolves the thread across all
+  // mailboxes of the account, so members outside the loaded view (the user's
+  // own replies in Sent, older replies that fell off the list window) can join
+  // the strip. Refreshed when the open message changes and after a send.
+  const [threadExtras, setThreadExtras] = useState<{ anchorId: string; members: Message[] } | null>(null);
+  const [threadRefreshTick, setThreadRefreshTick] = useState(0);
+  const selected = filteredMessages.find((message) => message.id === selectedId)
+    ?? (isDemo ? null : threadExtras?.members.find((message) => message.id === selectedId) ?? null);
+  const threadExtrasForSelected = threadExtras && selected
+    && (threadExtras.anchorId === selected.id || threadExtras.members.some((member) => member.id === selected.id))
+    ? threadExtras.members
+    : [];
+  const selectedThread = selected
+    ? sortThreadByTimeline(mergeThreadMembers(threadById.get(selected.id) ?? [], threadExtrasForSelected))
+    : null;
+  useEffect(() => {
+    if (isDemo || !selectedId) {
+      setThreadExtras(null);
+      return;
+    }
+    let cancelled = false;
+    void api.messageThread(selectedId).then((response) => {
+      if (!cancelled) setThreadExtras({ anchorId: selectedId, members: response.items });
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, threadRefreshTick]);
   // Long conversations collapse to their first and last message in the strip;
   // the middle becomes one expand control. Collapsing never hides the open
   // message, so reading an interior message shows the whole thread instead.
@@ -1614,6 +1668,25 @@ await refreshSubmissions(nextAccounts, { silent: true });
     }
   }, []);
   const selectedMessageAccount = selected ? accounts.find((account) => account.id === selected.accountId) : undefined;
+  // Sent-vs-received display: a message whose sender is one of the user's own
+  // addresses is rendered recipient-first (Gmail style) — the reader header
+  // shows who it went TO, and quick reply names the original recipient rather
+  // than the user's own address. `to` can be empty (rare self-addressed
+  // drafts), in which case every conditional below falls back to the
+  // incoming-style rendering.
+  const selectedIsOwnSent = selected ? isOwnSentMessage(selected, accounts.map((account) => account.email)) : false;
+  const selectedSentRecipient = selectedIsOwnSent && selected ? selected.to[0] : undefined;
+  const selectedReplyTargetAddress = selected && selectedIsOwnSent
+    ? buildReplyDraft(selected, [...accounts.map((account) => account.email), selected.accountEmail]).to[0]
+    : undefined;
+  const selectedReplyTarget = selected && selectedReplyTargetAddress
+    ? selected.to.find((recipient) => recipient.address.trim().toLowerCase() === selectedReplyTargetAddress.trim().toLowerCase())
+    : undefined;
+  const quickReplySender = selected
+    ? selectedReplyTarget
+      ? (selectedReplyTarget.name || selectedReplyTarget.address)
+      : selectedReplyTargetAddress ?? (selected.from.name || selected.from.address)
+    : "";
   const visibleAttachments = selected?.attachments.filter((attachment) => !attachment.related) ?? [];
   const selectedAccountRecord = accounts.find((account) => account.id === selectedAccount);
   const localizedProviderName = (account: Pick<Account, "provider" | "providerName">) => providerDisplayName({ id: account.provider, name: account.providerName }, locale, t);
@@ -1674,6 +1747,25 @@ const emptyMessageList = useMemo(() => (query.trim()
   const safeHtml = useMemo(
     () => selected?.htmlBody ? sanitizeMailHtml(selected.htmlBody, theme === "dark") : "",
     [selected?.htmlBody, theme],
+  );
+  // Reply quotes collapse to a one-line toggle (Gmail-style). The fold lives
+  // at render time: sanitization, the translation pipeline and reply quoting
+  // all keep working on the original body, and re-opening a message starts
+  // with the quotes hidden again.
+  const [quotedExpanded, setQuotedExpanded] = useState(false);
+  useEffect(() => {
+    setQuotedExpanded(false);
+  }, [selected?.id]);
+  const readerHtml = useMemo(() => {
+    if (!safeHtml) return "";
+    const translatedHtml = translationState.phase === "ready" && translationState.visible ? translationState.translatedHtml : null;
+    const body = translatedHtml ?? safeHtml;
+    return quotedExpanded ? body : collapseQuotedMailHtml(body, t("mail.reader.showQuoted"));
+  }, [safeHtml, translationState, quotedExpanded, t]);
+  const readerTextSource = selected?.textBody || (selected?.snippet ? localizeMessageLinks(selected.snippet, locale) : "") || "";
+  const readerTextParts = useMemo(
+    () => quotedExpanded ? { body: readerTextSource, quote: "" } : splitQuotedMailText(readerTextSource),
+    [readerTextSource, quotedExpanded],
   );
   // Inherit the message's branded backdrop so a translated result keeps the
   // provider-authored look instead of falling back to a plain app panel.
@@ -1992,13 +2084,22 @@ const emptyMessageList = useMemo(() => (query.trim()
       pinFlagOverride(pendingLocalStateRef.current, message.id);
       updateUnreadViewRecentlyRead(message, true);
       applyLocalSeenChange(message, true);
+      // A message opened from the conversation strip may only exist in the
+      // server-resolved thread extras (outside the loaded view); keep its
+      // read state in sync there too, or the strip's unread dot would stick.
+      const patchThreadExtrasSeen = (seen: boolean) => setThreadExtras((current) => current
+        ? { ...current, members: current.members.map((member) => member.id === message.id ? { ...member, seen } : member) }
+        : current);
+      patchThreadExtrasSeen(true);
       if (isDemo) {
         unpinFlagOverride(pendingLocalStateRef.current, message.id);
+        patchThreadExtrasSeen(true);
       } else {
         void api.markSeen(message.id, true).catch((error: unknown) => {
           const readMessage = { ...message, seen: true, flags: [...new Set([...message.flags, "\\Seen"])] };
           updateUnreadViewRecentlyRead(readMessage, false);
           applyLocalSeenChange(readMessage, false);
+          patchThreadExtrasSeen(false);
           showToast(t("mail.error.markRead", { message: mailErrorToastMessage(error, t("mail.error.markReadFallback"), t) }), "error");
         }).finally(() => {
           unpinFlagOverride(pendingLocalStateRef.current, message.id);
@@ -2015,6 +2116,24 @@ const emptyMessageList = useMemo(() => (query.trim()
     if (!restoreFocus || !messageId) return;
     window.requestAnimationFrame(() => messageButtonRefs.current.get(messageId)?.focus());
   }, []);
+
+  const accountEmails = useMemo(() => accounts.map((account) => account.email), [accounts]);
+  // One conversation-strip entry. Own sent mail renders recipient-first
+  // (Gmail style): the recipient's avatar plus a "To <name>" line instead of
+  // presenting the user as the sender. Falls back to the sender when the
+  // message carries no recipients.
+  const renderThreadStripItem = (threadMessage: Message) => {
+    const ownSent = isOwnSentMessage(threadMessage, accountEmails);
+    const hasRecipient = ownSent && threadMessage.to[0] !== undefined;
+    const person = hasRecipient ? threadMessage.to[0]! : threadMessage.from;
+    return (
+      <button key={threadMessage.id} type="button" className={`thread-strip-item ${threadMessage.id === selected?.id ? "active" : ""}`} onClick={() => void openMessage(threadMessage)}>
+        <CustomAvatar name={person.name} address={person.address} tone={accountTone(person.address)} size="small" />
+        <span className="thread-strip-copy"><strong>{hasRecipient ? t("mail.reader.toRecipient", { recipient: person.name || person.address }) : (person.name || person.address)}</strong><time>{formatMessageTime(threadMessage.sentAt, locale)}</time></span>
+        {!threadMessage.seen && <span className="unread-dot" aria-hidden="true" />}
+      </button>
+    );
+  };
 
   useEffect(() => {
     if (!selectedId || !isCompactMailLayout()) return;
@@ -3191,13 +3310,28 @@ const emptyMessageList = useMemo(() => (query.trim()
   const testDesktopNotification = useCallback(async (testSettings: AppSettings) => {
     const bridge = desktopBridge();
     if (isDesktop && !bridge) throw new Error(t("settings.error.desktopNotificationsUnavailable"));
-    const customSound = testSettings.notificationSound === "soft" || testSettings.notificationSound === "bright";
-    const customSoundReady = customSound && await primeNotificationSound();
-    reportCustomNotificationSoundAvailability();
+    if (bridge?.testNativeNotification) {
+      // The settings test must exercise the SAME pipeline as a real new-mail
+      // alert: the main process plays the configured custom sound (soft/bright)
+      // and pairs the notification silence with the actual playback outcome.
+      // The old renderer-side assumption (prime the AudioContext, mute the
+      // banner, and play from the renderer) left the test banner SILENT —
+      // nobody played anything when the real sound had moved to the main
+      // process — which is exactly the "notification without sound" report.
+      const result = await bridge.testNativeNotification({
+        title: "Nami Mail",
+        body: t("settings.notifications.testBody"),
+        // The main process decides the silence from the actual playback
+        // outcome; the payload value is never taken at face value.
+        silent: false,
+      });
+      if (!result.shown) throw new Error(t("settings.error.systemNotificationsUnavailable"));
+      return;
+    }
     const payload = {
       title: "Nami Mail",
       body: t("settings.notifications.testBody"),
-      silent: testSettings.notificationSound === "none" || customSoundReady,
+      silent: testSettings.notificationSound === "none",
     };
     if (bridge) {
       const result = await bridge.notify(payload);
@@ -3208,21 +3342,36 @@ const emptyMessageList = useMemo(() => (query.trim()
     let permission = Notification.permission;
     if (permission === "default") permission = await Notification.requestPermission();
     if (permission !== "granted") throw new Error(t("settings.error.notificationsPermission"));
+    // In the browser there is no main-process player: prime the AudioContext
+    // from this user gesture and play the tone alongside the banner. A failed
+    // prime falls back to the audible default instead of a silent banner.
+    const customSound = testSettings.notificationSound === "soft" || testSettings.notificationSound === "bright";
+    if (customSound) {
+      const primed = await primeNotificationSound();
+      if (primed && playNotificationSound(testSettings.notificationSound)) {
+        new Notification(payload.title, { ...payload, silent: true });
+        return;
+      }
+    }
     new Notification(payload.title, payload);
   }, [t]);
 
   const testNotificationSound = useCallback(async (sound: AppSettings["notificationSound"]) => {
     if (sound === "none") return;
+    if (desktopBridge()?.testNativeNotification) {
+      // Desktop: the sound test runs through the real pipeline (a localized
+      // banner plus the main-process playback) via testDesktopNotification.
+      await testDesktopNotification({ ...settings, notificationSound: sound });
+      return;
+    }
     if (sound === "system") {
       await testDesktopNotification({ ...settings, notificationSound: sound });
       return;
     }
+    // Browser preview: prime from this user gesture and play the WebAudio tone.
     const primed = await primeNotificationSound();
-    reportCustomNotificationSoundAvailability();
     if (primed && playNotificationSound(sound)) return;
-    desktopBridge()?.setCustomNotificationSoundReady(false);
     await testDesktopNotification({ ...settings, notificationSound: "system" });
-    desktopBridge()?.setCustomNotificationSoundReady(false);
   }, [settings, testDesktopNotification]);
 
   const openNotifiedMessage = useCallback(async (messageId: string) => {
@@ -3249,27 +3398,12 @@ const emptyMessageList = useMemo(() => (query.trim()
     setSelectedFolder("");
     setSelectedId(null);
     setRecipientDetailsOpen(false);
+    // A different view is a different list: start reading from the top
+    // instead of wherever the previous list happened to be scrolled (the
+    // clamped offset otherwise reads as a random jump).
+    messageListRef.current?.scrollTo({ top: 0 });
     actions.closeMobileSidebar();
   }, [clearUnreadViewRecentlyRead, actions.closeMobileSidebar]);
-
-  useEffect(() => {
-    const unlockAudio = () => {
-      void primeNotificationSound().then(reportCustomNotificationSoundAvailability, reportCustomNotificationSoundAvailability);
-    };
-    const reportAudioAvailability = () => reportCustomNotificationSoundAvailability();
-    reportAudioAvailability();
-    window.addEventListener("pointerdown", unlockAudio);
-    window.addEventListener("keydown", unlockAudio);
-    window.addEventListener("focus", reportAudioAvailability);
-    document.addEventListener("visibilitychange", reportAudioAvailability);
-    return () => {
-      window.removeEventListener("pointerdown", unlockAudio);
-      window.removeEventListener("keydown", unlockAudio);
-      window.removeEventListener("focus", reportAudioAvailability);
-      document.removeEventListener("visibilitychange", reportAudioAvailability);
-      desktopBridge()?.setCustomNotificationSoundReady(false);
-    };
-  }, []);
 
   // Latest handlers for the desktop-bridge subscribers below, read at call time.
   // The subscriptions are installed once (their deps are effectively empty),
@@ -3279,7 +3413,6 @@ const emptyMessageList = useMemo(() => (query.trim()
   // nobody. The refresh fallback hides the loss; the alert and the toast do not.
   const bridgeHandlersRef = useRef({
     requestRefresh,
-    notificationSound: settings.notificationSound,
     showToast,
     t,
     openNotifiedMessage,
@@ -3288,7 +3421,6 @@ const emptyMessageList = useMemo(() => (query.trim()
   });
   bridgeHandlersRef.current = {
     requestRefresh,
-    notificationSound: settings.notificationSound,
     showToast,
     t,
     openNotifiedMessage,
@@ -3303,15 +3435,8 @@ const emptyMessageList = useMemo(() => (query.trim()
       const handlers = bridgeHandlersRef.current;
       handlers.requestRefresh();
       if (!notice.shouldAlert) return;
-      if (notice.playCustomSound && !playNotificationSound(handlers.notificationSound)) {
-        bridge.setCustomNotificationSoundReady(false);
-        const sender = notice.fromName || notice.fromAddress || handlers.t("mail.notification.newContact");
-        void bridge.notify({
-          title: notice.count === 1 ? handlers.t("mail.notification.singleTitle", { sender }) : handlers.t("mail.notification.multipleTitle", { count: notice.count }),
-          body: notice.count === 1 ? notice.subject : handlers.t("mail.notification.multipleBody", { sender }),
-          silent: false,
-        }).catch(() => undefined);
-      }
+      // The custom sound (soft/bright) is played by the main process before
+      // the native banner goes out; nothing for the renderer to play here.
       handlers.showToast(notice.count === 1
         ? handlers.t("mail.notification.singleToast", { sender: notice.fromName || notice.fromAddress || handlers.t("mail.notification.newContact") })
         : handlers.t("mail.notification.multipleToast", { count: notice.count }));
@@ -3608,6 +3733,8 @@ const emptyMessageList = useMemo(() => (query.trim()
     setView("inbox");
     setSelectedId(null);
     setRecipientDetailsOpen(false);
+    // Same as view switches: a folder is a different list, read it from the top.
+    messageListRef.current?.scrollTo({ top: 0 });
     actions.closeMobileSidebar();
   };
 
@@ -3645,14 +3772,26 @@ const emptyMessageList = useMemo(() => (query.trim()
           <button className="compose-button" type="button" onClick={() => { actions.closeMobileSidebar(); if (accounts.length) actions.openCompose(); else actions.openAddAccount(); }}><PenLine size={18} />{t("mail.compose")}</button>
 
           <nav className={`nav-section${selectedAccount === "all" && !accountsExpanded ? "" : " collapsed"}`} aria-label={t("navigation.mailViews")}>
-            <button aria-pressed={view === "inbox" && !selectedFolder} className={view === "inbox" && !selectedFolder ? "active" : ""} onClick={() => chooseView("inbox")}><Inbox size={18} /><span>{t("mail.unifiedInbox")}</span><em className="sidebar-count" data-tooltip={t("mail.inboxCountTooltip")}>{sidebarCounts.inbox || ""}</em></button>
-            <button aria-pressed={view === "unread"} className={view === "unread" ? "active" : ""} onClick={() => chooseView("unread")}><Mail size={18} /><span>{t("mail.unread")}</span><em className="sidebar-count" data-tooltip={t("mail.unreadCountTooltip")}>{sidebarCounts.unread || ""}</em></button>
-            <button aria-pressed={view === "starred"} className={view === "starred" ? "active" : ""} onClick={() => chooseView("starred")}><Star size={18} /><span>{t("mail.starred")}</span><em className="sidebar-count">{sidebarCounts.starred || ""}</em></button>
-            <button aria-pressed={view === "archived"} className={view === "archived" ? "active" : ""} onClick={() => chooseView("archived")}><Archive size={18} /><span>{t("mail.action.archive")}</span></button>
-            <button aria-pressed={view === "snoozed"} className={view === "snoozed" ? "active" : ""} onClick={() => chooseView("snoozed")}><Clock size={18} /><span>{t("mail.snoozed")}</span><em className="sidebar-count">{sidebarCounts.snoozed || ""}</em></button>
-            <button aria-pressed={view === "attachments"} className={view === "attachments" ? "active" : ""} onClick={() => chooseView("attachments")}><Paperclip size={18} /><span>{t("mail.attachments")}</span><em className="sidebar-count">{sidebarCounts.attachments || ""}</em></button>
-            <button className={draftsNavActive ? "active" : ""} disabled={!draftsNavTarget} onClick={() => draftsNavTarget && openFolderNavTarget(draftsNavTarget)}><FilePenLine size={18} /><span>{t("mail.drafts")}</span><em>{draftsCount || ""}</em></button>
-            <button className={sentNavActive ? "active" : ""} disabled={!sentNavTarget} onClick={() => sentNavTarget && openFolderNavTarget(sentNavTarget)}><Send size={18} /><span>{t("mail.sent")}</span><em>{sentCount || ""}</em></button>
+            {/* Loading indicator: the spinner and the count share ONE fixed
+                18px end slot on the ACTIVE entry — the count fades out while
+                the spinner fades in, so the two can never overlap, the label
+                is never squeezed into a re-ellipsis, and the column width
+                never jumps. Below the 250ms grace nothing changes. */}
+            {(() => {
+              const loadingEnd = sidebarLoading;
+              return (
+                <>
+                  <button aria-pressed={view === "inbox" && !selectedFolder} className={view === "inbox" && !selectedFolder ? "active" : ""} onClick={() => chooseView("inbox")}><Inbox size={18} /><span>{t("mail.unifiedInbox")}</span><span className={`sidebar-end${loadingEnd && view === "inbox" && !selectedFolder ? " loading" : ""}`}><span className="sidebar-spinner" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span><em className="sidebar-count" data-tooltip={t("mail.inboxCountTooltip")}>{sidebarCounts.inbox || ""}</em></span></button>
+                  <button aria-pressed={view === "unread"} className={view === "unread" ? "active" : ""} onClick={() => chooseView("unread")}><Mail size={18} /><span>{t("mail.unread")}</span><span className={`sidebar-end${loadingEnd && view === "unread" ? " loading" : ""}`}><span className="sidebar-spinner" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span><em className="sidebar-count" data-tooltip={t("mail.unreadCountTooltip")}>{sidebarCounts.unread || ""}</em></span></button>
+                  <button aria-pressed={view === "starred"} className={view === "starred" ? "active" : ""} onClick={() => chooseView("starred")}><Star size={18} /><span>{t("mail.starred")}</span><span className={`sidebar-end${loadingEnd && view === "starred" ? " loading" : ""}`}><span className="sidebar-spinner" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span><em className="sidebar-count">{sidebarCounts.starred || ""}</em></span></button>
+                  <button aria-pressed={view === "archived"} className={view === "archived" ? "active" : ""} onClick={() => chooseView("archived")}><Archive size={18} /><span>{t("mail.action.archive")}</span><span className={`sidebar-end${loadingEnd && view === "archived" ? " loading" : ""}`}><span className="sidebar-spinner" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span></span></button>
+                  <button aria-pressed={view === "snoozed"} className={view === "snoozed" ? "active" : ""} onClick={() => chooseView("snoozed")}><Clock size={18} /><span>{t("mail.snoozed")}</span><span className={`sidebar-end${loadingEnd && view === "snoozed" ? " loading" : ""}`}><span className="sidebar-spinner" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span><em className="sidebar-count">{sidebarCounts.snoozed || ""}</em></span></button>
+                  <button aria-pressed={view === "attachments"} className={view === "attachments" ? "active" : ""} onClick={() => chooseView("attachments")}><Paperclip size={18} /><span>{t("mail.attachments")}</span><span className={`sidebar-end${loadingEnd && view === "attachments" ? " loading" : ""}`}><span className="sidebar-spinner" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span><em className="sidebar-count">{sidebarCounts.attachments || ""}</em></span></button>
+                  <button className={draftsNavActive ? "active" : ""} disabled={!draftsNavTarget} onClick={() => draftsNavTarget && openFolderNavTarget(draftsNavTarget)}><FilePenLine size={18} /><span>{t("mail.drafts")}</span><span className={`sidebar-end${loadingEnd && draftsNavActive ? " loading" : ""}`}><span className="sidebar-spinner" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span><em>{draftsCount || ""}</em></span></button>
+                  <button className={sentNavActive ? "active" : ""} disabled={!sentNavTarget} onClick={() => sentNavTarget && openFolderNavTarget(sentNavTarget)}><Send size={18} /><span>{t("mail.sent")}</span><span className={`sidebar-end${loadingEnd && sentNavActive ? " loading" : ""}`}><span className="sidebar-spinner" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span><em>{sentCount || ""}</em></span></button>
+                </>
+              );
+            })()}
           </nav>
 
           <div className="accounts-heading"><span>{t("mail.accounts")}</span><IconButton label={t("account.add")} onClick={() => { actions.closeMobileSidebar(); actions.openAddAccount(); }}><Plus size={16} /></IconButton></div>
@@ -3689,26 +3828,34 @@ const emptyMessageList = useMemo(() => (query.trim()
                   <>
                     <span className="folder-title">{t("mail.folders")}</span>
                     {selectedAccountRecord.folders.map((folder) => (
-                      <button key={folder.path} className={selectedFolder === folder.path ? "active" : ""} aria-pressed={selectedFolder === folder.path} onClick={() => chooseFolder(folder.path)}><FolderNavigationIcon specialUse={folder.specialUse} name={folder.name} /><span>{folder.name}</span><em className={folder.unseen ? "folder-unseen" : ""}>{folder.unseen || folder.total || ""}</em></button>
+                      <button key={folder.path} className={selectedFolder === folder.path ? "active" : ""} aria-pressed={selectedFolder === folder.path} onClick={() => chooseFolder(folder.path)}><FolderNavigationIcon specialUse={folder.specialUse} name={folder.name} /><span>{folder.name}</span><span className={`sidebar-end${sidebarLoading && selectedFolder === folder.path ? " loading" : ""}`}><span className="sidebar-spinner" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span><em className={folder.unseen ? "folder-unseen" : ""}>{folder.unseen || folder.total || ""}</em></span></button>
                     ))}
                   </>
                 )}
           </div>
 
           <div className="sidebar-footer">
-            <div><ShieldCheck size={16} /><span><strong>{t("app.localEncryption")}</strong><small>{t("app.credentialsLocal")}</small></span></div>
+            <div><ShieldCheck size={16} /><span><strong>{t("app.dataStaysLocal")}</strong><small>{t("app.credentialsLocal")}</small></span></div>
             <div className="sidebar-footer-actions">
               <span className="version">v{__NAMI_APP_VERSION__}</span>
+              {desktopUpdateStatus && desktopUpdateStatus.phase === "available" && desktopUpdateStatus.suppression === "none" && !updateBadgeHidden && desktopUpdateStatus.targetVersion && (
+                <div className={`update-badge${updateBadgeDismissed ? " dismissed" : ""}`}>
+                  <span className="update-badge-icon" aria-hidden="true"><ArrowDown size={15} /></span>
+                  <span className="update-badge-pop">
+                    <span className="update-badge-text">{t("update.badge.available", { version: desktopUpdateStatus.targetVersion })}</span>
+                    <button type="button" className="update-badge-download" disabled={updateFooterBusy} onClick={() => void runUpdateFooterAction({ kind: "download" })}>{t("update.badge.download")}</button>
+                    <button type="button" className="update-badge-close" aria-label={t("update.badge.dismiss")} onClick={dismissUpdateBadge}><X size={13} /></button>
+                  </span>
+                </div>
+              )}
               {updateFooterAction && (
                 <button type="button" className="update-footer-button" disabled={updateFooterBusy || updateFooterAction.kind === "downloading"} onClick={() => void runUpdateFooterAction(updateFooterAction)}>
                   {updateFooterAction.kind === "downloading" ? (
                     <><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("update.footer.downloading", { percent: updateFooterAction.percent })}</>
                   ) : updateFooterAction.kind === "install" ? (
                     <><RotateCcw size={13} aria-hidden="true" />{t("update.footer.ready")}</>
-                  ) : updateFooterAction.kind === "retry" ? (
-                    <><CircleAlert size={13} aria-hidden="true" />{t("update.footer.retry")}</>
                   ) : (
-                    <><Download size={13} aria-hidden="true" />{t("update.footer.available", { version: desktopUpdateStatus?.targetVersion ?? "" })}</>
+                    <><CircleAlert size={13} aria-hidden="true" />{t("update.footer.retry")}</>
                   )}
                 </button>
               )}
@@ -3822,7 +3969,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           <Profiler id="MessageList" onRender={onMessageListRender}>
             <MessageList
               loading={loading}
-              listKey={listIdentity}
+              listKey={listSnapshotKey}
               fatalError={fatalError}
               accounts={accounts}
               messages={filteredMessages}
@@ -3917,27 +4064,13 @@ const emptyMessageList = useMemo(() => (query.trim()
                     <div className="thread-strip-messages">
                       {threadCollapsed
                         ? (<>
-                            <button key={selectedThread[0]!.id} type="button" className={`thread-strip-item ${selectedThread[0]!.id === selected.id ? "active" : ""}`} onClick={() => void openMessage(selectedThread[0]!)}>
-                              <CustomAvatar name={selectedThread[0]!.from.name} address={selectedThread[0]!.from.address} tone={accountTone(selectedThread[0]!.from.address)} size="small" />
-                              <span className="thread-strip-copy"><strong>{selectedThread[0]!.from.name || selectedThread[0]!.from.address}</strong><time>{formatMessageTime(selectedThread[0]!.sentAt, locale)}</time></span>
-                              {!selectedThread[0]!.seen && <span className="unread-dot" aria-hidden="true" />}
-                            </button>
+                            {renderThreadStripItem(selectedThread[0]!)}
                             <button type="button" className="thread-strip-fold" onClick={() => setThreadCollapsedPref(false)} aria-label={t("mail.thread.expand", { count: selectedThread.length - 2 })} data-tooltip={t("mail.thread.expand", { count: selectedThread.length - 2 })}>
                               <MoreHorizontal size={15} /><span>{t("mail.thread.folded", { count: selectedThread.length - 2 })}</span>
                             </button>
-                            <button key={selectedThread[selectedThread.length - 1]!.id} type="button" className={`thread-strip-item ${selectedThread[selectedThread.length - 1]!.id === selected.id ? "active" : ""}`} onClick={() => void openMessage(selectedThread[selectedThread.length - 1]!)}>
-                              <CustomAvatar name={selectedThread[selectedThread.length - 1]!.from.name} address={selectedThread[selectedThread.length - 1]!.from.address} tone={accountTone(selectedThread[selectedThread.length - 1]!.from.address)} size="small" />
-                              <span className="thread-strip-copy"><strong>{selectedThread[selectedThread.length - 1]!.from.name || selectedThread[selectedThread.length - 1]!.from.address}</strong><time>{formatMessageTime(selectedThread[selectedThread.length - 1]!.sentAt, locale)}</time></span>
-                              {!selectedThread[selectedThread.length - 1]!.seen && <span className="unread-dot" aria-hidden="true" />}
-                            </button>
+                            {renderThreadStripItem(selectedThread[selectedThread.length - 1]!)}
                           </>)
-                        : selectedThread.map((threadMessage) => (
-                            <button key={threadMessage.id} type="button" className={`thread-strip-item ${threadMessage.id === selected.id ? "active" : ""}`} onClick={() => void openMessage(threadMessage)}>
-                              <CustomAvatar name={threadMessage.from.name} address={threadMessage.from.address} tone={accountTone(threadMessage.from.address)} size="small" />
-                              <span className="thread-strip-copy"><strong>{threadMessage.from.name || threadMessage.from.address}</strong><time>{formatMessageTime(threadMessage.sentAt, locale)}</time></span>
-                              {!threadMessage.seen && <span className="unread-dot" aria-hidden="true" />}
-                            </button>
-                          ))}
+                        : selectedThread.map((threadMessage) => renderThreadStripItem(threadMessage))}
                     </div>
                     {threadCollapsible && (
                       <button type="button" className={`thread-strip-toggle${threadCollapsed ? "" : " expanded"}`} onClick={() => setThreadCollapsedPref((value) => !value)} aria-expanded={!threadCollapsed}>
@@ -3949,7 +4082,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                 {selectedMoveLocationUnverified && <section className="move-location-notice" role="status"><CircleAlert size={18} /><div><strong>{t("mail.moveLocationUnverified.title")}</strong><p>{t("mail.moveLocationUnverified.description")}</p></div></section>}
                 <div className="reader-split">
                 <article className="mail-reader">
-                <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people"><CustomAvatar name={selected.from.name} address={selected.from.address} tone={accountTone(selected.from.address)} size="large" /><div className="mail-people-copy"><strong>{selected.from.name || selected.from.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={selected.from.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div><time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
+                <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people">{(() => { const headerPerson = selectedSentRecipient ?? selected.from; return <><CustomAvatar name={headerPerson.name} address={headerPerson.address} tone={accountTone(headerPerson.address)} size="large" /><div className="mail-people-copy"><strong>{headerPerson.name || headerPerson.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={headerPerson.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{selectedSentRecipient ? t("mail.reader.toRecipient", { recipient: headerPerson.name || headerPerson.address }) : t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div></>; })()}<time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
                 {verificationCodes.length > 0 && (
                   <section className="verification-code-list" aria-label={t("mail.verification.detected") }>
                     {verificationCodes.map((candidate, index) => {
@@ -3978,8 +4111,8 @@ const emptyMessageList = useMemo(() => (query.trim()
                 />
                 <div className="mail-content">
                   {selected.htmlBody
-                    ? <div className="mail-html" dangerouslySetInnerHTML={{ __html: (translationState.phase === "ready" && translationState.visible && translationState.translatedHtml) ? translationState.translatedHtml : safeHtml }} />
-                    : <div className="mail-text">{selected.textBody || (selected.snippet ? localizeMessageLinks(selected.snippet, locale) : "")}</div>}
+                    ? <div className="mail-html" dangerouslySetInnerHTML={{ __html: readerHtml }} />
+                    : <div className="mail-text">{readerTextParts.quote ? (<>{readerTextParts.body}<button type="button" className="mail-quote-toggle" onClick={() => setQuotedExpanded(true)}>{t("mail.reader.showQuoted")}</button></>) : readerTextSource}</div>}
                 </div>
                 {visibleAttachments.length > 0 && (
                   <section className="attachment-list" aria-label={t("mail.attachment.aria", { count: visibleAttachments.length })}>
@@ -4011,7 +4144,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                     })}
                   </section>
                 )}
-                <footer className="quick-reply"><CustomAvatar name={selected.accountEmail} address={selected.accountEmail} tone={accountTone(selected.accountEmail)} size="small" /><button onClick={openReply}>{t("mail.reader.replyTo", { sender: selected.from.name || selected.from.address })}</button></footer>
+                <footer className="quick-reply"><CustomAvatar name={selected.accountEmail} address={selected.accountEmail} tone={accountTone(selected.accountEmail)} size="small" /><button onClick={openReply}>{t("mail.reader.replyTo", { sender: quickReplySender })}</button></footer>
               </article>
               {state.attachmentPreview && <Suspense fallback={null}><AttachmentPreviewModal messageId={state.attachmentPreview.message.id} attachment={state.attachmentPreview.attachment} onClose={() => actions.closeAttachmentPreview()} /></Suspense>}
               </div>
@@ -4052,7 +4185,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       </main>
 
       {state.addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} existingAccounts={accounts} onClose={() => actions.closeAddAccount()} onAdded={handleAccountAdded} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
-      {state.composeOpen && <ComposeModal accounts={accounts} draft={state.composeDraft} onClose={() => actions.closeCompose()} onSent={(message, kind, undoDraft) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), run: () => { window.setTimeout(() => { actions.openCompose(undoDraft); }, 0); } }); else showToast(message, kind); }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} />}
+      {state.composeOpen && <ComposeModal accounts={accounts} draft={state.composeDraft} onClose={() => actions.closeCompose()} onSent={(message, kind, undoDraft, sentAccountId) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), run: () => { window.setTimeout(() => { actions.openCompose(undoDraft); }, 0); } }); else showToast(message, kind); if (sentAccountId && !isDemo) { void api.sync(sentAccountId).then(() => load({ silent: true })).catch(() => undefined).finally(() => setThreadRefreshTick((value) => value + 1)); } }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} />}
       {state.settingsOpen && <Suspense fallback={null}><SettingsModal settings={settings} accounts={accounts} onClose={() => actions.closeSettings()} onSettingsChange={applySettings} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} onOpenAgentProviderSettings={() => { actions.closeSettings(); setAgentProviderSettingsRequestId((requestId) => requestId + 1); openAgentWorkspace(); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
       {state.contactsOpen && <Suspense fallback={null}><ManagementDialogs demoMode={isDemo} onClose={() => actions.closeContacts()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.templatesOpen && <Suspense fallback={null}><TemplatesDialog demoMode={isDemo} onClose={() => actions.closeTemplates()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}

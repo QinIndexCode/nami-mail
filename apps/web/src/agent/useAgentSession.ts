@@ -364,8 +364,17 @@ export function useAgentSession({
       });
       return messages === current.messages ? current : { ...current, messages };
     });
-    // Drain the remaining backlog on the next frame at the same bounded pace.
-    if (leftovers.length > 0) armStreamFlush();
+    // The pieces beyond this frame's budget must go back into the pending
+    // queue: the queue was detached at the top of this flush, so leaving them
+    // only in the local `leftovers` slice would orphan those deltas forever
+    // (text loss until a re-render rebuilds the row from the server
+    // snapshot). Backfill, then drain on the next frame at the same bounded
+    // pace. Safe to assign directly — nothing can enqueue between the detach
+    // above and here (synchronous, no await).
+    if (leftovers.length > 0) {
+      pendingStreamPiecesRef.current = leftovers;
+      armStreamFlush();
+    }
   }, [armStreamFlush, setActive]);
   flushPendingStreamPiecesRef.current = flushPendingStreamPieces;
 

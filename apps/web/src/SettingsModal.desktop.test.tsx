@@ -33,7 +33,6 @@ describe("settings desktop behaviors", () => {
     expect(markup).toContain('data-settings-nav="desktop"');
     expect(markup).toContain("settings-option-grid close-behavior-grid");
     expect(markup).toContain(zh("settings.launchAtStartup.label"));
-    expect(markup).toContain(zh("settings.launchAtStartup.description"));
     expect(markup).toContain(zh("settings.shortcut.label"));
     expect(markup).toContain(zh("settings.shortcut.description"));
     expect(markup).toContain(`aria-label="${zh("settings.launchAtStartup.label")}"`);

@@ -1278,6 +1278,37 @@ describe("AgentWorkspace conversation switching", () => {
     expect(transcriptText()).toContain("earlier question");
   });
 
+  it("revoke NOT_FOUND adopts the server transcript: a phantom turn the server refused disappears without re-entry", async () => {
+    resetConversationMock();
+    await renderWorkspace();
+    clickRow("Conversation A");
+    await flush();
+
+    // A resend the server never recorded: the stream request hangs (the
+    // CONFLICT retry window), so the optimistic rows exist only client-side.
+    setComposer("phantom resend");
+    clickSend();
+    await flush();
+    expect(transcriptText()).toContain("phantom resend");
+
+    // Revoking the phantom row hits a 404: the server never persisted it.
+    vi.mocked(api.revokeAgentMessage).mockRejectedValueOnce(new ApiError("gone", "NOT_FOUND"));
+    act(() => { recallFor("phantom resend").click(); });
+    await flush();
+    act(() => { recallFor("phantom resend").click(); });
+    await flush();
+    await flush();
+
+    // The server snapshot is adopted: the phantom rows disappear NOW, not just
+    // after re-entering the conversation; the refilled composer text is kept
+    // because the message never reached the server and stays resolvable.
+    expect(api.agentConversation).toHaveBeenCalledWith("conv-a");
+    expect(transcriptText()).not.toContain("phantom resend");
+    expect(transcriptText()).toContain("earlier question");
+    expect(composerValue()).toBe("phantom resend");
+    expect(container.querySelector(".agent-revoke-notice.error")?.textContent).toContain("消息已不存在");
+  });
+
   it("deleting a conversation clears its revoked-id marks", async () => {
     // Pre-seed marks exactly as a successful revoke would have written them
     // (going through the UI would also start the notice countdown timer).

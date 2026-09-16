@@ -41,7 +41,7 @@ describe("window bar", () => {
     const markup = renderWindowBar();
 
     expect(markup).toContain("Nami Mail");
-    expect(markup).toContain(zh("app.localEncryption"));
+    expect(markup).toContain(zh("app.dataStaysLocal"));
     expect(markup).toContain(zh("app.switchLight"));
     expect(markup).not.toContain("window-controls");
     expect(markup).not.toContain("window-control-slot");
@@ -55,10 +55,10 @@ describe("window bar", () => {
     expect(markup).toContain(`aria-label="${zh("app.windowMaximize")}"`);
     expect(markup).toContain(`aria-label="${zh("app.windowClose")}"`);
     expect(markup).toContain("window-control-close");
-    // The desktop bar stays minimal: no app name, no encryption pill, no
+    // The desktop bar stays minimal: no app name, no data-local pill, no
     // theme switch (all live elsewhere in the desktop UI already).
     expect(markup).not.toContain("Nami Mail");
-    expect(markup).not.toContain(zh("app.localEncryption"));
+    expect(markup).not.toContain(zh("app.dataStaysLocal"));
     expect(markup).not.toContain(zh("app.switchLight"));
     expect(markup).not.toContain("window-control-slot");
   });
@@ -80,6 +80,6 @@ describe("window bar", () => {
     const markup = renderWindowBar({ isDesktop: true, platform: "win32" });
 
     expect(markup).not.toContain("window-controls");
-    expect(markup).not.toContain(zh("app.localEncryption"));
+    expect(markup).not.toContain(zh("app.dataStaysLocal"));
   });
 });

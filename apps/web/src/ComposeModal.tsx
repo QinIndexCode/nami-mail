@@ -27,7 +27,7 @@ function createSubmissionIdempotencyKey(): string {
   return createLocalId("sub");
 }
 
-export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftDiscarded, onSubmissionChanged, fallbackFocusRef }: { accounts: Account[]; draft: ComposeDraft; onClose: () => void; onSent: (message: string, kind?: ToastKind, undoDraft?: ComposeDraft) => void; onDraftSaved: (accountId: string) => void; onDraftDiscarded: (messageId: string) => void; onSubmissionChanged: () => void; fallbackFocusRef?: RefObject<HTMLElement | null> }) {
+export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftDiscarded, onSubmissionChanged, fallbackFocusRef }: { accounts: Account[]; draft: ComposeDraft; onClose: () => void; onSent: (message: string, kind?: ToastKind, undoDraft?: ComposeDraft, accountId?: string) => void; onDraftSaved: (accountId: string) => void; onDraftDiscarded: (messageId: string) => void; onSubmissionChanged: () => void; fallbackFocusRef?: RefObject<HTMLElement | null> }) {
   const { t } = useI18n();
   const signatureForAccount = (accountId: string): string =>
     accounts.find((account) => account.id === accountId)?.signature ?? "";
@@ -436,13 +436,15 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
           onSent(
             t("compose.delivery.unknown"),
             "warning",
+            undefined,
+            draft.accountId,
           );
         } else {
           if (draft.sourceDraftId && !result.draftDiscardWarning) onDraftDiscarded(draft.sourceDraftId);
           const deliveryMessage = submission.deliveryStatus === "confirmed"
             ? t("compose.delivery.confirmed")
             : t("compose.delivery.submitted");
-          onSent(result.draftDiscardWarning ? t("compose.delivery.previousDraftRemains", { message: deliveryMessage }) : deliveryMessage);
+          onSent(result.draftDiscardWarning ? t("compose.delivery.previousDraftRemains", { message: deliveryMessage }) : deliveryMessage, undefined, undefined, draft.accountId);
         }
       } else {
         await new Promise((resolve) => setTimeout(resolve, 650));
