@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildForwardDraft, buildReplyDraft, buildReplyQuote } from "./mailActions";
+import { buildForwardDraft, buildReplyDraft, buildReplyQuote, isOwnSentMessage } from "./mailActions";
 import type { Message } from "./types";
 
 const message: Message = {
@@ -60,6 +60,26 @@ describe("mail compose actions", () => {
       inReplyTo: "<parent@example.com>",
       references: ["<root@example.com>", "<earlier@example.com>", "<parent@example.com>"],
     });
+  });
+
+  it("detects the user's own sent mail regardless of address case and without needing the account email repeated", () => {
+    const sent: Message = { ...message, from: { name: "Me", address: "ME@example.com" } };
+    expect(isOwnSentMessage(sent, ["me@example.com", "secondary@example.com"])).toBe(true);
+    // The message's own account address counts even when the caller omits it.
+    expect(isOwnSentMessage(sent, ["secondary@example.com"])).toBe(true);
+    expect(isOwnSentMessage(message, ["me@example.com"])).toBe(false);
+  });
+
+  it("builds a reply to the original recipients for the user's own sent mail", () => {
+    const sent: Message = {
+      ...message,
+      mailbox: "Sent",
+      from: { name: "Me", address: "me@example.com" },
+    };
+    const draft = buildReplyDraft(sent, ["me@example.com", "secondary@example.com"]);
+
+    expect(draft.to).toEqual(["bob@example.com"]);
+    expect(draft.subject).toBe("Re: Project update");
   });
 
   it("creates a standalone plain-text forward without reply threading headers", () => {

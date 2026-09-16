@@ -433,6 +433,7 @@ export const api = {
   messages: (query = "") =>
     request<MessagePage>(`/api/messages${query ? `?${query}` : ""}`),
   message: (id: string) => request<Message>(`/api/messages/${encodeURIComponent(id)}`),
+  messageThread: (id: string) => request<{ items: Message[] }>(`/api/messages/${encodeURIComponent(id)}/thread`),
   translationStatus: () => request<TranslationServiceStatus>("/api/translation/status"),
   translationConfiguration: () => request<TranslationConfiguration>("/api/translation/configuration"),
   updateTranslationConfiguration: (patch: TranslationConfigurationPatch) =>

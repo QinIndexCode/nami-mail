@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupMessagesByThread, shouldCollapseThread, sortThreadByTimeline } from "./threads";
+import { groupMessagesByThread, mergeThreadMembers, shouldCollapseThread, sortThreadByTimeline } from "./threads";
 import type { Message } from "./types";
 
 function message(overrides: Partial<Message> & { id: string }): Message {
@@ -155,5 +155,28 @@ describe("shouldCollapseThread", () => {
 
   it("never collapses when there is no selected thread", () => {
     expect(shouldCollapseThread(null, "oldest", true)).toBe(false);
+  });
+});
+
+describe("mergeThreadMembers", () => {
+  it("appends server-resolved members that the loaded view does not contain", () => {
+    const local = [message({ id: "root" }), message({ id: "newest" })];
+    const extras = [message({ id: "root" }), message({ id: "sent", mailbox: "Sent" }), message({ id: "newest" })];
+    expect(mergeThreadMembers(local, extras).map((item) => item.id)).toEqual(["root", "newest", "sent"]);
+  });
+
+  it("keeps the local object when an id exists in both sets, so fresh flags win", () => {
+    const local = [message({ id: "root", seen: true })];
+    const extras = [message({ id: "root", seen: false })];
+    const merged = mergeThreadMembers(local, extras);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.seen).toBe(true);
+  });
+
+  it("returns a copy when there is nothing to merge", () => {
+    const local = [message({ id: "root" })];
+    const merged = mergeThreadMembers(local, []);
+    expect(merged).not.toBe(local);
+    expect(merged.map((item) => item.id)).toEqual(["root"]);
   });
 });

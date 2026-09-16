@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, statSync } from "node:fs";
 import test from "node:test";
-import { generateNotificationSoundWav, getNotificationSoundFile } from "../src/desktop-notification-sound.mts";
+import { generateNotificationSoundWav, getNotificationSoundFile, playCustomNotificationSound, warmUpNotificationSoundPlayer, type PlayerRunner } from "../src/desktop-notification-sound.mts";
 
 /** Minimal RIFF/WAVE reader so the assertions describe the container, not offsets. */
 function readWavHeader(buffer: Buffer) {
@@ -72,4 +72,38 @@ test("caches the generated file and reuses it across calls", () => {
   assert.ok(statSync(first).size > 44);
   assert.equal(getNotificationSoundFile("bright"), first);
   assert.notEqual(getNotificationSoundFile("soft"), first);
+});
+
+function stubExec(outcome: "success" | "failure", seen: { command?: string; timeout?: number }): PlayerRunner {
+  return (command, options, callback) => {
+    seen.command = command;
+    seen.timeout = (options as { timeout?: number }).timeout;
+    queueMicrotask(() => callback(outcome === "success" ? null : new Error("player failed")));
+  };
+}
+
+test("playCustomNotificationSound resolves true after a successful playback", async () => {
+  const seen: { command?: string; timeout?: number } = {};
+  const result = await playCustomNotificationSound("soft", stubExec("success", seen));
+  assert.equal(result, true);
+  // Windows guards: the command targets the generated WAV and is hard-capped
+  // so a wedged player can never delay the notification indefinitely.
+  assert.ok(seen.command?.includes("nami-notification-soft.wav"));
+  assert.equal(seen.timeout, 4000);
+});
+
+test("playCustomNotificationSound resolves false when the player fails", async () => {
+  const seen: { command?: string; timeout?: number } = {};
+  const result = await playCustomNotificationSound("bright", stubExec("failure", seen));
+  assert.equal(result, false);
+});
+
+test("warmUpNotificationSoundPlayer pre-starts the OS player without waiting", async () => {
+  let completed = false;
+  warmUpNotificationSoundPlayer((_command, _options, callback) => {
+    completed = true;
+    callback(null);
+  });
+  // Fire-and-forget: the warm-up must not block the caller.
+  assert.equal(completed, true);
 });

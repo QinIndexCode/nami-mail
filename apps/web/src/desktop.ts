@@ -7,7 +7,6 @@ export type DesktopMailNotice = {
   fromAddress: string;
   count: number;
   shouldAlert: boolean;
-  playCustomSound: boolean;
 };
 
 export type DesktopAutoReplyNotice =
@@ -331,6 +330,13 @@ export function normalizeDesktopAutoReplyNotice(value: unknown): DesktopAutoRepl
 
 export type DesktopBridge = {
   notify: (payload: NativeNotification) => Promise<{ shown: boolean }>;
+  /**
+   * Desktop only: runs the SAME pipeline a real new-mail alert uses — the
+   * main process plays the configured custom sound (soft/bright) and pairs
+   * it with a matching notification silence state. `soundPlayed` reports the
+   * playback outcome so the settings page can surface a silent-fallback.
+   */
+  testNativeNotification?: (payload: NativeNotification) => Promise<{ shown: boolean; soundPlayed?: boolean }>;
   copyVerificationCode: (code: string) => Promise<{ copied: boolean }>;
   showItemInFolder?: (path: string) => Promise<void>;
   quit?: () => void;
@@ -345,7 +351,6 @@ export type DesktopBridge = {
   skipUpdate: () => Promise<DesktopUpdateSnapshot | undefined>;
   snoozeUpdate: (durationMinutes: number) => Promise<DesktopUpdateSnapshot | undefined>;
   installUpdate: () => Promise<DesktopUpdateInstallResult>;
-  setCustomNotificationSoundReady: (ready: boolean) => void;
   onNewMail: (listener: (payload: DesktopMailNotice) => void) => () => void;
   onAutoReply?: (listener: (notice: DesktopAutoReplyNotice) => void) => () => void;
   onOpenMessage: (listener: (id: string) => void) => () => void;

@@ -60,6 +60,19 @@ function replyThreading(message: Message): Pick<ComposeAction, "inReplyTo" | "re
   return { inReplyTo, references };
 }
 
+/**
+ * True when the message was sent from one of the user's own accounts. The
+ * from-address check (rather than the mailbox name) is deliberate: sent
+ * folder names vary across providers ("Sent", "[Gmail]/Sent Mail"), while
+ * the sender being an owned address is provider-independent. The message's
+ * own account address is always included, so callers may pass just the
+ * configured account emails.
+ */
+export function isOwnSentMessage(message: Pick<Message, "from" | "accountEmail">, accountEmails: readonly string[]): boolean {
+  const own = new Set([...accountEmails, message.accountEmail].map(normalizedAddress));
+  return own.has(normalizedAddress(message.from.address.trim()));
+}
+
 /** Builds a direct reply or reply-all draft without ever mailing one of the user's own accounts. */
 export function buildReplyDraft(message: Message, accountEmails: readonly string[], replyAll = false): ComposeAction {
   const ownAddresses = new Set(accountEmails.map(normalizedAddress));

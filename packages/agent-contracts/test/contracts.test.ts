@@ -44,6 +44,44 @@ test("versioned response envelopes keep success and failure shapes distinct", ()
   assert.equal(schema.safeParse({ ...success, error: failure.error }).success, false);
 });
 
+test("tool activities carry an optional human-readable detail line", () => {
+  const running = {
+    type: "tool" as const,
+    activity: {
+      id: "tool-1",
+      toolName: "web.search",
+      title: "Search the web",
+      state: "running" as const,
+      detail: "Trae",
+    },
+  };
+  assert.equal(agentUiStreamEventSchema.safeParse(running).success, true);
+  const completed = {
+    type: "tool" as const,
+    activity: {
+      id: "tool-1",
+      toolName: "rag.search",
+      title: "Search local mail",
+      state: "completed" as const,
+      summary: "Found 2 relevant mail message(s).",
+      detail: "“Trae” · 2 result(s)",
+    },
+  };
+  assert.equal(agentUiStreamEventSchema.safeParse(completed).success, true);
+  // Older transcripts without the field keep parsing.
+  const legacy = {
+    type: "tool" as const,
+    activity: {
+      id: "tool-1",
+      toolName: "messages.list",
+      title: "List mail messages",
+      state: "completed" as const,
+      summary: "Operation completed.",
+    },
+  };
+  assert.equal(agentUiStreamEventSchema.safeParse(legacy).success, true);
+});
+
 test("approved confirmations must bind the immutable payload", () => {
   const common = {
     confirmationId: "confirm_1",

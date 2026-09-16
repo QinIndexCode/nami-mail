@@ -390,9 +390,8 @@ describe("mail reader title wrapping", () => {
 
 describe("list switching", () => {
   it("keeps the current rows on screen while a switch is still loading", () => {
-    // A switch used to replace the list with a six-row skeleton: the list got
-    // shorter, the layout jumped and the user lost their place. The skeleton is
-    // now reserved for a list that has nothing to show yet.
+    // A switch must never replace the rows with a shorter placeholder: the
+    // outgoing rows stay (dimmed) until the arriving snapshot swaps in.
     renderList({ loading: true });
 
     expect(container.querySelector(".message-skeleton-list")).toBeNull();
@@ -400,13 +399,17 @@ describe("list switching", () => {
     expect(container.querySelector(".message-list-viewport")?.getAttribute("data-switching")).toBe("true");
   });
 
-  it("shows the skeleton only when there is nothing to show yet", () => {
+  it("shows nothing while a cold-start load is in flight, busy-flagged for assistive tech", () => {
+    // The old skeleton appeared for a beat on fast loads and was immediately
+    // replaced — reading as flicker. Cold-start now shows an empty (busy)
+    // list; loading feedback moved to the sidebar spinner.
     renderList({ loading: true, messages: [] });
 
-    expect(container.querySelector(".message-skeleton-list")).not.toBeNull();
+    expect(container.querySelector(".message-skeleton-list")).toBeNull();
     expect(container.querySelector(".message-list-viewport")).toBeNull();
-    // The empty state must not race the skeleton: it waits for loading to end.
+    // The empty state must not race the load: it waits for loading to end.
     expect(container.querySelector(".empty-state")).toBeNull();
+    expect(container.querySelector(".message-list")?.getAttribute("aria-busy")).toBe("true");
   });
 
   it("swaps the viewport element when the list identity changes", () => {
@@ -419,6 +422,26 @@ describe("list switching", () => {
     expect(second).not.toBeNull();
     // A different element means the arriving list can animate in instead of
     // mutating the previous one in place.
+    expect(second).not.toBe(first);
+    expect(second?.getAttribute("data-switching")).toBeNull();
+  });
+
+  it("remounts the viewport exactly once per switch: stable during the request, swapped at the data change", () => {
+    // The old key followed the request lifecycle (identity → pending → ready),
+    // which tore the rows down and replayed the fade twice on STALE data —
+    // the flicker on every view/folder/search switch.
+    renderList({ listKey: 0 });
+    const first = container.querySelector(".message-list-viewport");
+
+    // The request starts: the rows dim in place, the DOM stays.
+    renderIntoRoot({ listKey: 0, loading: true });
+    expect(container.querySelector(".message-list-viewport")).toBe(first);
+    expect(first?.getAttribute("data-switching")).toBe("true");
+
+    // The response lands and App bumps the settled key in the same batch as
+    // the row swap: this is the only remount, and it shows the new rows.
+    renderIntoRoot({ listKey: 1 });
+    const second = container.querySelector(".message-list-viewport");
     expect(second).not.toBe(first);
     expect(second?.getAttribute("data-switching")).toBeNull();
   });

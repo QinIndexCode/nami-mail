@@ -53,6 +53,7 @@ export function createDemoAccounts(locale: string): Account[] {
       folders: [
         { path: "INBOX", name: folderName("INBOX", "收件箱"), specialUse: "\\Inbox", total: 7, unseen: 0 },
         { path: "[Gmail]/All Mail", name: folderName("[Gmail]/All Mail", "所有邮件"), specialUse: "\\All", total: 0, unseen: 0 },
+        { path: "[Gmail]/重要", name: folderName("重要", "重要"), specialUse: null, total: 0, unseen: 0 },
       ],
     },
   ];

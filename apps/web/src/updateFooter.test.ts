@@ -37,8 +37,10 @@ describe("resolveUpdateFooter", () => {
     }
   });
 
-  it("starts a download while a release is available", () => {
-    expect(resolveUpdateFooter(snapshot({ phase: "available", targetVersion: "0.1.1" }))).toEqual({ kind: "download" });
+  it("leaves the available phase to the expandable update badge", () => {
+    // An available release is surfaced by the circular hover badge in the
+    // sidebar footer, not by this footer button.
+    expect(resolveUpdateFooter(snapshot({ phase: "available", targetVersion: "0.1.1" }))).toBeNull();
   });
 
   it("reports download progress with a fallback of zero", () => {

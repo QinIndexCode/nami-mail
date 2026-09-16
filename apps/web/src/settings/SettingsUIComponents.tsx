@@ -1,6 +1,15 @@
-import { Check, CircleHelp, Copy, Minimize2, Monitor, Moon, Power, Sun } from "lucide-react";
+import { Check, CircleHelp, Copy, Minimize2, Monitor, Moon, Power, ShieldCheck, Sun } from "lucide-react";
 import { useI18n } from "../i18n";
 import type { AppTheme, CloseBehavior } from "../types";
+
+/**
+ * A short "where does my data go" note rendered as a badge next to a setting.
+ * Kept visually distinct from regular hint text so privacy statements never
+ * blend into ordinary descriptions.
+ */
+export function PrivacyNote({ note }: { note: string }) {
+  return <span className="settings-privacy-note"><ShieldCheck size={12} aria-hidden="true" />{note}</span>;
+}
 
 export function ExternalGuideBlock(props: {
   id: string;
@@ -40,19 +49,24 @@ export function Switch({
   disabled = false,
   label,
   description,
+  privacyNote,
   onChange,
 }: {
   checked: boolean;
   disabled?: boolean;
   label: string;
-  description: string;
+  /** Optional: omit when the label is self-explanatory. */
+  description?: string;
+  /** Optional data-flow statement (e.g. what leaves the device when enabled). */
+  privacyNote?: string;
   onChange: () => void;
 }) {
   return (
     <div className="setting-row setting-switch-row">
       <div>
         <strong>{label}</strong>
-        <span>{description}</span>
+        {description && <span>{description}</span>}
+        {privacyNote && <PrivacyNote note={privacyNote} />}
       </div>
       <button
         className={`setting-switch${checked ? " active" : ""}`}
