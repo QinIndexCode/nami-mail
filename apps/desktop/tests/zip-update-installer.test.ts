@@ -180,7 +180,7 @@ test("Windows detects replacement during handle transition and rejects writes wh
       NAMI_LOCKED_INSTALLER: executablePath,
     },
     windowsHide: true,
-    timeout: 5_000,
+    timeout: 30_000,
   });
 
   await fs.copyFile(sourceExecutablePath, executablePath);
@@ -265,7 +265,10 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
   await fs.writeFile(sourcePath, "public static class Program { [System.STAThread] public static void Main() {} }", "utf8");
   await execFileAsync(compiler, ["/nologo", "/target:winexe", `/out:${installerSource}`, sourcePath], {
     windowsHide: true,
-    timeout: 15_000,
+    // csc.exe cold-starts slowly on busy CI runners (Defender scans included);
+    // 15s flaked the release gate. These fixture tooling timeouts are not
+    // performance assertions.
+    timeout: 60_000,
   });
   await execFileAsync(powershell, [
     "-NoProfile",
@@ -279,7 +282,7 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
       NAMI_UPDATE_ZIP_PATH: archivePath,
     },
     windowsHide: true,
-    timeout: 15_000,
+    timeout: 60_000,
   });
   const archive = await fs.readFile(archivePath);
   const archiveSha512 = createHash("sha512").update(archive).digest("base64");
@@ -293,7 +296,7 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
   ], {
     env: { ...process.env, NAMI_UPDATE_ARCHIVE_PATH: archivePath },
     windowsHide: true,
-    timeout: 15_000,
+    timeout: 30_000,
   });
   assert.equal(archiveProbe.trim(), `${archiveSize}|${archiveSha512}`);
   await fs.writeFile(helperPath, createZipUpdateInstallerScript(), "utf8");
