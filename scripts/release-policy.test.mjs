@@ -657,6 +657,7 @@ test("release workflow isolates read-only validation from credential-minimized p
   );
   const validateCommands = workflow.jobs.validate.steps.map((step) => step.run).filter(Boolean);
   assert.deepEqual(validateCommands, [
+    "node scripts/verify-release-notes.mjs",
     "npm ci",
     "npm run verify:node-sqlite",
     "npm run verify:electron-sqlite",
