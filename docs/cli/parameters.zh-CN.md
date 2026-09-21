@@ -2,7 +2,7 @@
 
 [English](parameters.en.md) | [命令](commands.zh-CN.md)
 
-> **当前构建状态：已实现。** 0.3.0 构建随附 `namimail` CLI。下列选项是当前生效的解析和权限规则，可用于现有自动化。
+> **当前构建状态：已实现。** 0.4.0 构建随附 `namimail` CLI。下列选项是当前生效的解析和权限规则，可用于现有自动化。
 
 选项可写成 `--name value` 或 `--name=value`。同一选项不得重复；未知选项或缺少值返回 `INVALID_ARGUMENT`。选项放在命令词后；位置参数会被拒绝。
 

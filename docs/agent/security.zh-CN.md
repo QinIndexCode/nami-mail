@@ -2,7 +2,7 @@
 
 [简体中文](security.zh-CN.md) | [English](security.en.md)
 
-> **当前构建状态：已强制生效。** 0.3.0 构建随附 `namimail` CLI、MCP stdio 适配器、Broker、配对记录和位于已配对当前用户 SID-DACL 命名管道之后的外部 AgentHost 路径。以下安全边界由已发布构建强制实施；违反它们的外部入口会失败关闭而不会降级。实验性的本地 NLLB 翻译保持独立、主动和可选。
+> **当前构建状态：已强制生效。** 0.4.0 构建随附 `namimail` CLI、MCP stdio 适配器、Broker、配对记录和位于已配对当前用户 SID-DACL 命名管道之后的外部 AgentHost 路径。以下安全边界由已发布构建强制实施；违反它们的外部入口会失败关闭而不会降级。实验性的本地 NLLB 翻译保持独立、主动和可选。
 
 ## 威胁模型
 

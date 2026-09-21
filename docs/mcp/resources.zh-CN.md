@@ -2,7 +2,7 @@
 
 [English](resources.en.md) | [工具](tools.zh-CN.md) | [安全](security.zh-CN.md)
 
-> **当前构建状态：已强制生效。** 0.3.0 构建随附 MCP Server 和 Broker 及可发现的工具。下列 Resources 边界已生效：v1 不暴露任何可调用的邮件 Resource。
+> **当前构建状态：已强制生效。** 0.4.0 构建随附 MCP Server 和 Broker 及可发现的工具。下列 Resources 边界已生效：v1 不暴露任何可调用的邮件 Resource。
 
 NamiMail MCP v1 不会发布 `namimail://accounts`、`namimail://messages/...` 或其他包含邮件数据的 MCP Resource。
 

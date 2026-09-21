@@ -1,5 +1,32 @@
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-21
+
+### Added
+
+- Static website and documentation site: a landing page plus docs pages built from `docs/` (deployed automatically to GitHub Pages), with an English/Chinese language switch.
+- Conversation thread completion: Gmail-style threading across folders. Message records carry no thread column, so threads are grouped client-side over the loaded set first, and missing members are completed through the new `GET /api/messages/:id/thread` endpoint (a bidirectional transitive closure over RFC headers within the account, drafts excluded, yielding the event loop between rows while decrypting); threads are refetched automatically after sending.
+- Quote auto-folding: top-level quoted blocks in HTML mail collapse into native clickable `<details>` elements, and trailing `> ` quote blocks collapse in plain text. Folding happens only at the render layer; sanitizing, translation, and reply-quote pipelines still use the full body.
+
+### Fixed
+
+- Fixed the cascade of races behind revoke-then-resend in the Agent: the server now releases the conversation slot as soon as a turn is persisted. Previously the first-turn title generation tail (up to ~two minutes on a slow provider) kept holding the slot, so every resend after a revoke was refused with CONFLICT and the optimistic message was never persisted; revoking it again reported "message not found", the UI showed two identical rows, and only re-entering the conversation recovered. The client now also adopts the server snapshot when a revoke hits "not found" (the phantom rows disappear immediately, no re-entry needed) while keeping the refilled composer text for editing and resending.
+- Fixed the "banner pops up but no sound" problem with the new-mail notification sound: the main process now plays the sound first and shows the banner afterwards — the OS sound is only silenced when playback actually succeeded, any failure falls back to a system-sound notification and logs the reason to the runtime log; the playback pipeline is warmed up at startup, removing the ~1.5 s cold-start delay of the first notification; the Settings "test notification / test sound" buttons now use exactly the same pipeline as a real new-mail alert.
+- Fixed the list flicker when switching account, folder, or view: the list identity now follows only the landed snapshot, in-flight old rows merely dim as a whole instead of being rebuilt.
+- Fixed the direction display for mail the user sent themselves: it now renders by recipient (the reading-view avatar and main name show the first recipient, list rows show a To line with the recipient's avatar, and quick reply pre-fills the original recipient) instead of guessing the direction from the folder name; incoming mail keeps showing the sender.
+- Fixed the fragile parsing in the Agent's web-search tool: it no longer depends on class names of the search result page (whose changes used to make it return zero results forever) and parses attributes and links in two steps; search activity now shows the real query and a result summary instead of generic status text (backward compatible with old records).
+
+### Improved
+
+- Streamlined the Settings information architecture: removed 21 redundant subtitles and condensed 11 (both locales); the select control's font size matches its open menu; added a Settings localization interaction test.
+- The update notice is now a round badge in the lower-left corner: hovering expands it into a "new version x.y.z" pill (with download and dismiss), and dismissing animates out in layers; the main lower-left copy changed from "local encryption" to "data stays on this device".
+- Adjusted the account folder icon semantics: junk mail is now a shield with an exclamation mark and All mail is a stacked-layers icon; fixed their vertical alignment.
+- Dependency upgrades: imapflow 1.7.8 → 2.0.2 (TypeScript rewrite; upstream fixed IDLE not re-entering after a session ends on its own), react 19.3.0 (with react-dom in sync), lucide-react 1.45.0, @tanstack/react-virtual 3.14.12.
+
+### Documentation
+
+- Added the paired `v0.4.0` release notes; the website version display is synced.
+
 ## [0.3.0] - 2026-09-13
 
 ### Added

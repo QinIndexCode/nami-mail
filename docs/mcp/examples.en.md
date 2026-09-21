@@ -2,7 +2,7 @@
 
 [Chinese](examples.zh-CN.md) | [Configuration](configuration.en.md) | [Tools](tools.en.md)
 
-> **Current-build status: sendable.** The 0.3.0 installer ships the MCP stdio process, `namimail` command, Broker, pairing UI, and a callable `tools/list`. The JSON below runs against a paired, running Agent host.
+> **Current-build status: sendable.** The 0.4.0 installer ships the MCP stdio process, `namimail` command, Broker, pairing UI, and a callable `tools/list`. The JSON below runs against a paired, running Agent host.
 
 ## Tool discovery
 

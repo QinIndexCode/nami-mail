@@ -2,7 +2,7 @@
 
 [English](agent-integration.en.md) | [MCP 接入](../mcp/README.zh-CN.md)
 
-> **当前构建状态：已接入。** 0.3.0 构建随附 Broker、`namimail` 可执行文件、PATH shim、配对 UI 和 MCP 启动器。脚本、IDE Agent 和自动化任务可调用文档化接口；默认只读，可在桌面设置的「权限」分组中提升。
+> **当前构建状态：已接入。** 0.4.0 构建随附 Broker、`namimail` 可执行文件、PATH shim、配对 UI 和 MCP 启动器。脚本、IDE Agent 和自动化任务可调用文档化接口；默认只读，可在桌面设置的「权限」分组中提升。
 
 ## 当前限制
 

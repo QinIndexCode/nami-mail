@@ -2,7 +2,7 @@
 
 [Chinese](troubleshooting.zh-CN.md) | [Exit codes](exit-codes.en.md)
 
-> **Current-build status: available.** The 0.3.0 installer ships the `namimail` command, PATH shim, external Broker, service mode, and pairing UI. The error codes below are recovery signals for a live CLI client. Service mode still fails closed with `BROKER_SECURITY_UNAVAILABLE` before opening GUI, SQLite, a master key, or a translation model.
+> **Current-build status: available.** The 0.4.0 installer ships the `namimail` command, PATH shim, external Broker, service mode, and pairing UI. The error codes below are recovery signals for a live CLI client. Service mode still fails closed with `BROKER_SECURITY_UNAVAILABLE` before opening GUI, SQLite, a master key, or a translation model.
 
 ## What to do today
 

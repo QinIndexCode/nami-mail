@@ -6,7 +6,7 @@
 
 本页定义 NamiMail Agent 的生产边界，并区分当前源码中的嵌入式 GUI 实现、已发布的 CLI/MCP 外部入口，以及仍失败关闭的独立服务模式。
 
-> **当前构建状态：外部接口可用。** 0.3.0 安装包随附 `namimail` 命令、PATH shim、CLI、MCP stdio 启动器、Broker 和配对 UI；安装器 smoke 会验证打包后的 MCP stdio 路径（协议 `2025-03-26`、serverInfo `NamiMail`、恰好十六个工具：九个只读 + 七个写）。图中的 CLI、MCP 和 Broker 是已配对的当前用户 SID-DACL 命名管道背后的可用入口。独立的无界面服务模式仍会以 `BROKER_SECURITY_UNAVAILABLE` 失败关闭。实验性的本地 NLLB-200 翻译不受此状态影响，仍保持独立、主动和可选。
+> **当前构建状态：外部接口可用。** 0.4.0 安装包随附 `namimail` 命令、PATH shim、CLI、MCP stdio 启动器、Broker 和配对 UI；安装器 smoke 会验证打包后的 MCP stdio 路径（协议 `2025-03-26`、serverInfo `NamiMail`、恰好十六个工具：九个只读 + 七个写）。图中的 CLI、MCP 和 Broker 是已配对的当前用户 SID-DACL 命名管道背后的可用入口。独立的无界面服务模式仍会以 `BROKER_SECURITY_UNAVAILABLE` 失败关闭。实验性的本地 NLLB-200 翻译不受此状态影响，仍保持独立、主动和可选。
 
 当前常规 server/runtime 已创建并启动嵌入式 `AgentService`，提供 GUI 使用的 `/api/agent` 路由、RAG 工作者和 React 工作区。打包桌面版 CLI/MCP 路径的验证由安装器 smoke 覆盖；真实账户/Provider 路径、删除与重建生命周期以及安全确认流仍需实环境证据。
 

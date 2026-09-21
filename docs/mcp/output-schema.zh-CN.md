@@ -2,7 +2,7 @@
 
 [English](output-schema.en.md) | [工具](tools.zh-CN.md)
 
-> **当前构建状态：已实现。** 0.3.0 构建随附 MCP stdio Server、Broker 和 `tools/list`。下列包络可由当前客户端获得。
+> **当前构建状态：已实现。** 0.4.0 构建随附 MCP stdio Server、Broker 和 `tools/list`。下列包络可由当前客户端获得。
 
 MCP 的外层消息遵循客户端与 stdio Server 协商的 MCP 协议。NamiMail 在工具结果中保留相同的稳定 Agent 成功/失败语义；支持结构化内容的客户端应把以下对象作为程序接口：
 

@@ -2,7 +2,7 @@
 
 [Chinese](output-schema.zh-CN.md) | [Tools](tools.en.md)
 
-> **Current-build status: implemented.** The 0.3.0 build ships the MCP stdio server, Broker, and `tools/list`. The envelope below is obtained by a current client.
+> **Current-build status: implemented.** The 0.4.0 build ships the MCP stdio server, Broker, and `tools/list`. The envelope below is obtained by a current client.
 
 The MCP outer message follows the MCP protocol negotiated by the client and stdio server. NamiMail preserves the same stable Agent success/failure semantics in a tool result. Clients supporting structured content should treat this object as the programmatic interface:
 
