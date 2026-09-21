@@ -2,7 +2,7 @@
 
 [Chinese](security.zh-CN.md) | [English](security.en.md)
 
-> **Current-build status: enforced.** The 0.3.0 build ships the `namimail` CLI, MCP stdio adapter, Broker, pairing records, and the external AgentHost path behind a paired current-user SID-DACL named pipe. The security boundaries below are enforced by the shipped build; violating external entry points fail closed rather than degrading. Experimental local NLLB translation remains separate, explicit, and opt-in.
+> **Current-build status: enforced.** The 0.4.0 build ships the `namimail` CLI, MCP stdio adapter, Broker, pairing records, and the external AgentHost path behind a paired current-user SID-DACL named pipe. The security boundaries below are enforced by the shipped build; violating external entry points fail closed rather than degrading. Experimental local NLLB translation remains separate, explicit, and opt-in.
 
 ## Threat model
 

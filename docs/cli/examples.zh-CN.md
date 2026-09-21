@@ -2,7 +2,7 @@
 
 [English](examples.en.md) | [外部 Agent 接入](agent-integration.zh-CN.md)
 
-> **当前构建状态：可运行。** 0.3.0 安装包随附 `namimail` 可执行文件和 PATH shim。下列示例针对已配对、正在运行的 Agent 宿主执行。
+> **当前构建状态：可运行。** 0.4.0 安装包随附 `namimail` 可执行文件和 PATH shim。下列示例针对已配对、正在运行的 Agent 宿主执行。
 
 ## 本地版本检查
 

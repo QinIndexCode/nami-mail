@@ -2,7 +2,7 @@
 
 [English](installation.en.md) | [配置](configuration.zh-CN.md)
 
-> **当前构建状态：已安装且可启动。** 0.3.0 安装包随附原生 SID-DACL 命名管道 Broker、`namimail` 可执行文件、PATH shim、无界面 AgentHost 服务模式和客户端配对 UI。本文的进程声明可粘贴到 IDE 或其他 MCP 客户端。
+> **当前构建状态：已安装且可启动。** 0.4.0 安装包随附原生 SID-DACL 命名管道 Broker、`namimail` 可执行文件、PATH shim、无界面 AgentHost 服务模式和客户端配对 UI。本文的进程声明可粘贴到 IDE 或其他 MCP 客户端。
 
 ## 当前用户操作
 

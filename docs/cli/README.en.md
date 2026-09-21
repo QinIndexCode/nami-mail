@@ -2,7 +2,7 @@
 
 [Chinese](README.zh-CN.md) | [Installation](installation.en.md) | [Commands](commands.en.md) | [Output](output-schema.en.md) | [Permissions](permissions.en.md) | [Examples](examples.en.md) | [Troubleshooting](troubleshooting.en.md)
 
-> **Current-build status: available.** The 0.3.0 installer ships a managed `namimail` executable and registers a current-user PATH shim. The desktop main process starts a secured Windows named-pipe Broker and routes `--cli` invocations through it; the installer smoke test also verifies a post-install MCP stdio session that reports exactly sixteen tools (nine read-only and seven write). Data commands require a running, paired Agent host. Experimental local NLLB-200 translation remains separate and opt-in through the UI.
+> **Current-build status: available.** The 0.4.0 installer ships a managed `namimail` executable and registers a current-user PATH shim. The desktop main process starts a secured Windows named-pipe Broker and routes `--cli` invocations through it; the installer smoke test also verifies a post-install MCP stdio session that reports exactly sixteen tools (nine read-only and seven write). Data commands require a running, paired Agent host. Experimental local NLLB-200 translation remains separate and opt-in through the UI.
 
 NamiMail CLI documents the native automation contract for the Windows desktop application. External calls are read-only by default; the desktop settings can raise the CLI permission to "confirm before operations" (`send-confirmed`) or "fully automatic" (`full-access`) — see [Permissions](permissions.en.md).
 

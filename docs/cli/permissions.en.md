@@ -2,7 +2,7 @@
 
 [Chinese](permissions.zh-CN.md) | [MCP security](../mcp/security.en.md)
 
-> **Current-build status: enforced.** The 0.3.0 build ships the external CLI with a Broker, pairing records, and per-entry client permission grants. The access levels, scope, and audit requirements below apply to the external interface; requests that exceed the configured level fail closed.
+> **Current-build status: enforced.** The 0.4.0 build ships the external CLI with a Broker, pairing records, and per-entry client permission grants. The access levels, scope, and audit requirements below apply to the external interface; requests that exceed the configured level fail closed.
 
 ## Access levels
 

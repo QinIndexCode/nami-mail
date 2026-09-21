@@ -2,7 +2,7 @@
 
 [English](configuration.en.md) | [安装](installation.zh-CN.md) | [示例](examples.zh-CN.md)
 
-> **当前构建状态：请配置 MCP 客户端。** 0.3.0 安装包随附 `namimail` 命令和 PATH shim，`namimail mcp start` 针对已配对、正在运行的 Agent 宿主运行 MCP stdio 桥接。下面的 JSON 可粘贴到当前 IDE 或 MCP 客户端。
+> **当前构建状态：请配置 MCP 客户端。** 0.4.0 安装包随附 `namimail` 命令和 PATH shim，`namimail mcp start` 针对已配对、正在运行的 Agent 宿主运行 MCP stdio 桥接。下面的 JSON 可粘贴到当前 IDE 或 MCP 客户端。
 
 ## 进程声明
 

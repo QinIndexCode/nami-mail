@@ -2,7 +2,7 @@
 
 [Chinese](examples.zh-CN.md) | [Agent integration](agent-integration.en.md)
 
-> **Current-build status: runnable.** The 0.3.0 installer ships the `namimail` executable and PATH shim. The examples below run against a paired, running Agent host.
+> **Current-build status: runnable.** The 0.4.0 installer ships the `namimail` executable and PATH shim. The examples below run against a paired, running Agent host.
 
 ## Local version check
 

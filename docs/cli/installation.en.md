@@ -2,7 +2,7 @@
 
 [Chinese](installation.zh-CN.md) | [Back to overview](README.en.md)
 
-> **Current-build status: installed.** The 0.3.0 installer ships a managed `namimail` executable and registers a current-user PATH shim. The desktop main process starts the Broker and routes `--cli` invocations through it; the installer smoke test verifies the shim and a post-install MCP stdio session.
+> **Current-build status: installed.** The 0.4.0 installer ships a managed `namimail` executable and registers a current-user PATH shim. The desktop main process starts the Broker and routes `--cli` invocations through it; the installer smoke test verifies the shim and a post-install MCP stdio session.
 
 ## What users can do today
 

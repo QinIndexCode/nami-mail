@@ -2,7 +2,7 @@
 
 [Chinese](tools.zh-CN.md) | [Output schema](output-schema.en.md) | [Security](security.en.md)
 
-> **Current-build status: available.** The 0.3.0 build ships the MCP server with a working `tools/list`. The sixteen tool names and schema semantics below are live (nine read-only plus seven write); `tools/list` is still the authoritative source for descriptions, input schemas, and availability.
+> **Current-build status: available.** The 0.4.0 build ships the MCP server with a working `tools/list`. The sixteen tool names and schema semantics below are live (nine read-only plus seven write); `tools/list` is still the authoritative source for descriptions, input schemas, and availability.
 
 ## Discovery first
 

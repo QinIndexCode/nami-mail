@@ -2,7 +2,7 @@
 
 [Chinese](agent-integration.zh-CN.md) | [MCP integration](../mcp/README.en.md)
 
-> **Current-build status: integrated.** The 0.3.0 build ships the Broker, `namimail` executable, PATH shim, pairing UI, and MCP launcher. Scripts, IDE Agents, and automation tasks may invoke the documented interface; it defaults to read-only and can be raised in the Permissions section of desktop settings.
+> **Current-build status: integrated.** The 0.4.0 build ships the Broker, `namimail` executable, PATH shim, pairing UI, and MCP launcher. Scripts, IDE Agents, and automation tasks may invoke the documented interface; it defaults to read-only and can be raised in the Permissions section of desktop settings.
 
 ## Current restrictions
 

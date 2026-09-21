@@ -2,7 +2,7 @@
 
 [Chinese](commands.zh-CN.md) | [Parameters](parameters.en.md) | [Output](output-schema.en.md)
 
-> **Current-build status: implemented.** The 0.3.0 installer ships a managed `namimail` command and PATH shim. The syntax and command names below are live; data commands require a running, paired Agent host.
+> **Current-build status: implemented.** The 0.4.0 installer ships a managed `namimail` command and PATH shim. The syntax and command names below are live; data commands require a running, paired Agent host.
 
 Syntax:
 

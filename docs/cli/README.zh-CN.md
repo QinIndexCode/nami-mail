@@ -2,7 +2,7 @@
 
 [English](README.en.md) | [安装](installation.zh-CN.md) | [命令](commands.zh-CN.md) | [输出](output-schema.zh-CN.md) | [权限](permissions.zh-CN.md) | [示例](examples.zh-CN.md) | [排错](troubleshooting.zh-CN.md)
 
-> **当前构建状态：可用。** 0.3.0 安装包随附受管理的 `namimail` 可执行文件并注册当前用户 PATH shim。桌面主进程会启动受保护的 Windows 命名管道 Broker 并通过它路由 `--cli` 调用；安装器 smoke 测试还会验证安装后 MCP stdio 会话返回恰好十六个工具（九个只读 + 七个写）。数据命令需要正在运行且已配对的 Agent 宿主。实验性的本地 NLLB-200 翻译仍独立保留，只能由用户在界面中主动、可选使用。
+> **当前构建状态：可用。** 0.4.0 安装包随附受管理的 `namimail` 可执行文件并注册当前用户 PATH shim。桌面主进程会启动受保护的 Windows 命名管道 Broker 并通过它路由 `--cli` 调用；安装器 smoke 测试还会验证安装后 MCP stdio 会话返回恰好十六个工具（九个只读 + 七个写）。数据命令需要正在运行且已配对的 Agent 宿主。实验性的本地 NLLB-200 翻译仍独立保留，只能由用户在界面中主动、可选使用。
 
 NamiMail CLI 文档定义 Windows 桌面应用的当前本机自动化契约。外部调用默认只读；可在桌面设置中把 CLI 权限提升为"操作前确认"（`send-confirmed`）或"完全自动"（`full-access`），详见[权限](permissions.zh-CN.md)。
 

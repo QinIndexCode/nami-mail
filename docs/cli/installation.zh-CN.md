@@ -2,7 +2,7 @@
 
 [English](installation.en.md) | [返回概览](README.zh-CN.md)
 
-> **当前构建状态：已安装。** 0.3.0 安装包随附受管理的 `namimail` 可执行文件并注册当前用户 PATH shim。桌面主进程会启动 Broker 并通过它路由 `--cli` 调用；安装器 smoke 测试会验证 shim 和安装后的 MCP stdio 会话。
+> **当前构建状态：已安装。** 0.4.0 安装包随附受管理的 `namimail` 可执行文件并注册当前用户 PATH shim。桌面主进程会启动 Broker 并通过它路由 `--cli` 调用；安装器 smoke 测试会验证 shim 和安装后的 MCP stdio 会话。
 
 ## 当前用户操作
 

@@ -2,7 +2,7 @@
 
 [English](security.en.md) | [CLI 权限](../cli/permissions.zh-CN.md)
 
-> **当前构建状态：已强制生效。** 0.3.0 构建随附 MCP stdio 适配器、Broker、配对记录和外部 AgentHost。下列信任边界、签名和权限规则已生效；违反它们的外部入口会失败关闭。
+> **当前构建状态：已强制生效。** 0.4.0 构建随附 MCP stdio 适配器、Broker、配对记录和外部 AgentHost。下列信任边界、签名和权限规则已生效；违反它们的外部入口会失败关闭。
 
 ## 信任边界
 

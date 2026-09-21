@@ -2,7 +2,7 @@
 
 [Chinese](resources.zh-CN.md) | [Tools](tools.en.md) | [Security](security.en.md)
 
-> **Current-build status: enforced.** The 0.3.0 build ships the MCP server and Broker with discoverable tools. The Resources boundary below is live: v1 exposes no callable mail Resources.
+> **Current-build status: enforced.** The 0.4.0 build ships the MCP server and Broker with discoverable tools. The Resources boundary below is live: v1 exposes no callable mail Resources.
 
 NamiMail MCP v1 publishes no `namimail://accounts`, `namimail://messages/...`, or other mail-data MCP Resources.
 

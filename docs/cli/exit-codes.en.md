@@ -2,7 +2,7 @@
 
 [Chinese](exit-codes.zh-CN.md) | [Output schema](output-schema.en.md)
 
-> **Current-build status: implemented.** The 0.3.0 build ships the `namimail` CLI and provides these exit codes to a terminal.
+> **Current-build status: implemented.** The 0.4.0 build ships the `namimail` CLI and provides these exit codes to a terminal.
 
 Exit codes support shell control flow; `error.code` in structured JSON is the precise classifier. Even for a non-zero exit, callers should parse the JSON envelope before deciding whether to retry.
 

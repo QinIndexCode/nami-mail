@@ -2,7 +2,7 @@
 
 [English](examples.en.md) | [配置](configuration.zh-CN.md) | [工具](tools.zh-CN.md)
 
-> **当前构建状态：可发送。** 0.3.0 安装包随附 MCP stdio 进程、`namimail` 命令、Broker、配对 UI 和可调用的 `tools/list`。下面的 JSON 针对已配对、正在运行的 Agent 宿主执行。
+> **当前构建状态：可发送。** 0.4.0 安装包随附 MCP stdio 进程、`namimail` 命令、Broker、配对 UI 和可调用的 `tools/list`。下面的 JSON 针对已配对、正在运行的 Agent 宿主执行。
 
 ## 工具发现
 

@@ -2,7 +2,7 @@
 
 [English](tools.en.md) | [输出 Schema](output-schema.zh-CN.md) | [安全](security.zh-CN.md)
 
-> **当前构建状态：可用。** 0.3.0 构建随附可用的 `tools/list`。下列十六个工具名和 schema 语义已生效（九个只读 + 七个写）；`tools/list` 返回的 `description`、`inputSchema` 和可用性仍是权威依据。
+> **当前构建状态：可用。** 0.4.0 构建随附可用的 `tools/list`。下列十六个工具名和 schema 语义已生效（九个只读 + 七个写）；`tools/list` 返回的 `description`、`inputSchema` 和可用性仍是权威依据。
 
 ## 发现优先
 

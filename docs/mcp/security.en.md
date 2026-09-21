@@ -2,7 +2,7 @@
 
 [Chinese](security.zh-CN.md) | [CLI permissions](../cli/permissions.en.md)
 
-> **Current-build status: enforced.** The 0.3.0 build ships the MCP stdio adapter, Broker, pairing records, and external AgentHost. The trust-boundary, signature, and permission rules below are live; external entry that violates them fails closed.
+> **Current-build status: enforced.** The 0.4.0 build ships the MCP stdio adapter, Broker, pairing records, and external AgentHost. The trust-boundary, signature, and permission rules below are live; external entry that violates them fails closed.
 
 ## Trust boundary
 

@@ -2,7 +2,7 @@
 
 [Chinese](installation.zh-CN.md) | [Configuration](configuration.en.md)
 
-> **Current-build status: installed and startable.** The 0.3.0 installer ships the native SID-DACL named-pipe Broker, the `namimail` executable, a PATH shim, the headless AgentHost service mode, and the client-pairing UI. The process declaration below can be pasted into an IDE or other MCP client.
+> **Current-build status: installed and startable.** The 0.4.0 installer ships the native SID-DACL named-pipe Broker, the `namimail` executable, a PATH shim, the headless AgentHost service mode, and the client-pairing UI. The process declaration below can be pasted into an IDE or other MCP client.
 
 ## What users can do today
 

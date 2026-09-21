@@ -2,7 +2,7 @@
 
 [Chinese](parameters.zh-CN.md) | [Commands](commands.en.md)
 
-> **Current-build status: implemented.** The 0.3.0 build ships the `namimail` CLI. The options below are live parsing and permission rules; they may be used for current automation.
+> **Current-build status: implemented.** The 0.4.0 build ships the `namimail` CLI. The options below are live parsing and permission rules; they may be used for current automation.
 
 Options may be written as `--name value` or `--name=value`. An option cannot be repeated. An unknown option or a missing value returns `INVALID_ARGUMENT`. Options follow the command words; positional arguments are rejected.
 

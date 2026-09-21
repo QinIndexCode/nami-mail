@@ -2,7 +2,7 @@
 
 [English](troubleshooting.en.md) | [安全](security.zh-CN.md)
 
-> **当前构建状态：可用。** 0.3.0 安装包随附 `namimail` 命令、PATH shim、MCP stdio 子进程、Broker、服务模式和配对 UI。下列错误码是活动 MCP 客户端的恢复信号。外部服务模式仍会以 `BROKER_SECURITY_UNAVAILABLE` 在打开 GUI、SQLite、主密钥或翻译模型之前失败关闭。
+> **当前构建状态：可用。** 0.4.0 安装包随附 `namimail` 命令、PATH shim、MCP stdio 子进程、Broker、服务模式和配对 UI。下列错误码是活动 MCP 客户端的恢复信号。外部服务模式仍会以 `BROKER_SECURITY_UNAVAILABLE` 在打开 GUI、SQLite、主密钥或翻译模型之前失败关闭。
 
 ## 当前处理方式
 

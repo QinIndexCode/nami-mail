@@ -2,7 +2,7 @@
 
 [English](exit-codes.en.md) | [输出 Schema](output-schema.zh-CN.md)
 
-> **当前构建状态：已实现。** 0.3.0 构建随附 `namimail` CLI，并向终端提供下列退出码。
+> **当前构建状态：已实现。** 0.4.0 构建随附 `namimail` CLI，并向终端提供下列退出码。
 
 退出码方便 shell 控制流；结构化 JSON 中的 `error.code` 才是精确分类。即使退出码为非零，也应先解析 JSON 包络再决定是否重试。
 

@@ -2,7 +2,7 @@
 
 [English](commands.en.md) | [参数](parameters.zh-CN.md) | [输出](output-schema.zh-CN.md)
 
-> **当前构建状态：已实现。** 0.3.0 安装包随附受管理的 `namimail` 命令和 PATH shim。下列语法和命令名已生效；数据命令需要已运行、已配对的 Agent 宿主。
+> **当前构建状态：已实现。** 0.4.0 安装包随附受管理的 `namimail` 命令和 PATH shim。下列语法和命令名已生效；数据命令需要已运行、已配对的 Agent 宿主。
 
 语法：
 
