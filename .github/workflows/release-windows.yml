@@ -23,6 +23,16 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      # The promote step reads docs/releases/v<version>.md. A missing file used
+      # to surface only after the release job had signed, packaged, and uploaded
+      # assets (burning a runner plus an approval). Fail here, before any heavy
+      # check, with an actionable message.
+      - name: Check the paired release notes exist
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $notes = "docs/releases/v$version.md"
+          if (-not (Test-Path $notes)) { throw "Missing $notes — promote-github-release.mjs requires it. Create the paired release notes (docs/releases/v$version.md) before tagging." }
+          if (-not ((Get-Content $notes -Raw).Trim())) { throw "$notes is empty — promote-github-release.mjs requires non-empty release notes." }
       # v4.4.0; pin the action implementation for a secret-free validation job.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
