@@ -23,6 +23,11 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      # The promote step reads docs/releases/v<version>.md. A missing file used
+      # to surface only after the release job had signed, packaged, and uploaded
+      # assets (burning a runner plus an approval). Fail here, before any heavy
+      # check, with an actionable message.
+      - run: node scripts/verify-release-notes.mjs
       # v4.4.0; pin the action implementation for a secret-free validation job.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
