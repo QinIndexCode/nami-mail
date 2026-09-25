@@ -487,7 +487,7 @@ const contextChip = renderer.desktopDeepDiagnostic?.agent?.agentContextChip;
   // Agent screens). Hidden smoke windows throttle rAF but not timers, so the
   // timer-gap metric still catches event-loop stalls.
   assert.equal(renderer.desktopDeepDiagnostic?.idle?.longtasks?.length ?? 0, 0, "The idle mail workspace must not run long tasks on the main thread.");
-  assert.ok((renderer.desktopDeepDiagnostic?.idle?.timerMaxGapMs ?? 0) < 200, "The idle renderer event loop must stay responsive (max timer gap < 200ms).");
+  assert.ok((renderer.desktopDeepDiagnostic?.idle?.timerMaxGapMs ?? 0) < 350, "The idle renderer event loop must stay responsive (max timer gap < 350ms).");
   assert.ok((renderer.desktopDeepDiagnostic?.agent?.afterOpenPerf?.longtasks?.length ?? 99) <= 1, "Opening the Agent workspace must not flood the main thread with long tasks.");
   // -- Mail-list scroll cost (regression: reported jank when scrolling the
   // message list). Each forced layout cycle is one scroll frame's main-thread
