@@ -391,6 +391,8 @@ export type AppSettings = {
   agentToolRoundLimit: number;
   listDensity: ListDensity;
   avatarGravatarEnabled: boolean;
+  /** BIMI brand logos: resolved server-side (DNS TXT + sender-hosted SVG). */
+  avatarBimiEnabled: boolean;
   agentAccessLevel: AgentAccessLevel;
   agentCliAccessLevel: AgentAccessLevel;
   agentMcpAccessLevel: AgentAccessLevel;
@@ -403,7 +405,7 @@ export type AppSettings = {
 
 export type AppSettingsPatch = Partial<Pick<
   AppSettings,
-  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "realtimePushEnabled" | "syncMessageLimit" | "closeBehavior" | "launchAtStartup" | "globalShortcutEnabled" | "agentToolRoundLimit" | "listDensity" | "avatarGravatarEnabled" | "agentAccessLevel" | "agentCliAccessLevel" | "agentMcpAccessLevel" | "autoReply"
+  "theme" | "locale" | "backgroundPreset" | "backgroundIntensity" | "notificationsEnabled" | "notifyWhenFocused" | "notificationSound" | "refreshIntervalSeconds" | "realtimePushEnabled" | "syncMessageLimit" | "closeBehavior" | "launchAtStartup" | "globalShortcutEnabled" | "agentToolRoundLimit" | "listDensity" | "avatarGravatarEnabled" | "avatarBimiEnabled" | "agentAccessLevel" | "agentCliAccessLevel" | "agentMcpAccessLevel" | "autoReply"
 >>;
 
 export const defaultAppSettings: AppSettings = {
@@ -424,6 +426,7 @@ export const defaultAppSettings: AppSettings = {
   agentToolRoundLimit: 30,
   listDensity: "comfortable",
   avatarGravatarEnabled: false,
+  avatarBimiEnabled: false,
   agentAccessLevel: "send-confirmed",
   agentCliAccessLevel: "read-only",
   agentMcpAccessLevel: "read-only",

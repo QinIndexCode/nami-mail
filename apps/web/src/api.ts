@@ -273,6 +273,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
+/**
+ * Resolves the BIMI brand logo for a sender domain through the local service,
+ * which performs the DNS TXT lookup, SSRF-guarded fetch and SVG-to-data-URL
+ * conversion. Returns null when the domain publishes no usable record; the
+ * server owns positive/negative caching so repeat calls are cheap.
+ */
+export async function getBimiAvatar(domain: string): Promise<string | null> {
+  const parsed = await request<{ ok: boolean; logo?: string }>(`/api/avatars/bimi/${encodeURIComponent(domain)}`);
+  return parsed.ok && parsed.logo ? parsed.logo : null;
+}
+
 function parseAgentEvent(value: unknown): AgentStreamEvent | null {
   const parsed = agentUiStreamEventSchema.safeParse(value);
   return parsed.success ? parsed.data : null;

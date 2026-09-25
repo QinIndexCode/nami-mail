@@ -5614,6 +5614,29 @@ overflow:hidden
 pointer-events:none;
 animation:.17s cubic-bezier(.2,.8,.2,1) both modal-out
 }
+.compose-drag-overlay
+{
+position:absolute;
+inset:0;
+z-index:10;
+display:flex;
+flex-direction:column;
+align-items:center;
+justify-content:center;
+gap:12px;
+background:color-mix(in srgb, var(--panel-solid) 92%, transparent);
+border:2px dashed var(--accent);
+border-radius:var(--radius-lg);
+color:var(--text);
+pointer-events:none
+}
+.compose-drag-overlay p
+{
+font-size:14px;
+font-weight:500;
+color:var(--text);
+margin:0
+}
 .compose-header
 {
 border-bottom:1px solid var(--line);
@@ -12074,17 +12097,17 @@ overflow:hidden
 {
 z-index:0;
 border:1px solid var(--line);
-background:color-mix(in srgb, var(--panel-solid) 30%, transparent);
+border-bottom:none;
+background:color-mix(in srgb, var(--panel-solid) 92%, var(--canvas));
 max-width:840px;
 max-height:360px;
 box-shadow:0 -8px 18px -12px color-mix(in srgb, var(--danger) 28%, transparent);
 border-radius:16px 16px 0 0;
 margin:4px auto 0;
-padding:14px 15px 18px;
-/* The bottom edge dissolves into the composer slot instead of ending in a
-   hard border, so the card reads as pulled out of a slot behind the input
-   box while the composer itself never changes shape, tint or position. */
-mask-image:linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+padding:14px 16px 24px;
+/* The bottom edge tucks cleanly behind the composer instead of ending in an awkward gap,
+   so the card reads as pulled out of a slot behind the input box while the composer
+   itself sits firmly on top with its solid panel background. */
 animation:agent-confirmation-in .34s cubic-bezier(.2,.8,.2,1);
 position:relative;
 overflow:hidden
@@ -12097,13 +12120,16 @@ overflow:hidden
 {
 display:grid;
 grid-template-rows:1fr;
-transition:grid-template-rows .3s cubic-bezier(.2,.8,.2,1);
-margin:0 auto;
-max-width:840px
+transition:grid-template-rows .3s cubic-bezier(.2,.8,.2,1),margin-bottom .3s cubic-bezier(.2,.8,.2,1);
+margin:0 auto -14px;
+max-width:840px;
+position:relative;
+z-index:0
 }
 .agent-confirmation-slot.collapsed
 {
-grid-template-rows:0fr
+grid-template-rows:0fr;
+margin-bottom:0
 }
 .agent-confirmation-collapse
 {
@@ -12123,11 +12149,22 @@ transform:none;
 opacity:1
 }
 }
+.agent-confirmation-card.leaving
+{
+opacity:0;
+transform:translateY(8px);
+transition:opacity .24s ease,transform .28s cubic-bezier(.2,.8,.2,1);
+pointer-events:none
+}
 @media (prefers-reduced-motion:reduce)
 {
 .agent-confirmation-card
 {
 animation:none
+}
+.agent-confirmation-card.leaving
+{
+transition:none
 }
 .agent-confirmation-slot
 {
@@ -12613,7 +12650,7 @@ background:color-mix(in srgb, var(--text-faint) 14%, transparent)
 {
 z-index:1;
 border:1px solid var(--line);
-background:0 0;
+background:var(--panel-solid);
 border-radius:18px;
 flex-direction:column;
 gap:0;

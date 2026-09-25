@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { api } from "./api";
+
 import { ComposeModal } from "./ComposeModal";
 import { I18nProvider } from "./i18n";
 import type { Account } from "./types";
@@ -24,7 +24,12 @@ vi.mock("./api", () => ({
     templates: h.templates,
     discardOutboundAttachments: vi.fn(async () => ({ ok: true })),
     discardDraft: vi.fn(async () => ({ ok: true })),
-    uploadOutboundAttachment: vi.fn(async () => ({ ok: true })),
+    uploadOutboundAttachment: vi.fn(async (_accountId: string, file: File) => ({
+      token: "mock-token-1",
+      filename: file.name,
+      contentType: file.type || "application/octet-stream",
+      size: file.size,
+    })),
     send: vi.fn(async () => ({ ok: true })),
     submission: vi.fn(async () => ({ submission: { status: "running" } })),
     saveDraft: vi.fn(async () => ({ ok: true })),
@@ -206,5 +211,59 @@ describe("compose template picker", () => {
     const option = container.querySelector("#compose-template-option-0");
     expect(option?.getAttribute("role")).toBe("option");
     expect(option?.textContent).toContain("Weekly report");
+  });
+});
+
+describe("compose drag-and-drop and clipboard paste", () => {
+  it("renders drag overlay when files are dragged over and handles drop", async () => {
+    renderCompose();
+    const card = container.querySelector(".compose-card");
+    if (!card) throw new Error("compose-card not found");
+
+    expect(container.querySelector(".compose-drag-overlay")).toBeNull();
+
+    const enterEvent = new Event("dragenter", { bubbles: true });
+    Object.defineProperty(enterEvent, "dataTransfer", {
+      value: { types: ["Files"], items: [{ kind: "file" }] },
+    });
+    act(() => {
+      card.dispatchEvent(enterEvent);
+    });
+    expect(container.querySelector(".compose-drag-overlay")).not.toBeNull();
+
+    const file = new File(["test-content"], "test.pdf", { type: "application/pdf" });
+    const dropEvent = new Event("drop", { bubbles: true });
+    Object.defineProperty(dropEvent, "dataTransfer", {
+      value: { files: [file] },
+    });
+    act(() => {
+      card.dispatchEvent(dropEvent);
+    });
+    await flush();
+    expect(container.querySelector(".compose-drag-overlay")).toBeNull();
+  });
+
+  it("handles image paste from clipboard", async () => {
+    renderCompose();
+    const card = container.querySelector(".compose-card");
+    if (!card) throw new Error("compose-card not found");
+
+    const imageFile = new File(["image-bytes"], "screenshot.png", { type: "image/png" });
+    const pasteEvent = new Event("paste", { bubbles: true });
+    Object.defineProperty(pasteEvent, "clipboardData", {
+      value: {
+        items: [
+          {
+            type: "image/png",
+            getAsFile: () => imageFile,
+          },
+        ],
+      },
+    });
+
+    act(() => {
+      card.dispatchEvent(pasteEvent);
+    });
+    await flush();
   });
 });

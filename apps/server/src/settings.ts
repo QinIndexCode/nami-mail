@@ -48,6 +48,8 @@ export type AppSettings = {
   agentToolRoundLimit: number;
   listDensity: ListDensity;
   avatarGravatarEnabled: boolean;
+  /** BIMI brand logos: DNS TXT + sender-hosted SVG per sender domain. */
+  avatarBimiEnabled: boolean;
   agentAccessLevel: AgentAccessLevel;
   agentCliAccessLevel: AgentAccessLevel;
   agentMcpAccessLevel: AgentAccessLevel;
@@ -83,6 +85,7 @@ const defaults: Omit<AppSettings, "updatedAt"> = {
   agentToolRoundLimit: 30,
   listDensity: "comfortable",
   avatarGravatarEnabled: false,
+  avatarBimiEnabled: false,
   agentAccessLevel: "send-confirmed",
   agentCliAccessLevel: "read-only",
   agentMcpAccessLevel: "read-only",
@@ -108,6 +111,7 @@ type SettingsRow = {
   agent_tool_round_limit: number;
   list_density: ListDensity;
   avatar_gravatar_enabled: number;
+  avatar_bimi_enabled: number;
   agent_access_level: AgentAccessLevel;
   agent_cli_access_level: AgentAccessLevel;
   agent_mcp_access_level: AgentAccessLevel;
@@ -134,12 +138,12 @@ function ensureSettingsRow(db: DatabaseHandle): void {
       refresh_interval_seconds, realtime_push_enabled, close_behavior, launch_at_startup, global_shortcut_enabled,
       sync_message_limit,
       agent_tool_round_limit,
-      list_density, avatar_gravatar_enabled, agent_access_level, agent_cli_access_level, agent_mcp_access_level,
+      list_density, avatar_gravatar_enabled, avatar_bimi_enabled, agent_access_level, agent_cli_access_level, agent_mcp_access_level,
       custom_background_filename, updated_at
     ) VALUES (1, @theme, @locale, @backgroundPreset, @backgroundIntensity, @notificationsEnabled,
       @notifyWhenFocused, @notificationSound, @refreshIntervalSeconds, @realtimePushEnabled, @closeBehavior,
       @launchAtStartup, @globalShortcutEnabled,
-      @syncMessageLimit, @agentToolRoundLimit, @listDensity, @avatarGravatarEnabled, @agentAccessLevel, @agentCliAccessLevel, @agentMcpAccessLevel,
+      @syncMessageLimit, @agentToolRoundLimit, @listDensity, @avatarGravatarEnabled, @avatarBimiEnabled, @agentAccessLevel, @agentCliAccessLevel, @agentMcpAccessLevel,
       NULL, @updatedAt)
   `).run({
     ...defaults,
@@ -149,6 +153,7 @@ function ensureSettingsRow(db: DatabaseHandle): void {
     launchAtStartup: defaults.launchAtStartup ? 1 : 0,
     globalShortcutEnabled: defaults.globalShortcutEnabled ? 1 : 0,
     avatarGravatarEnabled: defaults.avatarGravatarEnabled ? 1 : 0,
+    avatarBimiEnabled: defaults.avatarBimiEnabled ? 1 : 0,
     updatedAt: new Date().toISOString(),
   });
 }
@@ -172,6 +177,7 @@ function rowToSettings(row: SettingsRow): AppSettings {
     agentToolRoundLimit: row.agent_tool_round_limit,
     listDensity: row.list_density,
     avatarGravatarEnabled: Boolean(row.avatar_gravatar_enabled),
+    avatarBimiEnabled: Boolean(row.avatar_bimi_enabled),
     agentAccessLevel: row.agent_access_level,
     agentCliAccessLevel: row.agent_cli_access_level,
     agentMcpAccessLevel: row.agent_mcp_access_level,
@@ -220,6 +226,7 @@ export function updateAppSettings(db: DatabaseHandle, patch: AppSettingsPatch): 
       agent_tool_round_limit = @agentToolRoundLimit,
       list_density = @listDensity,
       avatar_gravatar_enabled = @avatarGravatarEnabled,
+      avatar_bimi_enabled = @avatarBimiEnabled,
       agent_access_level = @agentAccessLevel,
       agent_cli_access_level = @agentCliAccessLevel,
       agent_mcp_access_level = @agentMcpAccessLevel,
@@ -235,6 +242,7 @@ export function updateAppSettings(db: DatabaseHandle, patch: AppSettingsPatch): 
     launchAtStartup: next.launchAtStartup ? 1 : 0,
     globalShortcutEnabled: next.globalShortcutEnabled ? 1 : 0,
     avatarGravatarEnabled: next.avatarGravatarEnabled ? 1 : 0,
+    avatarBimiEnabled: next.avatarBimiEnabled ? 1 : 0,
     autoReplyConfig: JSON.stringify(next.autoReply),
   });
 

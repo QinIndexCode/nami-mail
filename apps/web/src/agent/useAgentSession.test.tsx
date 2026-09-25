@@ -17,6 +17,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { useState } from "react";
+import type { api } from "../api";
 import { createRoot } from "react-dom/client";
 import type { ReactElement } from "react";
 import type {
@@ -75,9 +76,9 @@ describe("keepAheadTranscript", () => {
 });
 
 const h = vi.hoisted(() => ({
-  agentConversation: vi.fn<typeof import("../api").api.agentConversation>(async () => ({ id: "x", title: "", preview: "", updatedAt: "", providerId: "p", scope: { mode: "all_accounts", accountIds: [], messageIds: [] }, messages: [] })),
-  streamAgentMessage: vi.fn<typeof import("../api").api.streamAgentMessage>(() => new Promise(() => undefined)),
-  cancelAgentRun: vi.fn<typeof import("../api").api.cancelAgentRun>(async () => ({ ok: true })),
+  agentConversation: vi.fn<typeof api.agentConversation>(async () => ({ id: "x", title: "", preview: "", updatedAt: "", providerId: "p", scope: { mode: "all_accounts", accountIds: [], messageIds: [] }, messages: [] })),
+  streamAgentMessage: vi.fn<typeof api.streamAgentMessage>(() => new Promise(() => undefined)),
+  cancelAgentRun: vi.fn<typeof api.cancelAgentRun>(async () => ({ ok: true })),
 }));
 
 vi.mock("../api", () => ({
@@ -123,7 +124,7 @@ const refreshSpy = vi.fn(async () => undefined);
 
 function Harness(): ReactElement | null {
   const [active, setActive] = useState<AgentConversation | null>(ctx.box.active);
-  const [conversations, setConversations] = useState<AgentConversation[]>([]);
+  const [, setConversations] = useState<AgentConversation[]>([]);
   const [, setSuggestions] = useState<string[]>([]);
   const result = useAgentSession({
     demoMode: false,
@@ -177,7 +178,7 @@ async function drain(): Promise<void> {
 
 /** A stream script: emits the given events in order, then (optionally) holds
  *  the SSE open until the signal aborts (which rejects like a real fetch). */
-function streamScript(events: AgentStreamEvent[], hold = false): typeof import("../api").api.streamAgentMessage {
+function streamScript(events: AgentStreamEvent[], hold = false): typeof api.streamAgentMessage {
   return async (_id, _payload, onEvent, signal) => {
     for (const event of events) onEvent(event);
     if (!hold) return;
@@ -187,7 +188,7 @@ function streamScript(events: AgentStreamEvent[], hold = false): typeof import("
   };
 }
 
-const streamPayload = { content: "hello" } as unknown as Parameters<typeof import("../api").api.streamAgentMessage>[1];
+const streamPayload = { content: "hello" } as unknown as Parameters<typeof api.streamAgentMessage>[1];
 
 beforeEach(() => {
   vi.clearAllMocks();

@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   Bot,
   CalendarDays,
@@ -25,7 +25,7 @@ import {
   ArrowLeft,
   ArrowUp,
   ChevronDown,
-  Server,
+
   ShieldAlert,
   ShieldCheck,
   Square,
@@ -36,35 +36,31 @@ import {
   Zap,
 } from "lucide-react";
 import { api, ApiError } from "./api";
-import { AttachmentFileIcon } from "./mailUi";
-import { presentAttachment } from "./attachmentPresentation";
+
 import { type AgentSlashCommand, type AgentSlashSubcommand } from "@nami/agent-contracts";
 import { buildSlashMenu, slashCompletionText, slashKeepsMenuOpen, slashMenuActiveIndex } from "./slashMenu";
 import { mentionActiveIndex, mentionQuery } from "./mentionMenu";
 import { AgentMark } from "./AgentMark";
-import { AgentMarkdown, streamingMarkdownContent } from "./AgentMarkdown";
+
 import { desktopBridge } from "./desktop";
 import type {
   AgentBootstrap,
-  AgentCitation,
-  AgentConfirmation,
   AgentConversation,
   AgentMessage,
   AgentProviderList,
   AgentProviderSummary,
-  AgentStreamEvent,
-  AgentToolActivity,
 } from "./agentTypes";
 import { agentScopeFor, sameAgentScope, scopeTargetForConversation, type AgentScopeTarget } from "./agentContext";
 import { isSupportedFile, processFile, type ProcessedFile } from "./fileProcessor";
 import type { Account, AgentAccessLevel, Message } from "./types";
-import { useI18n, type Translate } from "./i18n";
+import { useI18n } from "./i18n";
 import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 import { AgentProviderSettings, type AgentSettingsPane, configuredProviderId } from "./agent/AgentProviderSettings";
 import { AgentMessageRow } from "./agent/AgentMessageRow";
-import { AgentToolList } from "./agent/AgentToolCard";
+
 import { AgentConfirmationCard } from "./agent/AgentConfirmationCard";
-import { AgentRecallButton, AgentScrubberBar, AgentMessageContent, RevokeNotice } from "./agent/AgentSmallComponents";
+import { AgentScrubberBar, RevokeNotice } from "./agent/AgentSmallComponents";
 import { AgentPickerPopover } from "./agent/AgentPickerPopover";
 import {
   type AgentMode,
@@ -89,7 +85,6 @@ import {
   LAST_ACTIVE_CONVERSATION_KEY,
   readLastActiveConversationId,
   lastMessageIsUnanswered,
-  lastMessageIsStreaming,
   applyRevokedMarks,
   purgeStaleErrors,
   sourceLabel,
@@ -97,8 +92,6 @@ import {
   dedupeCitations,
   truncateForPreview,
   truncateForContext,
-  messageWithEvent,
-  interruptAssistantMessage,
   applyConfirmationDecision,
   expireConfirmation,
 } from "./agent/agent-utils";
@@ -192,8 +185,27 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const [loadingConversationId, setLoadingConversationId] = useState<string | null>(null);
   /** Conversations awaiting a destructive-delete confirmation dialog (ids; one for a single delete, several for a bulk delete). */
   const [deleteConfirm, setDeleteConfirm] = useState<string[] | null>(null);
+  const {
+    closing: deleteConfirmClosing,
+    requestClose: requestDeleteConfirmClose,
+    reset: resetDeleteConfirmClosing,
+  } = useDismissTransition(useCallback(() => setDeleteConfirm(null), []));
+  const openDeleteConfirm = useCallback((ids: string[]) => {
+    resetDeleteConfirmClosing();
+    setDeleteConfirm(ids);
+  }, [resetDeleteConfirmClosing]);
+
   /** Holds a full-access request that still needs the user's explicit warning acknowledgment. */
   const [pendingAccessLevel, setPendingAccessLevel] = useState<AgentAccessLevel | null>(null);
+  const {
+    closing: accessConfirmClosing,
+    requestClose: requestAccessConfirmClose,
+    reset: resetAccessConfirmClosing,
+  } = useDismissTransition(useCallback(() => setPendingAccessLevel(null), []));
+  const openAccessConfirm = useCallback((level: AgentAccessLevel) => {
+    resetAccessConfirmClosing();
+    setPendingAccessLevel(level);
+  }, [resetAccessConfirmClosing]);
   /** Whether the composer permission picker popover is open. */
   const [permissionOpen, setPermissionOpen] = useState(false);
   /** Anchors the permission popover so an outside click closes it. */
@@ -289,6 +301,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const providerSettingsTriggerRef = useRef<HTMLButtonElement>(null);
   const workspaceRef = useRef<HTMLElement>(null);
   const accessConfirmRef = useRef<HTMLElement>(null);
+  const deleteConfirmRef = useRef<HTMLElement>(null);
   // Latest transcript mirror for stable callbacks passed to memoized message
   // rows. Reading through a ref keeps the row props referentially stable so an
   // unrelated re-render (scroll, scrubber hover, other rows streaming) never
@@ -321,8 +334,36 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     window.requestAnimationFrame(() => composerRef.current?.focus());
   }, []);
 
-  useDialogFocus(true, workspaceRef, { restoreFocusRef, suspended: agentSettingsPane !== null || Boolean(pendingAccessLevel) });
+  useDialogFocus(true, workspaceRef, {
+    restoreFocusRef,
+    suspended: agentSettingsPane !== null || Boolean(pendingAccessLevel) || Boolean(deleteConfirm),
+  });
   useDialogFocus(Boolean(pendingAccessLevel), accessConfirmRef, { restoreFocusRef: workspaceRef });
+  useDialogFocus(Boolean(deleteConfirm), deleteConfirmRef, { restoreFocusRef: workspaceRef });
+
+  useEffect(() => {
+    if (!deleteConfirm) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!multiDeleteBusy) requestDeleteConfirmClose();
+    };
+    window.addEventListener("keydown", closeOnEscape, true);
+    return () => window.removeEventListener("keydown", closeOnEscape, true);
+  }, [deleteConfirm, multiDeleteBusy, requestDeleteConfirmClose]);
+
+  useEffect(() => {
+    if (!pendingAccessLevel) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      requestAccessConfirmClose();
+    };
+    window.addEventListener("keydown", closeOnEscape, true);
+    return () => window.removeEventListener("keydown", closeOnEscape, true);
+  }, [pendingAccessLevel, requestAccessConfirmClose]);
 
   const scope = useMemo(() => agentScopeFor(scopeTarget, accounts), [accounts, scopeTarget]);
   const providers = useMemo(() => bootstrap?.providers ?? [], [bootstrap]);
@@ -537,7 +578,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     } finally {
       setLoading(false);
     }
-  }, [accounts, demoMode, preloadedBootstrap, refreshConversations, t]);
+  }, [accounts, demoMode, locale, preloadedBootstrap, refreshConversations, t]);
 
   // Mount-once: loadBootstrap wholesale-adopts the (splash-time) bootstrap
   // snapshot into the sidebar and re-resolves the initial conversation, so
@@ -620,7 +661,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   }, []);
   const scrollToBottom = useCallback(() => {
     stickToBottomRef.current = true;
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
   }, []);
   // Scrubber: re-measure user-message anchors whenever the set of user
   // messages changes (streamed assistant tokens never move earlier messages,
@@ -1114,7 +1155,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       restoreLiveRunIndicators(id);
       setLoadError(error instanceof Error ? error.message : t("agent.error.loadConversation"));
     }
-  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, clearLiveRunIndicators, clearPendingFlush, conversationProviders, conversations, getSession, providers, replayBackgroundSession, restoreLiveRunIndicators, syncBackgroundRuns, t, takeBackgroundError]);
+  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, clearLiveRunIndicators, clearPendingFlush, conversationProviders, conversations, currentMessage, getSession, providers, replayBackgroundSession, restoreLiveRunIndicators, syncBackgroundRuns, t, takeBackgroundError]);
 
   const createConversation = useCallback(async () => {
     // Starting a new conversation does not cancel the current one — a live run
@@ -1239,7 +1280,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     } finally {
       setMultiDeleteBusy(false);
     }
-  }, [active, activeIdRef, conversationSearch, conversations, refreshConversations, selectConversation, syncBackgroundRuns, t]);
+  }, [active, activeIdRef, conversationSearch, conversations, refreshConversations, selectConversation, syncBackgroundRuns, t, terminateSession]);
 
   // Token batching, reveal pacing and session-buffer routing
   // (flushPendingStreamPieces / enqueueStreamPiece / streamPacingRef /
@@ -1417,7 +1458,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   // Slash commands are mail-operation scoped: only the mail-assistant mode
   // builds the menu, plain chat ignores the leading "/".
   const slashMenu = useMemo(() => mode === "agent" ? buildSlashMenu(composer, { streaming, dismissed: slashDismissed }) : null, [composer, slashDismissed, mode, streaming]);
-  const slashVisible = slashMenu !== null && slashMenu.length > 0;
+
   const activeSlashIndex = slashMenuActiveIndex(slashMenu, slashIndex);
   const completeSlash = useCallback((command: AgentSlashCommand, sub?: AgentSlashSubcommand) => {
     setSlashDismissed(!slashKeepsMenuOpen(command, sub));
@@ -1743,7 +1784,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       next.delete(messageId);
       pendingRevokeIdsRef.current = next;
     });
-  }, [active?.id, t]);
+  }, [active?.id, getSession, t]);
 
   return (
     <section ref={workspaceRef} className="agent-workspace" role="dialog" aria-modal="true" aria-label={t("agent.workspace.aria")} tabIndex={-1}>
@@ -1765,7 +1806,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
           <div className={`agent-selection-bar-wrap${selectionMode ? " open" : ""}`} aria-hidden={!selectionMode}>
             <div className="agent-selection-bar">
               <span className="agent-selection-count">{t("agent.conversation.selected")} {selectedConversationIds.size}</span>
-              <button className="agent-selection-delete" type="button" disabled={multiDeleteBusy || selectedConversationIds.size === 0 || Array.from(selectedConversationIds).some((id) => backgroundRunIds.has(id) || (active?.id === id && streaming))} onClick={() => setDeleteConfirm(Array.from(selectedConversationIds))}><Trash2 size={14} />{t("agent.conversation.deleteSelected")}</button>
+              <button className="agent-selection-delete" type="button" disabled={multiDeleteBusy || selectedConversationIds.size === 0 || Array.from(selectedConversationIds).some((id) => backgroundRunIds.has(id) || (active?.id === id && streaming))} onClick={() => openDeleteConfirm(Array.from(selectedConversationIds))}><Trash2 size={14} />{t("agent.conversation.deleteSelected")}</button>
               <button className="agent-selection-cancel" type="button" onClick={exitSelectionMode}><X size={14} />{t("common.cancel")}</button>
             </div>
           </div>
@@ -1773,7 +1814,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             <div key={conversation.id} className={`agent-conversation-row ${active?.id === conversation.id ? "active" : ""}${selectionMode ? " selectable" : ""}${selectionMode && selectedConversationIds.has(conversation.id) ? " selected" : ""}`} onContextMenu={(event) => openConversationMenu(event, conversation.id)}>
               {selectionMode && <button className={`agent-row-check ${selectedConversationIds.has(conversation.id) ? "checked" : ""}`} type="button" aria-label={t("agent.conversation.toggleSelect")} aria-pressed={selectedConversationIds.has(conversation.id)} disabled={backgroundRunIds.has(conversation.id) || (active?.id === conversation.id && streaming)} onClick={() => toggleConversationSelected(conversation.id)}><span className="agent-row-check-box"><Check size={12} /></span></button>}
               <button className="agent-conversation-open" type="button" onClick={() => { setMobileConversationsOpen(false); if (selectionMode) toggleConversationSelected(conversation.id); else void selectConversation(conversation.id); }}><span><strong>{conversation.title}</strong>{backgroundRunIds.has(conversation.id) && <LoaderCircle className="spin" size={13} aria-label={t("agent.conversation.backgroundRunning")} />}<small>{conversation.preview || t("agent.conversation.emptyPreview")}</small></span><time>{shortDate(conversation.updatedAt, locale)}</time></button>
-              {!selectionMode && <button className="agent-row-delete" type="button" aria-label={t("agent.conversation.delete")} disabled={backgroundRunIds.has(conversation.id) || (active?.id === conversation.id && streaming)} onClick={() => setDeleteConfirm([conversation.id])}><Trash2 size={14} /></button>}
+              {!selectionMode && <button className="agent-row-delete" type="button" aria-label={t("agent.conversation.delete")} disabled={backgroundRunIds.has(conversation.id) || (active?.id === conversation.id && streaming)} onClick={() => openDeleteConfirm([conversation.id])}><Trash2 size={14} /></button>}
             </div>
           ))}
           </>}
@@ -1784,7 +1825,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
               <button type="button" role="menuitem" onClick={() => runMenuAction(() => void createConversation())}><MessageCirclePlus size={14} /><span>{t("agent.conversation.new")}</span></button>
             ) : (
               <>
-                <button type="button" role="menuitem" disabled={backgroundRunIds.has(sidebarMenu.conversationId) || (active?.id === sidebarMenu.conversationId && streaming)} onClick={() => { const id = sidebarMenu.conversationId!; runMenuAction(() => setDeleteConfirm([id])); }}><Trash2 size={14} /><span>{t("agent.conversation.delete")}</span></button>
+                <button type="button" role="menuitem" disabled={backgroundRunIds.has(sidebarMenu.conversationId) || (active?.id === sidebarMenu.conversationId && streaming)} onClick={() => { const id = sidebarMenu.conversationId!; runMenuAction(() => openDeleteConfirm([id])); }}><Trash2 size={14} /><span>{t("agent.conversation.delete")}</span></button>
                 <button type="button" role="menuitem" onClick={() => { const id = sidebarMenu.conversationId!; runMenuAction(() => enterSelectionMode(id)); }}><SquareCheck size={14} /><span>{t("agent.conversation.multiSelect")}</span></button>
                 <button type="button" role="menuitem" onClick={() => { const id = sidebarMenu.conversationId!; runMenuAction(() => void selectConversation(id).then(() => { setDraftTitle(conversations.find((item) => item.id === id)?.title ?? ""); setRenaming(true); })); }}><Pencil size={14} /><span>{t("agent.conversation.rename")}</span></button>
                 <button type="button" role="menuitem" onClick={() => { const id = sidebarMenu.conversationId!; runMenuAction(() => void downloadConversation(id, "markdown")); }}><FileText size={14} /><span>{t("agent.conversation.exportMarkdown")}</span></button>
@@ -2024,6 +2065,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                 desktopConfirmationAvailable={desktopConfirmationAvailable}
                 resolutionError={confirmationErrors[pendingConfirmation.id]}
                 onDecision={demoMode ? (decision) => resolveDemoConfirmation(pendingConfirmation.id, decision) : undefined}
+                onStartLeaving={demoMode ? () => setLeavingConfirmationIds((current) => new Set(current).add(pendingConfirmation.id)) : undefined}
                 expiresAt={Number.isFinite(confirmationDeadline) && confirmationDeadline > 0 ? confirmationDeadline : undefined}
                 onExpire={expirePendingConfirmation}
                 forceLeaving={leavingConfirmationIds.has(pendingConfirmation.id)}
@@ -2031,7 +2073,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             </div>
           </div>
           <div className={`agent-composer${streaming ? " streaming" : ""}`}>
-            <button className={`agent-scroll-to-bottom ${showScrollToBottom ? "visible" : ""}`} type="button" onClick={scrollToBottom} aria-label={t("agent.composer.scrollToBottom")}><ChevronDown size={17} /></button>
+            <button className={`agent-scroll-to-bottom ${showScrollToBottom && !pendingConfirmation ? "visible" : ""}`} type="button" onClick={scrollToBottom} aria-label={t("agent.composer.scrollToBottom")}><ChevronDown size={17} /></button>
             <input ref={fileInputRef} type="file" multiple onChange={(e) => void handleFileSelect(e)} accept=".txt,.md,.markdown,.csv,.tsv,.json,.xml,.html,.htm,.py,.js,.ts,.tsx,.jsx,.css,.scss,.less,.yaml,.yml,.log,.rtf,.ini,.cfg,.conf,.sh,.bash,.zsh,.sql,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.vue,.svelte,.pdf,.docx,.pptx" style={{ display: "none" }} />
             <label className="visually-hidden" htmlFor="agent-composer">{t("agent.composer.label")}</label>
             <textarea id="agent-composer" ref={composerRef} value={composer} onChange={(event) => { setComposer(event.target.value); setSlashDismissed(false); setMentionDismissed(false); setMentionLimitReached(false); }} onKeyDown={(event) => {
@@ -2043,7 +2085,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                   event.preventDefault();
                   const delta = event.key === "ArrowDown" ? 1 : -1;
                   setSlashIndex((index) => (index + delta + slashMenu.length) % slashMenu.length);
-                  requestAnimationFrame(() => document.getElementById("agent-slash-menu")?.querySelector(".selected")?.scrollIntoView({ block: "nearest" }));
+                  requestAnimationFrame(() => document.getElementById("agent-slash-menu")?.querySelector(".selected")?.scrollIntoView?.({ block: "nearest" }));
                   return;
                 }
                 if (event.key === "Tab" || event.key === "Enter") {
@@ -2071,7 +2113,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                   if (mentionItems.length === 0) return;
                   const delta = event.key === "ArrowDown" ? 1 : -1;
                   setMentionIndex((index) => (index + delta + mentionItems.length) % mentionItems.length);
-                  requestAnimationFrame(() => document.getElementById("agent-mention-menu")?.querySelector(".selected")?.scrollIntoView({ block: "nearest" }));
+                  requestAnimationFrame(() => document.getElementById("agent-mention-menu")?.querySelector(".selected")?.scrollIntoView?.({ block: "nearest" }));
                   return;
                 }
                 if (event.key === "Tab" || event.key === "Enter") {
@@ -2203,7 +2245,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                               <button type="button" role="menuitemradio" aria-checked={active} className={`agent-popover-option${active ? " active" : ""}${option.level === "full-access" ? " danger" : ""}`} onClick={() => {
                                 if (option.level === "full-access" && !active) {
                                   setPermissionOpen(false);
-                                  setPendingAccessLevel("full-access");
+                                  openAccessConfirm("full-access");
                                   return;
                                 }
                                 setPermissionOpen(false);
@@ -2295,8 +2337,24 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
         restoreFocusRef={providerSettingsTriggerRef}
       />
       {deleteConfirm && (
-        <div className="modal-backdrop confirmation-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setDeleteConfirm(null)}>
-          <section className="confirmation-card" role="alertdialog" aria-modal="true" aria-labelledby="agent-conversation-delete-title" aria-describedby="agent-conversation-delete-description" tabIndex={-1}>
+        <div
+          className={`modal-backdrop confirmation-backdrop${deleteConfirmClosing ? " closing" : ""}`}
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !multiDeleteBusy) {
+              requestDeleteConfirmClose();
+            }
+          }}
+        >
+          <section
+            ref={deleteConfirmRef}
+            className={`confirmation-card${deleteConfirmClosing ? " closing" : ""}`}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="agent-conversation-delete-title"
+            aria-describedby="agent-conversation-delete-description"
+            tabIndex={-1}
+          >
             <span className="eyebrow">{t("agent.conversation.deleteEyebrow")}</span>
             <h3 id="agent-conversation-delete-title">{t("agent.conversation.deleteTitle")}</h3>
             <p id="agent-conversation-delete-description">{(() => {
@@ -2314,25 +2372,70 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
               return t("agent.conversation.deleteOne", { title: titles.map((title) => `「${title}」`).join("、") });
             })()}</p>
             <div className="confirmation-actions">
-              <button className="secondary-button" type="button" data-dialog-initial-focus onClick={() => setDeleteConfirm(null)}>{t("common.cancel")}</button>
-              <button className="secondary-button danger-button" type="button" onClick={() => void performDeleteConversations(deleteConfirm)}><Trash2 size={14} />{t("agent.conversation.delete")}</button>
+              <button
+                className="secondary-button"
+                type="button"
+                data-dialog-initial-focus
+                disabled={multiDeleteBusy}
+                onClick={requestDeleteConfirmClose}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                className="secondary-button danger-button"
+                type="button"
+                disabled={multiDeleteBusy}
+                onClick={() => void performDeleteConversations(deleteConfirm)}
+              >
+                {multiDeleteBusy ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}
+                {t("agent.conversation.delete")}
+              </button>
             </div>
           </section>
         </div>
       )}
       {pendingAccessLevel && (
-        <div className="modal-backdrop confirmation-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setPendingAccessLevel(null)}>
-          <section ref={accessConfirmRef} className="confirmation-card" role="alertdialog" aria-modal="true" aria-labelledby="agent-full-access-warning-title" aria-describedby="agent-full-access-warning-description" tabIndex={-1}>
+        <div
+          className={`modal-backdrop confirmation-backdrop${accessConfirmClosing ? " closing" : ""}`}
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              requestAccessConfirmClose();
+            }
+          }}
+        >
+          <section
+            ref={accessConfirmRef}
+            className={`confirmation-card${accessConfirmClosing ? " closing" : ""}`}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="agent-full-access-warning-title"
+            aria-describedby="agent-full-access-warning-description"
+            tabIndex={-1}
+          >
             <span className="eyebrow">{t("agent.permission.warningEyebrow")}</span>
             <h3 id="agent-full-access-warning-title">{t("agent.permission.fullAccessWarningTitle")}</h3>
             <p id="agent-full-access-warning-description">{t("agent.permission.fullAccessWarningDescription")}</p>
             <div className="confirmation-actions">
-              <button className="secondary-button" type="button" data-dialog-initial-focus onClick={() => setPendingAccessLevel(null)}>{t("common.cancel")}</button>
-              <button className="secondary-button danger-button" type="button" onClick={() => {
-                const level = pendingAccessLevel;
-                setPendingAccessLevel(null);
-                onAgentAccessLevelChange?.(level);
-              }}><Zap size={14} />{t("agent.permission.fullAccessWarningAction")}</button>
+              <button
+                className="secondary-button"
+                type="button"
+                data-dialog-initial-focus
+                onClick={requestAccessConfirmClose}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                className="secondary-button danger-button"
+                type="button"
+                onClick={() => {
+                  const level = pendingAccessLevel;
+                  setPendingAccessLevel(null);
+                  onAgentAccessLevelChange?.(level);
+                }}
+              >
+                <Zap size={14} />{t("agent.permission.fullAccessWarningAction")}
+              </button>
             </div>
           </section>
         </div>

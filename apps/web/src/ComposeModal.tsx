@@ -54,6 +54,8 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const [composeTemplates, setComposeTemplates] = useState<MailTemplate[] | null>(null);
   const [templateLoadBusy, setTemplateLoadBusy] = useState(false);
   const [templateLoadFailed, setTemplateLoadFailed] = useState(false);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const dragCounterRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composeDialogRef = useRef<HTMLElement>(null);
   const discardConfirmDialogRef = useRef<HTMLElement>(null);
@@ -274,9 +276,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     }
   };
 
-  const addFiles = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.currentTarget.files ?? []);
-    event.currentTarget.value = "";
+  const handleFiles = async (files: File[]) => {
     if (!files.length || busy || uploading || uploadInFlightRef.current) return;
     if (!accountId) {
       setError(t("compose.error.selectSender"));
@@ -305,11 +305,78 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     setError("");
     uploadInFlightRef.current = true;
     try {
-      for (const upload of nextUploads) {
-        if (upload.phase === "uploading") await uploadAttachment(accountId, upload.id, upload.file);
-      }
+      await Promise.all(
+        nextUploads
+          .filter((upload) => upload.phase === "uploading")
+          .map((upload) => uploadAttachment(accountId, upload.id, upload.file)),
+      );
     } finally {
       uploadInFlightRef.current = false;
+    }
+  };
+
+  const addFiles = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = "";
+    void handleFiles(files);
+  };
+
+  const handleDragEnter = (event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragCounterRef.current += 1;
+    if (event.dataTransfer?.types?.includes("Files")) {
+      setIsDraggingFiles(true);
+    }
+  };
+
+  const handleDragLeave = (event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDraggingFiles(false);
+    }
+  };
+
+  const handleDragOver = (event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleDrop = (event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDraggingFiles(false);
+    const droppedFiles = Array.from(event.dataTransfer?.files ?? []);
+    if (droppedFiles.length > 0) {
+      void handleFiles(droppedFiles);
+    }
+  };
+
+  const handlePaste = (event: React.ClipboardEvent) => {
+    const items = event.clipboardData?.items;
+    if (!items || items.length === 0) return;
+    const imageFiles: File[] = [];
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
+      if (item && item.type.startsWith("image/")) {
+        const blob = item.getAsFile();
+        if (blob) {
+          const ext = blob.type.split("/")[1] || "png";
+          const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(11, 19);
+          const name = blob.name && blob.name !== "image.png"
+            ? blob.name
+            : `${t("compose.pastedImageName")}_${timestamp}.${ext}`;
+          imageFiles.push(new File([blob], name, { type: blob.type }));
+        }
+      }
+    }
+    if (imageFiles.length > 0) {
+      event.preventDefault();
+      void handleFiles(imageFiles);
     }
   };
 
@@ -508,7 +575,25 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
       if (confirmAction) requestConfirmClose();
       else requestClose();
     }}>
-      <section ref={composeDialogRef} className={`compose-card${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="compose-title" tabIndex={-1}>
+      <section
+        ref={composeDialogRef}
+        className={`compose-card${closing ? " closing" : ""}${isDraggingFiles ? " is-dragging-files" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="compose-title"
+        tabIndex={-1}
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onPaste={handlePaste}
+      >
+        {isDraggingFiles && (
+          <div className="compose-drag-overlay" role="presentation" aria-hidden="true">
+            <Paperclip size={32} />
+            <p>{t("compose.attachment.dropPrompt")}</p>
+          </div>
+        )}
         <header className="compose-header">
           <div><span className="eyebrow">{draft.sourceDraftId ? t("compose.draft") : t("compose.new")}</span><h2 id="compose-title">{draft.sourceDraftId ? t("compose.editDraft") : t("compose.new")}</h2></div>
           <div className="compose-header-actions">{draft.sourceDraftId && <IconButton label={t("compose.deleteDraft")} onClick={() => { resetConfirmClosing(); setConfirmAction("delete"); }} disabled={busy || uploading || discarding}><Trash2 size={18} /></IconButton>}<IconButton label={t("common.close")} onClick={requestClose} disabled={busy || uploading || discarding}><X size={18} /></IconButton></div>

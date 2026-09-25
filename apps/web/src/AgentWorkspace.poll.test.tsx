@@ -112,7 +112,7 @@ vi.mock("./api", () => ({
   },
   api: {
     agentBootstrap: vi.fn(async () => h.bootstrap),
-    agentConversation: vi.fn(async (id: string) => h.convGhost),
+    agentConversation: vi.fn(async (_id: string) => h.convGhost),
     streamAgentMessage: vi.fn(async () => new Promise(() => undefined)),
     cancelAgentRun: vi.fn(async () => ({ ok: true })),
     createAgentConversation: vi.fn(async () => h.convGhost),
@@ -214,8 +214,7 @@ describe("AgentWorkspace pickup polling", () => {
       await sleep(600);
     });
     const readsAfter = base.mock.calls.length;
-    // eslint-disable-next-line no-console
-    console.log(`N1: reads in 600ms = ${readsBefore} → ${readsAfter}`);
+
     expect(readsAfter - readsBefore).toBeLessThanOrEqual(1);
   });
 
@@ -241,8 +240,7 @@ describe("AgentWorkspace pickup polling", () => {
       await sleep(2300);
     });
     const readsAfter = base.mock.calls.length;
-    // eslint-disable-next-line no-console
-    console.log(`N2: reads after stop in 2300ms = ${readsBefore} → ${readsAfter}`);
+
     expect(readsAfter).toBe(readsBefore);
   });
 

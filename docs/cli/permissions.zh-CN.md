@@ -18,7 +18,7 @@
 
 宿主为外部 caller 构造访问级别，并按配置档位收紧（clamp）；已配对客户端不能自行提升级别。请求超过配置级别时返回 `PERMISSION_DENIED`。交互能力（`interactive` / `canRequestConfirmation`）仅对外部 caller 在 `send-confirmed` 档为 `true`。
 
-外部工具面共 15 个（v1）：8 个只读工具使用 `read:accounts`、`read:folders`、`read:messages` 和 `read:attachments` 这些 scope；7 个写工具（`mail.draft.create`、`mail.draft.update`、`mail.draft.delete`、`messages.move`、`messages.set-flag`、`messages.send`、`mail.reply`）在 `send-confirmed` 及以上档位可用，`read-only` 档调用返回 `PERMISSION_DENIED`。
+外部工具面共 16 个（v1）：9 个只读工具使用 `read:accounts`、`read:folders`、`read:messages` 和 `read:attachments` 这些 scope；7 个写工具（`mail.draft.create`、`mail.draft.update`、`mail.draft.delete`、`messages.move`、`messages.set-flag`、`messages.send`、`mail.reply`）在 `send-confirmed` 及以上档位可用，`read-only` 档调用返回 `PERMISSION_DENIED`。
 
 ## 错误码
 

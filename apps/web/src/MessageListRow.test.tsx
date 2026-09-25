@@ -81,6 +81,7 @@ describe("MessageListRow", () => {
             recentlyReadInUnread={false}
             threadSize={1}
             gravatarEnabled
+            bimiEnabled={false}
             accountEmails={["me@example.com"]}
             buttonRefs={buttonRefs}
             rowVirtualizer={virtualizerStub as never}

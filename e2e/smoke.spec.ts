@@ -91,4 +91,50 @@ test.describe("Nami Mail demo smoke", () => {
     // styling can be reviewed without a backend; assert that conversation.
     await expect(page.locator(".agent-workspace")).toContainText("季度回顾会议准备");
   });
+
+  test("batch selection shows delete confirmation dialog, cancels on Escape, and deletes on confirm", async ({ page }) => {
+    await bootDemo(page);
+
+    // Enter selection mode
+    await page.locator(".selection-toggle").click();
+    await expect(page.locator(".selection-toolbar")).toBeVisible();
+
+    // Select first two messages
+    const items = page.locator(".message-item");
+    await items.nth(0).click();
+    await items.nth(1).click();
+    await expect(page.locator(".selection-count")).toContainText("2");
+
+    // Click trash button in selection toolbar
+    await page.locator(".selection-action-danger").click();
+
+    // Secondary confirmation modal appears
+    const dialog = page.locator(".confirmation-card");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator("h3")).toContainText("2");
+
+    // Wait for the entrance animation to finish
+    await page.waitForTimeout(250);
+
+    // Capture visual artifact for user
+    await page.screenshot({ path: "output/screenshots/13-batch-delete-confirm.png" });
+
+    // Cancel closes dialog without deleting
+    await dialog.locator("button", { hasText: "取消" }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(page.locator(".selection-count")).toContainText("2");
+
+    // Re-open and verify Escape closes it
+    await page.locator(".selection-action-danger").click();
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
+
+    // Re-open and confirm move to trash
+    await page.locator(".selection-action-danger").click();
+    await expect(dialog).toBeVisible();
+    await dialog.locator(".danger-button").click();
+    await expect(dialog).not.toBeVisible();
+    await expect(page.locator(".toast")).toBeVisible();
+  });
 });

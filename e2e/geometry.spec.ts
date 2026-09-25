@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { bootDemoShell } from "./helpers";
 
 /**
@@ -39,7 +39,7 @@ const layouts = [
   { name: "phone", viewport: { width: 600, height: 800 }, sidebar: null, readerFillsColumn: true },
 ] as const;
 
-async function expectNoHorizontalOverflow(page: import("@playwright/test").Page): Promise<void> {
+async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   const overflow = await page.evaluate(() => {
     const root = document.documentElement;
     return { scrollWidth: root.scrollWidth, clientWidth: root.clientWidth };

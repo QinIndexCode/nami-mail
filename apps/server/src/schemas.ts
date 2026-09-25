@@ -207,6 +207,7 @@ export const settingsPatchSchema = z.object({
   agentToolRoundLimit: z.number().int().min(1).max(50).optional(),
   listDensity: z.enum(LIST_DENSITIES).optional(),
   avatarGravatarEnabled: z.boolean().optional(),
+  avatarBimiEnabled: z.boolean().optional(),
   agentAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
   agentCliAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
   agentMcpAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),

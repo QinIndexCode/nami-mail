@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { applyMailTranslation, extractMailTextSegments } from "./mailDomTranslation";
+import { applyMailTranslation, detectTextLanguage, extractMailTextSegments, isMailMatchingLocale } from "./mailDomTranslation";
 
 function parse(html: string): DocumentFragment {
   const template = document.createElement("template");
@@ -67,3 +67,59 @@ describe("applyMailTranslation", () => {
     expect(original.querySelector("li")?.textContent).toBe("T0");
   });
 });
+
+describe("detectTextLanguage", () => {
+  it("detects Chinese for text with Chinese characters", () => {
+    expect(detectTextLanguage("周末，在安静的地方见")).toBe("zh");
+    expect(detectTextLanguage("如果这周有空，我们找一个安静的地方坐坐，喝杯咖啡")).toBe("zh");
+    expect(detectTextLanguage("Release 0.4.0 版本发布更新通知")).toBe("zh");
+  });
+
+  it("detects English for Latin text without CJK characters", () => {
+    expect(detectTextLanguage("Hello, hope you are having a productive week.")).toBe("en");
+    expect(detectTextLanguage("Weekly engineering sync notes and action items")).toBe("en");
+  });
+
+  it("returns unknown for empty or insufficient text", () => {
+    expect(detectTextLanguage("")).toBe("unknown");
+    expect(detectTextLanguage("   ")).toBe("unknown");
+    expect(detectTextLanguage("12345")).toBe("unknown");
+  });
+});
+
+describe("isMailMatchingLocale", () => {
+  it("returns true when mail language matches interface locale", () => {
+    expect(
+      isMailMatchingLocale(
+        { subject: "周末，在安静的地方见", snippet: "如果这周有空，喝杯咖啡" },
+        "zh-CN",
+      ),
+    ).toBe(true);
+
+    expect(
+      isMailMatchingLocale(
+        { subject: "Team standup notes", snippet: "Here is the summary of today's meeting" },
+        "en-US",
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false when mail language differs from interface locale", () => {
+    // English mail in Chinese UI -> need translation
+    expect(
+      isMailMatchingLocale(
+        { subject: "Team standup notes", snippet: "Here is the summary of today's meeting" },
+        "zh-CN",
+      ),
+    ).toBe(false);
+
+    // Chinese mail in English UI -> need translation
+    expect(
+      isMailMatchingLocale(
+        { subject: "周末，在安静的地方见", snippet: "如果这周有空，喝杯咖啡" },
+        "en-US",
+      ),
+    ).toBe(false);
+  });
+});
+

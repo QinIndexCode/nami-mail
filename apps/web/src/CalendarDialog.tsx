@@ -269,7 +269,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     return () => {
       active = false;
     };
-  }, [view, demoMode]);
+  }, [view, demoMode, locale]);
 
   useDialogFocus(true, dialogRef, { fallbackFocusRef, suspended: Boolean(editor || pendingDelete || pendingBulkDelete) });
   useDialogFocus(Boolean(editor), editorDialog, { fallbackFocusRef: dialogRef });

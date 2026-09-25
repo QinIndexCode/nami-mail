@@ -20,7 +20,7 @@ import ThemedSelect from "../ThemedSelect";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { useDismissTransition } from "../hooks/useDismissTransition";
 import type {
-  AgentMcpServerSummary,
+
   AgentProviderInput,
   AgentProviderKind,
   AgentProviderList,

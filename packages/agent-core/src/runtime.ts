@@ -13,7 +13,7 @@ import {
   type ToolResult,
 } from "@nami/agent-contracts";
 import type { PermissionEngine } from "./permissions.js";
-import { type PermissionDecision } from "./permissions.js";
+
 import type { ToolRegistry } from "./tool-registry.js";
 import { type ToolResolution } from "./tool-registry.js";
 

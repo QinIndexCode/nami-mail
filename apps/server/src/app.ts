@@ -12,6 +12,7 @@ import { registerAccountRoutes } from "./routes/accounts.js";
 import { registerTranslationRoutes } from "./routes/translation.js";
 import { registerCalendarRoutes } from "./routes/calendar.js";
 import { registerContactRoutes } from "./routes/contacts.js";
+import { registerAvatarRoutes } from "./routes/avatars.js";
 import { registerFilterRuleRoutes } from "./routes/filter-rules.js";
 import { registerMessageRoutes } from "./routes/messages.js";
 import { registerTemplateRoutes } from "./routes/templates.js";
@@ -349,6 +350,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
 
   registerFilterRuleRoutes(app, { context, log: app.log });
   registerContactRoutes(app, { context, log: app.log });
+  registerAvatarRoutes(app, { context, log: app.log });
   registerTemplateRoutes(app, { context, log: app.log });
   registerCalendarRoutes(app, { context, log: app.log });
   notePhase("build:register-core-routes");

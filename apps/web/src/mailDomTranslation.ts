@@ -112,3 +112,46 @@ export async function translateMailDom(
   }
   return applied === segments.length;
 }
+
+/**
+ * Detects the dominant language category of text:
+ * - "zh": Chinese (CJK ideographs)
+ * - "en": English / Latin script without CJK
+ * - "unknown": indeterminate or empty
+ */
+export function detectTextLanguage(text: string): "zh" | "en" | "unknown" {
+  if (!text || !text.trim()) return "unknown";
+  // Sample up to first 2000 characters to keep it fast
+  const sample = text.slice(0, 2000);
+  const cjkMatches = sample.match(/[\u4e00-\u9fa5\u3400-\u4dbf]/g);
+  const cjkCount = cjkMatches ? cjkMatches.length : 0;
+
+  // If there are CJK characters (at least 3 or significant density), it's Chinese
+  if (cjkCount >= 3) {
+    return "zh";
+  }
+
+  const latinMatches = sample.match(/[a-zA-Z]/g);
+  const latinCount = latinMatches ? latinMatches.length : 0;
+  if (latinCount >= 8 && cjkCount === 0) {
+    return "en";
+  }
+
+  return "unknown";
+}
+
+/**
+ * Checks whether the email's language matches the current UI locale,
+ * meaning an automatic translation banner is not needed.
+ */
+export function isMailMatchingLocale(
+  message: { subject?: string; snippet?: string; textBody?: string },
+  locale: string,
+): boolean {
+  const primaryLocale = locale.split("-")[0]?.toLowerCase() ?? "zh";
+  const combined = `${message.subject ?? ""} ${message.snippet ?? ""} ${message.textBody ?? ""}`.trim();
+  const detected = detectTextLanguage(combined);
+  if (detected === "unknown") return false;
+  return detected === primaryLocale;
+}
+

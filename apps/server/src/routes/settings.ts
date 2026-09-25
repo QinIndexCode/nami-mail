@@ -61,6 +61,7 @@ function publicSettings(context: RuntimeContext, settings: AppSettings) {
     agentToolRoundLimit: settings.agentToolRoundLimit,
     listDensity: settings.listDensity,
     avatarGravatarEnabled: settings.avatarGravatarEnabled,
+    avatarBimiEnabled: settings.avatarBimiEnabled,
     agentAccessLevel: settings.agentAccessLevel,
     agentCliAccessLevel: settings.agentCliAccessLevel,
     agentMcpAccessLevel: settings.agentMcpAccessLevel,

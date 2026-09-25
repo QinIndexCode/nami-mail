@@ -66,7 +66,7 @@ Every successful response `data` is strictly validated by the shared v1 schema a
 
 Public data never includes `htmlBody`, raw attachments, credentials, database paths, file paths, or redaction objects. Current v1 limits are 100 accounts, 500 folders, 50 listed messages, 10 messages per batch_get call, 100 attachments, 25 messages per thread, an 8,000-character body, and a 1,500-character snippet. When `truncated` or `bodyTruncated` is `true`, treat the data as a bounded result, never as a complete mailbox copy.
 
-`messages.search`, every `rag.*` operation, attachment export, `agent.chat`, and `agent.run` are outside External Mail v1. They are unaffected by permission levels and stay unavailable at every level; they do not appear in MCP `tools/list` and cannot be bypassed through CLI flags, HTTP, TCP, file URIs, SQLite, or the local Fastify token.
+Every `rag.*` operation, attachment export, `agent.chat`, and `agent.run` are outside External Mail v1. They are unaffected by permission levels and stay unavailable at every level; they do not appear in MCP `tools/list` and cannot be bypassed through CLI flags, HTTP, TCP, file URIs, SQLite, or the local Fastify token.
 
 ## Trust Boundary
 

@@ -1,4 +1,4 @@
-import { useI18n } from "../i18n";
+import type { Translate } from "../i18n";
 import { mailErrorMessage } from "../errorPresentation";
 import type { AgentAccessLevel, AppTheme, BackgroundPreset, CloseBehavior, ListDensity, NotificationSound } from "../types";
 
@@ -62,7 +62,7 @@ export const externalMcpGuideCode = [
 export const externalServiceGuideCode = "namimail service start\nnamimail service stop";
 export const externalDocsUrl = "https://github.com/QinIndexCode/nami-mail";
 
-export function errorMessage(error: unknown, fallback: string, t: ReturnType<typeof useI18n>["t"]): string {
+export function errorMessage(error: unknown, fallback: string, t: Translate): string {
   return mailErrorMessage(error, fallback, t);
 }
 

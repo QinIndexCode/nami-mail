@@ -1,5 +1,4 @@
 import { api } from "./api";
-import type { CalendarEvent, Contact, MailTemplate } from "./types";
 
 const DEFAULT_TTL_MS = 30_000;
 

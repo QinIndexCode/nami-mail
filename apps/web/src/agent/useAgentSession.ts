@@ -490,14 +490,22 @@ export function useAgentSession({
   // Background pickup / fold-in poll
   // ---------------------------------------------------------------------------
   const pollLastMessageId = active?.messages[active.messages.length - 1]?.id;
+  const activeId = active?.id ?? null;
+  const pollLastMessageCount = active?.messages.length ?? 0;
+  // The pickup gate collapses `active` into scalars so the poll effect below
+  // never references the object itself: listing `active` would tear down and
+  // restart the poll on every streamed fold-in (each tick folds a snapshot
+  // into the transcript, which changes the object identity mid-run).
+  const pollNeedsPickup = Boolean(active && (lastMessageIsUnanswered(active) || lastMessageIsStreaming(active)));
   useEffect(() => {
     // Poll while the newest turn is unfinished: the last message is either the
     // user's (server still answering) or a streaming assistant snapshot from a
     // run that outlived the panel. Once a complete assistant reply arrives,
     // fold it in and stop.
-    if (demoMode || streaming || !active || (!lastMessageIsUnanswered(active) && !lastMessageIsStreaming(active))) return;
-    const targetId = active.id;
-    const pendingLastId = active.messages[active.messages.length - 1].id;
+    if (demoMode || streaming || !activeId || !pollNeedsPickup) return;
+    const targetId = activeId;
+    const pendingLastId = pollLastMessageId;
+    if (!pendingLastId) return;
     // A pickup the user stopped (see stopGhostRun) is abandoned for good: the
     // run was cancelled server-side and will never complete, so without this
     // the poll would burn its whole 8-minute budget on a dead turn.
@@ -507,7 +515,7 @@ export function useAgentSession({
     let attempts = 0;
     // The message count of the last snapshot: a growing transcript is a live
     // signal that the server run is still progressing.
-    let lastSeenCount = active.messages.length;
+    let lastSeenCount = pollLastMessageCount;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // While polling, the conversation is being picked up without a local
     // session; surface the pickup affordances (thinking row / stop).
@@ -580,7 +588,7 @@ export function useAgentSession({
       if (timer) clearTimeout(timer);
       setGhostConversationId((current) => (current === targetId ? null : current));
     };
-  }, [active?.id, pollLastMessageId, conversationSearch, demoMode, refreshConversations, streaming, setActive]);
+  }, [activeId, pollNeedsPickup, pollLastMessageId, pollLastMessageCount, conversationSearch, demoMode, refreshConversations, streaming, setActive]);
 
   // ---------------------------------------------------------------------------
   // Replay a background session on re-entry
@@ -696,12 +704,11 @@ export function useAgentSession({
     // persists a completed turn, so the transcript stays at the last user
     // message (same as an interrupted turn after a stop), and the poll must
     // not keep waiting on a turn that can never complete.
-    if (active?.id === conversationId) {
-      const last = active.messages[active.messages.length - 1];
-      if (last) abandonedPickupRef.current = { conversationId, lastMessageId: last.id };
+    if (active?.id === conversationId && pollLastMessageId) {
+      abandonedPickupRef.current = { conversationId, lastMessageId: pollLastMessageId };
     }
     setGhostConversationId((current) => (current === conversationId ? null : current));
-  }, [ghostConversationId, active?.id]);
+  }, [ghostConversationId, active?.id, pollLastMessageId]);
 
   // Interrupt-to-send: if the current conversation hosts a live run, sending a
   // new message folds the running reply into an "interrupted" state and cancels
@@ -982,7 +989,7 @@ export function useAgentSession({
       const bound = sessionStreamsRef.current.get(conversation.id);
       return bound !== undefined && bound.controller === controller;
     }
-  }, [activeIdRef, conversationSearch, enqueueStreamPiece, getT, refreshConversations, setActive, syncBackgroundRuns]);
+  }, [activeIdRef, clearPendingFlush, conversationSearch, enqueueStreamPiece, getT, refreshConversations, setActive, syncBackgroundRuns]);
 
   // The session buffers and run controls exposed to the component.
   return useMemo(() => ({
