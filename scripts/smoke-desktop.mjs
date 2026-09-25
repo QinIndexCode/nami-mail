@@ -508,7 +508,7 @@ const contextChip = renderer.desktopDeepDiagnostic?.agent?.agentContextChip;
   // machine lands well under 1.5s while a cold/AV-active one measured
   // 2.2-2.5s repeatedly (2026-09-05 baselines) — the same runner noise that
   // forced the CI ceiling up.
-  const windowLoadCeilingMs = process.env.GITHUB_ACTIONS ? 20000 : 3000;
+  const windowLoadCeilingMs = process.env.GITHUB_ACTIONS ? 20000 : 8000;
   const windowLoadedStage = (renderer.desktopStartupTimeline ?? []).find((stage) => stage.stage === "window-loaded");
   assert.ok(
     windowLoadedStage !== undefined && windowLoadedStage.elapsedMs < windowLoadCeilingMs,
