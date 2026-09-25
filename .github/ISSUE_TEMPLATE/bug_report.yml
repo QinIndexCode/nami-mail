@@ -12,8 +12,8 @@ body:
     id: version
     attributes:
       label: Nami Mail 版本 / Version
-      description: e.g. 0.4.0 / 例如 0.4.0；请不要粘贴完整日志路径。
-      placeholder: 0.4.0
+      description: e.g. 0.4.1 / 例如 0.4.1；请不要粘贴完整日志路径。
+      placeholder: 0.4.1
     validations:
       required: true
   - type: dropdown
