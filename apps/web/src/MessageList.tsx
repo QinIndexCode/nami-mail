@@ -59,6 +59,7 @@ type MessageListProps = {
   threadById: Map<string, Message[]>;
   listDensity: AppSettings["listDensity"];
   avatarGravatarEnabled: boolean;
+  avatarBimiEnabled: boolean;
   emptyMessageList: MessageListEmptyState;
   // Refs are owned by App.tsx (scroll anchoring, load-more listener and
   // focus restoration read the same registries after list messages change).
@@ -107,6 +108,7 @@ type MessageListRowProps = {
   recentlyReadInUnread: boolean;
   threadSize: number;
   gravatarEnabled: boolean;
+  bimiEnabled: boolean;
   /** Lowercaseable account emails used to detect the user's own sent mail;
    *  owned by the list via a stable memo so row memoization stays effective. */
   accountEmails: readonly string[];
@@ -127,7 +129,7 @@ type MessageListRowProps = {
  */
 export const MessageListRow = memo(function MessageListRow(props: MessageListRowProps): React.JSX.Element {
   const { locale, t } = useI18n();
-  const { message, index, virtualStart, selected, unread, selectionMode, multiSelected, recentlyReadInUnread, threadSize, gravatarEnabled, accountEmails, buttonRefs, rowVirtualizer, onRowClick, onOpenContextMenu, onQuickToggleStar, onQuickMoveMessage } = props;
+  const { message, index, virtualStart, selected, unread, selectionMode, multiSelected, recentlyReadInUnread, threadSize, gravatarEnabled, bimiEnabled, accountEmails, buttonRefs, rowVirtualizer, onRowClick, onOpenContextMenu, onQuickToggleStar, onQuickMoveMessage } = props;
   const buttonRefCallback = useCallback((node: HTMLButtonElement | null) => {
     rowVirtualizer.measureElement(node);
     if (node) buttonRefs.current.set(message.id, node);
@@ -144,7 +146,7 @@ export const MessageListRow = memo(function MessageListRow(props: MessageListRow
       <button data-index={index} data-message-id={message.id} ref={buttonRefCallback} className={className} aria-pressed={selectionMode ? multiSelected : undefined} aria-haspopup="menu" onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
         <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
         {selectionMode && <span className={`selection-checkbox ${multiSelected ? "checked" : ""}`} aria-hidden="true" />}
-        <SenderAvatar name={rowPerson.name} address={rowPerson.address} tone={accountTone(rowPerson.address)} gravatarEnabled={gravatarEnabled} />
+        <SenderAvatar name={rowPerson.name} address={rowPerson.address} tone={accountTone(rowPerson.address)} gravatarEnabled={gravatarEnabled} bimiEnabled={bimiEnabled} />
         <span className="message-copy">
           <span className="message-meta"><strong>{ownSent && message.to[0] ? t("mail.reader.toRecipient", { recipient: rowPerson.name || rowPerson.address }) : (rowPerson.name || rowPerson.address)}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
           <span className="message-subject">{message.subject}</span>
@@ -170,7 +172,7 @@ export const MessageListRow = memo(function MessageListRow(props: MessageListRow
  * restoration keep working without touching the rows themselves.
  */
 function MessageList(props: MessageListProps): React.JSX.Element {
-  const { locale, t } = useI18n();
+  const { t } = useI18n();
   const {
     loading,
     listKey,
@@ -185,6 +187,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
     threadById,
     listDensity,
     avatarGravatarEnabled,
+    avatarBimiEnabled,
     emptyMessageList,
     messageListRef,
     messageButtonRefs,
@@ -392,6 +395,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
               recentlyReadInUnread={view === "unread" && message.seen && unreadViewRecentlyReadIds.has(message.id)}
               threadSize={threadSize}
               gravatarEnabled={avatarGravatarEnabled}
+              bimiEnabled={avatarBimiEnabled}
               accountEmails={accountEmails}
               buttonRefs={messageButtonRefs}
               rowVirtualizer={rowVirtualizer}

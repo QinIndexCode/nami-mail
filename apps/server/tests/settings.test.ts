@@ -71,6 +71,8 @@ describe("app settings migrations", () => {
       expect(getAppSettings(migrated).globalShortcutEnabled).toBe(false);
     expect(getAppSettings(migrated).launchAtStartup).toBe(false);
       expect(getAppSettings(migrated).globalShortcutEnabled).toBe(false);
+      expect(columns.some((column) => column.name === "avatar_bimi_enabled")).toBe(true);
+      expect(getAppSettings(migrated).avatarBimiEnabled).toBe(false);
 
       expect(updateAppSettings(migrated, { launchAtStartup: true, globalShortcutEnabled: true })).toMatchObject({
         launchAtStartup: true,

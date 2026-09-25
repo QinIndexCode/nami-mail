@@ -2,10 +2,14 @@
 // Loading it through this indirection keeps it out of the initial bundle's
 // import graph; the first demo request imports the chunk once and every
 // later site reuses the settled promise or the resolved snapshot.
-let demoPromise: Promise<typeof import("./demo")> | undefined;
-let demoResolved: typeof import("./demo") | null = null;
+import type * as DemoModule from "./demo";
 
-export function ensureDemoLoaded(): Promise<typeof import("./demo")> {
+type Demo = typeof DemoModule;
+
+let demoPromise: Promise<Demo> | undefined;
+let demoResolved: Demo | null = null;
+
+export function ensureDemoLoaded(): Promise<Demo> {
   demoPromise ??= import("./demo").then((module) => {
     demoResolved = module;
     return module;
@@ -13,6 +17,6 @@ export function ensureDemoLoaded(): Promise<typeof import("./demo")> {
   return demoPromise;
 }
 
-export function demoDataSnapshot(): typeof import("./demo") | null {
+export function demoDataSnapshot(): Demo | null {
   return demoResolved;
 }

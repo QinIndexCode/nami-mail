@@ -12,7 +12,7 @@ import { AttachmentFileIcon } from "../mailUi";
 import type { AgentMessage } from "../agentTypes";
 import type { Translate } from "../i18n";
 import { shortDate, truncateForPreview } from "./agent-utils";
-import AgentToolCard, { AgentToolList } from "./AgentToolCard";
+import { AgentToolList } from "./AgentToolCard";
 import { AgentMessageContent, AgentRecallButton, CopyMessageButton } from "./AgentSmallComponents";
 
 export type AgentMessageRowProps = {

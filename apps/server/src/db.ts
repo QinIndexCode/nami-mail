@@ -203,6 +203,16 @@ CREATE TABLE IF NOT EXISTS outbound_attachment_submissions (
 CREATE INDEX IF NOT EXISTS idx_outbound_attachment_submissions_submission
   ON outbound_attachment_submissions(account_id, submission_id);
 
+-- BIMI brand-logo cache persisted across restarts, keyed by sender domain.
+-- logo NULL records a negative resolution (no usable BIMI record); resolved_at
+-- anchors the TTL decision made by avatars/bimi.ts. This is public DNS-derived
+-- data, not user content, so it stays plaintext like folder metadata.
+CREATE TABLE IF NOT EXISTS bimi_logo_cache (
+  domain TEXT PRIMARY KEY,
+  logo TEXT,
+  resolved_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS data_migrations (
   id TEXT PRIMARY KEY,
   completed_at TEXT NOT NULL
@@ -228,6 +238,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
   agent_tool_round_limit INTEGER NOT NULL DEFAULT 30 CHECK (agent_tool_round_limit BETWEEN 1 AND 50),
   list_density TEXT NOT NULL DEFAULT 'comfortable' CHECK (list_density IN ('comfortable', 'compact')),
   avatar_gravatar_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_gravatar_enabled IN (0, 1)),
+  avatar_bimi_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_bimi_enabled IN (0, 1)),
   agent_access_level TEXT NOT NULL DEFAULT 'send-confirmed' CHECK (agent_access_level IN ('read-only', 'send-confirmed', 'full-access')),
   agent_cli_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_cli_access_level IN ('read-only', 'send-confirmed', 'full-access')),
   agent_mcp_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_mcp_access_level IN ('read-only', 'send-confirmed', 'full-access')),
@@ -595,6 +606,9 @@ function migrateDatabase(db: DatabaseHandle): void {
   if (!settingsColumns.some((column) => column.name === "avatar_gravatar_enabled")) {
     db.exec("ALTER TABLE app_settings ADD COLUMN avatar_gravatar_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_gravatar_enabled IN (0, 1))");
   }
+  if (!settingsColumns.some((column) => column.name === "avatar_bimi_enabled")) {
+    db.exec("ALTER TABLE app_settings ADD COLUMN avatar_bimi_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_bimi_enabled IN (0, 1))");
+  }
   if (!settingsColumns.some((column) => column.name === "agent_access_level")) {
     db.exec("ALTER TABLE app_settings ADD COLUMN agent_access_level TEXT NOT NULL DEFAULT 'send-confirmed' CHECK (agent_access_level IN ('read-only', 'send-confirmed', 'full-access'))");
   }
@@ -672,6 +686,7 @@ function migrateDatabase(db: DatabaseHandle): void {
           agent_tool_round_limit INTEGER NOT NULL DEFAULT 30 CHECK (agent_tool_round_limit BETWEEN 1 AND 50),
           list_density TEXT NOT NULL DEFAULT 'comfortable' CHECK (list_density IN ('comfortable', 'compact')),
           avatar_gravatar_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_gravatar_enabled IN (0, 1)),
+          avatar_bimi_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_bimi_enabled IN (0, 1)),
           agent_access_level TEXT NOT NULL DEFAULT 'send-confirmed' CHECK (agent_access_level IN ('read-only', 'send-confirmed', 'full-access')),
           agent_cli_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_cli_access_level IN ('read-only', 'send-confirmed', 'full-access')),
           agent_mcp_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_mcp_access_level IN ('read-only', 'send-confirmed', 'full-access')),
@@ -688,9 +703,9 @@ function migrateDatabase(db: DatabaseHandle): void {
           realtime_push_enabled, sync_message_limit, close_behavior, launch_at_startup,
           global_shortcut_enabled, locale, translation_configuration,
           translation_configuration_version, agent_tool_round_limit, list_density,
-          avatar_gravatar_enabled, agent_access_level, agent_cli_access_level,
-          agent_mcp_access_level, custom_background_filename, auto_reply_config,
-          builtin_templates_seeded, updated_at
+          avatar_gravatar_enabled, avatar_bimi_enabled, agent_access_level,
+          agent_cli_access_level, agent_mcp_access_level, custom_background_filename,
+          auto_reply_config, builtin_templates_seeded, updated_at
         )
         SELECT
           id, theme, background_preset, background_intensity, notifications_enabled,
@@ -698,9 +713,9 @@ function migrateDatabase(db: DatabaseHandle): void {
           realtime_push_enabled, sync_message_limit, close_behavior, launch_at_startup,
           global_shortcut_enabled, locale, translation_configuration,
           translation_configuration_version, agent_tool_round_limit, list_density,
-          avatar_gravatar_enabled, agent_access_level, agent_cli_access_level,
-          agent_mcp_access_level, custom_background_filename, auto_reply_config,
-          builtin_templates_seeded, updated_at
+          avatar_gravatar_enabled, avatar_bimi_enabled, agent_access_level,
+          agent_cli_access_level, agent_mcp_access_level, custom_background_filename,
+          auto_reply_config, builtin_templates_seeded, updated_at
         FROM app_settings
       `).run();
       db.prepare("DROP TABLE app_settings").run();

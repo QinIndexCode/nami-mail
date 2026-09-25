@@ -5,7 +5,7 @@ import {
   LoaderCircle,
   MessageSquareReply,
   MessageSquareX,
-  RefreshCw,
+
   Wrench,
 } from "lucide-react";
 import type { Translate } from "../i18n";

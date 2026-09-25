@@ -9,11 +9,11 @@ Tools register with lower-case dotted identifiers and versioned descriptors. A d
 | Mode | Typical use | External CLI/MCP v1 | Confirmation |
 | --- | --- | --- | --- |
 | `read` | Accounts, folders, messages, threads, attachment metadata, RAG queries | Allowed only inside paired scope | None |
-| `draft` | Create, update, or delete drafts | Not allowed | Audited; operation policy applies |
-| `write` | Mark, move, or archive | Not allowed | Descriptor and GUI policy decide |
-| `high-risk` | Send, forward, permanent delete, bulk writes, content egress | Not allowed | Durable audit and one-time GUI confirmation required |
+| `draft` | Create, update, or delete drafts | Allowed at `send-confirmed` and above (one of the seven write tools) | Visible confirmation per write until `full-access` |
+| `write` | Mark, move, or archive | Allowed at `send-confirmed` and above | Visible confirmation per write until `full-access` |
+| `high-risk` | Send, forward, permanent delete, bulk writes, content egress | Only `mail.reply` / `messages.send` are external | Durable audit and one-time GUI confirmation required |
 
-CLI/MCP v1 exposes read-only tools only. `--yes`, MCP arguments, a paired identity, or model output never relaxes that rule.
+External CLI/MCP v1 exposes 16 tools: nine read-only plus seven bounded writes (draft create/update/delete, move, flag, send, reply). The default `read-only` level keeps only reads available; elevating the level enables the write tools. `--yes`, MCP arguments, a paired identity, or model output never relaxes the access level or replace confirmation.
 
 ## Mail-service boundary
 

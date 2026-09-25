@@ -15,7 +15,7 @@ import {
   SkipForward,
   Trash2,
   Undo2,
-  Upload,
+
   Volume2,
   VolumeX,
   X,
@@ -25,7 +25,7 @@ import {
 import { api, type TranslationConfiguration, type TranslationProviderId } from "./api";
 import type { ExternalPairingSummary } from "./agentTypes";
 import { desktopBridge, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
-import { mailErrorMessage } from "./errorPresentation";
+
 import FilterRulesSection from "./FilterRulesSection";
 import AgentMemoryDialog from "./AgentMemoryDialog";
 import AutoReplyPendingDialog from "./AutoReplyPendingDialog";
@@ -45,10 +45,10 @@ import type {
   AgentAccessLevel,
   AppSettings,
   AppSettingsPatch,
-  AppTheme,
+
   BackgroundPreset,
-  CloseBehavior,
-  ListDensity,
+
+
   NotificationSound,
 } from "./types";
 import { defaultAppSettings } from "./types";
@@ -58,7 +58,7 @@ import {
   errorMessage,
   backgroundContentTypeForFile,
   revokeDemoObjectUrl,
-  copyGuideTextToClipboard,
+
   maxBackgroundUploadBytes,
 } from "./settings/settings-utils";
 import { Switch, CloseBehaviorIcon } from "./settings/SettingsUIComponents";
@@ -127,6 +127,7 @@ const restoreDefaultsPatch: AppSettingsPatch = {
   agentToolRoundLimit: defaultAppSettings.agentToolRoundLimit,
   listDensity: defaultAppSettings.listDensity,
   avatarGravatarEnabled: defaultAppSettings.avatarGravatarEnabled,
+  avatarBimiEnabled: defaultAppSettings.avatarBimiEnabled,
 };
 
 
@@ -839,15 +840,7 @@ export default function SettingsModal({
   };
 
   const hasCustomBackground = Boolean(currentSettings.customBackgroundUrl);
-  const copyExternalGuide = (text: string, id: string) => {
-    void copyGuideTextToClipboard(text).then((copied) => {
-      if (!copied) return;
-      setExternalGuideCopied(id);
-      window.setTimeout(() => {
-        setExternalGuideCopied((current) => current === id ? null : current);
-      }, 1_800);
-    });
-  };
+
   const translationConfigurationNeedsReplacementKey = Boolean(
     translationConfiguration?.source === "environment"
     && translationConfiguration.apiKeyConfigured

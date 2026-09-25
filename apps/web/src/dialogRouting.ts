@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type RefObject } from "react";
+import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import type { ComposeDraft } from "./mailUi";
 import type { Message, MessageAttachment } from "./types";
 
@@ -247,6 +247,34 @@ export function useDialogRouting(): DialogRouting {
   const anyModalOpen = addOpen || composeOpen || settingsOpen || contactsOpen || templatesOpen || calendarOpen || accountsOpen || sendingStatusOpen || translationTermsOpen;
   const anyModalOrSidebar = anyModalOpen || mobileSidebar;
 
+  // Every member is a stable reference (useCallback with [] deps or a setState
+  // function), so the object itself can be memoized once — consumers can list
+  // `actions` in hook dependency arrays without re-running effects.
+  const actions = useMemo(() => ({
+    openAddAccount,
+    closeAddAccount,
+    openCompose,
+    closeCompose,
+    openSettings,
+    closeSettings,
+    openContacts,
+    closeContacts,
+    openTemplates,
+    closeTemplates,
+    openCalendar,
+    closeCalendar,
+    openAccounts,
+    closeAccounts,
+    openSendingStatus,
+    closeSendingStatus,
+    openMobileSidebar,
+    closeMobileSidebar,
+    openAttachmentPreview,
+    closeAttachmentPreview,
+    setTranslationTermsOpen,
+    setTranslationTermsAccepted,
+  }), [openAddAccount, closeAddAccount, openCompose, closeCompose, openSettings, closeSettings, openContacts, closeContacts, openTemplates, closeTemplates, openCalendar, closeCalendar, openAccounts, closeAccounts, openSendingStatus, closeSendingStatus, openMobileSidebar, closeMobileSidebar, openAttachmentPreview, closeAttachmentPreview]);
+
   return {
     state: {
       addOpen,
@@ -265,30 +293,7 @@ export function useDialogRouting(): DialogRouting {
       anyModalOpen,
       anyModalOrSidebar,
     },
-    actions: {
-      openAddAccount,
-      closeAddAccount,
-      openCompose,
-      closeCompose,
-      openSettings,
-      closeSettings,
-      openContacts,
-      closeContacts,
-      openTemplates,
-      closeTemplates,
-      openCalendar,
-      closeCalendar,
-      openAccounts,
-      closeAccounts,
-      openSendingStatus,
-      closeSendingStatus,
-      openMobileSidebar,
-      closeMobileSidebar,
-      openAttachmentPreview,
-      closeAttachmentPreview,
-      setTranslationTermsOpen,
-      setTranslationTermsAccepted,
-    },
+    actions,
     translationTermsPendingRef,
   };
 }

@@ -105,6 +105,14 @@ export default function SettingsAppearanceSection({
         onChange={() => void applyOptimisticSettings({ avatarGravatarEnabled: !currentSettings.avatarGravatarEnabled }, null)}
       />
 
+      <Switch
+        checked={currentSettings.avatarBimiEnabled}
+        disabled={controlsBusy}
+        label={t("settings.avatars.bimi.label")}
+        privacyNote={t("settings.avatars.bimi.privacy")}
+        onChange={() => void applyOptimisticSettings({ avatarBimiEnabled: !currentSettings.avatarBimiEnabled }, null)}
+      />
+
       <div className="setting-subheading"><span>{t("settings.background.title")}</span><small>{t("settings.background.offlineHint")}</small></div>
       <div className="background-preset-grid" role="group" aria-label={t("settings.background.presetGroupLabel")}>
         {backgroundPresetOptions.map((preset) => {

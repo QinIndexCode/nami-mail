@@ -79,6 +79,7 @@ function listProps(props: Partial<Parameters<typeof MessageList>[0]>) {
     threadById: new Map(),
     listDensity: "comfortable",
     avatarGravatarEnabled: false,
+    avatarBimiEnabled: false,
     emptyMessageList,
     messageListRef: { current: null },
     messageButtonRefs: { current: new Map() },

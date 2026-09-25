@@ -12,6 +12,7 @@ export function AgentConfirmationCard({
   expiresAt,
   onExpire,
   forceLeaving = false,
+  onStartLeaving,
 }: {
   confirmation: AgentConfirmation;
   desktopConfirmationAvailable: boolean;
@@ -26,6 +27,8 @@ export function AgentConfirmationCard({
    *  the wrapping slot (grid 1fr→0fr) and removes the card after the collapse —
    *  without this signal the card would vanish with no exit transition at all. */
   forceLeaving?: boolean;
+  /** Triggered the moment a decision is clicked to initiate the wrapping slot collapse without waiting. */
+  onStartLeaving?: () => void;
 }) {
   const { locale, t } = useI18n();
   const [leaving, setLeaving] = useState(false);
@@ -47,6 +50,7 @@ export function AgentConfirmationCard({
   const resolve = (decision: "approve" | "reject") => {
     if (leaving) return;
     setLeaving(true);
+    onStartLeaving?.();
     // Let the collapse animation finish before the card unmounts.
     window.setTimeout(() => onDecision?.(decision), 340);
   };

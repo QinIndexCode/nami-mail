@@ -15,7 +15,7 @@ Nami Mail 外部 Mail v1 是 Windows 桌面版提供的本机、已配对接口�
 
 ## v1 工具面
 
-这 15 项工具（9 个只读 + 7 个写）是外部 Mail v1 的完整能力集。输入对象使用严格 schema，未知字段会被拒绝；首次配对固化的账户 ID 快照决定账户范围，请求参数不能扩大权限。之后新增的账户不可由旧配置文件访问，需撤销并重新配对。
+这 16 项工具（9 个只读 + 7 个写）是外部 Mail v1 的完整能力集。输入对象使用严格 schema，未知字段会被拒绝；首次配对固化的账户 ID 快照决定账户范围，请求参数不能扩大权限。之后新增的账户不可由旧配置文件访问，需撤销并重新配对。
 
 | Tool | CLI | MCP | 严格输入 | Scope |
 | --- | --- | --- | --- | --- |
@@ -42,7 +42,7 @@ Nami Mail 外部 Mail v1 是 Windows 桌面版提供的本机、已配对接口�
 
 外部 CLI 与外部 MCP 在桌面应用设置界面"权限"分组中各自独立配置访问级别（`agentCliAccessLevel` 与 `agentMcpAccessLevel`，默认均 `read-only`），档位与内置 Agent 相同：`read-only` / `send-confirmed` / `full-access`。
 
-- `read-only`：7 个写工具均不可用，调用返回 `PERMISSION_DENIED`；8 个只读工具在任何档位都可用且无需确认。
+- `read-only`：7 个写工具均不可用，调用返回 `PERMISSION_DENIED`；9 个只读工具在任何档位都可用且无需确认。
 - `send-confirmed`：每次写操作（草稿创建/更新/删除、移动、标记、发送、回复）都在 Nami Mail 桌面端弹出可见的一次性不可变确认，批准后执行。
 - `full-access`：开启前必须由用户在 UI 中阅读明确警告并确认；开启后在已批准账户范围内自动执行所有操作（含发送与删除），不再逐项确认。范围与审计仍然生效。
 
@@ -66,7 +66,7 @@ Nami Mail 外部 Mail v1 是 Windows 桌面版提供的本机、已配对接口�
 
 公开数据不会包含 `htmlBody`、原始附件、凭据、数据库路径、文件路径或引用对象。当前 v1 上限是：账户 100、文件夹 500、邮件列表 50、单次 batch_get 10、附件 100、单线程消息 25、正文 8,000 字符、摘要 1,500 字符。`truncated` 或 `bodyTruncated` 为 `true` 时，调用方应把数据视为受限结果，而不是完整邮箱副本。
 
-下列功能不属于外部 v1：`messages.search`、所有 `rag.*`、附件导出、`agent.chat`、`agent.run`。它们不受权限档位影响——无论访问级别如何都不可用；不会出现在 MCP `tools/list`，也不能通过 CLI 参数、HTTP、TCP、文件 URI、SQLite 或本机 Fastify token 绕过。
+下列功能不属于外部 v1：所有 `rag.*`、附件导出、`agent.chat`、`agent.run`。它们不受权限档位影响——无论访问级别如何都不可用；不会出现在 MCP `tools/list`，也不能通过 CLI 参数、HTTP、TCP、文件 URI、SQLite 或本机 Fastify token 绕过。
 
 ## 信任边界
 

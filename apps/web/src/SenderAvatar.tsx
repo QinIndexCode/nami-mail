@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useCustomAvatar } from "./avatarStore";
+import { useBimiLogo } from "./bimiStore";
 
 export function initials(name: string, address: string): string {
   const value = name.trim() || address.split("@")[0] || "?";
@@ -22,7 +23,13 @@ function md5(input: string): string {
   bytes.push(0x80);
   while (bytes.length % 64 !== 56) bytes.push(0);
   const bitLength = originalLength * 8;
-  for (let i = 0; i < 8; i += 1) bytes.push((bitLength >>> (i * 8)) & 0xff);
+  // 64-bit little-endian length. JS bit shifts wrap at 32 bits, so the low
+  // four bytes use shifts while the high four bytes must be written directly —
+  // shifting by 32+ is a no-op and would copy the low bytes (regression that
+  // broke every Gravatar hash).
+  for (let i = 0; i < 4; i += 1) bytes.push((bitLength >>> (i * 8)) & 0xff);
+  const high = Math.floor(bitLength / 2 ** 32);
+  for (let i = 0; i < 4; i += 1) bytes.push((high >>> (i * 8)) & 0xff);
   const shifts = [
     7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
     5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
@@ -76,7 +83,13 @@ function md5(input: string): string {
     c0 = (c0 + c) >>> 0;
     d0 = (d0 + d) >>> 0;
   }
-  const hex = (value: number) => value.toString(16).padStart(8, "0");
+  // The digest is the four words serialized little-endian (RFC 1321 §3.5);
+  // printing the register values big-endian yields a byte-swapped hash.
+  const hex = (value: number) => {
+    let out = "";
+    for (let i = 0; i < 4; i += 1) out += ((value >>> (i * 8)) & 0xff).toString(16).padStart(2, "0");
+    return out;
+  };
   return hex(a0) + hex(b0) + hex(c0) + hex(d0);
 }
 
@@ -92,21 +105,31 @@ type SenderAvatarProps = {
   size?: "small" | "large";
   /** When true, tries Gravatar first and falls back to initials on 404/error. */
   gravatarEnabled: boolean;
+  /** When true, tries the BIMI brand logo of the sender's domain before Gravatar. */
+  bimiEnabled: boolean;
 };
 
 /**
- * Sender avatar: a locally configured picture wins, then (when enabled)
- * Gravatar, then colored initials (Gmail/QQ/163/custom domains uniformly).
- * Gravatar sends the md5(email) to a third party only when gravatarEnabled
- * is true; locally stored avatars never leave the machine.
+ * Sender avatar: a locally configured picture wins, then (when enabled) the
+ * BIMI brand logo for the sender's domain, then (when enabled) Gravatar, then
+ * colored initials (Gmail/QQ/163/custom domains uniformly). Gravatar sends
+ * the md5(email) to a third party only when gravatarEnabled is true; BIMI
+ * requests carry only the sender's domain, resolved by the local service; and
+ * locally stored avatars never leave the machine.
  */
-export function SenderAvatar({ name, address, tone, size, gravatarEnabled }: SenderAvatarProps) {
+export function SenderAvatar({ name, address, tone, size, gravatarEnabled, bimiEnabled }: SenderAvatarProps) {
   const [failed, setFailed] = useState(false);
   const email = address.trim().toLowerCase();
+  const domain = email.split("@")[1] ?? "";
   const customAvatar = useCustomAvatar(email);
+  // An empty domain (feature off) keeps the store untouched: no request, no snapshot.
+  const bimiLogo = useBimiLogo(bimiEnabled ? domain : "");
   const className = `sender-avatar${size ? ` ${size}` : ""} tone-${tone}`;
   if (customAvatar) {
     return <span className={className}><img src={customAvatar} alt="" /></span>;
+  }
+  if (bimiLogo) {
+    return <span className={className}><img src={bimiLogo} alt="" /></span>;
   }
   const showGravatar = gravatarEnabled && !failed && !missingGravatarEmails.has(email);
   if (!showGravatar) {

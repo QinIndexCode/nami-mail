@@ -22,6 +22,7 @@ import {
   ListChecks,
   ListFilter,
   LoaderCircle,
+  Languages,
   Mail,
   MailOpen,
   Menu,
@@ -50,14 +51,14 @@ import {
   UserRound,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
-import { CustomAvatar } from "./SenderAvatar";
+import { CustomAvatar, SenderAvatar } from "./SenderAvatar";
 import { WindowBar } from "./WindowBar";
 import { ApiError, api, type BatchJobCreatePayload, type BatchJobQuery, type BatchJobSnapshot, type MoveTarget } from "./api";
 import { calendarCache, contactsCache, templatesCache } from "./dialogPrefetch";
 import DatePicker from "./DatePicker";
 import { canPreviewAttachment } from "./attachmentPreview";
 import { attachmentKinds, presentAttachment, type AttachmentKind } from "./attachmentPresentation";
-import { AttachmentFileIcon, FolderNavigationIcon, formatFileSize, isoFromDatetimeLocal, IconButton, type ComposeDraft, type ToastKind } from "./mailUi";
+import { AttachmentFileIcon, FolderNavigationIcon, formatFileSize, isoFromDatetimeLocal, IconButton, type ToastKind } from "./mailUi";
 import { parseMailtoUrl } from "./mailtoLink";
 import { attachmentsZipFilename, buildAttachmentsZipBlob, triggerBlobDownload } from "./attachmentZip";
 import { calendarEventIcs, exportDownloadFilename, vCardText } from "./contactExport";
@@ -70,7 +71,7 @@ import { useRealtimeSync, type SyncProgressPayload } from "./realtimeSync";
 import { useCoalescedRefresh } from "./useCoalescedRefresh";
 import { resolveScrollAnchor, type ScrollAnchorRow } from "./scrollAnchor";
 import { buildForwardDraft, buildReplyDraft, isOwnSentMessage } from "./mailActions";
-import { ComposeModal } from "./ComposeModal";
+// ComposeModal loaded lazily below
 import { sortMessages } from "./mailImportance";
 import { groupMessagesByThread, mergeThreadMembers, shouldCollapseThread, sortThreadByTimeline } from "./threads";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -108,13 +109,14 @@ import { playNotificationSound, primeNotificationSound } from "./sounds";
 import { saveLocalePreference } from "./localePreference";
 import { createSettingsLoadCoordinator } from "./settingsLoadCoordinator";
 import TranslationPanel, { type TranslationAvailability, type TranslationContent, type TranslationPanelState } from "./TranslationPanel";
-import { applyMailTranslation, extractMailTextSegments } from "./mailDomTranslation";
+import { applyMailTranslation, extractMailTextSegments, isMailMatchingLocale } from "./mailDomTranslation";
 import { extractMailVisualStyle, llmTranslationErrorMessage, translationErrorMessage } from "./translationPresentation";
 import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type MessageAttachment, type OutboundAttachment, type OutboundSubmission, type ProviderInfo, type Stats } from "./types";
 import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 import { dialogKeydownDecision, useDialogRouting } from "./dialogRouting";
 import { findVerificationCodes } from "./verificationCode";
-import { resolveLocale, type Translate, useI18n } from "./i18n";
+import { resolveLocale, useI18n } from "./i18n";
 import type { AgentBootstrap } from "./agentTypes";
 import MessageList from "./MessageList";
 import { AutoReplyToastStack, autoReplyNoticeKey } from "./AutoReplyToastStack";
@@ -125,7 +127,7 @@ import {
   isCompactMailLayout,
   buildMessageQuery,
   demoMessageTotal,
-  moveTargetSpecialUses,
+
   moveActionKey,
   demoMoveDestination,
   accountTone,
@@ -162,6 +164,10 @@ const TemplatesDialog = lazy(async () => {
 const SendingStatusModal = lazy(() => import("./SendingStatusModal"));
 const StartupUpdatePrompt = lazy(() => import("./StartupUpdatePrompt"));
 const TranslationTermsDialog = lazy(() => import("./TranslationTermsDialog"));
+const ComposeModal = lazy(async () => {
+  const module = await import("./ComposeModal");
+  return { default: module.ComposeModal };
+});
 
 type MailView = MessageListQuery["messageView"];
 type ToastAction = { label: string; run: () => void };
@@ -266,7 +272,7 @@ async function copyVerificationCodeToClipboard(code: string): Promise<boolean> {
 }
 
 export default function App() {
-  const { locale, setLocale, t } = useI18n();
+  const { locale, locales, setLocale, t } = useI18n();
   const [systemTheme, setSystemTheme] = useState<"light" | "dark">(currentSystemTheme);
   const [settings, setSettings] = useState<AppSettings>(() => ({
     ...defaultAppSettings,
@@ -290,6 +296,7 @@ export default function App() {
   const [unreadViewRecentlyReadIds, setUnreadViewRecentlyReadIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [translationSession, setTranslationSession] = useState<TranslationSession | null>(null);
+  const [forceShowTranslationId, setForceShowTranslationId] = useState<string | null>(null);
   const [translationAvailability, setTranslationAvailability] = useState<TranslationAvailability>(isDemo ? "available" : "checking");
   // The shell's modal/panel routing (nine dialogs, attachment preview, mobile
   // sidebar, translation-terms gate) and the global keydown decisions live in
@@ -398,6 +405,12 @@ export default function App() {
   const keyboardSelectionAnchorIdRef = useRef<string | null>(null);
   const [batchJob, setBatchJob] = useState<BatchJobSnapshot | null>(null);
   const [batchBusy, setBatchBusy] = useState(false);
+  const [pendingBatchDelete, setPendingBatchDelete] = useState(false);
+  const { closing: batchDeleteConfirmClosing, requestClose: requestBatchDeleteConfirmClose, reset: resetBatchDeleteConfirmClosing } = useDismissTransition(
+    useCallback(() => setPendingBatchDelete(false), []),
+  );
+  const batchDeleteDialogRef = useRef<HTMLElement | null>(null);
+  useDialogFocus(pendingBatchDelete, batchDeleteDialogRef);
   const [attachmentKindFilter, setAttachmentKindFilter] = useState<AttachmentKind | undefined>(undefined);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -795,7 +808,7 @@ export default function App() {
     mediaQuery.addEventListener("change", closeDesktopDrawer);
     closeDesktopDrawer();
     return () => mediaQuery.removeEventListener("change", closeDesktopDrawer);
-  }, []);
+  }, [actions]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -951,7 +964,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         }
       }
     }
-  }, [locale, selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, searchScope, t, view]);
+  }, [locale, selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, searchScope, t, view, attachmentKindFilter, dateBounds.after, dateBounds.before]);
   // A batch job's poll loop keeps the closure it started with for the whole run,
   // so its final reconciliation reload would otherwise use the account/folder
   // the job started in — yanking the user back there when the job ends. Reading
@@ -1642,6 +1655,15 @@ await refreshSubmissions(nextAccounts, { silent: true });
     && translationSession.targetLocale === locale
     ? translationSession.state
     : { phase: "idle" }, [locale, selected, translationSession]);
+  const forceShowTranslation = selected ? forceShowTranslationId === selected.id : false;
+  const isMailLanguageMatching = useMemo(() => {
+    if (!selected) return true;
+    return isMailMatchingLocale(selected, locale);
+  }, [selected, locale]);
+  const shouldRenderTranslationPanel =
+    translationState.phase !== "idle" ||
+    forceShowTranslation ||
+    !isMailLanguageMatching;
   // Whether at least one LLM provider is configured AND authorized for mail
   // content, enabling AI translation. Cloud providers require the explicit
   // "allowCloudMailContent" consent; local providers (e.g. Ollama) always qualify.
@@ -1905,7 +1927,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         state: { phase: "error", message: translationErrorMessage(error, t), ...(previous ? { previous } : {}), ...(llmAvailable ? { llmAvailable } : {}) },
       });
     }
-  }, [locale, selected, t, theme, translationState, state.translationTermsAccepted]);
+  }, [actions, locale, selected, t, theme, translationState, translationTermsPendingRef, state.translationTermsAccepted]);
   const translateSelectedMessageWithLlm = useCallback(async () => {
     if (!selected || translationState.phase === "loading") return;
     if (!state.translationTermsAccepted) {
@@ -1985,7 +2007,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     } finally {
       if (llmTranslationAbortRef.current === controller) llmTranslationAbortRef.current = null;
     }
-  }, [locale, selected, t, translationState, state.translationTermsAccepted]);
+  }, [actions, locale, selected, t, translationState, translationTermsPendingRef, state.translationTermsAccepted]);
   const showSelectedTranslation = useCallback(() => {
     setTranslationSession((current) => {
       if (!selected || !current || current.messageId !== selected.id || current.targetLocale !== locale || current.state.phase !== "ready") {
@@ -2019,7 +2041,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     translationTermsPendingRef.current = null;
     if (pending === "free") void translateSelectedMessage();
     else if (pending === "llm") void translateSelectedMessageWithLlm();
-  }, [translateSelectedMessage, translateSelectedMessageWithLlm]);
+  }, [actions, translateSelectedMessage, translateSelectedMessageWithLlm, translationTermsPendingRef]);
   const declineTranslationTerms = useCallback(() => {
     actions.setTranslationTermsOpen(false);
     const pending = translationTermsPendingRef.current;
@@ -2028,7 +2050,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       if (window.namiDesktop?.quit) window.namiDesktop.quit();
       else window.close();
     }
-  }, []);
+  }, [actions, translationTermsPendingRef]);
   const copyDetectedVerificationCode = useCallback(async (code: string) => {
     const copied = await copyVerificationCodeToClipboard(code);
     showToast(copied ? t("mail.verification.copied", { code }) : t("mail.verification.copyFailed"), copied ? "success" : "error");
@@ -2106,7 +2128,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         });
       }
     }
-  }, [accounts, applyLocalSeenChange, actions.openCompose, showToast, t, updateUnreadViewRecentlyRead]);
+  }, [accounts, actions, applyLocalSeenChange, showToast, t, updateUnreadViewRecentlyRead]);
 
   const closeReader = useCallback((restoreFocus = false) => {
     const messageId = lastOpenedMessageIdRef.current;
@@ -2128,7 +2150,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     const person = hasRecipient ? threadMessage.to[0]! : threadMessage.from;
     return (
       <button key={threadMessage.id} type="button" className={`thread-strip-item ${threadMessage.id === selected?.id ? "active" : ""}`} onClick={() => void openMessage(threadMessage)}>
-        <CustomAvatar name={person.name} address={person.address} tone={accountTone(person.address)} size="small" />
+        <SenderAvatar name={person.name} address={person.address} tone={accountTone(person.address)} size="small" gravatarEnabled={settings.avatarGravatarEnabled} bimiEnabled={settings.avatarBimiEnabled} />
         <span className="thread-strip-copy"><strong>{hasRecipient ? t("mail.reader.toRecipient", { recipient: person.name || person.address }) : (person.name || person.address)}</strong><time>{formatMessageTime(threadMessage.sentAt, locale)}</time></span>
         {!threadMessage.seen && <span className="unread-dot" aria-hidden="true" />}
       </button>
@@ -2200,6 +2222,18 @@ const emptyMessageList = useMemo(() => (query.trim()
     };
   }, [searchOpen]);
 
+  useEffect(() => {
+    if (!pendingBatchDelete) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!batchBusy) requestBatchDeleteConfirmClose();
+    };
+    window.addEventListener("keydown", closeOnEscape, true);
+    return () => window.removeEventListener("keydown", closeOnEscape, true);
+  }, [batchBusy, pendingBatchDelete, requestBatchDeleteConfirmClose]);
+
   const openReply = useCallback(() => {
     if (!selected) return;
     const reply = buildReplyDraft(selected, [...accounts.map((account) => account.email), selected.accountEmail]);
@@ -2212,7 +2246,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       references: reply.references,
       text: replyBody(selected, accounts, locale, t, safeHtml),
     });
-  }, [accounts, locale, actions.openCompose, safeHtml, selected, t]);
+  }, [accounts, actions, locale, safeHtml, selected, t]);
 
   const openReplyAll = useCallback(() => {
     if (!selected) return;
@@ -2226,7 +2260,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       references: reply.references,
       text: replyBody(selected, accounts, locale, t, safeHtml),
     });
-  }, [accounts, locale, actions.openCompose, safeHtml, selected, t]);
+  }, [accounts, actions, locale, safeHtml, selected, t]);
 
   const openForward = useCallback(() => {
     if (!selected) return;
@@ -2242,7 +2276,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       subject: forward.subject,
       text: signature.trim() ? `${forward.text}\n\n${signature.trim()}` : forward.text,
     });
-  }, [accounts, actions.openCompose, safeHtml, selected]);
+  }, [accounts, actions, safeHtml, selected]);
 
   const moveSelectedMessage = async (target: MoveTarget) => {
     if (!selected || selectedRemoteActionsBlocked || (target === "archive" && selectedIsArchived)) return;
@@ -2473,6 +2507,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     setSelectedMessageIds(new Set());
     setSelectAllPaged(false);
     setBatchJob(null);
+    setPendingBatchDelete(false);
   }, []);
 
   // The current view expressed as a server-side filter scope for predicate
@@ -2905,7 +2940,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       unpinFlagOverride(pendingLocalStateRef.current, message.id);
       setMessageFlagging(false);
     }
-  }, [applyBatchFlaggedChange, isDemo, messageAction, messageFlagging, selectedRemoteActionsBlocked, showToast, t]);
+  }, [applyBatchFlaggedChange, messageAction, messageFlagging, selectedRemoteActionsBlocked, showToast, t]);
 
   const quickToggleSeen = useCallback(async (message: Message) => {
     if (selectedRemoteActionsBlocked) return;
@@ -2928,7 +2963,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     } finally {
       unpinFlagOverride(pendingLocalStateRef.current, message.id);
     }
-  }, [applyLocalSeenChange, isDemo, messageAction, messageFlagging, selectedRemoteActionsBlocked, showToast, t, updateUnreadViewRecentlyRead]);
+  }, [applyLocalSeenChange, messageAction, messageFlagging, selectedRemoteActionsBlocked, showToast, t, updateUnreadViewRecentlyRead]);
 
   const quickMoveMessage = useCallback(async (message: Message, target: MoveTarget) => {
     // The server queues a second write behind the in-flight one; surface that
@@ -3024,7 +3059,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       unpinMovedAway([message.id]);
       setMessageAction(null);
     }
-  }, [accounts, batchBusy, filteredMessages, filterQuery, isDemo, load, messageAction, messageFlagging, messages, pinMovedAway, showToast, stats, t, unpinMovedAway]);
+  }, [accounts, batchBusy, filteredMessages, filterQuery, load, messageAction, messageFlagging, messages, pinMovedAway, showToast, stats, t, unpinMovedAway]);
 
   const snoozeOptions = useMemo(() => [
     { key: "inOneHour", label: t("mail.snooze.inOneHour"), compute: () => new Date(Date.now() + 60 * 60_000) },
@@ -3403,7 +3438,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     // clamped offset otherwise reads as a random jump).
     messageListRef.current?.scrollTo({ top: 0 });
     actions.closeMobileSidebar();
-  }, [clearUnreadViewRecentlyRead, actions.closeMobileSidebar]);
+  }, [actions, clearUnreadViewRecentlyRead]);
 
   // Latest handlers for the desktop-bridge subscribers below, read at call time.
   // The subscriptions are installed once (their deps are effectively empty),
@@ -3471,9 +3506,9 @@ const emptyMessageList = useMemo(() => (query.trim()
       unsubscribeAutoReply?.();
       unsubscribeConfirmationResult?.();
     };
-    // `isDemo` is fixed for a session and the handlers are read through
-    // bridgeHandlersRef, so this subscription is installed exactly once.
-  }, [isDemo]);
+    // The handlers are read through bridgeHandlersRef, so this subscription
+    // is installed exactly once.
+  }, []);
 
   // A mailto link anywhere in the document (sidebar, message body, agent
   // answer) opens a pre-filled compose window instead of the OS default
@@ -3491,7 +3526,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     };
     document.addEventListener("click", handleMailtoClick);
     return () => document.removeEventListener("click", handleMailtoClick);
-  }, [actions.openCompose]);
+  }, [actions]);
 
   // Plain web sessions have no desktop bridge to push auto-reply events, so
   // poll the pending list and surface newly drafted replies as toasts. The
@@ -3668,7 +3703,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [accounts.length, state.addOpen, state.calendarOpen, closeReader, state.composeOpen, filteredMessages, state.mobileSidebar, actions.openCompose, openForward, openMessage, openReply, openReplyAll, selectMessageRange, selected, selectedId, state.contactsOpen, state.templatesOpen, state.accountsOpen, state.sendingStatusOpen, state.translationTermsOpen, state.attachmentPreview, state.settingsOpen, updatePromptOpen, actions.openAddAccount, actions.closeSettings, actions.closeCalendar, actions.closeContacts, actions.closeTemplates, actions.closeAccounts, actions.closeAddAccount, actions.closeMobileSidebar]);
+  }, [accounts.length, actions, state.addOpen, state.calendarOpen, closeReader, state.composeOpen, filteredMessages, state.mobileSidebar, openForward, openMessage, openReply, openReplyAll, selectMessageRange, selected, selectedId, state.contactsOpen, state.templatesOpen, state.accountsOpen, state.sendingStatusOpen, state.translationTermsOpen, state.attachmentPreview, state.settingsOpen, updatePromptOpen]);
 
   const sync = async () => {
     if (!accounts.length || syncing) return;
@@ -3960,7 +3995,17 @@ const emptyMessageList = useMemo(() => (query.trim()
                 <span className="toolbar-divider" aria-hidden="true" />
                 <IconButton label={t("mail.action.archive")} className="selection-action" onClick={() => void batchMoveMessages("archive")} disabled={!selectedMessageIds.size}><Archive size={15} /></IconButton>
                 <IconButton label={t("mail.action.reportSpam")} className="selection-action" onClick={() => void batchMoveMessages("junk")} disabled={!selectedMessageIds.size}><ShieldCheck size={15} /></IconButton>
-                <IconButton label={t("mail.action.moveToTrash")} className="selection-action selection-action-danger" onClick={() => void batchMoveMessages("trash")} disabled={!selectedMessageIds.size}><Trash2 size={15} /></IconButton>
+                <IconButton
+                  label={t("mail.action.moveToTrash")}
+                  className="selection-action selection-action-danger"
+                  onClick={() => {
+                    resetBatchDeleteConfirmClosing();
+                    setPendingBatchDelete(true);
+                  }}
+                  disabled={!selectedMessageIds.size && !selectAllPaged}
+                >
+                  <Trash2 size={15} />
+                </IconButton>
               </div>
               <button className="selection-done" type="button" onClick={exitSelectionMode} disabled={batchBusy}>{t("mail.selection.done")}</button>
             </div>
@@ -3981,6 +4026,7 @@ const emptyMessageList = useMemo(() => (query.trim()
               threadById={threadById}
               listDensity={settings.listDensity}
               avatarGravatarEnabled={settings.avatarGravatarEnabled}
+              avatarBimiEnabled={settings.avatarBimiEnabled}
               emptyMessageList={emptyMessageList}
               messageListRef={messageListRef}
               messageButtonRefs={messageButtonRefs}
@@ -4044,6 +4090,9 @@ const emptyMessageList = useMemo(() => (query.trim()
                         <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void exportSelectedEml(); }}><Download size={16} />{t("mail.action.exportEml")}</button>
                         <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportContactVcf(); }}><UserRound size={16} />{t("mail.action.saveVcf")}</button>
                         <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportCalendarIcs(); }}><CalendarArrowDown size={16} />{t("mail.action.exportIcs")}</button>
+                        {!shouldRenderTranslationPanel && (
+                          <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); setForceShowTranslationId(selected.id); }}><Languages size={16} />{t("translation.action", { language: locales.find((item) => item.locale === locale)?.nativeName ?? locale })}</button>
+                        )}
                         <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); printSelectedMessage(); }}><Printer size={16} />{t("mail.action.print")}</button>
                         {!selectedIsInJunk && (
                           <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("junk"); }}><ShieldCheck size={16} />{t("mail.action.reportSpam")}</button>
@@ -4082,7 +4131,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                 {selectedMoveLocationUnverified && <section className="move-location-notice" role="status"><CircleAlert size={18} /><div><strong>{t("mail.moveLocationUnverified.title")}</strong><p>{t("mail.moveLocationUnverified.description")}</p></div></section>}
                 <div className="reader-split">
                 <article className="mail-reader">
-                <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people">{(() => { const headerPerson = selectedSentRecipient ?? selected.from; return <><CustomAvatar name={headerPerson.name} address={headerPerson.address} tone={accountTone(headerPerson.address)} size="large" /><div className="mail-people-copy"><strong>{headerPerson.name || headerPerson.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={headerPerson.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{selectedSentRecipient ? t("mail.reader.toRecipient", { recipient: headerPerson.name || headerPerson.address }) : t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div></>; })()}<time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
+                <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people">{(() => { const headerPerson = selectedSentRecipient ?? selected.from; return <><SenderAvatar name={headerPerson.name} address={headerPerson.address} tone={accountTone(headerPerson.address)} size="large" gravatarEnabled={settings.avatarGravatarEnabled} bimiEnabled={settings.avatarBimiEnabled} /><div className="mail-people-copy"><strong>{headerPerson.name || headerPerson.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={headerPerson.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{selectedSentRecipient ? t("mail.reader.toRecipient", { recipient: headerPerson.name || headerPerson.address }) : t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div></>; })()}<time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
                 {verificationCodes.length > 0 && (
                   <section className="verification-code-list" aria-label={t("mail.verification.detected") }>
                     {verificationCodes.map((candidate, index) => {
@@ -4097,7 +4146,8 @@ const emptyMessageList = useMemo(() => (query.trim()
                     })}
                   </section>
                 )}
-                <TranslationPanel
+                {shouldRenderTranslationPanel && (
+                  <TranslationPanel
                   availability={translationAvailability}
                   state={translationState}
                   llmAvailable={llmTranslationAvailable}
@@ -4109,6 +4159,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                   onHide={hideSelectedTranslation}
                   onCancel={cancelTranslation}
                 />
+                )}
                 <div className="mail-content">
                   {selected.htmlBody
                     ? <div className="mail-html" dangerouslySetInnerHTML={{ __html: readerHtml }} />
@@ -4185,7 +4236,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       </main>
 
       {state.addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} existingAccounts={accounts} onClose={() => actions.closeAddAccount()} onAdded={handleAccountAdded} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
-      {state.composeOpen && <ComposeModal accounts={accounts} draft={state.composeDraft} onClose={() => actions.closeCompose()} onSent={(message, kind, undoDraft, sentAccountId) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), run: () => { window.setTimeout(() => { actions.openCompose(undoDraft); }, 0); } }); else showToast(message, kind); if (sentAccountId && !isDemo) { void api.sync(sentAccountId).then(() => load({ silent: true })).catch(() => undefined).finally(() => setThreadRefreshTick((value) => value + 1)); } }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} />}
+      {state.composeOpen && <Suspense fallback={null}><ComposeModal accounts={accounts} draft={state.composeDraft} onClose={() => actions.closeCompose()} onSent={(message, kind, undoDraft, sentAccountId) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), run: () => { window.setTimeout(() => { actions.openCompose(undoDraft); }, 0); } }); else showToast(message, kind); if (sentAccountId && !isDemo) { void api.sync(sentAccountId).then(() => load({ silent: true })).catch(() => undefined).finally(() => setThreadRefreshTick((value) => value + 1)); } }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.settingsOpen && <Suspense fallback={null}><SettingsModal settings={settings} accounts={accounts} onClose={() => actions.closeSettings()} onSettingsChange={applySettings} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} onOpenAgentProviderSettings={() => { actions.closeSettings(); setAgentProviderSettingsRequestId((requestId) => requestId + 1); openAgentWorkspace(); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
       {state.contactsOpen && <Suspense fallback={null}><ManagementDialogs demoMode={isDemo} onClose={() => actions.closeContacts()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.templatesOpen && <Suspense fallback={null}><TemplatesDialog demoMode={isDemo} onClose={() => actions.closeTemplates()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
@@ -4199,6 +4250,58 @@ const emptyMessageList = useMemo(() => (query.trim()
         defer={state.anyModalOrSidebar || syncing}
         onVisibilityChange={setUpdatePromptOpen}
       /></Suspense>
+      {pendingBatchDelete && (
+        <div
+          className={`modal-backdrop confirmation-backdrop${batchDeleteConfirmClosing ? " closing" : ""}`}
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !batchBusy) {
+              requestBatchDeleteConfirmClose();
+            }
+          }}
+        >
+          <section
+            ref={batchDeleteDialogRef}
+            className={`confirmation-card${batchDeleteConfirmClosing ? " closing" : ""}`}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="batch-delete-confirmation-title"
+            aria-describedby="batch-delete-confirmation-description"
+            tabIndex={-1}
+          >
+            <span className="eyebrow">{t("mail.selection.deleteConfirmEyebrow")}</span>
+            <h3 id="batch-delete-confirmation-title">
+              {t("mail.selection.deleteConfirmTitle", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}
+            </h3>
+            <p id="batch-delete-confirmation-description">
+              {t("mail.selection.deleteConfirmDescription", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}
+            </p>
+            <div className="confirmation-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                data-dialog-initial-focus
+                disabled={batchBusy}
+                onClick={requestBatchDeleteConfirmClose}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                className="secondary-button danger-button"
+                type="button"
+                disabled={batchBusy}
+                onClick={() => {
+                  setPendingBatchDelete(false);
+                  void batchMoveMessages("trash");
+                }}
+              >
+                {batchBusy ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}
+                {t("mail.selection.deleteConfirmAction")}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {state.mobileSidebar && <button className="mobile-scrim" aria-label={t("navigation.closeMenu")} onClick={() => actions.closeMobileSidebar()} />}
       {toast && <div className={`toast ${toast.kind}`} role={toast.kind === "error" || toast.kind === "warning" ? "alert" : "status"} aria-atomic="true"><span className="toast-icon" aria-hidden="true">{toast.kind === "error" || toast.kind === "warning" ? <CircleAlert size={17} /> : toast.kind === "info" ? <Sparkles size={17} /> : <Check size={17} />}</span><span className="toast-message">{toast.message}</span>{toast.action && <button className="toast-action" type="button" onClick={() => { setToast(null); toast.action?.run(); }}>{toast.action.label}</button>}<button className="toast-dismiss" type="button" aria-label={t("common.closeNotification")} data-tooltip={t("common.closeNotification")} onClick={() => setToast(null)}><X size={16} /></button></div>}
       {autoReplyNotices.length > 0 && <AutoReplyToastStack behindModal={state.anyModalOpen} notices={autoReplyNotices} onDismiss={(notice) => setAutoReplyNotices((items) => items.filter((item) => autoReplyNoticeKey(item) !== autoReplyNoticeKey(notice)))} />}

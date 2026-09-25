@@ -15,8 +15,11 @@ export default defineConfig({
     react(),
     {
       name: "nami-splash-logo-inline",
-      transformIndexHtml(html) {
-        return html.replace("__NAMI_SPLASH_LOGO_SRC__", splashLogoDataUrl);
+      transformIndexHtml: {
+        order: "pre",
+        handler(html) {
+          return html.replace("__NAMI_SPLASH_LOGO_SRC__", splashLogoDataUrl);
+        },
       },
     },
   ],
