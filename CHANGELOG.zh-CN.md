@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-25
+
+### 修复
+
+- **Windows NSIS 安装程序自定义路径失效与覆写缺陷**：修复用户在安装向导中选择自定义路径后，初次安装仍被强制装入系统盘默认目录（`C:\Users\<user>\AppData\Local\Programs\Nami Mail`）的问题；调整向导宏页面时序，确保在安装模式确定后展示目录选择，并在构建配置中显式启用 `allowToChangeInstallationDirectory: true`。
+- **覆盖安装与升级安装历史路径自动探测与记忆恢复**：修复重复运行安装程序或升级时向导无法读取非系统盘旧安装路径、回退至 C 盘的缺陷；在安装预初始化阶段（`preInit`）新增多源探测恢复宏（`namiRecoverExistingInstallLocation`），按优先级交叉扫描专有安装注册表、Windows 卸载记录（`UninstallString`、`DisplayIcon`、`InstallLocation`）并自动反解标准化真实安装路径，并在安装阶段对注册表双重写入 `InstallLocation`。
+- **自动化测试环境稳定性优化**：针对桌面端冒烟测试中的空闲渲染器检测，放宽 `timerMaxGapMs` 阈值至 350ms，消除峰值高负载环境下的偶发抖动超时。
+
+### 文档
+
+- 新增 `v0.4.2` 中英文发布说明；官网与 Issue 模板版本号同步更新至 0.4.2。
+
 ## [0.4.1] - 2026-09-25
 
 ### 新增

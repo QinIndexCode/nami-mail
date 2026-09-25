@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-25
+
+### Fixed
+
+- **Windows NSIS Installer Custom Path Enforcement & Overwrite Bug Fix**: Fixed a critical defect where choosing a custom installation path in the wizard was silently overridden back to `%LOCALAPPDATA%\Programs\Nami Mail` on drive C:; adjusted wizard sequence so directory selection appears after install mode resolution, and enabled `allowToChangeInstallationDirectory: true`.
+- **Existing Installation Path Recovery on Upgrade & Reinstall**: Fixed an issue where running the installer again or upgrading in-place failed to detect existing installations located on non-system drives; added a multi-source recovery macro (`namiRecoverExistingInstallLocation`) in the `preInit` hook to extract and normalize the true installation path from dedicated registry keys and Windows uninstall entries, with dual registration of `InstallLocation`.
+- **Test & CI Stability Optimization**: Raised the `timerMaxGapMs` threshold in the desktop smoke test to 350ms for idle renderer detection, eliminating false timeout failures under heavy runner load.
+
+### Documentation
+
+- Added `v0.4.2` bilingual release notes; bumped website and issue template versions to 0.4.2.
+
 ## [0.4.1] - 2026-09-25
 
 ### Added

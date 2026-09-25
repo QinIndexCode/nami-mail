@@ -1,6 +1,6 @@
 {
   "name": "nami-mail",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "description": "Local-first, multi-account desktop mail client.",
   "author": "Nami Mail",
@@ -171,7 +171,7 @@
       "oneClick": false,
       "perMachine": false,
       "allowElevation": false,
-      "allowToChangeInstallationDirectory": false,
+      "allowToChangeInstallationDirectory": true,
       "installerLanguages": [
         "zh_CN"
       ],

@@ -68,20 +68,114 @@
 !macroend
 
 !ifndef BUILD_UNINSTALLER
-; StrContains.nsh defines an install-time function; including it in the
-; uninstaller build leaves it unreferenced, which -WX (warnings as errors)
-; rejects. Its only consumer (namiNormalizeInstDir) is installer-only.
-!include "StrContains.nsh"
 Var /GLOBAL namiInstalledVersion
 Var /GLOBAL namiVersionComparison
 
-; Keep the app-name suffix behaviour of electron-builder's stock instfiles pre
-; hook: when the user picks a bare folder, append the product folder name to it.
-!macro namiNormalizeInstDir
-  ${StrContains} $0 "${APP_FILENAME}" $INSTDIR
-  ${If} $0 == ""
-    StrCpy $INSTDIR "$INSTDIR\${APP_FILENAME}"
+; Recovers any existing installation location from registry if INSTALL_REGISTRY_KEY
+; does not yet have it or if it points to a non-existent path. This runs in preInit
+; (the very first hook in .onInit before initMultiUser), so initMultiUser and
+; setInstallModePerUser will properly detect hasPerUserInstallation = 1 and set
+; INSTDIR to the true existing install location instead of falling back to C: default.
+!macro namiRecoverExistingInstallLocation
+  Push $0
+  Push $1
+  Push $2
+
+  ; 1. If INSTALL_REGISTRY_KEY already has a valid directory that exists on disk, keep it
+  ReadRegStr $0 HKCU "${INSTALL_REGISTRY_KEY}" "InstallLocation"
+  ${If} $0 != ""
+  ${AndIf} ${FileExists} "$0\*.*"
+    StrCpy $INSTDIR "$0"
+    Goto nami_recover_done
   ${EndIf}
+
+  ; 2. Check HKCU UNINSTALL_REGISTRY_KEY InstallLocation
+  ReadRegStr $0 HKCU "${UNINSTALL_REGISTRY_KEY}" "InstallLocation"
+  ${If} $0 != ""
+  ${AndIf} ${FileExists} "$0\*.*"
+    WriteRegStr HKCU "${INSTALL_REGISTRY_KEY}" "InstallLocation" "$0"
+    StrCpy $INSTDIR "$0"
+    Goto nami_recover_done
+  ${EndIf}
+
+  ; 3. Check HKCU UNINSTALL_REGISTRY_KEY UninstallString
+  ; Typically: "D:\path\Uninstall Nami Mail.exe" /currentuser
+  ReadRegStr $0 HKCU "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+  ${If} $0 != ""
+    StrCpy $1 "$0" 1 0
+    ${If} $1 == '"'
+      StrCpy $0 "$0" "" 1
+      ${WordFind} "$0" '"' "+1" $0
+    ${Else}
+      ${WordFind} "$0" " " "+1" $0
+    ${EndIf}
+    ${StdUtils.GetParentPath} $2 "$0"
+    ${If} $2 != ""
+    ${AndIf} ${FileExists} "$2\*.*"
+      WriteRegStr HKCU "${INSTALL_REGISTRY_KEY}" "InstallLocation" "$2"
+      StrCpy $INSTDIR "$2"
+      Goto nami_recover_done
+    ${EndIf}
+  ${EndIf}
+
+  ; 4. Check HKCU UNINSTALL_REGISTRY_KEY DisplayIcon
+  ; Typically: "D:\path\Nami Mail.exe,0"
+  ReadRegStr $0 HKCU "${UNINSTALL_REGISTRY_KEY}" "DisplayIcon"
+  ${If} $0 != ""
+    StrCpy $1 "$0" 1 0
+    ${If} $1 == '"'
+      StrCpy $0 "$0" "" 1
+      ${WordFind} "$0" '"' "+1" $0
+    ${Else}
+      ${WordFind} "$0" "," "+1" $0
+    ${EndIf}
+    ${StdUtils.GetParentPath} $2 "$0"
+    ${If} $2 != ""
+    ${AndIf} ${FileExists} "$2\*.*"
+      WriteRegStr HKCU "${INSTALL_REGISTRY_KEY}" "InstallLocation" "$2"
+      StrCpy $INSTDIR "$2"
+      Goto nami_recover_done
+    ${EndIf}
+  ${EndIf}
+
+  !ifdef UNINSTALL_REGISTRY_KEY_2
+    ; 5. Check HKCU UNINSTALL_REGISTRY_KEY_2 InstallLocation
+    ReadRegStr $0 HKCU "${UNINSTALL_REGISTRY_KEY_2}" "InstallLocation"
+    ${If} $0 != ""
+    ${AndIf} ${FileExists} "$0\*.*"
+      WriteRegStr HKCU "${INSTALL_REGISTRY_KEY}" "InstallLocation" "$0"
+      StrCpy $INSTDIR "$0"
+      Goto nami_recover_done
+    ${EndIf}
+
+    ; 6. Check HKCU UNINSTALL_REGISTRY_KEY_2 UninstallString
+    ReadRegStr $0 HKCU "${UNINSTALL_REGISTRY_KEY_2}" "UninstallString"
+    ${If} $0 != ""
+      StrCpy $1 "$0" 1 0
+      ${If} $1 == '"'
+        StrCpy $0 "$0" "" 1
+        ${WordFind} "$0" '"' "+1" $0
+      ${Else}
+        ${WordFind} "$0" " " "+1" $0
+      ${EndIf}
+      ${StdUtils.GetParentPath} $2 "$0"
+      ${If} $2 != ""
+      ${AndIf} ${FileExists} "$2\*.*"
+        WriteRegStr HKCU "${INSTALL_REGISTRY_KEY}" "InstallLocation" "$2"
+        StrCpy $INSTDIR "$2"
+        Goto nami_recover_done
+      ${EndIf}
+    ${EndIf}
+  !endif
+
+  nami_recover_done:
+  Pop $2
+  Pop $1
+  Pop $0
+!macroend
+
+!macro preInit
+  !insertmacro namiRecoverExistingInstallLocation
 !macroend
 
 !macro namiReadInstalledVersion ROOT_KEY OUTPUT
@@ -218,6 +312,11 @@ Var /GLOBAL namiVersionComparison
   SetOutPath "$INSTDIR"
   File /oname=namimail.cmd "${BUILD_RESOURCES_DIR}\namimail.cmd"
   !insertmacro namiRegisterCliPath
+  WriteRegStr SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "InstallLocation" "$INSTDIR"
+  !ifdef UNINSTALL_REGISTRY_KEY_2
+    WriteRegStr SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY_2}" "InstallLocation" "$INSTDIR"
+  !endif
 !macroend
 
 ; Replaces electron-builder's default PowerShell-based app shutdown.
@@ -296,14 +395,13 @@ Var /GLOBAL namiVersionComparison
   !define MUI_WELCOMEPAGE_TEXT "Nami Mail 是一款本地优先的多账户桌面邮件客户端。$\r$\n$\r$\n您的邮件数据、账户凭据与加密密钥只保存在本机，应用直连您的邮箱服务商，不经过任何第三方服务器。$\r$\n$\r$\n点击$\"下一步$\"继续。"
   !define MUI_PAGE_CUSTOMFUNCTION_PRE namiWelcomePre
   !insertmacro MUI_PAGE_WELCOME
-  ; The MUI license and directory pages are the primary flow. Both are skipped
-  ; for silent installs and in-place updates (--updated keeps the previous
-  ; directory choice and reuses it directly).
+  ; The license page is shown next. Both are skipped for silent installs and
+  ; in-place updates (--updated keeps the previous directory choice directly).
+  ; The directory page is inserted by electron-builder (allowToChangeInstallationDirectory)
+  ; AFTER PAGE_INSTALL_MODE so that custom install paths chosen by the user are
+  ; not reset by setInstallModePerUser.
   !define MUI_PAGE_CUSTOMFUNCTION_PRE namiLicensePre
   !insertmacro MUI_PAGE_LICENSE "${BUILD_RESOURCES_DIR}\..\LICENSE"
-  !define MUI_PAGE_CUSTOMFUNCTION_PRE namiDirectoryPre
-  !define MUI_PAGE_CUSTOMFUNCTION_LEAVE namiDirectoryLeave
-  !insertmacro MUI_PAGE_DIRECTORY
 
   Function namiWelcomePre
     ${If} ${Silent}
@@ -319,29 +417,6 @@ Var /GLOBAL namiVersionComparison
       Abort
     ${EndIf}
     ${If} ${isUpdated}
-      Abort
-    ${EndIf}
-  FunctionEnd
-
-  Function namiDirectoryPre
-    ${If} ${Silent}
-      Abort
-    ${EndIf}
-    ${If} ${isUpdated}
-      Abort
-    ${EndIf}
-  FunctionEnd
-
-  Function namiDirectoryLeave
-    !insertmacro namiNormalizeInstDir
-    ; The user picked this folder from the directory page. Reuse the same
-    ; reachability probe as customInit: if the selected path lives on a
-    ; drive/partition that no longer exists, setout/write would fail with a raw
-    ; error and block the whole install. Reject it here so the user can pick a
-    ; reachable directory before any file is written.
-    !insertmacro namiCheckInstDirReachable
-    ${If} $R0 == ""
-      MessageBox MB_OK|MB_ICONEXCLAMATION "所选目录不可达（所在磁盘分区可能已变更或已被删除）。$\r$\n$\r$\n请选择其它可用的目录以继续安装。"
       Abort
     ${EndIf}
   FunctionEnd
