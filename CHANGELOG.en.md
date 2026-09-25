@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-25
+
+### Added
+
+- BIMI brand avatar support: resolve and validate enterprise sender SVG brand avatars to enhance visual verification for official mail; protected by strict SVG sanitization, size normalization, two-tier memory/disk caching, and TTL expiry.
+- Compose attachments drag-and-drop & clipboard paste: drag and drop local files directly into the compose dialog with a clear dashed drop indicator overlay; paste clipboard images into the body editor with `Ctrl+V` for instant attachment creation.
+
+### Fixed
+
+- Refactored agent confirmation card docking and collapse animation: applied a solid panel background (`var(--panel-solid)`) to `.agent-composer` to serve as an opaque occlusion surface, combined with `-14px` negative margin slot docking so the card bottom edge smoothly tucks behind the composer; eliminated floating edge artifacts caused by the gradient mask, removed redundant bottom borders, provided 24px bottom button safe padding, and synchronized grid row height with negative margin transitions for zero-jump dismissal.
+- Suppressed redundant translation banners: detect mail body language characteristics to hide the "Translate to current language" banner when mail content already matches the client language, reducing visual clutter.
+- Fixed Windows CI desktop smoke startup timeout: raised the window-loaded startup ceiling on GitHub Actions runners to avoid false alarms under heavy host load.
+
+### Documentation
+
+- Added `v0.4.1` bilingual release notes; bumped website and issue template versions to 0.4.1.
+
 ## [0.4.0] - 2026-09-21
 
 ### Added
