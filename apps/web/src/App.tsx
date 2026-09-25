@@ -107,6 +107,7 @@ import { mergeSubmissionSnapshots, sortSubmissions, submissionStatusNeedsRefresh
 import { providerDisplayName } from "./providerOnboarding";
 import { playNotificationSound, primeNotificationSound } from "./sounds";
 import { saveLocalePreference } from "./localePreference";
+import { getAccountDisplayName, useAccountDisplayNames } from "./accountDisplayNameStore";
 import { createSettingsLoadCoordinator } from "./settingsLoadCoordinator";
 import TranslationPanel, { type TranslationAvailability, type TranslationContent, type TranslationPanelState } from "./TranslationPanel";
 import { applyMailTranslation, extractMailTextSegments, isMailMatchingLocale } from "./mailDomTranslation";
@@ -272,6 +273,7 @@ async function copyVerificationCodeToClipboard(code: string): Promise<boolean> {
 }
 
 export default function App() {
+  useAccountDisplayNames();
   const { locale, locales, setLocale, t } = useI18n();
   const [systemTheme, setSystemTheme] = useState<"light" | "dark">(currentSystemTheme);
   const [settings, setSettings] = useState<AppSettings>(() => ({
@@ -3836,14 +3838,15 @@ const emptyMessageList = useMemo(() => (query.trim()
               const issue = accountIssues.get(account.id);
               const providerName = localizedProviderName(account);
               const freshness = formatSyncFreshness(account.lastSyncedAt, t);
+              const displayName = getAccountDisplayName(account.email);
               // With a single account selected, the other account rows fold
               // away so the folder list gets the room; "all accounts" stays.
               // Expanded mode shows every row again for one-tap switching.
               const collapsed = !accountsExpanded && selectedAccount !== "all" && selectedAccount !== account.id;
               return (
-                <button key={account.id} aria-pressed={selectedAccount === account.id} aria-hidden={collapsed} tabIndex={collapsed ? -1 : undefined} className={`${selectedAccount === account.id ? "active" : ""}${collapsed ? " hidden" : ""}`} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); actions.closeMobileSidebar(); }}>
-                  <CustomAvatar name={account.email} address={account.email} tone={accountTone(account.email)} className="account-avatar" />
-                  <span className="account-copy"><strong>{account.email.split("@")[0]}</strong><small>{accountShowsFreshness(issue) ? t("mail.accountFreshness", { provider: providerName, freshness }) : issue!.title}</small></span>
+                <button key={account.id} title={account.email} aria-label={displayName ? `${displayName} (${account.email})` : account.email} aria-pressed={selectedAccount === account.id} aria-hidden={collapsed} tabIndex={collapsed ? -1 : undefined} className={`${selectedAccount === account.id ? "active" : ""}${collapsed ? " hidden" : ""}`} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); actions.closeMobileSidebar(); }}>
+                  <CustomAvatar name={displayName || account.email} address={account.email} tone={accountTone(account.email)} className="account-avatar" />
+                  <span className="account-copy"><strong>{displayName || account.email.split("@")[0]}</strong><small>{accountShowsFreshness(issue) ? t("mail.accountFreshness", { provider: providerName, freshness }) : issue!.title}</small></span>
                   <span className={`status-dot ${accountStatusDotClass(issue, account.status)}`} aria-hidden="true" />
                 </button>
               );

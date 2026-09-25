@@ -7,6 +7,7 @@ import { useI18n, type Translate } from "./i18n";
 import { providerDisplayName } from "./providerOnboarding";
 import type { Account } from "./types";
 import { setAvatar, useCustomAvatar } from "./avatarStore";
+import { getAccountDisplayName, setAccountDisplayName, useAccountDisplayNames } from "./accountDisplayNameStore";
 import { AvatarEditor } from "./AvatarEditor";
 import { ManagementDialogShell } from "./ManagementDialogs";
 import { useDialogFocus } from "./hooks/useDialogFocus";
@@ -45,6 +46,7 @@ export default function AccountsDialog({
   onAccountSync,
   fallbackFocusRef,
 }: AccountsDialogProps) {
+  const accountDisplayNameVersion = useAccountDisplayNames();
   const { locale, t } = useI18n();
   const [notice, setNotice] = useState<Notice>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -52,6 +54,9 @@ export default function AccountsDialog({
   const [pendingBulkRemoval, setPendingBulkRemoval] = useState(false);
   const [signatureDrafts, setSignatureDrafts] = useState<Record<string, string>>(() =>
     Object.fromEntries(accounts.map((account) => [account.id, account.signature])),
+  );
+  const [displayNameDrafts, setDisplayNameDrafts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(accounts.map((account) => [account.id, getAccountDisplayName(account.email) ?? ""])),
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
@@ -73,11 +78,12 @@ export default function AccountsDialog({
       const providerName = providerDisplayName({ id: account.provider, name: account.providerName }, locale, t);
       return (
         account.email.toLocaleLowerCase().includes(needle)
+        || (getAccountDisplayName(account.email) ?? "").toLocaleLowerCase().includes(needle)
         || account.providerName.toLocaleLowerCase().includes(needle)
         || providerName.toLocaleLowerCase().includes(needle)
       );
     });
-  }, [accounts, searchQuery, showToolbar, locale, t]);
+  }, [accounts, searchQuery, showToolbar, locale, t, accountDisplayNameVersion]);
 
   const pageCount = Math.max(1, Math.ceil(filteredAccounts.length / ACCOUNTS_PER_PAGE));
   const clampedPage = Math.min(page, pageCount);
@@ -128,6 +134,7 @@ export default function AccountsDialog({
     if (busyAction) return;
     if (editingAccount) {
       setSignatureDrafts((drafts) => ({ ...drafts, [editingAccount.id]: editingAccount.signature }));
+      setDisplayNameDrafts((drafts) => ({ ...drafts, [editingAccount.id]: getAccountDisplayName(editingAccount.email) ?? "" }));
     }
     requestEditorClose();
   };
@@ -220,6 +227,14 @@ export default function AccountsDialog({
     } finally {
       setBusyAction(null);
     }
+  };
+
+  const saveAccountDisplayName = (account: Account) => {
+    if (controlsBusy) return;
+    const displayName = (displayNameDrafts[account.id] ?? "").trim().slice(0, 64);
+    setAccountDisplayName(account.email, displayName || null);
+    setDisplayNameDrafts((drafts) => ({ ...drafts, [account.id]: displayName }));
+    setNotice({ kind: "success", message: t("settings.account.displayNameSaved", { email: account.email }) });
   };
 
   const toggleSelect = (accountId: string) => {
@@ -398,7 +413,7 @@ export default function AccountsDialog({
                                   {retrying ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}{t("settings.account.resync")}
                                 </button>
                               )}
-                              <button className="secondary-button" type="button" aria-label={t("settings.account.editAriaLabel", { email: account.email })} disabled={controlsBusy} onClick={() => setEditingId(account.id)}>
+                              <button className="secondary-button" type="button" aria-label={t("settings.account.editAriaLabel", { email: account.email })} disabled={controlsBusy} onClick={() => { setSignatureDrafts((drafts) => ({ ...drafts, [account.id]: account.signature })); setDisplayNameDrafts((drafts) => ({ ...drafts, [account.id]: getAccountDisplayName(account.email) ?? "" })); setEditingId(account.id); }}>
                                 <Pencil size={15} />{t("settings.account.edit")}
                               </button>
                               <button className="icon-button danger-icon-button" type="button" aria-label={t("settings.account.removeAriaLabel", { email: account.email })} data-tooltip={t("settings.account.removeTooltip")} disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingAccountRemoval(account.id); }}>
@@ -432,12 +447,19 @@ export default function AccountsDialog({
           <section ref={editorDialog} className={`accounts-editor-modal${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={t("settings.account.editAriaLabel", { email: editingAccount.email })} aria-labelledby="accounts-editor-title" tabIndex={-1}>
             <div className="accounts-editor" role="form" aria-label={t("settings.account.editAriaLabel", { email: editingAccount.email })}>
               <div className="accounts-editor-head">
-                <AvatarEditor name={editingAccount.email} address={editingAccount.email} current={editingAvatar} disabled={controlsBusy} onChange={(dataUrl) => setAvatar(editingAccount.email, dataUrl)} />
+                <AvatarEditor name={displayNameDrafts[editingAccount.id] || editingAccount.email} address={editingAccount.email} current={editingAvatar} disabled={controlsBusy} onChange={(dataUrl) => setAvatar(editingAccount.email, dataUrl)} />
                 <div>
                   <span className="eyebrow">{t("settings.account.edit")}</span>
                   <h3 id="accounts-editor-title" className="contact-editor-title">{editingAccount.email}</h3>
                   <small className="accounts-editor-provider">{providerDisplayName({ id: editingAccount.provider, name: editingAccount.providerName }, locale, t)}</small>
                 </div>
+              </div>
+              <label className="calendar-field" htmlFor="account-display-name-input">
+                <span>{t("settings.account.displayNameLabel")}</span>
+                <input id="account-display-name-input" type="text" maxLength={64} value={displayNameDrafts[editingAccount.id] ?? ""} onChange={(event) => setDisplayNameDrafts((drafts) => ({ ...drafts, [editingAccount.id]: event.target.value }))} placeholder={t("settings.account.displayNamePlaceholder")} />
+              </label>
+              <div className="accounts-editor-actions">
+                <button className="primary-button" type="button" disabled={controlsBusy} onClick={() => saveAccountDisplayName(editingAccount)}><Save size={15} />{t("settings.account.saveDisplayName")}</button>
               </div>
               <label className="calendar-field" htmlFor="account-signature-input">
                 <span>{t("settings.account.signatureLabel")}</span>
