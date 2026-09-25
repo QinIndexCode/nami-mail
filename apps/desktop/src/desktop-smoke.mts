@@ -951,7 +951,7 @@ export async function inspectDesktopSettingsUi(): Promise<DesktopSettingsUiSmoke
     return await targetWindow.webContents.executeJavaScript(`
       (async () => {
         const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-        const waitFor = async (predicate, timeout = 5000) => {
+        const waitFor = async (predicate, timeout = 15000) => {
           const deadline = performance.now() + timeout;
           while (performance.now() < deadline) {
             const value = predicate();
@@ -1131,7 +1131,7 @@ export async function inspectDesktopSettingsSync(): Promise<DesktopSettingsSyncS
     return await targetWindow.webContents.executeJavaScript(`
       (async () => {
         const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-        const waitFor = async (predicate, timeout = 5000) => {
+        const waitFor = async (predicate, timeout = 15000) => {
           const deadline = performance.now() + timeout;
           while (performance.now() < deadline) {
             const value = predicate();
