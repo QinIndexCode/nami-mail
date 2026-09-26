@@ -8301,11 +8301,17 @@ flex:1;
 font-size:12px;
 overflow:hidden
 }
-.accounts-copy-address
+.accounts-copy-address svg
 {
-width:24px;
-height:24px;
-border-radius:var(--radius-sm)
+animation:account-copy-icon-in .16s ease
+}
+@keyframes account-copy-icon-in
+{
+from
+{
+opacity:0;
+transform:scale(.55)
+}
 }
 .accounts-row-copy small
 {
