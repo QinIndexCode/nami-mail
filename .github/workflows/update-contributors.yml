@@ -1,0 +1,67 @@
+name: Update contributors
+
+# Runs every day at 03:00 UTC, or manually, or whenever README files change.
+# GitHub Actions allows scheduled runs as frequent as every 5 minutes;
+# once per day is well within limits and consumes only 1–2 API calls
+# against the 5 000 req/h GITHUB_TOKEN quota.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "README.zh-CN.md"
+      - "README.en.md"
+      - "scripts/update-contributors.mjs"
+      - ".github/workflows/update-contributors.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-contributors
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.14.0
+
+      - name: Fetch contributors and update READMEs
+        id: update
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/update-contributors.mjs
+
+      # Opens a PR when the contributor list changes. The PR targets main and
+      # is set to auto-merge (squash) so it merges automatically once the
+      # required "validate" status check passes — no manual review needed.
+      - name: Open or update pull request
+        if: steps.update.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5e914681df9dc83aa4e4905692ca88beb2f9e91f
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update contributor list [skip ci]"
+          branch: chore/update-contributors
+          delete-branch: true
+          title: "chore: update contributor list"
+          body: |
+            Automated contributor list refresh.
+
+            This PR was opened by the **Update contributors** workflow. It will
+            merge automatically once the required status checks pass.
+          labels: "automated,documentation"
+          author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+          auto-merge: squash
+

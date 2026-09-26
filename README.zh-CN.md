@@ -271,6 +271,33 @@ npm.cmd audit --omit=dev
 
 架构参考了 [ImapFlow](https://github.com/postalsys/imapflow)、[Stork](https://github.com/paperkite-hq/stork) 和 [MailGo](https://github.com/MengMengCode/MailGo) 的公开实现思路，但项目本身采用轻量的全 Node.js 本地架构，不依赖 MySQL 或 Redis。
 
+## 贡献者
+
+感谢以下贡献者参与了本项目的开发（不含机器人账户）：
+
+<!-- contributors-start -->
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/QinIndexCode">
+        <img src="https://avatars.githubusercontent.com/u/177287013?v=4" width="64" height="64" style="border-radius:50%" alt="QinIndexCode" /><br />
+        <sub><b>QinIndexCode</b></sub>
+      </a><br />
+      <sub>189 次提交</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/JIE-jiee">
+        <img src="https://avatars.githubusercontent.com/u/130622560?v=4" width="64" height="64" style="border-radius:50%" alt="JIE-jiee" /><br />
+        <sub><b>JIE-jiee</b></sub>
+      </a><br />
+      <sub>1 次提交</sub>
+    </td>
+  </tr>
+</table>
+<!-- contributors-end -->
+
+欢迎参与贡献，请参阅 [贡献指南](CONTRIBUTING.zh-CN.md)。
+
 ## 许可证
 
 本项目采用 [MIT License](LICENSE)。

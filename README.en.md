@@ -271,6 +271,33 @@ npm.cmd audit --omit=dev
 
 The architecture draws on public implementation ideas from [ImapFlow](https://github.com/postalsys/imapflow), [Stork](https://github.com/paperkite-hq/stork), and [MailGo](https://github.com/MengMengCode/MailGo). Nami Mail itself uses a lightweight all-Node.js local architecture and does not depend on MySQL or Redis.
 
+## Contributors
+
+Thanks to everyone who has contributed to this project (bots excluded):
+
+<!-- contributors-start -->
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/QinIndexCode">
+        <img src="https://avatars.githubusercontent.com/u/177287013?v=4" width="64" height="64" style="border-radius:50%" alt="QinIndexCode" /><br />
+        <sub><b>QinIndexCode</b></sub>
+      </a><br />
+      <sub>189 commits</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/JIE-jiee">
+        <img src="https://avatars.githubusercontent.com/u/130622560?v=4" width="64" height="64" style="border-radius:50%" alt="JIE-jiee" /><br />
+        <sub><b>JIE-jiee</b></sub>
+      </a><br />
+      <sub>1 commit</sub>
+    </td>
+  </tr>
+</table>
+<!-- contributors-end -->
+
+Contributions are welcome — see the [contributing guide](CONTRIBUTING.en.md).
+
 ## License
 
 Nami Mail is available under the [MIT License](LICENSE).

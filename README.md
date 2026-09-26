@@ -41,3 +41,28 @@ Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端开源�
 面向用户的版本说明见 [Release Notes](docs/releases/README.en.md)（[中文](docs/releases/README.zh-CN.md)）；维护者的签名、Release 与真实更新验证步骤见 [Windows 发布指南](docs/RELEASING.en.md)（[中文](docs/RELEASING.zh-CN.md)）。
 
 User-facing release notes live in [docs/releases](docs/releases/README.en.md) (简体中文: [docs/releases/README.zh-CN.md](docs/releases/README.zh-CN.md)); maintainer signing, release, and real-update-verification steps are in the [Windows release guide](docs/RELEASING.en.md) (简体中文: [docs/RELEASING.zh-CN.md](docs/RELEASING.zh-CN.md)).
+
+## 贡献者 / Contributors
+
+感谢以下贡献者 / Thanks to everyone who contributed (bots excluded):
+
+<!-- contributors-start -->
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/QinIndexCode">
+        <img src="https://avatars.githubusercontent.com/u/177287013?v=4" width="64" height="64" style="border-radius:50%" alt="QinIndexCode" /><br />
+        <sub><b>QinIndexCode</b></sub>
+      </a><br />
+      <sub>189 commits</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/JIE-jiee">
+        <img src="https://avatars.githubusercontent.com/u/130622560?v=4" width="64" height="64" style="border-radius:50%" alt="JIE-jiee" /><br />
+        <sub><b>JIE-jiee</b></sub>
+      </a><br />
+      <sub>1 commit</sub>
+    </td>
+  </tr>
+</table>
+<!-- contributors-end -->
