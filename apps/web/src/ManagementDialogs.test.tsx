@@ -57,6 +57,7 @@ describe("management dialogs", () => {
     expect(markup).toContain('id="accounts-dialog-title"');
     expect(markup).toContain(zh("settings.account.title"));
     expect(markup).toContain("nami@example.com");
+    expect(markup).toContain(zh("settings.account.copyAddressAriaLabel").replace("{email}", "nami@example.com"));
     expect(markup).toContain(zh("settings.account.edit"));
     expect(markup).toContain(zh("settings.account.removeAriaLabel").replace("{email}", "nami@example.com"));
     // The signature editor is collapsed behind the edit button until opened.

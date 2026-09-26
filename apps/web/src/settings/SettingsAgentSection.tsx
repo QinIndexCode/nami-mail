@@ -18,7 +18,7 @@ import {
   externalMcpGuideCode,
   externalServiceGuideCode,
   externalDocsUrl,
-  copyGuideTextToClipboard,
+  copyTextToClipboard,
 } from "./settings-utils";
 import { ExternalGuideBlock, NumberStepper, Switch } from "./SettingsUIComponents";
 import ThemedSelect from "../ThemedSelect";
@@ -63,7 +63,7 @@ export default function SettingsAgentSection({
   setMemoryDialogOpen,
 }: SettingsAgentSectionProps) {
   const copyExternalGuide = (text: string, id: string) => {
-    void copyGuideTextToClipboard(text).then((copied) => {
+    void copyTextToClipboard(text).then((copied) => {
       if (!copied) return;
       setExternalGuideCopied(id);
       window.setTimeout(() => {

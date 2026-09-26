@@ -8285,12 +8285,27 @@ gap:2px;
 min-width:0;
 display:flex
 }
+.accounts-row-copy-heading
+{
+align-items:center;
+gap:4px;
+min-width:0;
+display:flex
+}
 .accounts-row-copy strong
 {
 text-overflow:ellipsis;
 white-space:nowrap;
+min-width:0;
+flex:1;
 font-size:12px;
 overflow:hidden
+}
+.accounts-copy-address
+{
+width:24px;
+height:24px;
+border-radius:var(--radius-sm)
 }
 .accounts-row-copy small
 {
