@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Check, ChevronLeft, ChevronRight, LoaderCircle, Pencil, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Copy, LoaderCircle, Pencil, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { accountHealthIssue, mailErrorMessage } from "./errorPresentation";
 import { accountStatusDotClass } from "./accountHealth";
@@ -13,6 +13,7 @@ import { ManagementDialogShell } from "./ManagementDialogs";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { useStablePagedListHeight } from "./hooks/useStablePagedListHeight";
+import { copyTextToClipboard } from "./settings/settings-utils";
 
 type Notice = { kind: "success" | "error"; message: string } | null;
 
@@ -49,6 +50,9 @@ export default function AccountsDialog({
   const accountDisplayNameVersion = useAccountDisplayNames();
   const { locale, t } = useI18n();
   const [notice, setNotice] = useState<Notice>(null);
+  const [copiedAccountId, setCopiedAccountId] = useState<string | null>(null);
+  const [copyAnnouncement, setCopyAnnouncement] = useState("");
+  const copyResetTimer = useRef<number | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [pendingAccountRemoval, setPendingAccountRemoval] = useState<string | null>(null);
   const [pendingBulkRemoval, setPendingBulkRemoval] = useState(false);
@@ -66,6 +70,10 @@ export default function AccountsDialog({
   const confirmationDialog = useRef<HTMLElement>(null);
   const pendingRemovalAccount = accounts.find((account) => account.id === pendingAccountRemoval) ?? null;
   const controlsBusy = Boolean(busyAction);
+
+  useEffect(() => () => {
+    if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current);
+  }, []);
 
   // The search / pagination / bulk toolbar only appears once there are more
   // accounts than one page can hold.
@@ -237,6 +245,19 @@ export default function AccountsDialog({
     setNotice({ kind: "success", message: t("settings.account.displayNameSaved", { email: account.email }) });
   };
 
+  const copyAccountAddress = async (account: Account) => {
+    const copied = await copyTextToClipboard(account.email);
+    if (!copied) {
+      setNotice({ kind: "error", message: t("settings.account.addressCopyFailed") });
+      return;
+    }
+    setNotice(null);
+    setCopiedAccountId(account.id);
+    setCopyAnnouncement(t("settings.account.addressCopied", { email: account.email }));
+    if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current);
+    copyResetTimer.current = window.setTimeout(() => setCopiedAccountId(null), 1_500);
+  };
+
   const toggleSelect = (accountId: string) => {
     setSelectedIds((previous) => {
       const next = new Set(previous);
@@ -332,6 +353,7 @@ export default function AccountsDialog({
         focusSuspended={Boolean(editingAccount)}
       >
         <section className="settings-section settings-accounts">
+          <span className="visually-hidden" role="status" aria-live="polite">{copyAnnouncement}</span>
           {notice && (
             <div className={`form-status ${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}>
               {notice.kind === "success" ? <Check size={17} /> : <X size={17} />}
@@ -403,7 +425,12 @@ export default function AccountsDialog({
                             )}
                             <span className={`status-dot ${accountStatusDotClass(issue ?? undefined, account.status)}`} aria-hidden="true" />
                             <div className="accounts-row-copy">
-                              <strong>{account.email}</strong>
+                              <div className="accounts-row-copy-heading">
+                                <strong>{account.email}</strong>
+                                <button className="icon-button accounts-copy-address" type="button" aria-label={t("settings.account.copyAddressAriaLabel", { email: account.email })} onClick={() => void copyAccountAddress(account)}>
+                                  {copiedAccountId === account.id ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+                                </button>
+                              </div>
                               <small className={issue ? (issue.severity === "warning" ? "account-warning" : "account-error") : ""}>{issue ? `${providerName} · ${issue.title}` : providerName}</small>
                               {issue && <small className="account-error-guidance">{issue.guidance}</small>}
                             </div>

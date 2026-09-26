@@ -82,10 +82,10 @@ export function revokeDemoObjectUrl(url: string | null | undefined): void {
 }
 
 /**
- * Copies guide snippets to the clipboard with a short-lived fallback for
+ * Copies text to the clipboard with a short-lived fallback for
  * local sessions where clipboard permissions are unavailable.
  */
-export async function copyGuideTextToClipboard(text: string): Promise<boolean> {
+export async function copyTextToClipboard(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
