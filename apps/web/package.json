@@ -14,7 +14,7 @@
     "@nami/agent-contracts": "file:../../packages/agent-contracts",
     "@tanstack/react-virtual": "^3.14.12",
     "dompurify": "^3.4.15",
-    "jszip": "^3.10.1",
+    "jszip": "^3.10.2",
     "lucide-react": "^1.45.0",
     "mammoth": "^1.12.0",
     "pdfjs-dist": "^6.2.108",
