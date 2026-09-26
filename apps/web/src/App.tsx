@@ -9,12 +9,15 @@ import {
   CalendarArrowDown,
   Check,
   ChevronDown,
+  ChevronRight,
   CircleAlert,
   Clock,
   Copy,
   Download,
   Eye,
   FilePenLine,
+  Focus,
+  FolderTree,
   Forward,
   Inbox,
   Layers3,
@@ -73,7 +76,7 @@ import { resolveScrollAnchor, type ScrollAnchorRow } from "./scrollAnchor";
 import { buildForwardDraft, buildReplyDraft, isOwnSentMessage } from "./mailActions";
 // ComposeModal loaded lazily below
 import { sortMessages } from "./mailImportance";
-import { groupMessagesByThread, mergeThreadMembers, shouldCollapseThread, sortThreadByTimeline } from "./threads";
+import { groupMessagesByThread, mergeThreadMembers, mergeThreadSnapshot, shouldCollapseThread, sortThreadByTimeline, type ThreadSnapshot } from "./threads";
 import { ErrorBoundary } from "./ErrorBoundary";
 import {
   applyBatchSeenChange as applyBatchSeenChangeState,
@@ -108,6 +111,7 @@ import { providerDisplayName } from "./providerOnboarding";
 import { playNotificationSound, primeNotificationSound } from "./sounds";
 import { saveLocalePreference } from "./localePreference";
 import { getAccountDisplayName, useAccountDisplayNames } from "./accountDisplayNameStore";
+import { loadFolderDisplayMode, saveFolderDisplayMode, type FolderDisplayMode } from "./folderDisplayMode";
 import { createSettingsLoadCoordinator } from "./settingsLoadCoordinator";
 import TranslationPanel, { type TranslationAvailability, type TranslationContent, type TranslationPanelState } from "./TranslationPanel";
 import { applyMailTranslation, extractMailTextSegments, isMailMatchingLocale } from "./mailDomTranslation";
@@ -311,6 +315,26 @@ export default function App() {
   // folder list) so accounts that were folded or overflow the viewport can
   // still be reached; collapsing restores the previous mode.
   const [accountsExpanded, setAccountsExpanded] = useState(false);
+  // Sidebar folder presentation: "focused" keeps the classic single-account
+  // folder list at the bottom; "tree" shows every account's folders inline
+  // beneath its own row. A local UI preference, so it never round-trips
+  // through server settings.
+  const [folderDisplayMode, setFolderDisplayModeState] = useState<FolderDisplayMode>(loadFolderDisplayMode);
+  // Per-account open/closed state for tree mode. Keyed by account id so
+  // switching the selected account never collapses another account's list.
+  const [expandedAccountIds, setExpandedAccountIds] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const setFolderDisplayMode = (mode: FolderDisplayMode) => {
+    setFolderDisplayModeState(mode);
+    saveFolderDisplayMode(mode);
+  };
+  const toggleAccountFolders = (accountId: string) => {
+    setExpandedAccountIds((current) => {
+      const next = new Set(current);
+      if (next.has(accountId)) next.delete(accountId);
+      else next.add(accountId);
+      return next;
+    });
+  };
   const accountListRef = useRef<HTMLDivElement>(null);
   const [accountListOverflow, setAccountListOverflow] = useState(false);
   const [accountListAtBottom, setAccountListAtBottom] = useState(true);
@@ -329,7 +353,9 @@ export default function App() {
       observer.disconnect();
       el.removeEventListener("scroll", update);
     };
-  }, [accounts.length, selectedAccount, accountsExpanded]);
+    // Tree-mode folder toggles change the scroll content without resizing the
+    // box, so the expansion count re-runs the overflow/fade measurement.
+  }, [accounts.length, selectedAccount, accountsExpanded, expandedAccountIds.size, folderDisplayMode]);
   // The folder tree animates its max-height into whatever vertical room the
   // sidebar has left, so a short folder list never shows a scrollbar while
   // there is free space below (only the fixed 36vh cap caused that). The
@@ -865,6 +891,10 @@ export default function App() {
       if (!silent) setLoading(true);
       setFatalError(null);
       if (isDemo) {
+        if (!silent) {
+          // Provide natural, subtle visual pacing for view/folder switches in demo mode
+          await new Promise((resolve) => window.setTimeout(resolve, 140));
+        }
         const demo = await ensureDemoLoaded();
         const demoTotal = demoMessageTotal(
           demoLoadedRef.current && messagesRef.current.length ? messagesRef.current : demo.demoMessages,
@@ -876,10 +906,10 @@ export default function App() {
           setAccounts(demo.createDemoAccounts(locale));
           setProviders(demo.demoProviders);
           setMessages(demo.demoMessages);
-          setListSnapshotKey((value) => value + 1);
           setMessagePage(1);
           setStats(demo.demoStats);
         }
+        setListSnapshotKey((value) => value + 1);
         setMessageTotal(demoTotal);
         setMessagePage(1);
         setSubmissions(sortSubmissions(demo.createDemoSubmissions(locale)));
@@ -931,11 +961,17 @@ export default function App() {
         // Same batch as the row swap: the viewport remounts here, and only
         // here, so the fade-in plays on the arriving rows.
         setListSnapshotKey((value) => value + 1);
+        if (!silent) messageListRef.current?.scrollTo({ top: 0 });
         setMessageTotal(nextMessageTotalForSnapshot(messagePage.total, pendingMerge.items.length, messageView === "unread"));
         setMessagePage(messagePage.page);
         setStats(counts.stats);
         setSelectedId((current) => {
-          if (current && nextMessages.some((item) => item.id === current)) return current;
+          if (!current) return null;
+          // A message opened from the conversation strip legitimately lives
+          // outside the loaded list (another folder, or older than the list
+          // window); the strip membership map witnesses it, so a background
+          // refresh must not throw the reader back to the list.
+          if (nextMessages.some((item) => item.id === current) || threadStripMembersRef.current.has(current)) return current;
           return null;
         });
         finishMerge({ rows: nextMessages.length, silent });
@@ -1088,7 +1124,9 @@ await refreshSubmissions(nextAccounts, { silent: true });
       setMessages(settled);
       setMessageTotal(nextMessageTotalForSnapshot(firstPage.total, Math.max(pendingMerge.items.length, settled.length), view === "unread"));
       setStats(counts.stats);
-      setSelectedId((value) => value && settled.some((item) => item.id === value) ? value : null);
+      // Same strip-membership witness as the load merge: silent polls must
+      // keep off-list conversation members selected too.
+      setSelectedId((value) => value && (settled.some((item) => item.id === value) || threadStripMembersRef.current.has(value)) ? value : null);
       finishMerge({ rows: settled.length, silent: true });
       // A silent poll just succeeded, so the network is back: clear any
       // fatal-error banner that a previous full load may have raised.
@@ -1409,9 +1447,12 @@ await refreshSubmissions(nextAccounts, { silent: true });
       const request = ++positionRequest;
       tooltip.textContent = host.getAttribute("data-tooltip") ?? "";
       tooltip.classList.add("visible");
+      const rawPlacement = host.getAttribute("data-tooltip-placement") as "top" | "bottom" | "left" | "right" | null;
+      const nearTopBar = Boolean(host.closest(".window-bar, .agent-workspace-header, .column-header, .reader-toolbar"));
+      const placement = rawPlacement || (nearTopBar ? "bottom" : "top");
       void computePosition(host, tooltip, {
         strategy: "fixed",
-        placement: "top",
+        placement,
         middleware: [
           offset(8),
           flip({ boundary: frame, padding: 6 }),
@@ -1550,6 +1591,11 @@ await refreshSubmissions(nextAccounts, { silent: true });
 
   useEffect(() => {
     if (!selectedId || filteredMessages.some((message) => message.id === selectedId)) return;
+    // A message opened from the conversation strip legitimately lives outside
+    // the loaded list (another folder, a view that filters it out, or older
+    // than the list window); the strip membership map witnesses it, so this
+    // effect must not close the reader for it.
+    if (threadStripMembersRef.current.has(selectedId)) return;
     setSelectedId(null);
     setRecipientDetailsOpen(false);
   }, [filteredMessages, selectedId]);
@@ -1608,10 +1654,18 @@ await refreshSubmissions(nextAccounts, { silent: true });
   // mailboxes of the account, so members outside the loaded view (the user's
   // own replies in Sent, older replies that fell off the list window) can join
   // the strip. Refreshed when the open message changes and after a send.
-  const [threadExtras, setThreadExtras] = useState<{ anchorId: string; members: Message[] } | null>(null);
+  const [threadExtras, setThreadExtras] = useState<ThreadSnapshot | null>(null);
+  // Last rendered strip membership. Clicking a chip resolves its target from
+  // this map as a final fallback, so any member the strip ever showed opens
+  // even when the list window and the extras snapshot have both moved on.
+  const threadStripMembersRef = useRef<ReadonlyMap<string, Message>>(new Map());
   const [threadRefreshTick, setThreadRefreshTick] = useState(0);
   const selected = filteredMessages.find((message) => message.id === selectedId)
-    ?? (isDemo ? null : threadExtras?.members.find((message) => message.id === selectedId) ?? null);
+    ?? (isDemo
+      ? null
+      : threadExtras?.members.find((message) => message.id === selectedId)
+        ?? (selectedId ? threadStripMembersRef.current.get(selectedId) : undefined)
+        ?? null);
   const threadExtrasForSelected = threadExtras && selected
     && (threadExtras.anchorId === selected.id || threadExtras.members.some((member) => member.id === selected.id))
     ? threadExtras.members
@@ -1620,13 +1674,22 @@ await refreshSubmissions(nextAccounts, { silent: true });
     ? sortThreadByTimeline(mergeThreadMembers(threadById.get(selected.id) ?? [], threadExtrasForSelected))
     : null;
   useEffect(() => {
+    if (!selectedThread) return;
+    const members = new Map<string, Message>();
+    for (const member of selectedThread) members.set(member.id, member);
+    threadStripMembersRef.current = members;
+  }, [selectedThread]);
+  useEffect(() => {
     if (isDemo || !selectedId) {
       setThreadExtras(null);
       return;
     }
     let cancelled = false;
     void api.messageThread(selectedId).then((response) => {
-      if (!cancelled) setThreadExtras({ anchorId: selectedId, members: response.items });
+      // Merge instead of replace: the reader may be showing a member that
+      // only the previous snapshot contained, and a refetch must never drop
+      // it out from under the open message.
+      if (!cancelled) setThreadExtras((current) => mergeThreadSnapshot(current, { anchorId: selectedId, members: response.items }));
     }).catch(() => undefined);
     return () => {
       cancelled = true;
@@ -2150,10 +2213,11 @@ const emptyMessageList = useMemo(() => (query.trim()
     const ownSent = isOwnSentMessage(threadMessage, accountEmails);
     const hasRecipient = ownSent && threadMessage.to[0] !== undefined;
     const person = hasRecipient ? threadMessage.to[0]! : threadMessage.from;
+    const personLabel = person.name || person.address || t("mail.thread.unknownPerson");
     return (
-      <button key={threadMessage.id} type="button" className={`thread-strip-item ${threadMessage.id === selected?.id ? "active" : ""}`} onClick={() => void openMessage(threadMessage)}>
+      <button key={threadMessage.id} type="button" className={`thread-strip-item ${threadMessage.id === selected?.id ? "active" : ""}`} data-tooltip={hasRecipient ? t("mail.thread.sentTooltip", { recipient: personLabel, time: formatFullDate(threadMessage.sentAt, locale) }) : t("mail.thread.receivedTooltip", { person: personLabel, time: formatFullDate(threadMessage.sentAt, locale) })} onClick={() => void openMessage(threadMessage)}>
         <SenderAvatar name={person.name} address={person.address} tone={accountTone(person.address)} size="small" gravatarEnabled={settings.avatarGravatarEnabled} bimiEnabled={settings.avatarBimiEnabled} />
-        <span className="thread-strip-copy"><strong>{hasRecipient ? t("mail.reader.toRecipient", { recipient: person.name || person.address }) : (person.name || person.address)}</strong><time>{formatMessageTime(threadMessage.sentAt, locale)}</time></span>
+        <span className="thread-strip-copy"><strong>{hasRecipient ? t("mail.reader.toRecipient", { recipient: personLabel }) : personLabel}</strong><time>{formatMessageTime(threadMessage.sentAt, locale)}</time></span>
         {!threadMessage.seen && <span className="unread-dot" aria-hidden="true" />}
       </button>
     );
@@ -3431,14 +3495,11 @@ const emptyMessageList = useMemo(() => (query.trim()
   const chooseView = useCallback((next: MailView) => {
     viewRef.current = next;
     clearUnreadViewRecentlyRead();
+    setLoading(true);
     setView(next);
     setSelectedFolder("");
     setSelectedId(null);
     setRecipientDetailsOpen(false);
-    // A different view is a different list: start reading from the top
-    // instead of wherever the previous list happened to be scrolled (the
-    // clamped offset otherwise reads as a random jump).
-    messageListRef.current?.scrollTo({ top: 0 });
     actions.closeMobileSidebar();
   }, [actions, clearUnreadViewRecentlyRead]);
 
@@ -3766,12 +3827,11 @@ const emptyMessageList = useMemo(() => (query.trim()
   const chooseFolder = (path: string) => {
     viewRef.current = "inbox";
     clearUnreadViewRecentlyRead();
+    setLoading(true);
     setSelectedFolder(path);
     setView("inbox");
     setSelectedId(null);
     setRecipientDetailsOpen(false);
-    // Same as view switches: a folder is a different list, read it from the top.
-    messageListRef.current?.scrollTo({ top: 0 });
     actions.closeMobileSidebar();
   };
 
@@ -3831,9 +3891,9 @@ const emptyMessageList = useMemo(() => (query.trim()
             })()}
           </nav>
 
-          <div className="accounts-heading"><span>{t("mail.accounts")}</span><IconButton label={t("account.add")} onClick={() => { actions.closeMobileSidebar(); actions.openAddAccount(); }}><Plus size={16} /></IconButton></div>
-          <div className="account-list" ref={accountListRef}>
-            <button aria-pressed={selectedAccount === "all"} className={selectedAccount === "all" ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount("all"); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); actions.closeMobileSidebar(); }}><span className="account-avatar all"><Layers3 size={14} /></span><span className="account-copy"><strong>{t("mail.allAccounts")}</strong><small>{t("mail.accountCount", { count: accounts.length })}</small></span></button>
+          <div className="accounts-heading"><span>{t("mail.accounts")}</span><span className="accounts-heading-actions"><IconButton label={folderDisplayMode === "tree" ? t("mail.folderMode.switchToFocused") : t("mail.folderMode.switchToTree")} onClick={() => setFolderDisplayMode(folderDisplayMode === "tree" ? "focused" : "tree")}><span className="folder-mode-icon" data-mode={folderDisplayMode} aria-hidden="true"><FolderTree size={16} className="folder-mode-tree" /><Focus size={16} className="folder-mode-focused" /></span></IconButton><IconButton label={t("account.add")} onClick={() => { actions.closeMobileSidebar(); actions.openAddAccount(); }}><Plus size={16} /></IconButton></span></div>
+          <div className="account-list" data-folder-mode={folderDisplayMode} ref={accountListRef}>
+            <button aria-pressed={selectedAccount === "all"} className={selectedAccount === "all" ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); setLoading(true); setSelectedAccount("all"); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); actions.closeMobileSidebar(); }}><span className="account-avatar all"><Layers3 size={14} /></span><span className="account-copy"><strong>{t("mail.allAccounts")}</strong><small>{t("mail.accountCount", { count: accounts.length })}</small></span></button>
             {accounts.map((account) => {
               const issue = accountIssues.get(account.id);
               const providerName = localizedProviderName(account);
@@ -3842,27 +3902,77 @@ const emptyMessageList = useMemo(() => (query.trim()
               // With a single account selected, the other account rows fold
               // away so the folder list gets the room; "all accounts" stays.
               // Expanded mode shows every row again for one-tap switching.
-              const collapsed = !accountsExpanded && selectedAccount !== "all" && selectedAccount !== account.id;
-              return (
-                <button key={account.id} title={account.email} aria-label={displayName ? `${displayName} (${account.email})` : account.email} aria-pressed={selectedAccount === account.id} aria-hidden={collapsed} tabIndex={collapsed ? -1 : undefined} className={`${selectedAccount === account.id ? "active" : ""}${collapsed ? " hidden" : ""}`} onClick={() => { clearUnreadViewRecentlyRead(); setSelectedAccount(account.id); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); actions.closeMobileSidebar(); }}>
+              // Tree mode never folds rows: every account stays visible with
+              // its own folders right beneath it.
+              const collapsed = folderDisplayMode === "focused" && !accountsExpanded && selectedAccount !== "all" && selectedAccount !== account.id;
+              const foldersOpen = folderDisplayMode === "tree" && expandedAccountIds.has(account.id) && account.folders.length > 0;
+              const selectAccount = () => {
+                clearUnreadViewRecentlyRead();
+                setLoading(true);
+                setSelectedAccount(account.id);
+                setAccountsExpanded(false);
+                setSelectedFolder("");
+                setSelectedId(null);
+                setRecipientDetailsOpen(false);
+                actions.closeMobileSidebar();
+                // Selecting a *different* account in tree mode opens its
+                // folders as well; an already-selected row only resets to
+                // its inbox so a folded list stays folded. The disclosure
+                // chevron is the only way to fold them.
+                if (folderDisplayMode === "tree" && account.folders.length > 0 && selectedAccount !== account.id) {
+                  setExpandedAccountIds((current) => new Set(current).add(account.id));
+                }
+              };
+              const rowLabel = displayName ? `${displayName} (${account.email})` : account.email;
+              const rowInner = (
+                <>
                   <CustomAvatar name={displayName || account.email} address={account.email} tone={accountTone(account.email)} className="account-avatar" />
                   <span className="account-copy"><strong>{displayName || account.email.split("@")[0]}</strong><small>{accountShowsFreshness(issue) ? t("mail.accountFreshness", { provider: providerName, freshness }) : issue!.title}</small></span>
                   <span className={`status-dot ${accountStatusDotClass(issue, account.status)}`} aria-hidden="true" />
-                </button>
+                </>
+              );
+              // One DOM shape serves both modes: focused mode folds the other
+              // rows and closes every inline list (both transitioned), while
+              // tree mode keeps rows unfolded and opens each list on its own.
+              return (
+                <div key={account.id} className="account-tree-item">
+                  <div className={`account-tree-row${collapsed ? " hidden" : ""}`}>
+                    <button title={account.email} aria-label={rowLabel} aria-pressed={selectedAccount === account.id} aria-hidden={collapsed || undefined} tabIndex={collapsed ? -1 : undefined} className={`account-tree-main${selectedAccount === account.id ? " active" : ""}`} onClick={selectAccount}>{rowInner}</button>
+                    {account.folders.length > 0 && (
+                      <button type="button" className={`account-tree-toggle${foldersOpen ? " open" : ""}`} aria-expanded={foldersOpen} aria-hidden={folderDisplayMode === "focused" || undefined} tabIndex={folderDisplayMode === "focused" || collapsed ? -1 : undefined} aria-label={foldersOpen ? t("mail.folderMode.collapseFolders") : t("mail.folderMode.expandFolders")} onClick={() => toggleAccountFolders(account.id)}>
+                        <ChevronRight size={14} />
+                      </button>
+                    )}
+                  </div>
+                  {account.folders.length > 0 && (
+                    <div className={`account-tree-folders${foldersOpen ? " open" : ""}`} aria-hidden={!foldersOpen || undefined}>
+                      <div className="account-tree-folders-clip">
+                        <div className="account-tree-folders-list">
+                          {account.folders.map((folder) => {
+                            const folderActive = selectedAccount === account.id && selectedFolder === folder.path;
+                            return (
+                              <button key={folder.path} className={folderActive ? "active" : ""} aria-pressed={folderActive} onClick={() => openFolderNavTarget({ accountId: account.id, path: folder.path })}><FolderNavigationIcon specialUse={folder.specialUse} name={folder.name} /><span>{folder.name}</span><span className={`sidebar-end${sidebarLoading && folderActive ? " loading" : ""}`}><span className="sidebar-spinner" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span><em className={folder.unseen ? "folder-unseen" : ""}>{folder.unseen || folder.total || ""}</em></span></button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               );
             })}
-            {!accountsExpanded && selectedAccount === "all" && accountListOverflow && !accountListAtBottom && <div className="account-list-fade" aria-hidden="true" />}
+            {folderDisplayMode === "focused" && !accountsExpanded && selectedAccount === "all" && accountListOverflow && !accountListAtBottom && <div className="account-list-fade" aria-hidden="true" />}
           </div>
 
-          {(accountsExpanded || selectedAccount !== "all" || accountListOverflow) && (
+          {folderDisplayMode === "focused" && (accountsExpanded || selectedAccount !== "all" || accountListOverflow) && (
             <button type="button" className={`account-list-more${accountsExpanded ? " expanded" : ""}`} aria-expanded={accountsExpanded} aria-label={accountsExpanded ? t("mail.collapseAccounts") : t("mail.expandAccounts")} onClick={() => setAccountsExpanded(!accountsExpanded)}>
               <ChevronDown size={16} />
               {accountsExpanded && <span>{t("mail.collapseAccounts")}</span>}
             </button>
           )}
 
-          <div className={`folder-list${!accountsExpanded && selectedAccountRecord && selectedAccountRecord.folders.length > 0 ? " show" : ""}`} ref={folderListRef} style={folderListMaxHeight != null ? ({ "--folder-list-max": `${folderListMaxHeight}px` } as CSSProperties) : undefined} aria-hidden={accountsExpanded || !(selectedAccountRecord && selectedAccountRecord.folders.length > 0)}>
-                {selectedAccountRecord && selectedAccountRecord.folders.length > 0 && (
+          <div className={`folder-list${folderDisplayMode === "focused" && !accountsExpanded && selectedAccountRecord && selectedAccountRecord.folders.length > 0 ? " show" : ""}`} ref={folderListRef} style={folderListMaxHeight != null ? ({ "--folder-list-max": `${folderListMaxHeight}px` } as CSSProperties) : undefined} aria-hidden={folderDisplayMode === "tree" || accountsExpanded || !(selectedAccountRecord && selectedAccountRecord.folders.length > 0)}>
+                {folderDisplayMode === "focused" && selectedAccountRecord && selectedAccountRecord.folders.length > 0 && (
                   <>
                     <span className="folder-title">{t("mail.folders")}</span>
                     {selectedAccountRecord.folders.map((folder) => (
@@ -4111,8 +4221,8 @@ const emptyMessageList = useMemo(() => (query.trim()
                 </div>
               </header>
                 {selectedThread && selectedThread.length > 1 && (
-                  <section className="thread-strip" aria-label={t("mail.thread.label")}>
-                    <span className="thread-strip-caption">{t("mail.thread.label")}</span>
+                  <section className="thread-strip" aria-label={t("mail.thread.label", { count: selectedThread.length })}>
+                    <span className="thread-strip-caption">{t("mail.thread.label", { count: selectedThread.length })}</span>
                     <div className="thread-strip-messages">
                       {threadCollapsed
                         ? (<>
@@ -4244,7 +4354,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       {state.contactsOpen && <Suspense fallback={null}><ManagementDialogs demoMode={isDemo} onClose={() => actions.closeContacts()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.templatesOpen && <Suspense fallback={null}><TemplatesDialog demoMode={isDemo} onClose={() => actions.closeTemplates()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.calendarOpen && <Suspense fallback={null}><CalendarDialog demoMode={isDemo} onClose={() => actions.closeCalendar()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      {state.accountsOpen && <Suspense fallback={null}><AccountsDialog accounts={accounts} demoMode={isDemo} onClose={() => actions.closeAccounts()} onAccountRemoved={removeAccountFromView} onAccountSignatureChanged={updateAccountSignatureInState} onAccountSync={retryAccountSync} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {state.accountsOpen && <Suspense fallback={null}><AccountsDialog accounts={accounts} demoMode={isDemo} onClose={() => actions.closeAccounts()} onAddAccount={() => { actions.closeAccounts(); actions.openAddAccount(); }} onAccountRemoved={removeAccountFromView} onAccountSignatureChanged={updateAccountSignatureInState} onAccountSync={retryAccountSync} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.sendingStatusOpen && <Suspense fallback={null}><SendingStatusModal accounts={accounts} submissions={submissions} loading={submissionLoading} loadError={submissionLoadError} onClose={() => actions.closeSendingStatus()} onRefresh={() => refreshSubmissions(accounts)} onSyncAccount={async (accountId) => { await retryAccountSync(accountId); }} onCreateNewMessage={(draft) => { actions.closeSendingStatus(); actions.openCompose(draft); }} onCancelScheduled={cancelScheduledSubmission} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       <Suspense fallback={null}><TranslationTermsDialog open={state.translationTermsOpen} onAccept={acceptTranslationTerms} onDecline={declineTranslationTerms} /></Suspense>
       <Suspense fallback={null}><StartupUpdatePrompt
@@ -4307,7 +4417,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       )}
       {state.mobileSidebar && <button className="mobile-scrim" aria-label={t("navigation.closeMenu")} onClick={() => actions.closeMobileSidebar()} />}
       {toast && <div className={`toast ${toast.kind}`} role={toast.kind === "error" || toast.kind === "warning" ? "alert" : "status"} aria-atomic="true"><span className="toast-icon" aria-hidden="true">{toast.kind === "error" || toast.kind === "warning" ? <CircleAlert size={17} /> : toast.kind === "info" ? <Sparkles size={17} /> : <Check size={17} />}</span><span className="toast-message">{toast.message}</span>{toast.action && <button className="toast-action" type="button" onClick={() => { setToast(null); toast.action?.run(); }}>{toast.action.label}</button>}<button className="toast-dismiss" type="button" aria-label={t("common.closeNotification")} data-tooltip={t("common.closeNotification")} onClick={() => setToast(null)}><X size={16} /></button></div>}
-      {autoReplyNotices.length > 0 && <AutoReplyToastStack behindModal={state.anyModalOpen} notices={autoReplyNotices} onDismiss={(notice) => setAutoReplyNotices((items) => items.filter((item) => autoReplyNoticeKey(item) !== autoReplyNoticeKey(notice)))} />}
+      {autoReplyNotices.length > 0 && <AutoReplyToastStack behindModal={state.anyModalOpen} inAgent={agentOpen} notices={autoReplyNotices} onDismiss={(notice) => setAutoReplyNotices((items) => items.filter((item) => autoReplyNoticeKey(item) !== autoReplyNoticeKey(notice)))} />}
       </div>
     </div>
   );

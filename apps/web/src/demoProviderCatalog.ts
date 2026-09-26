@@ -27,13 +27,13 @@ export const demoProviderCatalog: ProviderInfo[] = [
       "secure": true
     },
     "authMethods": [
-      "oauth2",
-      "app-password"
+      "app-password",
+      "oauth2"
     ],
-    "recommendedAuthMethod": "oauth2",
-    "credentialLabel": "使用 Google 登录或应用专用密码",
-    "helpText": "优先使用 Google OAuth2；密码模式仅接受开启两步验证后生成的 16 位应用专用密码。",
-    "caveat": "不要填写 Google 账户普通密码。Google Workspace 自定义域名需要通过 OAuth 或 MX 自动发现。",
+    "recommendedAuthMethod": "app-password",
+    "credentialLabel": "Google 16 位应用专用密码",
+    "helpText": "使用 Google 账户开启两步验证后生成的 16 位应用专用密码登录（最稳妥安全）；如需 OAuth 网页授权请点击下方切换。",
+    "caveat": "请填写 16 位应用专用密码（非 Google 账户普通密码）。Google Workspace 自定义域名支持通过应用密码或自动发现登录。",
     "capabilities": {
       "imap": true,
       "smtp": true,
@@ -42,15 +42,15 @@ export const demoProviderCatalog: ProviderInfo[] = [
         "gmail-api"
       ]
     },
-    "credentialHint": "请使用开启两步验证后生成的 16 位应用专用密码",
+    "credentialHint": "请粘贴开启两步验证后生成的 16 位应用专用密码",
     "credentialName": "16 位应用专用密码",
     "setupSteps": [
-      "优先选择“使用 Google 登录”完成 OAuth2 授权。",
-      "如使用 IMAP 密码模式，请先在 Google 账户中启用两步验证。",
-      "进入“应用专用密码”，为 Nami Mail 生成并粘贴 16 位密码。"
+      "前往 Google 账户安全设置，确保已开启“两步验证 (2-Step Verification)”。",
+      "访问 Google“应用专用密码”页面，应用名称输入 Nami Mail 并点击生成。",
+      "将生成的 16 位密码直接复制粘贴到下方密码框中完成登录。"
     ],
     "helpUrl": "https://myaccount.google.com/apppasswords",
-    "helpLabel": "打开 Google 应用专用密码",
+    "helpLabel": "打开 Google 应用专用密码生成页",
     "basicAuthLimited": false,
     "usernameMode": "email",
     "oauthProvider": "google",

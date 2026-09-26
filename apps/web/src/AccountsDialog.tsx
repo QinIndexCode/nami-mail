@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Check, ChevronLeft, ChevronRight, Copy, LoaderCircle, Pencil, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Copy, LoaderCircle, Mail, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { accountHealthIssue, mailErrorMessage } from "./errorPresentation";
 import { accountStatusDotClass } from "./accountHealth";
@@ -29,6 +29,8 @@ export type AccountsDialogProps = {
   accounts: Account[];
   demoMode?: boolean;
   onClose: () => void;
+  /** Opens the account connection flow. */
+  onAddAccount?: () => void;
   /** Called after the account has been removed, or directly in demo mode. */
   onAccountRemoved: (accountId: string) => void | Promise<void>;
   /** Called after an account signature has been saved, or directly in demo mode. */
@@ -42,6 +44,7 @@ export default function AccountsDialog({
   accounts,
   demoMode = false,
   onClose,
+  onAddAccount,
   onAccountRemoved,
   onAccountSignatureChanged,
   onAccountSync,
@@ -351,6 +354,21 @@ export default function AccountsDialog({
         fallbackFocusRef={fallbackFocusRef}
         dialogRef={accountsDialog}
         focusSuspended={Boolean(editingAccount)}
+        actions={
+          onAddAccount ? (
+            <button
+              className="secondary-button management-header-add-button"
+              type="button"
+              onClick={() => {
+                requestClose();
+                onAddAccount();
+              }}
+            >
+              <Plus size={14} />
+              <span>{t("account.add")}</span>
+            </button>
+          ) : null
+        }
       >
         <section className="settings-section settings-accounts">
           <span className="visually-hidden" role="status" aria-live="polite">{copyAnnouncement}</span>
@@ -361,7 +379,23 @@ export default function AccountsDialog({
             </div>
           )}
           {accounts.length === 0 ? (
-            <p className="settings-empty">{t("settings.account.empty")}</p>
+            <div className="settings-empty-card accounts-empty-card">
+              <Mail className="empty-icon" size={32} strokeWidth={1.5} />
+              <p>{t("settings.account.empty")}</p>
+              {onAddAccount && (
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => {
+                    requestClose();
+                    onAddAccount();
+                  }}
+                >
+                  <Plus size={15} />
+                  <span>{t("account.add")}</span>
+                </button>
+              )}
+            </div>
           ) : (
             <>
               {showToolbar && (

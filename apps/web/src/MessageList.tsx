@@ -330,26 +330,59 @@ function MessageList(props: MessageListProps): React.JSX.Element {
 
   // Rows are measured lazily (their height varies with snippet line count and
   // density); estimateSize only seeds the initial layout.
+  const settledSnapshotRef = useRef<{
+    messages: Message[];
+    hasRows: boolean;
+    listKey?: string | number;
+    emptyMessageList: MessageListEmptyState;
+  } | null>(null);
+
+  if (!loading && !fatalError && accounts.length > 0) {
+    settledSnapshotRef.current = {
+      messages,
+      hasRows: messages.length > 0,
+      listKey,
+      emptyMessageList,
+    };
+  }
+
+  // A list switch keeps the previous state already on screen until the new snapshot
+  // lands. While a switch request is in flight, retain the previous settled content
+  // (smoothly fading out via data-switching) instead of abruptly unmounting to a blank void.
+  const isSwitching = loading && settledSnapshotRef.current !== null;
+
+  const displayHasRows = isSwitching && settledSnapshotRef.current !== null
+    ? settledSnapshotRef.current.hasRows
+    : accounts.length > 0 && messages.length > 0;
+
+  const activeMessages = isSwitching && settledSnapshotRef.current !== null
+    ? (settledSnapshotRef.current.hasRows ? settledSnapshotRef.current.messages : [])
+    : messages;
+
+  // Rows are measured lazily (their height varies with snippet line count and
+  // density); estimateSize only seeds the initial layout.
   const rowVirtualizer = useVirtualizer({
-    count: messages.length,
+    count: activeMessages.length,
     getScrollElement: () => messageListRef.current,
     estimateSize: () => (listDensity === "compact" ? 62 : 112),
-    getItemKey: (index) => messages[index]?.id ?? index,
+    getItemKey: (index) => activeMessages[index]?.id ?? index,
     overscan: 8,
   });
 
-  // A list switch keeps the rows already on screen until the new snapshot
-  // lands. Replacing them with a six-row skeleton made every account/folder/
-  // view switch — and every search-debounce tick — flash a shorter list, jump
-  // the layout and discard the position the user was holding. A cold-start
-  // wait shows nothing — a skeleton that appears for a beat and is immediately
-  // replaced reads as flicker — while a switch dims the outgoing rows and
-  // fades the incoming ones in.
-  const hasRows = accounts.length > 0 && messages.length > 0;
-  const showList = hasRows && !fatalError;
+  const showList = displayHasRows && !fatalError;
   const showError = !loading && Boolean(fatalError);
   const showFirstAccount = !loading && !fatalError && accounts.length === 0;
-  const showEmpty = !loading && !fatalError && accounts.length > 0 && messages.length === 0;
+  const showEmpty = !fatalError && accounts.length > 0 && !displayHasRows && (
+    !loading || (isSwitching && settledSnapshotRef.current !== null && !settledSnapshotRef.current.hasRows)
+  );
+
+  const displayEmptyState = isSwitching && settledSnapshotRef.current !== null && !settledSnapshotRef.current.hasRows
+    ? settledSnapshotRef.current.emptyMessageList
+    : emptyMessageList;
+
+  const displayListKey = isSwitching && settledSnapshotRef.current !== null
+    ? (settledSnapshotRef.current.listKey ?? listKey)
+    : listKey;
 
   return (
     <>
@@ -359,11 +392,15 @@ function MessageList(props: MessageListProps): React.JSX.Element {
         <div className="center-state empty-state"><div className="empty-orb"><Mail size={28} /></div><h3>{t("mail.empty.firstAccountTitle")}</h3><p>{t("mail.empty.firstAccountDescription")}</p><button className="primary-button" onClick={onAddAccount}><Plus size={17} />{t("account.add")}</button></div>
       )}
       {showEmpty && (
-        <div className="center-state empty-state">
-          {emptyMessageList.canClearSearch ? <Search size={24} /> : <Mail size={24} />}
-          <h3>{emptyMessageList.title}</h3>
-          <p>{emptyMessageList.description}</p>
-          {emptyMessageList.canClearSearch && <button className="secondary-button" type="button" onClick={onClearSearch}>{t("mail.clearSearch")}</button>}
+        <div
+          className="center-state empty-state"
+          data-switching={loading ? "true" : undefined}
+          key={displayListKey ?? "empty"}
+        >
+          {displayEmptyState.canClearSearch ? <Search size={24} /> : <Mail size={24} />}
+          <h3>{displayEmptyState.title}</h3>
+          <p>{displayEmptyState.description}</p>
+          {displayEmptyState.canClearSearch && <button className="secondary-button" type="button" onClick={onClearSearch}>{t("mail.clearSearch")}</button>}
         </div>
       )}
       {showList && (
@@ -376,11 +413,11 @@ function MessageList(props: MessageListProps): React.JSX.Element {
           // rows keep their DOM (dimmed via data-switching) instead of being
           // torn down and re-faded per lifecycle step; the arriving list
           // remounts exactly once, at the data swap.
-          key={listKey ?? "list"}
+          key={displayListKey ?? "list"}
           style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}
         >
           {rowVirtualizer.getVirtualItems().map((virtualItem) => {
-            const message = messages[virtualItem.index];
+            const message = activeMessages[virtualItem.index];
             const threadSize = threadById.get(message.id)?.length ?? 1;
             return (
             <MessageListRow

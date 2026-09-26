@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupMessagesByThread, mergeThreadMembers, shouldCollapseThread, sortThreadByTimeline } from "./threads";
+import { groupMessagesByThread, mergeThreadMembers, mergeThreadSnapshot, shouldCollapseThread, sortThreadByTimeline, type ThreadSnapshot } from "./threads";
 import type { Message } from "./types";
 
 function message(overrides: Partial<Message> & { id: string }): Message {
@@ -97,6 +97,41 @@ describe("message threading", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]!.messages.map((item) => item.id)).toEqual(["old", "mid", "young"]);
     expect(groups[0]!.key).toBe("old");
+  });
+});
+
+describe("mergeThreadSnapshot", () => {
+  const snapshot = (anchorId: string, ids: string[]): ThreadSnapshot => ({
+    anchorId,
+    members: ids.map((id) => message({ id, subject: "Thread" })),
+  });
+
+  it("returns the next snapshot when there is no previous one", () => {
+    const next = snapshot("b", ["b"]);
+    expect(mergeThreadSnapshot(null, next)).toBe(next);
+  });
+
+  it("unions a same-conversation refetch and keeps old-only members", () => {
+    const previous = snapshot("a", ["a", "b"]);
+    const result = mergeThreadSnapshot(previous, snapshot("b", ["b", "c"]));
+    expect(result.anchorId).toBe("b");
+    expect(result.members.map((member) => member.id).sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("lets fresh server values win on id collisions", () => {
+    const previous = snapshot("a", ["a"]);
+    previous.members[0]!.seen = false;
+    const result = mergeThreadSnapshot(previous, snapshot("a", ["a"]));
+    expect(result.members).toHaveLength(1);
+    expect(result.members[0]!.seen).toBe(false);
+    result.members[0]!.seen = true;
+    expect(previous.members[0]!.seen).toBe(false);
+  });
+
+  it("replaces wholesale when the fetch belongs to a different conversation", () => {
+    const previous = snapshot("a", ["a", "b"]);
+    const result = mergeThreadSnapshot(previous, snapshot("x", ["x", "y"]));
+    expect(result.members.map((member) => member.id).sort()).toEqual(["x", "y"]);
   });
 });
 

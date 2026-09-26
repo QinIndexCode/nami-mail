@@ -56,6 +56,12 @@ export function unmarkAccountMoving(accountId: string): void {
   movingAccounts.delete(accountId);
 }
 
+/** Clears in-flight sync and move tracking when an account is deleted. */
+export function clearAccountSyncState(accountId: string): void {
+  running.delete(accountId);
+  movingAccounts.delete(accountId);
+}
+
 // Raised when a sync pass is aborted by its caller (client disconnect or the
 // route-level runtime cap). Distinguished from provider failures so the
 // account status is left untouched instead of being marked error/reauth.
@@ -1379,7 +1385,7 @@ export { applyFilterRulesToNewMessages } from "./sync-filter-rules.js";
 
 // Flag operations are in sync-flags.ts; re-export for backward compatibility.
 import { updateMessageFlags, updateMessageFlagsBatch, markMessageSeen, type MessageFlagsPatch } from "./sync-flags.js";
-export { MessageFlagsPatch, updateMessageFlags, updateMessageFlagsBatch, markMessageSeen } from "./sync-flags.js";
+export { type MessageFlagsPatch, updateMessageFlags, updateMessageFlagsBatch, markMessageSeen } from "./sync-flags.js";
 
 // Move operations are in sync-moves.ts; re-export for backward compatibility.
 export {

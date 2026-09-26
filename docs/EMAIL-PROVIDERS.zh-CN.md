@@ -17,7 +17,7 @@ Nami Mail 只会将凭据用于直接连接你选择的邮箱服务商。凭据�
 
 | 服务商或账户类型 | 常见后缀 | 推荐认证 | 先完成的准备 |
 | --- | --- | --- | --- |
-| Gmail / Google Workspace | `gmail.com`、`googlemail.com`、企业自定义域 | Google OAuth2；应用专用密码为兼容路径 | 优先选择 Google 登录；密码路径先开启两步验证并生成应用专用密码。自定义域可能需要 OAuth 或 MX 发现。 |
+| Gmail / Google Workspace | `gmail.com`、`googlemail.com`、企业自定义域 | Google 16 位应用专用密码（最稳妥）；OAuth2 为可选路径 | 推荐直接使用 16 位应用专用密码：在 Google 账户开启“两步验证”后，访问 [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) 生成 Nami Mail 专用密钥粘贴登录；若当前环境已配置 Google Client ID 亦可切换至 OAuth 网页授权。 |
 | Outlook.com / Microsoft 365 | `outlook.com`、`hotmail.com`、`live.com`、`msn.com`、`office365.com`、组织自定义域 | Microsoft OAuth2 | 使用 Microsoft 登录。组织管理员可能禁止 IMAP，需确认邮件协议和授权策略。 |
 | iCloud Mail | `icloud.com`、`me.com`、`mac.com` | Apple App 专用密码 | 在 Apple 账户中开启双重认证后生成 App 专用密码；iCloud 不支持 POP。 |
 | QQ / QQ VIP / Foxmail | `qq.com`、`vip.qq.com`、`foxmail.com` | QQ 客户端授权码 | 在 QQ 邮箱网页设置中开启 IMAP/SMTP，并完成安全验证后生成授权码。 |
@@ -30,13 +30,22 @@ Nami Mail 只会将凭据用于直接连接你选择的邮箱服务商。凭据�
 
 上表列出当前预设的常见入口，不代表每个服务商、国家站点、账户套餐或企业租户都已做过真实账户兼容性验证。服务商可随时改变协议和认证政策；界面中的官方帮助链接与管理员配置优先于过期的截图或第三方教程。
 
+## Gmail 登录与 16 位应用专用密码获取指引
+
+对于 Gmail 用户，Nami Mail 默认采用 Google 官方推荐给第三方邮件客户端的 **16 位应用专用密码（App Password）** 登录方式，此方式无需依赖公共 OAuth 客户端，连接稳定、独立安全且不会泄露主账户密码：
+
+1. **开启两步验证**：访问 [Google 账户安全性设置](https://myaccount.google.com/security)，确认已开启「两步验证（2-Step Verification）」。
+2. **生成应用专用密码**：直接访问 [Google 应用专用密码管理页](https://myaccount.google.com/apppasswords)。
+3. **输入应用名称**：在名称中填入 `Nami Mail`，点击「创建 / 生成」。
+4. **复制并粘贴登录**：系统将展示一串 16 位的密码（例如 `abcd efgh ijkl mnop`），直接复制并粘贴到 Nami Mail 的密码框中即可完成接入。
+
 ## Google 与 Microsoft OAuth
 
-Nami Mail 当前只实现 Google 和 Microsoft 的 OAuth 登录入口。OAuth 使用公共客户端和本机回环回调，不需要也不接受 client secret。
+Nami Mail 同样完整内置了 Google 和 Microsoft 的 OAuth 2.0 PKCE 登录能力。OAuth 使用公共客户端和本机回环回调，不需要也不接受 client secret。
 
-- **Google**：使用 Google Cloud 的 Desktop app 客户端。若组织账号被管理员限制，按组织管理员的 OAuth 规则操作。
+- **Google**：使用 Google Cloud 的 Desktop app 客户端 ID。如在未配置全局 Client ID 的版本中使用，点击切换到 OAuth 会显示当前未配置，用户可直接使用上述 16 位应用密码登录，或由开发者在环境中注入 Client ID。
 - **Microsoft**：使用 Microsoft Entra 的 Mobile and desktop applications / public client 配置。组织账号如提示 IMAP 或权限限制，需要管理员启用相应能力。
-- **按钮不可用**：这通常表示当前安装版没有配置对应的公共 client ID，或该账号的发现结果不支持该入口。不要用普通账号密码代替 Microsoft OAuth；对 Gmail 仅可在服务商允许时使用应用专用密码兼容路径。
+- **OAuth 与密码切换**：界面支持在应用专用密码与 OAuth 授权之间一键平滑切换。
 
 开发者配置回调、client ID 和租户的方式见 [README.en.md](../README.en.md#oauth-configuration) 的 OAuth 配置章节。普通用户不应把 client secret 写入 `nami-mail.env`、Issue、日志或截图。
 
