@@ -73,6 +73,13 @@ export function quickProviderCatalog(providers: ProviderInfo[], locale = default
   return [...preferred, ...fallback].slice(0, QUICK_PROVIDER_IDS.length);
 }
 
+export function fullCatalogProviders(providers: ProviderInfo[], locale = defaultLocale): ProviderInfo[] {
+  const quick = quickProviderCatalog(providers, locale);
+  const quickIds = new Set(quick.map((p) => p.id));
+  const remaining = orderedProviderCatalog(providers, locale).filter((p) => !quickIds.has(p.id));
+  return [...quick, ...remaining];
+}
+
 export function providerAuthLabel(method?: string, t: Translate = defaultTranslate): string {
   switch (method) {
     case "oauth2":

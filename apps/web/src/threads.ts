@@ -35,6 +35,30 @@ export function mergeThreadMembers(local: readonly Message[], extras: readonly M
   return [...local, ...extras.filter((message) => !known.has(message.id))];
 }
 
+export type ThreadSnapshot = {
+  anchorId: string;
+  members: Message[];
+};
+
+/**
+ * Folds a freshly fetched server thread into the previous snapshot without
+ * dropping members. The reader may currently be showing a member that only
+ * the previous snapshot contained, so a refetch of the same conversation
+ * unions (fresh server values win on collisions) while a fetch for a
+ * different conversation replaces wholesale.
+ */
+export function mergeThreadSnapshot(previous: ThreadSnapshot | null, next: ThreadSnapshot): ThreadSnapshot {
+  if (!previous) return next;
+  const nextIds = new Set(next.members.map((message) => message.id));
+  const sameConversation = previous.members.some((message) => nextIds.has(message.id));
+  if (!sameConversation) return next;
+  const known = new Set(next.members.map((message) => message.id));
+  return {
+    anchorId: next.anchorId,
+    members: [...next.members, ...previous.members.filter((message) => !known.has(message.id))],
+  };
+}
+
 /** Whether the thread strip should render collapsed: only long conversations,
  *  and only while the open message sits at an endpoint of the timeline, so
  *  collapsing never hides the message being read. */

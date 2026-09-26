@@ -28,15 +28,15 @@ function context(accountIds: readonly string[] = ["account-1"]): MailApplication
   };
 }
 
-function insertAccount(db: DatabaseHandle, id = "account-1"): void {
+function insertAccount(db: DatabaseHandle, id = "account-1", email = `${id}@example.test`): void {
   db.prepare(`
     INSERT INTO accounts (
       id, email, provider, provider_name, encrypted_password,
       imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
       username_mode, status, created_at
-    ) VALUES (?, 'demo@example.test', 'custom', 'Demo', 'encrypted',
+    ) VALUES (?, ?, 'custom', 'Demo', 'encrypted',
       'imap.example.test', 993, 1, 'smtp.example.test', 465, 1, 'email', 'connected', ?)
-  `).run(id, timestamp);
+  `).run(id, email, timestamp);
 }
 
 describe("SqliteMailApplicationService account deletion", () => {
@@ -117,6 +117,51 @@ describe("SqliteMailApplicationService account deletion", () => {
       expect(completeAccountDeletion).toHaveBeenCalledWith("account-1", 7);
       const remaining = db.prepare("SELECT COUNT(*) AS count FROM accounts").get() as { count: number };
       expect(remaining.count).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("cleans up messages_fts efficiently while keeping other accounts and restoring the trigger", async () => {
+    const db = openDatabase(":memory:");
+    const masterKey = randomBytes(32);
+    try {
+      insertAccount(db, "account-1");
+      insertAccount(db, "account-2");
+
+      // Insert messages for both accounts
+      db.prepare(`
+        INSERT INTO messages (id, account_id, mailbox, uid, message_id, subject, from_name, from_address, created_at)
+        VALUES
+          ('msg-1', 'account-1', 'INBOX', 1, '<m1@test>', 'Subject 1', 'Sender 1', 's1@test', ?),
+          ('msg-2', 'account-1', 'INBOX', 2, '<m2@test>', 'Subject 2', 'Sender 2', 's2@test', ?),
+          ('msg-3', 'account-2', 'INBOX', 1, '<m3@test>', 'Subject 3', 'Sender 3', 's3@test', ?)
+      `).run(timestamp, timestamp, timestamp);
+
+      db.prepare(`
+        INSERT INTO messages_fts (message_id, subject, from_name, from_address, body)
+        VALUES
+          ('msg-1', 'Subject 1', 'Sender 1', 's1@test', 'Body 1'),
+          ('msg-2', 'Subject 2', 'Sender 2', 's2@test', 'Body 2'),
+          ('msg-3', 'Subject 3', 'Sender 3', 's3@test', 'Body 3')
+      `).run();
+
+      const service = new SqliteMailApplicationService({ db, masterKey, syncMessageLimit: 20, outboundAttachmentDirectory: "" });
+      await service.deleteAccount(context(), "account-1");
+
+      // Account 1 and its messages/FTS should be gone
+      expect(db.prepare("SELECT COUNT(*) AS count FROM accounts WHERE id = 'account-1'").get()).toEqual({ count: 0 });
+      expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE account_id = 'account-1'").get()).toEqual({ count: 0 });
+      expect(db.prepare("SELECT COUNT(*) AS count FROM messages_fts WHERE message_id IN ('msg-1', 'msg-2')").get()).toEqual({ count: 0 });
+
+      // Account 2 and its messages/FTS must be intact
+      expect(db.prepare("SELECT COUNT(*) AS count FROM accounts WHERE id = 'account-2'").get()).toEqual({ count: 1 });
+      expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE account_id = 'account-2'").get()).toEqual({ count: 1 });
+      expect(db.prepare("SELECT COUNT(*) AS count FROM messages_fts WHERE message_id = 'msg-3'").get()).toEqual({ count: 1 });
+
+      // Verify the trigger was restored and works for single message deletion on account-2
+      db.prepare("DELETE FROM messages WHERE id = 'msg-3'").run();
+      expect(db.prepare("SELECT COUNT(*) AS count FROM messages_fts WHERE message_id = 'msg-3'").get()).toEqual({ count: 0 });
     } finally {
       db.close();
     }

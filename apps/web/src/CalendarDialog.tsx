@@ -629,6 +629,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
         requestClose={guardedRequestClose}
         fallbackFocusRef={fallbackFocusRef}
         dialogRef={dialogRef}
+        dialogClassName="calendar-management-dialog"
       >
         <section className="settings-section calendar-section">
           {notice && (
@@ -641,7 +642,11 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
             <>
               <div className="calendar-toolbar-wrap" ref={jumpWrapRef}>
                 <div className="calendar-toolbar">
-                  <button className="secondary-button calendar-nav" type="button" aria-label={t("calendar.previousMonth")} data-tooltip={t("calendar.previousMonth")} onClick={() => shiftMonth(-1)}><ChevronLeft size={15} /></button>
+                  <div className="calendar-nav-group">
+                    <button className="secondary-button calendar-nav" type="button" aria-label={t("calendar.previousMonth")} data-tooltip={t("calendar.previousMonth")} onClick={() => shiftMonth(-1)}><ChevronLeft size={15} /></button>
+                    <button className="secondary-button calendar-nav" type="button" aria-label={t("calendar.nextMonth")} data-tooltip={t("calendar.nextMonth")} onClick={() => shiftMonth(1)}><ChevronRight size={15} /></button>
+                  </div>
+                  <button className="secondary-button calendar-today" type="button" onClick={() => { setJumpOpen(false); setViewMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1)); }}>{t("calendar.today")}</button>
                   <button
                     type="button"
                     className="calendar-month-label"
@@ -651,11 +656,14 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
                   >
                     {monthLabel}<ChevronDown size={13} aria-hidden="true" />
                   </button>
-                  <button className="secondary-button calendar-nav" type="button" aria-label={t("calendar.nextMonth")} data-tooltip={t("calendar.nextMonth")} onClick={() => shiftMonth(1)}><ChevronRight size={15} /></button>
-                  <button className="secondary-button calendar-today" type="button" onClick={() => { setJumpOpen(false); setViewMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1)); }}>{t("calendar.today")}</button>
-                  <button className="secondary-button calendar-view-switch" type="button" onClick={() => setView("list")}>
-                    <List size={14} />{t("calendar.eventsList")}
-                  </button>
+                  <div className="calendar-toolbar-end">
+                    <button className="secondary-button calendar-view-switch" type="button" onClick={() => setView("list")}>
+                      <List size={14} />{t("calendar.eventsList")}
+                    </button>
+                    <button className="secondary-button calendar-new-button" type="button" onClick={() => openNewEvent(localDateKey(new Date()))}>
+                      <Plus size={14} />{t("calendar.newEvent")}
+                    </button>
+                  </div>
                 </div>
                 {jumpOpen && (
                   <div className="calendar-jump-panel" role="dialog" aria-label={t("calendar.jumpPanelAriaLabel")}>

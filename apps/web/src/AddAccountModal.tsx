@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CompositionEvent, type FormEvent, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CompositionEvent, type FormEvent, type RefObject } from "react";
 import {
+  BookOpen,
   Check,
   ChevronDown,
+  ChevronRight,
   CircleAlert,
+  CircleHelp,
   Copy,
   ExternalLink,
+  Eye,
+  EyeOff,
   LoaderCircle,
   Mail,
   Mailbox,
@@ -19,6 +24,7 @@ import { mailErrorMessage, presentMailError } from "./errorPresentation";
 import { type Translate, useI18n } from "./i18n";
 import {
   CUSTOM_IMAP_PROVIDER_ID,
+  fullCatalogProviders,
   localizedProviderOnboarding,
   orderedProviderCatalog,
   providerAuthLabel,
@@ -82,13 +88,52 @@ export function canonicalGmailEmail(value: string): string {
   return `${local.slice(0, plus)}@${domain}`;
 }
 
+/**
+ * Computes the updated email address and target cursor index when a provider is selected.
+ * - When targetDomain is provided (e.g. "gmail.com"):
+ *   - If input is empty or only a domain suffix (e.g. "@qq.com"), sets "@gmail.com" and places cursor at 0.
+ *   - If input already contains a username (e.g. "user" or "user@qq.com"), preserves username and appends "@gmail.com", placing cursor right after the username.
+ * - When targetDomain is empty (e.g. Custom IMAP):
+ *   - If input was only a suffix (e.g. "@gmail.com"), resets to "" with cursor at 0.
+ *   - If input had a username, keeps it with cursor at the end.
+ */
+export function computeEmailAfterProviderSelect(
+  currentEmail: string,
+  targetDomain: string | undefined
+): { nextEmail: string; cursorPos: number } {
+  if (!targetDomain) {
+    if (currentEmail.trim().startsWith("@")) {
+      return { nextEmail: "", cursorPos: 0 };
+    }
+    return { nextEmail: currentEmail, cursorPos: currentEmail.length };
+  }
+
+  const domainSuffix = `@${targetDomain.toLowerCase()}`;
+  const trimmed = currentEmail.trim();
+
+  if (!trimmed || trimmed.startsWith("@")) {
+    return { nextEmail: domainSuffix, cursorPos: 0 };
+  }
+
+  const atIndex = trimmed.indexOf("@");
+  if (atIndex !== -1) {
+    const username = trimmed.slice(0, atIndex).trim();
+    if (!username) {
+      return { nextEmail: domainSuffix, cursorPos: 0 };
+    }
+    return { nextEmail: `${username}${domainSuffix}`, cursorPos: username.length };
+  }
+
+  return { nextEmail: `${trimmed}${domainSuffix}`, cursorPos: trimmed.length };
+}
+
 function emailDomain(value: string): string {
   return value.trim().toLowerCase().split("@")[1] ?? "";
 }
 
 function providerAuthMethods(provider?: ProviderInfo): string[] {
   if (provider?.authMethods?.length) return provider.authMethods;
-  if (provider?.id === "gmail") return ["oauth2", "app-password"];
+  if (provider?.id === "gmail") return ["app-password", "oauth2"];
   if (provider?.id === "microsoft") return ["oauth2"];
   return ["app-password"];
 }
@@ -232,10 +277,10 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busyAction, setBusyAction] = useState<BusyAction>("idle");
-  const [showGuide, setShowGuide] = useState(false);
+  const [tutorialDrawerOpen, setTutorialDrawerOpen] = useState(false);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [providerCatalogOpen, setProviderCatalogOpen] = useState(false);
-  const [showPasswordFallback, setShowPasswordFallback] = useState(false);
+  const [explicitAuthMode, setExplicitAuthMode] = useState<"oauth" | "password" | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualConfig, setManualConfig] = useState<ManualAccountConfig>(() => manualConfigFor(""));
   const [discovery, setDiscovery] = useState<AccountDiscoveryResult | null>(null);
@@ -251,6 +296,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
   const manualRef = useRef<HTMLInputElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
   const autoCloseTimerRef = useRef<number | null>(null);
   const oauthPollTimerRef = useRef<number | null>(null);
   const oauthPopupRef = useRef<Window | null>(null);
@@ -314,6 +360,154 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
   const guideProviderName = guideOnboarding?.name ?? guideProvider?.name ?? "";
   const orderedProviders = useMemo(() => orderedProviderCatalog(providers, locale), [locale, providers]);
   const quickProviders = useMemo(() => quickProviderCatalog(providers, locale), [locale, providers]);
+  const allProviders = useMemo(() => fullCatalogProviders(providers, locale), [locale, providers]);
+
+  const targetProviderId = guideProvider?.id || activeDiscovery?.id || matchedProvider?.id || selectedProviderId;
+  const isGmail = targetProviderId === "gmail" || /@(gmail\.com|googlemail\.com)$/i.test(normalizedEmail);
+  const isQQ = targetProviderId === "qq" || /@(qq\.com|vip\.qq\.com|foxmail\.com)$/i.test(normalizedEmail);
+  const isNetease = Boolean(targetProviderId?.startsWith("netease")) || /@(163\.com|126\.com|yeah\.net|188\.com)$/i.test(normalizedEmail);
+  const isiCloud = targetProviderId === "icloud" || /@(icloud\.com|me\.com|mac\.com)$/i.test(normalizedEmail);
+  const isMicrosoft = targetProviderId === "microsoft" || /@(outlook\.com|hotmail\.com|live\.com|msn\.com|office365\.com)$/i.test(normalizedEmail);
+
+  const providerKind: "gmail" | "qq" | "netease" | "icloud" | "microsoft" | "generic" =
+    isGmail ? "gmail"
+    : isQQ ? "qq"
+    : isNetease ? "netease"
+    : isiCloud ? "icloud"
+    : isMicrosoft ? "microsoft"
+    : "generic";
+
+  const credentialDetails = useMemo(() => {
+    switch (providerKind) {
+      case "gmail":
+        return {
+          label: t("account.credential.gmail.label"),
+          placeholder: t("account.credential.gmail.placeholder"),
+          help: t("account.credential.gmail.help"),
+          is16CharAppPassword: true,
+        };
+      case "qq":
+        return {
+          label: t("account.credential.qq.label"),
+          placeholder: t("account.credential.qq.placeholder"),
+          help: t("account.credential.qq.help"),
+          is16CharAppPassword: true,
+        };
+      case "netease":
+        return {
+          label: t("account.credential.netease.label"),
+          placeholder: t("account.credential.netease.placeholder"),
+          help: t("account.credential.netease.help"),
+          is16CharAppPassword: true,
+        };
+      case "icloud":
+        return {
+          label: t("account.credential.icloud.label"),
+          placeholder: t("account.credential.icloud.placeholder"),
+          help: t("account.credential.icloud.help"),
+          is16CharAppPassword: true,
+        };
+      case "microsoft":
+        return {
+          label: t("account.credential.microsoft.label"),
+          placeholder: t("account.credential.microsoft.placeholder"),
+          help: t("account.credential.microsoft.help"),
+          is16CharAppPassword: false,
+        };
+      case "generic":
+      default:
+        return {
+          label: activeOnboarding?.credentialLabel ?? t("account.credential.generic.label"),
+          placeholder: t("account.credential.generic.placeholder"),
+          help: activeOnboarding?.credentialHint ?? t("account.credential.generic.help"),
+          is16CharAppPassword: false,
+        };
+    }
+  }, [activeOnboarding?.credentialHint, activeOnboarding?.credentialLabel, providerKind, t]);
+
+  const providerCardInfo = useMemo(() => {
+    if (!guideProvider) return null;
+    const icon = providerIconUrl(guideProvider.id);
+    const monogram = matchedProvider
+      ? providerMonogram(matchedProvider)
+      : (guideProvider.domain ? guideProvider.domain.slice(0, 2).toUpperCase() : guideProvider.name.slice(0, 2).toUpperCase());
+    switch (providerKind) {
+      case "gmail":
+        return {
+          icon,
+          monogram,
+          name: "Gmail (Google)",
+          badge: t("account.provider.badge.appPassword"),
+          summary: t("account.actionCard.gmail.summary"),
+          actionHref: "https://myaccount.google.com/apppasswords",
+          actionLabel: t("account.actionCard.gmail.openAppPasswords"),
+          actionTitle: t("account.actionCard.gmail.openAppPasswordsTitle"),
+          howToEnable: t("account.actionCard.gmail.howToEnable"),
+        };
+      case "qq":
+        return {
+          icon,
+          monogram,
+          name: "QQ 邮箱 / Foxmail",
+          badge: t("account.provider.badge.authCode"),
+          summary: t("account.actionCard.qq.summary"),
+          actionHref: "https://mail.qq.com",
+          actionLabel: t("account.actionCard.qq.openSettings"),
+          actionTitle: t("account.actionCard.qq.openSettings"),
+          howToEnable: t("account.actionCard.qq.howToEnable"),
+        };
+      case "netease":
+        return {
+          icon: icon || providerIconUrl("netease-163"),
+          monogram: monogram || "163",
+          name: guideProviderName || "网易邮箱",
+          badge: t("account.provider.badge.neteaseCode"),
+          summary: t("account.actionCard.netease.summary"),
+          actionHref: domain.includes("126") ? "https://mail.126.com" : "https://mail.163.com",
+          actionLabel: t("account.actionCard.netease.openSettings"),
+          actionTitle: t("account.actionCard.netease.openSettings"),
+          howToEnable: t("account.actionCard.netease.howToEnable"),
+        };
+      case "icloud":
+        return {
+          icon,
+          monogram,
+          name: "Apple iCloud",
+          badge: t("account.provider.badge.applePassword"),
+          summary: t("account.actionCard.icloud.summary"),
+          actionHref: "https://account.apple.com/account/manage",
+          actionLabel: t("account.actionCard.icloud.openSettings"),
+          actionTitle: t("account.actionCard.icloud.openSettings"),
+          howToEnable: t("account.actionCard.icloud.howToEnable"),
+        };
+      case "microsoft":
+        return {
+          icon,
+          monogram,
+          name: "Microsoft Outlook",
+          badge: t("account.provider.badge.oauth"),
+          summary: t("account.actionCard.microsoft.summary"),
+          actionHref: "https://account.live.com/proofs/manage/additional",
+          actionLabel: t("account.actionCard.microsoft.openSettings"),
+          actionTitle: t("account.actionCard.microsoft.openSettings"),
+          howToEnable: t("account.actionCard.microsoft.howToEnable"),
+        };
+      case "generic":
+      default:
+        return {
+          icon: guideProvider.isCustom ? undefined : icon,
+          monogram: guideProvider.isCustom ? undefined : monogram,
+          name: guideProviderName || (domain ? `@${domain}` : t("account.provider.custom_name")),
+          badge: t("account.provider.badge.imap"),
+          summary: t("account.actionCard.generic.summary"),
+          actionHref: guideProvider.helpUrl,
+          actionLabel: guideOnboarding?.helpLabel ?? t("account.guide.open_official"),
+          actionTitle: guideOnboarding?.helpLabel ?? t("account.guide.open_official"),
+          howToEnable: t("account.actionCard.generic.howToEnable"),
+        };
+    }
+  }, [domain, guideOnboarding?.helpLabel, guideProvider, guideProviderName, providerKind, t]);
+
   const activeOAuthProvider = discoveryEmail === normalizedEmail && discovery
     ? discovery.oauthProvider
     : activeDiscovery ? oauthProviderFor(activeDiscovery) : undefined;
@@ -327,13 +521,38 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
   const passwordLooksLikeAppCredential = !manualOpen
     && authMethods.some((method) => method === "app-password" || method === "client-authorization-code");
   const canUsePassword = !oauthOnly;
+  const providerPrefersOAuth = Boolean(
+    activeOAuthProvider && oauthAvailable && activeDiscovery?.recommendedAuthMethod !== "app-password" && !isGmail
+  );
+  const showOAuthPanel = Boolean(
+    activeOAuthProvider && !manualOpen && (explicitAuthMode === "oauth" || (explicitAuthMode === null && providerPrefersOAuth))
+  );
   const busy = busyAction !== "idle";
   const blockingBusy = busyAction === "password" || busyAction === "manual" || busyAction === "oauth";
   const isOAuthWaiting = busyAction === "oauth" && Boolean(oauthAttemptId);
-  const usingPassword = validEmail(normalizedEmail)
+  const usingPassword = (validEmail(normalizedEmail) || Boolean(selectedProviderId) || Boolean(matchedProvider))
     && !needsProviderDiscovery
     && canUsePassword
-    && (manualOpen || !activeOAuthProvider || showPasswordFallback);
+    && (manualOpen || !showOAuthPanel);
+
+  const [showPassword, setShowPassword] = useState(false);
+  const pendingCursorRef = useRef<number | null>(null);
+
+
+  useLayoutEffect(() => {
+    if (pendingCursorRef.current !== null && emailRef.current) {
+      const pos = pendingCursorRef.current;
+      pendingCursorRef.current = null;
+      emailRef.current.focus();
+      emailRef.current.setSelectionRange(pos, pos);
+    }
+  }, [email]);
+
+  useEffect(() => {
+    if (!providerCatalogOpen && gridRef.current) {
+      gridRef.current.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [providerCatalogOpen]);
 
   const clearOAuthPolling = useCallback(() => {
     if (oauthPollTimerRef.current !== null) {
@@ -406,8 +625,8 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
     setDiscovery(null);
     setDiscoveryEmail("");
     setManualOpen(false);
-    setShowPasswordFallback(false);
-    setShowGuide(false);
+    setExplicitAuthMode(null);
+    setTutorialDrawerOpen(false);
     setManualConfig(manualConfigFor(next));
     setPassword("");
     setOauthAttemptId(null);
@@ -417,27 +636,76 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
     serverConfigurationCopyTimerRef.current = null;
     setServerConfigurationCopied(false);
     setSelectedProviderId((current) => {
-      if (!current || !validEmail(next)) return current;
-      const providerForEmail = providers.find((item) => item.domains.some((candidate) => candidate.toLowerCase() === emailDomain(next)));
-      return providerForEmail?.id === current ? current : "";
+      const domain = emailDomain(next);
+      if (!domain) {
+        return next.trim() === "" ? "" : current;
+      }
+      const providerForEmail = providers.find((item) =>
+        item.domains.some((candidate) => candidate.toLowerCase() === domain)
+      );
+      if (providerForEmail) return providerForEmail.id;
+      return current === CUSTOM_IMAP_PROVIDER_ID ? current : "";
     });
     clearOAuthPolling();
     setBusyAction((current) => current === "discover" ? "idle" : current);
     setStatus((current) => current.kind === "idle" ? current : { kind: "idle", message: "" });
   }, [clearOAuthPolling, providers]);
 
+  const clearEmail = useCallback(() => {
+    updateEmailValue("");
+    setSelectedProviderId("");
+    pendingCursorRef.current = 0;
+    window.requestAnimationFrame(() => {
+      if (emailRef.current) {
+        emailRef.current.focus();
+        emailRef.current.setSelectionRange(0, 0);
+      }
+    });
+  }, [updateEmailValue]);
+
   const selectProvider = useCallback((providerId: string) => {
     setSelectedProviderId(providerId);
     setProviderCatalogOpen(false);
-    setShowGuide(Boolean(providerId));
     setManualOpen(false);
-    setShowPasswordFallback(false);
+    setExplicitAuthMode(null);
     if (serverConfigurationCopyTimerRef.current !== null) window.clearTimeout(serverConfigurationCopyTimerRef.current);
     serverConfigurationCopyTimerRef.current = null;
     setServerConfigurationCopied(false);
     setStatus({ kind: "idle", message: "" });
-    window.requestAnimationFrame(() => emailRef.current?.focus());
-  }, []);
+
+    const provider = providers.find((item) => item.id === providerId);
+    const targetDomain = providerId === CUSTOM_IMAP_PROVIDER_ID ? undefined : provider?.domains[0];
+    const { nextEmail, cursorPos } = computeEmailAfterProviderSelect(emailValueRef.current, targetDomain);
+
+    pendingCursorRef.current = cursorPos;
+    updateEmailValue(nextEmail);
+
+    window.requestAnimationFrame(() => {
+      if (emailRef.current) {
+        emailRef.current.focus();
+        emailRef.current.setSelectionRange(cursorPos, cursorPos);
+      }
+    });
+  }, [providers, updateEmailValue]);
+
+  const handleEmailKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Backspace") {
+      const input = event.currentTarget;
+      if (input.selectionStart === 0 && input.selectionEnd === 0 && email.startsWith("@")) {
+        event.preventDefault();
+        clearEmail();
+        return;
+      }
+    }
+    if (event.key === "Enter") {
+      if (validEmail(normalizedEmail)) {
+        if (canUsePassword && passwordRef.current) {
+          event.preventDefault();
+          passwordRef.current.focus();
+        }
+      }
+    }
+  };
 
   const discoverProvider = useCallback(async (): Promise<AccountDiscoveryResult | null> => {
     const candidate = emailValueRef.current.trim().toLowerCase();
@@ -512,10 +780,11 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
   };
 
   const openManualConfig = () => {
-    if (!activeDiscovery) return;
-    setManualConfig(manualConfigFor(normalizedEmail, activeDiscovery));
+    const discoveryToUse = activeDiscovery ?? selectedProviderGuide;
+    if (!discoveryToUse) return;
+    setManualConfig(manualConfigFor(normalizedEmail, discoveryToUse));
     setManualOpen((current) => !current);
-    setShowPasswordFallback(true);
+    setExplicitAuthMode("password");
     setStatus({ kind: "idle", message: "" });
   };
 
@@ -654,11 +923,13 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
       showError(existingDuplicateMessage, "email");
       return;
     }
-    if (!password) {
-      showError(t("account.error.credential_required", { credential: activeOnboarding?.credentialLabel ?? t("account.credential.fallback") }), "password");
+    const rawPassword = password.trim();
+    const cleanPassword = credentialDetails.is16CharAppPassword ? rawPassword.replace(/\s+/g, "") : rawPassword;
+    if (!cleanPassword) {
+      showError(t("account.error.credential_required", { credential: credentialDetails.label }), "password");
       return;
     }
-    if (passwordLooksLikeAppCredential && password.length !== 16) {
+    if (credentialDetails.is16CharAppPassword && cleanPassword.length !== 16) {
       setStatus({ kind: "warning", message: t("account.error.credential_app_password_hint") });
     }
     if (manualOpen && !isServerConfigValid(manualConfig)) {
@@ -677,7 +948,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
       await (manualOpen
         ? api.addManualAccount({
           email: normalizedEmail,
-          password,
+          password: cleanPassword,
           ...(activeDiscovery && activeDiscovery.id !== "custom" ? { providerId: activeDiscovery.id } : {}),
           imap: {
             host: manualConfig.imap.host.trim(),
@@ -692,7 +963,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
           ...(manualConfig.imap.username.trim() ? { imapUsername: manualConfig.imap.username.trim() } : {}),
           ...(manualConfig.smtp.username.trim() ? { smtpUsername: manualConfig.smtp.username.trim() } : {}),
         })
-        : api.addAccount(normalizedEmail, password));
+        : api.addAccount(normalizedEmail, cleanPassword));
       // The first full mailbox sync already runs in the background: this
       // request returns as soon as the connection is verified, so the dialog
       // closes immediately and the messages appear via the post-add refresh.
@@ -707,9 +978,9 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
     }
   };
 
-  const credentialName = showPasswordFallback && activeOAuthProvider
-    ? activeOnboarding?.credentialName ?? t("account.credential.oauth_fallback")
-    : activeOnboarding?.credentialLabel ?? t("account.credential.fallback");
+  const credentialName = activeOnboarding?.credentialName
+    ?? activeOnboarding?.credentialLabel
+    ?? t("account.credential.fallback");
   const passwordFallbackName = activeOnboarding?.credentialName ?? t("account.credential.oauth_fallback");
   const setupSteps = guideOnboarding?.setupSteps ?? [];
   const guideIsPreview = !activeDiscovery && Boolean(selectedProviderGuide);
@@ -725,6 +996,73 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
   const emailInvalid = status.kind === "error" && status.field === "email";
   const passwordInvalid = status.kind === "error" && status.field === "password";
   const manualInvalid = status.kind === "error" && status.field === "manual";
+  const isFlowActive = Boolean(
+    (guideAvailable && providerCardInfo) || showOAuthPanel || isOAuthWaiting || usingPassword
+  ) && !accountAdded;
+
+  const [, setFlowCloseTick] = useState(0);
+  const flowCloseTimerRef = useRef<number | null>(null);
+
+  const lastFlowSnapshotRef = useRef<{
+    providerCardInfo: typeof providerCardInfo;
+    usingPassword: boolean;
+    showOAuthPanel: boolean;
+    isOAuthWaiting: boolean;
+    credentialDetails: typeof credentialDetails;
+    manualOpen: boolean;
+  } | null>(null);
+
+  if (isFlowActive) {
+    lastFlowSnapshotRef.current = {
+      providerCardInfo,
+      usingPassword,
+      showOAuthPanel,
+      isOAuthWaiting,
+      credentialDetails,
+      manualOpen,
+    };
+  } else if (accountAdded) {
+    lastFlowSnapshotRef.current = null;
+  }
+
+  useEffect(() => {
+    if (isFlowActive) {
+      if (flowCloseTimerRef.current !== null) {
+        window.clearTimeout(flowCloseTimerRef.current);
+        flowCloseTimerRef.current = null;
+      }
+    } else if (lastFlowSnapshotRef.current !== null) {
+      if (flowCloseTimerRef.current !== null) {
+        window.clearTimeout(flowCloseTimerRef.current);
+      }
+      flowCloseTimerRef.current = window.setTimeout(() => {
+        flowCloseTimerRef.current = null;
+        lastFlowSnapshotRef.current = null;
+        setFlowCloseTick((tick) => tick + 1);
+      }, 340);
+    }
+  }, [isFlowActive]);
+
+  useEffect(() => {
+    return () => {
+      if (flowCloseTimerRef.current !== null) {
+        window.clearTimeout(flowCloseTimerRef.current);
+        flowCloseTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const activeSnapshot = isFlowActive
+    ? { providerCardInfo, usingPassword, showOAuthPanel, isOAuthWaiting, credentialDetails, manualOpen }
+    : lastFlowSnapshotRef.current;
+
+  const displayProviderCardInfo = isFlowActive ? providerCardInfo : activeSnapshot?.providerCardInfo;
+  const displayUsingPassword = isFlowActive ? usingPassword : Boolean(activeSnapshot?.usingPassword);
+  const displayShowOAuthPanel = isFlowActive ? showOAuthPanel : Boolean(activeSnapshot?.showOAuthPanel);
+  const displayIsOAuthWaiting = isFlowActive ? isOAuthWaiting : Boolean(activeSnapshot?.isOAuthWaiting);
+  const displayCredentialDetails = isFlowActive ? credentialDetails : (activeSnapshot?.credentialDetails ?? credentialDetails);
+  const displayManualOpen = isFlowActive ? manualOpen : Boolean(activeSnapshot?.manualOpen);
+  const hasFlowDetails = isFlowActive || activeSnapshot !== null;
 
   const copyServerConfiguration = async () => {
     if (!serverConfiguration) return;
@@ -746,42 +1084,40 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
     <div className={`modal-backdrop account-modal-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
       <section
         ref={dialogRef}
-        className={`modal-card account-modal${closing ? " closing" : ""}`}
+        className={`modal-card account-modal${tutorialDrawerOpen ? " with-drawer" : ""}${closing ? " closing" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-account-title"
         aria-describedby="add-account-description"
         tabIndex={-1}
       >
-        <div className="modal-heading">
-          <div>
-            <span className="eyebrow">{t("account.eyebrow")}</span>
-            <h2 id="add-account-title">{t("account.title")}</h2>
+        <div className="modal-heading account-modal-heading">
+          <div className="account-modal-title-group">
+            <div className="account-modal-title-row">
+              <span className="account-modal-brand-badge" aria-hidden="true">
+                <Mail size={16} strokeWidth={2} />
+              </span>
+              <h2 id="add-account-title">{t("account.title")}</h2>
+            </div>
+            <p id="add-account-description" className="account-modal-subtitle">{t("account.description")}</p>
           </div>
           <button className="icon-button" type="button" aria-label={t("common.close")} data-tooltip={t("common.close")} onClick={requestClose} disabled={blockingBusy}>
             <X size={18} />
           </button>
         </div>
 
-        {!(showGuide || manualOpen || providerCatalogOpen) && (
-          <div className="provider-orbit" aria-hidden="true">
-            <div className="provider-core"><Mail size={26} strokeWidth={1.7} /></div>
-            <span className="orbit-chip chip-a">G</span>
-            <span className="orbit-chip chip-b">M</span>
-            <span className="orbit-chip chip-c">Q</span>
-            <span className="orbit-chip chip-d">163</span>
-          </div>
-        )}
-
-        <p id="add-account-description" className="modal-intro">{t("account.description")}</p>
-
-        <form noValidate onSubmit={submitPassword} className="account-form" aria-busy={busy}>
-          <section className="provider-picker" aria-labelledby="provider-picker-title">
+        <div className="account-modal-body">
+          <div className="account-modal-main">
+            <form
+              id="account-form"
+              noValidate
+              onSubmit={submitPassword}
+              className={`account-form${providerCatalogOpen ? " catalog-open" : ""}`}
+              aria-busy={busy}
+            >
+          <section className={`provider-picker${providerCatalogOpen ? " catalog-open" : ""}`} aria-labelledby="provider-picker-title">
             <div className="provider-picker-heading">
-              <div>
-                <span className="eyebrow">{t("account.provider.eyebrow")}</span>
-                <strong id="provider-picker-title">{t("account.provider.title")}</strong>
-              </div>
+              <strong id="provider-picker-title">{providerCatalogOpen ? t("account.provider.all_providers") : t("account.provider.title")}</strong>
               <button
                 className="provider-catalog-toggle"
                 type="button"
@@ -789,19 +1125,23 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
                 onClick={() => setProviderCatalogOpen((value) => !value)}
                 disabled={busy || accountAdded}
               >
-                {providerCatalogOpen ? t("account.provider.collapse_catalog") : t("account.provider.more")}
+                <span>{providerCatalogOpen ? t("account.provider.collapse_catalog") : t("account.provider.more")}</span>
                 <ChevronDown className={providerCatalogOpen ? "open" : ""} size={14} />
               </button>
             </div>
-            <div className="provider-quick-grid">
-              {quickProviders.map((provider) => {
+            <div ref={gridRef} className={`provider-quick-grid${providerCatalogOpen ? " catalog-expanded" : ""}`}>
+              {allProviders.map((provider, index) => {
+                const isCore = index < 6;
                 const iconUrl = providerIconUrl(provider.id);
+                const isSelected = selectedProviderId === provider.id;
                 return (
                   <button
                     key={provider.id}
-                    className={`provider-choice${selectedProviderId === provider.id ? " selected" : ""}`}
+                    className={`provider-choice${isCore ? "" : " extra-choice"}${isSelected ? " selected" : ""}`}
                     type="button"
-                    aria-pressed={selectedProviderId === provider.id}
+                    tabIndex={isCore || providerCatalogOpen ? 0 : -1}
+                    aria-hidden={!isCore && !providerCatalogOpen}
+                    aria-pressed={isSelected}
                     aria-label={t("account.provider.select_aria", { provider: providerDisplayName(provider, locale, t) })}
                     onClick={() => selectProvider(provider.id)}
                     disabled={busy || accountAdded}
@@ -811,14 +1151,21 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
                     </span>
                     <span className="provider-choice-copy">
                       <strong>{providerDisplayName(provider, locale, t)}</strong>
-                      <small>{provider.domains[0]}</small>
+                      <small className="provider-choice-domain">@{provider.domains[0]}</small>
                     </span>
+                    {isSelected && (
+                      <span className="provider-choice-check" aria-hidden="true">
+                        <Check size={11} strokeWidth={2.6} />
+                      </span>
+                    )}
                   </button>
                 );
               })}
               <button
-                className={`provider-choice provider-choice-custom${selectedProviderId === CUSTOM_IMAP_PROVIDER_ID ? " selected" : ""}`}
+                className={`provider-choice provider-choice-custom extra-choice${selectedProviderId === CUSTOM_IMAP_PROVIDER_ID ? " selected" : ""}`}
                 type="button"
+                tabIndex={providerCatalogOpen ? 0 : -1}
+                aria-hidden={!providerCatalogOpen}
                 aria-pressed={selectedProviderId === CUSTOM_IMAP_PROVIDER_ID}
                 onClick={() => selectProvider(CUSTOM_IMAP_PROVIDER_ID)}
                 disabled={busy || accountAdded}
@@ -828,68 +1175,64 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
                   <strong>{t("account.provider.custom_name")}</strong>
                   <small>{t("account.provider.custom_description")}</small>
                 </span>
+                {selectedProviderId === CUSTOM_IMAP_PROVIDER_ID && (
+                  <span className="provider-choice-check" aria-hidden="true">
+                    <Check size={11} strokeWidth={2.6} />
+                  </span>
+                )}
               </button>
             </div>
-            {providerCatalogOpen && (
-              <label className="provider-catalog-select" htmlFor="account-provider-catalog">
-                <span>{t("account.provider.catalog_label")}</span>
-                <ThemedSelect
-                  id="account-provider-catalog"
-                  value={selectedProviderId}
-                  onValueChange={selectProvider}
-                  disabled={busy || accountAdded}
-                >
-                  <option value="">{t("account.provider.catalog_placeholder")}</option>
-                  {(["P0", "P1", "P2"] as const).map((priority) => {
-                    const options = orderedProviders.filter((provider) => provider.priority === priority);
-                    return options.length ? (
-                      <optgroup key={priority} label={t(`account.provider.priority.${priority.toLowerCase()}`)}>
-                        {options.map((provider) => <option key={provider.id} value={provider.id}>{providerDisplayName(provider, locale, t)} · {provider.domains[0]}</option>)}
-                      </optgroup>
-                    ) : null;
-                  })}
-                  <option value={CUSTOM_IMAP_PROVIDER_ID}>{t("account.provider.custom_option")}</option>
-                </ThemedSelect>
-              </label>
-            )}
             <small className="provider-picker-note">{t("account.provider.picker_note")}</small>
           </section>
 
-          <div className="account-email-row">
+          <div className={`account-form-fields${providerCatalogOpen ? " collapsed" : ""}`} inert={providerCatalogOpen ? true : undefined}>
+            <div className="account-form-fields-inner">
+              <div className="account-email-row">
             <label htmlFor="account-email">
               <span>{t("account.email.label")}</span>
-              <input
-                ref={emailRef}
-                id="account-email"
-                type="text"
-                inputMode="email"
-                autoCapitalize="none"
-                data-dialog-initial-focus
-                autoComplete="email"
-                spellCheck={false}
-                placeholder={t("account.email.placeholder")}
-                value={email}
-                onChange={updateEmail}
-                onFocus={() => setEmailFocused(true)}
-                onBlur={() => {
-                  // Abandon any in-flight composition when focus leaves the
-                  // field. Some IMEs never deliver compositionend after a
-                  // blur, which would otherwise block all later typing.
-                  emailComposingRef.current = false;
-                  setEmailFocused(false);
-                }}
-                onCompositionStart={beginEmailComposition}
-                onCompositionEnd={endEmailComposition}
-                disabled={blockingBusy || accountAdded}
-                required
-                aria-invalid={emailInvalid}
-                aria-describedby={emailInvalid ? "account-form-status" : "account-email-help"}
-              />
+              <div className="account-email-input-wrapper">
+                <input
+                  ref={emailRef}
+                  id="account-email"
+                  type="text"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  data-dialog-initial-focus
+                  autoComplete="email"
+                  spellCheck={false}
+                  placeholder={t("account.email.placeholder")}
+                  value={email}
+                  onChange={updateEmail}
+                  onKeyDown={handleEmailKeyDown}
+                  onFocus={() => setEmailFocused(true)}
+                  onBlur={() => {
+                    // Abandon any in-flight composition when focus leaves the
+                    // field. Some IMEs never deliver compositionend after a
+                    // blur, which would otherwise block all later typing.
+                    emailComposingRef.current = false;
+                    setEmailFocused(false);
+                  }}
+                  onCompositionStart={beginEmailComposition}
+                  onCompositionEnd={endEmailComposition}
+                  disabled={blockingBusy || accountAdded}
+                  required
+                  aria-invalid={emailInvalid}
+                  aria-describedby={emailInvalid ? "account-form-status" : "account-email-help"}
+                />
+                {email.length > 0 && !blockingBusy && (
+                  <button
+                    type="button"
+                    className="account-input-clear-btn"
+                    aria-label={t("common.clear")}
+                    title={t("common.clear")}
+                    onClick={clearEmail}
+                    tabIndex={-1}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
             </label>
-            <button className="secondary-button account-discover-button" type="button" onClick={() => void discoverProvider()} disabled={busy || accountAdded || !validEmail(normalizedEmail)}>
-              {busyAction === "discover" ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />}
-              {busyAction === "discover" ? t("account.email.discover_busy") : t("account.email.discover")}
-            </button>
           </div>
           <small id="account-email-help" className="account-field-help">{t("account.email.help")}</small>
 
@@ -897,17 +1240,6 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
             <div className="form-status error account-email-exists" role="alert">
               <X size={17} />{existingDuplicateMessage}
             </div>
-          )}
-
-          {activeDiscovery && (
-            <section className={`provider-hint account-provider-result${manualReviewRecommended(activeDiscovery) ? " warning" : ""}`} aria-live="polite">
-              <ShieldCheck size={17} />
-              <div>
-                <strong>{activeProviderName}</strong>
-                <span>{activeOnboarding?.helpText ?? activeOnboarding?.credentialHint}</span>
-                {sourceNote && <small>{sourceNote}</small>}
-              </div>
-            </section>
           )}
 
           {needsProviderDiscovery && (
@@ -919,67 +1251,58 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
             </section>
           )}
 
-          {guideAvailable && !accountAdded && guideProvider && (
-            <>
-              <button className="guide-toggle" type="button" aria-expanded={showGuide} onClick={() => setShowGuide((value) => !value)} disabled={busy}>
-                <Wand2 size={15} />
-                <span>{guideIsPreview
-                  ? t("account.guide.toggle_preview", { provider: guideProviderName })
-                  : t("account.guide.toggle", { provider: guideProviderName })}</span>
-                <ChevronDown className={showGuide ? "open" : ""} size={15} />
-              </button>
+          <div
+            className={`account-flow-details${isFlowActive ? " open" : ""}`}
+            aria-hidden={!isFlowActive}
+          >
+            <div className="account-flow-details-inner">
+              {displayProviderCardInfo && !accountAdded && (
+                <section className="account-provider-action-card" aria-label={displayProviderCardInfo.name}>
+                  <div className="provider-card-header">
+                <div className="provider-card-identity">
+                  {displayProviderCardInfo.icon ? (
+                    <img className="provider-card-icon" src={displayProviderCardInfo.icon} alt="" loading="lazy" />
+                  ) : displayProviderCardInfo.monogram ? (
+                    <span className="provider-card-monogram">{displayProviderCardInfo.monogram}</span>
+                  ) : (
+                    <span className="provider-card-monogram"><Mailbox size={12} /></span>
+                  )}
+                  <strong className="provider-card-name">{displayProviderCardInfo.name}</strong>
+                </div>
+                <span className="provider-card-badge">{displayProviderCardInfo.badge}</span>
+              </div>
 
-              {showGuide && (
-                <section className="setup-guide" aria-label={t("account.guide.aria", { provider: guideProviderName })}>
-                  <div className="setup-guide-title">
-                    <div>
-                      <span>{t("account.guide.title")}</span>
-                      <strong>{guideProviderName}</strong>
-                    </div>
-                    <ShieldCheck size={17} />
-                  </div>
-                  {guideIsPreview && <p className="setup-guide-preview">{t("account.guide.preview")}</p>}
-                  <div className="setup-guide-auth">
-                    <span>{t("account.guide.recommended_login")}</span>
-                    <strong>{providerAuthLabel(guideProvider.recommendedAuthMethod, t)}</strong>
-                    <small>{guideOnboarding?.credentialLabel}</small>
-                  </div>
-                  <ol>
-                    {setupSteps.map((step) => <li key={step}>{step}</li>)}
-                  </ol>
-                  {serverConfiguration && (
-                    <div className="setup-guide-server-settings">
-                      <dl className="setup-guide-endpoints">
-                        <div><dt>IMAP</dt><dd>{serverEndpointLabel(guideProvider.imap, t)}</dd></div>
-                        <div><dt>SMTP</dt><dd>{serverEndpointLabel(guideProvider.smtp, t)}</dd></div>
-                      </dl>
-                      <button
-                        className={`setup-guide-copy${serverConfigurationCopied ? " copied" : ""}`}
-                        type="button"
-                        onClick={() => void copyServerConfiguration()}
-                        aria-label={serverConfigurationCopied
-                          ? t("account.server.copied_aria")
-                          : t("account.server.copy_aria", { provider: guideProviderName })}
-                      >
-                        {serverConfigurationCopied ? <Check size={14} /> : <Copy size={14} />}
-                        <span>{serverConfigurationCopied ? t("account.server.copied") : t("account.server.copy")}</span>
-                      </button>
-                      <small className="setup-guide-copy-note">{t("account.server.copy_note")}</small>
-                    </div>
-                  )}
-                  {sourceNote && <p><strong>{t("account.guide.note")}</strong>{sourceNote}</p>}
-                  {guideProvider.helpUrl && (
-                    <a href={guideProvider.helpUrl} target="_blank" rel="noreferrer">
-                      {guideOnboarding?.helpLabel ?? t("account.guide.open_official")}
-                      <ExternalLink size={13} />
-                    </a>
-                  )}
-                </section>
-              )}
-            </>
+              <p className="provider-card-desc">{displayProviderCardInfo.summary}</p>
+
+              <div className="provider-card-actions">
+                {displayProviderCardInfo.actionHref && (
+                  <a
+                    href={displayProviderCardInfo.actionHref}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="provider-direct-action-btn"
+                    title={displayProviderCardInfo.actionTitle}
+                  >
+                    <ExternalLink size={14} />
+                    <span>{displayProviderCardInfo.actionLabel}</span>
+                  </a>
+                )}
+                <button
+                  type="button"
+                  className={`provider-tutorial-trigger-btn${tutorialDrawerOpen ? " active" : ""}`}
+                  onClick={() => setTutorialDrawerOpen((value) => !value)}
+                  aria-expanded={tutorialDrawerOpen}
+                  disabled={!isFlowActive}
+                >
+                  <CircleHelp size={14} />
+                  <span>{tutorialDrawerOpen ? t("account.actionCard.collapseGuide") : displayProviderCardInfo.howToEnable}</span>
+                  <ChevronRight size={13} className={tutorialDrawerOpen ? "open" : ""} />
+                </button>
+              </div>
+            </section>
           )}
 
-          {activeOAuthProvider && !manualOpen && !showPasswordFallback && !accountAdded && (
+          {displayShowOAuthPanel && !accountAdded && (
             <section className="account-oauth-panel" aria-labelledby="oauth-login-title">
               <div>
                 <span className="eyebrow">{t("account.oauth.eyebrow")}</span>
@@ -987,7 +1310,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
                 <p>{t("account.oauth.description")}</p>
               </div>
               {!oauthAvailable && <small className="oauth-config-note">{t("account.oauth.config_unavailable", { provider: activeOAuthProvider === "google" ? "Google" : "Microsoft" })}</small>}
-              <button className="primary-button large oauth-button" type="button" onClick={() => void startOAuth()} disabled={busy || !oauthAvailable || Boolean(existingAccountMatch)}>
+              <button className="primary-button large oauth-button" type="button" onClick={() => void startOAuth()} disabled={busy || !oauthAvailable || Boolean(existingAccountMatch) || !isFlowActive}>
                 {busyAction === "oauth" ? <LoaderCircle className="spin" size={18} /> : <ShieldCheck size={18} />}
                 {busyAction === "oauth"
                   ? t("account.oauth.waiting_browser")
@@ -996,14 +1319,16 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
                     : t("account.oauth.unavailable")}
               </button>
               {canUsePassword && (
-                <button className="account-link-button" type="button" onClick={() => setShowPasswordFallback(true)} disabled={busy}>
-                  {t("account.oauth.use_password_fallback", { credential: passwordFallbackName })}
+                <button className="account-link-button" type="button" onClick={() => setExplicitAuthMode("password")} disabled={busy || !isFlowActive}>
+                  {activeDiscovery?.recommendedAuthMethod === "app-password"
+                    ? t("account.oauth.switch_to_password")
+                    : t("account.oauth.use_password_fallback", { credential: passwordFallbackName })}
                 </button>
               )}
             </section>
           )}
 
-          {isOAuthWaiting && (
+          {displayIsOAuthWaiting && (
             <section className="account-oauth-wait" role="status" aria-live="polite">
               <LoaderCircle className="spin" size={18} />
               <div>
@@ -1015,44 +1340,51 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
             </section>
           )}
 
-          {usingPassword && !accountAdded && (
+          {displayUsingPassword && !accountAdded && (
             <>
-              {activeOAuthProvider && !manualOpen && (
-                <button className="account-link-button account-link-back" type="button" onClick={() => setShowPasswordFallback(false)} disabled={busy}>
-                  {t("account.oauth.back_to_sign_in", { provider: activeOAuthProvider === "google" ? "Google" : "Microsoft" })}
+              <label htmlFor="account-password">
+                <span className="credential-label">{displayCredentialDetails.label}<em>{t("account.credential.no_one_time_code")}</em></span>
+                <div className="account-password-field-wrapper">
+                  <input
+                    ref={passwordRef}
+                    id="account-password"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    placeholder={displayCredentialDetails.placeholder}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    disabled={busy || !isFlowActive}
+                    required={isFlowActive}
+                    aria-invalid={passwordInvalid}
+                    aria-describedby={passwordInvalid ? "account-form-status" : "account-credential-help"}
+                  />
+                  <button
+                    type="button"
+                    className="account-password-toggle-btn"
+                    aria-label={showPassword ? t("account.password.hide") : t("account.password.show")}
+                    title={showPassword ? t("account.password.hide") : t("account.password.show")}
+                    onClick={() => setShowPassword((value) => !value)}
+                    tabIndex={-1}
+                    disabled={!isFlowActive}
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </label>
+              <small id="account-credential-help" className="account-field-help">{displayCredentialDetails.help}</small>
+
+              {activeOAuthProvider && !displayManualOpen && (
+                <button className="account-link-button" type="button" onClick={() => setExplicitAuthMode("oauth")} disabled={busy || !isFlowActive}>
+                  {t("account.oauth.switch_to_oauth", { provider: activeOAuthProvider === "google" ? "Google" : "Microsoft" })}
                 </button>
               )}
-              <label htmlFor="account-password">
-                <span className="credential-label">{credentialName}<em>{t("account.credential.no_one_time_code")}</em></span>
-                <input
-                  ref={passwordRef}
-                  id="account-password"
-                  type="password"
-                  autoComplete="new-password"
-                  placeholder={t("account.credential.paste", { credential: credentialName })}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  disabled={busy}
-                  required
-                  aria-invalid={passwordInvalid}
-                  aria-describedby={passwordInvalid ? "account-form-status" : "account-credential-help"}
-                />
-              </label>
-              <small id="account-credential-help" className="account-field-help">{activeOnboarding?.credentialHint ?? t("account.credential.help")}</small>
 
-              {guideProvider?.helpUrl && (
-                <a className="account-link-button credential-help-link" href={guideProvider.helpUrl} target="_blank" rel="noreferrer">
-                  {guideOnboarding?.helpLabel ?? t("account.guide.open_official")}
-                  <ExternalLink size={13} />
-                </a>
-              )}
-
-              <button className="account-link-button manual-config-toggle" type="button" onClick={openManualConfig} disabled={busy} aria-expanded={manualOpen}>
-                {manualOpen ? t("account.manual.collapse") : t("account.manual.open")}
+              <button className="account-link-button manual-config-toggle" type="button" onClick={openManualConfig} disabled={busy || !isFlowActive} aria-expanded={displayManualOpen}>
+                {displayManualOpen ? t("account.manual.collapse") : t("account.manual.open")}
               </button>
 
-              {manualOpen && (
-                <fieldset className="manual-server-config" disabled={busy}>
+              {displayManualOpen && (
+                <fieldset className="manual-server-config" disabled={busy || !isFlowActive}>
                   <legend>{t("account.manual.legend")}</legend>
                   <p>{t("account.manual.description")}</p>
                   {(["imap", "smtp"] as const).map((server) => {
@@ -1075,6 +1407,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
                               onChange={(event) => updateManualServer(server, "host", event.target.value)}
                               aria-invalid={manualInvalid}
                               aria-describedby={manualInvalid ? "account-form-status" : undefined}
+                              disabled={busy || !isFlowActive}
                             />
                           </label>
                           <label htmlFor={`manual-${server}-port`}>
@@ -1088,11 +1421,12 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
                               value={config.port}
                               onChange={(event) => updateManualServer(server, "port", event.target.value)}
                               aria-invalid={manualInvalid}
+                              disabled={busy || !isFlowActive}
                             />
                           </label>
                           <label htmlFor={`manual-${server}-transport`}>
                             <span>{t("account.manual.encryption")}</span>
-                            <ThemedSelect id={`manual-${server}-transport`} value={config.transport} onValueChange={(value) => updateManualServer(server, "transport", value)} aria-invalid={manualInvalid}>
+                            <ThemedSelect id={`manual-${server}-transport`} value={config.transport} onValueChange={(value) => updateManualServer(server, "transport", value)} aria-invalid={manualInvalid} disabled={busy || !isFlowActive}>
                               <option value="tls">TLS/SSL</option>
                               <option value="starttls">STARTTLS</option>
                             </ThemedSelect>
@@ -1106,6 +1440,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
                               value={config.username}
                               onChange={(event) => updateManualServer(server, "username", event.target.value)}
                               placeholder={normalizedEmail || t("account.manual.username_placeholder")}
+                              disabled={busy || !isFlowActive}
                             />
                           </label>
                         </div>
@@ -1116,18 +1451,10 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
                 </fieldset>
               )}
 
-              <button className="primary-button large" type="submit" disabled={busy || !password || Boolean(existingAccountMatch)}>
-                {busyAction === "password" || busyAction === "manual" ? <LoaderCircle className="spin" size={18} /> : <Plus size={18} />}
-                {busyAction === "password" || busyAction === "manual"
-                  ? t("account.manual.validating")
-                  : manualOpen
-                    ? t("account.manual.validate_and_add")
-                    : t("account.manual.verify_and_add")}
-              </button>
             </>
           )}
-
-          {accountAdded && <button className="primary-button large" type="button" onClick={onClose}>{t("account.done")}</button>}
+            </div>
+          </div>
 
           {status.kind !== "idle" && (
             <div
@@ -1142,8 +1469,469 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
               {status.message}
             </div>
           )}
+            </div>
+          </div>
         </form>
-        <p className="privacy-note">{t("account.privacy_note")}</p>
+          </div>
+
+          <div className="account-modal-divider" aria-hidden="true" />
+          <div className="account-modal-drawer-wrapper" aria-hidden={!tutorialDrawerOpen}>
+            {guideProvider && (
+              <aside className="account-modal-drawer" aria-label={t("account.drawer.title", { provider: guideProviderName })}>
+                <div className="drawer-header">
+                  <strong>
+                    {providerKind === "gmail"
+                      ? t("account.drawer.gmail.title")
+                      : providerKind === "qq"
+                        ? t("account.drawer.qq.title")
+                        : providerKind === "netease"
+                          ? t("account.drawer.netease.title")
+                          : providerKind === "icloud"
+                            ? t("account.drawer.icloud.title")
+                            : providerKind === "microsoft"
+                              ? t("account.drawer.microsoft.title")
+                              : t("account.drawer.generic.title")}
+                  </strong>
+                  <button
+                    className="drawer-collapse-btn"
+                    type="button"
+                    onClick={() => setTutorialDrawerOpen(false)}
+                    title={t("account.drawer.collapse")}
+                  >
+                    <X size={14} />
+                    <span>{t("account.drawer.collapse")}</span>
+                  </button>
+                </div>
+
+                {providerKind === "gmail" ? (
+                  <>
+                    <div className="drawer-step-card prereq-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge warn">{t("account.drawer.gmail.prereqBadge")}</span>
+                        <strong>{t("account.drawer.gmail.prereqTitle")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.gmail.prereqDesc")}</p>
+                      <a
+                        href="https://myaccount.google.com/security"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="drawer-action-link"
+                      >
+                        <ExternalLink size={13} />
+                        <span>{t("account.drawer.gmail.prereqAction")}</span>
+                      </a>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">01</span>
+                        <strong>{t("account.drawer.gmail.step1Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.gmail.step1Desc")}</p>
+                      <a
+                        href="https://myaccount.google.com/apppasswords"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="drawer-action-link primary"
+                      >
+                        <ExternalLink size={13} />
+                        <span>{t("account.drawer.gmail.step1Action")}</span>
+                      </a>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">02</span>
+                        <strong>{t("account.drawer.gmail.step2Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.gmail.step2Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">03</span>
+                        <strong>{t("account.drawer.gmail.step3Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.gmail.step3Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">04</span>
+                        <strong>{t("account.drawer.gmail.step4Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.gmail.step4Desc")}</p>
+                    </div>
+
+                    <div className="drawer-faq-section">
+                      <strong>{t("account.drawer.faqTitle")}</strong>
+                      <details className="drawer-faq-item">
+                        <summary>{t("account.drawer.gmail.faq1Q")}</summary>
+                        <p>{t("account.drawer.gmail.faq1A")}</p>
+                      </details>
+                      <details className="drawer-faq-item">
+                        <summary>{t("account.drawer.gmail.faq2Q")}</summary>
+                        <p>{t("account.drawer.gmail.faq2A")}</p>
+                      </details>
+                    </div>
+                  </>
+                ) : providerKind === "qq" ? (
+                  <>
+                    <div className="drawer-step-card prereq-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge warn">{t("account.drawer.qq.prereqBadge")}</span>
+                        <strong>{t("account.drawer.qq.prereqTitle")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.qq.prereqDesc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">01</span>
+                        <strong>{t("account.drawer.qq.step1Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.qq.step1Desc")}</p>
+                      <a
+                        href="https://mail.qq.com"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="drawer-action-link"
+                      >
+                        <ExternalLink size={13} />
+                        <span>{t("account.actionCard.qq.openSettings")}</span>
+                      </a>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">02</span>
+                        <strong>{t("account.drawer.qq.step2Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.qq.step2Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">03</span>
+                        <strong>{t("account.drawer.qq.step3Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.qq.step3Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">04</span>
+                        <strong>{t("account.drawer.qq.step4Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.qq.step4Desc")}</p>
+                    </div>
+
+                    <div className="drawer-faq-section">
+                      <strong>{t("account.drawer.faqTitle")}</strong>
+                      <details className="drawer-faq-item">
+                        <summary>{t("account.drawer.qq.faq1Q")}</summary>
+                        <p>{t("account.drawer.qq.faq1A")}</p>
+                      </details>
+                      <details className="drawer-faq-item">
+                        <summary>{t("account.drawer.qq.faq2Q")}</summary>
+                        <p>{t("account.drawer.qq.faq2A")}</p>
+                      </details>
+                    </div>
+                  </>
+                ) : providerKind === "netease" ? (
+                  <>
+                    <div className="drawer-step-card prereq-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge warn">{t("account.drawer.netease.prereqBadge")}</span>
+                        <strong>{t("account.drawer.netease.prereqTitle")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.netease.prereqDesc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">01</span>
+                        <strong>{t("account.drawer.netease.step1Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.netease.step1Desc")}</p>
+                      <a
+                        href={domain.includes("126") ? "https://mail.126.com" : "https://mail.163.com"}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="drawer-action-link"
+                      >
+                        <ExternalLink size={13} />
+                        <span>{t("account.actionCard.netease.openSettings")}</span>
+                      </a>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">02</span>
+                        <strong>{t("account.drawer.netease.step2Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.netease.step2Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">03</span>
+                        <strong>{t("account.drawer.netease.step3Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.netease.step3Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">04</span>
+                        <strong>{t("account.drawer.netease.step4Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.netease.step4Desc")}</p>
+                    </div>
+
+                    <div className="drawer-faq-section">
+                      <strong>{t("account.drawer.faqTitle")}</strong>
+                      <details className="drawer-faq-item">
+                        <summary>{t("account.drawer.netease.faq1Q")}</summary>
+                        <p>{t("account.drawer.netease.faq1A")}</p>
+                      </details>
+                      <details className="drawer-faq-item">
+                        <summary>{t("account.drawer.netease.faq2Q")}</summary>
+                        <p>{t("account.drawer.netease.faq2A")}</p>
+                      </details>
+                    </div>
+                  </>
+                ) : providerKind === "icloud" ? (
+                  <>
+                    <div className="drawer-step-card prereq-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge warn">{t("account.drawer.icloud.prereqBadge")}</span>
+                        <strong>{t("account.drawer.icloud.prereqTitle")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.icloud.prereqDesc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">01</span>
+                        <strong>{t("account.drawer.icloud.step1Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.icloud.step1Desc")}</p>
+                      <a
+                        href="https://account.apple.com/account/manage"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="drawer-action-link"
+                      >
+                        <ExternalLink size={13} />
+                        <span>{t("account.actionCard.icloud.openSettings")}</span>
+                      </a>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">02</span>
+                        <strong>{t("account.drawer.icloud.step2Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.icloud.step2Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">03</span>
+                        <strong>{t("account.drawer.icloud.step3Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.icloud.step3Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">04</span>
+                        <strong>{t("account.drawer.icloud.step4Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.icloud.step4Desc")}</p>
+                    </div>
+
+                    <div className="drawer-faq-section">
+                      <strong>{t("account.drawer.faqTitle")}</strong>
+                      <details className="drawer-faq-item">
+                        <summary>{t("account.drawer.icloud.faq1Q")}</summary>
+                        <p>{t("account.drawer.icloud.faq1A")}</p>
+                      </details>
+                      <details className="drawer-faq-item">
+                        <summary>{t("account.drawer.icloud.faq2Q")}</summary>
+                        <p>{t("account.drawer.icloud.faq2A")}</p>
+                      </details>
+                    </div>
+                  </>
+                ) : providerKind === "microsoft" ? (
+                  <>
+                    <div className="drawer-step-card prereq-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge warn">{t("account.drawer.microsoft.prereqBadge")}</span>
+                        <strong>{t("account.drawer.microsoft.prereqTitle")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.microsoft.prereqDesc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">01</span>
+                        <strong>{t("account.drawer.microsoft.step1Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.microsoft.step1Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">02</span>
+                        <strong>{t("account.drawer.microsoft.step2Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.microsoft.step2Desc")}</p>
+                      <a
+                        href="https://account.live.com/proofs/manage/additional"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="drawer-action-link"
+                      >
+                        <ExternalLink size={13} />
+                        <span>{t("account.actionCard.microsoft.openSettings")}</span>
+                      </a>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">03</span>
+                        <strong>{t("account.drawer.microsoft.step3Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.microsoft.step3Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">04</span>
+                        <strong>{t("account.drawer.microsoft.step4Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.microsoft.step4Desc")}</p>
+                    </div>
+
+                    <div className="drawer-faq-section">
+                      <strong>{t("account.drawer.faqTitle")}</strong>
+                      <details className="drawer-faq-item">
+                        <summary>{t("account.drawer.microsoft.faq1Q")}</summary>
+                        <p>{t("account.drawer.microsoft.faq1A")}</p>
+                      </details>
+                      <details className="drawer-faq-item">
+                        <summary>{t("account.drawer.microsoft.faq2Q")}</summary>
+                        <p>{t("account.drawer.microsoft.faq2A")}</p>
+                      </details>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="drawer-step-card prereq-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">{t("account.drawer.generic.prereqBadge")}</span>
+                        <strong>{t("account.drawer.generic.prereqTitle")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.generic.prereqDesc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">01</span>
+                        <strong>{t("account.drawer.generic.step1Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.generic.step1Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">02</span>
+                        <strong>{t("account.drawer.generic.step2Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.generic.step2Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">03</span>
+                        <strong>{t("account.drawer.generic.step3Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.generic.step3Desc")}</p>
+                    </div>
+
+                    <div className="drawer-step-card">
+                      <div className="drawer-step-header">
+                        <span className="drawer-step-badge">04</span>
+                        <strong>{t("account.drawer.generic.step4Title")}</strong>
+                      </div>
+                      <p className="drawer-step-desc">{t("account.drawer.generic.step4Desc")}</p>
+                    </div>
+
+                    {serverConfiguration && (
+                      <div className="setup-guide-server-settings">
+                        <dl className="setup-guide-endpoints">
+                          <div><dt>IMAP</dt><dd>{serverEndpointLabel(guideProvider.imap, t)}</dd></div>
+                          <div><dt>SMTP</dt><dd>{serverEndpointLabel(guideProvider.smtp, t)}</dd></div>
+                        </dl>
+                        <button
+                          className={`setup-guide-copy${serverConfigurationCopied ? " copied" : ""}`}
+                          type="button"
+                          onClick={() => void copyServerConfiguration()}
+                          aria-label={serverConfigurationCopied
+                            ? t("account.server.copied_aria")
+                            : t("account.server.copy_aria", { provider: guideProviderName })}
+                        >
+                          {serverConfigurationCopied ? <Check size={14} /> : <Copy size={14} />}
+                          <span>{serverConfigurationCopied ? t("account.server.copied") : t("account.server.copy")}</span>
+                        </button>
+                        <small className="setup-guide-copy-note">{t("account.server.copy_note")}</small>
+                      </div>
+                    )}
+
+                    <div className="drawer-faq-section">
+                      <strong>{t("account.drawer.faqTitle")}</strong>
+                      <details className="drawer-faq-item">
+                        <summary>{t("account.drawer.generic.faq1Q")}</summary>
+                        <p>{t("account.drawer.generic.faq1A")}</p>
+                      </details>
+                      <details className="drawer-faq-item">
+                        <summary>{t("account.drawer.generic.faq2Q")}</summary>
+                        <p>{t("account.drawer.generic.faq2A")}</p>
+                      </details>
+                    </div>
+                  </>
+                )}
+              </aside>
+            )}
+          </div>
+        </div>
+        <footer className="account-modal-footer">
+          {accountAdded ? (
+            <button className="primary-button large modal-submit-btn" type="button" onClick={onClose}>
+              {t("account.done")}
+            </button>
+          ) : !showOAuthPanel ? (
+            <button
+              form="account-form"
+              className="primary-button large modal-submit-btn"
+              type="submit"
+              disabled={busy || !password || Boolean(existingAccountMatch) || !usingPassword}
+            >
+              {busyAction === "password" || busyAction === "manual" ? <LoaderCircle className="spin" size={18} /> : <Plus size={18} />}
+              {busyAction === "password" || busyAction === "manual"
+                ? t("account.manual.validating")
+                : manualOpen
+                  ? t("account.manual.validate_and_add")
+                  : t("account.manual.verify_and_add")}
+            </button>
+          ) : null}
+          <div className="account-modal-footer-privacy">
+            <ShieldCheck size={13} className="account-modal-footer-icon" aria-hidden="true" />
+            <p className="privacy-note">{t("account.privacy_note")}</p>
+          </div>
+        </footer>
       </section>
     </div>
   );

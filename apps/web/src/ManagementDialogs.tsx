@@ -16,6 +16,8 @@ export function ManagementDialogShell({
   title,
   description,
   eyebrow,
+  actions,
+  dialogClassName,
   onClose,
   closing: closingProp,
   requestClose: requestCloseProp,
@@ -28,6 +30,8 @@ export function ManagementDialogShell({
   title: string;
   description: string;
   eyebrow: string;
+  actions?: ReactNode;
+  dialogClassName?: string;
   onClose: () => void;
   /**
    * Optional externally-managed exit transition (closing state + close
@@ -58,16 +62,19 @@ export function ManagementDialogShell({
   const requestClose = requestCloseProp ?? selfRequestClose;
   return (
     <div className={`modal-backdrop management-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
-      <section ref={sectionRef} className={`modal-card management-dialog${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+      <section ref={sectionRef} className={`modal-card management-dialog${dialogClassName ? ` ${dialogClassName}` : ""}${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <header className="modal-heading management-heading">
-          <div>
+          <div className="management-heading-title">
             <span className="eyebrow">{eyebrow}</span>
             <h2 id={titleId}>{title}</h2>
             <p className="management-heading-description">{description}</p>
           </div>
-          <button className="icon-button" type="button" aria-label={t("common.close")} data-tooltip={t("common.close")} onClick={requestClose}>
-            <X size={18} />
-          </button>
+          <div className="management-heading-actions">
+            {actions}
+            <button className="icon-button" type="button" aria-label={t("common.close")} data-tooltip={t("common.close")} onClick={requestClose}>
+              <X size={18} />
+            </button>
+          </div>
         </header>
         <div className="management-dialog-body">{children}</div>
       </section>

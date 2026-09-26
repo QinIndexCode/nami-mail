@@ -176,7 +176,10 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
           <LayoutTemplate size={16} />
           <div><span>{t("settings.templates.title")}</span><p id="templates-settings">{t("settings.templates.description")}</p></div>
         </div>
-        <p className="settings-empty" role="status">{t("settings.templates.demoUnavailable")}</p>
+        <div className="settings-empty-card" role="status">
+          <LayoutTemplate className="empty-icon" size={32} strokeWidth={1.5} />
+          <p>{t("settings.templates.demoUnavailable")}</p>
+        </div>
       </section>
     );
   }
@@ -314,7 +317,10 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
             )}
 
             {filteredTemplates.length === 0 ? (
-              <p className="settings-empty">{showToolbar ? t("settings.templates.noSearchResults") : (templates.length === 0 ? t("settings.templates.empty") : t("settings.templates.noMatches"))}</p>
+              <div className="settings-empty-card">
+                <LayoutTemplate className="empty-icon" size={32} strokeWidth={1.5} />
+                <p>{showToolbar ? t("settings.templates.noSearchResults") : (templates.length === 0 ? t("settings.templates.empty") : t("settings.templates.noMatches"))}</p>
+              </div>
             ) : (
               <>
                 {templates.some((template) => template.builtin) && (

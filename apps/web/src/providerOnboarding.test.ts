@@ -3,6 +3,7 @@ import { translate } from "./i18n";
 import type { ProviderInfo } from "./types";
 import {
   CUSTOM_IMAP_PROVIDER_ID,
+  fullCatalogProviders,
   orderedProviderCatalog,
   providerAuthLabel,
   providerMonogram,
@@ -46,6 +47,17 @@ describe("provider onboarding catalog", () => {
       "netease-163",
       "netease-126",
       "icloud",
+    ]);
+
+    expect(fullCatalogProviders(catalog).map((item) => item.id)).toEqual([
+      "gmail",
+      "microsoft",
+      "qq",
+      "netease-163",
+      "netease-126",
+      "icloud",
+      "yahoo",
+      "sina",
     ]);
   });
 

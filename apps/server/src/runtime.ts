@@ -64,7 +64,7 @@ import { cleanupExpiredOutboundAttachments, outboundAttachmentDirectory } from "
 import { getAppSettings, getSyncMessageLimit, updateAppSettings, type AppSettings, type AppSettingsPatch } from "./settings.js";
 import { submitDueScheduledSubmissions } from "./scheduled-send.js";
 import { releaseDueSnoozedMessages } from "./snooze.js";
-import { syncAccount, scheduleSentSubmissionVerification, type NewInboxMessage } from "./sync.js";
+import { syncAccount, scheduleSentSubmissionVerification, clearAccountSyncState, type NewInboxMessage } from "./sync.js";
 import type { AccountRecord, RuntimeContext } from "./types.js";
 
 export type RunningServer = {
@@ -561,6 +561,10 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       agentService,
       outboundAttachmentDirectory: outboundDirectory,
       onRefreshIntervalChanged: () => scheduler?.reschedule(),
+      onAccountDeleted: async (accountId: string) => {
+        clearAccountSyncState(accountId);
+        await idleWatcher?.stopAccount(accountId).catch(() => undefined);
+      },
       oauthService,
       serverEvents,
       onRealtimePushChanged: (enabled) => {

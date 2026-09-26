@@ -15,6 +15,8 @@ type AutoReplyToastStackProps = {
   /** While a modal dialog is open the stack moves behind the scrim so it can
    *  never intercept clicks aimed at the dialog (e.g. the compose card). */
   behindModal?: boolean;
+  /** When agent workspace is open, toast is shifted up to not block the input composer */
+  inAgent?: boolean;
 };
 
 /**
@@ -147,9 +149,9 @@ function AutoReplyToastItem({
   );
 }
 
-export function AutoReplyToastStack({ notices, onDismiss, behindModal = false }: AutoReplyToastStackProps) {
+export function AutoReplyToastStack({ notices, onDismiss, behindModal = false, inAgent = false }: AutoReplyToastStackProps) {
   return (
-    <div className={`auto-reply-toast-stack${behindModal ? " behind-modal" : ""}`} role="status" aria-live="polite">
+    <div className={`auto-reply-toast-stack${behindModal ? " behind-modal" : ""}${inAgent ? " in-agent" : ""}`} role="status" aria-live="polite">
       {notices.map((notice) => (
         <AutoReplyToastItem
           key={autoReplyNoticeKey(notice)}

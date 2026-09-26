@@ -240,7 +240,10 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
           <BookUser size={16} />
           <div><span>{t("settings.contacts.title")}</span><p id="contacts-settings">{t("settings.contacts.description")}</p></div>
         </div>
-        <p className="settings-empty" role="status">{t("settings.contacts.demoUnavailable")}</p>
+        <div className="settings-empty-card" role="status">
+          <BookUser className="empty-icon" size={32} strokeWidth={1.5} />
+          <p>{t("settings.contacts.demoUnavailable")}</p>
+        </div>
       </section>
     );
   }
@@ -407,7 +410,10 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
             )}
 
             {filteredContacts.length === 0 ? (
-              <p className="settings-empty">{showToolbar ? t("settings.contacts.noSearchResults") : (contacts.length === 0 ? t("settings.contacts.empty") : t("settings.contacts.noMatches"))}</p>
+              <div className="settings-empty-card">
+                <BookUser className="empty-icon" size={32} strokeWidth={1.5} />
+                <p>{showToolbar ? t("settings.contacts.noSearchResults") : (contacts.length === 0 ? t("settings.contacts.empty") : t("settings.contacts.noMatches"))}</p>
+              </div>
             ) : (
               <>
                 <div ref={listScroll.ref} className="contacts-list" style={listScroll.style}>

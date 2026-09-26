@@ -21,6 +21,7 @@ import {
 } from "../schemas.js";
 import { detectProvider, loginUsername, resolveProvider, type DetectedProvider } from "../providers.js";
 import { testAccountConnection } from "../mail.js";
+import { deleteAccountRowWithOptimizedCascade } from "../db.js";
 import {
   discardOutboundAttachmentsForAccount,
   outboundAttachmentDirectory,
@@ -393,10 +394,11 @@ export function registerAccountRoutes(
         const deletion = context.agentMailEvents.beginAccountDeletion(
           request.params.id,
           () => {
-            const result = context.db
-              .prepare("DELETE FROM accounts WHERE id = ?")
-              .run(request.params.id);
-            if (!result.changes)
+            const removed = deleteAccountRowWithOptimizedCascade(
+              context.db,
+              request.params.id,
+            );
+            if (!removed)
               throw new Error(
                 "Account deletion did not remove the primary account row.",
               );
@@ -414,13 +416,22 @@ export function registerAccountRoutes(
           );
         }
       } else {
-        const result = context.db
-          .prepare("DELETE FROM accounts WHERE id = ?")
-          .run(request.params.id);
-        if (!result.changes)
+        const removed = deleteAccountRowWithOptimizedCascade(
+          context.db,
+          request.params.id,
+        );
+        if (!removed)
           return reply
             .code(404)
             .send({ ok: false, message: "邮箱不存在。" });
+      }
+      try {
+        await context.onAccountDeleted?.(request.params.id);
+      } catch (error) {
+        log.warn(
+          { error, accountId: request.params.id },
+          "Post-deletion account cleanup failed",
+        );
       }
       return { ok: true };
     },

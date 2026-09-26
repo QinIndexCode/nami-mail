@@ -97,6 +97,8 @@ export type RuntimeContext = {
   // The owning runtime (re)starts or stops the live IMAP IDLE watcher after
   // the user toggles the realtime push setting.
   onRealtimePushChanged?: (enabled: boolean) => void;
+  // Called immediately after an account is deleted so live background watchers (such as IDLE) terminate immediately.
+  onAccountDeleted?: (accountId: string) => Promise<void> | void;
 };
 
 export function publicAccount(row: AccountRecord) {

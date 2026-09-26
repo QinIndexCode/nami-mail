@@ -594,8 +594,8 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(gmail).toMatchObject({
       family: "google",
       priority: "P0",
-      authMethods: ["oauth2", "app-password"],
-      recommendedAuthMethod: "oauth2",
+      authMethods: ["app-password", "oauth2"],
+      recommendedAuthMethod: "app-password",
       credentialName: "16 位应用专用密码",
       usernameMode: "email",
       oauthProvider: "google",

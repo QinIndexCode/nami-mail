@@ -1,6 +1,7 @@
 import type { Citation } from "@nami/agent-contracts";
 import { discardDraft, saveDraft } from "../drafts.js";
 import type { DatabaseHandle } from "../db.js";
+import { deleteAccountRowWithOptimizedCascade } from "../db.js";
 import { messagePayloadForRow, type MessageStorageRow } from "../message-storage.js";
 import type { AccountAccessTokenProvider } from "../mail.js";
 import { sendMail } from "../mail.js";
@@ -649,8 +650,8 @@ export class SqliteMailApplicationService implements MailApplicationService {
     }
     if (this.options.agentMailEvents) {
       const deletion = this.options.agentMailEvents.beginAccountDeletion(accountId, () => {
-        const result = this.options.db.prepare("DELETE FROM accounts WHERE id = ?").run(accountId);
-        if (!result.changes) throw new Error("Account deletion did not remove the primary account row.");
+        const removed = deleteAccountRowWithOptimizedCascade(this.options.db, accountId);
+        if (!removed) throw new Error("Account deletion did not remove the primary account row.");
       });
       try {
         this.options.agentMailEvents.completeAccountDeletion(accountId, deletion.deletionGeneration);
@@ -659,8 +660,8 @@ export class SqliteMailApplicationService implements MailApplicationService {
         // later startup can continue cleanup from the deleting lifecycle state.
       }
     } else {
-      const result = this.options.db.prepare("DELETE FROM accounts WHERE id = ?").run(accountId);
-      if (!result.changes) throw new AgentMailApplicationError("not_found", "The requested account is no longer available.");
+      const removed = deleteAccountRowWithOptimizedCascade(this.options.db, accountId);
+      if (!removed) throw new AgentMailApplicationError("not_found", "The requested account is no longer available.");
     }
   }
 
