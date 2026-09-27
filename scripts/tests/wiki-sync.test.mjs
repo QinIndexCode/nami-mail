@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildWikiTree, collectWikiPages, syncWikiTree } from "./wiki-sync.mjs";
+import { buildWikiTree, collectWikiPages, syncWikiTree } from "../wiki-sync.mjs";
 
 function makeDocs() {
   const dir = mkdtempSync(join(tmpdir(), "nami-wiki-docs-"));

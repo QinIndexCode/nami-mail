@@ -19,12 +19,12 @@ import {
   uploadGitHubReleaseAssets,
   verifyGitHubDraftRelease,
   verifyPublicGitHubRepository,
-} from "./release-policy.mjs";
-import { resolveLocalWindowsElectronDist } from "./electron-dist.mjs";
-import { resolveInstallerSmokeBaseDirectory } from "./installer-smoke-location.mjs";
-import { redactSmokeDiagnosticText, writeSmokeDiagnostic } from "./smoke-diagnostics.mjs";
+} from "../release-policy.mjs";
+import { resolveLocalWindowsElectronDist } from "../electron-dist.mjs";
+import { resolveInstallerSmokeBaseDirectory } from "../installer-smoke-location.mjs";
+import { redactSmokeDiagnosticText, writeSmokeDiagnostic } from "../smoke-diagnostics.mjs";
 
-const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 function jsonResponse(value, status = 200) {
   return new Response(JSON.stringify(value), {
@@ -663,12 +663,7 @@ test("release workflow isolates read-only validation from credential-minimized p
     "npm run verify:electron-sqlite",
     "npm run smoke:server-node",
     "npm run build:brand:check",
-    "node --test scripts/release-policy.test.mjs",
-    "node --test scripts/build-locale-catalog.test.mjs",
-    "node --test scripts/dev-server-backoff.test.mjs scripts/package-win-trust.test.mjs scripts/dev-port-sync.test.mjs",
-    "node --test scripts/github-update-assets.test.mjs",
-    "node --test scripts/wiki-sync.test.mjs",
-    "node --test scripts/build-docs-site.test.mjs",
+    'node --test "scripts/tests/*.test.mjs"',
     "node scripts/build-docs-site.mjs",
     "node scripts/build-locale-catalog.mjs --check",
     "npm run lint",
@@ -740,12 +735,7 @@ test("pull request validation runs the release gate without write credentials", 
     "npm run verify:electron-sqlite",
     "npm run smoke:server-node",
     "npm run build:brand:check",
-    "node --test scripts/release-policy.test.mjs",
-    "node --test scripts/build-locale-catalog.test.mjs",
-    "node --test scripts/dev-server-backoff.test.mjs scripts/package-win-trust.test.mjs scripts/dev-port-sync.test.mjs",
-    "node --test scripts/github-update-assets.test.mjs",
-    "node --test scripts/wiki-sync.test.mjs",
-    "node --test scripts/build-docs-site.test.mjs",
+    'node --test "scripts/tests/*.test.mjs"',
     "node scripts/build-docs-site.mjs",
     "node scripts/build-locale-catalog.mjs --check",
     "npm run lint",

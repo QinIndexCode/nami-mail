@@ -18,7 +18,7 @@ import {
   serializeHast,
   slugify,
   summarizeReport,
-} from "./build-docs-site.mjs";
+} from "../build-docs-site.mjs";
 
 /** A tiny repository-shaped fixture: `docs/` plus repository-root documents. */
 function withFixture(run) {
@@ -322,7 +322,7 @@ test("a single-language page declares its locale", () => {
 });
 
 test("the landing page only links at documents and assets that exist", () => {
-  const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+  const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
   const html = readFileSync(join(repoRoot, "site", "index.html"), "utf8");
 
   // Documentation shortcuts: `./docs/<topic>.<lang>.html` has to correspond to a

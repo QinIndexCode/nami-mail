@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeLineEndings, validateLocalePacks } from "./build-locale-catalog.mjs";
+import { normalizeLineEndings, validateLocalePacks } from "../build-locale-catalog.mjs";
 
 function localePack(file, locale, messages) {
   return {

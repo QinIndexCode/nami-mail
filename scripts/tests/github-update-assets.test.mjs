@@ -10,7 +10,7 @@ import {
   githubZipUpdateAssetNames,
   readEd25519SigningKey,
   writeEd25519UpdateTrust,
-} from "./github-update-assets.mjs";
+} from "../github-update-assets.mjs";
 
 test("derives an embedded public trust record without writing the release private key", async (t) => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");

@@ -40,6 +40,7 @@ import {
 import { parseArgs } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, relative } from "node:path";
+import { GROUPS } from "./docs-groups.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const LANG_EXT = { zh: ".zh-CN.md", en: ".en.md" };
@@ -47,19 +48,10 @@ const HOME_PAGES = { en: "Home.md", zh: "Home.zh-CN.md" };
 const SIDEBAR_PAGE = "_Sidebar.md";
 const MANIFEST = ".wiki-sync.json";
 
-// Topic groups and labels (zh / en), matching scripts/build-docs-site.mjs. Unknown
-// directories fall back to "misc". "root" is not used here: the wiki tree
-// never includes repository-root documents.
-const GROUPS = [
-  { id: "guide", label: { zh: "使用指南", en: "Guide" } },
-  { id: "agent", label: { zh: "Agent", en: "Agent" } },
-  { id: "rag", label: { zh: "邮件检索 (RAG)", en: "Mail search (RAG)" } },
-  { id: "mcp", label: { zh: "MCP Server", en: "MCP Server" } },
-  { id: "cli", label: { zh: "CLI 命令行", en: "CLI" } },
-  { id: "development", label: { zh: "开发", en: "Development" } },
-  { id: "releases", label: { zh: "版本发布", en: "Releases" } },
-  { id: "misc", label: { zh: "其他", en: "Misc" } },
-];
+// Topic groups and labels (zh / en) come from `docs-groups.mjs`, shared with
+// build-docs-site.mjs. Unknown directories fall back to "misc". "root" is not
+// used here: the wiki tree never includes repository-root documents, so the
+// group list below filters it out and empty groups are dropped at the end.
 
 function walkMarkdown(dir, base) {
   const out = [];

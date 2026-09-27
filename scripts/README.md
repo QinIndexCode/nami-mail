@@ -4,8 +4,14 @@
 
 ## 已接线的工具
 根目录下的脚本都是活跃工具：构建、打包、SQLite ABI 验证、smoke、locale catalog、
-文档站构建（`build-docs-site.mjs`）、wiki 同步、发布策略等。`*.test.mjs` 由 `.github/workflows/validate.yml`
-与 `release-windows.yml` 逐一显式运行（没有 glob，新增测试必须手动登记）。
+文档站构建（`build-docs-site.mjs`）、wiki 同步、发布策略等。
+
+## tests/ — 脚本级测试（CI 自动发现）
+`tests/` 下的 `*.test.mjs` 由 `node --test "scripts/tests/*.test.mjs"` 一次性运行
+（`validate.yml` 与 `release-windows.yml` 都跑同一条 glob）。**新增脚本测试直接放进
+`tests/` 即可**，不需要再登记进任何工作流；`test-placement.test.mjs` 会把散落在
+`tests/` 之外的脚本测试判为失败。测试里引用被测脚本用 `../<脚本名>.mjs`，
+仓库根目录用「三层 dirname」（`scripts/tests/` → `scripts/` → 仓库根）。
 
 ## attic/ — 归档的一次性脚本
 `attic/` 收纳历次开发过程中遗留、当前**零引用**的探针与诊断脚本

@@ -5,7 +5,7 @@ import {
   MIN_RESTART_DELAY_MS,
   STABLE_UPTIME_MS,
   nextRestartDelayMs,
-} from "./dev-server-backoff.mjs";
+} from "../dev-server-backoff.mjs";
 
 test("the first failure restarts after the minimum delay", () => {
   assert.equal(nextRestartDelayMs(0, 100), MIN_RESTART_DELAY_MS);

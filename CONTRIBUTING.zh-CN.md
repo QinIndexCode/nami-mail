@@ -81,7 +81,7 @@ Windows 安装包、签名和发布路径的额外步骤见 [发布指南](docs/
 ```powershell
 npm.cmd ci
 npm.cmd run build:brand:check
-node --test scripts/release-policy.test.mjs
+node --test "scripts/tests/*.test.mjs"
 npm.cmd run typecheck
 npm.cmd run build
 npm.cmd run test

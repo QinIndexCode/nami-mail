@@ -8,7 +8,7 @@ import {
   healTrustInjection,
   resolveTrustPaths,
   restoreTrustInjection,
-} from "./package-win-trust.mjs";
+} from "../package-win-trust.mjs";
 
 const ORIGINAL = '{\n  "schemaVersion": 1,\n  "algorithm": "disabled"\n}\n';
 const INJECTED = '{\n  "schemaVersion": 1,\n  "algorithm": "ed25519",\n  "publicKey": "injected"\n}\n';

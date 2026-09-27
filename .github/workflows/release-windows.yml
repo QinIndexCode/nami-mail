@@ -38,12 +38,9 @@ jobs:
       - run: npm run verify:electron-sqlite
       - run: npm run smoke:server-node
       - run: npm run build:brand:check
-      - run: node --test scripts/release-policy.test.mjs
-      - run: node --test scripts/build-locale-catalog.test.mjs
-      - run: node --test scripts/dev-server-backoff.test.mjs scripts/package-win-trust.test.mjs scripts/dev-port-sync.test.mjs
-      - run: node --test scripts/github-update-assets.test.mjs
-      - run: node --test scripts/wiki-sync.test.mjs
-      - run: node --test scripts/build-docs-site.test.mjs
+      # Every script-level invariant lives in scripts/tests/ and is discovered
+      # by this one run (a placement guard fails if a test is filed elsewhere).
+      - run: node --test "scripts/tests/*.test.mjs"
       - run: node scripts/build-docs-site.mjs
       - run: node scripts/build-locale-catalog.mjs --check
       - run: npm run lint
