@@ -1,21 +1,38 @@
 import type { DatabaseHandle } from "./db.js";
 import { defaultLocale, normalizeLocale, type SupportedLocale } from "./localization.js";
-import { autoReplyConfigSchema, type AutoReplyConfig } from "@nami/agent-contracts";
+import {
+  appSettingsCoreDefaults,
+  autoReplyConfigSchema,
+  type AgentAccessLevel,
+  type AutoReplyConfig,
+  type AppTheme,
+  type BackgroundPreset,
+  type CloseBehavior,
+  type ListDensity,
+  type NotificationSound,
+  type SyncMessageLimit,
+} from "@nami/agent-contracts";
+import { agentAccessLevels as agentAccessLevelValues } from "@nami/agent-contracts";
 
-export const BACKGROUND_PRESETS = ["none", "paper", "mist", "coast", "dawn", "night", "custom"] as const;
-export const NOTIFICATION_SOUNDS = ["system", "soft", "bright", "none"] as const;
-export const CLOSE_BEHAVIORS = ["ask", "tray", "quit"] as const;
-export const LIST_DENSITIES = ["comfortable", "compact"] as const;
-export const SYNC_MESSAGE_LIMIT_OPTIONS = [0, 200, 500, 1000, 2000, 5000] as const;
-export const AGENT_ACCESS_LEVELS = ["read-only", "send-confirmed", "full-access"] as const;
-
-export type BackgroundPreset = (typeof BACKGROUND_PRESETS)[number];
-export type NotificationSound = (typeof NOTIFICATION_SOUNDS)[number];
-export type CloseBehavior = (typeof CLOSE_BEHAVIORS)[number];
-export type AppTheme = "system" | "light" | "dark";
-export type ListDensity = (typeof LIST_DENSITIES)[number];
-export type SyncMessageLimit = (typeof SYNC_MESSAGE_LIMIT_OPTIONS)[number];
-export type AgentAccessLevel = (typeof AGENT_ACCESS_LEVELS)[number];
+// The settings vocabulary lives in @nami/agent-contracts now; these re-exports
+// keep the rest of the server importing from ./settings.js as before. The
+// access-level array keeps its historical SCREAMING name locally.
+export {
+  APP_THEMES,
+  BACKGROUND_PRESETS,
+  CLOSE_BEHAVIORS,
+  LIST_DENSITIES,
+  NOTIFICATION_SOUNDS,
+  SYNC_MESSAGE_LIMIT_OPTIONS,
+  type AppTheme,
+  type BackgroundPreset,
+  type CloseBehavior,
+  type ListDensity,
+  type NotificationSound,
+  type SyncMessageLimit,
+} from "@nami/agent-contracts";
+export const AGENT_ACCESS_LEVELS = agentAccessLevelValues;
+export type { AgentAccessLevel } from "@nami/agent-contracts";
 
 const DEFAULT_AUTO_REPLY: AutoReplyConfig = {
   enabled: false,
@@ -69,28 +86,10 @@ export type AppSettingsPatch = Partial<Omit<AppSettings, "customBackgroundFilena
 };
 
 const defaults: Omit<AppSettings, "updatedAt"> = {
-  theme: "system",
+  ...appSettingsCoreDefaults,
   locale: defaultLocale,
-  backgroundPreset: "none",
-  backgroundIntensity: 80,
-  notificationsEnabled: true,
-  notifyWhenFocused: false,
-  notificationSound: "soft",
-  refreshIntervalSeconds: 60,
-  realtimePushEnabled: true,
-  syncMessageLimit: 2000,
-  closeBehavior: "ask",
-  launchAtStartup: false,
-  globalShortcutEnabled: false,
-  agentToolRoundLimit: 30,
-  listDensity: "comfortable",
-  avatarGravatarEnabled: false,
-  avatarBimiEnabled: false,
-  agentAccessLevel: "send-confirmed",
-  agentCliAccessLevel: "read-only",
-  agentMcpAccessLevel: "read-only",
-  customBackgroundFilename: null,
   autoReply: DEFAULT_AUTO_REPLY,
+  customBackgroundFilename: null,
   autoReplyInvalid: false,
 };
 

@@ -1,3 +1,8 @@
+import {
+  appSettingsCoreDefaults,
+  type AppSettingsCore,
+} from "@nami/agent-contracts";
+
 export type Folder = {
   path: string;
   name: string;
@@ -304,12 +309,15 @@ export type CalendarEventUpdate = Partial<CalendarEventInput>;
 
 export type Stats = { accounts: number; messages: number; unread: number; starred?: number; snoozed?: number; attachments?: number };
 
-export type AppTheme = "system" | "light" | "dark";
-export type BackgroundPreset = "none" | "paper" | "mist" | "coast" | "dawn" | "night" | "custom";
-export type NotificationSound = "system" | "soft" | "bright" | "none";
-export type CloseBehavior = "ask" | "tray" | "quit";
-export type ListDensity = "comfortable" | "compact";
-export type AgentAccessLevel = "read-only" | "send-confirmed" | "full-access";
+export type {
+  AgentAccessLevel,
+  AppTheme,
+  BackgroundPreset,
+  CloseBehavior,
+  ListDensity,
+  NotificationSound,
+  SyncMessageLimit,
+} from "@nami/agent-contracts";
 
 export type AutoReplyMode = "llm" | "template";
 
@@ -369,37 +377,17 @@ export type AutoReplyDecisionRecord = {
   occurredAt: string;
 };
 
-export type AppSettings = {
-  theme: AppTheme;
-  locale: string;
-  backgroundPreset: BackgroundPreset;
-  backgroundIntensity: number;
-  notificationsEnabled: boolean;
-  notifyWhenFocused: boolean;
-  notificationSound: NotificationSound;
-  refreshIntervalSeconds: 30 | 60 | 180 | 300;
-  realtimePushEnabled: boolean;
-  /** Per-folder mailbox sync cap: 0 syncs the whole mailbox. */
-  syncMessageLimit: 0 | 200 | 500 | 1000 | 2000 | 5000;
+/**
+ * Derived from the shared settings contract (`AppSettingsCore`) plus the
+ * server-derived wire fields. `autoReply` keeps the web-local shape because
+ * the contract's scope carries optional dates.
+ */
+export type AppSettings = AppSettingsCore & {
+  autoReply: AutoReplyConfig;
   /** The cap actually applied, after the SYNC_MESSAGE_LIMIT environment override. */
   effectiveSyncMessageLimit: number | null;
-  closeBehavior: CloseBehavior;
-  /** Desktop only: open Nami Mail at login. Browser mode ignores it. */
-  launchAtStartup: boolean;
-  /** Desktop only: global shortcut that focuses the mail window from anywhere. */
-  globalShortcutEnabled: boolean;
-  agentToolRoundLimit: number;
-  listDensity: ListDensity;
-  avatarGravatarEnabled: boolean;
-  /** BIMI brand logos: resolved server-side (DNS TXT + sender-hosted SVG). */
-  avatarBimiEnabled: boolean;
-  agentAccessLevel: AgentAccessLevel;
-  agentCliAccessLevel: AgentAccessLevel;
-  agentMcpAccessLevel: AgentAccessLevel;
-  autoReply: AutoReplyConfig;
-  /** True when the stored auto-reply config failed to parse; autoReply carries defaults. Output-only, never patched. */
-  autoReplyInvalid: boolean;
   customBackgroundUrl: string | null;
+  autoReplyInvalid: boolean;
   updatedAt: string;
 };
 
@@ -409,27 +397,7 @@ export type AppSettingsPatch = Partial<Pick<
 >>;
 
 export const defaultAppSettings: AppSettings = {
-  theme: "system",
-  locale: "zh-CN",
-  backgroundPreset: "none",
-  backgroundIntensity: 80,
-  notificationsEnabled: true,
-  notifyWhenFocused: false,
-  notificationSound: "soft",
-  refreshIntervalSeconds: 60,
-  realtimePushEnabled: true,
-  syncMessageLimit: 2000,
-  effectiveSyncMessageLimit: null,
-  closeBehavior: "ask",
-  launchAtStartup: false,
-  globalShortcutEnabled: false,
-  agentToolRoundLimit: 30,
-  listDensity: "comfortable",
-  avatarGravatarEnabled: false,
-  avatarBimiEnabled: false,
-  agentAccessLevel: "send-confirmed",
-  agentCliAccessLevel: "read-only",
-  agentMcpAccessLevel: "read-only",
+  ...appSettingsCoreDefaults,
   autoReply: {
     enabled: false,
     accountIds: [],
@@ -439,7 +407,8 @@ export const defaultAppSettings: AppSettings = {
     requireConfirmation: true,
     dailyLimitPerAccount: 30,
   },
-  autoReplyInvalid: false,
+  effectiveSyncMessageLimit: null,
   customBackgroundUrl: null,
+  autoReplyInvalid: false,
   updatedAt: "",
 };

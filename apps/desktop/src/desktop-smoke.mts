@@ -12,8 +12,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { type BrowserWindow, type MessageBoxReturnValue, type NativeImage, type Tray } from "electron";
+import type { CloseBehavior } from "@nami/agent-contracts";
 
-export type CloseBehavior = "ask" | "tray" | "quit";
+export type { CloseBehavior };
 
 export type DesktopSmokeNotificationResult = {
   invoked: boolean;

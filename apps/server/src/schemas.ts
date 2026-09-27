@@ -6,17 +6,13 @@
  * constant imports from settings/attachment-kind/localization.
  */
 import { z } from "zod";
-import { agentMemoryKindSchema, autoReplyConfigPatchSchema } from "@nami/agent-contracts";
+import {
+  agentMemoryKindSchema,
+  appSettingsPatchSchema,
+  autoReplyConfigPatchSchema,
+} from "@nami/agent-contracts";
 import { ATTACHMENT_KINDS, type AttachmentKind } from "./attachment-kind.js";
 import { supportedLocale } from "./localization.js";
-import {
-  AGENT_ACCESS_LEVELS,
-  BACKGROUND_PRESETS,
-  CLOSE_BEHAVIORS,
-  LIST_DENSITIES,
-  NOTIFICATION_SOUNDS,
-  SYNC_MESSAGE_LIMIT_OPTIONS,
-} from "./settings.js";
 
 export const credentialsSchema = z.object({
   email: z.email().transform((value) => value.trim().toLowerCase()),
@@ -190,29 +186,14 @@ export const translationConfigurationPatchSchema = z.object({
   { message: "A custom primary provider requires an endpoint." },
 );
 
-export const settingsPatchSchema = z.object({
-  theme: z.enum(["system", "light", "dark"]).optional(),
-  locale: interfaceLocaleSchema.optional(),
-  backgroundPreset: z.enum(BACKGROUND_PRESETS).optional(),
-  backgroundIntensity: z.number().int().min(0).max(100).optional(),
-  notificationsEnabled: z.boolean().optional(),
-  notifyWhenFocused: z.boolean().optional(),
-  notificationSound: z.enum(NOTIFICATION_SOUNDS).optional(),
-  refreshIntervalSeconds: z.union([z.literal(30), z.literal(60), z.literal(180), z.literal(300)]).optional(),
-  realtimePushEnabled: z.boolean().optional(),
-  syncMessageLimit: z.union(SYNC_MESSAGE_LIMIT_OPTIONS.map((value) => z.literal(value))).optional(),
-  closeBehavior: z.enum(CLOSE_BEHAVIORS).optional(),
-  launchAtStartup: z.boolean().optional(),
-  globalShortcutEnabled: z.boolean().optional(),
-  agentToolRoundLimit: z.number().int().min(1).max(50).optional(),
-  listDensity: z.enum(LIST_DENSITIES).optional(),
-  avatarGravatarEnabled: z.boolean().optional(),
-  avatarBimiEnabled: z.boolean().optional(),
-  agentAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
-  agentCliAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
-  agentMcpAccessLevel: z.enum(AGENT_ACCESS_LEVELS).optional(),
-  autoReply: autoReplyConfigPatchSchema.optional(),
-}).strict();
+/**
+ * The PATCH shape is the wire contract from @nami/agent-contracts; the only
+ * server-side tightening is `locale`, which must be a supported locale.
+ */
+export const settingsPatchSchema = appSettingsPatchSchema
+  .omit({ locale: true })
+  .extend({ locale: interfaceLocaleSchema.optional() })
+  .strict();
 
 export const agentProviderSchema = z.object({
   label: z.string().trim().min(1).max(128),

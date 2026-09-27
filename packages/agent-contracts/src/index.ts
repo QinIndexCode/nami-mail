@@ -13,6 +13,7 @@ export * from "./pairing.js";
 export * from "./primitives.js";
 export * from "./protocol.js";
 export * from "./provider.js";
+export * from "./settings.js";
 export * from "./source-events.js";
 export * from "./stream.js";
 export * from "./tool.js";
