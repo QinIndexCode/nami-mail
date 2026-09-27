@@ -48,7 +48,7 @@ describe("DatePicker (client)", () => {
     host?.remove();
   });
 
-  it("opens the month grid and picks a date in the current month", () => {
+  it("opens the month grid and picks a date in the current month", async () => {
     mount();
     act(() => {
       document.querySelector<HTMLButtonElement>(".date-picker-trigger")?.click();
@@ -63,7 +63,9 @@ describe("DatePicker (client)", () => {
     act(() => day15?.click());
 
     expect(onChange).toHaveBeenCalledWith("2026-08-15");
-    // In date mode the panel closes after picking.
+    // In date mode the panel plays its exit transition before unmounting.
+    expect(document.querySelector(".date-picker-panel.closing")).not.toBeNull();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
     expect(document.querySelector(".date-picker-panel")).toBeNull();
   });
 
@@ -93,7 +95,7 @@ describe("DatePicker (client)", () => {
     expect(day9?.disabled).toBe(true);
   });
 
-  it("closes the panel on Escape", () => {
+  it("closes the panel on Escape", async () => {
     mount();
     act(() => {
       document.querySelector<HTMLButtonElement>(".date-picker-trigger")?.click();
@@ -103,6 +105,8 @@ describe("DatePicker (client)", () => {
       document.querySelector<HTMLButtonElement>(".date-picker-trigger")
         ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
+    expect(document.querySelector(".date-picker-panel.closing")).not.toBeNull();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
     expect(document.querySelector(".date-picker-panel")).toBeNull();
   });
 
@@ -161,7 +165,7 @@ describe("DatePicker (client)", () => {
     expect(onChange).toHaveBeenCalledWith("2026-08-15");
   });
 
-  it("jumps to today via the today shortcut", () => {
+  it("jumps to today via the today shortcut", async () => {
     mount("date", "2026-08-14");
     act(() => {
       document.querySelector<HTMLButtonElement>(".date-picker-trigger")?.click();
@@ -172,7 +176,9 @@ describe("DatePicker (client)", () => {
     const today = new Date();
     const expected = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     expect(onChange).toHaveBeenCalledWith(expected);
-    // date mode closes after picking.
+    // date mode closes after picking, with the exit transition in between.
+    expect(document.querySelector(".date-picker-panel.closing")).not.toBeNull();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
     expect(document.querySelector(".date-picker-panel")).toBeNull();
   });
 });

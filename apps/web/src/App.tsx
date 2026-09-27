@@ -119,6 +119,7 @@ import { extractMailVisualStyle, llmTranslationErrorMessage, translationErrorMes
 import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type MessageAttachment, type OutboundAttachment, type OutboundSubmission, type ProviderInfo, type Stats } from "./types";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
+import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import { dialogKeydownDecision, useDialogRouting } from "./dialogRouting";
 import { findVerificationCodes } from "./verificationCode";
 import { resolveLocale, useI18n } from "./i18n";
@@ -461,6 +462,11 @@ export default function App() {
   const [recipientDetailsOpen, setRecipientDetailsOpen] = useState(false);
   const [readerMoreOpen, setReaderMoreOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  // The reader popovers animate their exit: user dismissals route through
+  // beginClose (keep mounted with the closing class), parent-driven closes
+  // (opening another view, selecting another message) stay instant.
+  const { mounted: readerMoreMounted, closing: readerMoreClosing, beginClose: beginReaderMoreClose } = usePopupExitTransition(readerMoreOpen, () => setReaderMoreOpen(false));
+  const { mounted: snoozeMounted, closing: snoozeClosing, beginClose: beginSnoozeClose } = usePopupExitTransition(snoozeOpen, () => setSnoozeOpen(false));
   const [snoozeCustomUntil, setSnoozeCustomUntil] = useState("");
   const [toast, setToast] = useState<ToastNotice>(null);
   const [autoReplyNotices, setAutoReplyNotices] = useState<DesktopAutoReplyNotice[]>([]);
@@ -2233,10 +2239,10 @@ const emptyMessageList = useMemo(() => (query.trim()
     if (!readerMoreOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       if (readerMoreRef.current?.contains(event.target as Node)) return;
-      setReaderMoreOpen(false);
+      beginReaderMoreClose();
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setReaderMoreOpen(false);
+      if (event.key === "Escape") beginReaderMoreClose();
     };
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     window.addEventListener("keydown", closeOnEscape);
@@ -3153,10 +3159,10 @@ const emptyMessageList = useMemo(() => (query.trim()
     if (!snoozeOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       if (snoozeRef.current?.contains(event.target as Node)) return;
-      setSnoozeOpen(false);
+      beginSnoozeClose();
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSnoozeOpen(false);
+      if (event.key === "Escape") beginSnoozeClose();
     };
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     window.addEventListener("keydown", closeOnEscape);
@@ -4171,9 +4177,9 @@ const emptyMessageList = useMemo(() => (query.trim()
                   <IconButton label={selectedMoveActionLabel ?? t("mail.action.archive")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("archive")} disabled={selectedRemoteActionsBlocked || selectedIsArchived}><Archive size={18} /></IconButton>
                   <IconButton label={selectedMoveActionLabel ?? t("mail.action.moveToTrash")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("trash")} disabled={selectedRemoteActionsBlocked}><Trash2 size={18} /></IconButton>
                   <div className="reader-snooze" ref={snoozeRef}>
-                    <IconButton label={selectedIsSnoozed ? t("mail.snooze.reschedule") : t("mail.snooze.title")} className={`reader-action-secondary${selectedIsSnoozed ? " snoozed" : ""}`} onClick={() => { setSnoozeOpen((value) => !value); setSnoozeCustomUntil(""); }} expanded={snoozeOpen} disabled={selectedRemoteActionsBlocked}><Clock size={18} /></IconButton>
-                    {snoozeOpen && (
-                      <div className="snooze-menu" role="menu" aria-label={t("mail.snooze.title")}>
+                    <IconButton label={selectedIsSnoozed ? t("mail.snooze.reschedule") : t("mail.snooze.title")} className={`reader-action-secondary${selectedIsSnoozed ? " snoozed" : ""}`} onClick={() => { if (snoozeOpen) { beginSnoozeClose(); } else { setSnoozeOpen(true); } setSnoozeCustomUntil(""); }} expanded={snoozeOpen} disabled={selectedRemoteActionsBlocked}><Clock size={18} /></IconButton>
+                    {snoozeMounted && (
+                      <div className={`snooze-menu${snoozeClosing ? " closing" : ""}`} role="menu" aria-label={t("mail.snooze.title")}>
                         {selectedIsSnoozed && selected.snoozedUntil && (
                           <>
                             <div className="snooze-current" role="status"><Clock size={14} />{t("mail.snooze.current", { until: formatFullDate(selected.snoozedUntil, locale) })}</div>
@@ -4194,9 +4200,9 @@ const emptyMessageList = useMemo(() => (query.trim()
                     )}
                   </div>
                   <div className="reader-more" ref={readerMoreRef}>
-                    <IconButton label={t("mail.action.more")} className="reader-more-toggle" onClick={() => setReaderMoreOpen((value) => !value)} expanded={readerMoreOpen}><MoreHorizontal size={19} /></IconButton>
-                    {readerMoreOpen && (
-                      <div className="reader-more-menu" role="menu" aria-label={t("mail.action.more")}>
+                    <IconButton label={t("mail.action.more")} className="reader-more-toggle" onClick={() => { if (readerMoreOpen) { beginReaderMoreClose(); } else { setReaderMoreOpen(true); } }} expanded={readerMoreOpen}><MoreHorizontal size={19} /></IconButton>
+                    {readerMoreMounted && (
+                      <div className={`reader-more-menu${readerMoreClosing ? " closing" : ""}`} role="menu" aria-label={t("mail.action.more")}>
                         <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openReplyAll(); }}><ReplyAll size={16} />{t("mail.action.replyAll")}</button>
                         <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openForward(); }}><Forward size={16} />{t("mail.action.forward")}</button>
                         <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked || selectedIsArchived} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />{t("mail.action.archive")}</button>

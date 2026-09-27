@@ -418,7 +418,7 @@
     "compose.scheduleSend": "定时发送",
     "compose.replyQuote": "在 {date}，{sender} 写道：",
     "compose.attachments": "附件",
-    "compose.saveDraft": "保存草稿",
+            "compose.saveDraft": "保存草稿",
     "compose.send": "发送",
     "compose.sending": "正在发送…",
     "compose.processing": "正在处理…",

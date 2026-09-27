@@ -179,6 +179,8 @@ describe("compose contact suggestions", () => {
 
     expect(toInput().getAttribute("aria-expanded")).toBe("true");
     pressKey("Escape");
+    expect(container.querySelector("#compose-contact-suggestions.closing")).not.toBeNull();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
     expect(container.querySelector("#compose-contact-suggestions")).toBeNull();
     expect(toInput().getAttribute("aria-expanded")).toBe("false");
     expect(toInput().getAttribute("aria-activedescendant")).toBeNull();

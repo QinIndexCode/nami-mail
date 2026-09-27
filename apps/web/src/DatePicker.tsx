@@ -1,6 +1,10 @@
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { createPortal } from "react-dom";
+import { autoUpdate, computePosition, flip, offset, shift } from "@floating-ui/dom";
 import { buildGrid, dateKey, pad, parseTime, parseValue, timeValue } from "./datePickerUtils";
+import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
+import ThemedSelect from "./ThemedSelect";
 import { useI18n } from "./i18n";
 
 export type DatePickerMode = "date" | "datetime";
@@ -42,14 +46,15 @@ export default function DatePicker({
 }: DatePickerProps) {
   const { locale, t } = useI18n();
   const [open, setOpen] = useState(false);
+  const { mounted: panelMounted, closing: panelClosing, beginClose: beginPanelClose } = usePopupExitTransition(open, () => setOpen(false));
   const [view, setView] = useState<PanelView>("day");
   const [viewMonth, setViewMonth] = useState<Date>(() => {
     const base = parseValue(value, mode).date ?? new Date();
     return new Date(base.getFullYear(), base.getMonth(), 1);
   });
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
-  const [anchorStyle, setAnchorStyle] = useState<CSSProperties>({});
   const rootRef = useRef<HTMLSpanElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
   const parsed = useMemo(() => parseValue(value, mode), [value, mode]);
@@ -57,28 +62,28 @@ export default function DatePicker({
   const todayKey = useMemo(() => dateKey(new Date()), []);
   const selectedKey = parsed.date ? dateKey(parsed.date) : "";
 
-  // Reposition the panel when it would overflow the viewport edge. Runs in
-  // every panel view (day/month/year) and whenever its height changes (the
-  // time row appears/disappears) so narrow triggers never clip the popup.
+  // The panel renders through a portal into document.body so no dialog's
+  // overflow clipping can cut it off, and Floating-UI owns placement: flip
+  // picks the side with room, shift keeps the panel inside the viewport, and
+  // autoUpdate repositions across scrolling, resizing, and view changes.
   useEffect(() => {
     if (!open) return undefined;
-    const frame = requestAnimationFrame(() => {
-      const panel = panelRef.current;
-      if (!panel) return;
-      const rect = panel.getBoundingClientRect();
-      const next: CSSProperties = {};
-      if (rect.right > window.innerWidth - 8) {
-        next.left = "auto";
-        next.right = 0;
-      }
-      if (rect.bottom > window.innerHeight - 8) {
-        next.top = "auto";
-        next.bottom = "calc(100% + 6px)";
-      }
-      setAnchorStyle(next);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [open, view, selectedKey, parsed.time, mode]);
+    const trigger = triggerRef.current;
+    const panel = panelRef.current;
+    if (!trigger || !panel) return undefined;
+    const update = () => {
+      void computePosition(trigger, panel, {
+        strategy: "fixed",
+        placement: "bottom-start",
+        middleware: [offset(6), flip(), shift({ padding: 8 })],
+      }).then(({ x, y }) => {
+        panel.style.left = `${x}px`;
+        panel.style.top = `${y}px`;
+      });
+    };
+    update();
+    return autoUpdate(trigger, panel, update);
+  }, [open]);
 
   // Sync the focused day when the panel opens or the selected date changes.
   useEffect(() => {
@@ -89,7 +94,11 @@ export default function DatePicker({
     if (!open) return undefined;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target;
-      if (!(target instanceof Node) || !rootRef.current?.contains(target)) setOpen(false);
+      if (!(target instanceof Node)) return;
+      // The panel is portaled to document.body, so the outside-click check
+      // must cover it alongside the trigger wrapper.
+      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      beginPanelClose();
     };
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
@@ -134,7 +143,7 @@ export default function DatePicker({
 
   const pickDate = (day: Date) => {
     emitValue(day);
-    if (mode === "date") setOpen(false);
+    if (mode === "date") beginPanelClose();
   };
 
   const pickTime = (nextTime: string) => {
@@ -165,16 +174,20 @@ export default function DatePicker({
     emitValue(today);
     setViewMonth(new Date(today.getFullYear(), today.getMonth(), 1));
     setView("day");
-    if (mode === "date") setOpen(false);
+    if (mode === "date") beginPanelClose();
   };
 
   const toggle = () => {
     if (disabled) return;
-    setOpen((current) => !current);
+    if (open) {
+      beginPanelClose();
+      return;
+    }
+    setOpen(true);
   };
 
   const handleTriggerKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === "Escape") setOpen(false);
+    if (event.key === "Escape") beginPanelClose();
     if (event.key === "ArrowDown" && !open) {
       event.preventDefault();
       setOpen(true);
@@ -184,7 +197,7 @@ export default function DatePicker({
   const handleGridKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
-      setOpen(false);
+      beginPanelClose();
       return;
     }
     if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Enter", " "].includes(event.key)) return;
@@ -260,13 +273,13 @@ export default function DatePicker({
         <div className="date-picker-time">
           <span className="date-picker-time-label">{t("datePicker.time")}</span>
           <span className="date-picker-time-segments">
-            <select className="date-picker-select" value={hour} aria-label={t("datePicker.hours")} onChange={(event) => pickTime(timeValue(event.target.value, minute))}>
+            <ThemedSelect id={`${panelId}-hours`} className="date-picker-select" value={hour} aria-label={t("datePicker.hours")} onValueChange={(next) => pickTime(timeValue(next, minute))}>
               {hours.map((value) => <option key={value} value={value}>{value}</option>)}
-            </select>
+            </ThemedSelect>
             <span aria-hidden="true">:</span>
-            <select className="date-picker-select" value={minute} aria-label={t("datePicker.minutes")} onChange={(event) => pickTime(timeValue(hour, event.target.value))}>
+            <ThemedSelect id={`${panelId}-minutes`} className="date-picker-select" value={minute} aria-label={t("datePicker.minutes")} onValueChange={(next) => pickTime(timeValue(hour, next))}>
               {minutes.map((value) => <option key={value} value={value}>{value}</option>)}
-            </select>
+            </ThemedSelect>
           </span>
         </div>
       )}
@@ -303,6 +316,7 @@ export default function DatePicker({
   return (
     <span ref={rootRef} className={`date-picker${className ? ` ${className}` : ""}`}>
       <button
+        ref={triggerRef}
         type="button"
         className="date-picker-trigger"
         aria-haspopup="dialog"
@@ -316,12 +330,11 @@ export default function DatePicker({
         <CalendarDays size={14} aria-hidden="true" />
         <span className={displayValue ? "" : "placeholder"}>{displayValue || placeholder || t("datePicker.placeholder")}</span>
       </button>
-      {open && (
+      {panelMounted && createPortal(
         <div
           id={panelId}
           ref={panelRef}
-          className="date-picker-panel"
-          style={anchorStyle}
+          className={`date-picker-panel${panelClosing ? " closing" : ""}`}
           role="dialog"
           aria-label={ariaLabel || t("datePicker.panelLabel")}
         >
@@ -333,7 +346,8 @@ export default function DatePicker({
           {view === "day" && renderDayView()}
           {view === "month" && renderMonthView()}
           {view === "year" && renderYearView()}
-        </div>
+        </div>,
+        document.body,
       )}
     </span>
   );

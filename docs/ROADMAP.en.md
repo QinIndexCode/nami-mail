@@ -41,6 +41,14 @@ Agent workspace with the reference already attached and the instruction already 
 - **Gap**: `AgentWorkspace` has no `initialPrompt` / auto-send intent (it can only seed the reference chip), so a new prop is required.
 - **Constraint**: new copy must land in both `zh-CN.json` and `en-US.json` (enforced by `build-locale-catalog --check` in CI).
 
+## Compose dialog: expandable full-page mode (hybrid)
+
+**Status**: direction confirmed, unscheduled (raised in the 2026-09-27 interaction review).
+
+**Goal**: keep the compose overlay as the default (it preserves the inbox context and suits quick replies) and add an "expand to full page" toggle in the dialog header, reusing the reader's existing full-page shell with the back arrow for immersive long-form writing. Replies started from the reader keep the overlay form (the context is the open message).
+
+**Notes**: ComposeModal gains a size state with two CSS layouts; the dialogRouting Escape/focus chain stays untouched; draft content must survive view switches; mobile keeps the overlay form.
+
 ## UI and interaction polish (audited 2026-09-10, delivered in batches)
 
 **Status**: direction agreed, first batch scheduled.

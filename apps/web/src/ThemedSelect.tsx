@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { useI18n } from "./i18n";
+import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 
 type SelectOption = {
   value: string;
@@ -101,6 +102,7 @@ export default function ThemedSelect({
     return groups;
   }, []), [options]);
   const [open, setOpen] = useState(false);
+  const { mounted: menuMounted, closing: menuClosing, beginClose: beginMenuClose } = usePopupExitTransition(open, () => setOpen(false));
   const [activeValue, setActiveValue] = useState(selectedEnabledValue);
   const rootRef = useRef<HTMLSpanElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -112,7 +114,7 @@ export default function ThemedSelect({
     if (!open) return undefined;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target;
-      if (!(target instanceof Node) || !rootRef.current?.contains(target)) setOpen(false);
+      if (!(target instanceof Node) || !rootRef.current?.contains(target)) beginMenuClose();
     };
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
@@ -125,7 +127,7 @@ export default function ThemedSelect({
   const choose = (option: SelectOption) => {
     if (option.disabled) return;
     onValueChange(option.value);
-    setOpen(false);
+    beginMenuClose();
     window.requestAnimationFrame(() => triggerRef.current?.focus());
   };
 
@@ -170,7 +172,7 @@ export default function ThemedSelect({
     if (event.key === "Escape" && open) {
       event.preventDefault();
       event.stopPropagation();
-      setOpen(false);
+      beginMenuClose();
       return;
     }
     if (event.key === "Enter" || event.key === " ") {
@@ -192,7 +194,7 @@ export default function ThemedSelect({
       className={`select-control ${containerClassName}`.trim()}
       onBlur={(event) => {
         const nextFocusTarget = event.relatedTarget;
-        if (!(nextFocusTarget instanceof Node) || !rootRef.current?.contains(nextFocusTarget)) setOpen(false);
+        if (!(nextFocusTarget instanceof Node) || !rootRef.current?.contains(nextFocusTarget)) beginMenuClose();
       }}
     >
       <button
@@ -211,7 +213,7 @@ export default function ThemedSelect({
         disabled={disabled}
         onClick={() => {
           if (!disabled) {
-            if (open) setOpen(false);
+            if (open) beginMenuClose();
             else openMenu();
           }
         }}
@@ -220,10 +222,10 @@ export default function ThemedSelect({
         <span className="themed-select-value">{selected?.label ?? t("common.notSelected")}</span>
         <ChevronDown className={`select-control-icon${open ? " open" : ""}`} size={15} aria-hidden="true" />
       </button>
-      {open && (
+      {menuMounted && (
         <span
           id={listboxId}
-          className="themed-select-menu"
+          className={`themed-select-menu${menuClosing ? " closing" : ""}`}
           role="listbox"
           aria-label={ariaLabel}
           aria-labelledby={ariaLabel ? undefined : id}

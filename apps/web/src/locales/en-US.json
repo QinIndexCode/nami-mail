@@ -418,7 +418,7 @@
     "compose.scheduleSend": "Send later",
     "compose.replyQuote": "On {date}, {sender} wrote:",
     "compose.attachments": "Attachments",
-    "compose.saveDraft": "Save draft",
+            "compose.saveDraft": "Save draft",
     "compose.send": "Send",
     "compose.sending": "Sending…",
     "compose.processing": "Working…",

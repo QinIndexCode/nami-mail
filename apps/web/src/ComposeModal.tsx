@@ -9,6 +9,7 @@ import { pollSubmittingSubmission } from "./sendingStatus";
 import DatePicker from "./DatePicker";
 import ThemedSelect from "./ThemedSelect";
 import { useDialogFocus } from "./hooks/useDialogFocus";
+import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { useI18n } from "./i18n";
 import type { Account, Contact, MailTemplate, OutboundAttachment } from "./types";
@@ -49,8 +50,10 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const [sendAtLocal, setSendAtLocal] = useState("");
   const [toSuggestions, setToSuggestions] = useState<Contact[]>([]);
   const [toSuggestionsOpen, setToSuggestionsOpen] = useState(false);
+  const { mounted: toSuggestionsMounted, closing: toSuggestionsClosing, beginClose: beginToSuggestionsClose } = usePopupExitTransition(toSuggestionsOpen, () => setToSuggestionsOpen(false));
   const [toSuggestionIndex, setToSuggestionIndex] = useState(0);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+  const { mounted: templatePickerMounted, closing: templatePickerClosing, beginClose: beginTemplatePickerClose } = usePopupExitTransition(templatePickerOpen, () => setTemplatePickerOpen(false));
   const [composeTemplates, setComposeTemplates] = useState<MailTemplate[] | null>(null);
   const [templateLoadBusy, setTemplateLoadBusy] = useState(false);
   const [templateLoadFailed, setTemplateLoadFailed] = useState(false);
@@ -133,7 +136,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const toggleTemplatePicker = () => {
     if (busy || discarding) return;
     if (templatePickerOpen) {
-      setTemplatePickerOpen(false);
+      beginTemplatePickerClose();
       return;
     }
     setTemplatePickerOpen(true);
@@ -143,7 +146,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     const applied = applyTemplateToDraft({ subject, body: text }, template);
     setSubject(applied.subject);
     setText(applied.body);
-    setTemplatePickerOpen(false);
+    beginTemplatePickerClose();
     onSent(t("compose.templates.inserted"));
   };
   const initialDraft = initialDraftRef.current;
@@ -617,7 +620,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             <label htmlFor="compose-to"><span>{t("compose.to")}</span>
               <div className="compose-to-input-wrap">
                 <input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => { setTo(event.target.value); searchContacts(event.target.value); }} onKeyDown={(event) => {
-                  if (event.key === "Escape") { setToSuggestionsOpen(false); return; }
+                  if (event.key === "Escape") { beginToSuggestionsClose(); return; }
                   if ((event.key === "ArrowDown" || event.key === "ArrowUp")) {
                     if (!toSuggestionsOpen || toSuggestions.length === 0) return;
                     event.preventDefault();
@@ -639,8 +642,8 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
                 )}
               </div>
             </label>
-            {toSuggestionsOpen && (
-              <div className="compose-contact-suggestions" id="compose-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
+            {toSuggestionsMounted && (
+              <div className={`compose-contact-suggestions${toSuggestionsClosing ? " closing" : ""}`} id="compose-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
                 {toSuggestions.map((contact, index) => (
                   <button key={contact.id} type="button" role="option" id={`compose-contact-suggestion-${index}`} aria-selected={index === suggestedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => applyRecipientSuggestion(contact)}>
                     <span>{contact.name || contact.email}</span><small>{contact.name ? contact.email : ""}</small>
@@ -677,8 +680,8 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
               <button className="secondary-button" type="button" disabled={busy || uploading || discarding || hasPendingUploads || !accountId} onClick={() => void saveDraft()}>{busy ? <LoaderCircle className="spin" size={17} /> : <FilePenLine size={17} />}{t("compose.saveDraft")}</button>
               <div className="compose-template-wrap">
                 <button className="secondary-button compose-template-toggle" type="button" disabled={busy || discarding} onClick={toggleTemplatePicker} aria-expanded={templatePickerOpen} aria-controls={templatePickerOpen ? "compose-template-picker" : undefined} aria-haspopup="listbox"><LayoutTemplate size={15} />{t("compose.templates")}</button>
-                {templatePickerOpen && (
-                  <div className="compose-template-picker" id="compose-template-picker" role="listbox" aria-label={t("compose.templates")}>
+                {templatePickerMounted && (
+                  <div className={`compose-template-picker${templatePickerClosing ? " closing" : ""}`} id="compose-template-picker" role="listbox" aria-label={t("compose.templates")}>
                     {isDemo ? (
                       <p className="compose-template-empty" role="status">{t("compose.templates.demoUnavailable")}</p>
                     ) : templateLoadBusy ? (

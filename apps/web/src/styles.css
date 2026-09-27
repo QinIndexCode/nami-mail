@@ -2693,7 +2693,8 @@ min-width:164px;
 box-shadow:var(--shadow-raised);
 border-radius:var(--radius-sm);
 padding:5px;
-animation:.14s both fade-in;
+animation:.15s cubic-bezier(.2,.8,.2,1) both popup-in;
+transform-origin:top right;
 display:grid;
 position:absolute;
 top:calc(100% + 7px);
@@ -2743,7 +2744,8 @@ box-shadow:var(--shadow-raised);
 border-radius:var(--radius-sm);
 gap:1px;
 padding:5px;
-animation:.14s both fade-in;
+animation:.15s cubic-bezier(.2,.8,.2,1) both popup-in;
+transform-origin:top right;
 display:grid;
 position:absolute;
 top:calc(100% + 7px);
@@ -6735,17 +6737,19 @@ border-radius:var(--radius-sm);
 outline:none;
 width:calc(100% - 40px);
 height:270px;
-margin:2px 20px 6px;
+margin:10px 20px 12px;
 padding:20px;
 font-family:Georgia,Songti SC,serif;
 font-size:15px;
 line-height:1.7;
-display:block
+display:block;
+transition:background .15s ease,border-color .15s ease
 }
 .compose-body:focus-visible
 {
-border-color:var(--focus-ring);
-box-shadow:0 0 0 3px var(--focus-ring-subtle)
+background:color-mix(in srgb, var(--panel-muted) 60%, transparent);
+border-color:transparent;
+box-shadow:none
 }
 .visually-hidden
 {
@@ -15703,10 +15707,8 @@ width:264px;
 box-shadow:var(--shadow-raised);
 border-radius:var(--radius-md);
 padding:11px;
-animation:.14s both pop-in;
-position:absolute;
-top:calc(100% + 6px);
-left:0
+animation:.16s cubic-bezier(.2,.8,.2,1) both popup-in;
+position:fixed
 }
 .date-picker-nav
 {
@@ -15884,16 +15886,25 @@ align-items:center;
 gap:4px;
 display:inline-flex
 }
-.date-picker-select
+.date-picker-time-segments .select-control
 {
+flex:none
+}
+.date-picker-time-segments .themed-select
+{
+width:64px;
+height:27px;
+padding:0 6px;
+font-size:11px;
+justify-content:space-between;
 border:1px solid var(--line-strong);
 background:var(--panel-solid);
-height:27px;
 color:var(--text);
-border-radius:6px;
-outline:none;
-padding:0 6px;
-font-size:11px
+border-radius:6px
+}
+.date-picker-time-segments .themed-select-menu
+{
+width:64px
 }
 .date-picker-select:focus
 {
@@ -18323,4 +18334,83 @@ color:var(--text)
 .error-boundary-fallback .lucide-triangle-alert
 {
 color:var(--warning)
+}
+
+/* Popup motion: enter/exit transitions consistent with the dialogs, tuned
+   per surface — large anchored cards pop, form dropdowns drop, toolbar
+   menus scale from their trigger, input suggestions stay subtle. Exits use
+   the .closing class driven by usePopupExitTransition. */
+@keyframes popup-in
+{
+0%
+{
+opacity:0;
+transform:scale(.97)translateY(4px)
+}
+}
+@keyframes popup-out
+{
+to
+{
+opacity:0;
+transform:scale(.97)translateY(4px)
+}
+}
+@keyframes drop-in
+{
+0%
+{
+opacity:0;
+transform:translateY(3px)
+}
+}
+@keyframes drop-out
+{
+to
+{
+opacity:0;
+transform:translateY(3px)
+}
+}
+.date-picker-panel.closing
+{
+animation:.12s cubic-bezier(.4,0,.2,1) both popup-out;
+pointer-events:none
+}
+.themed-select-menu
+{
+animation:.13s cubic-bezier(.2,.8,.2,1) both drop-in
+}
+.themed-select-menu.closing
+{
+animation:.11s cubic-bezier(.4,0,.2,1) both drop-out;
+pointer-events:none
+}
+.snooze-menu.closing
+{
+animation:.12s cubic-bezier(.4,0,.2,1) both popup-out;
+pointer-events:none
+}
+.reader-more-menu.closing
+{
+animation:.12s cubic-bezier(.4,0,.2,1) both popup-out;
+pointer-events:none
+}
+.compose-contact-suggestions
+{
+animation:.12s cubic-bezier(.2,.8,.2,1) both drop-in
+}
+.compose-contact-suggestions.closing
+{
+animation:.1s cubic-bezier(.4,0,.2,1) both drop-out;
+pointer-events:none
+}
+.compose-template-picker
+{
+animation:.18s cubic-bezier(.2,.8,.2,1) both popup-in
+}
+.compose-template-picker.closing
+{
+animation:.14s cubic-bezier(.4,0,.2,1) both popup-out;
+pointer-events:none
 }
