@@ -147,8 +147,30 @@ export function buildWikiTree(docsDir, outDir) {
   const homeZh = ["# Nami Mail Wiki", ""];
   const sidebar = ["**Nami Mail**", "- [Home](Home.md)", "- [Home 中文](Home.zh-CN.md)", ""];
   const navLine = "[English](Home.md) | [简体中文](Home.zh-CN.md)";
-  homeEn.push(navLine, "", "This wiki is maintained in the [docs/](https://github.com/QinIndexCode/nami-mail/tree/main/docs) directory and synced by the Sync Wiki workflow.", "");
-  homeZh.push(navLine, "", "本 Wiki 由 [docs/](https://github.com/QinIndexCode/nami-mail/tree/main/docs) 目录维护，并由 Sync Wiki workflow 自动同步。", "");
+  homeEn.push(
+    navLine,
+    "",
+    "Nami Mail is a local-first, multi-account desktop email client for Windows with a built-in AI mail assistant. Accounts, credentials, and every message stay on the machine: the app talks to IMAP/SMTP providers directly, and an Agent layer automates triage, drafting, and lookup on top of the local store.",
+    "",
+    "**Highlights**: multi-account unified inbox · AI mail assistant · RAG mail search · MCP Server and external MCP tools · message translation · privacy-first local storage.",
+    "",
+    "**Architecture in one line**: an Electron main process plus renderer, a local SQLite store, and a Node server runtime with strict trust boundaries between them — see [Architecture and Trust Boundaries](ARCHITECTURE.en.md) (简体中文: [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md)).",
+    "",
+    "This wiki is maintained in the [docs/](https://github.com/QinIndexCode/nami-mail/tree/main/docs) directory; sync it manually with `scripts/wiki-sync.mjs`.",
+    "",
+  );
+  homeZh.push(
+    navLine,
+    "",
+    "Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端，内置 AI 邮件助手。账户、凭据与全部邮件数据都保存在本机：应用直连 IMAP/SMTP 服务商，Agent 层在本地数据之上自动完成分拣、起草与检索。",
+    "",
+    "**功能亮点**：多账户统一收件箱 · AI 邮件助手 · RAG 邮件检索 · MCP Server 与外部 MCP 工具 · 邮件翻译 · 隐私优先的本地存储。",
+    "",
+    "**架构一句话**：Electron 主进程 + 渲染进程、本地 SQLite 存储、Node 服务运行时，三者之间有严格的信任边界——见 [架构与信任边界](ARCHITECTURE.zh-CN.md)（English: [ARCHITECTURE.en.md](ARCHITECTURE.en.md)）。",
+    "",
+    "本 Wiki 由 [docs/](https://github.com/QinIndexCode/nami-mail/tree/main/docs) 目录维护，使用 `scripts/wiki-sync.mjs` 手动同步。",
+    "",
+  );
 
   for (const group of groups) {
     homeEn.push(`## ${group.label.en} / ${group.label.zh}`, "");
