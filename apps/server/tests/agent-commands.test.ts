@@ -368,7 +368,7 @@ describe("slash command expansion", () => {
         allowCloudMailContent: false,
         makeDefault: true,
       });
-      expect(value.service.providers.list().defaultProviderId).toBe(provider.id);
+      expect(value.service.providerService.list().defaultProviderId).toBe(provider.id);
 
       // Simulate an app restart: same database and master key, fresh service.
       await value.service.close();
@@ -385,13 +385,13 @@ describe("slash command expansion", () => {
         memoryStore: memory,
       });
       try {
-        const listing = restarted.providers.list();
+        const listing = restarted.providerService.list();
         expect(listing.defaultProviderId).toBe(provider.id);
         expect(listing.items.map((item) => item.id)).toContain(provider.id);
 
         // Removing the default clears the persisted default.
-        restarted.providers.remove(provider.id);
-        expect(restarted.providers.list().defaultProviderId).toBeNull();
+        restarted.providerService.remove(provider.id);
+        expect(restarted.providerService.list().defaultProviderId).toBeNull();
       } finally {
         await restarted.close();
       }
