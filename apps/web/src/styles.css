@@ -6740,12 +6740,14 @@ padding:20px;
 font-family:Georgia,Songti SC,serif;
 font-size:15px;
 line-height:1.7;
-display:block
+display:block;
+transition:background .15s ease,border-color .15s ease
 }
 .compose-body:focus-visible
 {
-border-color:var(--focus-ring);
-box-shadow:0 0 0 3px var(--focus-ring-subtle)
+background:color-mix(in srgb, var(--panel-muted) 60%, transparent);
+border-color:transparent;
+box-shadow:none
 }
 .visually-hidden
 {
