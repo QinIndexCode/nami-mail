@@ -11,7 +11,7 @@
 
 ### Fixed
 
-- **Outlook / Hotmail add-account dead ends (Issue #116)**: with no OAuth client ID configured, the OAuth panel did not render at all, the action card referenced a nonexistent button, the footer submit stayed disabled forever, and the guide taught an impossible app-password path — the panel now honestly presents "not yet available in this build" plus one-time setup steps; partial outlook addresses no longer flash a misleading password field; the documented registration platform was corrected from Web to Mobile and desktop (the local callback port is dynamic, so the Web platform's exact-port match always fails).
+- **Outlook / Hotmail add-account dead ends (Issue #120)**: with no OAuth client ID configured, the OAuth panel did not render at all, the action card referenced a nonexistent button, the footer submit stayed disabled forever, and the guide taught an impossible app-password path — the panel now honestly presents "not yet available in this build" plus one-time setup steps; partial outlook addresses no longer flash a misleading password field; the documented registration platform was corrected from Web to Mobile and desktop (the local callback port is dynamic, so the Web platform's exact-port match always fails).
 - Duplicate conversation cards: when one message exists in both the inbox and a labeled folder, the conversation strip rendered two identical cards — now collapsed by Message-ID with the opened row always winning.
 - Folder navigation: the spinner never disappeared after re-clicking the same folder (which also left the whole list translucent/unclickable and broke infinite scroll).
 - Press animations knocked centered icon buttons off-center (`transform` cascade replacement); fixed the model-provider secret toggle plus two identical latent cases (translation key, account password toggle).
@@ -23,7 +23,7 @@
 ### Changed
 
 - Toolchain: the Node floor moves from 22.14 to 24.21 (LTS) — Electron 43 bundles Node 24.17, so CI's 22 window sat two majors behind production (which already produced one "green locally, red in CI" surprise); validation now matches the shipped runtime. The release-policy guard and the development/releasing docs move with it.
-- Microsoft mailbox access is now labeled "not yet available in this build" (waiting on an embedded public client ID, see Issue #116 and the roadmap); advanced users can follow the guide for a one-time manual setup.
+- Microsoft mailbox access is now labeled "not yet available in this build" (waiting on an embedded public client ID, see Issue #120 and the roadmap); advanced users can follow the guide for a one-time manual setup.
 - The server reserves built-in public client ID constants for Google/Microsoft (environment variables win); once embedded, users sign in with zero configuration.
 - Removed the automated wiki sync workflow: the default GITHUB_TOKEN cannot reach the wiki repository, so syncing is done manually with `scripts/wiki-sync.mjs`; the wiki home template gained a project overview. (#97/#98)
 

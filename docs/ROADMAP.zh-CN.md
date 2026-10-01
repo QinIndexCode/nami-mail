@@ -4,7 +4,7 @@
 
 ## Microsoft 邮箱 OAuth 内置授权（Outlook / Hotmail 接入恢复）
 
-**状态**：阻塞中（2026-10-01）。详情、恢复路径与验收标准见 [issue #116](https://github.com/QinIndexCode/nami-mail/issues/116)。
+**状态**：阻塞中（2026-10-01）。详情、恢复路径与验收标准见 [issue #120](https://github.com/QinIndexCode/nami-mail/issues/120)。
 
 **现状**：微软已于 2024-09 关闭 Outlook.com IMAP/SMTP 基础认证（普通密码与应用密码均被服务器拒绝），OAuth 是唯一接入方式；当前构建未内置 OAuth client ID，默认安装无法添加 Outlook / Hotmail 账号。开发者侧注册 Azure 应用需绑卡（万事达/Visa），为当前阻塞点；前端已对该状态做诚实说明。
 
