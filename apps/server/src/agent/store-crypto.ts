@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { maxJsonDepth } from "@nami/agent-contracts";
 import {
   decryptTextEnvelope,
   deriveEncryptionKey,
@@ -324,21 +325,26 @@ export function agentOpaqueDigestEquals(expected: string, actual: string): boole
 
 /** Canonical JSON keeps encrypted request fingerprints stable across key order. */
 export function canonicalAgentJson(value: unknown): string {
-  const visit = (current: unknown, seen: Set<object>): string => {
+  // This walk recurses over whatever the caller hands it, including a
+  // model-supplied tool payload, so it carries the same depth budget as every
+  // other JSON walk in the process: the budget is checked before descending,
+  // so a hostile record cannot turn the walk itself into a stack overflow.
+  const visit = (current: unknown, seen: Set<object>, depth: number): string => {
     if (current === null) return "null";
     if (typeof current === "string" || typeof current === "boolean") return JSON.stringify(current);
     if (typeof current === "number") {
       if (!Number.isFinite(current)) throw new AgentStoreCryptoError("Agent record contains a non-finite number.");
       return JSON.stringify(current);
     }
-    if (Array.isArray(current)) return `[${current.map((item) => visit(item, seen)).join(",")}]`;
     if (typeof current !== "object") throw new AgentStoreCryptoError("Agent record contains an unsupported value.");
+    if (depth >= maxJsonDepth) throw new AgentStoreCryptoError("Agent record is nested past the supported JSON depth.");
+    if (Array.isArray(current)) return `[${current.map((item) => visit(item, seen, depth + 1)).join(",")}]`;
     if (seen.has(current as object)) throw new AgentStoreCryptoError("Agent record contains a cycle.");
     seen.add(current as object);
     const object = current as Record<string, unknown>;
-    const result = `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${visit(object[key], seen)}`).join(",")}}`;
+    const result = `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${visit(object[key], seen, depth + 1)}`).join(",")}}`;
     seen.delete(current as object);
     return result;
   };
-  return visit(value, new Set<object>());
+  return visit(value, new Set<object>(), 0);
 }

@@ -358,3 +358,40 @@ test("MCP negotiate protocol version across supported revisions and reject unkno
   assert.equal(rejected?.error?.code, -32602);
   assert.deepEqual(rejected?.error?.data, { code: "VERSION_MISMATCH" });
 });
+
+test("MCP stdio session refuses a JSON-RPC request nested past the shared JSON depth budget", async () => {
+  const adapter = adapterWith({
+    transport: "windows-named-pipe",
+    async invoke() { return null; },
+  });
+  const session = new NamiMailMcpStdioSession({
+    mcpProtocolVersion,
+    serverInfo: { name: "NamiMail", version: "0.2.3" },
+    toolAdapter: adapter,
+  });
+  // Built by string repetition and parsed, never by JSON.stringify of a deep
+  // object: the engine's serializer is the recursive walk being guarded.
+  const nested = (levels: number): unknown =>
+    JSON.parse(`${'{"nested":'.repeat(levels)}"leaf"${"}".repeat(levels)}`);
+  await session.handle({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: mcpProtocolVersion } });
+
+  // Ordinary traffic is untouched by the budget.
+  const accepted = await session.handle({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "namimail_accounts_list", arguments: {} },
+  });
+  assert.equal((accepted?.result as { structuredContent: { success: boolean } }).structuredContent.success, true);
+
+  // The guard has to answer this rather than recurse: an exception here would
+  // escape the line handler as an uncaughtException.
+  const refused = await session.handle({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: { name: "namimail_accounts_list", arguments: { filter: nested(50_000) } },
+  });
+  assert.equal(refused?.error?.code, -32600);
+  assert.equal(refused?.id, null);
+});

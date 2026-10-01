@@ -1,11 +1,13 @@
 import {
   awaitAbortable,
   endpointUrl,
+  hasUnsafeToolArguments,
   linesFrom,
   maximumSseLineBytes,
   providerRequest,
   safeMessage,
   statusError,
+  unsafeToolArgumentsError,
   asRecord,
   type ProviderResponseLease,
 } from "./provider-common.js";
@@ -180,6 +182,11 @@ export class OpenAiResponsesProvider implements LlmProvider {
   }
 
   async *streamChat(request: ProviderChatRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): AsyncIterable<ProviderStreamEvent> {
+    if (hasUnsafeToolArguments(request.messages)) {
+      yield { type: "error", error: unsafeToolArgumentsError() };
+      yield { type: "completed", finishReason: "content-filter" };
+      return;
+    }
     const pending = new Map<string, PendingFunctionCall>();
     let nextOrder = 0;
     let finishReason: ProviderFinishReason = "stop";

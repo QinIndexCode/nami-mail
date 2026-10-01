@@ -4,6 +4,8 @@
 // `localizedProviderOnboarding`, which resolves these keys in the active
 // locale instead of shipping hardcoded Chinese prose to English UIs.
 
+import { type Translate } from "./i18n";
+
 export type ProviderCopyField = "credentialLabel" | "credentialName" | "credentialHint" | "helpText" | "caveat" | "helpLabel";
 
 export type ProviderCopyKeys = {
@@ -118,3 +120,17 @@ export const providerCopyKeys: Readonly<Record<string, ProviderCopyKeys>> = {
     helpText: key("custom", "helpText"), caveat: key("custom", "caveat"), setupSteps: steps("custom", 4),
   },
 };
+
+/**
+ * Resolves one preset's credential hint in the caller's active locale, for
+ * surfaces that only know a provider id (error guidance) instead of a catalog
+ * entry. The caller's `Translate` is already bound to that locale, and echoing
+ * a key back is how this codebase signals a pack that does not carry it — the
+ * same miss `localizedProviderOnboarding` treats as "use the fallback".
+ */
+export function providerCredentialHint(t: Translate, providerId: string | null | undefined): string | undefined {
+  const copyKey = providerId ? providerCopyKeys[providerId]?.credentialHint : undefined;
+  if (!copyKey) return undefined;
+  const hint = t(copyKey);
+  return hint === copyKey ? undefined : hint;
+}

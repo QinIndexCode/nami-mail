@@ -28,12 +28,14 @@ type SendingStatusModalProps = {
 export function submissionNoticeMessage(
   submission: Pick<OutboundSubmission, "deliveryStatus" | "errorCode" | "errorMessage" | "postSubmitWarning">,
   t: Translate = (key, values) => translate("zh-CN", key, values),
+  providerId?: string,
 ): string | null {
   if (submission.errorMessage) {
     return mailErrorMessage(
       { code: submission.errorCode ?? undefined, message: submission.errorMessage },
       submission.deliveryStatus === "unknown_delivery" ? t("sending.notice.unknownDelivery") : t("sending.notice.incomplete"),
       t,
+      { providerId },
     );
   }
   if (submission.postSubmitWarning) {
@@ -41,6 +43,7 @@ export function submissionNoticeMessage(
       { code: submission.errorCode ?? undefined, message: submission.postSubmitWarning },
       t("sending.notice.postSubmitIncomplete"),
       t,
+      { providerId },
     );
   }
   return null;
@@ -272,7 +275,7 @@ export default function SendingStatusModal({
               const canCreate = submission.deliveryStatus === "unknown_delivery" || submission.deliveryStatus === "failed";
               const isPendingScheduled = submission.deliveryStatus === "pending" && Boolean(submission.sendAt);
               const isOverdueScheduled = isPendingScheduled && submission.sendAt !== null && new Date(submission.sendAt).getTime() < Date.now();
-              const statusMessage = submissionNoticeMessage(submission, t);
+              const statusMessage = submissionNoticeMessage(submission, t, accountById.get(submission.accountId)?.provider);
               const recordBusy = busyIds.has(submission.id);
               const actionError = actionErrors[submission.id];
               return (
@@ -366,8 +369,8 @@ export default function SendingStatusModal({
                   );
                 })()}
               </dl>
-              {submissionNoticeMessage(detailsSubmission, t) && (
-                <div className="sending-status-details-message" role="alert"><CircleAlert size={14} />{submissionNoticeMessage(detailsSubmission, t)}</div>
+              {submissionNoticeMessage(detailsSubmission, t, accountById.get(detailsSubmission.accountId)?.provider) && (
+                <div className="sending-status-details-message" role="alert"><CircleAlert size={14} />{submissionNoticeMessage(detailsSubmission, t, accountById.get(detailsSubmission.accountId)?.provider)}</div>
               )}
               {actionErrors[detailsSubmission.id] && (
                 <div className="sending-status-details-action-error" role="alert"><CircleAlert size={14} />{actionErrors[detailsSubmission.id]}</div>

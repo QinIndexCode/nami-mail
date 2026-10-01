@@ -215,7 +215,7 @@ export default function AccountsDialog({
         message: syncResultNoticeMessage(summary, result.limitReached, t),
       });
     } catch (error) {
-      setNotice({ kind: "error", message: t("settings.account.syncFailed", { email: account.email, message: mailErrorMessage(error, undefined, t) }) });
+      setNotice({ kind: "error", message: t("settings.account.syncFailed", { email: account.email, message: mailErrorMessage(error, undefined, t, { providerId: account.provider }) }) });
     } finally {
       setBusyAction(null);
     }
@@ -233,7 +233,7 @@ export default function AccountsDialog({
       setEditingId(null);
       setNotice({ kind: "success", message: t("settings.account.signatureSaved", { email: account.email }) });
     } catch (error) {
-      setNotice({ kind: "error", message: mailErrorMessage(error, t("settings.error.saveSignature"), t) });
+      setNotice({ kind: "error", message: mailErrorMessage(error, t("settings.error.saveSignature"), t, { providerId: account.provider }) });
     } finally {
       setBusyAction(null);
     }

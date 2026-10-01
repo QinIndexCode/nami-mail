@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { it, vi } from "vitest";
+import { maxJsonDepth } from "@nami/agent-contracts";
 import { OpenAiCompatibleProvider } from "../src/agent/openai-compatible-provider.js";
 
 function sseResponse(lines: string[]): Response {
@@ -444,4 +445,72 @@ it("OpenAI compatible provider completes at [DONE] without waiting for the conne
   })) events.push(event);
   assert.deepEqual(events.map((event) => event.type), ["response_started", "text_delta", "completed"]);
   assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
+});
+
+// The tool_calls an assistant turn contributes are re-serialized into the next
+// chat-completions body, so a model-controlled payload arrives here with no
+// depth bound of its own.
+// Built by string repetition, never by JSON.stringify of a deep object: the
+// engine's serializer is the recursive walk being guarded.
+function deepJson(levels: number): unknown {
+  return JSON.parse(`${'{"nested":'.repeat(levels)}"leaf"${"}".repeat(levels)}`);
+}
+
+function historyWithToolInput(input: unknown): Record<string, unknown> {
+  return {
+    requestId: "123e4567-e89b-12d3-a456-426614174040",
+    providerId: "local-ollama",
+    model: "gpt-test",
+    messages: [
+      { role: "user", content: "Find invoices" },
+      { role: "assistant", content: "", toolCalls: [{ id: "call-1", toolName: "messages.search", input, requestedAt: "2026-01-01T00:00:00.000Z" }] },
+    ],
+    tools: [],
+    allowToolCalls: true,
+    responseFormat: "text",
+  };
+}
+
+it("OpenAI compatible provider refuses to resend a history carrying an inadmissible tool input", async () => {
+  const requests: Request[] = [];
+  const provider = new OpenAiCompatibleProvider({
+    id: "local-ollama",
+    kind: "ollama",
+    endpoint: "http://127.0.0.1:11434/v1",
+    fetchImpl: async (input) => {
+      requests.push(new Request(input));
+      return sseResponse(["data: [DONE]"]);
+    },
+  });
+
+  const events = [];
+  // A guard that raised instead of yielding would reject here.
+  for await (const event of provider.streamChat(historyWithToolInput(deepJson(5_000)) as never)) events.push(event);
+
+  // The guard fires before the request body is serialized, so no call is made.
+  assert.deepEqual(requests.length, 0);
+  assert.deepEqual(events, [
+    { type: "error", error: { code: "TOOL_INPUT_INVALID", message: "The provider returned tool call arguments that are not usable JSON input.", retryable: false } },
+    { type: "completed", finishReason: "content-filter" },
+  ]);
+});
+
+it("OpenAI compatible provider still replays a tool input nested exactly at the budget", async () => {
+  const requests: Request[] = [];
+  const provider = new OpenAiCompatibleProvider({
+    id: "local-ollama",
+    kind: "ollama",
+    endpoint: "http://127.0.0.1:11434/v1",
+    fetchImpl: async (input) => {
+      requests.push(new Request(input));
+      return sseResponse(['data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}', "data: [DONE]"]);
+    },
+  });
+
+  const events = [];
+  for await (const event of provider.streamChat(historyWithToolInput(deepJson(maxJsonDepth)) as never)) events.push(event);
+
+  assert.deepEqual(requests.length, 1);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
+  assert.equal(events.some((event) => event.type === "error"), false);
 });

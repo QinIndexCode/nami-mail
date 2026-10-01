@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   canonicalGmailEmail,
@@ -153,5 +156,31 @@ describe("surfacesExtraProvider", () => {
 
   it("is quiet when nothing is selected", () => {
     expect(surfacesExtraProvider(catalog, "")).toBe(false);
+  });
+});
+
+describe("add-account error guidance wiring", () => {
+  // The modal is a 1 900-line module whose only unit surface is the pure
+  // helpers above, so the provider context it hands to the error presenter is
+  // pinned by reading the source — the approach threads.test.ts takes for
+  // App.tsx. A rejected authorization code is only actionable when the user is
+  // told which provider's code they are supposed to generate.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const source = readFileSync(path.join(here, "AddAccountModal.tsx"), "utf8");
+
+  it("passes the provider being added to the shared error formatter", () => {
+    const start = source.indexOf("function friendlyError");
+    expect(start, "friendlyError not found").toBeGreaterThan(-1);
+    const declaration = source.slice(start, source.indexOf("\n}", start));
+    expect(declaration).toContain("providerId?: string");
+    expect(declaration).toContain("mailErrorMessage(error, undefined, t, { providerId })");
+  });
+
+  it("reports a rejected password and a failed OAuth attempt against that provider", () => {
+    expect(source).not.toMatch(/friendlyError\(error, t\)/);
+    for (const call of source.match(/friendlyError\(error, t, [^)]+\)/g) ?? []) {
+      expect(call).toBe("friendlyError(error, t, targetProviderId)");
+    }
+    expect(source).toContain('}, undefined, t, { providerId: targetProviderId }));');
   });
 });

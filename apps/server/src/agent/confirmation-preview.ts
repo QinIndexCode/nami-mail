@@ -1,3 +1,4 @@
+import { safeStringifyJson } from "@nami/agent-contracts";
 import { agentT, type AgentMessageKey } from "./agent-messages.js";
 import { defaultLocale, type SupportedLocale } from "../localization.js";
 
@@ -216,7 +217,9 @@ export function mcpWriteConfirmationPreview(
   const fields = input && typeof input === "object" && !Array.isArray(input)
     ? Object.entries(input as Record<string, unknown>).slice(0, 10).map(([key, value]) => ({
       label: key,
-      value: typeof value === "string" ? value.slice(0, 2_000) : JSON.stringify(value).slice(0, 2_000),
+      // A preview must never be the thing that fails: an argument the shared
+      // guard rejects renders as an empty value instead of throwing here.
+      value: typeof value === "string" ? value.slice(0, 2_000) : (safeStringifyJson(value) ?? "").slice(0, 2_000),
     }))
     : [];
   return {

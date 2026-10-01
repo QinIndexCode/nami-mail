@@ -1,4 +1,9 @@
-import { createAgentError, type AgentError } from "@nami/agent-contracts";
+import {
+  createAgentError,
+  isSafeJsonValue,
+  type AgentError,
+  type ProviderChatMessage,
+} from "@nami/agent-contracts";
 import { isLoopbackHostname } from "../endpoint-guard.js";
 
 /** Shared upper bound for a single SSE line/frame across provider adapters. */
@@ -101,6 +106,26 @@ export function statusError(status: number): AgentError {
 
 export function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+/**
+ * Tool call arguments are model-controlled and get re-serialized on the way
+ * back out, so an adapter that cannot bound them hands a payload to the
+ * engine's own unbounded recursive walk. The refusal is deliberately terminal
+ * and non-retryable: replaying the identical history cannot make it valid, and
+ * a retryable code would spend the whole backoff budget resending it.
+ */
+export function unsafeToolArgumentsError(): AgentError {
+  return createAgentError({
+    code: "TOOL_INPUT_INVALID",
+    message: "The provider returned tool call arguments that are not usable JSON input.",
+    retryable: false,
+  });
+}
+
+/** True when replaying this history would serialize an inadmissible tool input. */
+export function hasUnsafeToolArguments(messages: readonly ProviderChatMessage[]): boolean {
+  return messages.some((message) => (message.toolCalls ?? []).some((call) => !isSafeJsonValue(call.input)));
 }
 
 export function linesFrom(buffer: string, final: boolean): { lines: string[]; remaining: string } {

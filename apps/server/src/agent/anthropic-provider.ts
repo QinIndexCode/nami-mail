@@ -1,16 +1,19 @@
 import {
   awaitAbortable,
   endpointUrl,
+  hasUnsafeToolArguments,
   linesFrom,
   maximumSseLineBytes,
   providerRequest,
   safeMessage,
   statusError,
+  unsafeToolArgumentsError,
   asRecord,
   type ProviderResponseLease,
 } from "./provider-common.js";
 import {
   createAgentError,
+  safeStringifyJson,
   type AgentToolDescriptor,
   type LlmProvider,
   type ProviderCapabilities,
@@ -165,6 +168,11 @@ export class AnthropicMessagesProvider implements LlmProvider {
   }
 
   async *streamChat(request: ProviderChatRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): AsyncIterable<ProviderStreamEvent> {
+    if (hasUnsafeToolArguments(request.messages)) {
+      yield { type: "error", error: unsafeToolArgumentsError() };
+      yield { type: "completed", finishReason: "content-filter" };
+      return;
+    }
     const toolUses = new Map<number, PendingToolUse>();
     let finishReason: ProviderFinishReason = "stop";
     let inputTokens: number | undefined;
@@ -241,11 +249,21 @@ export class AnthropicMessagesProvider implements LlmProvider {
                 // the start event. Treat an empty object as "no input yet".
                 const prefilled = block.input && typeof block.input === "object" && !Array.isArray(block.input)
                   && Object.keys(block.input as Record<string, unknown>).length > 0;
+                // A pre-filled input arrives already parsed, so it never touches
+                // the delta byte budget below; both that budget and JSON
+                // admissibility have to be enforced here or a hostile payload
+                // reaches serialization unguarded.
+                const prefilledJson = prefilled ? safeStringifyJson(block.input) : "";
+                if (prefilledJson === undefined || prefilledJson.length > maximumToolArgumentsBytes) {
+                  yield { type: "error", error: unsafeToolArgumentsError() };
+                  yield { type: "completed", finishReason: "content-filter" };
+                  return;
+                }
                 toolUses.set(index, {
                   index,
                   id: typeof block.id === "string" && block.id ? block.id : `tool-${index}`,
                   name: typeof block.name === "string" ? block.name : "",
-                  arguments: prefilled ? JSON.stringify(block.input) : "",
+                  arguments: prefilledJson,
                 });
               } else if (block?.type === "text" && typeof block.text === "string" && block.text) {
                 // The first text block carries its full text in this event;
