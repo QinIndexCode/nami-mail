@@ -49,6 +49,7 @@ export function Switch({
   disabled = false,
   label,
   description,
+  tooltip,
   privacyNote,
   onChange,
 }: {
@@ -57,6 +58,8 @@ export function Switch({
   label: string;
   /** Optional: omit when the label is self-explanatory. */
   description?: string;
+  /** Optional hover tooltip for extra context without static clutter. */
+  tooltip?: string;
   /** Optional data-flow statement (e.g. what leaves the device when enabled). */
   privacyNote?: string;
   onChange: () => void;
@@ -64,7 +67,20 @@ export function Switch({
   return (
     <div className="setting-row setting-switch-row">
       <div>
-        <strong>{label}</strong>
+        <strong className="setting-switch-label">
+          {label}
+          {tooltip && (
+            <span
+              className="field-help-icon"
+              data-tooltip={tooltip}
+              aria-label={tooltip}
+              tabIndex={0}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <CircleHelp size={12} aria-hidden="true" />
+            </span>
+          )}
+        </strong>
         {description && <span>{description}</span>}
         {privacyNote && <PrivacyNote note={privacyNote} />}
       </div>

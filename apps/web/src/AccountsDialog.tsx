@@ -65,6 +65,7 @@ export default function AccountsDialog({
     Object.fromEntries(accounts.map((account) => [account.id, getAccountDisplayName(account.email) ?? ""])),
   );
   const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [page, setPage] = useState(1);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -394,20 +395,39 @@ export default function AccountsDialog({
             <>
               {showToolbar && (
                 <div className="accounts-toolbar">
-                  <div className="search-wrap accounts-search">
+                  <div
+                    className="search-wrap accounts-search"
+                    onClick={() => searchInputRef.current?.focus()}
+                  >
                     <Search size={14} aria-hidden="true" />
                     <input
+                      ref={searchInputRef}
                       type="search"
                       value={searchQuery}
                       onChange={(event) => {
                         setSearchQuery(event.target.value);
                         setPage(1);
                       }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape" && searchQuery) {
+                          event.stopPropagation();
+                          setSearchQuery("");
+                        }
+                      }}
                       placeholder={t("settings.account.searchPlaceholder")}
                       aria-label={t("settings.account.searchAriaLabel")}
                     />
                     {searchQuery && (
-                      <button className="icon-button search-clear" type="button" aria-label={t("settings.account.clearSearch")} onClick={() => setSearchQuery("")}>
+                      <button
+                        className="icon-button search-clear"
+                        type="button"
+                        aria-label={t("settings.account.clearSearch")}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSearchQuery("");
+                          searchInputRef.current?.focus();
+                        }}
+                      >
                         <X size={14} />
                       </button>
                     )}

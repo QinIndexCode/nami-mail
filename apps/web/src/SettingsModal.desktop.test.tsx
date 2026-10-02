@@ -8,9 +8,20 @@ const zh = (key: string) => translate("zh-CN", key);
 
 // Simulates the desktop renderer URL (?desktop=1) so the desktop-only
 // settings section is rendered. Must run before SettingsModal is imported.
+// The settings modal renders one category panel at a time, so the stubbed
+// localStorage also pins the desktop category as the active panel.
 vi.hoisted(() => {
+  const store = new Map([["nami.settings.category", "desktop"]]);
   Object.defineProperty(globalThis, "window", {
-    value: { location: { search: "?desktop=1" } },
+    value: {
+      location: { search: "?desktop=1" },
+      localStorage: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          store.set(key, value);
+        },
+      },
+    },
     configurable: true,
   });
 });
@@ -25,7 +36,6 @@ describe("settings desktop behaviors", () => {
           demoMode={false}
           onClose={() => undefined}
           onSettingsChange={() => undefined}
-          onOpenAgentProviderSettings={() => undefined}
         />
       </I18nProvider>,
     );
@@ -48,7 +58,6 @@ describe("settings desktop behaviors", () => {
           demoMode={false}
           onClose={() => undefined}
           onSettingsChange={() => undefined}
-          onOpenAgentProviderSettings={() => undefined}
         />
       </I18nProvider>,
     );

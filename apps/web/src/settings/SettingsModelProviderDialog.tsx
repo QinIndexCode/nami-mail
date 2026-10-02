@@ -43,9 +43,7 @@ export default function SettingsModelProviderDialog({
       busy={busy}
       dirty={providers.formDirty}
       t={t}
-      eyebrow={editing ? t("agent.providers.form.editEyebrow") : t("agent.providers.form.newEyebrow")}
       title={editing ? t("agent.providers.form.editTitle") : t("agent.providers.form.newTitle")}
-      hint={t("settings.models.providers.formHint")}
       labelledBy="models-provider-form-title"
       formId="provider"
       feedback={providers.feedback}
@@ -58,31 +56,64 @@ export default function SettingsModelProviderDialog({
       onSubmit={() => void providers.save()}
       fields={
         <>
-          <ModelField id="agent-provider-kind" label={t("agent.providers.fields.kind")} hint={t("agent.providers.fields.kindHint")}>
-            <ThemedSelect
-              id="agent-provider-kind"
-              value={form.kind}
-              aria-label={t("agent.providers.fields.kind")}
-              disabled={busy}
-              onValueChange={(value) => providers.updateKind(value as AgentProviderKind)}
-            >
-              {PROVIDER_KIND_OPTIONS.map(({ kind, labelKey }) => <option key={kind} value={kind}>{t(labelKey)}</option>)}
-            </ThemedSelect>
-          </ModelField>
+          <div className="calendar-field-grid">
+            <ModelField id="agent-provider-kind" label={t("agent.providers.fields.kind")} help={t("agent.providers.fields.kindHint")}>
+              <ThemedSelect
+                id="agent-provider-kind"
+                className="settings-model-select"
+                value={form.kind}
+                aria-label={t("agent.providers.fields.kind")}
+                disabled={busy}
+                onValueChange={(value) => providers.updateKind(value as AgentProviderKind)}
+              >
+                {PROVIDER_KIND_OPTIONS.map(({ kind, labelKey }) => <option key={kind} value={kind}>{t(labelKey)}</option>)}
+              </ThemedSelect>
+            </ModelField>
 
-          <ModelField id="agent-provider-label" label={t("agent.providers.fields.label")} hint={t("agent.providers.fields.labelHint")}>
-            <input
-              id="agent-provider-label"
-              type="text"
-              value={form.label}
-              maxLength={128}
-              disabled={busy}
-              autoComplete="off"
-              onChange={(event) => providers.updateForm("label", event.target.value)}
-            />
-          </ModelField>
+            <ModelField id="agent-provider-label" label={t("agent.providers.fields.label")}>
+              <input
+                id="agent-provider-label"
+                type="text"
+                value={form.label}
+                maxLength={128}
+                disabled={busy}
+                autoComplete="off"
+                placeholder={form.kind === "ollama" ? "本机 Ollama" : "例如：DeepSeek V3"}
+                onChange={(event) => providers.updateForm("label", event.target.value)}
+              />
+            </ModelField>
+          </div>
 
-          <ModelField id="agent-provider-endpoint" label={t("agent.providers.fields.endpoint")} hint={t(kindMeta.endpointHintKey)}>
+          <div className="calendar-field-grid">
+            <ModelField id="agent-provider-model" label={t("agent.providers.fields.model")}>
+              <input
+                id="agent-provider-model"
+                type="text"
+                value={form.model}
+                placeholder={kindMeta.modelPlaceholder}
+                maxLength={256}
+                disabled={busy}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(event) => providers.updateForm("model", event.target.value)}
+              />
+            </ModelField>
+
+            <ModelField id="agent-provider-timeout" label={t("agent.providers.fields.timeout")} help={t("agent.providers.fields.timeoutHint")}>
+              <input
+                id="agent-provider-timeout"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={form.timeoutMs}
+                disabled={busy}
+                autoComplete="off"
+                onChange={(event) => providers.updateForm("timeoutMs", event.target.value)}
+              />
+            </ModelField>
+          </div>
+
+          <ModelField id="agent-provider-endpoint" label={t("agent.providers.fields.endpoint")} help={t(kindMeta.endpointHintKey)}>
             <input
               id="agent-provider-endpoint"
               type="text"
@@ -95,21 +126,7 @@ export default function SettingsModelProviderDialog({
             />
           </ModelField>
 
-          <ModelField id="agent-provider-model" label={t("agent.providers.fields.model")} hint={t("agent.providers.fields.modelHint")}>
-            <input
-              id="agent-provider-model"
-              type="text"
-              value={form.model}
-              placeholder={kindMeta.modelPlaceholder}
-              maxLength={256}
-              disabled={busy}
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(event) => providers.updateForm("model", event.target.value)}
-            />
-          </ModelField>
-
-          <ModelField id="agent-provider-key" label={t("agent.providers.fields.apiKey")} hint={editing && providers.selectedProvider?.apiKeyConfigured ? t("agent.providers.fields.apiKeyConfigured") : t("agent.providers.fields.apiKeyOptional")}>
+          <ModelField id="agent-provider-key" label={t("agent.providers.fields.apiKey")} help={editing && providers.selectedProvider?.apiKeyConfigured ? t("agent.providers.fields.apiKeyConfigured") : t("agent.providers.fields.apiKeyOptional")}>
             <span className="settings-secret-input">
               <input
                 id="agent-provider-key"
@@ -135,43 +152,32 @@ export default function SettingsModelProviderDialog({
             </span>
           </ModelField>
 
-          {editing && providers.selectedProvider?.apiKeyConfigured && (
+          <div className="settings-model-switches">
+            {editing && providers.selectedProvider?.apiKeyConfigured && (
+              <Switch
+                checked={form.clearApiKey}
+                disabled={busy || Boolean(form.apiKey)}
+                label={t("agent.providers.fields.clearApiKey")}
+                onChange={() => providers.updateForm("clearApiKey", !form.clearApiKey)}
+              />
+            )}
+
             <Switch
-              checked={form.clearApiKey}
-              disabled={busy || Boolean(form.apiKey)}
-              label={t("agent.providers.fields.clearApiKey")}
-              onChange={() => providers.updateForm("clearApiKey", !form.clearApiKey)}
+              checked={form.allowCloudMailContent}
+              disabled={busy || isLocal}
+              label={t("agent.providers.cloud.title")}
+              tooltip={isLocal ? t("agent.providers.cloud.localOnly") : t("agent.providers.cloud.description")}
+              onChange={() => providers.updateForm("allowCloudMailContent", !form.allowCloudMailContent)}
             />
-          )}
 
-          <Switch
-            checked={form.allowCloudMailContent}
-            disabled={busy || isLocal}
-            label={t("agent.providers.cloud.title")}
-            description={isLocal ? t("agent.providers.cloud.localOnly") : t("agent.providers.cloud.description")}
-            onChange={() => providers.updateForm("allowCloudMailContent", !form.allowCloudMailContent)}
-          />
-
-          <Switch
-            checked={form.makeDefault}
-            disabled={busy || isCurrentDefault}
-            label={t("agent.providers.default.title")}
-            description={isCurrentDefault ? t("agent.providers.default.current") : t("agent.providers.default.description")}
-            onChange={() => providers.updateForm("makeDefault", !form.makeDefault)}
-          />
-
-          <ModelField id="agent-provider-timeout" label={t("agent.providers.fields.timeout")} hint={t("agent.providers.fields.timeoutHint")}>
-            <input
-              id="agent-provider-timeout"
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              value={form.timeoutMs}
-              disabled={busy}
-              autoComplete="off"
-              onChange={(event) => providers.updateForm("timeoutMs", event.target.value)}
+            <Switch
+              checked={form.makeDefault}
+              disabled={busy || isCurrentDefault}
+              label={t("agent.providers.default.title")}
+              tooltip={isCurrentDefault ? t("agent.providers.default.current") : t("agent.providers.default.description")}
+              onChange={() => providers.updateForm("makeDefault", !form.makeDefault)}
             />
-          </ModelField>
+          </div>
 
           {providers.touched && providers.validationMessage && (
             <p className="settings-note" role="status"><CircleAlert size={13} aria-hidden="true" />{providers.validationMessage}</p>

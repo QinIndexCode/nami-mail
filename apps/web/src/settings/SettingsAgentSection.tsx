@@ -2,10 +2,10 @@ import {
   BookOpen,
   Bot,
   ChevronDown,
+  CircleHelp,
   LoaderCircle,
   MessageSquareReply,
   MessageSquareX,
-
   Wrench,
 } from "lucide-react";
 import type { Translate } from "../i18n";
@@ -42,6 +42,7 @@ export type SettingsAgentSectionProps = {
   setAutoReplyDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setAutoReplyDecisionsOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setMemoryDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  overlayHostRef?: React.RefObject<HTMLElement | null>;
 };
 
 export default function SettingsAgentSection({
@@ -62,6 +63,7 @@ export default function SettingsAgentSection({
   setAutoReplyDialogOpen,
   setAutoReplyDecisionsOpen,
   setMemoryDialogOpen,
+  overlayHostRef,
 }: SettingsAgentSectionProps) {
   const copyExternalGuide = (text: string, id: string) => {
     void copyTextToClipboard(text).then((copied) => {
@@ -95,8 +97,12 @@ export default function SettingsAgentSection({
           </div>
           <div className="setting-row">
             <div>
-              <strong>{t("settings.agent.toolRoundLimit")}</strong>
-              <span>{t("settings.agent.toolRoundLimitDesc")}</span>
+              <strong>
+                {t("settings.agent.toolRoundLimit")}
+                <span className="field-help-icon" data-tooltip={t("settings.agent.toolRoundLimitDesc")} aria-label={t("settings.agent.toolRoundLimitDesc")} tabIndex={0}>
+                  <CircleHelp size={12} aria-hidden="true" />
+                </span>
+              </strong>
             </div>
             <NumberStepper
               value={currentSettings.agentToolRoundLimit}
@@ -108,7 +114,7 @@ export default function SettingsAgentSection({
               onChange={(value) => void applyOptimisticSettings({ agentToolRoundLimit: value }, null)}
             />
           </div>
-          <div className="setting-subheading"><span>{t("settings.agent.autoReplyGroup")}</span><small>{t("settings.agent.autoReplyGroupDesc")}</small></div>
+          <div className="setting-subheading"><span>{t("settings.agent.autoReplyGroup")}</span></div>
           {currentSettings.autoReplyInvalid && (
             <p className="form-status error" role="alert">{t("settings.agent.autoReplyInvalidWarning")}</p>
           )}
@@ -206,7 +212,7 @@ export default function SettingsAgentSection({
                       checked={currentSettings.autoReply.template.skipConfirmation}
                       disabled={controlsBusy}
                       label={t("settings.agent.autoReplySkipConfirmation")}
-                      description={t("settings.agent.autoReplySkipConfirmationDesc")}
+                      tooltip={t("settings.agent.autoReplySkipConfirmationDesc")}
                       onChange={() => void applyOptimisticSettings(
                         { autoReply: { ...currentSettings.autoReply, template: { ...currentSettings.autoReply.template, skipConfirmation: !currentSettings.autoReply.template.skipConfirmation } } },
                         null,
@@ -217,6 +223,7 @@ export default function SettingsAgentSection({
                 <AutoReplyScopeEditor
                   scope={currentSettings.autoReply.scope}
                   disabled={controlsBusy}
+                  overlayHostRef={overlayHostRef}
                   onChange={(scope) => void applyOptimisticSettings(
                     { autoReply: { ...currentSettings.autoReply, scope } },
                     null,
@@ -224,8 +231,12 @@ export default function SettingsAgentSection({
                 />
                 <div className="setting-row">
                   <div>
-                    <strong>{t("settings.agent.autoReplyDailyLimit")}</strong>
-                    <span>{t("settings.agent.autoReplyDailyLimitDesc")}</span>
+                    <strong>
+                      {t("settings.agent.autoReplyDailyLimit")}
+                      <span className="field-help-icon" data-tooltip={t("settings.agent.autoReplyDailyLimitDesc")} aria-label={t("settings.agent.autoReplyDailyLimitDesc")} tabIndex={0}>
+                        <CircleHelp size={12} aria-hidden="true" />
+                      </span>
+                    </strong>
                   </div>
                   <NumberStepper
                     value={currentSettings.autoReply.dailyLimitPerAccount}

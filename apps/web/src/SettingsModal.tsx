@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode, type RefObject } from "react";
 import {
   Bell,
   Bot,
   Cpu,
+  Filter,
   KeyRound,
   Laptop,
   Languages,
@@ -10,6 +11,9 @@ import {
   Palette,
   RefreshCw,
   RotateCcw,
+  Search,
+  SearchX,
+  Server,
   Trash2,
   Undo2,
   X,
@@ -19,6 +23,7 @@ import {
 import { api, type TranslationConfiguration, type TranslationProviderId } from "./api";
 import type { AgentBootstrap, AgentProviderList, ExternalPairingSummary } from "./agentTypes";
 import { desktopBridge, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
+import { searchSettings } from "./settings/settings-search";
 
 import FilterRulesSection from "./FilterRulesSection";
 import AgentMemoryDialog from "./AgentMemoryDialog";
@@ -82,7 +87,9 @@ const categoryMeta: Record<SettingsCategoryId, { icon: LucideIcon; labelKey: str
   notifications: { icon: Bell, labelKey: "settings.notifications.title" },
   desktop: { icon: Laptop, labelKey: "settings.desktop.title" },
   sync: { icon: RefreshCw, labelKey: "settings.sync.title" },
+  filters: { icon: Filter, labelKey: "settings.nav.filters.title" },
   models: { icon: Cpu, labelKey: "settings.nav.models.title" },
+  mcp: { icon: Server, labelKey: "settings.nav.mcp.title" },
   agent: { icon: Bot, labelKey: "agent.launch" },
   translation: { icon: KeyRound, labelKey: "settings.translation.title" },
 };
@@ -197,6 +204,8 @@ export default function SettingsModal({
   // left off, and a stored "desktop" is ignored on browser runtimes. A deep
   // link present at mount wins over the persisted category.
   const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>(() => categoryRequest?.category ?? readStoredSettingsCategory(isDesktopRuntime));
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     try {
@@ -389,6 +398,7 @@ export default function SettingsModal({
       // before the combobox has a chance to close only its own menu. The
       // active element fallback covers retargeted key events.
       if (expandedThemedSelectOwnsEscape(target, activeElement)) return;
+      if (searchInputRef.current && (target === searchInputRef.current || activeElement === searchInputRef.current) && searchQuery) return;
       // The models form dialog owns Escape while it is up (and may put a
       // discard-confirmation on top of itself). Yield before stopping the
       // event, otherwise the inner layer never sees it and this dialog would
@@ -409,7 +419,7 @@ export default function SettingsModal({
     };
     window.addEventListener("keydown", closeOnEscape, true);
     return () => window.removeEventListener("keydown", closeOnEscape, true);
-  }, [backgroundUploadError, controlsBusy, modelsOverlayOpen, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose]);
+  }, [backgroundUploadError, controlsBusy, modelsOverlayOpen, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose, searchQuery]);
 
   useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || autoReplyDecisionsOpen || memoryDialogOpen || modelsOverlayOpen) });
   useDialogFocus(Boolean(pendingConfirmation), confirmationDialog, { fallbackFocusRef: settingsDialog });
@@ -939,6 +949,40 @@ export default function SettingsModal({
     if (settingsBody.current) settingsBody.current.scrollTop = 0;
   };
 
+  const searchResults = useMemo(() => searchSettings(searchQuery, t, isDesktopRuntime), [searchQuery, t]);
+
+  useEffect(() => {
+    if (searchResults && searchResults.length > 0) {
+      if (!searchResults.some((r) => r.categoryId === activeCategory)) {
+        selectCategory(searchResults[0].categoryId);
+      }
+    }
+  }, [searchResults, activeCategory]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const navigateToTarget = (categoryId: SettingsCategoryId, targetId?: string) => {
+    selectCategory(categoryId);
+    if (targetId) {
+      requestAnimationFrame(() => {
+        const el = document.getElementById(targetId) || document.querySelector(targetId);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+    }
+  };
+
   // The record keys are the full category set, so TypeScript rejects a nav
   // entry whose panel is missing (the old scroll-nav could point at nothing).
   const panels: Record<SettingsCategoryId, ReactNode> = {
@@ -1010,18 +1054,39 @@ export default function SettingsModal({
         applyOptimisticSettings={applyOptimisticSettings}
       />
     ),
+    filters: (
+      <FilterRulesSection
+        accounts={accounts}
+        demoMode={demoMode}
+        overlayHostRef={settingsBackdrop}
+      />
+    ),
     models: (
-    <SettingsModelsSection
-      t={t}
-      demoMode={demoMode}
-      initialProviders={agentProviderSeed?.providers ?? []}
-      initialDefaultProviderId={agentProviderSeed?.defaultProviderId ?? null}
-      onProvidersChanged={(providers) => onAgentProviderListChanged?.(providers)}
-      onOverlayOpenChange={setModelsOverlayOpen}
-      onBusyChange={setModelsBusy}
-      overlayHostRef={settingsBackdrop}
-    />
-  ),
+      <SettingsModelsSection
+        view="providers"
+        t={t}
+        demoMode={demoMode}
+        initialProviders={agentProviderSeed?.providers ?? []}
+        initialDefaultProviderId={agentProviderSeed?.defaultProviderId ?? null}
+        onProvidersChanged={(providers) => onAgentProviderListChanged?.(providers)}
+        onOverlayOpenChange={setModelsOverlayOpen}
+        onBusyChange={setModelsBusy}
+        overlayHostRef={settingsBackdrop}
+      />
+    ),
+    mcp: (
+      <SettingsModelsSection
+        view="mcp"
+        t={t}
+        demoMode={demoMode}
+        initialProviders={agentProviderSeed?.providers ?? []}
+        initialDefaultProviderId={agentProviderSeed?.defaultProviderId ?? null}
+        onProvidersChanged={(providers) => onAgentProviderListChanged?.(providers)}
+        onOverlayOpenChange={setModelsOverlayOpen}
+        onBusyChange={setModelsBusy}
+        overlayHostRef={settingsBackdrop}
+      />
+    ),
     agent: (
       <SettingsAgentSection
         t={t}
@@ -1041,6 +1106,7 @@ export default function SettingsModal({
         setAutoReplyDialogOpen={setAutoReplyDialogOpen}
         setAutoReplyDecisionsOpen={setAutoReplyDecisionsOpen}
         setMemoryDialogOpen={setMemoryDialogOpen}
+        overlayHostRef={settingsBackdrop}
       />
     ),
     translation: (
@@ -1078,10 +1144,7 @@ export default function SettingsModal({
     <div ref={settingsBackdrop} className={`modal-backdrop settings-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
       <section ref={settingsDialog} className={`modal-card settings-modal${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1}>
         <header className="modal-heading settings-heading">
-          <div>
-            <span className="eyebrow">{t("settings.eyebrow")}</span>
-            <h2 id="settings-title">{t("settings.title")}</h2>
-          </div>
+          <h2 id="settings-title">{t("settings.title")}</h2>
           <button
             className="icon-button"
             type="button"
@@ -1096,28 +1159,112 @@ export default function SettingsModal({
 
         <div className="settings-layout">
           <nav className="settings-nav" aria-label={t("settings.nav.title")}>
-            <p className="settings-nav-title">{t("settings.nav.title")}</p>
-            {visibleNavGroups.map((group) => (
-              <div className="settings-nav-group" key={group.key}>
-                <p className="settings-nav-group-label">{t(settingsNavGroupLabelKeys[group.key])}</p>
-                {group.items.map((id) => {
-                  const meta = categoryMeta[id];
-                  const active = activeCategory === id;
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      id={`settings-nav-${id}`}
-                      className={`settings-nav-item${active ? " active" : ""}`}
-                      aria-current={active ? "true" : undefined}
-                      onClick={() => selectCategory(id)}
-                    >
-                      <meta.icon size={14} />{t(meta.labelKey)}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
+            <div className="settings-nav-search">
+              <Search size={13} className="settings-nav-search-icon" aria-hidden="true" />
+              <input
+                ref={searchInputRef}
+                type="search"
+                className="settings-nav-search-input"
+                placeholder={t("settings.search.placeholder")}
+                aria-label={t("settings.search.placeholder")}
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape" && searchQuery) {
+                    event.stopPropagation();
+                    setSearchQuery("");
+                  } else if (event.key === "Enter" && searchResults && searchResults.length > 0) {
+                    selectCategory(searchResults[0].categoryId);
+                  }
+                }}
+                spellCheck={false}
+                autoComplete="off"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  className="settings-nav-search-clear"
+                  aria-label={t("settings.search.clear")}
+                  onClick={() => {
+                    setSearchQuery("");
+                    searchInputRef.current?.focus();
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+
+            {searchResults !== null ? (
+              searchResults.length === 0 ? (
+                <div className="settings-nav-search-empty" role="status">
+                  <SearchX size={20} />
+                  <span>{t("settings.search.noResults")}</span>
+                </div>
+              ) : (
+                <div className="settings-nav-group">
+                  <p className="settings-nav-group-label">
+                    {t("settings.search.resultsTitle")} ({searchResults.length})
+                  </p>
+                  {searchResults.map((result) => {
+                    const id = result.categoryId;
+                    const meta = categoryMeta[id];
+                    const active = activeCategory === id;
+                    return (
+                      <div key={id} className="settings-search-result-group">
+                        <button
+                          key={id}
+                          type="button"
+                          id={`settings-nav-${id}`}
+                          className={`settings-nav-item${active ? " active" : ""}`}
+                          aria-current={active ? "true" : undefined}
+                          onClick={() => selectCategory(id)}
+                        >
+                          <meta.icon size={14} />
+                          <span>{t(meta.labelKey)}</span>
+                        </button>
+                        {result.matchedItems.length > 0 && (
+                          <div className="settings-search-match-tags">
+                            {result.matchedItems.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                className="settings-search-match-tag"
+                                onClick={() => navigateToTarget(id, item.targetId)}
+                              >
+                                {item.title}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            ) : (
+              visibleNavGroups.map((group) => (
+                <div className="settings-nav-group" key={group.key}>
+                  <p className="settings-nav-group-label">{t(settingsNavGroupLabelKeys[group.key])}</p>
+                  {group.items.map((id) => {
+                    const meta = categoryMeta[id];
+                    const active = activeCategory === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        id={`settings-nav-${id}`}
+                        className={`settings-nav-item${active ? " active" : ""}`}
+                        aria-current={active ? "true" : undefined}
+                        onClick={() => selectCategory(id)}
+                      >
+                        <meta.icon size={14} />{t(meta.labelKey)}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))
+            )}
           </nav>
           <div className="settings-body" ref={settingsBody}>
             <FormNotice notice={notice} />
@@ -1132,9 +1279,6 @@ export default function SettingsModal({
               aria-labelledby={`settings-nav-${activeCategory}`}
             >
               {panels[activeCategory]}
-              {/* Filter rules are mailbox configuration without a nav entry of
-                  their own; they ride in the mail group's sync panel. */}
-              {activeCategory === "sync" && <FilterRulesSection accounts={accounts} demoMode={demoMode} />}
             </div>
           </div>
         </div>

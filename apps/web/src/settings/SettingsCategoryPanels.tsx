@@ -1,6 +1,7 @@
 import {
   Bell,
   Check,
+  CircleHelp,
   Clock3,
   Download,
   Laptop,
@@ -48,7 +49,9 @@ export function SettingsLanguagePanel({
         <div><span id="language-settings">{t("language.title")}</span></div>
       </div>
       <label className="setting-select-row" htmlFor="interface-language">
-        <span><strong>{t("language.label")}</strong><small>{t("settings.language.applyImmediately")}</small></span>
+        <span>
+          <strong>{t("language.label")}<span className="field-help-icon" data-tooltip={t("settings.language.applyImmediately")} aria-label={t("settings.language.applyImmediately")} tabIndex={0}><CircleHelp size={12} aria-hidden="true" /></span></strong>
+        </span>
         <ThemedSelect
           id="interface-language"
           value={activeLocale}
@@ -201,7 +204,7 @@ export function SettingsDesktopPanel({
         checked={currentSettings.globalShortcutEnabled}
         disabled={controlsBusy}
         label={t("settings.shortcut.label")}
-        description={t("settings.shortcut.description")}
+        tooltip={t("settings.shortcut.description")}
         onChange={() => void applyOptimisticSettings({ globalShortcutEnabled: !currentSettings.globalShortcutEnabled }, null)}
       />
       {updateStatus && updatePresentation && (
@@ -305,7 +308,9 @@ export function SettingsSyncPanel({
         </ThemedSelect>
       </label>
       <label className="setting-select-row" htmlFor="sync-message-limit">
-        <span><strong>{t("settings.sync.limit.label")}</strong><small>{t("settings.sync.limit.description")}</small></span>
+        <span>
+          <strong>{t("settings.sync.limit.label")}<span className="field-help-icon" data-tooltip={t("settings.sync.limit.description")} aria-label={t("settings.sync.limit.description")} tabIndex={0}><CircleHelp size={12} aria-hidden="true" /></span></strong>
+        </span>
         <ThemedSelect
           id="sync-message-limit"
           value={currentSettings.syncMessageLimit}

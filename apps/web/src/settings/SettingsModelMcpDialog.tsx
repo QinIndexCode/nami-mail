@@ -28,9 +28,7 @@ export default function SettingsModelMcpDialog({
       busy={busy}
       dirty={mcp.formDirty}
       t={t}
-      eyebrow={editing ? t("agent.mcpServers.form.editEyebrow") : t("agent.mcpServers.form.newEyebrow")}
       title={editing ? t("agent.mcpServers.form.editTitle") : t("agent.mcpServers.form.newTitle")}
-      hint={t("settings.models.mcp.formHint")}
       labelledBy="models-mcp-form-title"
       formId="mcp"
       feedback={mcp.feedback}
@@ -43,19 +41,35 @@ export default function SettingsModelMcpDialog({
       onSubmit={() => void mcp.save()}
       fields={
         <>
-          <ModelField id="mcp-server-label" label={t("agent.mcpServers.fields.label")} hint={t("agent.mcpServers.fields.labelHint")}>
-            <input
-              id="mcp-server-label"
-              type="text"
-              value={form.label}
-              maxLength={128}
-              disabled={busy}
-              autoComplete="off"
-              onChange={(event) => mcp.updateForm("label", event.target.value)}
-            />
-          </ModelField>
+          <div className="calendar-field-grid">
+            <ModelField id="mcp-server-label" label={t("agent.mcpServers.fields.label")} help={t("agent.mcpServers.fields.labelHint")}>
+              <input
+                id="mcp-server-label"
+                type="text"
+                value={form.label}
+                placeholder="例如：filesystem"
+                maxLength={128}
+                disabled={busy}
+                autoComplete="off"
+                onChange={(event) => mcp.updateForm("label", event.target.value)}
+              />
+            </ModelField>
 
-          <ModelField id="mcp-server-command" label={t("agent.mcpServers.fields.command")} hint={t("agent.mcpServers.fields.commandHint")}>
+            <ModelField id="mcp-server-timeout" label={t("agent.mcpServers.fields.timeout")} help={t("agent.mcpServers.fields.timeoutHint")}>
+              <input
+                id="mcp-server-timeout"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={form.timeoutMs}
+                disabled={busy}
+                autoComplete="off"
+                onChange={(event) => mcp.updateForm("timeoutMs", event.target.value)}
+              />
+            </ModelField>
+          </div>
+
+          <ModelField id="mcp-server-command" label={t("agent.mcpServers.fields.command")} help={t("agent.mcpServers.fields.commandHint")}>
             <input
               id="mcp-server-command"
               type="text"
@@ -69,9 +83,10 @@ export default function SettingsModelMcpDialog({
             />
           </ModelField>
 
-          <ModelField id="mcp-server-args" label={t("agent.mcpServers.fields.args")} hint={t("agent.mcpServers.fields.argsHint")}>
+          <ModelField id="mcp-server-args" label={t("agent.mcpServers.fields.args")} help={t("agent.mcpServers.fields.argsHint")}>
             <textarea
               id="mcp-server-args"
+              className="settings-model-textarea"
               value={form.argsText}
               placeholder={t("agent.mcpServers.fields.argsPlaceholder")}
               rows={3}
@@ -82,7 +97,7 @@ export default function SettingsModelMcpDialog({
             />
           </ModelField>
 
-          <ModelField label={t("agent.mcpServers.fields.env")} hint={t("agent.mcpServers.fields.envHint")}>
+          <ModelField label={t("agent.mcpServers.fields.env")} help={t("agent.mcpServers.fields.envHint")}>
             <div className="settings-model-env-editor">
               {mcp.envRows.map((row, index) => (
                 <div className="settings-model-env-line" key={row.id}>
@@ -125,11 +140,12 @@ export default function SettingsModelMcpDialog({
             </div>
           </ModelField>
 
-          <ModelField id="mcp-server-cwd" label={t("agent.mcpServers.fields.cwd")} hint={t("agent.mcpServers.fields.cwdHint")}>
+          <ModelField id="mcp-server-cwd" label={t("agent.mcpServers.fields.cwd")} help={t("agent.mcpServers.fields.cwdHint")}>
             <input
               id="mcp-server-cwd"
               type="text"
               value={form.cwd}
+              placeholder="例如：C:\projects\my-tool 或 /usr/local/bin"
               maxLength={2048}
               disabled={busy}
               autoComplete="off"
@@ -138,26 +154,15 @@ export default function SettingsModelMcpDialog({
             />
           </ModelField>
 
-          <ModelField id="mcp-server-timeout" label={t("agent.mcpServers.fields.timeout")} hint={t("agent.mcpServers.fields.timeoutHint")}>
-            <input
-              id="mcp-server-timeout"
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              value={form.timeoutMs}
+          <div className="settings-model-switches">
+            <Switch
+              checked={form.enabled}
               disabled={busy}
-              autoComplete="off"
-              onChange={(event) => mcp.updateForm("timeoutMs", event.target.value)}
+              label={t("agent.mcpServers.fields.enabled")}
+              tooltip={t("agent.mcpServers.fields.enabledHint")}
+              onChange={() => mcp.updateForm("enabled", !form.enabled)}
             />
-          </ModelField>
-
-          <Switch
-            checked={form.enabled}
-            disabled={busy}
-            label={t("agent.mcpServers.fields.enabled")}
-            description={t("agent.mcpServers.fields.enabledHint")}
-            onChange={() => mcp.updateForm("enabled", !form.enabled)}
-          />
+          </div>
 
           {editing && (
             <div className="settings-inline-actions">

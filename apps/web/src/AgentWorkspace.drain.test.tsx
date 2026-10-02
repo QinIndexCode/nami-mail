@@ -172,7 +172,7 @@ const renderedAssistantContent = (): string => {
   return captured;
 };
 
-const renderWorkspace = async () => {
+const renderWorkspace = async (providerListVersion = 0) => {
   await act(async () => {
     root.render(
       <I18nProvider>
@@ -185,6 +185,7 @@ const renderWorkspace = async () => {
           preloadedBootstrap={h.bootstrap}
           agentAccessLevel="send-confirmed"
           onAgentAccessLevelChange={() => undefined}
+          providerListVersion={providerListVersion}
         />
       </I18nProvider>,
     );
@@ -268,19 +269,15 @@ describe("AgentWorkspace — createConversation's early return keeps the drained
     expect(rafQueue.size).toBe(1); // the parked leftovers re-armed one flush
 
     // Make the panel's selected provider unresolvable through the real path:
-    // the settings pane refetches the provider list on open and pushes it into
-    // the panel. The mocked list has no configured entry and a different id, so
+    // the settings models panel edited the list, so App bumps
+    // providerListVersion and the workspace refetches and folds it in. The
+    // mocked list has no configured entry and a different id, so
     // selectedProvider resolves to nothing.
     (api as unknown as { agentProviders: unknown }).agentProviders = vi.fn(async () => ({
       items: [{ ...h.provider, id: "provider-x", configured: false, apiKeyConfigured: false }],
       defaultProviderId: null,
     }));
-    const wrench = Array.from(container.querySelectorAll<HTMLButtonElement>("button.icon-button"))
-      .find((button) => ["Model settings", "模型设置"].includes(button.getAttribute("aria-label") ?? ""));
-    if (!wrench) throw new Error("provider settings button not found");
-    act(() => { wrench.click(); });
-    await flush();
-    await flush();
+    await renderWorkspace(1);
 
     // The "new conversation" click: createConversation drains the queued tail
     // onto the outgoing transcript, then hits the early return (no provider)

@@ -34,8 +34,18 @@ describe("styles.css size ratchet", () => {
   // 的 .mimosa/）里对四个类名零命中。新增 53 行：.app-frame 的毛玻璃下沉到
   // :not(.desktop-app)::before（19 行，含 11 行说明为什么不能留在 .app-frame 上）、
   // 壁纸模式对应的 ::before 覆盖（9 行）、overscroll-behavior:contain ×5、
-  // max-height + overflow-y ×2、min-width ×1、flex-wrap ×1，余为说明注释。
-  const FROZEN_MAX_LINES = 17_680;
+  // 2026-10-02 有记录的一次下调（17_680 → 17_630）：「设置-模型与MCP」
+  // 样式与布局重构。收敛并紧凑化 .settings-model-* 规则，增加 .settings-field-hint、
+  // .settings-model-badge、.settings-model-switches 与 .settings-model-textarea，
+  // 2026-10-03 有记录的一次下调（17_630 → 17_570）：「自动回复规则」
+  // 弹窗化与卡片样式重构。移除旧的内联规则表单样式，净瘦身 60 行。
+  // 2026-10-03 第二次有记录的下调（17_570 → 17_540）：管理弹窗与子编辑器
+  // 样式统一与精简（管理弹窗头部、日程/模板/联系人编辑器头部统一与写信附件栏优化），
+  // 净瘦身 30 行。
+  // 2026-10-03 第三次有记录的下调（17_540 → 17_520）：搜索框（联系人/模板/日程/账户）
+  // 修复与样式收敛。隐藏原生 WebKit 搜索清除按钮、补全输入框全高与光标、收紧工具栏
+  // 搜索框包裹规则，净瘦身 22 行。
+  const FROZEN_MAX_LINES = 17_520;
   const STALENESS_WINDOW = 900;
 
   it("does not grow beyond the frozen baseline", () => {

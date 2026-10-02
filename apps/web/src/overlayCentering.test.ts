@@ -159,10 +159,19 @@ describe("absolutely positioned overlay centring", () => {
     ).toEqual([]);
   });
 
-  it("the three key-field overlay eyes centre with the composable property", () => {
+  it("keeps the settings key-field eye in flow rather than absolutely positioned", () => {
+    const rule = rules.find((entry) => entry.selectors.includes(".settings-secret-input>.icon-button"));
+    expect(rule, ".settings-secret-input>.icon-button should exist").toBeDefined();
+    expect(rule?.body).not.toMatch(/position:absolute/);
+  });
+
+  it("the two key-field overlay eyes centre with the composable property", () => {
     // The reported one, its translation twin, and the account field's peek —
     // all three are buttons, so all three are exposed to the shared press rule.
-    for (const selector of [".agent-provider-secret .icon-button", ".translation-key-visibility", ".account-password-toggle-btn"]) {
+    // The provider key eye used to overlay an absolutely positioned dialog
+    // input; inside the settings panel it is an in-flow flex child, so the
+    // guard below covers the two eyes that really are overlays.
+    for (const selector of [".translation-key-visibility", ".account-password-toggle-btn"]) {
       const rule = rules.find((entry) => entry.selectors.includes(selector)
         || entry.selectors.includes(`${selector},.account-input-clear-btn`));
       expect(rule, `${selector} has no rule in styles.css`).toBeDefined();

@@ -223,17 +223,17 @@ export default function SendingStatusModal({
       }}>
         <section ref={dialogRef} className={`modal-card sending-status-modal${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="sending-status-title" tabIndex={-1}>
           <header className="modal-heading management-heading sending-status-heading">
-            <div>
+            <div className="management-heading-title">
               <span className="eyebrow">{t("sending.modal.eyebrow")}</span>
               <h2 id="sending-status-title">{t("sending.modal.title")}</h2>
               <p className="management-heading-description">{t("sending.modal.description")}</p>
             </div>
             <div className="sending-status-heading-actions">
               <button className="icon-button" type="button" aria-label={t("sending.modal.refreshTooltip")} data-tooltip={t("sending.modal.refreshTooltip")} disabled={loading} onClick={() => void refresh()}>
-                {loading ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}
+                {loading ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
               </button>
               <button className="icon-button" type="button" aria-label={t("sending.modal.closeTooltip")} data-tooltip={t("sending.modal.closeTooltip")} onClick={requestClose}>
-                <X size={18} />
+                <X size={16} />
               </button>
             </div>
           </header>

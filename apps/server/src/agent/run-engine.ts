@@ -900,13 +900,13 @@ export class AgentRunEngine {
       yield { type: "completed", reason: "error" };
       return;
     }
+    // Adopt the client's optimistic row id when safe (validated at the route), so a
+    // revoke issued seconds later addresses this exact row. The three guards mirror
+    // the assistant id below — non-empty, not the assistant id this turn asks for,
+    // not already in the transcript — so a reused id can never overwrite a row.
+    const userMessageId = input.clientMessageId && input.clientMessageId !== input.clientAssistantMessageId && !state.messages.some((message) => message.id === input.clientMessageId) ? input.clientMessageId : `message-${randomUUID()}`;
     const userMessage: AgentMessage = {
-      // Adopt the client's optimistic row id when supplied (validated at the
-      // route as an agent identifier): a revoke issued seconds after sending
-      // then addresses this exact row, and later server snapshots keep the
-      // same id, so locally-cached revoked marks stay effective. Old clients
-      // and in-process callers without an id fall back to a random one.
-      id: input.clientMessageId ?? `message-${randomUUID()}`,
+      id: userMessageId,
       role: "user",
       content: input.content.trim(),
       createdAt: now(),
@@ -927,11 +927,11 @@ export class AgentRunEngine {
     // The in-flight reply is published under the same id it is later persisted
     // with, so a panel that reopens mid-run renders this message and the final
     // persisted copy is the same row (no duplicate). The client's optimistic
-    // assistant row id is adopted when unused and distinct from the user row,
-    // so live deltas fold into the row the client rendered; else random (above).
+    // assistant row id is adopted when unused and distinct from the user row —
+    // resolved or requested — so one id sent for both yields two distinct rows.
     const requestedAssistantId = input.clientAssistantMessageId;
     const assistantMessageId = requestedAssistantId
-      && requestedAssistantId !== userMessage.id
+      && requestedAssistantId !== userMessage.id && requestedAssistantId !== input.clientMessageId
       && !state.messages.some((message) => message.id === requestedAssistantId)
       ? requestedAssistantId
       : `message-${randomUUID()}`;

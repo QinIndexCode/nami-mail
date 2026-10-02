@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
-  Bot,
-  KeyRound,
+  Cpu,
   LoaderCircle,
   Pencil,
   Plus,
@@ -21,6 +20,8 @@ import { useMcpServers, useModelProviders } from "./useSettingsModels";
 
 export type SettingsModelsSectionProps = {
   t: Translate;
+  /** Controls which card is displayed: "providers" (models), "mcp" (MCP tools), or "all" (both). */
+  view?: "all" | "providers" | "mcp";
   /** Demo sessions never reach the local Agent service, so the panel shows the
    *  same in-memory notice the agent category uses instead of fetching. */
   demoMode: boolean;
@@ -79,6 +80,7 @@ function mcpSummary(server: AgentMcpServerSummary, t: Translate): string {
 
 export default function SettingsModelsSection({
   t,
+  view = "all",
   demoMode,
   initialProviders,
   initialDefaultProviderId,
@@ -88,18 +90,18 @@ export default function SettingsModelsSection({
   overlayHostRef,
 }: SettingsModelsSectionProps) {
   const providers = useModelProviders({
-    enabled: !demoMode,
+    enabled: !demoMode && view !== "mcp",
     initialProviders,
     initialDefaultProviderId,
     onProvidersChanged: demoMode ? () => undefined : onProvidersChanged,
     t,
   });
-  const mcp = useMcpServers({ enabled: !demoMode, t });
+  const mcp = useMcpServers({ enabled: !demoMode && view !== "providers", t });
   // The settings modal guards its own Escape / backdrop / "done" paths, and its
   // focus trap, on ONE flag reported from here — never one per dialog: with two
   // independent forms mounted, whichever unmounted last would clear a signal the
   // other still needs. The panel's own state is the single source of truth.
-  const overlayOpen = providers.editing || mcp.editing;
+  const overlayOpen = (view !== "mcp" && providers.editing) || (view !== "providers" && mcp.editing);
   useEffect(() => {
     onOverlayOpenChange?.(overlayOpen);
     return () => onOverlayOpenChange?.(false);
@@ -109,7 +111,9 @@ export default function SettingsModelsSection({
   // check, set-default, delete — that never go through a dialog but can run for
   // the whole 120 s check timeout. One OR'd flag, for the same reason as above.
   const [dialogBusy, setDialogBusy] = useState(false);
-  const panelBusy = dialogBusy || providers.panelBusy || mcp.panelBusy;
+  const panelBusy = dialogBusy
+    || (view !== "mcp" && providers.panelBusy)
+    || (view !== "providers" && mcp.panelBusy);
   useEffect(() => {
     onBusyChange?.(panelBusy);
     return () => onBusyChange?.(false);
@@ -117,13 +121,25 @@ export default function SettingsModelsSection({
   const reportBusy = useCallback((busy: boolean) => setDialogBusy(busy), []);
 
   if (demoMode) {
+    const isMcp = view === "mcp";
     return (
-      <section className="settings-section" data-settings-nav="models" aria-labelledby="models-settings">
+      <section
+        className="settings-section"
+        data-settings-nav={isMcp ? "mcp" : "models"}
+        aria-labelledby={isMcp ? "mcp-settings" : "models-settings"}
+      >
         <div className="settings-section-title">
-          <Bot size={16} />
-          <div><span id="models-settings">{t("settings.nav.models.title")}</span><p>{t("settings.nav.models.description")}</p></div>
+          {isMcp ? <Server size={16} /> : <Cpu size={16} />}
+          <div>
+            <span id={isMcp ? "mcp-settings" : "models-settings"}>
+              {t(isMcp ? "settings.nav.mcp.title" : "settings.nav.models.title")}
+            </span>
+            <p>{t(isMcp ? "settings.nav.mcp.description" : "settings.nav.models.description")}</p>
+          </div>
         </div>
-        <p className="settings-empty" role="status">{t("agent.demo.modelsUnavailable")}</p>
+        <p className="settings-empty" role="status">
+          {t(isMcp ? "agent.demo.mcpUnavailable" : "agent.demo.modelsUnavailable")}
+        </p>
       </section>
     );
   }
@@ -144,10 +160,10 @@ export default function SettingsModelsSection({
   // settings card, above it, unaffected by the panel's animation.
   const formDialogs = (
     <>
-      {providers.editing && (
+      {view !== "mcp" && providers.editing && (
         <SettingsModelProviderDialog t={t} providers={providers} onBusyChange={reportBusy} />
       )}
-      {mcp.editing && (
+      {view !== "providers" && mcp.editing && (
         <SettingsModelMcpDialog t={t} mcp={mcp} onBusyChange={reportBusy} />
       )}
     </>
@@ -155,162 +171,175 @@ export default function SettingsModelsSection({
 
   return (
     <>
-      <section className="settings-section" data-settings-nav="models" aria-labelledby="models-settings">
-        <div className="settings-section-title">
-          <Bot size={16} />
-          <div><span id="models-settings">{t("settings.nav.models.title")}</span><p>{t("settings.nav.models.description")}</p></div>
-        </div>
-      </section>
-
-      <section className="settings-section" data-models-card="providers" aria-labelledby="models-providers-title">
-        <div className="settings-section-title">
-          <KeyRound size={16} />
-          <div><span id="models-providers-title">{t("agent.providers.title")}</span><p>{t("agent.providers.description")}</p></div>
-        </div>
-        {providers.loading && providers.providers.length === 0 && (
-          <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("agent.providers.loading")}</p>
-        )}
-        {!providers.loading && providers.providers.length === 0 && (
-          <p className="settings-empty" role="status">{t("agent.providers.empty")}<br />{t("agent.providers.emptyDescription")}</p>
-        )}
-        {providers.providers.map((provider) => {
-          const isDefault = provider.id === providers.defaultProviderId;
-          const rowDeletePending = providers.deletePendingId === provider.id;
-          const rowChecking = providers.checkingId === provider.id;
-          return (
-            <div
-              key={provider.id}
-              className="setting-row"
-              data-model-row="provider"
-              data-provider-id={provider.id}
-              data-default={isDefault ? "true" : "false"}
-            >
-              <div>
-                <strong>
-                  {provider.label}
-                  {isDefault && <span> · {t("agent.providers.status.default")}</span>}
-                </strong>
-                <span>{providerSummary(provider, t)}</span>
-              </div>
-              <div className="settings-row-actions">
-                <span className={`status-dot${providerDotClass(provider)}`} aria-hidden="true" />
-                {!isDefault && (
+      {view !== "mcp" && (
+        <section
+          className="settings-section"
+          data-settings-nav="models"
+          data-models-card="providers"
+          aria-labelledby="models-providers-title"
+        >
+          <div className="settings-section-title">
+            <Cpu size={16} />
+            <div>
+              <span id="models-providers-title">{t("agent.providers.title")}</span>
+              <p>{t("agent.providers.description")}</p>
+            </div>
+          </div>
+          {providers.loading && providers.providers.length === 0 && (
+            <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("agent.providers.loading")}</p>
+          )}
+          {!providers.loading && providers.providers.length === 0 && (
+            <p className="settings-empty" role="status">{t("agent.providers.empty")}<br />{t("agent.providers.emptyDescription")}</p>
+          )}
+          {providers.providers.map((provider) => {
+            const isDefault = provider.id === providers.defaultProviderId;
+            const rowDeletePending = providers.deletePendingId === provider.id;
+            const rowChecking = providers.checkingId === provider.id;
+            return (
+              <div
+                key={provider.id}
+                className="setting-row"
+                data-model-row="provider"
+                data-provider-id={provider.id}
+                data-default={isDefault ? "true" : "false"}
+              >
+                <div>
+                  <strong>
+                    {provider.label}
+                    {isDefault && <span className="settings-model-badge default">{t("agent.providers.status.default")}</span>}
+                  </strong>
+                  <span>{providerSummary(provider, t)}</span>
+                </div>
+                <div className="settings-row-actions">
+                  <span className={`status-dot${providerDotClass(provider)}`} aria-hidden="true" />
+                  {!isDefault && (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      disabled={providerBusy}
+                      onClick={() => void providers.setDefault(provider)}
+                    >
+                      <Star size={13} />{t("settings.models.providers.setDefault")}
+                    </button>
+                  )}
                   <button
                     className="secondary-button"
                     type="button"
                     disabled={providerBusy}
-                    onClick={() => void providers.setDefault(provider)}
+                    onClick={() => void providers.check(provider)}
                   >
-                    <Star size={13} />{t("settings.models.providers.setDefault")}
+                    {rowChecking ? <LoaderCircle className="spin" size={13} /> : <RefreshCw size={13} />}
+                    {t("agent.providers.check")}
                   </button>
-                )}
-                <button
-                  className="secondary-button"
-                  type="button"
-                  disabled={providerBusy}
-                  onClick={() => void providers.check(provider)}
-                >
-                  {rowChecking ? <LoaderCircle className="spin" size={13} /> : <RefreshCw size={13} />}
-                  {t("agent.providers.check")}
-                </button>
-                <button className="secondary-button" type="button" disabled={providerBusy} onClick={() => providers.startEdit(provider)}>
-                  <Pencil size={13} />{t("settings.models.edit")}
-                </button>
-                <button
-                  className={`secondary-button danger-button${rowDeletePending ? " settings-model-delete-pending" : ""}`}
-                  type="button"
-                  disabled={providerBusy}
-                  onClick={() => (rowDeletePending ? void providers.confirmDelete(provider.id) : providers.requestDelete(provider.id))}
-                >
-                  <Trash2 size={13} />{rowDeletePending ? t("agent.providers.deleteConfirm") : t("agent.providers.delete")}
-                </button>
+                  <button className="secondary-button" type="button" disabled={providerBusy} onClick={() => providers.startEdit(provider)}>
+                    <Pencil size={13} />{t("settings.models.edit")}
+                  </button>
+                  <button
+                    className={`secondary-button danger-button${rowDeletePending ? " settings-model-delete-pending" : ""}`}
+                    type="button"
+                    disabled={providerBusy}
+                    onClick={() => (rowDeletePending ? void providers.confirmDelete(provider.id) : providers.requestDelete(provider.id))}
+                  >
+                    <Trash2 size={13} />{rowDeletePending ? t("agent.providers.deleteConfirm") : t("agent.providers.delete")}
+                  </button>
+                </div>
               </div>
-            </div>
-          );
-        })}
-        {providers.deletePendingId !== null && <p className="settings-model-delete-note">{t("agent.providers.deletePrompt")}</p>}
-        <div className="settings-inline-actions">
-          <button className="secondary-button" type="button" disabled={providerBusy} onClick={providers.startCreate}>
-            <Plus size={15} />{t("agent.providers.new")}
-          </button>
-        </div>
-        {/* A list load failure retries the load; a row action's outcome stays in
-            its dialog, so only the closeable card shows anything here. */}
-        {providers.listError && (
-          <ModelFeedbackLine
-            feedback={{ kind: "error", message: providers.listError, retry: () => providers.retryList() }}
-            retryLabel={t("agent.providers.retry")}
-            busy={providerBusy}
-          />
-        )}
-        {!providers.editing && providers.feedback && (
-          <ModelFeedbackLine feedback={providers.feedback} retryLabel={t("agent.providers.retry")} busy={providerBusy} />
-        )}
-      </section>
+            );
+          })}
+          {providers.deletePendingId !== null && <p className="settings-model-delete-note">{t("agent.providers.deletePrompt")}</p>}
+          <div className="settings-inline-actions">
+            <button className="secondary-button" type="button" disabled={providerBusy} onClick={providers.startCreate}>
+              <Plus size={15} />{t("agent.providers.new")}
+            </button>
+          </div>
+          {/* A list load failure retries the load; a row action's outcome stays in
+              its dialog, so only the closeable card shows anything here. */}
+          {providers.listError && (
+            <ModelFeedbackLine
+              feedback={{ kind: "error", message: providers.listError, retry: () => providers.retryList() }}
+              retryLabel={t("agent.providers.retry")}
+              busy={providerBusy}
+            />
+          )}
+          {!providers.editing && providers.feedback && (
+            <ModelFeedbackLine feedback={providers.feedback} retryLabel={t("agent.providers.retry")} busy={providerBusy} />
+          )}
+        </section>
+      )}
 
-      <section className="settings-section" data-models-card="mcp" aria-labelledby="models-mcp-title">
-        <div className="settings-section-title">
-          <Server size={16} />
-          <div><span id="models-mcp-title">{t("agent.mcpServers.title")}</span><p>{t("agent.mcpServers.description")}</p></div>
-        </div>
-        {mcp.loading && mcp.servers.length === 0 && (
-          <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("agent.mcpServers.loading")}</p>
-        )}
-        {!mcp.loading && mcp.servers.length === 0 && (
-          <p className="settings-empty" role="status">{t("agent.mcpServers.empty")}<br />{t("agent.mcpServers.emptyDescription")}</p>
-        )}
-        {mcp.servers.map((server) => {
-          const rowDeletePending = mcp.deletePendingId === server.id;
-          const rowChecking = mcp.checkingId === server.id;
-          return (
-            <div key={server.id} className="setting-row" data-model-row="mcp" data-mcp-id={server.id}>
-              <div>
-                <strong>{server.label}</strong>
-                <span>{mcpSummary(server, t)}</span>
+      {view !== "providers" && (
+        <section
+          className="settings-section"
+          data-settings-nav={view === "mcp" ? "mcp" : undefined}
+          data-models-card="mcp"
+          aria-labelledby="models-mcp-title"
+        >
+          <div className="settings-section-title">
+            <Server size={16} />
+            <div><span id="models-mcp-title">{t("agent.mcpServers.title")}</span><p>{t("agent.mcpServers.description")}</p></div>
+          </div>
+          {mcp.loading && mcp.servers.length === 0 && (
+            <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("agent.mcpServers.loading")}</p>
+          )}
+          {!mcp.loading && mcp.servers.length === 0 && (
+            <p className="settings-empty" role="status">{t("agent.mcpServers.empty")}<br />{t("agent.mcpServers.emptyDescription")}</p>
+          )}
+          {mcp.servers.map((server) => {
+            const rowDeletePending = mcp.deletePendingId === server.id;
+            const rowChecking = mcp.checkingId === server.id;
+            return (
+              <div key={server.id} className="setting-row" data-model-row="mcp" data-mcp-id={server.id}>
+                <div>
+                  <strong>
+                    {server.label}
+                    {!server.enabled && <span className="settings-model-badge disabled">{t("agent.mcpServers.status.disabled")}</span>}
+                  </strong>
+                  <span>{mcpSummary(server, t)}</span>
+                </div>
+                <div className="settings-row-actions">
+                  <span className={`status-dot${mcpDotClass(server)}`} aria-hidden="true" />
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={mcpBusy}
+                    onClick={() => void mcp.check(server)}
+                  >
+                    {rowChecking ? <LoaderCircle className="spin" size={13} /> : <RefreshCw size={13} />}
+                    {t("agent.mcpServers.check")}
+                  </button>
+                  <button className="secondary-button" type="button" disabled={mcpBusy} onClick={() => mcp.startEdit(server)}>
+                    <Pencil size={13} />{t("settings.models.edit")}
+                  </button>
+                  <button
+                    className={`secondary-button danger-button${rowDeletePending ? " settings-model-delete-pending" : ""}`}
+                    type="button"
+                    disabled={mcpBusy}
+                    onClick={() => (rowDeletePending ? void mcp.confirmDelete(server.id) : mcp.requestDelete(server.id))}
+                  >
+                    <Trash2 size={13} />{rowDeletePending ? t("agent.mcpServers.deleteConfirm") : t("agent.mcpServers.delete")}
+                  </button>
+                </div>
               </div>
-              <div className="settings-row-actions">
-                <span className={`status-dot${mcpDotClass(server)}`} aria-hidden="true" />
-                <button
-                  className="secondary-button"
-                  type="button"
-                  disabled={mcpBusy}
-                  onClick={() => void mcp.check(server)}
-                >
-                  {rowChecking ? <LoaderCircle className="spin" size={13} /> : <RefreshCw size={13} />}
-                  {t("agent.mcpServers.check")}
-                </button>
-                <button className="secondary-button" type="button" disabled={mcpBusy} onClick={() => mcp.startEdit(server)}>
-                  <Pencil size={13} />{t("settings.models.edit")}
-                </button>
-                <button
-                  className={`secondary-button danger-button${rowDeletePending ? " settings-model-delete-pending" : ""}`}
-                  type="button"
-                  disabled={mcpBusy}
-                  onClick={() => (rowDeletePending ? void mcp.confirmDelete(server.id) : mcp.requestDelete(server.id))}
-                >
-                  <Trash2 size={13} />{rowDeletePending ? t("agent.mcpServers.deleteConfirm") : t("agent.mcpServers.delete")}
-                </button>
-              </div>
-            </div>
-          );
-        })}
-        {mcp.deletePendingId !== null && <p className="settings-model-delete-note">{t("agent.mcpServers.deletePrompt")}</p>}
-        <div className="settings-inline-actions">
-          <button className="secondary-button" type="button" disabled={mcpBusy} onClick={mcp.startCreate}>
-            <Plus size={15} />{t("agent.mcpServers.new")}
-          </button>
-        </div>
-        {mcp.listError && (
-          <ModelFeedbackLine
-            feedback={{ kind: "error", message: mcp.listError, retry: () => mcp.retryList() }}
-            retryLabel={t("agent.mcpServers.retry")}
-            busy={mcpBusy}
-          />
-        )}
-        {!mcp.editing && mcp.feedback && (
-          <ModelFeedbackLine feedback={mcp.feedback} retryLabel={t("agent.mcpServers.retry")} busy={mcpBusy} />
-        )}
-      </section>
+            );
+          })}
+          {mcp.deletePendingId !== null && <p className="settings-model-delete-note">{t("agent.mcpServers.deletePrompt")}</p>}
+          <div className="settings-inline-actions">
+            <button className="secondary-button" type="button" disabled={mcpBusy} onClick={mcp.startCreate}>
+              <Plus size={15} />{t("agent.mcpServers.new")}
+            </button>
+          </div>
+          {mcp.listError && (
+            <ModelFeedbackLine
+              feedback={{ kind: "error", message: mcp.listError, retry: () => mcp.retryList() }}
+              retryLabel={t("agent.mcpServers.retry")}
+              busy={mcpBusy}
+            />
+          )}
+          {!mcp.editing && mcp.feedback && (
+            <ModelFeedbackLine feedback={mcp.feedback} retryLabel={t("agent.mcpServers.retry")} busy={mcpBusy} />
+          )}
+        </section>
+      )}
 
       {overlayHostRef.current
         ? createPortal(formDialogs, overlayHostRef.current)

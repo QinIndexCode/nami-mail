@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, CircleAlert, LoaderCircle, RefreshCw, X } from "lucide-react";
+import { Check, CircleAlert, CircleHelp, LoaderCircle, RefreshCw, X } from "lucide-react";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { useDismissTransition } from "../hooks/useDismissTransition";
 import type { Translate } from "../i18n";
@@ -21,25 +21,41 @@ import { expandedThemedSelectOwnsEscape } from "./settings-utils";
  *   result).
  */
 
-/** A form row: label above the control, optional hint under the label. */
-export function ModelField({ id, label, hint, children }: {
+/** A form row: label above the control, with optional hover help or subtle hint. */
+export function ModelField({ id, label, help, hint, children }: {
   id?: string;
   label: string;
+  /** Hoverable tooltip explanation using app custom tooltip instead of static text bloat */
+  help?: string;
+  /** Deprecated static hint, automatically mapped to hover tooltip */
   hint?: string;
   children: ReactNode;
 }) {
+  const tooltipText = help || hint;
   const content = (
     <>
-      <span>{label}</span>
-      {hint ? <small>{hint}</small> : null}
+      <span className="settings-field-label">
+        <span className="settings-field-label-text">{label}</span>
+        {tooltipText ? (
+          <span
+            className="field-help-icon"
+            data-tooltip={tooltipText}
+            aria-label={tooltipText}
+            tabIndex={0}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <CircleHelp size={12} aria-hidden="true" />
+          </span>
+        ) : null}
+      </span>
       {children}
     </>
   );
   // A plain field takes an <input type=text> from the label; a control group
   // (the environment editor holds its own inputs) must not nest labels.
   return id
-    ? <label className="calendar-field" htmlFor={id}>{content}</label>
-    : <div className="calendar-field">{content}</div>;
+    ? <label className="settings-field calendar-field" htmlFor={id}>{content}</label>
+    : <div className="settings-field calendar-field">{content}</div>;
 }
 
 /** One outcome line plus, for failures, the action that repeats it. */
@@ -69,9 +85,9 @@ export type SettingsModelFormDialogProps = {
   /** The form holds unsaved input, so closing asks first. */
   dirty: boolean;
   t: Translate;
-  eyebrow: string;
+  eyebrow?: string;
   title: string;
-  hint: string;
+  hint?: string;
   /** id of the heading element; also the dialog's accessible name. */
   labelledBy: string;
   /** Which card this form belongs to; lands on <form data-models-form>. */
@@ -182,28 +198,35 @@ export function SettingsModelFormDialog({
       >
         <section
           ref={panelRef}
-          className={`contact-editor-modal${closing ? " closing" : ""}`}
+          className={`contact-editor-modal settings-model-modal${closing ? " closing" : ""}`}
           role="dialog"
           aria-modal="true"
           aria-labelledby={labelledBy}
           tabIndex={-1}
         >
           <form
-            className="contact-editor"
+            className="contact-editor settings-model-form"
             data-models-form={formId}
             aria-label={title}
             onSubmit={(event) => { event.preventDefault(); onSubmit(); }}
           >
-            <div className="contact-editor-head">
-              <div>
-                <span className="eyebrow">{eyebrow}</span>
-                <h3 id={labelledBy} className="contact-editor-title">{title}</h3>
-                <small>{hint}</small>
-              </div>
+            <div className="contact-editor-head settings-model-head">
+              <h3 id={labelledBy} className="contact-editor-title settings-model-title">{title}</h3>
+              <button
+                className="icon-button settings-model-close-btn"
+                type="button"
+                aria-label={cancelLabel}
+                disabled={busy}
+                onClick={requestClose}
+              >
+                <X size={16} />
+              </button>
             </div>
-            {fields}
+            <div className="settings-model-fields">
+              {fields}
+            </div>
             {feedback && <ModelFeedbackLine feedback={feedback} retryLabel={retryLabel} busy={busy} />}
-            <div className="contact-editor-actions">
+            <div className="contact-editor-actions settings-model-actions">
               <button className="secondary-button" type="button" disabled={busy} onClick={requestClose}>
                 <X size={15} />{cancelLabel}
               </button>

@@ -472,6 +472,30 @@ describe("assembly · App executor over the routed decisions", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
+  it("openSettingsTo opens the modal and carries a fresh nonce for a re-link", async () => {
+    await mount();
+    expect(latest!.state.settingsOpen).toBe(false);
+    expect(latest!.state.settingsCategoryRequest).toBeNull();
+
+    await act(async () => {
+      latest!.actions.openSettingsTo("models");
+    });
+    expect(latest!.state.settingsOpen).toBe(true);
+    expect(latest!.state.settingsCategoryRequest).toEqual({ category: "models", nonce: 1 });
+
+    // A second deep link to the same category must still register: the modal
+    // keys off the nonce, not the category, so an identical repeat re-applies.
+    await act(async () => {
+      latest!.actions.openSettingsTo("models");
+    });
+    expect(latest!.state.settingsCategoryRequest).toEqual({ category: "models", nonce: 2 });
+
+    await act(async () => {
+      latest!.actions.openSettingsTo("agent");
+    });
+    expect(latest!.state.settingsCategoryRequest).toEqual({ category: "agent", nonce: 3 });
+  });
+
   it("after the close action the same gateway re-arms", async () => {
     await mount();
     await act(async () => {

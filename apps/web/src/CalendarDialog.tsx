@@ -210,6 +210,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
   const [jumpYear, setJumpYear] = useState(() => new Date().getFullYear());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [page, setPage] = useState(1);
 
   const todayKey = localDateKey(new Date());
@@ -751,20 +752,39 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
                 <div className="content-enter">
                   {showListToolbar && (
                     <div className="calendar-list-toolbar">
-                      <div className="search-wrap calendar-list-search">
+                      <div
+                        className="search-wrap calendar-list-search"
+                        onClick={() => searchInputRef.current?.focus()}
+                      >
                         <Search size={14} aria-hidden="true" />
                         <input
+                          ref={searchInputRef}
                           type="search"
                           value={searchQuery}
                           onChange={(event) => {
                             setSearchQuery(event.target.value);
                             setPage(1);
                           }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape" && searchQuery) {
+                              event.stopPropagation();
+                              setSearchQuery("");
+                            }
+                          }}
                           placeholder={t("calendar.searchPlaceholder")}
                           aria-label={t("calendar.searchAriaLabel")}
                         />
                         {searchQuery && (
-                          <button className="icon-button search-clear" type="button" aria-label={t("calendar.clearSearch")} onClick={() => setSearchQuery("")}>
+                          <button
+                            className="icon-button search-clear"
+                            type="button"
+                            aria-label={t("calendar.clearSearch")}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSearchQuery("");
+                              searchInputRef.current?.focus();
+                            }}
+                          >
                             <X size={14} />
                           </button>
                         )}
@@ -843,15 +863,22 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
       </ManagementDialogShell>
       {editor && (
         <div className={`modal-backdrop calendar-editor-backdrop${editorClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && requestEditorClose()}>
-          <section ref={editorDialog} className={`calendar-editor-modal${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={editor.event ? t("calendar.editEvent") : t("calendar.newEvent")} tabIndex={-1}>
+          <section ref={editorDialog} className={`calendar-editor-modal${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={editor.event ? t("calendar.editEvent") : t("calendar.newEvent")} aria-labelledby="calendar-editor-title" tabIndex={-1}>
             <div className="calendar-editor" role="form" aria-label={t("calendar.formAriaLabel")}>
               <div className="calendar-editor-head">
-                <span className="eyebrow">{editor.event ? t("calendar.editEvent") : t("calendar.newEvent")}</span>
-                {editor.event && (
-                  <button className="icon-button danger-icon-button" type="button" aria-label={t("calendar.delete")} data-tooltip={t("calendar.delete")} disabled={busy} onClick={() => { resetConfirmClosing(); setPendingDelete(editor.event); }}>
-                    <Trash2 size={16} />
+                <div className="calendar-editor-head-text">
+                  <h3 id="calendar-editor-title">{editor.event ? t("calendar.editEvent") : t("calendar.newEvent")}</h3>
+                </div>
+                <div className="calendar-editor-head-actions">
+                  {editor.event && (
+                    <button className="icon-button danger-icon-button" type="button" aria-label={t("calendar.delete")} data-tooltip={t("calendar.delete")} disabled={busy} onClick={() => { resetConfirmClosing(); setPendingDelete(editor.event); }}>
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                  <button className="icon-button calendar-editor-close-btn" type="button" aria-label={t("common.close")} data-tooltip={t("common.close")} disabled={busy} onClick={requestEditorClose}>
+                    <X size={16} />
                   </button>
-                )}
+                </div>
               </div>
               <label className="calendar-field">
                 <span>{t("calendar.titleLabel")}</span>

@@ -1,5 +1,6 @@
 import {
   Check,
+  CircleHelp,
   CloudCog,
   Eye,
   EyeOff,
@@ -128,7 +129,14 @@ export default function SettingsTranslationSection({
             </div>
           </div>
           <label className="translation-setting-field" htmlFor="translation-service-endpoint">
-            <span><strong>{t("settings.translation.endpoint")}</strong><small>{t("settings.translation.endpointHint")}</small></span>
+            <span>
+              <strong>
+                {t("settings.translation.endpoint")}
+                <span className="field-help-icon" data-tooltip={t("settings.translation.endpointHint")} aria-label={t("settings.translation.endpointHint")} tabIndex={0}>
+                  <CircleHelp size={12} aria-hidden="true" />
+                </span>
+              </strong>
+            </span>
             <input
               id="translation-service-endpoint"
               type="url"
@@ -143,8 +151,12 @@ export default function SettingsTranslationSection({
           </label>
           <label className="translation-setting-field" htmlFor="translation-service-key">
             <span>
-              <strong>{t("settings.translation.apiKey")}</strong>
-              <small>{translationApiKeyHint}</small>
+              <strong>
+                {t("settings.translation.apiKey")}
+                <span className="field-help-icon" data-tooltip={translationApiKeyHint} aria-label={translationApiKeyHint} tabIndex={0}>
+                  <CircleHelp size={12} aria-hidden="true" />
+                </span>
+              </strong>
             </span>
             <span className="translation-secret-input">
               <input
@@ -171,7 +183,14 @@ export default function SettingsTranslationSection({
             </span>
           </label>
           <label className="translation-setting-field translation-timeout-field" htmlFor="translation-service-timeout">
-            <span><strong>{t("settings.translation.timeout")}</strong><small>{t("settings.translation.timeoutHint")}</small></span>
+            <span>
+              <strong>
+                {t("settings.translation.timeout")}
+                <span className="field-help-icon" data-tooltip={t("settings.translation.timeoutHint")} aria-label={t("settings.translation.timeoutHint")} tabIndex={0}>
+                  <CircleHelp size={12} aria-hidden="true" />
+                </span>
+              </strong>
+            </span>
             <input
               id="translation-service-timeout"
               type="number"

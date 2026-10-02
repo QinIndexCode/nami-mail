@@ -1,12 +1,14 @@
 /**
  * Small, self-contained sub-components extracted from AgentWorkspace.tsx.
- * RevokeNotice, AgentRecallButton, AgentScrubberBar, CopyMessageButton,
- * AgentMessageContent — zero functional changes.
+ * RevokeNotice, AgentRecallButton, AgentScrubberBar, CopyMessageButton —
+ * zero functional changes. AgentMessageContent renders a streaming reply as a
+ * memoised settled prefix, a memoised committed line prefix, and a plain-text
+ * tail.
  */
 import { memo, useEffect, useRef, useState } from "react";
 import { Check, Copy, Undo2 } from "lucide-react";
 import { useI18n } from "../i18n";
-import { AgentMarkdown, streamingMarkdownContent } from "../AgentMarkdown";
+import { AgentMarkdown, AgentMarkdownSettled, splitStreamingMarkdown } from "../AgentMarkdown";
 import { copyToClipboard } from "./agent-utils";
 
 // Owns its own 1 s tick so the countdown does not re-render the workspace.
@@ -122,16 +124,26 @@ export function CopyMessageButton({ content, label }: { content: string; label: 
 }
 
 /**
- * Renders an assistant turn's body. While it is streaming, the content is
- * parsed and rendered live by `AgentMarkdown` (a mature react-markdown-based
- * renderer) instead of showing plain text, so bold/headings/code appear as the
- * model types them. `streamingMarkdownContent` guards against an unfinished
- * code fence swallowing the tail; once the turn completes, the full content is
- * parsed with no truncation.
+ * Renders an assistant turn's body. A finished turn is parsed in full. While it
+ * is streaming the reply is cut in three: the settled prefix of closed blocks,
+ * the committed prefix of the block being typed whose lines are already safe to
+ * parse, and the unterminated last line, which stays plain text so a half-open
+ * `**` or `](` cannot flash. The two markdown layers share the same memoised
+ * body and only move when a block or a line completes, so a paragraph costs one
+ * parse rather than one per frame, and inline formatting shows up as it is typed
+ * instead of a paragraph later. All three sit in one `.agent-message-content`
+ * container, which keeps the existing `p:last-child` rule doing the right thing:
+ * the gap between two paragraphs moves with the split point instead of appearing
+ * all at once at the end.
  */
 export const AgentMessageContent = memo(function AgentMessageContentInner({ content, streaming }: { content: string; streaming: boolean }) {
-  if (streaming) {
-    return <AgentMarkdown content={streamingMarkdownContent(content)} />;
-  }
-  return <AgentMarkdown content={content} />;
+  if (!streaming) return <AgentMarkdown content={content} />;
+  const { settled, committed, live } = splitStreamingMarkdown(content);
+  return (
+    <div className="agent-message-content">
+      {settled.trim() ? <AgentMarkdownSettled key="settled" content={settled} /> : null}
+      {committed.trim() ? <AgentMarkdownSettled key="committed" content={committed} /> : null}
+      {live ? <div key="live" className="agent-message-content-streaming">{live}</div> : null}
+    </div>
+  );
 });

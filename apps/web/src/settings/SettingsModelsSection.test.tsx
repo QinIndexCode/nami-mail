@@ -520,4 +520,23 @@ describe("settings models panel", () => {
     expect(container.querySelector('[data-models-card="mcp"]')).toBeNull();
     expect(mockApi.agentProviders).not.toHaveBeenCalled();
   });
+
+  it("renders only providers when view='providers'", async () => {
+    await render({ view: "providers" });
+
+    expect(container.querySelector('[data-models-card="providers"]')).not.toBeNull();
+    expect(container.querySelector('[data-models-card="mcp"]')).toBeNull();
+    expect(mockApi.agentProviders).toHaveBeenCalled();
+    expect(mockApi.agentMcpServers).not.toHaveBeenCalled();
+  });
+
+  it("renders only mcp servers when view='mcp'", async () => {
+    await render({ view: "mcp" });
+
+    expect(container.querySelector('[data-models-card="mcp"]')).not.toBeNull();
+    expect(container.querySelector('[data-models-card="providers"]')).toBeNull();
+    expect(container.querySelector('[data-settings-nav="mcp"]')).not.toBeNull();
+    expect(mockApi.agentMcpServers).toHaveBeenCalled();
+    expect(mockApi.agentProviders).not.toHaveBeenCalled();
+  });
 });
