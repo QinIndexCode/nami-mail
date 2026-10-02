@@ -156,6 +156,11 @@ export type AgentMessageRequest = {
    *  snapshot replacing the transcript) address the SAME row instead of a
    *  server-random id the client has never seen. */
   clientMessageId?: string;
+  /** The client-generated id of the optimistic assistant row. The server
+   *  publishes the in-flight reply and persists the turn under this id, so
+   *  streamed deltas keep folding into the row the client already rendered
+   *  instead of a server-random id the client has never seen. */
+  clientAssistantMessageId?: string;
   quote?: string;
   /** Files uploaded by the user; token is present when usable as a mail attachment. */
   attachments?: AgentMessageAttachment[];

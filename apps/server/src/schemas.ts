@@ -244,6 +244,10 @@ export const agentMessageSchema = z.object({
   // The server persists the turn under it so a mid-session revoke addresses a
   // row the server knows instead of 404-ing on a client-only id.
   clientMessageId: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "Expected an opaque identifier.").max(128).optional(),
+  // Client-generated id of the optimistic assistant row (same charset): the
+  // in-flight reply and the persisted turn are published under it so streamed
+  // deltas keep folding into the row the client already rendered.
+  clientAssistantMessageId: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "Expected an opaque identifier.").max(128).optional(),
   // Historical field kept optional for old clients; the current UI no longer
   // sends it (references carry the user-chosen mail context instead).
   context: z.object({

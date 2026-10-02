@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   Bot,
   CalendarDays,
@@ -459,7 +459,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     backgroundRunIds,
     syncBackgroundRuns,
     getSession,
-    clearPendingFlush,
+    drainPendingFlush,
     takeBackgroundError,
     clearLiveRunIndicators,
     restoreLiveRunIndicators,
@@ -642,7 +642,9 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   // token streams). When the user scrolls up manually, we stop following; when
   // they scroll back to the bottom (or click the scroll-to-bottom button), we
   // resume. Using a ref avoids re-renders on every scroll tick.
-  useEffect(() => {
+  // Layout, not passive: this must land before paint, or every token frame
+  // paints at the previous offset and the transcript crawls a frame behind.
+  useLayoutEffect(() => {
     if (!stickToBottomRef.current) return;
     const el = transcriptRef.current;
     if (!el) return;
@@ -671,9 +673,8 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     stickToBottomRef.current = true;
     messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
   }, []);
-  // Scrubber: re-measure user-message anchors whenever the set of user
-  // messages changes (streamed assistant tokens never move earlier messages,
-  // so measuring on message-identity changes keeps this cheap).
+  // Scrubber: re-measure user-message anchors whenever the set of user messages
+  // changes — keyed on the joined id list, or every token frame pays a layout.
   const userMessages = useMemo(
     () => active?.messages.filter((message) => message.role === "user" && !message.revoked) ?? [],
     [active?.messages],
@@ -689,8 +690,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     return -1;
   }, [active?.messages]);
   // Memoised: streaming replaces the transcript on every token, and rebuilding
-  // this list (then splitting the joined key back apart) on each of those
-  // renders was pure churn — the ids only change when the user rows do.
+  // this list per render was pure churn — it only changes with the user rows.
   const userMessageIds = useMemo(() => userMessages.map((message) => message.id), [userMessages]);
   // Stable placeholder row for a run picked up after the panel reopened. The
   // transcript re-renders on every streamed token, and a fresh object literal
@@ -708,7 +708,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     : undefined), [active?.id]);
   const userMessageIdsKey = useMemo(() => userMessageIds.join("|"), [userMessageIds]);
   useEffect(() => {
-    const ids = userMessageIds;
+    const ids = userMessageIdsKey ? userMessageIdsKey.split("|") : [];
     const el = transcriptRef.current;
     if (!el || ids.length === 0) {
       setUserMarkerPositions([]);
@@ -722,7 +722,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       // so bars stay aligned regardless of where the transcript is scrolled.
       return node.getBoundingClientRect().top - containerRect.top + el.scrollTop;
     }));
-  }, [userMessageIds]);
+  }, [userMessageIdsKey]);
   // Initialise the scrubber viewport whenever the bar group changes or the
   // track resizes: centre the group when it fits, bottom-anchor it (newest
   // visible) once it overflows. Kept in sync with the ref the handlers read.
@@ -1073,9 +1073,8 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     // is replayed when they come back. The spinner/stop affordance belongs to
     // whatever is on screen, so it must follow the newly selected conversation.
     clearLiveRunIndicators();
-    // Pending frame-batched deltas belong to the outgoing transcript; drop them
-    // so they can never land on a different conversation.
-    clearPendingFlush();
+    // Drain queued deltas onto the outgoing transcript (never drop); no await may sit between this and the flip below.
+    drainPendingFlush();
     // Memory suggestions belong to the reply that produced them; switching
     // conversations discards whatever is undecided (a background session's
     // suggestions are replayed on re-entry).
@@ -1163,13 +1162,14 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       restoreLiveRunIndicators(id);
       setLoadError(error instanceof Error ? error.message : t("agent.error.loadConversation"));
     }
-  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, clearLiveRunIndicators, clearPendingFlush, conversationProviders, conversations, currentMessage, getSession, providers, replayBackgroundSession, restoreLiveRunIndicators, syncBackgroundRuns, t, takeBackgroundError]);
+  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, clearLiveRunIndicators, conversationProviders, conversations, currentMessage, drainPendingFlush, getSession, providers, replayBackgroundSession, restoreLiveRunIndicators, syncBackgroundRuns, t, takeBackgroundError]);
 
   const createConversation = useCallback(async () => {
     // Starting a new conversation does not cancel the current one — a live run
     // keeps streaming into its session buffer and resumes if the user returns.
     clearLiveRunIndicators();
-    clearPendingFlush();
+    // Drain (not drop) queued deltas; no await may sit between this and the flip below.
+    drainPendingFlush();
     setPendingMemorySuggestions([]);
     if (!selectedProvider) {
       setAgentSettingsPane("providers");
@@ -1200,7 +1200,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     setRenaming(false);
     setLoadError(null);
     window.requestAnimationFrame(() => composerRef.current?.focus());
-  }, [active?.id, clearLiveRunIndicators, clearPendingFlush, restoreLiveRunIndicators, selectedProvider, syncBackgroundRuns]);
+  }, [active?.id, clearLiveRunIndicators, drainPendingFlush, restoreLiveRunIndicators, selectedProvider, syncBackgroundRuns]);
 
   const renameConversation = useCallback(async () => {
     if (!active || !draftTitle.trim()) return;
@@ -1446,12 +1446,12 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       providerId: selectedProvider.id,
       mode,
       scope,
-      // Let the server persist this turn under the optimistic row's id: a
-      // revoke issued seconds later (the recall-and-resend flow) then addresses
-      // a row the server actually knows, instead of 404-ing on a client-only
-      // id and rolling the optimistic revoke back (the "revoked messages
-      // came back" bug).
+      // Let the server persist both optimistic rows' ids: a revoke issued
+      // seconds later (the recall-and-resend flow) then addresses rows the
+      // server knows instead of 404-ing on client-only ids, and the reply
+      // streams under the assistant row's id so deltas fold into that row.
       clientMessageId: userMessage.id,
+      clientAssistantMessageId: assistantMessage.id,
       ...(truncatedQuote ? { quote: truncatedQuote } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(mailReferences.length > 0 ? { references: mailReferences.map((reference) => ({ id: reference.id, subject: reference.subject })) } : {}),
@@ -1641,13 +1641,13 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     || loadingConversationId === active?.id;
 
   const latestCitations = useMemo(() => {
-    if (!active) return [];
-    for (let i = active.messages.length - 1; i >= 0; i--) {
-      const msg = active.messages[i]!;
+    const messages = active?.messages ?? [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i]!;
       if (msg.role === "assistant" && msg.citations.length > 0) return dedupeCitations(msg.citations);
     }
     return [];
-  }, [active]);
+  }, [active?.messages]);
 
   const desktopConfirmationAvailable = Boolean(desktopBridge()?.onAgentConfirmationResult);
   // The active confirmation (one at a time) floats above the composer, opencode
@@ -1657,7 +1657,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       if (message.confirmation?.state === "pending") return message.confirmation;
     }
     return undefined;
-  }, [active]);
+  }, [active?.messages]);
   // The confirmation card owns a local ticking countdown, so a waiting
   // confirmation no longer re-renders the whole transcript every second.
   const confirmationDeadline = pendingConfirmation ? Date.parse(pendingConfirmation.expiresAt) : 0;

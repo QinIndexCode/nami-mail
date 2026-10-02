@@ -140,6 +140,9 @@ export type AgentMessageInput = {
   /** Client-generated id of the optimistic user row; the turn is persisted
    *  under it so mid-session revokes address a known row (see schemas.ts). */
   clientMessageId?: string;
+  /** Client-generated id of the optimistic assistant row; the reply is published
+   *  and persisted under it so deltas fold into the client's row (see schemas.ts). */
+  clientAssistantMessageId?: string;
   context?: {
     currentMessageId?: string;
   };
@@ -923,8 +926,15 @@ export class AgentRunEngine {
     let mailContextIncluded = false;
     // The in-flight reply is published under the same id it is later persisted
     // with, so a panel that reopens mid-run renders this message and the final
-    // persisted copy is the same row (no duplicate).
-    const assistantMessageId = `message-${randomUUID()}`;
+    // persisted copy is the same row (no duplicate). The client's optimistic
+    // assistant row id is adopted when unused and distinct from the user row,
+    // so live deltas fold into the row the client rendered; else random (above).
+    const requestedAssistantId = input.clientAssistantMessageId;
+    const assistantMessageId = requestedAssistantId
+      && requestedAssistantId !== userMessage.id
+      && !state.messages.some((message) => message.id === requestedAssistantId)
+      ? requestedAssistantId
+      : `message-${randomUUID()}`;
     // Becomes true once the user message has been appended to the
     // conversation. Before that nothing is published as in-flight.
     let turnActive = false;
