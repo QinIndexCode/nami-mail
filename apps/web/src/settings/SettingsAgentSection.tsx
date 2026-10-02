@@ -30,7 +30,8 @@ export type SettingsAgentSectionProps = {
   currentSettings: AppSettings;
   controlsBusy: boolean;
   demoMode: boolean;
-  requestAgentProviderSettings: () => void;
+  /** Switches the settings modal to the models category in place. */
+  openModelSettings: () => void;
   requestAccessLevelChange: (patch: { agentAccessLevel?: AgentAccessLevel; agentCliAccessLevel?: AgentAccessLevel; agentMcpAccessLevel?: AgentAccessLevel }, value: AgentAccessLevel, successMessage: string | null) => void;
   applyOptimisticSettings: (patch: Record<string, unknown>, successMessage: string | null) => Promise<unknown>;
   externalGuideCopied: string | null;
@@ -50,7 +51,7 @@ export default function SettingsAgentSection({
   currentSettings,
   controlsBusy,
   demoMode,
-  requestAgentProviderSettings,
+  openModelSettings,
   requestAccessLevelChange,
   applyOptimisticSettings,
   externalGuideCopied,
@@ -76,18 +77,19 @@ export default function SettingsAgentSection({
     <section className="settings-section" data-settings-nav="agent" aria-labelledby="agent-settings">
       <div className="settings-section-title">
         <Bot size={16} />
-        <div><span>{t("agent.launch")}</span><p id="agent-settings">{demoMode ? t("agent.demo.description") : t("agent.providers.description")}</p></div>
+        {/* The panel is named by its title, not by the description below it. */}
+        <div><span id="agent-settings">{t("agent.launch")}</span><p>{demoMode ? t("agent.demo.description") : t("agent.providers.description")}</p></div>
       </div>
       {demoMode ? (
         <p className="settings-empty" role="status">{t("agent.demo.actionUnavailable")}</p>
       ) : (
         <>
-          <div className="setting-row agent-provider-settings-row">
+          <div className="setting-row">
             <div>
               <strong>{t("agent.providers.title")}</strong>
               <span>{t("agent.providers.emptyDescription")}</span>
             </div>
-            <button className="secondary-button" type="button" disabled={controlsBusy} onClick={requestAgentProviderSettings}>
+            <button className="secondary-button" type="button" disabled={controlsBusy} onClick={openModelSettings}>
               <Wrench size={15} />{t("agent.providers.configure")}
             </button>
           </div>

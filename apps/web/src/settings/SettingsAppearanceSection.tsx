@@ -33,7 +33,7 @@ export type SettingsAppearanceSectionProps = {
   chooseCustomBackground: () => void;
   uploadBackground: (event: ChangeEvent<HTMLInputElement>) => Promise<void>;
   resetConfirmClosing: () => void;
-  setPendingConfirmation: React.Dispatch<React.SetStateAction<"clear-background" | "restore-defaults" | "install-update" | "remove-translation-configuration" | "remove-translation-api-key" | "discard-translation-changes" | "discard-translation-changes-and-open-agent" | "enable-full-access" | null>>;
+  setPendingConfirmation: React.Dispatch<React.SetStateAction<"clear-background" | "restore-defaults" | "install-update" | "remove-translation-configuration" | "remove-translation-api-key" | "discard-translation-changes" | "discard-translation-changes-and-open-models" | "enable-full-access" | null>>;
   /** Receives the background upload button so the oversized-file alert can restore focus to it. */
   uploadButtonRef?: RefObject<HTMLButtonElement | null>;
 };

@@ -391,7 +391,7 @@ export default function App() {
   }, [loading]);
   const [syncing, setSyncing] = useState(false);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>("idle");
-  const [agentProviderSettingsRequestId, setAgentProviderSettingsRequestId] = useState(0);
+  const [agentProviderListVersion, setAgentProviderListVersion] = useState(0);
   const [submissions, setSubmissions] = useState<OutboundSubmission[]>([]);
   const [submissionLoading, setSubmissionLoading] = useState(true);
   const [submissionLoadError, setSubmissionLoadError] = useState<string | null>(null);
@@ -449,6 +449,10 @@ export default function App() {
   const [updatePromptOpen, setUpdatePromptOpen] = useState(false);
   const [updateFooterBusy, setUpdateFooterBusy] = useState(false);
   const [preloadedAgentBootstrap, setPreloadedAgentBootstrap] = useState<AgentBootstrap | null>(null);
+  // The provider slice of the bootstrap, kept apart so the settings panel can publish
+  // it when the splash preload never landed: patching the bootstrap in place was
+  // dropped while it was null, pinning the AI-translation switch to startup state.
+  const [agentProviderSnapshot, setAgentProviderSnapshot] = useState<Pick<AgentBootstrap, "providers" | "defaultProviderId"> | null>(null);
   const splashAnimationDoneRef = useRef(false);
   const splashDataDoneRef = useRef(false);
   const splashAgentDoneRef = useRef(false);
@@ -744,11 +748,10 @@ export default function App() {
       ".settings-body", ".compose-card > form", ".compose-contact-suggestions", ".compose-template-picker",
       ".sending-status-list", ".sending-status-floating-tooltip", ".external-guide-code",
       ".themed-select-menu", ".agent-message-content pre", ".agent-message-content table",
-      ".agent-slash-menu", ".agent-provider-settings-scrim", ".agent-provider-list",
-      ".agent-provider-form", ".agent-provider-settings-body", ".auto-reply-list",
+      ".agent-slash-menu", ".auto-reply-list",
       ".agent-memory-list", ".auto-reply-toast-reply",
       ".settings-account-signature textarea", ".template-editor textarea",
-      ".agent-provider-field > textarea.agent-mcp-args-input", ".calendar-field textarea",
+      ".calendar-field textarea",
     ].join(",");
     const BAND = 8; // matches the custom track width in styles.css
     let raf = 0;
@@ -1230,7 +1233,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     void api.agentBootstrap().then((value) => {
       // Cap stored conversations to the 50 most recent to bound memory.
       const capped: AgentBootstrap = { ...value, conversations: value.conversations.slice(0, 50) };
-      setPreloadedAgentBootstrap(capped);
+      setPreloadedAgentBootstrap(capped); setAgentProviderSnapshot(capped);
     }).catch(() => undefined).finally(() => {
       splashAgentDoneRef.current = true;
       console.log("[nami-startup] renderer-agent-bootstrap-done");
@@ -1725,10 +1728,10 @@ await refreshSubmissions(nextAccounts, { silent: true });
   // content, enabling AI translation. Cloud providers require the explicit
   // "allowCloudMailContent" consent; local providers (e.g. Ollama) always qualify.
   const llmTranslationAvailable = useMemo(
-    () => !isDemo && Boolean(preloadedAgentBootstrap?.providers.some(
+    () => !isDemo && Boolean(agentProviderSnapshot?.providers.some(
       (provider) => provider.configured && (!provider.cloud || provider.cloudContentConsent),
     )),
-    [preloadedAgentBootstrap],
+    [agentProviderSnapshot],
   );
   const refreshTranslationAvailability = useCallback(async () => {
     const requestId = ++translationAvailabilityRequestIdRef.current;
@@ -2195,6 +2198,16 @@ const emptyMessageList = useMemo(() => (query.trim()
       }
     }
   }, [accounts, actions, applyLocalSeenChange, showToast, t, updateUnreadViewRecentlyRead]);
+  // Stable identity for the agent transcript's "open referenced message" handler:
+  // it reaches memoised AgentMessageRow, where a per-render arrow re-parses every historic message.
+  const openMessageRef = useRef(openMessage);
+  openMessageRef.current = openMessage;
+  const handleAgentOpenMessage = useCallback((messageId: string) => {
+    closeAgentWorkspace();
+    const known = messagesRef.current.find((item) => item.id === messageId);
+    if (known) { void openMessageRef.current(known); return; }
+    void api.message(messageId).then((fetched) => openMessageRef.current(fetched)).catch((error: unknown) => showToast(mailErrorToastMessage(error, t("mail.error.openNew"), t), "error"));
+  }, [closeAgentWorkspace, showToast, t]);
 
   const closeReader = useCallback((restoreFocus = false) => {
     const messageId = lastOpenedMessageIdRef.current;
@@ -4274,25 +4287,11 @@ const emptyMessageList = useMemo(() => (query.trim()
           )}
 </section>
         </div>
-        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} providerSettingsRequestId={agentProviderSettingsRequestId} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
+        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} overlayOpen={state.settingsOpen} providerListVersion={agentProviderListVersion} onOpenModelSettings={() => actions.openSettingsTo("models")} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
           closeAgentWorkspace();
-          // Refresh agent bootstrap so the translation panel picks up any
-          // provider configuration changes made inside the assistant workspace.
-          if (!isDemo) {
-            void api.agentBootstrap().then((value) => {
-              const capped: AgentBootstrap = { ...value, conversations: value.conversations.slice(0, 50) };
-              setPreloadedAgentBootstrap(capped);
-            }).catch(() => undefined);
-          }
-        }} onOpenMessage={(messageId) => {
-          closeAgentWorkspace();
-          const message = messagesRef.current.find((item) => item.id === messageId);
-          if (message) {
-            void openMessage(message);
-            return;
-          }
-          void api.message(messageId).then((fetched) => openMessage(fetched)).catch((error: unknown) => showToast(mailErrorToastMessage(error, t("mail.error.openNew"), t), "error"));
-        }} /></Suspense>}
+          // Refresh so the translation panel picks up provider changes made in the workspace.
+          if (!isDemo) void api.agentBootstrap().then((value) => { const capped: AgentBootstrap = { ...value, conversations: value.conversations.slice(0, 50) }; setPreloadedAgentBootstrap(capped); setAgentProviderSnapshot(capped); }).catch(() => undefined);
+        }} onOpenMessage={handleAgentOpenMessage} /></Suspense>}
         <aside className="icon-rail" aria-label={t("navigation.management")}>
           <IconButton label={t("settings.title")} onClick={() => { actions.closeMobileSidebar(); actions.openSettings(); }}><Settings size={18} /></IconButton>
           <IconButton label={t("sending.title")} className={submissionAttentionCount ? "attention" : ""} onClick={() => { actions.closeMobileSidebar(); actions.openSendingStatus(); void refreshSubmissions(accounts, { silent: true }); }}><ListChecks size={18} />{submissionOutstandingCount > 0 && <span className="rail-badge" aria-hidden="true">{submissionOutstandingCount}</span>}</IconButton>
@@ -4306,7 +4305,7 @@ const emptyMessageList = useMemo(() => (query.trim()
 
       {state.addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} existingAccounts={accounts} onClose={() => actions.closeAddAccount()} onAdded={handleAccountAdded} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
       {state.composeOpen && <Suspense fallback={null}><ComposeModal accounts={accounts} draft={state.composeDraft} onClose={() => actions.closeCompose()} onSent={(message, kind, undoDraft, sentAccountId) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), run: () => { window.setTimeout(() => { actions.openCompose(undoDraft); }, 0); } }); else showToast(message, kind); if (sentAccountId && !isDemo) { void api.sync(sentAccountId).then(() => load({ silent: true })).catch(() => undefined).finally(() => setThreadRefreshTick((value) => value + 1)); } }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      {state.settingsOpen && <Suspense fallback={null}><SettingsModal settings={settings} accounts={accounts} onClose={() => actions.closeSettings()} onSettingsChange={applySettings} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} onOpenAgentProviderSettings={() => { actions.closeSettings(); setAgentProviderSettingsRequestId((requestId) => requestId + 1); openAgentWorkspace(); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
+      {state.settingsOpen && <Suspense fallback={null}><SettingsModal settings={settings} accounts={accounts} onClose={() => actions.closeSettings()} onSettingsChange={applySettings} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} agentProviderSeed={agentProviderSnapshot ?? preloadedAgentBootstrap ?? undefined} categoryRequest={state.settingsCategoryRequest} onAgentProviderListChanged={(snapshot) => { setAgentProviderSnapshot({ providers: snapshot.items, defaultProviderId: snapshot.defaultProviderId }); setPreloadedAgentBootstrap((current) => current && { ...current, providers: snapshot.items, defaultProviderId: snapshot.defaultProviderId, configured: snapshot.items.some((provider) => provider.configured) }); setAgentProviderListVersion((version) => version + 1); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
       {state.contactsOpen && <Suspense fallback={null}><ManagementDialogs demoMode={isDemo} onClose={() => actions.closeContacts()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.templatesOpen && <Suspense fallback={null}><TemplatesDialog demoMode={isDemo} onClose={() => actions.closeTemplates()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.calendarOpen && <Suspense fallback={null}><CalendarDialog demoMode={isDemo} onClose={() => actions.closeCalendar()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}

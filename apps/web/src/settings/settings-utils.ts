@@ -2,6 +2,34 @@ import type { Translate } from "../i18n";
 import { mailErrorMessage } from "../errorPresentation";
 import type { AgentAccessLevel, AppTheme, BackgroundPreset, CloseBehavior, ListDensity, NotificationSound } from "../types";
 
+/**
+ * Confirmation kinds the settings modal can raise. Shared here so panel
+ * components can request a confirmation without owning the dialog itself.
+ */
+export type PendingSettingsConfirmation =
+  | "clear-background"
+  | "restore-defaults"
+  | "install-update"
+  | "remove-translation-configuration"
+  | "remove-translation-api-key"
+  | "discard-translation-changes"
+  | "discard-translation-changes-and-open-models"
+  | "enable-full-access";
+
+/**
+ * The themed select owns Escape while its listbox is expanded: an application
+ * dialog listening for Escape must leave the event alone so the combobox closes
+ * only its own menu instead of the dialog behind it.
+ */
+export function expandedThemedSelectOwnsEscape(
+  eventTarget: Pick<Element, "closest"> | null,
+  activeElement: Pick<Element, "closest"> | null,
+): boolean {
+  const selectControl = eventTarget?.closest(".select-control")
+    ?? activeElement?.closest(".select-control");
+  return Boolean(selectControl?.querySelector('[role="combobox"][aria-expanded="true"]'));
+}
+
 export type BackgroundPresetOption = {
   id: Exclude<BackgroundPreset, "custom">;
   labelKey: string;

@@ -149,18 +149,35 @@ background:color-mix(in srgb, var(--frame) var(--bg-panel-opacity), transparent)
 width:min(1680px,100vw - 28px);
 height:min(1050px,100vh - 28px);
 box-shadow:var(--shadow);
--webkit-backdrop-filter:blur(28px)saturate(150%);
-backdrop-filter:blur(28px)saturate(150%);
 margin:14px auto;
 overflow:hidden
+}
+/* The glass is a ::before layer, never a filter on .app-frame itself: filter /
+   backdrop-filter / transform on an ancestor make that ancestor the containing
+   block of every position:fixed descendant, and App renders all of its
+   overlays inside the frame. With the filter on the frame, a fixed overlay
+   resolved against the frame's padding box instead of the viewport — measured
+   1677x902 @ (15,15) in a 1707x932 window, leaving the 14px canvas gutter
+   undimmed and shifting clientX/clientY popovers. .app-frame keeps no such
+   property now, so the fixed overlays see the viewport again. z-index:-1
+   paints the layer above the frame's own tint but below its in-flow content;
+   .app-frame is position:relative + z-index:1, so it is the stacking context
+   that scopes the negative offset. */
+.app-frame:not(.desktop-app)::before
+{
+content:"";
+z-index:-1;
+pointer-events:none;
+position:absolute;
+inset:0;
+-webkit-backdrop-filter:blur(28px)saturate(150%);
+backdrop-filter:blur(28px)saturate(150%)
 }
 .app-frame.desktop-app
 {
 width:100%;
 height:100%;
 box-shadow:none;
--webkit-backdrop-filter:none;
-backdrop-filter:none;
 border:0;
 border-radius:0;
 margin:0
@@ -224,7 +241,13 @@ position:relative
 }
 .workspace-canvas.background-active .app-frame
 {
-background:color-mix(in srgb, var(--frame) 48%, transparent);
+background:color-mix(in srgb, var(--frame) 48%, transparent)
+}
+/* Replaces (never adds to) the base glass: backdrop-filter is one property, so
+   the wallpaper mode has always dropped the 28px blur and kept only the
+   saturation shift. Same semantics on the ::before layer. */
+.workspace-canvas.background-active .app-frame:not(.desktop-app)::before
+{
 -webkit-backdrop-filter:saturate(108%);
 backdrop-filter:saturate(108%)
 }
@@ -1194,6 +1217,11 @@ border-radius:50%
 {
 background:var(--danger);
 box-shadow:0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent)
+}
+.status-dot.muted
+{
+background:var(--text-faint);
+box-shadow:none
 }
 .status-dot.warning
 {
@@ -4296,7 +4324,7 @@ max-width:340px
 }
 .modal-backdrop
 {
-z-index:30;
+z-index:40;
 background:var(--scrim-base);
 /* In the desktop shell the top of a modal can overlay the .column-header
    draggable strip. Without opting out, Electron's drag-region resolution
@@ -4325,6 +4353,7 @@ width:min(430px,100%);
 max-height:calc(100vh - 40px);
 padding:24px;
 animation:.24s cubic-bezier(.2,.8,.2,1) both modal-in;
+overscroll-behavior:contain;
 overflow-y:auto
 }
 .modal-card-header
@@ -4419,26 +4448,26 @@ overflow-y:auto
 pointer-events:none;
 animation:.17s cubic-bezier(.2,.8,.2,1) both modal-out
 }
-:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar
 {
 width:8px;
 height:8px
 }
-:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-track
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-track
 {
 background:0 0
 }
-:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-button
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-button
 {
 width:0;
 height:0;
 display:none
 }
-:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-corner
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-corner
 {
 background:0 0
 }
-:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-thumb
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-thumb
 {
 background-clip:padding-box;
 border:2px solid #0000;
@@ -4488,21 +4517,21 @@ background:0 0
 {
 background:0 0
 }
-:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)::-webkit-scrollbar-thumb
+:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-thumb
 {
 background:0 0
 }
-:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea).scrollbar-reveal::-webkit-scrollbar-thumb
+:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea).scrollbar-reveal::-webkit-scrollbar-thumb
 {
 background:color-mix(in srgb, var(--text-faint) 45%, transparent)
 }
-:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea).scrollbar-reveal::-webkit-scrollbar-thumb:active
+:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea).scrollbar-reveal::-webkit-scrollbar-thumb:active
 {
 background:var(--text-faint)
 }
 @supports ((-moz-appearance:none))
 {
-:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.agent-provider-settings-scrim,.agent-provider-list,.agent-provider-form,.agent-provider-settings-body,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.agent-provider-field>textarea.agent-mcp-args-input,.calendar-field textarea)
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)
 {
 scrollbar-width:thin;
 scrollbar-color:var(--line-strong) transparent
@@ -4643,7 +4672,7 @@ display:inline-flex
 }
 .update-background-status
 {
-z-index:26;
+z-index:46;
 border:1px solid var(--line-strong);
 background:var(--panel-solid);
 width:min(360px,100vw - 44px);
@@ -7681,8 +7710,13 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 border-radius:14px;
 width:min(390px,100%);
+/* The backdrop is a `place-items:center` grid, so an over-tall card overflows
+   symmetrically and its top half cannot be scrolled to. Cap and scroll it. */
+max-height:calc(100vh - 40px);
 padding:22px;
-animation:.2s cubic-bezier(.2,.8,.2,1) both modal-in
+animation:.2s cubic-bezier(.2,.8,.2,1) both modal-in;
+overscroll-behavior:contain;
+overflow-y:auto
 }
 .confirmation-card h3
 {
@@ -7700,6 +7734,7 @@ line-height:1.6
 .confirmation-actions
 {
 justify-content:flex-end;
+flex-wrap:wrap;
 gap:8px;
 margin-top:20px;
 display:flex
@@ -7716,8 +7751,12 @@ border:1px solid color-mix(in srgb, var(--danger) 40%, var(--line-strong));
 background:var(--panel-solid);
 border-radius:14px;
 width:min(440px,100%);
+/* Same centred-grid overflow as .confirmation-card, same cap. */
+max-height:calc(100vh - 40px);
 padding:24px;
-animation:.2s cubic-bezier(.2,.8,.2,1) both modal-in
+animation:.2s cubic-bezier(.2,.8,.2,1) both modal-in;
+overscroll-behavior:contain;
+overflow-y:auto
 }
 .settings-alert-card.closing
 {
@@ -8433,6 +8472,110 @@ opacity:.45
 .settings-inline-actions
 {
 margin-top:13px
+}
+/* Settings models panel: the provider/MCP rows reuse .setting-row, so only the
+   right-hand action cluster needs sizing the shared row never had. */
+.setting-row>.settings-row-actions
+{
+align-items:center;
+gap:6px;
+flex:none;
+display:flex
+}
+.setting-row>.settings-row-actions>.secondary-button
+{
+white-space:nowrap;
+min-height:28px;
+padding:5px 8px;
+font-size:10px
+}
+.settings-secret-input
+{
+align-items:center;
+gap:4px;
+display:flex
+}
+.settings-secret-input>.icon-button
+{
+flex:none
+}
+.settings-model-env-line
+{
+gap:6px;
+margin-bottom:6px;
+display:flex
+}
+.settings-model-env-line>input
+{
+border:1px solid var(--line-strong);
+background:var(--panel-muted);
+border-radius:var(--radius-sm);
+color:var(--text);
+min-width:0;
+flex:1;
+padding:6px 8px;
+font-size:11px
+}
+.settings-model-add-env
+{
+border:1px dashed var(--line-strong);
+background:0 0;
+color:var(--text-soft);
+cursor:pointer;
+border-radius:var(--radius-sm);
+align-items:center;
+gap:5px;
+padding:6px 10px;
+font-size:10px;
+display:inline-flex
+}
+.settings-model-add-env:hover:not(:disabled)
+{
+border-color:var(--text-faint);
+color:var(--text)
+}
+.settings-model-add-env:disabled
+{
+cursor:default;
+opacity:.5
+}
+.settings-model-feedback
+{
+align-items:center;
+gap:6px;
+margin:10px 0 0;
+font-size:10px;
+line-height:1.45;
+display:flex
+}
+.settings-model-feedback>span
+{
+flex:1;
+min-width:0
+}
+.settings-model-feedback.error
+{
+color:var(--danger)
+}
+.settings-model-feedback.success
+{
+color:var(--success)
+}
+.settings-model-feedback .secondary-button
+{
+flex:none
+}
+.settings-model-delete-note
+{
+color:var(--warning);
+margin:8px 0 0;
+font-size:10px;
+line-height:1.45
+}
+.settings-model-delete-pending
+{
+border-color:var(--danger);
+color:var(--danger)
 }
 .translation-settings-form
 {
@@ -9489,6 +9632,7 @@ box-shadow:inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
 border-radius:16px;
 padding:24px;
 animation:.2s cubic-bezier(.2,.8,.2,1) both modal-in;
+overscroll-behavior:contain;
 overflow-y:auto
 }
 .accounts-editor-modal.closing
@@ -9951,6 +10095,7 @@ box-shadow:inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
 border-radius:16px;
 padding:24px;
 animation:.2s cubic-bezier(.2,.8,.2,1) both modal-in;
+overscroll-behavior:contain;
 overflow-y:auto
 }
 .contact-editor-modal.closing
@@ -10431,6 +10576,16 @@ z-index:58;
 border:1px solid var(--line-strong);
 background:var(--panel-solid);
 max-height:min(280px,44dvh);
+/* left:0/right:0 stretches the menu to the trigger's width, so a narrow trigger
+   (the 96px filter-rule value select, the 150px kind selects, the 132px
+   auto-reply rule select) ellipsised every option. min-width raises the floor to
+   the widest option, leaving wider triggers exactly as they were. A
+   `min(max-content,90vw)` cap is NOT usable here: Chromium's CSS parser drops
+   any math function that contains an intrinsic sizing keyword, so the whole
+   declaration is discarded (verified in-browser). The option labels are short
+   enum values and account addresses, so nothing here reaches the viewport edge;
+   flipping the menu near one stays a separate portal follow-up. */
+min-width:max-content;
 box-shadow:var(--shadow-raised);
 border-radius:var(--radius-sm);
 flex-direction:column;
@@ -10498,7 +10653,7 @@ flex:none
 }
 .toast
 {
-z-index:90;
+z-index:92;
 left:50%;
 bottom:max(28px, calc(env(safe-area-inset-bottom) + 16px));
 border:1px solid var(--line-strong);
@@ -11909,71 +12064,6 @@ gap:6px;
 row-gap:4px;
 display:flex;
 flex-wrap:wrap
-}
-.agent-provider-picker
-{
-border:1px solid var(--line-strong);
-background:var(--panel-muted);
-border-radius:var(--radius-sm);
-align-items:center;
-min-width:0;
-padding:3px;
-display:inline-flex
-}
-.agent-provider-picker-label
-{
-min-width:0;
-color:var(--text-faint);
-white-space:nowrap;
-align-items:center;
-gap:4px;
-padding:0 6px;
-font-family:DM Mono,monospace;
-font-size:8px;
-font-weight:700;
-display:inline-flex
-}
-.agent-provider-select-control
-{
-width:min(220px,28vw)
-}
-.agent-provider-select
-{
-background:var(--panel-solid);
-width:100%;
-min-height:30px;
-color:var(--text);
-letter-spacing:-.15px;
-border:1px solid #0000;
-border-radius:5px;
-font-size:10px;
-font-weight:500;
-padding:6px 29px 6px 8px!important
-}
-.agent-provider-select:hover:not(:disabled)
-{
-border-color:var(--line-strong);
-background:var(--hover)
-}
-.agent-provider-select:focus-visible
-{
-border-color:var(--focus-ring);
-box-shadow:0 0 0 2px var(--focus-ring-subtle)
-}
-.agent-provider-picker .select-control-icon
-{
-right:8px
-}
-.agent-provider-picker .themed-select-menu
-{
-z-index:90;
-min-width:min(280px,72vw)
-}
-.agent-provider-picker .themed-select-option
-{
-letter-spacing:-.15px;
-font-size:10px;
-font-weight:500
 }
 .agent-configure-provider-action
 {
@@ -14556,21 +14646,6 @@ opacity:.35
 background:var(--text-soft);
 color:var(--panel-solid)
 }
-.agent-composer-meta
-{
-max-width:840px;
-color:var(--text-faint);
-justify-content:space-between;
-gap:10px;
-margin:8px auto 0;
-font-size:9px;
-line-height:1.4;
-display:flex
-}
-.agent-composer-meta span:last-child
-{
-text-align:right
-}
 .agent-scroll-to-bottom
 {
 border:1px solid var(--line-strong);
@@ -14639,831 +14714,6 @@ transition:transform .2s
 .agent-permission-chevron.open
 {
 transform:rotate(180deg)
-}
-.agent-provider-settings-scrim
-{
-z-index:82;
-background:var(--scrim-drawer);
--webkit-backdrop-filter:none;
-backdrop-filter:none;
-place-items:center;
-padding:14px;
-animation:.16s both fade-in;
-display:grid;
-position:absolute;
-inset:0;
-overflow:auto
-}
-.agent-provider-settings-scrim.closing
-{
-pointer-events:none;
-animation:.16s both backdrop-out
-}
-.agent-provider-settings
-{
-border:1px solid var(--line-strong);
-background:var(--panel-solid);
-border-radius:10px;
-outline:none;
-grid-template-rows:auto minmax(0,1fr);
-width:min(920px,100%);
-max-height:min(780px,100%);
-animation:.18s cubic-bezier(.2,.8,.2,1) both modal-in;
-display:grid;
-overflow:hidden
-}
-.agent-provider-settings.closing
-{
-pointer-events:none;
-animation:.17s cubic-bezier(.2,.8,.2,1) both modal-out
-}
-.agent-provider-settings-header
-{
-border-bottom:1px solid var(--line);
-background:var(--panel-solid);
-justify-content:space-between;
-align-items:flex-start;
-gap:16px;
-padding:20px 22px 16px;
-display:flex
-}
-.agent-provider-settings-header>div
-{
-min-width:0
-}
-.agent-provider-settings-header .eyebrow
-{
-color:var(--text-faint);
-font-size:8px
-}
-.agent-provider-settings-header h2
-{
-color:var(--text);
-margin:0;
-font-size:16px;
-font-weight:700
-}
-.agent-provider-settings-header .agent-provider-title-line
-{
-align-items:center;
-gap:6px;
-margin-top:2px;
-display:inline-flex
-}
-.agent-provider-settings-body
-{
-grid-template-columns:minmax(220px,260px) minmax(0,1fr);
-min-height:0;
-display:grid
-}
-.agent-provider-catalog
-{
-border-right:1px solid var(--line);
-background:var(--panel-muted);
-flex-direction:column;
-min-width:0;
-min-height:0;
-padding:14px;
-display:flex
-}
-.agent-provider-catalog-header
-{
-color:var(--text-faint);
-text-transform:uppercase;
-justify-content:space-between;
-align-items:center;
-gap:8px;
-padding:1px 1px 10px;
-font-family:DM Mono,monospace;
-font-size:8px;
-font-weight:700;
-display:flex
-}
-.agent-provider-new
-{
-border:1px solid var(--line-strong);
-background:var(--panel-solid);
-min-height:27px;
-color:var(--text-soft);
-cursor:pointer;
-text-transform:none;
-border-radius:5px;
-align-items:center;
-gap:4px;
-padding:4px 6px;
-font-family:inherit;
-font-size:8px;
-font-weight:700;
-display:inline-flex
-}
-.agent-provider-new:hover:not(:disabled)
-{
-border-color:var(--text-faint);
-background:var(--hover);
-color:var(--text)
-}
-.agent-provider-new:disabled
-{
-cursor:default;
-opacity:.45
-}
-.agent-provider-loading,.agent-provider-empty
-{
-min-height:72px;
-color:var(--text-faint);
-text-align:center;
-justify-content:center;
-align-items:center;
-gap:8px;
-padding:10px;
-font-size:9px;
-display:flex
-}
-.agent-provider-empty
-{
-flex-direction:column
-}
-.agent-provider-empty strong
-{
-color:var(--text-soft);
-font-size:10px
-}
-.agent-provider-list
-{
-flex-direction:column;
-gap:4px;
-min-height:0;
-padding:1px;
-display:flex;
-overflow-y:auto
-}
-.agent-provider-list-row
-{
-align-items:stretch;
-gap:3px;
-display:flex
-}
-.agent-provider-list-row>.agent-provider-list-item
-{
-flex:1;
-min-width:0
-}
-.agent-provider-list-delete
-{
-width:24px;
-height:24px;
-color:var(--text-faint);
-cursor:pointer;
-opacity:0;
-background:0 0;
-border:0;
-border-radius:var(--radius-sm);
-flex:none;
-align-self:center;
-place-items:center;
-padding:0;
-transition:opacity .14s,background .14s,color .14s;
-display:grid
-}
-.agent-provider-list-row:hover .agent-provider-list-delete,.agent-provider-list-delete:focus-visible,.agent-provider-list-delete.pending
-{
-opacity:1
-}
-.agent-provider-list-delete:hover:not(:disabled)
-{
-background:var(--hover);
-color:var(--danger)
-}
-.agent-provider-list-delete.pending
-{
-color:var(--danger)
-}
-.agent-provider-list-delete:disabled
-{
-cursor:default;
-opacity:.35
-}
-.agent-provider-list-item
-{
-width:100%;
-min-height:58px;
-color:var(--text-soft);
-cursor:pointer;
-font:inherit;
-text-align:left;
-background:0 0;
-border:1px solid #0000;
-border-radius:var(--radius-sm);
-grid-template-columns:auto minmax(0,1fr) auto;
-align-items:start;
-gap:8px;
-padding:8px;
-display:grid
-}
-.agent-provider-list-item:hover:not(:disabled)
-{
-border-color:var(--line);
-background:var(--hover);
-color:var(--text)
-}
-.agent-provider-list-item.active
-{
-border-color:var(--line-strong);
-background:var(--selected);
-color:var(--text)
-}
-.agent-provider-list-item:disabled
-{
-cursor:default;
-opacity:.56
-}
-.agent-provider-list-item>span:nth-child(2)
-{
-flex-direction:column;
-gap:2px;
-min-width:0;
-display:flex
-}
-.agent-provider-list-item strong,.agent-provider-list-item small
-{
-text-overflow:ellipsis;
-white-space:nowrap;
-overflow:hidden
-}
-.agent-provider-list-item strong
-{
-font-size:10px;
-font-weight:700
-}
-.agent-provider-list-item em
-{
-color:var(--text-faint);
-font-size:8px;
-font-style:normal
-}
-.agent-provider-list-item em.model
-{
-max-width:150px;
-margin-right:6px;
-white-space:nowrap;
-text-overflow:ellipsis;
-overflow:hidden;
-display:inline-block;
-vertical-align:top
-}
-.agent-provider-list-item>svg
-{
-color:var(--text-faint);
-margin-top:2px
-}
-.agent-provider-state
-{
-border:1px solid var(--line-strong);
-background:var(--text-faint);
-border-radius:50%;
-width:7px;
-height:7px;
-margin-top:4px
-}
-.agent-provider-state.ready
-{
-border-color:color-mix(in srgb, var(--success) 52%, var(--line));
-background:var(--success)
-}
-.agent-provider-state.pending
-{
-background:color-mix(in srgb, var(--text-faint) 60%, transparent)
-}
-.agent-provider-form
-{
-flex-direction:column;
-gap:15px;
-min-width:0;
-min-height:0;
-padding:18px 22px 20px;
-display:flex;
-overflow-y:auto
-}
-.agent-provider-form-heading
-{
-justify-content:space-between;
-align-items:flex-start;
-gap:10px;
-padding-bottom:2px;
-display:flex
-}
-.agent-provider-form-heading .eyebrow
-{
-color:var(--text-faint);
-font-size:8px
-}
-.agent-provider-form-heading h3
-{
-color:var(--text);
-margin:3px 0 0;
-font-size:14px;
-font-weight:700
-}
-.agent-provider-form-status
-{
-border:1px solid var(--line);
-min-height:24px;
-color:var(--text-soft);
-white-space:nowrap;
-border-radius:5px;
-align-items:center;
-gap:5px;
-padding:4px 6px;
-font-size:8px;
-display:inline-flex
-}
-.agent-provider-form-status.ready
-{
-color:var(--success)
-}
-.agent-provider-form-status.pending
-{
-color:var(--text-faint)
-}
-.agent-provider-feedback
-{
-border:1px solid var(--line);
-background:var(--panel-muted);
-color:var(--text-soft);
-border-radius:var(--radius-sm);
-align-items:flex-start;
-gap:8px;
-padding:8px;
-font-size:9px;
-line-height:1.45;
-display:flex
-}
-.agent-provider-feedback>svg
-{
-flex:none
-}
-.agent-provider-feedback>span
-{
-overflow-wrap:anywhere;
-flex:1;
-min-width:0
-}
-.agent-provider-feedback.error
-{
-border-color:color-mix(in srgb, var(--danger) 40%, var(--line));
-color:var(--danger)
-}
-.agent-provider-feedback.success
-{
-border-color:color-mix(in srgb, var(--success) 38%, var(--line));
-color:var(--success)
-}
-.agent-provider-feedback .secondary-button
-{
-flex:none;
-min-height:25px;
-padding:4px 6px;
-font-size:8px
-}
-.agent-provider-field
-{
-gap:8px;
-min-width:0;
-display:grid
-}
-.agent-provider-field>span:first-child
-{
-flex-direction:row;
-align-items:center;
-gap:5px;
-min-width:0;
-display:flex
-}
-.agent-provider-field strong
-{
-color:var(--text);
-font-size:10px
-}
-.agent-provider-field small
-{
-color:var(--text-faint);
-font-size:9px;
-line-height:1.4
-}
-.agent-provider-field>input,.agent-provider-secret>input,.agent-provider-field .themed-select
-{
-border:1px solid var(--line-strong);
-background:var(--panel-muted);
-width:100%;
-min-height:38px;
-color:var(--text);
-border-radius:var(--radius-sm);
-outline:none;
-padding:8px 10px;
-font-size:11px
-}
-.agent-provider-field .themed-select
-{
-padding-right:32px
-}
-.agent-provider-field>input::placeholder,.agent-provider-secret>input::placeholder
-{
-color:var(--text-faint);
-opacity:.82
-}
-.agent-provider-field>input:focus-visible,.agent-provider-secret>input:focus-visible,.agent-provider-field .themed-select:focus-visible
-{
-border-color:var(--focus-ring);
-box-shadow:0 0 0 3px var(--focus-ring-subtle)
-}
-.agent-provider-field>input:disabled,.agent-provider-secret>input:disabled,.agent-provider-field .themed-select:disabled
-{
-cursor:default;
-opacity:.56
-}
-.agent-provider-field .select-control
-{
-min-width:0
-}
-.agent-provider-field .themed-select-menu
-{
-z-index:90
-}
-.agent-provider-timeout
-{
-max-width:260px
-}
-.agent-provider-secret
-{
-min-width:0;
-display:block;
-position:relative
-}
-.agent-provider-secret>input
-{
-padding-right:41px
-}
-/* Overlay buttons centred inside an input (this eye and its two siblings) must centre
-   with `translate`, never `transform`: `.icon-button:active{transform:scale(.88)}`
-   REPLACES the matrix instead of composing, dropping the button half its height out. */
-.agent-provider-secret .icon-button
-{
-width:29px;
-height:29px;
-position:absolute;
-top:50%;
-right:4px;
-translate:0 -50%
-}
-.agent-provider-inline-toggle
-{
-width:max-content;
-min-height:26px;
-color:var(--text-soft);
-cursor:pointer;
-background:0 0;
-border:0;
-align-items:center;
-gap:6px;
-margin-top:6px;
-padding:3px 0;
-font-size:9px;
-display:inline-flex
-}
-.agent-provider-inline-toggle>span:first-child
-{
-border:1px solid var(--line-strong);
-background:var(--panel-muted);
-border-radius:var(--radius-pill);
-width:22px;
-height:13px;
-padding:1px
-}
-.agent-provider-inline-toggle>span:first-child:after
-{
-background:var(--text-faint);
-content:"";
-border-radius:50%;
-width:9px;
-height:9px;
-transition:transform .16s,background .16s;
-display:block
-}
-.agent-provider-inline-toggle.active>span:first-child
-{
-border-color:var(--text);
-background:var(--text)
-}
-.agent-provider-inline-toggle.active>span:first-child:after
-{
-background:var(--panel-solid);
-transform:translate(9px)
-}
-.agent-provider-inline-toggle:disabled
-{
-cursor:default;
-opacity:.48
-}
-.agent-provider-toggle-row
-{
-border:0;
-border-top:1px solid var(--line);
-width:100%;
-color:var(--text);
-cursor:pointer;
-text-align:left;
-background:0 0;
-justify-content:space-between;
-align-items:center;
-gap:14px;
-padding:11px 0;
-display:flex
-}
-.agent-provider-toggle-row>span:first-child
-{
-flex-direction:row;
-align-items:center;
-gap:5px;
-min-width:0;
-display:flex
-}
-.agent-provider-toggle-row strong
-{
-font-size:10px
-}
-.agent-provider-help
-{
-border:0;
-background:0 0;
-color:var(--text-faint);
-cursor:help;
-flex:none;
-line-height:0;
-padding:1px;
-display:inline-flex;
-transition:color .15s
-}
-.agent-provider-help:hover
-{
-color:var(--text-soft)
-}
-.agent-provider-toggle-row:disabled
-{
-cursor:default;
-opacity:.54
-}
-.agent-provider-switch
-{
-border:1px solid var(--line-strong);
-background:var(--panel-muted);
-border-radius:var(--radius-pill);
-flex:none;
-width:36px;
-height:21px;
-padding:2px;
-transition:border-color .16s,background .16s
-}
-.agent-provider-switch>span
-{
-background:var(--text-faint);
-border-radius:50%;
-width:15px;
-height:15px;
-transition:transform .16s cubic-bezier(.2,.8,.2,1),background .16s;
-display:block
-}
-.agent-provider-toggle-row.active .agent-provider-switch
-{
-border-color:var(--text);
-background:var(--text)
-}
-.agent-provider-toggle-row.active .agent-provider-switch>span
-{
-background:var(--panel-solid);
-transform:translate(15px)
-}
-.agent-provider-validation,.agent-provider-delete-note
-{
-color:var(--danger);
-align-items:flex-start;
-gap:5px;
-margin:-2px 0 0;
-font-size:9px;
-line-height:1.4;
-display:flex
-}
-.agent-provider-validation>svg
-{
-flex:none;
-margin-top:1px
-}
-.agent-provider-delete-note
-{
-color:var(--text-faint)
-}
-.agent-provider-form-actions
-{
-flex-wrap:wrap;
-justify-content:space-between;
-gap:8px;
-padding-top:2px;
-display:flex
-}
-.agent-provider-form-actions .primary-button,.agent-provider-form-actions .secondary-button
-{
-min-height:34px;
-padding:8px 10px;
-font-size:10px
-}
-.agent-provider-delete-pending
-{
-border-color:color-mix(in srgb, var(--danger) 64%, var(--line-strong));
-background:color-mix(in srgb, var(--danger) 8%, var(--panel-muted))
-}
-.agent-provider-settings :is(input,textarea)
-{
--webkit-user-select:text!important;
-user-select:text!important
-}
-.agent-provider-settings-actions
-{
-align-items:center;
-gap:8px;
-display:flex
-}
-.agent-mcp-switch-button
-{
-border:1px solid var(--line-strong);
-background:var(--panel-muted);
-min-height:30px;
-color:var(--text-soft);
-cursor:pointer;
-white-space:nowrap;
-border-radius:6px;
-align-items:center;
-gap:5px;
-padding:5px 8px;
-font-family:inherit;
-font-size:9px;
-font-weight:600;
-display:inline-flex
-}
-.agent-mcp-switch-button:hover:not(:disabled)
-{
-border-color:var(--text-faint);
-background:var(--hover);
-color:var(--text)
-}
-.agent-mcp-switch-button:disabled
-{
-cursor:default;
-opacity:.5
-}
-.agent-provider-state.verified,.agent-provider-state.checked,.agent-provider-state.ready
-{
-border-color:color-mix(in srgb, var(--success) 52%, var(--line));
-background:var(--success)
-}
-.agent-provider-state.configurationComplete,.agent-provider-state.enabled
-{
-border-color:color-mix(in srgb, var(--info) 52%, var(--line));
-background:var(--info)
-}
-.agent-provider-state.degraded
-{
-border-color:color-mix(in srgb, var(--warning) 52%, var(--line));
-background:var(--warning)
-}
-.agent-provider-state.unavailable
-{
-border-color:color-mix(in srgb, var(--danger) 52%, var(--line));
-background:var(--danger)
-}
-.agent-provider-state.failed
-{
-border-color:color-mix(in srgb, var(--danger) 52%, var(--line));
-background:var(--danger)
-}
-.agent-provider-state.disabled
-{
-border-color:var(--line-strong);
-background:var(--text-faint);
-opacity:.45
-}
-.agent-provider-list-meta em.failed
-{
-color:var(--danger)
-}
-.agent-provider-list-meta em.checked,.agent-provider-form-status.checked
-{
-color:var(--success)
-}
-.agent-provider-form-status.failed
-{
-color:var(--danger)
-}
-.agent-provider-field>textarea.agent-mcp-args-input
-{
-border:1px solid var(--line-strong);
-background:var(--panel-muted);
-width:100%;
-min-height:62px;
-color:var(--text);
-font:inherit;
-resize:vertical;
-border-radius:var(--radius-sm);
-outline:none;
-padding:8px 10px;
-font-size:11px;
-line-height:1.5
-}
-.agent-provider-field>textarea.agent-mcp-args-input::placeholder
-{
-color:var(--text-faint);
-opacity:.82
-}
-.agent-provider-field>textarea.agent-mcp-args-input:focus-visible
-{
-border-color:var(--focus-ring);
-box-shadow:0 0 0 3px var(--focus-ring-subtle)
-}
-.agent-provider-field>textarea.agent-mcp-args-input:disabled
-{
-cursor:default;
-opacity:.56
-}
-.agent-mcp-env-editor
-{
-flex-direction:column;
-gap:6px;
-display:flex
-}
-.agent-mcp-env-row
-{
-grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) auto;
-align-items:center;
-gap:6px;
-display:grid
-}
-.agent-mcp-env-row>input
-{
-border:1px solid var(--line-strong);
-background:var(--panel-muted);
-min-width:0;
-min-height:32px;
-color:var(--text);
-font:inherit;
-border-radius:var(--radius-sm);
-outline:none;
-padding:8px 8px;
-font-size:10px
-}
-.agent-mcp-env-row>input::placeholder
-{
-color:var(--text-faint);
-opacity:.82
-}
-.agent-mcp-env-row>input:focus-visible
-{
-border-color:var(--focus-ring);
-box-shadow:0 0 0 3px var(--focus-ring-subtle)
-}
-.agent-mcp-env-row>input:disabled
-{
-cursor:default;
-opacity:.56
-}
-.agent-mcp-env-row>.icon-button
-{
-width:30px;
-height:30px
-}
-.agent-mcp-add-env
-{
-border:1px dashed var(--line-strong);
-width:max-content;
-min-height:26px;
-color:var(--text-soft);
-cursor:pointer;
-background:0 0;
-border-radius:6px;
-align-items:center;
-gap:4px;
-padding:4px 6px;
-font-family:inherit;
-font-size:9px;
-display:inline-flex
-}
-.agent-mcp-add-env:hover:not(:disabled)
-{
-border-color:var(--text-faint);
-background:var(--hover);
-color:var(--text)
-}
-.agent-mcp-add-env:disabled
-{
-cursor:default;
-opacity:.5
 }
 .calendar-section
 {
@@ -15747,7 +14997,7 @@ color:var(--text-faint)
 {
 width:100%
 }
-.calendar-field input[type=text],.calendar-field input[type=date],.calendar-field input[type=datetime-local],.calendar-field textarea
+.calendar-field input[type=text],.calendar-field input[type=password],.calendar-field input[type=date],.calendar-field input[type=datetime-local],.calendar-field textarea
 {
 border:1px solid var(--line-strong);
 background:var(--panel-muted);
@@ -16502,6 +15752,7 @@ width:min(520px,100%);
 max-height:calc(100vh - 40px);
 padding:24px;
 animation:.2s cubic-bezier(.2,.8,.2,1) both modal-in;
+overscroll-behavior:contain;
 overflow-y:auto
 }
 .calendar-editor-modal.closing
@@ -16605,69 +15856,6 @@ padding:18px 16px
 .agent-composer-region
 {
 padding:8px 16px 12px
-}
-.agent-provider-picker-label
-{
-display:none
-}
-.agent-provider-select-control
-{
-width:min(180px,50vw)
-}
-.agent-composer-meta
-{
-flex-direction:column;
-gap:2px
-}
-.agent-composer-meta span:last-child
-{
-text-align:left
-}
-.agent-provider-settings-scrim
-{
-align-items:end;
-padding:0
-}
-.agent-provider-settings
-{
-border-bottom:0;
-border-left:0;
-border-right:0;
-border-radius:10px 10px 0 0;
-width:100%;
-max-height:min(92%,760px)
-}
-.agent-provider-settings-header
-{
-padding:14px 14px 12px
-}
-.agent-provider-settings-body
-{
-grid-template-columns:1fr;
-overflow-y:auto
-}
-.agent-provider-catalog
-{
-border-right:0;
-border-bottom:1px solid var(--line);
-min-height:auto;
-max-height:178px;
-padding:10px 12px
-}
-.agent-provider-list
-{
-grid-template-columns:repeat(2,minmax(0,1fr));
-display:grid;
-overflow-y:visible
-}
-.agent-provider-list-item
-{
-min-height:54px
-}
-.agent-provider-form
-{
-padding:14px 14px 18px;
-overflow-y:visible
 }
 .calendar-toolbar
 {
@@ -18287,63 +17475,6 @@ color:inherit
 color:inherit
 }
 
-.agent-provider-settings-tabs
-{
-border:1px solid var(--line);
-background:var(--panel-solid);
-border-radius:var(--radius-pill);
-flex:none;
-gap:2px;
-padding:3px;
-display:inline-flex;
-position:relative
-}
-.agent-provider-settings-thumb
-{
-background:var(--selected);
-border-radius:var(--radius-pill);
-width:calc(50% - 6px);
-transition:left .22s cubic-bezier(.2,.8,.2,1);
-position:absolute;
-top:4px;
-bottom:4px;
-left:4px
-}
-.agent-provider-settings-tabs[data-pane=mcp] .agent-provider-settings-thumb
-{
-left:calc(50% + 2px)
-}
-.agent-provider-settings-tab
-{
-border:0;
-background:0 0;
-min-height:27px;
-color:var(--text-faint);
-cursor:pointer;
-white-space:nowrap;
-z-index:1;
-border-radius:var(--radius-pill);
-flex:1 1 0;
-justify-content:center;
-align-items:center;
-gap:6px;
-min-width:0;
-padding:5px 14px;
-font-size:10px;
-font-weight:600;
-display:inline-flex;
-position:relative;
-transition:color .15s
-}
-.agent-provider-settings-tab:hover
-{
-color:var(--text)
-}
-.agent-provider-settings-tab.active
-{
-color:var(--text);
-font-weight:650
-}
 .content-enter
 {
 animation:content-in .3s cubic-bezier(.2,.8,.2,1) both

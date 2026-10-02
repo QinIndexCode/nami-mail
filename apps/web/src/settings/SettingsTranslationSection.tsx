@@ -42,7 +42,7 @@ export type SettingsTranslationSectionProps = {
   saveTranslationConfiguration: () => Promise<void>;
   retryTranslationConfigurationLoad: () => void;
   resetConfirmClosing: () => void;
-  setPendingConfirmation: React.Dispatch<React.SetStateAction<"clear-background" | "restore-defaults" | "install-update" | "remove-translation-configuration" | "remove-translation-api-key" | "discard-translation-changes" | "discard-translation-changes-and-open-agent" | "enable-full-access" | null>>;
+  setPendingConfirmation: React.Dispatch<React.SetStateAction<"clear-background" | "restore-defaults" | "install-update" | "remove-translation-configuration" | "remove-translation-api-key" | "discard-translation-changes" | "discard-translation-changes-and-open-models" | "enable-full-access" | null>>;
 };
 
 export default function SettingsTranslationSection({
