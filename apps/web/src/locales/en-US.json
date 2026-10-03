@@ -2219,6 +2219,8 @@
     "settings.agent.sandbox.llmSkippedNotice": "This message was intercepted by screening or scope rules; LLM was not invoked. Enable forced LLM evaluation below to test model judgment and draft generation.",
     "settings.agent.sandbox.validationError": "Please provide a valid sender email, subject, and message body.",
     "settings.agent.sandbox.runningHint": "Evaluating token pruning, offline screening, and LLM drafting decision...",
+    "settings.agent.sandbox.skipTypewriter": "Show all",
+    "settings.agent.sandbox.llmTime": "Model {ms}ms",
     "mail.expandAccounts": "Show all accounts",
     "mail.collapseAccounts": "Collapse account list",
     "mail.folderMode.switchToTree": "Switch to multi-account folder tree",

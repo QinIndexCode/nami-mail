@@ -6,6 +6,7 @@ import {
   CircleAlert,
   CircleHelp,
   ClipboardList,
+  Clock,
   Info,
   Link2,
   LoaderCircle,
@@ -16,6 +17,8 @@ import {
 import { api } from "../api";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { useDismissTransition } from "../hooks/useDismissTransition";
+import { useTypewriter } from "../hooks/useTypewriter";
+import { recordAgentTiming } from "../perfTelemetry";
 import type { Translate } from "../i18n";
 import type { AutoReplySimulateInput, AutoReplySimulateResult } from "../agentTypes";
 
@@ -64,6 +67,38 @@ const SAMPLE_PRESETS: Preset[] = [
     textBody: "大额贷款，快速到账，无需抵押，点击链接即刻申请：https://unverified-marketing.xyz/apply?id=9999",
   },
 ];
+
+function SandboxDraftPreview({ text, t }: { text: string; t: Translate }) {
+  const { displayedText, isTyping, complete } = useTypewriter({
+    text,
+    speedMs: 14,
+    maxDurationMs: 1500,
+  });
+
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
+        <span style={{ fontSize: 11, color: "var(--text-faint)" }}>
+          {t("settings.agent.sandbox.draftPreview")}
+        </span>
+        {isTyping && (
+          <button
+            type="button"
+            className="sandbox-typewriter-skip-btn"
+            onClick={complete}
+            title={t("settings.agent.sandbox.skipTypewriter")}
+          >
+            {t("settings.agent.sandbox.skipTypewriter")}
+          </button>
+        )}
+      </div>
+      <div className="sandbox-quote-preview" data-testid="sandbox-draft-preview">
+        {displayedText}
+        {isTyping && <span className="typewriter-cursor" aria-hidden="true" />}
+      </div>
+    </div>
+  );
+}
 
 export default function AutoReplySandboxDialog({
   t,
@@ -129,6 +164,12 @@ export default function AutoReplySandboxDialog({
       };
       const response = await api.autoReplySimulate(payload);
       setResult(response.result);
+      if (response.result.timings) {
+        recordAgentTiming("auto-reply-simulate", response.result.timings.totalMs, {
+          llmMs: response.result.timings.llmMs,
+          finalAction: response.result.finalAction,
+        });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -317,10 +358,27 @@ export default function AutoReplySandboxDialog({
 
             {result && (
               <div ref={resultRef} className="sandbox-result-card">
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: 13, fontWeight: 650, color: "var(--text)" }}>
-                    {t("settings.agent.sandbox.results")}
-                  </span>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 650, color: "var(--text)" }}>
+                      {t("settings.agent.sandbox.results")}
+                    </span>
+                    {result.timings && (
+                      <span
+                        className="sandbox-latency-pill"
+                        data-testid="sandbox-latency-pill"
+                        title={`初筛 ${result.timings.screeningMs}ms · 范围 ${result.timings.scopeMs}ms${result.timings.llmMs !== undefined ? ` · 模型 ${result.timings.llmMs}ms` : ""}`}
+                      >
+                        <Clock size={11} />
+                        <span>{result.timings.totalMs}ms</span>
+                        {result.timings.llmMs !== undefined && (
+                          <span style={{ opacity: 0.75 }}>
+                            ({t("settings.agent.sandbox.llmTime", { ms: result.timings.llmMs })})
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </div>
                   {renderActionBadge(result.finalAction)}
                 </div>
 
@@ -357,12 +415,7 @@ export default function AutoReplySandboxDialog({
                     <div>{t("settings.agent.sandbox.replyValue")}<strong>{result.decision.replyValue === "high" ? t("settings.agent.sandbox.highValue") : t("settings.agent.sandbox.lowValue")}</strong></div>
                     <div>{t("settings.agent.sandbox.sensitiveKeywords")}{result.decision.sensitive ? t("settings.agent.sandbox.sensitive") : t("settings.agent.sandbox.safe")}</div>
                     {result.decision.reply && (
-                      <div style={{ marginTop: 6 }}>
-                        <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 2 }}>
-                          {t("settings.agent.sandbox.draftPreview")}
-                        </div>
-                        <div className="sandbox-quote-preview">{result.decision.reply}</div>
-                      </div>
+                      <SandboxDraftPreview text={result.decision.reply} t={t} />
                     )}
                   </div>
                 )}

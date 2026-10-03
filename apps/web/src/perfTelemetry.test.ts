@@ -16,6 +16,7 @@ import {
   perfEntries,
   recordApiTiming,
   recordCommit,
+  recordAgentTiming,
   setPerfTelemetryEnabled,
   trackSpan,
 } from "./perfTelemetry";
@@ -164,5 +165,18 @@ describe("perfTelemetry", () => {
   it("observeLongTasks is a safe no-op without PerformanceObserver", () => {
     // jsdom has no PerformanceObserver: must not throw, must not record.
     expect(() => observeLongTasks()).not.toThrow();
+  });
+
+  it("records slow agent operations with detail", () => {
+    configurePerfTelemetry({ agentMs: 0 });
+    recordAgentTiming("auto-reply-simulate", 1200, { model: "llama3.2" });
+    const entries = perfEntries().filter((entry) => entry.name === "auto-reply-simulate");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].kind).toBe("slow-agent");
+    expect(entries[0].detail).toEqual({ model: "llama3.2" });
+
+    configurePerfTelemetry({ agentMs: 5_000 });
+    recordAgentTiming("fast-agent-op", 100);
+    expect(perfEntries().filter((entry) => entry.name === "fast-agent-op")).toHaveLength(0);
   });
 });

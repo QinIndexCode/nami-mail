@@ -11,6 +11,7 @@ import {
 } from "@nami/agent-contracts";
 import { AGENT_PROTOCOL_VERSION, asAgentDesktopError, agentDesktopError } from "./contracts.mjs";
 import type { JsonValue } from "./broker-protocol.mjs";
+import type { SupportedBrokerTransport } from "./ipc-transport.mjs";
 
 export type CliOutputFormat = "table" | "json" | "jsonl" | "text";
 export type CliCommandAccess = "local" | "read-only" | "external" | "launcher";
@@ -119,7 +120,7 @@ export type CliBrokerRequest = {
 
 /** The CLI never imports a runtime, database, HTTP client, or credential store. */
 export interface NamiMailBrokerClient {
-  readonly transport: "windows-named-pipe";
+  readonly transport: SupportedBrokerTransport;
   invoke(request: CliBrokerRequest): Promise<JsonValue>;
 }
 
@@ -791,13 +792,13 @@ export class NamiMailCliClient {
         error: createAgentError({ code: "HOST_UNAVAILABLE", message: "NamiMail Agent host is not available.", retryable: true, suggestion: "Open Nami Mail or run namimail service start." }),
       });
     }
-    if (broker.transport !== "windows-named-pipe") {
+    if (broker.transport !== "windows-named-pipe" && broker.transport !== "unix-domain-socket") {
       return createCliEnvelope({
         requestId,
         version: this.options.version,
         durationMs: this.now() - startedAt,
         data: null,
-        error: createAgentError({ code: "BROKER_SECURITY_UNAVAILABLE", message: "NamiMail only accepts secured Windows named-pipe Agent IPC.", retryable: false }),
+        error: createAgentError({ code: "BROKER_SECURITY_UNAVAILABLE", message: "NamiMail only accepts secured local Agent IPC.", retryable: false }),
       });
     }
     try {

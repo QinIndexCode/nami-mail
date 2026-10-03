@@ -81,6 +81,13 @@ export type AutoReplySimulateResult = {
     | "ignored_scope"
     | "ignored_low_value"
     | "sensitive_requires_confirmation";
+  timings?: {
+    linkSanitizationMs: number;
+    screeningMs: number;
+    scopeMs: number;
+    llmMs?: number;
+    totalMs: number;
+  };
 };
 
 /** Non-secret external MCP server details returned by the local Agent service. */

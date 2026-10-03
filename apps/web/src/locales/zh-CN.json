@@ -2219,6 +2219,8 @@
     "settings.agent.sandbox.llmSkippedNotice": "该邮件已被初筛或范围规则拦截，未调用大模型。若需单次验证模型判断与草稿生成，请勾选下方强制测试。",
     "settings.agent.sandbox.validationError": "请完整填写发件人邮箱、主题与邮件正文。",
     "settings.agent.sandbox.runningHint": "正在执行链接压缩、离线初筛评估与大模型起草决策...",
+    "settings.agent.sandbox.skipTypewriter": "完整显示",
+    "settings.agent.sandbox.llmTime": "模型 {ms}ms",
     "mail.expandAccounts": "展开所有账户",
     "mail.collapseAccounts": "收起账户列表",
     "mail.folderMode.switchToTree": "切换到多账户文件夹树",

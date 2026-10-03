@@ -22,7 +22,7 @@
  * at runtime; see `installPerfTelemetry`.
  */
 
-export type PerfEntryKind = "slow-span" | "slow-interval" | "slow-api" | "slow-commit" | "long-task";
+export type PerfEntryKind = "slow-span" | "slow-interval" | "slow-api" | "slow-commit" | "slow-agent" | "long-task";
 
 export type PerfEntry = {
   /** Epoch ms — correlate against other logs. */
@@ -42,6 +42,8 @@ export type PerfThresholds = {
   apiMs: number;
   /** One React commit (actualDuration). */
   commitMs: number;
+  /** One agent operation or tool round-trip. */
+  agentMs: number;
 };
 
 export const DEFAULT_PERF_THRESHOLDS: PerfThresholds = {
@@ -49,6 +51,7 @@ export const DEFAULT_PERF_THRESHOLDS: PerfThresholds = {
   intervalMs: 5_000,
   apiMs: 500,
   commitMs: 100,
+  agentMs: 1_500,
 };
 
 /** Bounded so an unattended janky session cannot grow the heap. */
@@ -142,6 +145,12 @@ export function recordApiTiming(path: string, ms: number, outcome: { status: num
 export function recordCommit(id: string, actualDuration: number, phase: string): void {
   if (!enabled || actualDuration < thresholds.commitMs) return;
   record({ at: Date.now(), kind: "slow-commit", name: id, ms: actualDuration, detail: { phase } });
+}
+
+/** Records an Agent operation or LLM execution over `agentMs`. */
+export function recordAgentTiming(operation: string, ms: number, detail?: Record<string, unknown>): void {
+  if (!enabled || ms < thresholds.agentMs) return;
+  record({ at: Date.now(), kind: "slow-agent", name: operation, ms, detail });
 }
 
 let longTaskObserver: PerformanceObserver | null = null;

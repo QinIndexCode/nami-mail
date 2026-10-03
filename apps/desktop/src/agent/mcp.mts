@@ -20,6 +20,7 @@ import {
 } from "@nami/agent-contracts";
 import { asAgentDesktopError, agentDesktopError } from "./contracts.mjs";
 import type { JsonValue } from "./broker-protocol.mjs";
+import type { SupportedBrokerTransport } from "./ipc-transport.mjs";
 
 const maxStdioLineLength = 1_000_000;
 
@@ -124,7 +125,7 @@ export type McpBrokerRequest = {
 };
 
 export interface NamiMailMcpBrokerClient {
-  readonly transport: "windows-named-pipe";
+  readonly transport: SupportedBrokerTransport;
   invoke(request: McpBrokerRequest): Promise<JsonValue>;
 }
 
@@ -196,8 +197,8 @@ export class NamiMailMcpToolAdapter {
     if (!parsedArguments.success || !isSafeJsonObject(parsedArguments.data)) {
       return mcpToolResult(failureEnvelope(requestId, toolError("TOOL_INPUT_INVALID", "The NamiMail MCP tool arguments do not match its published schema."), duration(startedAt, now)));
     }
-    if (this.options.broker.transport !== "windows-named-pipe") {
-      return mcpToolResult(failureEnvelope(requestId, toolError("BROKER_SECURITY_UNAVAILABLE", "NamiMail MCP requires secured Windows named-pipe Agent IPC."), duration(startedAt, now)));
+    if (this.options.broker.transport !== "windows-named-pipe" && this.options.broker.transport !== "unix-domain-socket") {
+      return mcpToolResult(failureEnvelope(requestId, toolError("BROKER_SECURITY_UNAVAILABLE", "NamiMail MCP requires secured local Agent IPC."), duration(startedAt, now)));
     }
     try {
       const data = await this.options.broker.invoke({ command: tool.brokerCommand, arguments: parsedArguments.data, requestId });

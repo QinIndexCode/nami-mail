@@ -5,4 +5,5 @@ export * from "./cli-entry.mjs";
 export * from "./contracts.mjs";
 export * from "./desktop-host-integration.mjs";
 export * from "./desktop-broker.mjs";
+export * from "./ipc-transport.mjs";
 export * from "./mcp.mjs";

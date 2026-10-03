@@ -111,6 +111,13 @@ describe("AutoReplySandboxDialog", () => {
         reply: "Simulated draft reply",
       },
       finalAction: "would_reply",
+      timings: {
+        linkSanitizationMs: 1.2,
+        screeningMs: 2.5,
+        scopeMs: 3.1,
+        llmMs: 140,
+        totalMs: 146.8,
+      },
     };
 
     (api.autoReplySimulate as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
@@ -129,7 +136,6 @@ describe("AutoReplySandboxDialog", () => {
 
     const contactCheckbox = container.querySelector("#sandbox-simulate-contact") as HTMLInputElement;
     const forceLlmCheckbox = container.querySelector("#sandbox-force-llm") as HTMLInputElement;
-
     act(() => {
       contactCheckbox.click();
       forceLlmCheckbox.click();
@@ -146,6 +152,18 @@ describe("AutoReplySandboxDialog", () => {
         forceLlm: true,
       }),
     );
+
+    // Verify latency badge is displayed
+    expect(container.querySelector(".sandbox-latency-pill")).not.toBeNull();
+    expect(container.textContent).toContain("146.8ms");
+
+    // Click typewriter skip button to show full draft immediately
+    const skipBtn = container.querySelector(".sandbox-typewriter-skip-btn") as HTMLButtonElement;
+    if (skipBtn) {
+      act(() => {
+        skipBtn.click();
+      });
+    }
 
     expect(container.textContent).toContain("Simulated draft reply");
   });

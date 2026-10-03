@@ -60,6 +60,13 @@ export type AutoReplySimulateResult = {
     | "ignored_scope"
     | "ignored_low_value"
     | "sensitive_requires_confirmation";
+  timings: {
+    linkSanitizationMs: number;
+    screeningMs: number;
+    scopeMs: number;
+    llmMs?: number;
+    totalMs: number;
+  };
 };
 
 const DEFAULT_SIMULATE_CONFIG: AutoReplyConfig = {
@@ -81,12 +88,16 @@ export async function simulateAutoReply(
   knownContacts?: Set<string>,
 ): Promise<AutoReplySimulateResult> {
   const config = configOverride ?? DEFAULT_SIMULATE_CONFIG;
+  const tStart = performance.now();
 
   // 1. Link sanitization & token preservation stats
+  const tLinkStart = performance.now();
   const stats = sanitizeLinksWithStats(input.textBody || "");
   const sanitizedSnippet = sanitizeLinksForScreening(input.snippet || stats.sanitized.slice(0, 200));
+  const linkSanitizationMs = Math.round((performance.now() - tLinkStart) * 100) / 100;
 
   // 2. Offline screening
+  const tScreenStart = performance.now();
   const screeningInput = {
     mailbox: input.mailbox || "INBOX",
     folderSpecialUse: input.folderSpecialUse,
@@ -109,8 +120,10 @@ export async function simulateAutoReply(
         reason: screeningVerdict.reason,
         details: screeningIgnoreReasonText(screeningVerdict.reason),
       };
+  const screeningMs = Math.round((performance.now() - tScreenStart) * 100) / 100;
 
   // 3. Sender scope check
+  const tScopeStart = performance.now();
   const contacts = new Set<string>(knownContacts ?? []);
   if (input.simulateAsContact && input.fromAddress) {
     contacts.add(input.fromAddress.toLowerCase().trim());
@@ -139,12 +152,15 @@ export async function simulateAutoReply(
 
   // 4. Sensitive keywords scan
   const sensitiveKeywords = scanSensitiveKeywords(stats.sanitized);
+  const scopeMs = Math.round((performance.now() - tScopeStart) * 100) / 100;
 
   // 5. LLM Evaluation (dry-run)
   const shouldEvaluateLlm = (screening.passed && scope.passed) || Boolean(input.forceLlm);
   let decision: AutoReplySimulateResult["decision"] = undefined;
+  let llmMs: number | undefined;
 
   if (shouldEvaluateLlm) {
+    const tLlmStart = performance.now();
     try {
       const evaluation = await agentService.evaluateAutoReply({
         accountEmail: input.accountEmail || "",
@@ -170,6 +186,8 @@ export async function simulateAutoReply(
         evaluated: false,
         error: error instanceof Error ? error.message : String(error),
       };
+    } finally {
+      llmMs = Math.round((performance.now() - tLlmStart) * 100) / 100;
     }
   }
 
@@ -193,6 +211,8 @@ export async function simulateAutoReply(
     finalAction = "sensitive_requires_confirmation";
   }
 
+  const totalMs = Math.round((performance.now() - tStart) * 100) / 100;
+
   return {
     linkStats: {
       originalLength: stats.originalLength,
@@ -206,5 +226,12 @@ export async function simulateAutoReply(
     sensitiveKeywords,
     ...(decision ? { decision } : {}),
     finalAction,
+    timings: {
+      linkSanitizationMs,
+      screeningMs,
+      scopeMs,
+      ...(llmMs !== undefined ? { llmMs } : {}),
+      totalMs,
+    },
   };
 }

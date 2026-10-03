@@ -49,6 +49,11 @@ describe("auto-reply-simulator", () => {
     expect(result.decision?.replyValue).toBe("high");
     expect(result.decision?.reply).toContain("收到您的邮件");
     expect(result.finalAction).toBe("would_reply");
+    expect(result.timings).toBeDefined();
+    expect(result.timings.totalMs).toBeGreaterThanOrEqual(0);
+    expect(result.timings.screeningMs).toBeGreaterThanOrEqual(0);
+    expect(result.timings.scopeMs).toBeGreaterThanOrEqual(0);
+    expect(result.timings.llmMs).toBeGreaterThanOrEqual(0);
   });
 
   it("flags sensitive content requiring manual confirmation", async () => {
