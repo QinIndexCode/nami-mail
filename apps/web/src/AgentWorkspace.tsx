@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   Bot,
+  Brain,
   CalendarDays,
   Check,
   CircleAlert,
@@ -177,6 +178,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const mentionCursorRef = useRef<string | null>(null);
   /** Memory summaries the agent suggested saving; each needs a save or dismiss. */
   const [pendingMemorySuggestions, setPendingMemorySuggestions] = useState<string[]>([]);
+  const [leavingMemorySummaries, setLeavingMemorySummaries] = useState<Set<string>>(() => new Set());
   const [mode, setMode] = useState<AgentMode>("agent");
   const [providerId, setProviderId] = useState("");
   // The header scope picker's selection: the account the agent searches (a
@@ -492,6 +494,43 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     const session = getSession(activeIdRef.current ?? "");
     if (session) session.suggestions = session.suggestions.filter((item) => item !== summary);
   }, [getSession]);
+
+  const dismissMemorySuggestion = useCallback((summary: string) => {
+    setLeavingMemorySummaries((prev) => new Set(prev).add(summary));
+    window.setTimeout(() => {
+      consumeAgentSuggestion(summary);
+      setPendingMemorySuggestions((suggestions) => suggestions.filter((item) => item !== summary));
+      setLeavingMemorySummaries((prev) => {
+        const next = new Set(prev);
+        next.delete(summary);
+        return next;
+      });
+    }, 180);
+  }, [consumeAgentSuggestion]);
+
+  const saveMemorySuggestion = useCallback((summary: string) => {
+    setLeavingMemorySummaries((prev) => new Set(prev).add(summary));
+    void api.agentMemoryCreate({ summary })
+      .then(() => {
+        window.setTimeout(() => {
+          consumeAgentSuggestion(summary);
+          setPendingMemorySuggestions((suggestions) => suggestions.filter((item) => item !== summary));
+          setLeavingMemorySummaries((prev) => {
+            const next = new Set(prev);
+            next.delete(summary);
+            return next;
+          });
+        }, 180);
+      })
+      .catch((error) => {
+        setLeavingMemorySummaries((prev) => {
+          const next = new Set(prev);
+          next.delete(summary);
+          return next;
+        });
+        setLoadError(error instanceof Error ? error.message : t("agent.error.saveMemory"));
+      });
+  }, [consumeAgentSuggestion, t]);
 
   const applyProviderList = useCallback((snapshot: AgentProviderList) => {
     setBootstrap((current) => current ? {
@@ -2223,26 +2262,32 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             {pendingMemorySuggestions.length > 0 && (
               <div className="agent-memory-suggestions" role="status">
                 {pendingMemorySuggestions.map((summary) => (
-                  <div className="agent-memory-suggestion" key={summary}>
-                    <span className="agent-memory-suggestion-label">{t("agent.memory.suggestion.title")}</span>
-                    <span className="agent-memory-suggestion-text">{summary}</span>
-                    <button
-                      className="agent-memory-suggestion-save"
-                      type="button"
-                      onClick={() => {
-                        void api.agentMemoryCreate({ summary })
-                          .then(() => {
-                            consumeAgentSuggestion(summary);
-                            setPendingMemorySuggestions((suggestions) => suggestions.filter((item) => item !== summary));
-                          })
-                          .catch((error) => {
-                            // Keep the chip so the user can retry; the error
-                            // banner explains what went wrong.
-                            setLoadError(error instanceof Error ? error.message : t("agent.error.saveMemory"));
-                          });
-                      }}
-                    >{t("agent.memory.suggestion.save")}</button>
-                    <button className="agent-memory-suggestion-dismiss" type="button" onClick={() => { consumeAgentSuggestion(summary); setPendingMemorySuggestions((suggestions) => suggestions.filter((item) => item !== summary)); }}>{t("agent.memory.suggestion.dismiss")}</button>
+                  <div className={`agent-memory-suggestion${leavingMemorySummaries.has(summary) ? " leaving" : ""}`} key={summary}>
+                    <div className="agent-memory-suggestion-header">
+                      <Brain size={14} className="agent-memory-suggestion-icon" />
+                      <span className="agent-memory-suggestion-label">{t("agent.memory.suggestion.title")}</span>
+                    </div>
+                    <div className="agent-memory-suggestion-body">
+                      <span className="agent-memory-suggestion-text" title={summary}>{summary}</span>
+                    </div>
+                    <div className="agent-memory-suggestion-actions">
+                      <button
+                        className="agent-memory-suggestion-dismiss"
+                        type="button"
+                        onClick={() => dismissMemorySuggestion(summary)}
+                      >
+                        <X size={12} />
+                        <span>{t("agent.memory.suggestion.dismiss")}</span>
+                      </button>
+                      <button
+                        className="agent-memory-suggestion-save"
+                        type="button"
+                        onClick={() => saveMemorySuggestion(summary)}
+                      >
+                        <Check size={12} />
+                        <span>{t("agent.memory.suggestion.save")}</span>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

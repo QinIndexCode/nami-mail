@@ -256,19 +256,63 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchItem[] = [
     ],
   },
 
-  // 8. MCP
+  // 8. MCP Tools (Internal)
   {
-    id: "mcp-servers",
+    id: "mcp-tools",
     categoryId: "mcp",
     titleKey: "settings.nav.mcp.title",
-    defaultTitleZh: "MCP 服务器",
-    defaultTitleEn: "MCP Tools",
-    targetId: "mcp-settings",
+    defaultTitleZh: "内置 MCP 工具服务",
+    defaultTitleEn: "Built-in MCP Tools",
+    targetId: "models-settings",
     keywords: [
       "MCP", "工具", "插件", "Server", "stdio", "npx", "node", "filesystem", "模型上下文协议",
-      "扩展", "环境变量", "命令行参数", "工作目录", "外部工具", "协议",
+      "扩展", "环境变量", "命令行参数", "工作目录", "外部工具", "协议", "预设", "模板", "知识图谱", "数据库", "git",
       "mcp", "tools", "server", "command", "args", "env", "environment", "model context protocol",
       "cwd", "stdio", "gongju", "chajian", "fuwuqi",
+    ],
+  },
+
+  // 9. Connections (External Exposed MCP, CLI & Client Pairings)
+  {
+    id: "connections-mcp",
+    categoryId: "connections",
+    titleKey: "settings.connections.mcp.title",
+    defaultTitleZh: "本地外露 MCP 服务",
+    defaultTitleEn: "Local Exposed MCP Server",
+    targetId: "connections-settings",
+    keywords: [
+      "外露MCP", "本地MCP", "Claude Desktop", "Cursor", "VS Code", "Windsurf", "IDE", "mcpServers",
+      "namimail mcp start", "配置文件", "代码生成", "只读工具", "写入工具", "16个工具", "MCP权限",
+      "exposed mcp", "claude", "cursor", "vscode", "windsurf", "ide config", "json config",
+      "wailu", "waibu mcp",
+    ],
+  },
+  {
+    id: "connections-cli",
+    categoryId: "connections",
+    titleKey: "settings.connections.cli.title",
+    defaultTitleZh: "外部终端 CLI 与命令",
+    defaultTitleEn: "External Terminal CLI",
+    targetId: "connections-settings",
+    keywords: [
+      "CLI", "终端", "命令行", "namimail", "脚本", "PowerShell", "CMD", "Bash", "速查表",
+      "namimail pair", "namimail status", "namimail accounts list", "namimail messages search",
+      "服务管理", "namimail service start", "CLI权限",
+      "cli", "terminal", "command line", "namimail", "powershell", "cmd", "bash", "cheatsheet",
+      "zhongduan", "mingling",
+    ],
+  },
+  {
+    id: "connections-pairings",
+    categoryId: "connections",
+    titleKey: "settings.connections.pairings.title",
+    defaultTitleZh: "已授权客户端配对",
+    defaultTitleEn: "Authorized Client Pairings",
+    targetId: "connections-settings",
+    keywords: [
+      "配对", "授权", "撤销授权", "撤销配对", "已授权客户端", "Ed25519", "漂移", "drift", "客户端列表",
+      "pairings", "authorized clients", "revoke", "disconnect", "client id",
+      "peidui", "chexiao",
     ],
   },
 
@@ -297,8 +341,10 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchItem[] = [
     keywords: [
       "自动回复", "自动邮件", "回复规则", "匹配规则", "发件人匹配", "仅联系人", "生效时间",
       "假期回复", "模板回复", "免确认", "请假", "不在办公室", "外出",
+      "决策模型", "决策筛选", "判断模型", "起草模型", "回复模型", "Jev", "System 1",
       "auto reply", "auto response", "rules", "out of office", "template", "responder",
-      "vacation", "auto responder", "contacts only", "zidonghuifu", "huifu", "jiaqi",
+      "vacation", "auto responder", "contacts only", "decision model", "draft model",
+      "zidonghuifu", "huifu", "jiaqi", "juece", "qicao",
     ],
   },
   {
@@ -342,6 +388,7 @@ const categoryDefaultTitles: Record<SettingsCategoryId, { zh: string; en: string
   filters: { zh: "邮件过滤", en: "Mail Filters" },
   models: { zh: "语言模型", en: "Language Models" },
   mcp: { zh: "MCP 工具", en: "MCP Tools" },
+  connections: { zh: "外部连接", en: "External Connections" },
   agent: { zh: "AI 邮件助理", en: "AI Mail Assistant" },
   translation: { zh: "翻译服务", en: "Translation Service" },
 };

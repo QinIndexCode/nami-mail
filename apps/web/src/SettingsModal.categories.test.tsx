@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
+import { loadAggregatedCss } from "./testUtils/loadStyles";
 import { createRoot, type Root } from "react-dom/client";
 import { I18nProvider, translate } from "./i18n";
 import SettingsModal from "./SettingsModal";
@@ -62,9 +63,7 @@ function extractCssBlock(source: string, start: number): string {
 
 /** The narrow-window media query that governs the settings layout. */
 function readSettingsNarrowWindowCss(): string {
-  // Same cwd-relative read as designTokens.test.ts (import.meta.url is not a
-  // file: URL under the jsdom environment); CRLF is normalised the same way.
-  const css = readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8").replace(/\r\n/g, "\n");
+  const css = loadAggregatedCss();
   const blocks: string[] = [];
   let index = css.indexOf("@media (width<=760px)");
   while (index !== -1) {
@@ -126,7 +125,7 @@ describe("settings category navigation", () => {
     }
     // Browser runtime: the desktop category is not offered in the sidebar at all.
     expect(container.querySelector("#settings-nav-desktop")).toBeNull();
-    expect(container.querySelectorAll(".settings-nav-item").length).toBe(9);
+    expect(container.querySelectorAll(".settings-nav-item").length).toBe(10);
   });
 
   it("covers every category exactly once across the sidebar groups with translated labels", () => {
@@ -152,6 +151,17 @@ describe("settings category navigation", () => {
     expect(window.localStorage.getItem(SETTINGS_CATEGORY_STORAGE_KEY)).toBe("agent");
     const panel = container.querySelector("#settings-active-panel");
     expect(panel?.getAttribute("aria-labelledby")).toBe("settings-nav-agent");
+  });
+
+  it("switches to connections panel and renders connections settings", () => {
+    renderModal();
+    const connectionsNav = container.querySelector<HTMLButtonElement>("#settings-nav-connections");
+    expect(connectionsNav).not.toBeNull();
+    act(() => {
+      connectionsNav!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    expect(container.querySelector('[data-settings-nav="connections"]')).not.toBeNull();
+    expect(container.querySelector('[data-settings-nav="language"]')).toBeNull();
   });
 
   it("restores the persisted category on the next mount", () => {
@@ -197,11 +207,11 @@ describe("settings category navigation", () => {
   });
   it("places the models and mcp categories in the intelligence group and separates sync and filters in mail group", () => {
     const intelligence = SETTINGS_NAV_GROUPS.find((group) => group.key === "intelligence");
-    expect(intelligence?.items).toEqual(["models", "mcp", "agent", "translation"]);
+    expect(intelligence?.items).toEqual(["models", "mcp", "agent", "connections", "translation"]);
     const mail = SETTINGS_NAV_GROUPS.find((group) => group.key === "mail");
     expect(mail?.items).toEqual(["sync", "filters"]);
-    // Ten categories in total; only "desktop" is filtered out on the web.
-    expect(SETTINGS_CATEGORY_IDS).toHaveLength(10);
+    // Eleven categories in total; only "desktop" is filtered out on the web.
+    expect(SETTINGS_CATEGORY_IDS).toHaveLength(11);
   });
 
   it("lands on the deep-linked category on a cold mount, beating the persisted choice", () => {

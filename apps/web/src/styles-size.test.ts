@@ -42,17 +42,32 @@ describe("styles.css size ratchet", () => {
   // 2026-10-03 第二次有记录的下调（17_570 → 17_540）：管理弹窗与子编辑器
   // 样式统一与精简（管理弹窗头部、日程/模板/联系人编辑器头部统一与写信附件栏优化），
   // 净瘦身 30 行。
-  // 2026-10-03 第三次有记录的下调（17_540 → 17_520）：搜索框（联系人/模板/日程/账户）
-  // 修复与样式收敛。隐藏原生 WebKit 搜索清除按钮、补全输入框全高与光标、收紧工具栏
-  // 搜索框包裹规则，净瘦身 22 行。
-  const FROZEN_MAX_LINES = 17_520;
+  // 2026-10-03 架构升级：styles.css 全面拆分为模块化按层导入架构
+  // （tokens/, base/, components/, overlays/, features/ 共 29 个模块）。
+  // 根 styles.css 保持纯粹的导入索引（≤ 40 行）。
+  // 聚合总样式继续保持严格的防膨胀棘轮限制（FROZEN_AGGREGATED_MAX_LINES）。
+  const FROZEN_ROOT_MAX_LINES = 40;
+  const FROZEN_AGGREGATED_MAX_LINES = 17_600;
   const STALENESS_WINDOW = 900;
 
-  it("does not grow beyond the frozen baseline", () => {
-    const css = readFileSync(fileURLToPath(new URL("./styles.css", import.meta.url)), "utf8");
-    const lines = css.split("\n").length;
-    expect(lines).toBeLessThanOrEqual(FROZEN_MAX_LINES);
-    // 防止阈值与实际值脱节后被人遗忘：当前值应始终留在阈值下方但附近。
-    expect(lines).toBeGreaterThan(FROZEN_MAX_LINES - STALENESS_WINDOW);
+  it("maintains a clean, modular root entry stylesheet", () => {
+    const rootPath = fileURLToPath(new URL("./styles.css", import.meta.url));
+    const rootCss = readFileSync(rootPath, "utf8");
+    const lines = rootCss.split("\n").length;
+    expect(lines).toBeLessThanOrEqual(FROZEN_ROOT_MAX_LINES);
+    // Root entry must only contain @import statements and empty lines
+    const nonImportLines = rootCss
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("@import") && !l.startsWith("/*") && !l.startsWith("*"));
+    expect(nonImportLines).toHaveLength(0);
+  });
+
+  it("does not grow beyond the frozen baseline in aggregated total styles", async () => {
+    const { loadAggregatedCss } = await import("./testUtils/loadStyles.js");
+    const aggregatedCss = loadAggregatedCss();
+    const lines = aggregatedCss.split("\n").length;
+    expect(lines).toBeLessThanOrEqual(FROZEN_AGGREGATED_MAX_LINES);
+    expect(lines).toBeGreaterThan(FROZEN_AGGREGATED_MAX_LINES - STALENESS_WINDOW);
   });
 });

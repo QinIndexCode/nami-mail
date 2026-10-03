@@ -175,6 +175,18 @@ export const agentMessageCatalog = {
     "zh-CN": "删除日历事件",
     "en-US": "Delete calendar event",
   },
+  "confirmation.title.create_contact": {
+    "zh-CN": "创建联系人",
+    "en-US": "Create contact",
+  },
+  "confirmation.title.update_contact": {
+    "zh-CN": "更新联系人",
+    "en-US": "Update contact",
+  },
+  "confirmation.title.delete_contact": {
+    "zh-CN": "删除联系人",
+    "en-US": "Delete contact",
+  },
   "confirmation.title.mcp_write": {
     "zh-CN": "调用外部 MCP 工具 {name}",
     "en-US": "Run external MCP tool {name}",
@@ -226,6 +238,18 @@ export const agentMessageCatalog = {
   "confirmation.summary.delete_calendar_event": {
     "zh-CN": "删除日历事件前请核对事件标识与标题。删除后不可恢复。",
     "en-US": "Review the event identifier and title before permanently removing this local calendar event.",
+  },
+  "confirmation.summary.create_contact": {
+    "zh-CN": "创建联系人前请核对姓名、邮箱与备注。联系人仅保存在本机。",
+    "en-US": "Review the name, email, and notes before adding this contact to the local address book.",
+  },
+  "confirmation.summary.update_contact": {
+    "zh-CN": "更新联系人前请核对新的姓名、邮箱与备注。联系人仅保存在本机。",
+    "en-US": "Review the replacement name, email, and notes before updating this local contact.",
+  },
+  "confirmation.summary.delete_contact": {
+    "zh-CN": "删除联系人前请核对联系人标识与姓名。删除后不可恢复。",
+    "en-US": "Review the contact identifier and name before permanently removing this local contact.",
   },
   "confirmation.summary.mcp_write": {
     "zh-CN": "{server} 是你配置的外部 MCP 服务器。该写操作可能修改文件、数据或远程服务，请核对参数后再继续。",
@@ -306,6 +330,22 @@ export const agentMessageCatalog = {
   "confirmation.field.event_description": {
     "zh-CN": "事件说明",
     "en-US": "Details",
+  },
+  "confirmation.field.contact_id": {
+    "zh-CN": "联系人 ID",
+    "en-US": "Contact ID",
+  },
+  "confirmation.field.contact_name": {
+    "zh-CN": "姓名",
+    "en-US": "Name",
+  },
+  "confirmation.field.contact_email": {
+    "zh-CN": "邮箱",
+    "en-US": "Email",
+  },
+  "confirmation.field.contact_notes": {
+    "zh-CN": "备注",
+    "en-US": "Notes",
   },
   "confirmation.field.body_preview": {
     "zh-CN": "正文预览（{count} 字符）",

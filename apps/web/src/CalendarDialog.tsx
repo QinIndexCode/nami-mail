@@ -632,7 +632,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
         dialogClassName="calendar-management-dialog"
       >
         <section className="settings-section calendar-section">
-          <FormNotice notice={notice} />
+          <FormNotice notice={notice} onDismiss={() => setNotice(null)} />
           {view === "month" ? (
             <>
               <div className="calendar-toolbar-wrap" ref={jumpWrapRef}>

@@ -1,0 +1,79 @@
+
+/* Popup motion: enter/exit transitions consistent with the dialogs, tuned
+   per surface — large anchored cards pop, form dropdowns drop, toolbar
+   menus scale from their trigger, input suggestions stay subtle. Exits use
+   the .closing class driven by usePopupExitTransition. */
+@keyframes popup-in
+{
+0%
+{
+opacity:0;
+transform:scale(.97)translateY(4px)
+}
+}
+@keyframes popup-out
+{
+to
+{
+opacity:0;
+transform:scale(.97)translateY(4px)
+}
+}
+@keyframes drop-in
+{
+0%
+{
+opacity:0;
+transform:translateY(3px)
+}
+}
+@keyframes drop-out
+{
+to
+{
+opacity:0;
+transform:translateY(3px)
+}
+}
+.date-picker-panel.closing
+{
+animation:.12s cubic-bezier(.4,0,.2,1) both popup-out;
+pointer-events:none
+}
+.themed-select-menu
+{
+animation:.13s cubic-bezier(.2,.8,.2,1) both drop-in
+}
+.themed-select-menu.closing
+{
+animation:.11s cubic-bezier(.4,0,.2,1) both drop-out;
+pointer-events:none
+}
+.snooze-menu.closing
+{
+animation:.12s cubic-bezier(.4,0,.2,1) both popup-out;
+pointer-events:none
+}
+.reader-more-menu.closing
+{
+animation:.12s cubic-bezier(.4,0,.2,1) both popup-out;
+pointer-events:none
+}
+.compose-contact-suggestions
+{
+animation:.12s cubic-bezier(.2,.8,.2,1) both drop-in
+}
+.compose-contact-suggestions.closing
+{
+animation:.1s cubic-bezier(.4,0,.2,1) both drop-out;
+pointer-events:none
+}
+.compose-template-picker
+{
+animation:.18s cubic-bezier(.2,.8,.2,1) both popup-in
+}
+.compose-template-picker.closing
+{
+animation:.14s cubic-bezier(.4,0,.2,1) both popup-out;
+pointer-events:none
+}

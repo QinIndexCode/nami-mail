@@ -91,6 +91,7 @@ export type RuntimeContext = {
   // Desktop-injected, non-secret summaries of active/revoked/expired
   // CLI/MCP pairing records. Absent in browser-only and test hosts.
   listExternalPairings?: () => readonly ExternalPairingSummary[] | Promise<readonly ExternalPairingSummary[]>;
+  revokeExternalPairing?: (clientId: string) => Promise<boolean> | boolean;
   // Server-originated mail events fanned out to connected clients over the
   // `GET /api/events` SSE endpoint by the route layer.
   serverEvents?: ServerEventBus;

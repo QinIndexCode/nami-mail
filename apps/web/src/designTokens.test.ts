@@ -20,7 +20,9 @@ import { describe, expect, it } from "vitest";
  * and deliberately not forced here.
  */
 
-const stylesheet = readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8").replace(/\r\n/g, "\n");
+import { loadAggregatedCss } from "./testUtils/loadStyles";
+
+const stylesheet = loadAggregatedCss();
 
 /** Ceilings for pre-existing debt. Lower these; never raise them. */
 const debtBudget = {

@@ -78,7 +78,7 @@ describe("SettingsModal sidebar search", () => {
     renderModal();
 
     const searchInput = container.querySelector<HTMLInputElement>(".settings-nav-search-input")!;
-    expect(container.querySelectorAll(".settings-nav-item").length).toBe(9);
+    expect(container.querySelectorAll(".settings-nav-item").length).toBe(10);
 
     // Type semantic synonym "暗色" (which corresponds to theme dark mode in Appearance)
     await act(async () => {
@@ -105,7 +105,7 @@ describe("SettingsModal sidebar search", () => {
     });
 
     // All categories restored
-    expect(container.querySelectorAll(".settings-nav-item").length).toBe(9);
+    expect(container.querySelectorAll(".settings-nav-item").length).toBe(10);
     expect(searchInput.value).toBe("");
   });
 
@@ -144,7 +144,7 @@ describe("SettingsModal sidebar search", () => {
     });
 
     expect(searchInput.value).toBe("");
-    expect(container.querySelectorAll(".settings-nav-item").length).toBe(9);
+    expect(container.querySelectorAll(".settings-nav-item").length).toBe(10);
   });
 
   it("selects category when pressing Enter in search input with results", async () => {

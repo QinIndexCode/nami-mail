@@ -36,7 +36,7 @@ const mockT = (key: string) => {
 describe("settings-search", () => {
   it("covers all categories in the search index", () => {
     const categoriesInIndex = new Set(SETTINGS_SEARCH_INDEX.map((item) => item.categoryId));
-    expect(categoriesInIndex.size).toBe(10);
+    expect(categoriesInIndex.size).toBe(11);
     expect(categoriesInIndex.has("language")).toBe(true);
     expect(categoriesInIndex.has("appearance")).toBe(true);
     expect(categoriesInIndex.has("notifications")).toBe(true);
@@ -45,6 +45,7 @@ describe("settings-search", () => {
     expect(categoriesInIndex.has("filters")).toBe(true);
     expect(categoriesInIndex.has("models")).toBe(true);
     expect(categoriesInIndex.has("mcp")).toBe(true);
+    expect(categoriesInIndex.has("connections")).toBe(true);
     expect(categoriesInIndex.has("agent")).toBe(true);
     expect(categoriesInIndex.has("translation")).toBe(true);
   });
@@ -134,12 +135,18 @@ describe("settings-search", () => {
     expect(r3!.some((r) => r.categoryId === "translation")).toBe(true);
   });
 
-  it("performs semantic matching for MCP tools", () => {
-    const r1 = searchSettings("MCP", mockT, true);
+  it("performs semantic matching for MCP tools and connections", () => {
+    // Internal MCP tools
+    const r1 = searchSettings("stdio", mockT, true);
     expect(r1![0].categoryId).toBe("mcp");
 
-    const r2 = searchSettings("stdio", mockT, true);
-    expect(r2![0].categoryId).toBe("mcp");
+    // External IDE connection: Cursor / Claude / namimail
+    const r2 = searchSettings("Cursor", mockT, true);
+    expect(r2![0].categoryId).toBe("connections");
+
+    // CLI connection: namimail pair
+    const r3 = searchSettings("namimail pair", mockT, true);
+    expect(r3![0].categoryId).toBe("connections");
   });
 
   it("performs semantic matching for AI Assistant features", () => {

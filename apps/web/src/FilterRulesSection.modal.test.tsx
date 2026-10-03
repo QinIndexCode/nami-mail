@@ -86,4 +86,97 @@ describe("FilterRulesSection modal and portal behavior", () => {
 
     portalHost.remove();
   });
+
+  it("notifies onOverlayOpenChange and renders compact top grid and inline add buttons", async () => {
+    const portalHost = document.createElement("div");
+    portalHost.id = "test-portal-host-2";
+    document.body.appendChild(portalHost);
+    const hostRef = { current: portalHost };
+    const overlayChanges: boolean[] = [];
+
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <FilterRulesSection
+            accounts={dummyAccounts}
+            initialRules={[]}
+            overlayHostRef={hostRef}
+            onOverlayOpenChange={(open) => overlayChanges.push(open)}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    expect(overlayChanges).toEqual([false]);
+
+    const addBtn = container.querySelector(".settings-inline-actions button") as HTMLButtonElement;
+    await act(async () => {
+      addBtn.click();
+    });
+
+    expect(overlayChanges).toEqual([false, true]);
+
+    // Check top grid and inline add buttons exist
+    const topGrid = portalHost.querySelector(".filter-rule-top-grid");
+    expect(topGrid).not.toBeNull();
+    expect(topGrid?.querySelector("#filter-rule-name")).not.toBeNull();
+    expect(topGrid?.querySelector("#filter-rule-account")).not.toBeNull();
+    expect(topGrid?.querySelector(".filter-rule-account-select")).not.toBeNull();
+
+    const sectionHeads = portalHost.querySelectorAll(".filter-rule-section-head");
+    expect(sectionHeads.length).toBe(2);
+
+    const addButtons = portalHost.querySelectorAll(".filter-rule-add-button");
+    expect(addButtons.length).toBe(2);
+
+    // Verify closing notifies overlayChange false after dismiss transition
+    const closeBtn = portalHost.querySelector(".filter-rule-close-btn") as HTMLButtonElement;
+    await act(async () => {
+      closeBtn.click();
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    });
+
+    expect(overlayChanges).toEqual([false, true, false]);
+    portalHost.remove();
+  });
+
+  it("allows reaching and focusing condition and action inputs inside the modal", async () => {
+    const portalHost = document.createElement("div");
+    portalHost.id = "test-portal-host-3";
+    document.body.appendChild(portalHost);
+    const hostRef = { current: portalHost };
+
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <FilterRulesSection
+            accounts={dummyAccounts}
+            initialRules={[]}
+            overlayHostRef={hostRef}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    const addBtn = container.querySelector(".settings-inline-actions button") as HTMLButtonElement;
+    await act(async () => {
+      addBtn.click();
+    });
+
+    const nameInput = portalHost.querySelector("#filter-rule-name") as HTMLInputElement;
+    expect(nameInput).not.toBeNull();
+
+    const conditionInput = portalHost.querySelector(".filter-rule-rows input[type=text]") as HTMLInputElement;
+    expect(conditionInput).not.toBeNull();
+
+    await act(async () => {
+      conditionInput.focus();
+    });
+
+    expect(document.activeElement).toBe(conditionInput);
+    portalHost.remove();
+  });
 });

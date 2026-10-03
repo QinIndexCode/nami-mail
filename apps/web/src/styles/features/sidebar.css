@@ -1,0 +1,838 @@
+.sidebar
+{
+background:color-mix(in srgb, var(--panel-solid) var(--bg-panel-opacity), transparent);
+flex-direction:column;
+padding:20px 13px 14px;
+display:flex;
+position:relative
+}
+.sidebar>:not(.account-list,.folder-list)
+{
+flex-shrink:0
+}
+.brand-row
+{
+align-items:center;
+gap:10px;
+padding:0 8px 18px;
+display:flex
+}
+.brand-mark
+{
+flex:none;
+place-items:center;
+width:36px;
+height:36px;
+display:grid
+}
+.brand-mark-image
+{
+object-fit:contain;
+grid-area:1/1;
+width:100%;
+height:100%;
+display:block
+}
+.brand-mark-dark,:root[data-theme=dark] .brand-mark-light
+{
+display:none
+}
+:root[data-theme=dark] .brand-mark-dark
+{
+display:block
+}
+.brand-row>div:nth-child(2)
+{
+flex-direction:column;
+flex:1;
+gap:1px;
+min-width:0;
+display:flex
+}
+.brand-row strong
+{
+letter-spacing:0;
+font-size:15px
+}
+.brand-row span
+{
+color:var(--text-faint);
+text-overflow:ellipsis;
+white-space:nowrap;
+font-size:11px;
+overflow:hidden
+}
+.compose-button
+{
+background:var(--button);
+width:100%;
+color:var(--button-text);
+cursor:pointer;
+box-shadow:var(--shadow-sm);
+border:0;
+border-radius:var(--radius-md);
+align-items:center;
+gap:8px;
+padding:11px 12px;
+font-size:13px;
+font-weight:650;
+transition:transform .18s,opacity .18s;
+display:flex
+}
+.compose-button:hover
+{
+transform:translateY(-1px)
+}
+.compose-button span
+{
+opacity:.45;
+margin-left:auto;
+font-family:DM Mono,monospace;
+font-size:9px;
+font-weight:400
+}
+.nav-section
+{
+opacity:1;
+flex-direction:column;
+gap:2px;
+max-height:300px;
+margin-top:18px;
+transition:max-height .32s,opacity .32s,margin-top .32s,visibility;
+display:flex;
+overflow:hidden
+}
+.nav-section.collapsed
+{
+opacity:0;
+visibility:hidden;
+pointer-events:none;
+max-height:0;
+margin-top:0;
+transition:max-height .32s,opacity .32s,margin-top .32s,visibility 0s linear .32s
+}
+.nav-section button,.folder-list button,.account-tree-folders button
+{
+width:100%;
+color:var(--text-soft);
+cursor:pointer;
+text-align:left;
+background:0 0;
+border:0;
+border-radius:var(--radius-sm);
+grid-template-columns:20px 1fr auto;
+align-items:center;
+gap:8px;
+padding:8px 8px;
+transition:background .16s,color .16s;
+display:grid
+}
+.nav-section button:hover:not(:disabled),.folder-list button:hover,.account-tree-folders button:hover
+{
+background:var(--hover);
+color:var(--text)
+}
+.nav-section button.active,.folder-list button.active,.account-tree-folders button.active
+{
+background:var(--selected-strong);
+color:var(--text);
+box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--text-soft) 40%, var(--line-strong));
+font-weight:600
+}
+.nav-section button.sending-status-nav.attention
+{
+color:color-mix(in srgb, var(--warning) 84%, var(--text))
+}
+.nav-section button.sending-status-nav.attention em
+{
+color:var(--warning);
+font-weight:750
+}
+.nav-section button:disabled
+{
+cursor:default;
+opacity:.45
+}
+.nav-section button span,.folder-list button span,.account-tree-folders button span
+{
+text-overflow:ellipsis;
+white-space:nowrap;
+font-size:12px;
+overflow:hidden
+}
+/* The folder tree icon lives inside a span (not a bare grid child like the
+   view icons), so it inherits the text line box and rode the baseline —
+   visibly higher than the label. Flex-centering pins it to the row. */
+.folder-list .folder-nav-icon
+{
+align-items:center;
+justify-content:center;
+display:flex;
+overflow:visible
+}
+.nav-section em,.folder-list em
+{
+min-width:18px;
+color:var(--text-faint);
+text-align:right;
+font-size:10px;
+font-style:normal
+}
+/* Loading ring and the entry's count share ONE fixed-width end slot: the
+   count fades out while the spinner fades in (cross-fade), so the two can
+   never overlap, the label is never squeezed into a re-ellipsis, and the
+   slot width — hence the whole row — never changes during a load. */
+.sidebar-end
+{
+position:relative;
+align-items:center;
+justify-content:flex-end;
+min-width:18px;
+display:inline-flex
+}
+.sidebar-end em
+{
+transition:opacity .18s ease
+}
+.sidebar-end.loading em
+{
+opacity:0
+}
+.sidebar-end .sidebar-spinner
+{
+position:absolute;
+right:0;
+top:50%;
+translate:0 -50%;
+opacity:0;
+transform:scale(.4);
+transition:opacity .18s ease,transform .18s ease;
+pointer-events:none
+}
+.sidebar-end.loading .sidebar-spinner
+{
+opacity:1;
+transform:scale(1)
+}
+/* Folders with unread mail call their count out; folders with only read mail
+   fall back to their total so every populated folder shows a number. */
+.folder-list em.folder-unseen
+{
+color:var(--text);
+font-weight:700
+}
+.accounts-heading
+{
+color:var(--text-faint);
+letter-spacing:0;
+text-transform:uppercase;
+justify-content:space-between;
+align-items:center;
+margin:22px 5px 8px 8px;
+font-family:DM Mono,monospace;
+font-size:10px;
+display:flex
+}
+.account-list
+{
+overscroll-behavior:contain;
+flex-direction:column;
+flex:0 auto;
+min-height:0;
+padding:1px 0;
+display:flex;
+position:relative;
+overflow:hidden auto
+}
+.account-list>button,.account-list .account-tree-main
+{
+width:100%;
+min-height:48px;
+max-height:62px;
+color:var(--text-soft);
+cursor:pointer;
+text-align:left;
+background:0 0;
+border:0;
+border-radius:10px;
+align-items:center;
+gap:8px;
+margin-top:2px;
+padding:8px 8px;
+transition:background .16s,color .16s,box-shadow .16s,min-height .32s,max-height .32s,margin .32s,padding .32s,opacity .32s,visibility;
+display:flex;
+overflow:hidden
+}
+.account-list>button:hover,.account-list .account-tree-main:hover
+{
+background:var(--hover);
+color:var(--text)
+}
+.account-list>button.active,.account-list .account-tree-main.active
+{
+background:var(--selected-strong);
+color:var(--text);
+box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--text-soft) 40%, var(--line-strong));
+font-weight:600
+}
+.account-list>button:focus-visible,.account-list .account-tree-main:focus-visible
+{
+background:var(--selected);
+color:var(--text);
+box-shadow:0 0 0 3px var(--focus-ring-subtle);
+outline:none
+}
+.account-list>button.hidden
+{
+opacity:0;
+visibility:hidden;
+pointer-events:none;
+min-height:0;
+max-height:0;
+margin-top:0;
+padding-top:0;
+padding-bottom:0;
+transition:min-height .32s,max-height .32s,margin .32s,padding .32s,opacity .32s,visibility 0s linear .32s
+}
+/* Tree mode: each account row carries its own folder list inline. The row
+   reuses the classic account button styles through .account-tree-main; the
+   disclosure chevron floats over the row's reserved right padding. */
+.accounts-heading-actions
+{
+align-items:center;
+gap:2px;
+display:flex
+}
+.account-tree-item
+{
+width:100%
+}
+/* The disclosure chevron anchors to the ROW wrapper, not the whole tree
+   item: anchoring to the item would re-center it over the folder list as
+   soon as the folders expand, moving the collapse control out from under
+   the cursor. The row also carries the focused-mode fold (max-height to a
+   cap above the tallest row) so switching modes animates rows in and out
+   instead of popping them. */
+.account-tree-row
+{
+width:100%;
+max-height:80px;
+position:relative;
+overflow:hidden;
+transition:max-height .32s,opacity .32s,visibility 0s 0s
+}
+.account-tree-row.hidden
+{
+max-height:0;
+opacity:0;
+visibility:hidden;
+pointer-events:none;
+transition:max-height .32s,opacity .32s,visibility 0s linear .32s
+}
+.account-list .account-tree-item .account-tree-main
+{
+padding-right:30px
+}
+.account-tree-toggle
+{
+width:24px;
+height:24px;
+color:var(--text-faint);
+cursor:pointer;
+background:0 0;
+border:0;
+border-radius:var(--radius-sm);
+align-items:center;
+justify-content:center;
+display:flex;
+position:absolute;
+right:3px;
+top:50%;
+translate:0 -50%;
+transition:background .16s,color .16s,opacity .22s ease
+}
+/* Focused mode owns the bottom folder list, so the per-account disclosure
+   fades out instead of vanishing mid row. */
+.account-list[data-folder-mode="focused"] .account-tree-toggle
+{
+opacity:0;
+pointer-events:none
+}
+.account-tree-item:hover .account-tree-toggle
+{
+color:var(--text-soft)
+}
+.account-tree-toggle:hover
+{
+background:var(--hover);
+color:var(--text)
+}
+.account-tree-toggle:focus-visible
+{
+box-shadow:0 0 0 3px var(--focus-ring-subtle);
+outline:none
+}
+.account-tree-toggle svg
+{
+flex:none;
+transition:transform .24s
+}
+.account-tree-toggle.open svg
+{
+transform:rotate(90deg)
+}
+/* Inline folder lists stay mounted and animate through the grid-rows
+   0fr→1fr trick, so expanding, collapsing, and the mode switch all
+   transition to the real content height instead of mounting/unmounting. */
+.account-tree-folders
+{
+display:grid;
+grid-template-rows:0fr;
+opacity:0;
+visibility:hidden;
+transition:grid-template-rows .3s cubic-bezier(.4,0,.2,1),opacity .3s cubic-bezier(.4,0,.2,1),visibility 0s linear .3s
+}
+.account-tree-folders.open
+{
+grid-template-rows:1fr;
+opacity:1;
+visibility:visible;
+transition:grid-template-rows .3s cubic-bezier(.4,0,.2,1),opacity .3s cubic-bezier(.4,0,.2,1),visibility 0s 0s
+}
+.account-tree-folders-clip
+{
+min-height:0;
+overflow:hidden
+}
+.account-tree-folders-list
+{
+border-left:1px solid var(--line);
+margin:2px 0 4px 26px;
+padding-left:4px;
+display:flex;
+flex-direction:column
+}
+/* The mode toggle shows the mode it switches TO: the tree glyph while in
+   focused mode, the focused glyph while in tree mode. Both stay mounted and
+   crossfade through scale+rotate so the swap never pops. */
+.folder-mode-icon
+{
+width:16px;
+height:16px;
+position:relative;
+display:inline-block
+}
+.folder-mode-icon svg
+{
+inset:0;
+position:absolute;
+transition:opacity .22s ease,transform .22s ease
+}
+.folder-mode-icon .folder-mode-focused
+{
+opacity:0;
+transform:scale(.55) rotate(-90deg)
+}
+.folder-mode-icon[data-mode="tree"] .folder-mode-tree
+{
+opacity:0;
+transform:scale(.55) rotate(90deg)
+}
+.folder-mode-icon[data-mode="tree"] .folder-mode-focused
+{
+opacity:1;
+transform:scale(1) rotate(0deg)
+}
+.account-list-fade
+{
+background:linear-gradient(to bottom, transparent, var(--panel-muted));
+pointer-events:none;
+opacity:1;
+border-radius:0 0 10px 10px;
+height:34px;
+transition:opacity .2s;
+position:absolute;
+bottom:0;
+left:0;
+right:0
+}
+.account-list-more
+{
+width:100%;
+min-height:30px;
+color:var(--text-faint);
+cursor:pointer;
+background:0 0;
+border:0;
+border-radius:var(--radius-sm);
+justify-content:center;
+align-items:center;
+gap:6px;
+margin-top:2px;
+font-family:inherit;
+font-size:11px;
+font-weight:650;
+transition:background .16s,color .16s;
+display:flex
+}
+.account-list-more:hover
+{
+background:var(--hover);
+color:var(--text)
+}
+.account-list-more svg
+{
+flex:none;
+transition:transform .32s
+}
+.account-list-more:hover svg
+{
+transform:translateY(1px)
+}
+.account-list-more.expanded svg
+{
+transform:rotate(180deg)
+}
+.account-list-more.expanded:hover svg
+{
+transform:rotate(180deg)translateY(-1px)
+}
+.account-avatar,.sender-avatar
+{
+background:var(--selected);
+color:var(--text);
+border-radius:50%;
+flex:none;
+place-items:center;
+font-size:10px;
+font-weight:700;
+display:grid
+}
+.account-avatar
+{
+width:29px;
+height:29px
+}
+.account-avatar.all
+{
+background:var(--text);
+color:var(--panel-solid)
+}
+.tone-0
+{
+color:#29292d;
+background:#e5e5e7
+}
+.tone-1
+{
+color:#20262b;
+background:#d9dee2
+}
+.tone-2
+{
+color:#2b2722;
+background:#e3ded7
+}
+.tone-3
+{
+color:#27242e;
+background:#dedce5
+}
+:root[data-theme=dark] .tone-0
+{
+color:#f2f2f3;
+background:#343438
+}
+:root[data-theme=dark] .tone-1
+{
+color:#edf5f6;
+background:#2f393d
+}
+:root[data-theme=dark] .tone-2
+{
+color:#f5f0e8;
+background:#3b3731
+}
+:root[data-theme=dark] .tone-3
+{
+color:#f2eef7;
+background:#37343e
+}
+.account-copy
+{
+flex-direction:column;
+flex:1;
+min-width:0;
+display:flex
+}
+.account-copy strong
+{
+text-overflow:ellipsis;
+white-space:nowrap;
+font-size:12px;
+font-weight:650;
+overflow:hidden
+}
+.account-copy small
+{
+color:var(--text-faint);
+text-overflow:ellipsis;
+white-space:nowrap;
+margin-top:2px;
+font-size:10px;
+overflow:hidden
+}
+.status-dot
+{
+background:var(--success);
+width:7px;
+height:7px;
+box-shadow:0 0 0 3px color-mix(in srgb, var(--success) 14%, transparent);
+border-radius:50%
+}
+.status-dot.error
+{
+background:var(--danger);
+box-shadow:0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent)
+}
+.status-dot.muted
+{
+background:var(--text-faint);
+box-shadow:none
+}
+.status-dot.warning
+{
+background:var(--warning);
+box-shadow:0 0 0 3px color-mix(in srgb, var(--warning) 16%, transparent)
+}
+.folder-list
+{
+border-top:1px solid var(--line);
+opacity:0;
+visibility:hidden;
+pointer-events:none;
+border-top-width:0;
+min-height:0;
+max-height:0;
+margin-top:0;
+padding-top:0;
+transition:max-height .32s,opacity .32s,margin-top .32s,padding-top .32s,border-top-width .32s,visibility 0s linear .32s;
+overflow:hidden
+}
+.folder-list.show
+{
+max-height:var(--folder-list-max,min(36vh, 300px));
+opacity:1;
+visibility:visible;
+pointer-events:auto;
+border-top-width:1px;
+margin-top:16px;
+padding-top:13px;
+transition:max-height .32s,opacity .32s,margin-top .32s,padding-top .32s,border-top-width .32s;
+overflow-y:auto
+}
+.folder-title
+{
+color:var(--text-faint);
+letter-spacing:0;
+text-transform:uppercase;
+margin:0 8px 6px;
+font-family:DM Mono,monospace;
+font-size:10px;
+display:block
+}
+.sidebar-footer
+{
+border-top:1px solid var(--line);
+justify-content:space-between;
+align-items:center;
+margin-top:auto;
+padding:12px 8px 0;
+display:flex
+}
+.sidebar-footer>div
+{
+color:var(--text-soft);
+align-items:center;
+gap:8px;
+display:flex
+}
+.sidebar-footer>div>span
+{
+flex-direction:column;
+display:flex
+}
+.sidebar-footer strong
+{
+font-size:10px;
+font-weight:600
+}
+.sidebar-footer small
+{
+color:var(--text-faint);
+font-size:8px
+}
+/* Beats `.sidebar-footer>div{gap:8px}` (0,1,1) on specificity instead of forcing
+   the value with !important — see DESIGN-SYSTEM §7. */
+.sidebar-footer>.sidebar-footer-actions
+{
+gap:2px
+}
+.update-footer-button
+{
+color:var(--button-text);
+border:1px solid color-mix(in srgb, var(--button-text) 40%, transparent);
+border-radius:var(--radius-pill);
+background:color-mix(in srgb, var(--button-text) 10%, transparent);
+align-items:center;
+gap:4px;
+padding:2px 8px;
+font-size:9px;
+font-weight:600;
+cursor:pointer;
+display:inline-flex;
+max-width:140px;
+overflow:hidden;
+white-space:nowrap;
+text-overflow:ellipsis
+}
+.update-footer-button:hover:not(:disabled)
+{
+border-color:var(--button-text)
+}
+.update-footer-button:disabled
+{
+opacity:.55;
+cursor:default
+}
+/* Circular update badge for an available release. Collapsed it is a 30px
+   circle with a download arrow; hovering fades the arrow out and stretches
+   the pill open ("new version x.y.z" + download + dismiss). Hovering out
+   folds it back into the circle. Dismissing reverses the pill first, then
+   fades the whole badge away (React removes it once the fade lands). */
+.update-badge
+{
+position:relative;
+align-items:center;
+max-width:30px;
+height:30px;
+border:1px solid color-mix(in srgb, var(--button-text) 40%, transparent);
+border-radius:var(--radius-pill);
+background:color-mix(in srgb, var(--button-text) 10%, transparent);
+cursor:default;
+overflow:hidden;
+display:flex;
+transition:max-width .3s ease,opacity .24s ease
+}
+.update-badge:hover
+{
+max-width:330px
+}
+.update-badge-icon
+{
+position:absolute;
+left:1px;
+top:1px;
+align-items:center;
+justify-content:center;
+width:28px;
+height:28px;
+color:var(--button-text);
+display:flex;
+opacity:1;
+transition:opacity .2s ease
+}
+.update-badge:hover .update-badge-icon
+{
+opacity:0
+}
+.update-badge-pop
+{
+align-items:center;
+gap:8px;
+padding-left:34px;
+padding-right:8px;
+display:flex;
+white-space:nowrap;
+opacity:0;
+transform:translateX(-6px);
+transition:opacity .18s ease .06s,transform .26s ease .04s
+}
+.update-badge:hover .update-badge-pop
+{
+opacity:1;
+transform:none
+}
+.update-badge-text
+{
+color:var(--text-secondary);
+font-size:10px;
+font-weight:600
+}
+.update-badge-download
+{
+color:var(--button-text);
+border:1px solid color-mix(in srgb, var(--button-text) 45%, transparent);
+border-radius:var(--radius-pill);
+background:transparent;
+align-items:center;
+padding:2px 10px;
+font-size:10px;
+font-weight:600;
+cursor:pointer;
+display:inline-flex;
+transition:border-color .15s ease,background .15s ease
+}
+.update-badge-download:hover:not(:disabled)
+{
+border-color:var(--button-text);
+background:color-mix(in srgb, var(--button-text) 16%, transparent)
+}
+.update-badge-download:disabled
+{
+opacity:.55;
+cursor:default
+}
+.update-badge-close
+{
+align-items:center;
+justify-content:center;
+width:20px;
+height:20px;
+border-radius:50%;
+color:var(--text-faint);
+background:transparent;
+cursor:pointer;
+display:flex;
+transition:color .15s ease,background .15s ease
+}
+.update-badge-close:hover
+{
+color:var(--text-secondary);
+background:color-mix(in srgb, var(--text-secondary) 12%, transparent)
+}
+/* Dismissed: the pill folds back into the circle first, then the circle
+   fades out; pointer events are cut so a stray hover cannot re-open it. */
+.update-badge.dismissed
+{
+max-width:30px;
+opacity:0;
+pointer-events:none;
+transition:max-width .3s ease .12s,opacity .22s ease .36s
+}
+.update-badge.dismissed .update-badge-pop
+{
+opacity:0;
+transform:translateX(-6px);
+transition:opacity .14s ease,transform .2s ease
+}
+.update-badge.dismissed .update-badge-icon
+{
+opacity:1
+}
+.version
+{
+color:var(--text-faint);
+font-family:DM Mono,monospace;
+font-size:8px
+}

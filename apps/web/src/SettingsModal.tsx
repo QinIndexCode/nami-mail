@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import {
   Bell,
   Bot,
+  Cable,
   Cpu,
   Filter,
   KeyRound,
@@ -69,6 +70,7 @@ import {
 } from "./settings/settings-categories";
 import SettingsAgentSection from "./settings/SettingsAgentSection";
 import SettingsModelsSection from "./settings/SettingsModelsSection";
+import SettingsConnectionsSection from "./settings/SettingsConnectionsSection";
 import SettingsTranslationSection from "./settings/SettingsTranslationSection";
 import SettingsAppearanceSection from "./settings/SettingsAppearanceSection";
 import {
@@ -90,6 +92,7 @@ const categoryMeta: Record<SettingsCategoryId, { icon: LucideIcon; labelKey: str
   filters: { icon: Filter, labelKey: "settings.nav.filters.title" },
   models: { icon: Cpu, labelKey: "settings.nav.models.title" },
   mcp: { icon: Server, labelKey: "settings.nav.mcp.title" },
+  connections: { icon: Cable, labelKey: "settings.nav.connections.title" },
   agent: { icon: Bot, labelKey: "agent.launch" },
   translation: { icon: KeyRound, labelKey: "settings.translation.title" },
 };
@@ -199,6 +202,9 @@ export default function SettingsModal({
   // of seconds — closing now would hide the result the user is waiting for.
   const [modelsOverlayOpen, setModelsOverlayOpen] = useState(false);
   const [modelsBusy, setModelsBusy] = useState(false);
+  const [connectionsOverlayOpen, setConnectionsOverlayOpen] = useState(false);
+  const [connectionsBusy, setConnectionsBusy] = useState(false);
+  const [filtersOverlayOpen, setFiltersOverlayOpen] = useState(false);
   // One visible panel at a time; the sidebar switches categories instead of
   // scrolling. The choice persists so reopening the modal lands where the user
   // left off, and a stored "desktop" is ignored on browser runtimes. A deep
@@ -213,6 +219,7 @@ export default function SettingsModal({
     } catch {
       // Storage may be unavailable (private mode); the choice simply does not persist.
     }
+    setNotice(null);
   }, [activeCategory]);
   // Deep-link requests arriving while the modal is open (workspace "configure
   // model" buttons): each nonce is applied once. The ref is seeded with the
@@ -220,15 +227,14 @@ export default function SettingsModal({
   const lastCategoryRequestNonceRef = useRef<number | null>(categoryRequest?.nonce ?? null);
   useEffect(() => {
     if (!categoryRequest || lastCategoryRequestNonceRef.current === categoryRequest.nonce) return;
-    // A models form stacked over the panel owns the interaction. Switching now
-    // would unmount the panel under it and drop its draft — write-only API keys
-    // included — without ever asking. The nonce is deliberately not consumed:
-    // the deep link lands as soon as the overlay is gone.
-    if (modelsOverlayOpen) return;
+    // A models form, connections dialog or filter-rules modal stacked over the panel owns the interaction.
+    // Switching now would unmount the panel under it and drop its draft without ever asking.
+    // The nonce is deliberately not consumed: the deep link lands as soon as the overlay is gone.
+    if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) return;
     lastCategoryRequestNonceRef.current = categoryRequest.nonce;
     setActiveCategory(categoryRequest.category);
     if (settingsBody.current) settingsBody.current.scrollTop = 0;
-  }, [categoryRequest, modelsOverlayOpen]);
+  }, [categoryRequest, modelsOverlayOpen, filtersOverlayOpen, connectionsOverlayOpen]);
   // The embedded models panel hosts both inner tabs (providers / MCP servers);
   // switching them swaps the body in place so the panel never remounts.
   const [externalPairingsReload, setExternalPairingsReload] = useState(0);
@@ -243,12 +249,13 @@ export default function SettingsModal({
   const confirmationDialog = useRef<HTMLElement>(null);
   const backgroundAlert = useRef<HTMLElement>(null);
   const activeLocale = currentSettings.locale || locale;
-  const controlsBusy = Boolean(busyAction || updateActionBusy === "install" || modelsBusy);
-  // While a models form is stacked over the panel, close is owned by that form.
+  const controlsBusy = Boolean(busyAction || updateActionBusy === "install" || modelsBusy || connectionsBusy);
+  // While a models form or filter rule modal is stacked over the panel, close is owned by that form.
   // The header X and "done" therefore look like live buttons that silently do
   // nothing: they show as disabled and say why.
-  const closeBlocked = controlsBusy || modelsOverlayOpen;
-  const closeBlockedHint = modelsOverlayOpen ? t("settings.models.formOpenHint") : null;
+  const formsOverlayOpen = modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen;
+  const closeBlocked = controlsBusy || formsOverlayOpen;
+  const closeBlockedHint = (modelsOverlayOpen || connectionsOverlayOpen) ? t("settings.models.formOpenHint") : null;
   const updatePresentation = updateStatus ? presentUpdateSnapshot(updateStatus, t) : null;
   const hasUnsavedTranslationDraft = hasUnsavedTranslationConfiguration(translationConfiguration, {
     endpoint: translationEndpoint,
@@ -272,17 +279,17 @@ export default function SettingsModal({
 
   const requestClose = useCallback(() => {
     if (controlsBusy) return;
-    // Same yield Escape already makes below: a stacked models form owns the
-    // interaction. Closing here would unmount the panel under it and drop the
+    // Same yield Escape already makes below: a stacked models form, connections dialog or filter rules modal
+    // owns the interaction. Closing here would unmount the panel under it and drop the
     // draft it holds without ever asking.
-    if (modelsOverlayOpen) return;
+    if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) return;
     if (hasUnsavedTranslationDraft) {
       resetConfirmClosing();
       setPendingConfirmation("discard-translation-changes");
       return;
     }
     requestExit();
-  }, [controlsBusy, hasUnsavedTranslationDraft, modelsOverlayOpen, requestExit, resetConfirmClosing]);
+  }, [connectionsOverlayOpen, controlsBusy, filtersOverlayOpen, hasUnsavedTranslationDraft, modelsOverlayOpen, requestExit, resetConfirmClosing]);
 
   // The "configure model" entry (agent panel button, translation-discard
   // confirmation) now switches to the models category in place — the embedded
@@ -294,6 +301,10 @@ export default function SettingsModal({
       return;
     }
     selectCategory("models");
+  };
+
+  const openConnectionsCategory = () => {
+    selectCategory("connections");
   };
 
   useEffect(() => {
@@ -399,11 +410,10 @@ export default function SettingsModal({
       // active element fallback covers retargeted key events.
       if (expandedThemedSelectOwnsEscape(target, activeElement)) return;
       if (searchInputRef.current && (target === searchInputRef.current || activeElement === searchInputRef.current) && searchQuery) return;
-      // The models form dialog owns Escape while it is up (and may put a
-      // discard-confirmation on top of itself). Yield before stopping the
+      // The models form dialog, connections dialog or filter rules modal owns Escape while it is up. Yield before stopping the
       // event, otherwise the inner layer never sees it and this dialog would
       // close underneath the form.
-      if (modelsOverlayOpen) return;
+      if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (controlsBusy) return;
@@ -419,9 +429,9 @@ export default function SettingsModal({
     };
     window.addEventListener("keydown", closeOnEscape, true);
     return () => window.removeEventListener("keydown", closeOnEscape, true);
-  }, [backgroundUploadError, controlsBusy, modelsOverlayOpen, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose, searchQuery]);
+  }, [backgroundUploadError, connectionsOverlayOpen, controlsBusy, filtersOverlayOpen, modelsOverlayOpen, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose, searchQuery]);
 
-  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || autoReplyDecisionsOpen || memoryDialogOpen || modelsOverlayOpen) });
+  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || autoReplyDecisionsOpen || memoryDialogOpen || modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) });
   useDialogFocus(Boolean(pendingConfirmation), confirmationDialog, { fallbackFocusRef: settingsDialog });
   useDialogFocus(Boolean(backgroundUploadError), backgroundAlert, { restoreFocusRef: uploadButton });
 
@@ -1059,6 +1069,7 @@ export default function SettingsModal({
         accounts={accounts}
         demoMode={demoMode}
         overlayHostRef={settingsBackdrop}
+        onOverlayOpenChange={setFiltersOverlayOpen}
       />
     ),
     models: (
@@ -1087,6 +1098,21 @@ export default function SettingsModal({
         overlayHostRef={settingsBackdrop}
       />
     ),
+    connections: (
+      <SettingsConnectionsSection
+        t={t}
+        formatDate={formatDate}
+        accounts={accounts}
+        currentSettings={currentSettings}
+        controlsBusy={controlsBusy}
+        demoMode={demoMode}
+        applyOptimisticSettings={applyOptimisticSettings}
+        requestAccessLevelChange={requestAccessLevelChange}
+        onOverlayOpenChange={setConnectionsOverlayOpen}
+        onBusyChange={setConnectionsBusy}
+        overlayHostRef={settingsBackdrop}
+      />
+    ),
     agent: (
       <SettingsAgentSection
         t={t}
@@ -1096,6 +1122,7 @@ export default function SettingsModal({
         controlsBusy={controlsBusy}
         demoMode={demoMode}
         openModelSettings={openModelsCategory}
+        openConnectionsSettings={openConnectionsCategory}
         requestAccessLevelChange={requestAccessLevelChange}
         applyOptimisticSettings={applyOptimisticSettings}
         externalGuideCopied={externalGuideCopied}
@@ -1267,7 +1294,7 @@ export default function SettingsModal({
             )}
           </nav>
           <div className="settings-body" ref={settingsBody}>
-            <FormNotice notice={notice} />
+            <FormNotice notice={notice} onDismiss={() => setNotice(null)} />
             <div
               className="settings-panel"
               key={activeCategory}

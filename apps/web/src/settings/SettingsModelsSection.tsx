@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
+  CircleHelp,
   Cpu,
   LoaderCircle,
   Pencil,
@@ -133,8 +134,15 @@ export default function SettingsModelsSection({
           <div>
             <span id={isMcp ? "mcp-settings" : "models-settings"}>
               {t(isMcp ? "settings.nav.mcp.title" : "settings.nav.models.title")}
+              <span
+                className="field-help-icon"
+                data-tooltip={t(isMcp ? "settings.nav.mcp.description" : "settings.nav.models.description")}
+                aria-label={t(isMcp ? "settings.nav.mcp.description" : "settings.nav.models.description")}
+                tabIndex={0}
+              >
+                <CircleHelp size={12} aria-hidden="true" />
+              </span>
             </span>
-            <p>{t(isMcp ? "settings.nav.mcp.description" : "settings.nav.models.description")}</p>
           </div>
         </div>
         <p className="settings-empty" role="status">
@@ -181,8 +189,17 @@ export default function SettingsModelsSection({
           <div className="settings-section-title">
             <Cpu size={16} />
             <div>
-              <span id="models-providers-title">{t("agent.providers.title")}</span>
-              <p>{t("agent.providers.description")}</p>
+              <span id="models-providers-title">
+                {t("agent.providers.title")}
+                <span
+                  className="field-help-icon"
+                  data-tooltip={t("agent.providers.description")}
+                  aria-label={t("agent.providers.description")}
+                  tabIndex={0}
+                >
+                  <CircleHelp size={12} aria-hidden="true" />
+                </span>
+              </span>
             </div>
           </div>
           {providers.loading && providers.providers.length === 0 && (
@@ -276,7 +293,19 @@ export default function SettingsModelsSection({
         >
           <div className="settings-section-title">
             <Server size={16} />
-            <div><span id="models-mcp-title">{t("agent.mcpServers.title")}</span><p>{t("agent.mcpServers.description")}</p></div>
+            <div>
+              <span id="models-mcp-title">
+                {t("agent.mcpServers.title")}
+                <span
+                  className="field-help-icon"
+                  data-tooltip={t("agent.mcpServers.description")}
+                  aria-label={t("agent.mcpServers.description")}
+                  tabIndex={0}
+                >
+                  <CircleHelp size={12} aria-hidden="true" />
+                </span>
+              </span>
+            </div>
           </div>
           {mcp.loading && mcp.servers.length === 0 && (
             <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("agent.mcpServers.loading")}</p>

@@ -746,7 +746,7 @@ export default function App() {
       ".thread-strip-messages", ".modal-backdrop", ".modal-card", ".update-prompt-card",
       ".accounts-editor-modal", ".contact-editor-modal", ".calendar-editor-modal", ".settings-modal",
       ".settings-body", ".compose-card > form", ".compose-contact-suggestions", ".compose-template-picker",
-      ".sending-status-list", ".sending-status-floating-tooltip", ".external-guide-code",
+      ".sending-status-list", ".sending-status-floating-tooltip", ".external-guide-code", ".connections-code-block",
       ".themed-select-menu", ".agent-message-content pre", ".agent-message-content table",
       ".agent-slash-menu", ".auto-reply-list",
       ".agent-memory-list", ".auto-reply-toast-reply",

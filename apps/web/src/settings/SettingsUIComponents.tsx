@@ -29,14 +29,13 @@ export function ExternalGuideBlock(props: {
           <small>{props.hint}</small>
         </span>
         <button
-          className="secondary-button"
+          className={`secondary-button settings-copy-btn${copied ? " copied" : ""}`}
           type="button"
-          disabled={copied}
           aria-label={copied ? t("settings.agent.externalGuide.copied") : `${t("settings.agent.externalGuide.copy")} ${props.label}`}
           onClick={() => props.onCopy(props.code, props.id)}
         >
-          {copied ? <Check size={12} /> : <Copy size={12} />}
-          {copied ? t("settings.agent.externalGuide.copied") : t("settings.agent.externalGuide.copy")}
+          {copied ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
+          <span>{copied ? t("settings.agent.externalGuide.copied") : t("settings.agent.externalGuide.copy")}</span>
         </button>
       </div>
       <pre className="external-guide-code"><code>{props.code}</code></pre>

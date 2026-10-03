@@ -1,0 +1,107 @@
+.toast
+{
+z-index:92;
+left:50%;
+bottom:max(28px, calc(env(safe-area-inset-bottom) + 16px));
+border:1px solid var(--line-strong);
+background:var(--panel-solid);
+width:min(470px,100vw - 32px);
+min-height:48px;
+color:var(--text);
+box-shadow:var(--shadow-raised);
+overflow-wrap:anywhere;
+border-radius:10px;
+align-items:center;
+gap:8px;
+padding:8px 8px 8px 12px;
+font-size:11px;
+line-height:1.45;
+animation:.25s both toast-in;
+display:flex;
+position:fixed;
+transform:translate(-50%)
+}
+.toast-icon
+{
+width:24px;
+height:24px;
+color:var(--success);
+flex:none;
+place-items:center;
+display:grid
+}
+.toast-message
+{
+flex:1;
+min-width:0
+}
+.toast-action
+{
+border:1px solid var(--line-strong);
+background:var(--selected);
+color:var(--text);
+cursor:pointer;
+border-radius:var(--radius-sm);
+flex:none;
+place-items:center;
+padding:6px 10px;
+font-weight:600;
+display:grid
+}
+.toast-action:hover
+{
+border-color:var(--focus-ring);
+background:var(--hover)
+}
+.toast-action:active
+{
+transform:scale(.96)
+}
+.toast-dismiss
+{
+width:32px;
+height:32px;
+color:var(--text-faint);
+cursor:pointer;
+background:0 0;
+border:0;
+border-radius:var(--radius-sm);
+flex:none;
+place-items:center;
+padding:0;
+display:grid
+}
+.toast-dismiss:hover
+{
+background:var(--hover);
+color:var(--text)
+}
+.toast.error
+{
+border-color:color-mix(in srgb, var(--danger) 54%, var(--line));
+background:color-mix(in srgb, var(--danger) 10%, var(--panel-solid));
+box-shadow:var(--shadow-raised), 0 4px 14px color-mix(in srgb, var(--danger) 10%, transparent)
+}
+.toast.error .toast-icon
+{
+color:var(--danger)
+}
+.toast.warning
+{
+border-color:color-mix(in srgb, var(--warning) 52%, var(--line));
+background:color-mix(in srgb, var(--warning) 11%, var(--panel-solid));
+box-shadow:var(--shadow-raised), 0 4px 14px color-mix(in srgb, var(--warning) 12%, transparent)
+}
+.toast.warning .toast-icon
+{
+color:var(--warning)
+}
+.toast.info
+{
+border-color:color-mix(in srgb, var(--text-soft) 38%, var(--line));
+background:var(--panel-solid)
+}
+.toast.info .toast-icon
+{
+color:var(--text-soft)
+}

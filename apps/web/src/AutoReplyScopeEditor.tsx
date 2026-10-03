@@ -228,7 +228,7 @@ export default function AutoReplyScopeEditor({
         </div>
 
         <div className="settings-model-fields">
-          <FormNotice notice={modalNotice} />
+          <FormNotice notice={modalNotice} onDismiss={() => setModalNotice(null)} />
 
           <div className="calendar-field-grid">
             <label className="settings-field calendar-field" htmlFor="auto-reply-rule-field">

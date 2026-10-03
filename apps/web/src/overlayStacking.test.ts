@@ -40,7 +40,9 @@ import { describe, expect, it } from "vitest";
  * be observed.
  */
 
-const css = readFileSync(fileURLToPath(new URL("./styles.css", import.meta.url)), "utf8");
+import { loadAggregatedCss } from "./testUtils/loadStyles";
+
+const css = loadAggregatedCss();
 
 /* ------------------------------------------------------------------ parser */
 

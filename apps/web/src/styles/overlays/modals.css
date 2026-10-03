@@ -1,0 +1,462 @@
+.modal-backdrop
+{
+z-index:40;
+background:var(--scrim-base);
+/* In the desktop shell the top of a modal can overlay the .column-header
+   draggable strip. Without opting out, Electron's drag-region resolution
+   falls through the neutral backdrop/card down to that -webkit-app-region:drag
+   element, so real hover/click over the modal's upper edge (e.g. the settings
+   close button) is swallowed by the OS as window drag. Declare no-drag so the
+   whole modal surface stays interactive. */
+-webkit-app-region:no-drag;
+-webkit-backdrop-filter:none;
+backdrop-filter:none;
+overscroll-behavior:contain;
+place-items:center;
+padding:24px;
+animation:.18s both fade-in;
+display:grid;
+position:fixed;
+inset:0;
+overflow-y:auto
+}
+.modal-card
+{
+border:1px solid var(--line-strong);
+background:var(--panel-solid);
+border-radius:16px;
+width:min(430px,100%);
+max-height:calc(100vh - 40px);
+padding:24px;
+animation:.24s cubic-bezier(.2,.8,.2,1) both modal-in;
+overscroll-behavior:contain;
+overflow-y:auto
+}
+.modal-card-header
+{
+flex-direction:column;
+gap:2px;
+margin-bottom:16px;
+display:flex
+}
+.modal-card-header h3
+{
+color:var(--text);
+margin:0;
+font-size:15px;
+font-weight:700;
+line-height:1.3
+}
+.template-editor-card
+{
+width:min(520px,100%)
+}
+.template-editor-head { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px; padding-bottom:10px; border-bottom:1px solid var(--line) }
+.template-editor-head-text { display:flex; flex-direction:column; gap:2px; min-width:0; flex:1 }
+.template-editor-head h3 { color:var(--text); margin:0; font-size:16px; font-weight:650; letter-spacing:-.01em; line-height:1.3 }
+.template-editor-close-btn { color:var(--text-faint); border-radius:var(--radius-sm); padding:4px; width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center }
+.template-editor-close-btn:hover:not(:disabled) { color:var(--text); background:var(--hover) }
+.template-editor-card .template-editor
+{
+gap:12px;
+display:grid
+}
+.template-editor-card .template-editor textarea
+{
+border:1px solid var(--line-strong);
+background:var(--panel-muted);
+width:100%;
+min-height:180px;
+color:var(--text);
+font:inherit;
+resize:vertical;
+border-radius:var(--radius-sm);
+outline:none;
+padding:8px 10px;
+font-size:11px;
+line-height:1.6
+}
+.template-editor-card .template-editor textarea::placeholder
+{
+color:var(--text-faint);
+opacity:.82
+}
+.template-editor-card .template-editor textarea:focus-visible
+{
+border-color:var(--focus-ring);
+box-shadow:0 0 0 3px var(--focus-ring-subtle)
+}
+.template-editor-card .template-editor textarea:disabled
+{
+cursor:default;
+opacity:.58
+}
+.template-editor-card .template-editor-actions
+{
+justify-content:flex-end;
+align-items:center;
+gap:10px;
+margin-top:18px;
+display:flex
+}
+.template-editor-card .template-editor-actions .secondary-button,.template-editor-card .template-editor-actions .primary-button
+{
+min-height:34px;
+padding:8px 16px;
+font-size:12px
+}
+.update-prompt-backdrop
+{
+z-index:90;
+background:var(--scrim-alert);
+-webkit-backdrop-filter:none;
+backdrop-filter:none;
+padding:24px
+}
+.update-prompt-card
+{
+border:1px solid var(--line-strong);
+background:var(--panel-solid);
+border-radius:14px;
+width:min(476px,100%);
+max-height:calc(100vh - 40px);
+padding:24px;
+animation:.22s cubic-bezier(.2,.8,.2,1) both modal-in;
+overflow-y:auto
+}
+.update-prompt-card.closing
+{
+pointer-events:none;
+animation:.17s cubic-bezier(.2,.8,.2,1) both modal-out
+}
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar
+{
+width:8px;
+height:8px
+}
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-track
+{
+background:0 0
+}
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-button
+{
+width:0;
+height:0;
+display:none
+}
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-corner
+{
+background:0 0
+}
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-thumb
+{
+background-clip:padding-box;
+border:2px solid #0000;
+border-radius:var(--radius-pill)
+}
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list)::-webkit-scrollbar-thumb
+{
+background:color-mix(in srgb, var(--text-faint) 45%, transparent)
+}
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list)::-webkit-scrollbar-thumb:hover
+{
+background:color-mix(in srgb, var(--text-faint) 72%, transparent)
+}
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list)::-webkit-scrollbar-thumb:active
+{
+background:var(--text-faint)
+}
+.account-list,.folder-list
+{
+scrollbar-width:none
+}
+.account-list::-webkit-scrollbar
+{
+width:0;
+height:0;
+display:none
+}
+.folder-list::-webkit-scrollbar
+{
+width:0;
+height:0;
+display:none
+}
+.account-list::-webkit-scrollbar-thumb
+{
+background:0 0
+}
+.folder-list::-webkit-scrollbar-thumb
+{
+background:0 0
+}
+.account-list::-webkit-scrollbar-track
+{
+background:0 0
+}
+.folder-list::-webkit-scrollbar-track
+{
+background:0 0
+}
+:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-thumb
+{
+background:0 0
+}
+:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea).scrollbar-reveal::-webkit-scrollbar-thumb
+{
+background:color-mix(in srgb, var(--text-faint) 45%, transparent)
+}
+:is(.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea).scrollbar-reveal::-webkit-scrollbar-thumb:active
+{
+background:var(--text-faint)
+}
+@supports ((-moz-appearance:none))
+{
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)
+{
+scrollbar-width:thin;
+scrollbar-color:var(--line-strong) transparent
+}
+
+}
+.update-prompt-heading
+{
+align-items:center;
+gap:12px;
+display:flex
+}
+.update-prompt-icon
+{
+border:1px solid var(--line-strong);
+background:var(--text);
+width:42px;
+height:42px;
+color:var(--panel-solid);
+border-radius:var(--radius-md);
+flex:none;
+place-items:center;
+display:grid
+}
+.update-prompt-icon.error
+{
+border-color:color-mix(in srgb, var(--danger) 40%, var(--line-strong));
+background:color-mix(in srgb, var(--danger) 10%, var(--panel-muted));
+color:var(--danger)
+}
+.update-prompt-heading .eyebrow
+{
+margin-bottom:3px
+}
+.update-prompt-heading h2
+{
+color:var(--text);
+margin:0;
+font-size:18px;
+font-weight:650;
+line-height:1.3
+}
+.update-prompt-description
+{
+color:var(--text-soft);
+margin:18px 0 0;
+font-size:11px;
+line-height:1.65
+}
+.update-prompt-status
+{
+color:var(--text-faint);
+margin:14px 0 0;
+font-size:10px;
+line-height:1.55
+}
+.update-progress
+{
+border-top:1px solid var(--line);
+margin-top:17px;
+padding-top:14px
+}
+.update-progress>div
+{
+color:var(--text-soft);
+justify-content:space-between;
+align-items:center;
+gap:10px;
+font-size:10px;
+font-weight:650;
+display:flex
+}
+.update-progress strong
+{
+color:var(--text);
+font-family:DM Mono,monospace;
+font-size:10px;
+font-weight:650
+}
+.update-progress progress
+{
+background:var(--line);
+border:0;
+border-radius:4px;
+width:100%;
+height:6px;
+margin-top:8px;
+overflow:hidden
+}
+.update-progress progress::-webkit-progress-bar
+{
+background:var(--line);
+border-radius:4px
+}
+.update-progress progress::-webkit-progress-value
+{
+background:var(--button);
+border-radius:4px
+}
+.update-prompt-pending
+{
+border-top:1px solid var(--line);
+color:var(--text-soft);
+align-items:center;
+gap:8px;
+margin-top:17px;
+padding-top:14px;
+font-size:10px;
+display:flex
+}
+.update-prompt-error
+{
+margin-top:17px
+}
+.update-prompt-actions
+{
+flex-wrap:wrap;
+gap:8px;
+margin-top:20px;
+display:flex
+}
+.update-prompt-actions .primary-button
+{
+flex:180px
+}
+.update-prompt-actions .secondary-button
+{
+flex:0 auto
+}
+.update-prompt-waiting
+{
+min-height:36px;
+color:var(--text-soft);
+align-items:center;
+gap:8px;
+font-size:10px;
+display:inline-flex
+}
+.update-background-status
+{
+z-index:46;
+border:1px solid var(--line-strong);
+background:var(--panel-solid);
+width:min(360px,100vw - 44px);
+box-shadow:var(--shadow-raised);
+color:var(--text-soft);
+border-radius:var(--radius-sm);
+grid-template-columns:auto minmax(0,1fr) auto;
+align-items:center;
+gap:8px;
+padding:11px 12px;
+animation:.18s cubic-bezier(.2,.8,.2,1) both modal-in;
+display:grid;
+position:fixed;
+bottom:22px;
+right:22px
+}
+.update-background-copy
+{
+flex-direction:column;
+gap:2px;
+min-width:0;
+display:flex
+}
+.update-background-copy strong
+{
+color:var(--text);
+text-overflow:ellipsis;
+white-space:nowrap;
+font-size:11px;
+overflow:hidden
+}
+.update-background-copy small
+{
+color:var(--text-faint);
+text-overflow:ellipsis;
+white-space:nowrap;
+font-size:9px;
+overflow:hidden
+}
+.update-background-percent
+{
+color:var(--text);
+font-family:DM Mono,monospace;
+font-size:10px
+}
+.update-background-status>progress
+{
+background:var(--line);
+border:0;
+border-radius:3px;
+grid-column:2/-1;
+width:100%;
+height:4px;
+margin-top:-2px;
+overflow:hidden
+}
+.update-background-status>progress::-webkit-progress-bar
+{
+background:var(--line);
+border-radius:3px
+}
+.update-background-status>progress::-webkit-progress-value
+{
+background:var(--button);
+border-radius:3px
+}
+.update-prompt-snooze
+{
+border-top:1px solid var(--line);
+grid-template-columns:auto minmax(0,1fr) auto;
+align-items:center;
+gap:8px;
+margin-top:16px;
+padding-top:15px;
+display:grid
+}
+.update-prompt-snooze-label
+{
+color:var(--text-soft);
+white-space:nowrap;
+align-items:center;
+gap:6px;
+font-size:10px;
+font-weight:650;
+display:inline-flex
+}
+.update-prompt-snooze .select-control
+{
+min-width:0
+}
+.update-prompt-snooze .themed-select
+{
+border:1px solid var(--line-strong);
+background:var(--panel-muted);
+width:100%;
+min-height:36px;
+color:var(--text);
+border-radius:var(--radius-sm);
+padding:8px 30px 8px 10px;
+font-size:11px
+}
+.update-prompt-snooze .secondary-button
+{
+white-space:nowrap;
+min-height:36px
+}

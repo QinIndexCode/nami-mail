@@ -297,3 +297,67 @@ export function deleteCalendarEventConfirmationPreview(
     ],
   };
 }
+
+type ContactInput = {
+  email?: string;
+  name?: string;
+  notes?: string;
+};
+
+function contactFields(resolved: SupportedLocale, input: ContactInput): Array<{ label: string; value: string }> {
+  const fields: Array<{ label: string; value: string }> = [];
+  if (input.name) fields.push(field(resolved, "confirmation.field.contact_name", clipped(input.name, 1_800)));
+  if (input.email) fields.push(field(resolved, "confirmation.field.contact_email", clipped(input.email, 1_800)));
+  if (input.notes) {
+    const normalized = input.notes.replace(/\s+/g, " ").trim();
+    const preview = clipped(normalized, 800);
+    fields.push({
+      label: agentT(resolved, "confirmation.field.contact_notes"),
+      value: preview === normalized ? preview || agentT(resolved, "confirmation.value.empty") : `${preview}...`,
+    });
+  }
+  return fields;
+}
+
+export function createContactConfirmationPreview(
+  locale: string | undefined,
+  input: ContactInput,
+): ConfirmationPreview {
+  const resolved = localeOf(locale);
+  return {
+    title: agentT(resolved, "confirmation.title.create_contact"),
+    summary: agentT(resolved, "confirmation.summary.create_contact"),
+    fields: contactFields(resolved, input),
+  };
+}
+
+export function updateContactConfirmationPreview(
+  locale: string | undefined,
+  input: ContactInput & { contactId: string },
+): ConfirmationPreview {
+  const resolved = localeOf(locale);
+  return {
+    title: agentT(resolved, "confirmation.title.update_contact"),
+    summary: agentT(resolved, "confirmation.summary.update_contact"),
+    fields: [
+      field(resolved, "confirmation.field.contact_id", input.contactId),
+      ...contactFields(resolved, input),
+    ],
+  };
+}
+
+export function deleteContactConfirmationPreview(
+  locale: string | undefined,
+  input: { contactId: string; name?: string; email?: string },
+): ConfirmationPreview {
+  const resolved = localeOf(locale);
+  const fields = [field(resolved, "confirmation.field.contact_id", input.contactId)];
+  if (input.name) fields.push(field(resolved, "confirmation.field.contact_name", clipped(input.name, 1_800)));
+  if (input.email) fields.push(field(resolved, "confirmation.field.contact_email", clipped(input.email, 1_800)));
+  return {
+    title: agentT(resolved, "confirmation.title.delete_contact"),
+    summary: agentT(resolved, "confirmation.summary.delete_contact"),
+    fields,
+  };
+}
+

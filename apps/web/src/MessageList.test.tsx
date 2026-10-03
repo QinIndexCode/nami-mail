@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
+import { loadAggregatedCss } from "./testUtils/loadStyles";
 import MessageList, { clampContextMenuPosition, type MessageListEmptyState } from "./MessageList";
 import { I18nProvider, translate } from "./i18n";
 import type { Account, Message } from "./types";
@@ -267,9 +268,7 @@ describe("message list range selection", () => {
 });
 
 describe("row quick actions reveal", () => {
-  // Normalize CRLF so the assertion is independent of the checkout's
-  // core.autocrlf (GitHub's Windows runners check text files out with CRLF).
-  const stylesheet = readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8").replace(/\r\n/g, "\n");
+  const stylesheet = loadAggregatedCss();
 
   it("reveals the quick actions on a row-level hover (they are siblings of the row button, not descendants)", () => {
     // The quick actions live next to the message button (buttons cannot nest),
@@ -372,7 +371,7 @@ describe("conversation count badge", () => {
 });
 
 describe("mail reader title wrapping", () => {
-  const stylesheet = readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8").replace(/\r\n/g, "\n");
+  const stylesheet = loadAggregatedCss();
 
   it("wraps unbroken subject lines inside the title column on narrow windows", () => {
     // A subject with no spaces (a URL, a token, a long ID) must break inside

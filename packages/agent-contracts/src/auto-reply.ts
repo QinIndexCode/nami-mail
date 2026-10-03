@@ -61,6 +61,10 @@ export const autoReplyConfigSchema = z.object({
   ),
   /** llm = Agent drafts each reply; template = fixed template with placeholder substitution. */
   mode: autoReplyModeSchema.default("llm"),
+  /** Dedicated provider ID for evaluating whether an incoming email requires a reply. When null/absent, uses default provider. */
+  decisionProviderId: z.string().trim().min(1).max(128).nullable().optional().default(null),
+  /** Dedicated provider ID for drafting LLM replies when mode is "llm". When null/absent, uses default provider. */
+  draftProviderId: z.string().trim().min(1).max(128).nullable().optional().default(null),
   template: autoReplyTemplateSchema.default(() => ({ text: "", skipConfirmation: false })),
   scope: autoReplyScopeSchema.default(() => ({ contactsOnly: false, threadOnce: true, rules: [] })),
   /**
@@ -79,6 +83,8 @@ export const autoReplyConfigPatchSchema = z.object({
     "Auto-reply account scope cannot contain duplicates.",
   ).optional(),
   mode: autoReplyModeSchema.optional(),
+  decisionProviderId: z.string().trim().min(1).max(128).nullable().optional(),
+  draftProviderId: z.string().trim().min(1).max(128).nullable().optional(),
   template: autoReplyTemplateSchema.optional(),
   scope: autoReplyScopeSchema.optional(),
   /** The desktop UI patches auto-reply settings by spreading the full config, so the invariant field is accepted. */

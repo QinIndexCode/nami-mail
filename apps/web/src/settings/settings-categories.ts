@@ -13,6 +13,7 @@ export const SETTINGS_CATEGORY_IDS = [
   "models",
   "mcp",
   "agent",
+  "connections",
   "translation",
 ] as const;
 
@@ -33,7 +34,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
 }> = [
   { key: "general", items: ["language", "appearance", "notifications", "desktop"] },
   { key: "mail", items: ["sync", "filters"] },
-  { key: "intelligence", items: ["models", "mcp", "agent", "translation"] },
+  { key: "intelligence", items: ["models", "mcp", "agent", "connections", "translation"] },
 ];
 
 export const SETTINGS_CATEGORY_STORAGE_KEY = "nami.settings.category";

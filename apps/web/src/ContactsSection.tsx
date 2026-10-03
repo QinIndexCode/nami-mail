@@ -329,7 +329,7 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
           <div><span>{t("settings.contacts.title")}</span><p id="contacts-settings">{t("settings.contacts.description")}</p></div>
         </div>
 
-        <FormNotice notice={notice} />
+        <FormNotice notice={notice} onDismiss={() => setNotice(null)} />
 
         {loading ? (
           <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("common.loading")}</p>

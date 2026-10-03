@@ -104,7 +104,21 @@ export function SettingsNotificationsPanel({
         onChange={() => void applyOptimisticSettings({ notifyWhenFocused: !currentSettings.notifyWhenFocused }, null)}
       />
 
-      <div className={`setting-subheading${currentSettings.notificationsEnabled ? "" : " muted"}`}><span>{t("settings.sound.title")}</span>{!currentSettings.notificationsEnabled && <small>{t("settings.sound.enableNotificationsFirst")}</small>}</div>
+      <div className={`setting-subheading${currentSettings.notificationsEnabled ? "" : " muted"}`}>
+        <span>
+          {t("settings.sound.title")}
+          {!currentSettings.notificationsEnabled && (
+            <span
+              className="field-help-icon"
+              data-tooltip={t("settings.sound.enableNotificationsFirst")}
+              aria-label={t("settings.sound.enableNotificationsFirst")}
+              tabIndex={0}
+            >
+              <CircleHelp size={12} aria-hidden="true" />
+            </span>
+          )}
+        </span>
+      </div>
       <div className="settings-option-grid sound-option-grid" role="group" aria-label={t("settings.sound.groupLabel")}>
         {soundOptions.map((option) => (
           <button
@@ -174,8 +188,7 @@ export function SettingsDesktopPanel({
     <section className="settings-section" data-settings-nav="desktop" aria-labelledby="desktop-settings">
       <div className="settings-section-title">
         <Laptop size={16} />
-        {/* The panel is named by its title, not by the description below it. */}
-        <div><span id="desktop-settings">{t("settings.desktop.title")}</span><p>{t("settings.desktop.description")}</p></div>
+        <div><span id="desktop-settings">{t("settings.desktop.title")}</span></div>
       </div>
       <div className="settings-option-grid close-behavior-grid" role="group" aria-label={t("settings.closeBehavior.groupLabel")}>
         {closeBehaviorOptions.map((option) => (
@@ -333,7 +346,7 @@ export function SettingsSyncPanel({
         checked={currentSettings.realtimePushEnabled}
         disabled={controlsBusy}
         label={t("settings.sync.realtime.label")}
-        description={t("settings.sync.realtime.description")}
+        tooltip={t("settings.sync.realtime.description")}
         onChange={() => void applyOptimisticSettings({ realtimePushEnabled: !currentSettings.realtimePushEnabled }, null)}
       />
     </section>

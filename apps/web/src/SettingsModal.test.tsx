@@ -64,17 +64,23 @@ describe("settings model provider entry", () => {
     expect(markup).not.toContain(zh("agent.providers.configure"));
   });
 
-  it("shows the external CLI/MCP access guide with copyable snippets", () => {
+  it("offers a dedicated link card to external connections from the agent panel", () => {
     const markup = renderSettings(false);
 
-    expect(markup).toContain(zh("settings.agent.externalGuide.title"));
+    expect(markup).toContain(zh("settings.connections.agentLink.title"));
+    expect(markup).toContain(zh("settings.connections.agentLink.banner"));
+    expect(markup).toContain(zh("settings.connections.agentLink.action"));
+  });
+
+  it("shows the external connections panel with MCP setup and tools", () => {
+    categoryStore.set("nami.settings.category", "connections");
+    const markup = renderSettings(false);
+
+    expect(markup).toContain(zh("settings.connections.title"));
     expect(markup).toContain("namimail pair");
-    expect(markup).toContain("namimail status");
-    expect(markup).toContain('&quot;command&quot;: &quot;cmd.exe&quot;');
+    expect(markup).toContain("cmd.exe");
     expect(markup).toContain("namimail mcp start");
-    expect(markup).toContain("namimail service start");
-    expect(markup).toContain(zh("settings.agent.externalGuide.copy"));
-    expect(markup).toContain('class="external-guide-code"');
+    expect(markup).toContain("namimail_accounts_list");
   });
 
   it("keeps the desktop-only behavior toggles out of browser mode", () => {

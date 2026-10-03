@@ -260,7 +260,7 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
           <div><span>{t("settings.templates.title")}</span><p id="templates-settings">{t("settings.templates.description")}</p></div>
         </div>
 
-        <FormNotice notice={notice} />
+        <FormNotice notice={notice} onDismiss={() => setNotice(null)} />
 
         {loading ? (
           <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("common.loading")}</p>

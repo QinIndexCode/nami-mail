@@ -108,8 +108,10 @@ function isStateSelector(selector: string): boolean {
   return STATE_MARKERS.some((marker) => selector.includes(marker));
 }
 
+import { loadAggregatedCss } from "./testUtils/loadStyles";
+
 describe("absolutely positioned overlay centring", () => {
-  const css = stripComments(readFileSync(fileURLToPath(new URL("./styles.css", import.meta.url)), "utf8"));
+  const css = stripComments(loadAggregatedCss());
   const rules = parseRules(css);
 
   /** Selectors that are absolutely positioned AND centre themselves via transform. */

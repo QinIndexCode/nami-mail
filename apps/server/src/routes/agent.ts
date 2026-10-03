@@ -500,4 +500,15 @@ export function registerAgentRoutes(app: FastifyInstance, deps: AgentRouteDeps):
       }),
     };
   });
+
+  app.delete<{ Params: { clientId: string } }>("/api/agent/pairings/:clientId", async (request, reply) => {
+    if (!context.revokeExternalPairing) {
+      return reply.code(503).send({ ok: false, code: ROUTE_ERROR_CODES.agent_unavailable, message: "当前环境不支持撤销外部连接配对。" });
+    }
+    const revoked = await context.revokeExternalPairing(request.params.clientId);
+    if (!revoked) {
+      return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "未找到该配对记录。" });
+    }
+    return { ok: true as const };
+  });
 }

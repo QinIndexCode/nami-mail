@@ -718,6 +718,7 @@ export const api = {
     request<{ ok: true }>(`/api/agent/mcp-servers/${encodeURIComponent(id)}`, { method: "DELETE" }),
   agentBootstrap: () => request<AgentBootstrap>("/api/agent/bootstrap"),
   agentPairings: () => request<{ pairings: ExternalPairingSummary[] }>("/api/agent/pairings"),
+  deleteAgentPairing: (clientId: string) => request<{ ok: true }>(`/api/agent/pairings/${encodeURIComponent(clientId)}`, { method: "DELETE" }),
   agentConversations: (query = "") => request<{ items: AgentConversationSummary[] }>(`/api/agent/conversations${query ? `?${query}` : ""}`),
   agentConversation: (id: string) => request<AgentConversation>(`/api/agent/conversations/${encodeURIComponent(id)}`),
   createAgentConversation: (input: { title?: string; providerId?: string; scope?: AgentConversationScope }) =>

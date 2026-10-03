@@ -1439,6 +1439,7 @@ async function startLocalServiceInUtilityProcess(options: {
       // the desktop-only bits that main owns.
       onSettingsChanged: () => applyDesktopSettingsFromServer(),
       listExternalPairings: () => (desktopAgentBroker ? desktopAgentBroker.describePairings() : Promise.resolve([])),
+      revokeExternalPairing: (clientId: string) => (desktopAgentBroker ? desktopAgentBroker.revokeReadOnlyPairing(clientId) : Promise.resolve(false)),
       requestExternalConfirmation: (input) => createExternalConfirmationBridge().request(input as ExternalConfirmationInput),
     });
 

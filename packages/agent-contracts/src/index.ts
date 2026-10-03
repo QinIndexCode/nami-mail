@@ -7,6 +7,7 @@ export * from "./citation.js";
 export * from "./confirmation.js";
 export * from "./errors.js";
 export * from "./external-calendar.js";
+export * from "./external-contacts.js";
 export * from "./external-mail.js";
 export * from "./external-write-mail.js";
 export * from "./json-safety.js";

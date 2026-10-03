@@ -372,7 +372,7 @@ export default function AccountsDialog({
       >
         <section className="settings-section settings-accounts">
           <span className="visually-hidden" role="status" aria-live="polite">{copyAnnouncement}</span>
-          <FormNotice notice={notice} />
+          <FormNotice notice={notice} onDismiss={() => setNotice(null)} />
           {accounts.length === 0 ? (
             <div className="settings-empty-card accounts-empty-card">
               <Mail className="empty-icon" size={32} strokeWidth={1.5} />

@@ -371,6 +371,8 @@ const allDesktopScopes = [
   "read:calendar",
   "time:read",
   "write:calendar",
+  "read:contacts",
+  "write:contacts",
   "read:rag",
   "write:drafts",
   "write:mail",

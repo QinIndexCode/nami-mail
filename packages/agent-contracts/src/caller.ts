@@ -8,6 +8,8 @@ export const agentPermissionScopes = [
   "read:attachments",
   "read:calendar",
   "write:calendar",
+  "read:contacts",
+  "write:contacts",
   "read:rag",
   "write:drafts",
   "write:mail",

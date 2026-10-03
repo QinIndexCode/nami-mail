@@ -77,7 +77,19 @@ export default function SettingsTranslationSection({
     <section className="settings-section" data-settings-nav="translation" aria-labelledby="translation-settings">
       <div className="settings-section-title">
         <KeyRound size={16} />
-        <div><span>{t("settings.translation.title")}</span><p id="translation-settings">{demoMode ? t("settings.translation.demoDescription") : t("settings.translation.description")}</p></div>
+        <div>
+          <span id="translation-settings">
+            {t("settings.translation.title")}
+            <span
+              className="field-help-icon"
+              data-tooltip={demoMode ? t("settings.translation.demoDescription") : t("settings.translation.description")}
+              aria-label={demoMode ? t("settings.translation.demoDescription") : t("settings.translation.description")}
+              tabIndex={0}
+            >
+              <CircleHelp size={12} aria-hidden="true" />
+            </span>
+          </span>
+        </div>
       </div>
       {demoMode ? null : translationConfigurationLoading ? (
         <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("common.loading")}</p>

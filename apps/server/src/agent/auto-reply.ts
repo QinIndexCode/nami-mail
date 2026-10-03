@@ -36,6 +36,8 @@ export type AutoReplyEvaluationInput = {
   snippet: string;
   sensitiveKeywords: readonly string[];
   memoryContext: string;
+  decisionProviderId?: string | null;
+  draftProviderId?: string | null;
 };
 
 export type AutoReplyEvaluationResult = {
@@ -404,6 +406,8 @@ export class AutoReplyEngine {
           snippet: payload.snippet.slice(0, 400),
           sensitiveKeywords: hints,
           memoryContext,
+          decisionProviderId: config.decisionProviderId,
+          draftProviderId: config.draftProviderId,
         });
       } catch (error) {
         serverLog.warn({ messageId }, "Auto-reply evaluation failed", error);

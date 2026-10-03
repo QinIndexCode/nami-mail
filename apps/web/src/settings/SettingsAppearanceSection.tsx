@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import {
   Check,
+  CircleHelp,
   ImagePlus,
   LoaderCircle,
   Palette,
@@ -101,7 +102,7 @@ export default function SettingsAppearanceSection({
         checked={currentSettings.avatarGravatarEnabled}
         disabled={controlsBusy}
         label={t("settings.avatars.gravatar.label")}
-        privacyNote={t("settings.avatars.gravatar.privacy")}
+        tooltip={t("settings.avatars.gravatar.privacy")}
         onChange={() => void applyOptimisticSettings({ avatarGravatarEnabled: !currentSettings.avatarGravatarEnabled }, null)}
       />
 
@@ -109,11 +110,23 @@ export default function SettingsAppearanceSection({
         checked={currentSettings.avatarBimiEnabled}
         disabled={controlsBusy}
         label={t("settings.avatars.bimi.label")}
-        privacyNote={t("settings.avatars.bimi.privacy")}
+        tooltip={t("settings.avatars.bimi.privacy")}
         onChange={() => void applyOptimisticSettings({ avatarBimiEnabled: !currentSettings.avatarBimiEnabled }, null)}
       />
 
-      <div className="setting-subheading"><span>{t("settings.background.title")}</span><small>{t("settings.background.offlineHint")}</small></div>
+      <div className="setting-subheading">
+        <span>
+          {t("settings.background.title")}
+          <span
+            className="field-help-icon"
+            data-tooltip={t("settings.background.offlineHint")}
+            aria-label={t("settings.background.offlineHint")}
+            tabIndex={0}
+          >
+            <CircleHelp size={12} aria-hidden="true" />
+          </span>
+        </span>
+      </div>
       <div className="background-preset-grid" role="group" aria-label={t("settings.background.presetGroupLabel")}>
         {backgroundPresetOptions.map((preset) => {
           const active = currentSettings.backgroundPreset === preset.id;
@@ -177,7 +190,14 @@ export default function SettingsAppearanceSection({
           />
         </label>
         <div className="background-actions">
-          <button ref={uploadButtonRef} className="secondary-button" type="button" disabled={controlsBusy} onClick={() => uploadInput.current?.click()}>
+          <button
+            ref={uploadButtonRef}
+            className="secondary-button"
+            type="button"
+            disabled={controlsBusy}
+            data-tooltip={t("settings.background.uploadHint")}
+            onClick={() => uploadInput.current?.click()}
+          >
             {busyAction === "background-upload" ? <LoaderCircle className="spin" size={15} /> : <Upload size={15} />}
             {hasCustomBackground ? t("settings.background.replaceImage") : t("settings.background.uploadImage")}
           </button>
@@ -189,7 +209,6 @@ export default function SettingsAppearanceSection({
           )}
         </div>
       </div>
-      <p className="background-upload-hint">{t("settings.background.uploadHint")}</p>
     </section>
   );
 }
