@@ -195,4 +195,47 @@ describe("AutoReplySandboxDialog", () => {
     expect(container.textContent).toContain("Provider timed out after 45s");
     expect(container.textContent).toContain("settings.agent.sandbox.llmEvaluationFailed");
   });
+
+  it("displays the loading status card while simulation is in flight", async () => {
+    let resolveSimulation: (value: any) => void;
+    const pendingPromise = new Promise((resolve) => {
+      resolveSimulation = resolve;
+    });
+
+    (api.autoReplySimulate as ReturnType<typeof vi.fn>).mockReturnValueOnce(pendingPromise);
+
+    act(() => {
+      root.render(
+        <AutoReplySandboxDialog
+          t={mockTranslate as any}
+          onClose={vi.fn()}
+        />,
+      );
+    });
+
+    const runBtn = container.querySelector(".settings-model-actions .primary-button") as HTMLButtonElement;
+    await act(async () => {
+      runBtn.click();
+    });
+
+    const loadingCard = container.querySelector(".sandbox-loading-card");
+    expect(loadingCard).not.toBeNull();
+    expect(loadingCard?.textContent).toContain("settings.agent.sandbox.runningHint");
+
+    await act(async () => {
+      resolveSimulation!({
+        ok: true,
+        result: {
+          linkStats: { originalLength: 10, sanitizedLength: 10, replacedCount: 0, estimatedTokensSaved: 0, sanitizedSnippet: "" },
+          screening: { passed: true },
+          scope: { passed: true },
+          sensitiveKeywords: [],
+          finalAction: "would_reply",
+        },
+      });
+    });
+
+    expect(container.querySelector(".sandbox-loading-card")).toBeNull();
+    expect(container.querySelector(".sandbox-result-card")).not.toBeNull();
+  });
 });

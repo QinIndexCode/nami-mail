@@ -86,6 +86,21 @@ export default function AutoReplySandboxDialog({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AutoReplySimulateResult | null>(null);
 
+  const resultRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (result && resultRef.current) {
+      resultRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [result]);
+
+  useEffect(() => {
+    if (running && loadingRef.current) {
+      loadingRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [running]);
+
   const loadPreset = (preset: Preset) => {
     setFromAddress(preset.fromAddress);
     setFromName(preset.fromName);
@@ -293,8 +308,15 @@ export default function AutoReplySandboxDialog({
               </p>
             )}
 
+            {running && (
+              <div className="sandbox-loading-card" role="status" ref={loadingRef}>
+                <LoaderCircle className="spin" size={14} />
+                <span>{t("settings.agent.sandbox.runningHint")}</span>
+              </div>
+            )}
+
             {result && (
-              <div className="sandbox-result-card">
+              <div ref={resultRef} className="sandbox-result-card">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span style={{ fontSize: 13, fontWeight: 650, color: "var(--text)" }}>
                     {t("settings.agent.sandbox.results")}

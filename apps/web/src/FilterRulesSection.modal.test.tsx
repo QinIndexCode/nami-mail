@@ -173,7 +173,8 @@ describe("FilterRulesSection modal and portal behavior", () => {
     expect(conditionInput).not.toBeNull();
 
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => requestAnimationFrame(r));
+      await new Promise((r) => setTimeout(r, 10));
       conditionInput.focus();
     });
 
