@@ -1,16 +1,28 @@
-## [Unreleased]
+## [0.4.3] - 2026-10-04
 
 ### Added
 
+- Sidebar folder display mode: switch between focused (single-account view with a bottom folder list) and a multi-account tree mode (every account stays visible and folds its folders independently); the preference is stored locally. (#95, Issue #88)
+- Account email address copy: added one-click copy button for account email addresses in the account management list with a smooth checkmark micro-interaction transition. (#93)
+- Dual-model auto-reply configuration: independent configuration for auto-reply screening/evaluation model and reply drafting model, optimizing cost and response quality.
+- Auto-reply dry-run simulator (Sandbox): zero-side-effect sandbox for testing auto-reply pipelines with custom inputs or inbox samples, displaying token savings, rule matches, LLM reasons, and drafted previews with smooth entry transitions and skeleton loading.
+- Typewriter streaming animation & draft visuals: adaptive typewriter stream-in (`useTypewriter`) with a pure CSS breathing cursor, instant-reveal skip control, and `prefers-reduced-motion` support.
+- Email link filtering & token compression: automatically sanitizes tracking links, Markdown links, and base64 images into compact tags prior to LLM evaluation, saving significant prompt tokens.
+- Agent context budget & tool pruning: configure context window and max output settings, dynamic token budget tracking, threshold-triggered tool result pruning, and automatic multi-turn history compression.
+- External connections & cross-platform IPC abstraction: clear separation of built-in MCP, exposed MCP servers, and external CLI; unified cross-platform local IPC transport layer (supporting both Windows Named Pipes and POSIX Unix Domain Sockets) with strict UID/0600 security checks.
+- End-to-end performance latency metrics & telemetry: high-precision stage timings (`screeningMs`, `compactionMs`, `scopeMs`, `llmMs`, `totalMs`), compact latency capsule badges, and telemetry integration.
 - Compose AI polish: refine the draft body with one click (meaning, facts, and addressee references preserved, same language) with inline undo; without a configured model the button shows an explanatory bubble, and cloud sends respect the existing content-consent gate.
 - Plain-text body linkification: http/https links in plain-text emails become clickable in the reader (opened in the system browser; character-faithful, idempotent, http/https only).
 - Microsoft add-account guidance: the drawer gains a "one-time setup" card (Azure registration: Mobile and desktop platform, loopback callback path, allow public client flows); when the button is unavailable the UI says so honestly and shows the steps.
 - Provider tile selection indicator: after picking a non-core provider from "more providers", the collapsed strip smoothly reveals the selected tile with its check mark (transitions respect reduced-motion).
-- Sidebar folder display mode: switch between focused (single-account view with a bottom folder list) and a multi-account tree mode (every account stays visible and folds its folders independently); the preference is stored locally. (#95, Issue #88)
 - Gmail sign-in guidance: defaults to the 16-digit app password with OAuth as an opt-in path, a direct shortcut to Google's app-passwords page, a side drawer covering the 2FA prerequisite and guided steps, and automatic whitespace stripping for credentials. (#95, Issue #86)
 
 ### Fixed
 
+- **Agent streaming output text loss fix**: completely resolved edge cases where streaming output deltas were dropped (draining queued tail deltas) during rapid conversation switches or component re-renders.
+- **Mail filter rules bugfix**: resolved condition evaluation and state synchronization anomalies in mail filter rules, ensuring automated filtering actions execute reliably.
+- **Settings UI/UX & aesthetic overhaul**: removed wall-of-text static subtitles across all settings panels, switching to elegant inline hover tooltips; standardized alignment, 32px control heights, and copy checkmark feedback; modularized stylesheets; eliminated scrollbar layout shifts.
+- **Add-account guidance polish**: refined account setup wizard and authentication guidance for major mail providers with standardized validation feedback.
 - **Outlook / Hotmail add-account dead ends (Issue #120)**: with no OAuth client ID configured, the OAuth panel did not render at all, the action card referenced a nonexistent button, the footer submit stayed disabled forever, and the guide taught an impossible app-password path — the panel now honestly presents "not yet available in this build" plus one-time setup steps; partial outlook addresses no longer flash a misleading password field; the documented registration platform was corrected from Web to Mobile and desktop (the local callback port is dynamic, so the Web platform's exact-port match always fails).
 - Duplicate conversation cards: when one message exists in both the inbox and a labeled folder, the conversation strip rendered two identical cards — now collapsed by Message-ID with the opened row always winning.
 - Folder navigation: the spinner never disappeared after re-clicking the same folder (which also left the whole list translucent/unclickable and broke infinite scroll).
