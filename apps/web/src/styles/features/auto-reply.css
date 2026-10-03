@@ -1183,4 +1183,6 @@ bottom:max(56px, calc(env(safe-area-inset-bottom) + 36px))
 .sandbox-grid-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:8px }
 .sandbox-stat-item { font-size:11px; line-height:1.6; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-sm,6px); padding:8px 10px }
 .sandbox-quote-preview { font-size:11px; line-height:1.55; color:var(--text-soft); background:var(--panel-solid); border:1px solid var(--line); border-radius:4px; padding:8px; white-space:pre-wrap; max-height:120px; overflow-y:auto }
+.sandbox-modal { width:min(660px,calc(100vw - 32px)) !important; max-height:min(720px,calc(100vh - 48px)); overflow-y:auto }
+
 

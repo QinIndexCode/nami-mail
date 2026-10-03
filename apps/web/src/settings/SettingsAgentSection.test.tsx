@@ -107,6 +107,7 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
             setAutoReplyDialogOpen={vi.fn()}
             setAutoReplyDecisionsOpen={vi.fn()}
             setMemoryDialogOpen={vi.fn()}
+            setAutoReplySandboxOpen={vi.fn()}
           />
         </I18nProvider>,
       );
@@ -209,6 +210,7 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
             setAutoReplyDialogOpen={vi.fn()}
             setAutoReplyDecisionsOpen={vi.fn()}
             setMemoryDialogOpen={vi.fn()}
+            setAutoReplySandboxOpen={vi.fn()}
           />
         </I18nProvider>,
       );

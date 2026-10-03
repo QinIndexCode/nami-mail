@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Bot,
   Check,
@@ -20,6 +21,8 @@ import type { AutoReplySimulateInput, AutoReplySimulateResult } from "../agentTy
 export type AutoReplySandboxDialogProps = {
   t: Translate;
   onClose: () => void;
+  fallbackFocusRef?: React.RefObject<HTMLElement | null>;
+  overlayHostRef?: React.RefObject<HTMLElement | null>;
 };
 
 type Preset = {
@@ -61,10 +64,15 @@ const SAMPLE_PRESETS: Preset[] = [
   },
 ];
 
-export default function AutoReplySandboxDialog({ t, onClose }: AutoReplySandboxDialogProps) {
+export default function AutoReplySandboxDialog({
+  t,
+  onClose,
+  fallbackFocusRef,
+  overlayHostRef,
+}: AutoReplySandboxDialogProps) {
   const panelRef = useRef<HTMLElement>(null);
   const { closing, requestClose } = useDismissTransition(onClose);
-  useDialogFocus(true, panelRef);
+  useDialogFocus(true, panelRef, { fallbackFocusRef });
 
   const [fromAddress, setFromAddress] = useState(SAMPLE_PRESETS[0]!.fromAddress);
   const [fromName, setFromName] = useState(SAMPLE_PRESETS[0]!.fromName);
@@ -137,9 +145,9 @@ export default function AutoReplySandboxDialog({ t, onClose }: AutoReplySandboxD
     }
   };
 
-  return (
+  const modalContent = (
     <div
-      className={`modal-backdrop contact-editor-backdrop${closing ? " closing" : ""}`}
+      className={`modal-backdrop contact-editor-backdrop auto-reply-sandbox-backdrop${closing ? " closing" : ""}`}
       role="presentation"
       onMouseDown={(e) => e.target === e.currentTarget && !running && requestClose()}
     >
@@ -150,7 +158,6 @@ export default function AutoReplySandboxDialog({ t, onClose }: AutoReplySandboxD
         aria-modal="true"
         aria-labelledby="sandbox-dialog-title"
         tabIndex={-1}
-        style={{ maxWidth: 680 }}
       >
         <div className="contact-editor settings-model-form">
           <div className="contact-editor-head settings-model-head">
@@ -332,4 +339,9 @@ export default function AutoReplySandboxDialog({ t, onClose }: AutoReplySandboxD
       </section>
     </div>
   );
+
+  if (overlayHostRef?.current) {
+    return createPortal(modalContent, overlayHostRef.current);
+  }
+  return modalContent;
 }

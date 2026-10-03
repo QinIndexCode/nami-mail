@@ -14,7 +14,6 @@ import type { Translate } from "../i18n";
 import type { Account, AgentAccessLevel, AppSettings } from "../types";
 import type { AgentProviderSummary, ExternalPairingSummary } from "../agentTypes";
 import AutoReplyScopeEditor from "../AutoReplyScopeEditor";
-import AutoReplySandboxDialog from "./AutoReplySandboxDialog";
 import { agentAccessLevelOptions } from "./settings-utils";
 import { NumberStepper, Switch } from "./SettingsUIComponents";
 import ThemedSelect from "../ThemedSelect";
@@ -39,6 +38,7 @@ export type SettingsAgentSectionProps = {
   setAutoReplyDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setAutoReplyDecisionsOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setMemoryDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  setAutoReplySandboxOpen: React.Dispatch<React.SetStateAction<boolean>>;
   overlayHostRef?: React.RefObject<HTMLElement | null>;
 };
 
@@ -61,11 +61,11 @@ export default function SettingsAgentSection({
   setAutoReplyDialogOpen,
   setAutoReplyDecisionsOpen,
   setMemoryDialogOpen,
+  setAutoReplySandboxOpen,
   overlayHostRef,
 }: SettingsAgentSectionProps) {
   const [providers, setProviders] = useState<AgentProviderSummary[]>([]);
   const [defaultProviderId, setDefaultProviderId] = useState<string | null>(null);
-  const [autoReplySandboxOpen, setAutoReplySandboxOpen] = useState(false);
 
   useEffect(() => {
     if (demoMode) {
@@ -446,9 +446,6 @@ export default function SettingsAgentSection({
             <span>{t("settings.connections.agentLink.action")}</span>
           </button>
         </div>
-      )}
-      {autoReplySandboxOpen && (
-        <AutoReplySandboxDialog t={t} onClose={() => setAutoReplySandboxOpen(false)} />
       )}
     </section>
   );

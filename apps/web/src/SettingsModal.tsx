@@ -30,6 +30,7 @@ import FilterRulesSection from "./FilterRulesSection";
 import AgentMemoryDialog from "./AgentMemoryDialog";
 import AutoReplyPendingDialog from "./AutoReplyPendingDialog";
 import AutoReplyDecisionsDialog from "./AutoReplyDecisionsDialog";
+import AutoReplySandboxDialog from "./settings/AutoReplySandboxDialog";
 import { useI18n } from "./i18n";
 import { playNotificationSound, primeNotificationSound } from "./sounds";
 import {
@@ -193,6 +194,7 @@ export default function SettingsModal({
   const [autoReplyDialogOpen, setAutoReplyDialogOpen] = useState(false);
   const [autoReplyDecisionsOpen, setAutoReplyDecisionsOpen] = useState(false);
   const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
+  const [autoReplySandboxOpen, setAutoReplySandboxOpen] = useState(false);
   const [externalGuideCopied, setExternalGuideCopied] = useState<string | null>(null);
   const [externalPairings, setExternalPairings] = useState<ExternalPairingSummary[] | null>(null);
   const [externalPairingsError, setExternalPairingsError] = useState<unknown>(null);
@@ -431,7 +433,7 @@ export default function SettingsModal({
     return () => window.removeEventListener("keydown", closeOnEscape, true);
   }, [backgroundUploadError, connectionsOverlayOpen, controlsBusy, filtersOverlayOpen, modelsOverlayOpen, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose, searchQuery]);
 
-  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || autoReplyDecisionsOpen || memoryDialogOpen || modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) });
+  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || autoReplyDecisionsOpen || memoryDialogOpen || autoReplySandboxOpen || modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) });
   useDialogFocus(Boolean(pendingConfirmation), confirmationDialog, { fallbackFocusRef: settingsDialog });
   useDialogFocus(Boolean(backgroundUploadError), backgroundAlert, { restoreFocusRef: uploadButton });
 
@@ -1133,6 +1135,7 @@ export default function SettingsModal({
         setAutoReplyDialogOpen={setAutoReplyDialogOpen}
         setAutoReplyDecisionsOpen={setAutoReplyDecisionsOpen}
         setMemoryDialogOpen={setMemoryDialogOpen}
+        setAutoReplySandboxOpen={setAutoReplySandboxOpen}
         overlayHostRef={settingsBackdrop}
       />
     ),
@@ -1380,6 +1383,13 @@ export default function SettingsModal({
         <AgentMemoryDialog
           accounts={accounts}
           onClose={() => setMemoryDialogOpen(false)}
+          fallbackFocusRef={settingsDialog}
+        />
+      )}
+      {autoReplySandboxOpen && (
+        <AutoReplySandboxDialog
+          t={t}
+          onClose={() => setAutoReplySandboxOpen(false)}
           fallbackFocusRef={settingsDialog}
         />
       )}
