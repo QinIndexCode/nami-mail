@@ -4,6 +4,7 @@ import {
   Bot,
   Cable,
   CircleHelp,
+  FlaskConical,
   MessageSquareReply,
   MessageSquareX,
   Wrench,
@@ -13,6 +14,7 @@ import type { Translate } from "../i18n";
 import type { Account, AgentAccessLevel, AppSettings } from "../types";
 import type { AgentProviderSummary, ExternalPairingSummary } from "../agentTypes";
 import AutoReplyScopeEditor from "../AutoReplyScopeEditor";
+import AutoReplySandboxDialog from "./AutoReplySandboxDialog";
 import { agentAccessLevelOptions } from "./settings-utils";
 import { NumberStepper, Switch } from "./SettingsUIComponents";
 import ThemedSelect from "../ThemedSelect";
@@ -63,6 +65,7 @@ export default function SettingsAgentSection({
 }: SettingsAgentSectionProps) {
   const [providers, setProviders] = useState<AgentProviderSummary[]>([]);
   const [defaultProviderId, setDefaultProviderId] = useState<string | null>(null);
+  const [autoReplySandboxOpen, setAutoReplySandboxOpen] = useState(false);
 
   useEffect(() => {
     if (demoMode) {
@@ -403,6 +406,9 @@ export default function SettingsAgentSection({
                 <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setMemoryDialogOpen(true)}>
                   <BookOpen size={15} />{t("settings.agent.autoReplyToolsMemory")}
                 </button>
+                <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setAutoReplySandboxOpen(true)}>
+                  <FlaskConical size={15} />{t("settings.agent.autoReplyToolsSandbox")}
+                </button>
               </div>
             </div>
         </>
@@ -440,6 +446,9 @@ export default function SettingsAgentSection({
             <span>{t("settings.connections.agentLink.action")}</span>
           </button>
         </div>
+      )}
+      {autoReplySandboxOpen && (
+        <AutoReplySandboxDialog t={t} onClose={() => setAutoReplySandboxOpen(false)} />
       )}
     </section>
   );

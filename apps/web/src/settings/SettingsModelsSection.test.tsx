@@ -240,6 +240,8 @@ describe("settings models panel", () => {
       timeoutMs: 30_000,
       allowCloudMailContent: false,
       apiKey: "write-only-secret",
+      contextWindowTokens: 8192,
+      maxOutputTokens: 2048,
     });
     // A save is always followed by a connection check, then a list refresh.
     expect(mockApi.checkAgentProvider).toHaveBeenCalledWith("provider-new");

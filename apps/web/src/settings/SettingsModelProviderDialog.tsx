@@ -113,6 +113,36 @@ export default function SettingsModelProviderDialog({
             </ModelField>
           </div>
 
+          <div className="calendar-field-grid">
+            <ModelField id="agent-provider-context-window" label={t("agent.providers.fields.contextWindow")} help={t("agent.providers.fields.contextWindowHint")}>
+              <input
+                id="agent-provider-context-window"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={form.contextWindowTokens}
+                placeholder="8192"
+                disabled={busy}
+                autoComplete="off"
+                onChange={(event) => providers.updateForm("contextWindowTokens", event.target.value)}
+              />
+            </ModelField>
+
+            <ModelField id="agent-provider-max-output" label={t("agent.providers.fields.maxOutput")} help={t("agent.providers.fields.maxOutputHint")}>
+              <input
+                id="agent-provider-max-output"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={form.maxOutputTokens}
+                placeholder="2048"
+                disabled={busy}
+                autoComplete="off"
+                onChange={(event) => providers.updateForm("maxOutputTokens", event.target.value)}
+              />
+            </ModelField>
+          </div>
+
           <ModelField id="agent-provider-endpoint" label={t("agent.providers.fields.endpoint")} help={t(kindMeta.endpointHintKey)}>
             <input
               id="agent-provider-endpoint"

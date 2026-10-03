@@ -73,6 +73,8 @@ export type ProviderForm = {
   timeoutMs: string;
   allowCloudMailContent: boolean;
   makeDefault: boolean;
+  contextWindowTokens: string;
+  maxOutputTokens: string;
 };
 
 export function providerFormFor(provider: AgentProviderSummary | null, defaultProviderId: string | null): ProviderForm {
@@ -87,6 +89,8 @@ export function providerFormFor(provider: AgentProviderSummary | null, defaultPr
       timeoutMs: "45000",
       allowCloudMailContent: false,
       makeDefault: defaultProviderId === null,
+      contextWindowTokens: "8192",
+      maxOutputTokens: "2048",
     };
   }
   return {
@@ -99,6 +103,8 @@ export function providerFormFor(provider: AgentProviderSummary | null, defaultPr
     timeoutMs: String(provider.timeoutMs),
     allowCloudMailContent: provider.cloudContentConsent,
     makeDefault: provider.id === defaultProviderId,
+    contextWindowTokens: String(provider.contextWindowTokens ?? 8192),
+    maxOutputTokens: String(provider.maxOutputTokens ?? 2048),
   };
 }
 
@@ -138,6 +144,14 @@ export function providerValidationMessage(form: ProviderForm, t: Translate): str
   if (!form.model.trim()) return t("agent.providers.validation.model");
   const timeoutMs = Number(form.timeoutMs);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 120_000) return t("agent.providers.validation.timeout");
+  if (form.contextWindowTokens.trim()) {
+    const ctx = Number(form.contextWindowTokens);
+    if (!Number.isInteger(ctx) || ctx < 1_000 || ctx > 2_000_000) return t("agent.providers.validation.contextWindow");
+  }
+  if (form.maxOutputTokens.trim()) {
+    const out = Number(form.maxOutputTokens);
+    if (!Number.isInteger(out) || out < 256 || out > 64_000) return t("agent.providers.validation.maxOutput");
+  }
   return null;
 }
 
@@ -153,6 +167,12 @@ export function providerInputFor(form: ProviderForm): AgentProviderInput {
     ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
     ...(form.clearApiKey ? { clearApiKey: true } : {}),
     ...(form.makeDefault ? { makeDefault: true } : {}),
+    ...(form.contextWindowTokens.trim() && Number(form.contextWindowTokens) > 0
+      ? { contextWindowTokens: Number(form.contextWindowTokens) }
+      : {}),
+    ...(form.maxOutputTokens.trim() && Number(form.maxOutputTokens) > 0
+      ? { maxOutputTokens: Number(form.maxOutputTokens) }
+      : {}),
   };
 }
 

@@ -37,6 +37,8 @@ export type AgentProviderInput = {
   timeoutMs: number;
   allowCloudMailContent: boolean;
   makeDefault?: boolean;
+  contextWindowTokens?: number;
+  maxOutputTokens?: number;
 };
 
 export type AgentProviderList = {
@@ -56,6 +58,8 @@ export type ProviderConfiguration = {
   timeoutMs: number;
   allowCloudMailContent: boolean;
   streaming: true;
+  contextWindowTokens?: number;
+  maxOutputTokens?: number;
   health?: ProviderHealth;
 };
 
@@ -94,6 +98,20 @@ function providerConfigRecordId(id: string): string {
   return `provider-config:${id}`;
 }
 
+function validateContextWindow(value: number): number {
+  if (!Number.isInteger(value) || value < 1_000 || value > 2_000_000) {
+    throw new AgentServiceError("INVALID_ARGUMENT", "模型上下文窗口必须介于 1,000 和 2,000,000 Tokens 之间。", 400);
+  }
+  return value;
+}
+
+function validateMaxOutput(value: number): number {
+  if (!Number.isInteger(value) || value < 256 || value > 64_000) {
+    throw new AgentServiceError("INVALID_ARGUMENT", "模型最大输出必须介于 256 和 64,000 Tokens 之间。", 400);
+  }
+  return value;
+}
+
 export function providerSummary(configuration: ProviderConfiguration): AgentProviderSummary {
   const cloud = normalizeEndpoint(configuration.endpoint).cloud;
   const apiKeyConfigured = Boolean(configuration.apiKey);
@@ -114,6 +132,8 @@ export function providerSummary(configuration: ProviderConfiguration): AgentProv
     // Mirrors the adapter-level vision capability (anthropic/gemini/openai-responses
     // accept image inputs; openai-compatible kind and ollama do not by default).
     vision: configuration.kind === "anthropic" || configuration.kind === "gemini" || configuration.kind === "openai-responses",
+    contextWindowTokens: configuration.contextWindowTokens ?? 8_192,
+    maxOutputTokens: configuration.maxOutputTokens ?? 2_048,
     ...(configuration.health ? { health: configuration.health } : {}),
   };
 }
@@ -139,6 +159,8 @@ function parseProviderConfiguration(value: unknown, id: string): ProviderConfigu
     || typeof input.allowCloudMailContent !== "boolean"
     || input.streaming !== true
     || (input.apiKey !== undefined && typeof input.apiKey !== "string")
+    || (input.contextWindowTokens !== undefined && (typeof input.contextWindowTokens !== "number" || !Number.isInteger(input.contextWindowTokens)))
+    || (input.maxOutputTokens !== undefined && (typeof input.maxOutputTokens !== "number" || !Number.isInteger(input.maxOutputTokens)))
   ) throw new AgentServiceError("INTERNAL", "模型配置格式无效。", 500);
   const health = input.health === undefined ? undefined : providerHealthSchema.safeParse(input.health);
   if (health && !health.success) throw new AgentServiceError("INTERNAL", "模型连接状态格式无效。", 500);
@@ -155,6 +177,8 @@ function parseProviderConfiguration(value: unknown, id: string): ProviderConfigu
     timeoutMs: validateTimeout(input.timeoutMs),
     allowCloudMailContent: input.allowCloudMailContent,
     streaming: true,
+    ...(input.contextWindowTokens !== undefined ? { contextWindowTokens: validateContextWindow(input.contextWindowTokens) } : {}),
+    ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: validateMaxOutput(input.maxOutputTokens) } : {}),
     ...(health?.success ? { health: health.data } : {}),
   };
 }
@@ -281,6 +305,16 @@ class AgentProviderStore {
       timeoutMs: validateTimeout(input.timeoutMs),
       allowCloudMailContent: endpoint.cloud && input.kind !== "ollama" && input.allowCloudMailContent,
       streaming: true,
+      ...(input.contextWindowTokens !== undefined
+        ? { contextWindowTokens: validateContextWindow(input.contextWindowTokens) }
+        : existing?.contextWindowTokens !== undefined
+          ? { contextWindowTokens: existing.contextWindowTokens }
+          : {}),
+      ...(input.maxOutputTokens !== undefined
+        ? { maxOutputTokens: validateMaxOutput(input.maxOutputTokens) }
+        : existing?.maxOutputTokens !== undefined
+          ? { maxOutputTokens: existing.maxOutputTokens }
+          : {}),
     };
     const timestamp = now();
     this.db.transaction(() => {

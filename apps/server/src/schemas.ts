@@ -206,6 +206,8 @@ export const agentProviderSchema = z.object({
   timeoutMs: z.number().int().min(1_000).max(120_000),
   allowCloudMailContent: z.boolean(),
   makeDefault: z.boolean().optional(),
+  contextWindowTokens: z.number().int().min(1_000).max(2_000_000).optional(),
+  maxOutputTokens: z.number().int().min(256).max(64_000).optional(),
 }).strict();
 
 export const agentMcpServerSchema = z.object({
@@ -298,4 +300,19 @@ export const agentMemoryCreateSchema = z.object({
   summary: z.string().trim().min(1).max(500),
   detail: z.string().trim().max(4_000).optional(),
   occurredAt: z.string().trim().min(1).max(64).optional(),
+}).strict();
+
+export const autoReplySimulateSchema = z.object({
+  accountEmail: z.string().trim().email().optional().or(z.literal("")),
+  fromName: z.string().trim().max(128).optional(),
+  fromAddress: z.string().trim().email(),
+  subject: z.string().trim().max(512),
+  textBody: z.string().max(100_000),
+  snippet: z.string().max(2_000).optional(),
+  mailbox: z.string().trim().default("INBOX"),
+  folderSpecialUse: z.string().trim().optional(),
+  autoSubmitted: z.string().trim().optional(),
+  listUnsubscribe: z.string().trim().optional(),
+  precedence: z.string().trim().optional(),
+  forceLlm: z.boolean().optional(),
 }).strict();

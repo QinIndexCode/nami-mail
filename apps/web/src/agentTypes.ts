@@ -29,6 +29,56 @@ export type AgentProviderInput = {
   timeoutMs: number;
   allowCloudMailContent: boolean;
   makeDefault?: boolean;
+  contextWindowTokens?: number;
+  maxOutputTokens?: number;
+};
+
+export type AutoReplySimulateInput = {
+  accountEmail?: string;
+  fromName?: string;
+  fromAddress: string;
+  subject: string;
+  textBody: string;
+  snippet?: string;
+  mailbox?: string;
+  folderSpecialUse?: string;
+  autoSubmitted?: string;
+  listUnsubscribe?: string;
+  precedence?: string;
+  forceLlm?: boolean;
+};
+
+export type AutoReplySimulateResult = {
+  linkStats: {
+    originalLength: number;
+    sanitizedLength: number;
+    replacedCount: number;
+    estimatedTokensSaved: number;
+    sanitizedSnippet: string;
+  };
+  screening: {
+    passed: boolean;
+    reason?: string;
+    details?: string;
+  };
+  scope: {
+    passed: boolean;
+    reason?: string;
+  };
+  sensitiveKeywords: string[];
+  decision?: {
+    evaluated: boolean;
+    replyValue?: "high" | "low";
+    sensitive?: boolean;
+    reply?: string;
+    error?: string;
+  };
+  finalAction:
+    | "would_reply"
+    | "ignored_offline_rule"
+    | "ignored_scope"
+    | "ignored_low_value"
+    | "sensitive_requires_confirmation";
 };
 
 /** Non-secret external MCP server details returned by the local Agent service. */

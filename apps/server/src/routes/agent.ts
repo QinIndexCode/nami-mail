@@ -24,8 +24,10 @@ import {
   agentMemoryQuerySchema,
   agentMcpServerSchema,
   agentProviderSchema,
+  autoReplySimulateSchema,
   emptyBodySchema,
 } from "../schemas.js";
+import { simulateAutoReply } from "../agent/auto-reply-simulator.js";
 import { getAppSettings } from "../settings.js";
 import type { RuntimeContext } from "../types.js";
 import { ROUTE_ERROR_CODES } from "./error-codes.js";
@@ -478,6 +480,23 @@ export function registerAgentRoutes(app: FastifyInstance, deps: AgentRouteDeps):
       const deleted = engine.deleteDecision(request.params.id);
       if (!deleted) return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "该记录不存在或已被删除。" });
       return { ok: true };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
+  app.post("/api/agent/auto-reply/simulate", async (request, reply) => {
+    if (!agentService) {
+      return reply.code(503).send({ ok: false, code: ROUTE_ERROR_CODES.agent_unavailable, message: "Agent 当前不可用。" });
+    }
+    const parsed = autoReplySimulateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
+    }
+    try {
+      const config = getAppSettings(context.db).autoReply;
+      const result = await simulateAutoReply(agentService, parsed.data, config);
+      return { ok: true, result };
     } catch (error) {
       return agentFailure(reply, error);
     }

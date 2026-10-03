@@ -4,42 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsConnectionsSection from "./SettingsConnectionsSection";
 import { I18nProvider, translate } from "../i18n";
-import type { AppSettings } from "../types";
+import { defaultAppSettings, type AppSettings } from "../types";
 
 const mockSettings: AppSettings = {
-  theme: "system",
-  density: "comfortable",
-  language: "zh-CN",
-  soundEnabled: true,
-  soundTheme: "subtle",
-  syncIntervalMs: 60_000,
-  notificationsEnabled: true,
-  messageCacheCount: 50,
-  realtimePushEnabled: true,
-  gravatarEnabled: false,
-  bimiEnabled: false,
-  background: null,
-  backgroundIntensity: 50,
-  autoLaunch: false,
-  closeToTray: true,
-  openAsHidden: false,
-  hardwareAcceleration: true,
-  agentEnabled: true,
-  agentDefaultModel: "llama3.2",
-  agentToolRoundLimit: 8,
-  agentAutoReplyAccounts: [],
-  agentAutoReplyDecisions: {},
-  agentCloudSendingAllowed: false,
-  agentMcpAccessLevel: "read-only",
-  agentCliAccessLevel: "read-only",
-  agentAutoReplyTemplate: null,
-  translationEnabled: false,
-  translationTargetLanguage: "zh-CN",
-  translationServiceEndpoint: "",
-  translationServiceKey: "",
-  translationTimeoutMs: 25_000,
-  translationPrimaryProvider: "google",
-  translationBackupProvider: "mymemory",
+  ...defaultAppSettings,
 };
 
 describe("settings connections copy buttons", () => {
@@ -66,11 +34,13 @@ describe("settings connections copy buttons", () => {
         <I18nProvider>
           <SettingsConnectionsSection
             t={(k, p) => translate("zh-CN", k, p)}
+            formatDate={(v) => v}
+            overlayHostRef={{ current: null }}
             currentSettings={mockSettings}
             controlsBusy={false}
             demoMode
             accounts={[]}
-            applyOptimisticSettings={() => undefined}
+            applyOptimisticSettings={() => Promise.resolve()}
             requestAccessLevelChange={() => undefined}
           />
         </I18nProvider>,

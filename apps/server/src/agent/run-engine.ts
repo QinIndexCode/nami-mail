@@ -52,6 +52,7 @@ import { extractMemorySuggestions, filterMemorySuggestionChunk, stripMemorySugge
 import { canonicalAgentJson } from "./store-crypto.js";
 import { agentT, type AgentMessageKey } from "./agent-messages.js";
 import { supportedLocale, type SupportedLocale } from "../localization.js";
+import { compressContextHistory, estimateMessagesTokens, estimateTokens, pruneToolOutput } from "./context-budget.js";
 
 export type AgentConversationScope = {
   mode: "all_accounts" | "selected_account" | "current_message";
@@ -1133,11 +1134,20 @@ export class AgentRunEngine {
       };
       let modelMessages = providerMessages;
       let toolRounds = 0;
+      const contextWindow = configuration.contextWindowTokens ?? 8_192;
+      const maxOutputTokens = configuration.maxOutputTokens ?? 2_048;
+      const availableBudget = Math.max(1_000, contextWindow - maxOutputTokens);
+      const toolsTokens = estimateMessagesTokens([], visibleTools);
+      const availableForMessages = Math.max(800, availableBudget - toolsTokens);
+      const messagesWarningThreshold = Math.floor(availableForMessages * 0.75);
       // The loop runs until the model stops requesting tools; every iteration
       // either appends a provider turn, reaches the round limit, or returns a
       // completed response — all paths exit explicitly below.
       while (true) {
         this.assertRunCurrent(lifecycleTasks, controller.signal);
+        if (estimateMessagesTokens(modelMessages) > messagesWarningThreshold) {
+          modelMessages = compressContextHistory(modelMessages, Math.floor(availableForMessages * 0.8));
+        }
         const chat: ProviderChatRequest = {
           requestId,
           providerId: configuration.id,
@@ -1146,6 +1156,7 @@ export class AgentRunEngine {
           tools: visibleTools,
           allowToolCalls: visibleTools.length > 0,
           responseFormat: "text",
+          maxOutputTokens,
         };
         const toolCalls: ToolCall[] = [];
         let turnContent = "";
@@ -1401,10 +1412,20 @@ export class AgentRunEngine {
           toolActivities = [...toolActivities.filter((activity) => activity.id !== activityId), completedActivity];
           yield { type: "tool", activity: completedActivity };
           syncInFlight();
+          const rawOutput = succeeded ? result.output : modelToolError(result.error);
+          let toolMessageContent = toolResultMessage(succeeded, rawOutput);
+          const isSafetyLimitTruncated = toolMessageContent.includes("safety limit");
+          const currentMessagesTokens = estimateMessagesTokens(modelMessages);
+          const messageTokens = estimateTokens(toolMessageContent);
+          if (succeeded && !isSafetyLimitTruncated && (currentMessagesTokens + messageTokens > messagesWarningThreshold)) {
+            const maxToolTokens = Math.min(2_000, Math.floor(availableForMessages * 0.4));
+            const prunedOutput = pruneToolOutput(rawOutput, maxToolTokens);
+            toolMessageContent = toolResultMessage(succeeded, prunedOutput);
+          }
           modelMessages = [...modelMessages, {
             role: "tool",
             toolCallId: call.id,
-            content: toolResultMessage(succeeded, succeeded ? result.output : modelToolError(result.error)),
+            content: toolMessageContent,
           }];
         }
       }
