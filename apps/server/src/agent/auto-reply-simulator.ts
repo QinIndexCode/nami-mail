@@ -24,6 +24,7 @@ export type AutoReplySimulateInput = {
   autoSubmitted?: string;
   listUnsubscribe?: string;
   precedence?: string;
+  simulateAsContact?: boolean;
   forceLlm?: boolean;
 };
 
@@ -43,6 +44,7 @@ export type AutoReplySimulateResult = {
   scope: {
     passed: boolean;
     reason?: AutoReplyScopeReason;
+    details?: string;
   };
   sensitiveKeywords: string[];
   decision?: {
@@ -76,6 +78,7 @@ export async function simulateAutoReply(
   agentService: AgentService,
   input: AutoReplySimulateInput,
   configOverride?: AutoReplyConfig,
+  knownContacts?: Set<string>,
 ): Promise<AutoReplySimulateResult> {
   const config = configOverride ?? DEFAULT_SIMULATE_CONFIG;
 
@@ -108,18 +111,31 @@ export async function simulateAutoReply(
       };
 
   // 3. Sender scope check
+  const contacts = new Set<string>(knownContacts ?? []);
+  if (input.simulateAsContact && input.fromAddress) {
+    contacts.add(input.fromAddress.toLowerCase().trim());
+  }
   const scopeInput = {
     fromAddress: input.fromAddress || "",
     fromName: input.fromName || "",
     fromDomain: senderDomain(input.fromAddress || ""),
     subject: input.subject || "",
     today: new Date().toISOString().slice(0, 10),
-    contacts: new Set<string>(),
+    contacts,
   };
   const scopeVerdict = applyAutoReplyScope(scopeInput, config.scope ?? {});
   const scope = scopeVerdict.keep
     ? { passed: true }
-    : { passed: false, reason: scopeVerdict.reason, ruleId: (scopeVerdict as { ruleId?: string }).ruleId };
+    : {
+        passed: false,
+        reason: scopeVerdict.reason,
+        details: scopeVerdict.reason === "not-contact"
+          ? "非通讯录联系人"
+          : scopeVerdict.reason === "outside-date-range"
+            ? "不在生效日期范围内"
+            : "匹配自定义忽略规则",
+        ruleId: (scopeVerdict as { ruleId?: string }).ruleId,
+      };
 
   // 4. Sensitive keywords scan
   const sensitiveKeywords = scanSensitiveKeywords(stats.sanitized);
@@ -159,7 +175,15 @@ export async function simulateAutoReply(
 
   // 6. Compute final projected action
   let finalAction: AutoReplySimulateResult["finalAction"] = "would_reply";
-  if (!screening.passed) {
+  if (input.forceLlm && decision?.evaluated) {
+    if (decision.sensitive) {
+      finalAction = "sensitive_requires_confirmation";
+    } else if (decision.replyValue === "low") {
+      finalAction = "ignored_low_value";
+    } else {
+      finalAction = "would_reply";
+    }
+  } else if (!screening.passed) {
     finalAction = "ignored_offline_rule";
   } else if (!scope.passed) {
     finalAction = "ignored_scope";

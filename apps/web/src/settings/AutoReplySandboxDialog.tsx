@@ -6,6 +6,7 @@ import {
   CircleAlert,
   CircleHelp,
   ClipboardList,
+  Info,
   Link2,
   LoaderCircle,
   Play,
@@ -78,6 +79,7 @@ export default function AutoReplySandboxDialog({
   const [fromName, setFromName] = useState(SAMPLE_PRESETS[0]!.fromName);
   const [subject, setSubject] = useState(SAMPLE_PRESETS[0]!.subject);
   const [textBody, setTextBody] = useState(SAMPLE_PRESETS[0]!.textBody);
+  const [simulateAsContact, setSimulateAsContact] = useState(false);
   const [forceLlm, setForceLlm] = useState(false);
 
   const [running, setRunning] = useState(false);
@@ -95,7 +97,7 @@ export default function AutoReplySandboxDialog({
 
   const handleRun = async () => {
     if (!fromAddress.trim() || !subject.trim() || !textBody.trim()) {
-      setError(t("settings.agent.sandbox.fromEmail") + " / " + t("settings.agent.sandbox.subject") + " / " + t("settings.agent.sandbox.body"));
+      setError(t("settings.agent.sandbox.validationError"));
       return;
     }
 
@@ -107,6 +109,7 @@ export default function AutoReplySandboxDialog({
         fromName: fromName.trim() || undefined,
         subject: subject.trim(),
         textBody: textBody.trim(),
+        simulateAsContact,
         forceLlm,
       };
       const response = await api.autoReplySimulate(payload);
@@ -197,11 +200,12 @@ export default function AutoReplySandboxDialog({
             </div>
 
             <div className="calendar-field-grid">
-              <label className="settings-field calendar-field">
+              <label className="settings-field calendar-field" htmlFor="sandbox-from-email">
                 <span className="settings-field-label">
                   <span className="settings-field-label-text">{t("settings.agent.sandbox.fromEmail")}</span>
                 </span>
                 <input
+                  id="sandbox-from-email"
                   type="email"
                   value={fromAddress}
                   placeholder="sender@example.com"
@@ -210,11 +214,12 @@ export default function AutoReplySandboxDialog({
                 />
               </label>
 
-              <label className="settings-field calendar-field">
+              <label className="settings-field calendar-field" htmlFor="sandbox-from-name">
                 <span className="settings-field-label">
                   <span className="settings-field-label-text">{t("settings.agent.sandbox.fromName")}</span>
                 </span>
                 <input
+                  id="sandbox-from-name"
                   type="text"
                   value={fromName}
                   placeholder="例如：张三"
@@ -224,11 +229,12 @@ export default function AutoReplySandboxDialog({
               </label>
             </div>
 
-            <label className="settings-field calendar-field">
+            <label className="settings-field calendar-field" htmlFor="sandbox-subject">
               <span className="settings-field-label">
                 <span className="settings-field-label-text">{t("settings.agent.sandbox.subject")}</span>
               </span>
               <input
+                id="sandbox-subject"
                 type="text"
                 value={subject}
                 placeholder="邮件主题..."
@@ -237,11 +243,12 @@ export default function AutoReplySandboxDialog({
               />
             </label>
 
-            <label className="settings-field calendar-field">
+            <label className="settings-field calendar-field" htmlFor="sandbox-body">
               <span className="settings-field-label">
                 <span className="settings-field-label-text">{t("settings.agent.sandbox.body")}</span>
               </span>
               <textarea
+                id="sandbox-body"
                 value={textBody}
                 rows={4}
                 className="settings-model-textarea"
@@ -251,17 +258,32 @@ export default function AutoReplySandboxDialog({
               />
             </label>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
-              <input
-                type="checkbox"
-                id="sandbox-force-llm"
-                checked={forceLlm}
-                disabled={running}
-                onChange={(e) => setForceLlm(e.target.checked)}
-              />
-              <label htmlFor="sandbox-force-llm" style={{ fontSize: 12, color: "var(--text-soft)", cursor: "pointer" }}>
-                {t("settings.agent.sandbox.forceLlm")}
-              </label>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16, marginTop: 2 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  id="sandbox-simulate-contact"
+                  checked={simulateAsContact}
+                  disabled={running}
+                  onChange={(e) => setSimulateAsContact(e.target.checked)}
+                />
+                <label htmlFor="sandbox-simulate-contact" style={{ fontSize: 12, color: "var(--text-soft)", cursor: "pointer" }}>
+                  {t("settings.agent.sandbox.simulateAsContact")}
+                </label>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  id="sandbox-force-llm"
+                  checked={forceLlm}
+                  disabled={running}
+                  onChange={(e) => setForceLlm(e.target.checked)}
+                />
+                <label htmlFor="sandbox-force-llm" style={{ fontSize: 12, color: "var(--text-soft)", cursor: "pointer" }}>
+                  {t("settings.agent.sandbox.forceLlm")}
+                </label>
+              </div>
             </div>
 
             {error && (
@@ -299,7 +321,7 @@ export default function AutoReplySandboxDialog({
                       <span>{t("settings.agent.sandbox.rules")}</span>
                     </div>
                     <div>{t("settings.agent.sandbox.offlineScreening")}{result.screening.passed ? t("settings.agent.sandbox.passed") : (result.screening.details || result.screening.reason)}</div>
-                    <div>{t("settings.agent.sandbox.scopeRule")}{result.scope.passed ? t("settings.agent.sandbox.allowed") : result.scope.reason}</div>
+                    <div>{t("settings.agent.sandbox.scopeRule")}{result.scope.passed ? t("settings.agent.sandbox.allowed") : (result.scope.details || result.scope.reason)}</div>
                     <div>{t("settings.agent.sandbox.sensitiveKeywords")}{result.sensitiveKeywords.length > 0 ? result.sensitiveKeywords.join(", ") : t("settings.agent.sandbox.none")}</div>
                   </div>
                 </div>
@@ -320,6 +342,25 @@ export default function AutoReplySandboxDialog({
                         <div className="sandbox-quote-preview">{result.decision.reply}</div>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {result.decision && !result.decision.evaluated && (
+                  <div className="sandbox-stat-item" style={{ marginTop: 2, borderColor: "var(--danger, #ef4444)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--danger, #ef4444)", marginBottom: 4, fontWeight: 600 }}>
+                      <CircleAlert size={13} />
+                      <span>{t("settings.agent.sandbox.llmEvaluationFailed")}</span>
+                    </div>
+                    <div style={{ color: "var(--text-soft)", fontSize: 11 }}>{result.decision.error}</div>
+                  </div>
+                )}
+
+                {!result.decision && (
+                  <div className="sandbox-stat-item" style={{ marginTop: 2, background: "transparent", borderStyle: "dashed" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--text-soft)", fontSize: 11 }}>
+                      <Info size={13} />
+                      <span>{t("settings.agent.sandbox.llmSkippedNotice")}</span>
+                    </div>
                   </div>
                 )}
               </div>

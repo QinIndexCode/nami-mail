@@ -314,5 +314,6 @@ export const autoReplySimulateSchema = z.object({
   autoSubmitted: z.string().trim().optional(),
   listUnsubscribe: z.string().trim().optional(),
   precedence: z.string().trim().optional(),
+  simulateAsContact: z.boolean().optional(),
   forceLlm: z.boolean().optional(),
 }).strict();

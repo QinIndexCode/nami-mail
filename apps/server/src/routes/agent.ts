@@ -29,6 +29,7 @@ import {
 } from "../schemas.js";
 import { simulateAutoReply } from "../agent/auto-reply-simulator.js";
 import { getAppSettings } from "../settings.js";
+import { listContacts } from "../contacts.js";
 import type { RuntimeContext } from "../types.js";
 import { ROUTE_ERROR_CODES } from "./error-codes.js";
 
@@ -495,7 +496,16 @@ export function registerAgentRoutes(app: FastifyInstance, deps: AgentRouteDeps):
     }
     try {
       const config = getAppSettings(context.db).autoReply;
-      const result = await simulateAutoReply(agentService, parsed.data, config);
+      let contacts: Set<string> | undefined;
+      if (config.scope?.contactsOnly) {
+        try {
+          const loaded = listContacts(context.db, context.masterKey);
+          contacts = new Set(loaded.map((c) => c.email.trim().toLowerCase()).filter(Boolean));
+        } catch {
+          contacts = new Set();
+        }
+      }
+      const result = await simulateAutoReply(agentService, parsed.data, config, contacts);
       return { ok: true, result };
     } catch (error) {
       return agentFailure(reply, error);

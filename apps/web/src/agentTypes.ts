@@ -45,6 +45,7 @@ export type AutoReplySimulateInput = {
   autoSubmitted?: string;
   listUnsubscribe?: string;
   precedence?: string;
+  simulateAsContact?: boolean;
   forceLlm?: boolean;
 };
 
@@ -64,6 +65,7 @@ export type AutoReplySimulateResult = {
   scope: {
     passed: boolean;
     reason?: string;
+    details?: string;
   };
   sensitiveKeywords: string[];
   decision?: {

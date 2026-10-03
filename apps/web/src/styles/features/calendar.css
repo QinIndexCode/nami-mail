@@ -280,7 +280,7 @@ color:var(--text-faint)
 {
 width:100%
 }
-.calendar-field input[type=text],.calendar-field input[type=password],.calendar-field input[type=date],.calendar-field input[type=datetime-local],.calendar-field textarea,.calendar-field .themed-select
+.calendar-field input[type=text],.calendar-field input[type=email],.calendar-field input[type=password],.calendar-field input[type=date],.calendar-field input[type=datetime-local],.calendar-field textarea,.calendar-field .themed-select
 {
 border:1px solid var(--line-strong);
 background:var(--panel-muted);
