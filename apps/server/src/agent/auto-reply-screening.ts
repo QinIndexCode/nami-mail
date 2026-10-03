@@ -378,7 +378,7 @@ export function sanitizeLinksWithStats(text: string): LinkSanitizationStats {
   });
 
   // 3. Replace Markdown links: [anchor](url)
-  result = result.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/gi, (_match, anchorText, url) => {
+  result = result.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, (_match, anchorText, url) => {
     replacedCount++;
     const cleanAnchor = anchorText.trim();
     const isUnsub = /unsubscribe|optout|opt-out|退订/i.test(url) || /unsubscribe|退订/i.test(cleanAnchor);

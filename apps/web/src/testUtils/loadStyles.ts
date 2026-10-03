@@ -7,8 +7,9 @@ function getDefaultStylesPath(): string {
     if (typeof import.meta !== "undefined" && import.meta.url && import.meta.url.startsWith("file:")) {
       return fileURLToPath(new URL("../styles.css", import.meta.url));
     }
-  } catch {}
-  // In jsdom environment, import.meta.url is not a file: URL
+  } catch {
+    // In jsdom environment, import.meta.url is not a file: URL
+  }
   const candidate = path.resolve(process.cwd(), "src/styles.css");
   if (existsSync(candidate)) return candidate;
   return path.resolve(process.cwd(), "apps/web/src/styles.css");
