@@ -3,6 +3,8 @@ import {
   applyAutoReplyScope,
   autoReplyThreadKey,
   renderAutoReplyTemplate,
+  sanitizeLinksForScreening,
+  sanitizeLinksWithStats,
   scanSensitiveKeywords,
   screenAutoReply,
   screeningIgnoreReasonText,
@@ -227,3 +229,45 @@ describe("auto-reply template rendering", () => {
     expect(renderAutoReplyTemplate("   ", vars)).toBe("");
   });
 });
+
+describe("auto-reply link sanitization", () => {
+  it("replaces long tracking URLs with clean compact domain tags", () => {
+    const raw = "请点击查看详情：https://click.mail.github.com/track/link?id=abcdef1234567890&utm_source=email 谢谢配合。";
+    const result = sanitizeLinksForScreening(raw);
+    expect(result).toBe("请点击查看详情：[链接: github.com] 谢谢配合。");
+  });
+
+  it("identifies unsubscribe links and formats them cleanly", () => {
+    const raw = "如果您不想接收此类邮件，请点击 https://news.example.com/unsubscribe?token=987654321 退订。";
+    const result = sanitizeLinksForScreening(raw);
+    expect(result).toBe("如果您不想接收此类邮件，请点击 [退订链接] 退订。");
+  });
+
+  it("simplifies Markdown links while preserving descriptive anchor text", () => {
+    const raw = "附上本次需求文档：[2026年Q4产品合作规划](https://docs.google.com/document/d/1234567890/edit?usp=sharing)，请查收。";
+    const result = sanitizeLinksForScreening(raw);
+    expect(result).toBe("附上本次需求文档：[2026年Q4产品合作规划]，请查收。");
+  });
+
+  it("handles generic Markdown anchors with compact domain tag", () => {
+    const raw = "点击 [Click Here](https://dashboard.stripe.com/payments/inv_12345) 查看发票。";
+    const result = sanitizeLinksForScreening(raw);
+    expect(result).toBe("点击 [链接: stripe.com] 查看发票。");
+  });
+
+  it("filters base64 data URIs into compact inline indicators", () => {
+    const raw = "Logo: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg== 邮件正文在此。";
+    const result = sanitizeLinksForScreening(raw);
+    expect(result).toBe("Logo: [内联图片] 邮件正文在此。");
+  });
+
+  it("collapses repetitive link clusters and reports token saving stats", () => {
+    const raw = "社交媒体：https://twitter.com/nami https://facebook.com/nami https://linkedin.com/nami 退订：https://example.com/optout";
+    const stats = sanitizeLinksWithStats(raw);
+    expect(stats.replacedCount).toBe(4);
+    expect(stats.sanitizedLength).toBeLessThan(stats.originalLength);
+    expect(stats.estimatedTokensSaved).toBeGreaterThan(0);
+    expect(stats.sanitized).toContain("[退订链接]");
+  });
+});
+

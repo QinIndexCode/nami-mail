@@ -70,6 +70,7 @@ import { AgentConfirmationLifecycle, type AgentConfirmationResolution } from "./
 import type { AutoReplyEvaluationInput, AutoReplyEvaluationResult } from "./agent/auto-reply.js";
 import { collectAuxiliaryChatText } from "./agent/auxiliary-chat.js";
 import { polishDraftWithProvider, type PolishDraftInput, type PolishDraftResult } from "./agent/writing-polish.js";
+import { sanitizeLinksForScreening } from "./agent/auto-reply-screening.js";
 import type { SupportedLocale } from "./localization.js";
 // 会话/运行域已抽至 agent/run-engine.ts；类型在此再导出以保持公共面不变。
 export type {
@@ -1089,12 +1090,14 @@ export class AgentService {
       );
     }
 
+    const cleanSnippet = sanitizeLinksForScreening(input.snippet || "");
+    const cleanBody = sanitizeLinksForScreening(input.textBody || "");
     const userPrompt = [
       `【账户】${input.accountEmail || "(未知)"}`,
       `【发件人】${input.fromName || "(无姓名)"} <${input.fromAddress}>`,
       `【主题】${input.subject}`,
-      `【正文摘要】${input.snippet || "(无)"}`,
-      `【正文】${input.textBody || "(无)"}`,
+      `【正文摘要】${cleanSnippet || "(无)"}`,
+      `【正文】${cleanBody || "(无)"}`,
       input.sensitiveKeywords.length > 0 ? `【初筛敏感词】${input.sensitiveKeywords.join("，")}` : "【初筛敏感词】无",
       input.memoryContext ? `【历史记忆】\n${input.memoryContext}` : "",
       "请输出你的判断。",

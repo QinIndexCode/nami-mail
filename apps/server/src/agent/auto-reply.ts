@@ -21,7 +21,7 @@ import { buildMemoryContextLines, type EncryptedAgentMemoryStore } from "./memor
 import type { ImmutableGuiConfirmationStore } from "./confirmations.js";
 import { canonicalAgentJson } from "./store-crypto.js";
 import type { MailApplicationContext, MailApplicationService } from "./mail-application-service.js";
-import { applyAutoReplyScope, renderAutoReplyTemplate, scanSensitiveKeywords, screenAutoReply, screeningIgnoreReasonText, senderDomain, type AutoReplyScopeReason } from "./auto-reply-screening.js";
+import { applyAutoReplyScope, renderAutoReplyTemplate, sanitizeLinksForScreening, scanSensitiveKeywords, screenAutoReply, screeningIgnoreReasonText, senderDomain, type AutoReplyScopeReason } from "./auto-reply-screening.js";
 import { type AutoReplyDecisionListOptions, type AutoReplyDecisionReason, type AutoReplyDecisionRecord, type EncryptedAutoReplyDecisionStore } from "./auto-reply-decisions.js";
 
 const CONFIRMATION_TTL_MS = 5 * 60 * 1_000;
@@ -402,8 +402,8 @@ export class AutoReplyEngine {
           fromName: payload.fromName,
           fromAddress: payload.fromAddress,
           subject: payload.subject,
-          textBody: payload.textBody.slice(0, 1_000),
-          snippet: payload.snippet.slice(0, 400),
+          textBody: sanitizeLinksForScreening(payload.textBody).slice(0, 1_000),
+          snippet: sanitizeLinksForScreening(payload.snippet).slice(0, 400),
           sensitiveKeywords: hints,
           memoryContext,
           decisionProviderId: config.decisionProviderId,

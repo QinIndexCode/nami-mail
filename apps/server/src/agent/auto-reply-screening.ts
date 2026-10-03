@@ -299,3 +299,122 @@ export function renderAutoReplyTemplate(template: string, vars: AutoReplyTemplat
   }
   return rendered.trim();
 }
+
+/**
+ * Result of link sanitization with token economy metrics.
+ */
+export type LinkSanitizationStats = {
+  sanitized: string;
+  replacedCount: number;
+  originalLength: number;
+  sanitizedLength: number;
+  estimatedTokensSaved: number;
+};
+
+/**
+ * Extracts a concise domain string (e.g. "github.com") from a URL string,
+ * ignoring common subdomains like "www.", "click.", "mail.", "tracking.".
+ */
+export function extractCompactDomain(rawUrl: string): string | null {
+  try {
+    const url = new URL(rawUrl);
+    const host = url.hostname.toLowerCase();
+    // IP addresses or bare names
+    if (/^[\d.]+$|^localhost$/i.test(host)) return host;
+    const parts = host.split(".").filter(Boolean);
+    if (parts.length <= 2) return host;
+    const isSpecialTld = parts.length >= 3 && /^(?:co|com|net|org|edu|gov)\.[a-z]{2}$/i.test(parts.slice(-2).join("."));
+    if (isSpecialTld) {
+      return parts.slice(-3).join(".");
+    }
+    return parts.slice(-2).join(".");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Strips or replaces heavy, redundant URLs, marketing redirects, and tracking links
+ * from email bodies before passing them to the LLM for screening/reply-value judgment.
+ * This preserves token budget, avoids wasting prompt space on tracking strings,
+ * and improves LLM classification accuracy.
+ */
+export function sanitizeLinksForScreening(text: string): string {
+  return sanitizeLinksWithStats(text).sanitized;
+}
+
+export function sanitizeLinksWithStats(text: string): LinkSanitizationStats {
+  if (!text || typeof text !== "string") {
+    return {
+      sanitized: "",
+      replacedCount: 0,
+      originalLength: 0,
+      sanitizedLength: 0,
+      estimatedTokensSaved: 0,
+    };
+  }
+
+  const originalLength = text.length;
+  let replacedCount = 0;
+  let result = text;
+
+  // 1. Replace data URIs (e.g. data:image/png;base64,...)
+  result = result.replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/gi, () => {
+    replacedCount++;
+    return "[内联图片]";
+  });
+
+  // 2. Replace HTML links: <a ... href="url" ...>anchorText</a>
+  result = result.replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_match, href, anchorText) => {
+    replacedCount++;
+    const cleanAnchor = anchorText.replace(/<[^>]+>/g, "").trim();
+    const isUnsub = /unsubscribe|optout|opt-out|退订/i.test(href) || /unsubscribe|退订/i.test(cleanAnchor);
+    if (isUnsub) return "[退订链接]";
+    if (cleanAnchor && cleanAnchor.length > 1 && !/^https?:\/\//i.test(cleanAnchor) && !/^(?:click here|here|链接|详情|link)$/i.test(cleanAnchor)) {
+      return `[${cleanAnchor}]`;
+    }
+    const domain = extractCompactDomain(href);
+    return domain ? `[链接: ${domain}]` : "[链接]";
+  });
+
+  // 3. Replace Markdown links: [anchor](url)
+  result = result.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/gi, (_match, anchorText, url) => {
+    replacedCount++;
+    const cleanAnchor = anchorText.trim();
+    const isUnsub = /unsubscribe|optout|opt-out|退订/i.test(url) || /unsubscribe|退订/i.test(cleanAnchor);
+    if (isUnsub) return "[退订链接]";
+    if (cleanAnchor && cleanAnchor.length > 1 && !/^https?:\/\//i.test(cleanAnchor) && !/^(?:click here|here|链接|详情|link)$/i.test(cleanAnchor)) {
+      return `[${cleanAnchor}]`;
+    }
+    const domain = extractCompactDomain(url);
+    return domain ? `[链接: ${domain}]` : "[链接]";
+  });
+
+  // 4. Replace raw URLs (http:// or https://...)
+  result = result.replace(/https?:\/\/[^\s<>"'()[\]]+/gi, (rawUrl) => {
+    replacedCount++;
+    const isUnsub = /unsubscribe|optout|opt-out|退订/i.test(rawUrl);
+    if (isUnsub) return "[退订链接]";
+    const domain = extractCompactDomain(rawUrl);
+    return domain ? `[链接: ${domain}]` : "[链接]";
+  });
+
+  // 5. Collapse duplicate consecutive links (e.g. "[链接] [链接] [链接]" -> "[链接]")
+  result = result.replace(/(\[(?:链接(?::\s*[^\]]+)?|退订链接|内联图片)\](?:\s*,?\s*|\s+)){2,}/g, (match) => {
+    const firstTag = match.match(/\[[^\]]+\]/);
+    return firstTag ? `${firstTag[0]} ` : match;
+  });
+
+  result = result.replace(/[ \t]{2,}/g, " ").trim();
+  const sanitizedLength = result.length;
+  const charsSaved = Math.max(0, originalLength - sanitizedLength);
+  const estimatedTokensSaved = Math.round(charsSaved / 3.5);
+
+  return {
+    sanitized: result,
+    replacedCount,
+    originalLength,
+    sanitizedLength,
+    estimatedTokensSaved,
+  };
+}
