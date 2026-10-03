@@ -55,6 +55,26 @@ export type EventsRouteDeps = {
  */
 const activeStreams = new Set<ServerResponse>();
 
+/**
+ * Forcibly ends and destroys all active SSE response streams.
+ * Must be called during server shutdown before fastify.close(),
+ * because hijacked keep-alive streams otherwise prevent Node's
+ * http.Server from draining and closing.
+ */
+export function closeActiveEventStreams(): void {
+  for (const stream of activeStreams) {
+    try {
+      if (!stream.destroyed) {
+        stream.end();
+        stream.destroy();
+      }
+    } catch {
+      // Ignore errors while closing sockets during shutdown
+    }
+  }
+  activeStreams.clear();
+}
+
 export function registerEventsRoutes(app: FastifyInstance, deps: EventsRouteDeps): void {
   const { context, log } = deps;
   const pendingBudget = deps.limits?.maxPendingBytes ?? maxPendingEventBytes;

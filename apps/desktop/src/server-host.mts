@@ -232,7 +232,7 @@ export type UncaughtExceptionTarget = {
 
 /**
  * Turns an uncaught exception into exactly one structured line plus a
- * deliberate exit.
+ * deliberate exit, and records unhandled rejections to stderr as warnings.
  *
  * This module is the utility-process entry: it runs beside SQLite, the IMAP
  * connections, the Agent loop and the HTTP server, and it is a *different
@@ -270,6 +270,24 @@ export function installServiceCrashGuard(
     }
     hooks.exit(serviceCrashExitCode);
   });
+
+  if (target === (process as unknown)) {
+    process.on("unhandledRejection", (reason: unknown) => {
+      const line = `${JSON.stringify({
+        level: 40,
+        time: Date.now(),
+        event: "unhandled-rejection",
+        message: reason instanceof Error ? reason.message : String(reason),
+        name: reason instanceof Error ? reason.name : undefined,
+        stack: reason instanceof Error ? reason.stack : undefined,
+      })}\n`;
+      try {
+        hooks.write(line);
+      } catch {
+        // A dead stderr must not throw
+      }
+    });
+  }
 }
 
 // Auto-start when loaded as the utility-process entry (the default export is

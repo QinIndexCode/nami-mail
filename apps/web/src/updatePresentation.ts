@@ -132,10 +132,15 @@ function promptPresentation(
     };
   }
   if (snapshot.phase === "error") {
+    const isSpecificFailure = snapshot.reason === "mailDataBusy"
+      || snapshot.reason === "installerNotStarted"
+      || snapshot.reason === "archiveIntegrityInvalid"
+      || snapshot.reason === "installResult"
+      || snapshot.reason === "installNotApplied";
     return {
       eyebrow: t("update.prompt.error.eyebrow"),
       title: t("update.prompt.error.title"),
-      description: t("update.prompt.error.description", { version }),
+      description: isSpecificFailure ? status : t("update.prompt.error.description", { version }),
     };
   }
   if (snapshot.phase === "up-to-date") {

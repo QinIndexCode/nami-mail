@@ -745,7 +745,7 @@ async function prepareLocalServerForUpdateInstall(): Promise<boolean> {
     return true;
   } catch (error) {
     if (agentUpdateDrain.hasDrainedHost()) await agentUpdateDrain.recoverAfterInstallerFailure();
-    desktopAgentBrokerRecoveryGate = "closed";
+    desktopAgentBrokerRecoveryGate = "accepting";
     console.error("Nami Mail could not prepare its data for update", error);
     return false;
   }

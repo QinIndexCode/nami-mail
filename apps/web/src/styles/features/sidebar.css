@@ -644,149 +644,190 @@ display:block
 .sidebar-footer
 {
 border-top:1px solid var(--line);
+margin-top:auto;
+padding:10px 8px 6px;
+display:flex;
+flex-direction:column;
+gap:6px
+}
+.sidebar-footer-update-row
+{
+display:flex;
+align-items:center;
+width:100%
+}
+.sidebar-footer-info
+{
+display:flex;
 justify-content:space-between;
 align-items:center;
-margin-top:auto;
-padding:12px 8px 0;
-display:flex
+width:100%;
+gap:6px
 }
-.sidebar-footer>div
+.sidebar-footer-privacy
 {
 color:var(--text-soft);
 align-items:center;
-gap:8px;
-display:flex
+gap:6px;
+display:flex;
+min-width:0;
+flex:1
 }
-.sidebar-footer>div>span
+.sidebar-footer-privacy svg
+{
+flex-shrink:0
+}
+.sidebar-footer-privacy>span
 {
 flex-direction:column;
-display:flex
+display:flex;
+min-width:0
 }
 .sidebar-footer strong
 {
 font-size:10px;
-font-weight:600
+font-weight:600;
+white-space:nowrap;
+overflow:hidden;
+text-overflow:ellipsis
 }
 .sidebar-footer small
 {
 color:var(--text-faint);
-font-size:8px
+font-size:8px;
+white-space:nowrap;
+overflow:hidden;
+text-overflow:ellipsis
 }
-/* Beats `.sidebar-footer>div{gap:8px}` (0,1,1) on specificity instead of forcing
-   the value with !important — see DESIGN-SYSTEM §7. */
-.sidebar-footer>.sidebar-footer-actions
+.sidebar-footer .version
 {
-gap:2px
+font-family:DM Mono,monospace;
+font-size:9px;
+color:var(--text-faint);
+flex-shrink:0
 }
 .update-footer-button
 {
-color:var(--button-text);
-border:1px solid color-mix(in srgb, var(--button-text) 40%, transparent);
+color:var(--text);
+border:1px solid var(--line);
 border-radius:var(--radius-pill);
-background:color-mix(in srgb, var(--button-text) 10%, transparent);
+background:var(--panel-muted);
 align-items:center;
-gap:4px;
+justify-content:center;
+gap:6px;
+padding:4px 10px;
+font-size:10px;
+font-weight:600;
+cursor:pointer;
+display:inline-flex;
+width:100%;
+overflow:hidden;
+white-space:nowrap;
+text-overflow:ellipsis;
+transition:background .15s ease,border-color .15s ease,color .15s ease
+}
+.update-footer-button:hover:not(:disabled)
+{
+border-color:var(--focus-ring);
+background:var(--hover);
+color:var(--text)
+}
+.update-footer-button.update-footer-button--retry
+{
+color:var(--danger, #ef4444);
+border-color:color-mix(in srgb, var(--danger, #ef4444) 35%, var(--line));
+background:color-mix(in srgb, var(--danger, #ef4444) 10%, var(--panel-muted))
+}
+.update-footer-button.update-footer-button--retry:hover:not(:disabled)
+{
+border-color:var(--danger, #ef4444);
+background:color-mix(in srgb, var(--danger, #ef4444) 18%, var(--panel-muted))
+}
+.update-footer-button.update-footer-button--install
+{
+color:var(--focus-ring);
+border-color:color-mix(in srgb, var(--focus-ring) 45%, var(--line));
+background:color-mix(in srgb, var(--focus-ring) 10%, var(--panel-muted))
+}
+.update-footer-button.update-footer-button--install:hover:not(:disabled)
+{
+border-color:var(--focus-ring);
+background:color-mix(in srgb, var(--focus-ring) 18%, var(--panel-muted))
+}
+.update-footer-button:disabled
+{
+opacity:.6;
+cursor:default
+}
+.update-badge
+{
+position:relative;
+align-items:center;
+width:100%;
+height:28px;
+border:1px solid var(--line);
+border-radius:var(--radius-pill);
+background:var(--panel-muted);
+cursor:default;
+overflow:hidden;
+display:flex;
+transition:border-color .2s ease
+}
+.update-badge:hover
+{
+border-color:var(--focus-ring)
+}
+.update-badge-icon
+{
+position:absolute;
+left:8px;
+top:50%;
+transform:translateY(-50%);
+align-items:center;
+justify-content:center;
+width:14px;
+height:14px;
+color:var(--focus-ring);
+display:flex
+}
+.update-badge-pop
+{
+align-items:center;
+justify-content:space-between;
+width:100%;
+padding-left:26px;
+padding-right:6px;
+display:flex;
+white-space:nowrap;
+gap:6px
+}
+.update-badge-text
+{
+color:var(--text);
+font-size:10px;
+font-weight:600;
+overflow:hidden;
+text-overflow:ellipsis
+}
+.update-badge-download
+{
+color:var(--text);
+border:1px solid var(--line);
+border-radius:var(--radius-pill);
+background:var(--panel);
+align-items:center;
 padding:2px 8px;
 font-size:9px;
 font-weight:600;
 cursor:pointer;
 display:inline-flex;
-max-width:140px;
-overflow:hidden;
-white-space:nowrap;
-text-overflow:ellipsis
-}
-.update-footer-button:hover:not(:disabled)
-{
-border-color:var(--button-text)
-}
-.update-footer-button:disabled
-{
-opacity:.55;
-cursor:default
-}
-/* Circular update badge for an available release. Collapsed it is a 30px
-   circle with a download arrow; hovering fades the arrow out and stretches
-   the pill open ("new version x.y.z" + download + dismiss). Hovering out
-   folds it back into the circle. Dismissing reverses the pill first, then
-   fades the whole badge away (React removes it once the fade lands). */
-.update-badge
-{
-position:relative;
-align-items:center;
-max-width:30px;
-height:30px;
-border:1px solid color-mix(in srgb, var(--button-text) 40%, transparent);
-border-radius:var(--radius-pill);
-background:color-mix(in srgb, var(--button-text) 10%, transparent);
-cursor:default;
-overflow:hidden;
-display:flex;
-transition:max-width .3s ease,opacity .24s ease
-}
-.update-badge:hover
-{
-max-width:330px
-}
-.update-badge-icon
-{
-position:absolute;
-left:1px;
-top:1px;
-align-items:center;
-justify-content:center;
-width:28px;
-height:28px;
-color:var(--button-text);
-display:flex;
-opacity:1;
-transition:opacity .2s ease
-}
-.update-badge:hover .update-badge-icon
-{
-opacity:0
-}
-.update-badge-pop
-{
-align-items:center;
-gap:8px;
-padding-left:34px;
-padding-right:8px;
-display:flex;
-white-space:nowrap;
-opacity:0;
-transform:translateX(-6px);
-transition:opacity .18s ease .06s,transform .26s ease .04s
-}
-.update-badge:hover .update-badge-pop
-{
-opacity:1;
-transform:none
-}
-.update-badge-text
-{
-color:var(--text-secondary);
-font-size:10px;
-font-weight:600
-}
-.update-badge-download
-{
-color:var(--button-text);
-border:1px solid color-mix(in srgb, var(--button-text) 45%, transparent);
-border-radius:var(--radius-pill);
-background:transparent;
-align-items:center;
-padding:2px 10px;
-font-size:10px;
-font-weight:600;
-cursor:pointer;
-display:inline-flex;
+flex-shrink:0;
 transition:border-color .15s ease,background .15s ease
 }
 .update-badge-download:hover:not(:disabled)
 {
-border-color:var(--button-text);
-background:color-mix(in srgb, var(--button-text) 16%, transparent)
+border-color:var(--focus-ring);
+background:var(--hover)
 }
 .update-badge-download:disabled
 {
@@ -797,42 +838,27 @@ cursor:default
 {
 align-items:center;
 justify-content:center;
-width:20px;
-height:20px;
+width:18px;
+height:18px;
 border-radius:50%;
 color:var(--text-faint);
 background:transparent;
 cursor:pointer;
 display:flex;
+padding:0;
+flex-shrink:0;
+border:0;
 transition:color .15s ease,background .15s ease
 }
 .update-badge-close:hover
 {
-color:var(--text-secondary);
-background:color-mix(in srgb, var(--text-secondary) 12%, transparent)
+color:var(--text);
+background:var(--hover)
 }
-/* Dismissed: the pill folds back into the circle first, then the circle
-   fades out; pointer events are cut so a stray hover cannot re-open it. */
 .update-badge.dismissed
 {
-max-width:30px;
+max-width:0;
 opacity:0;
 pointer-events:none;
-transition:max-width .3s ease .12s,opacity .22s ease .36s
-}
-.update-badge.dismissed .update-badge-pop
-{
-opacity:0;
-transform:translateX(-6px);
-transition:opacity .14s ease,transform .2s ease
-}
-.update-badge.dismissed .update-badge-icon
-{
-opacity:1
-}
-.version
-{
-color:var(--text-faint);
-font-family:DM Mono,monospace;
-font-size:8px
+display:none
 }
