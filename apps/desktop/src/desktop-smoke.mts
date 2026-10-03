@@ -974,51 +974,16 @@ export async function inspectDesktopSettingsUi(): Promise<DesktopSettingsUiSmoke
 
         const settings = await waitFor(() => document.querySelector('.settings-modal'));
         if (!(settings instanceof HTMLElement)) throw new Error('Settings dialog did not open.');
-        const lastMissing = [];
-        const completeSettings = await waitFor(() => {
-          const settingsBackdrop = settings.parentElement;
-          const lightBrandMark = document.querySelector('.brand-mark-light');
-          const darkBrandMark = document.querySelector('.brand-mark-dark');
-          const title = settings.querySelector('#settings-title');
-          const editable = settings.querySelector('input[type="range"]');
-          const updateRow = settings.querySelector('.update-setting-row');
-          const input = settings.querySelector('input[type="file"]');
-          const uploadButton = settings.querySelector('.background-actions .secondary-button');
-          lastMissing.length = 0;
-          if (!(settingsBackdrop instanceof HTMLElement)) lastMissing.push('settings backdrop');
-          if (!(lightBrandMark instanceof HTMLImageElement)) lastMissing.push('.brand-mark-light');
-          if (!(darkBrandMark instanceof HTMLImageElement)) lastMissing.push('.brand-mark-dark');
-          if (!(title instanceof HTMLElement)) lastMissing.push('#settings-title');
-          if (!(editable instanceof HTMLInputElement)) lastMissing.push('input[type="range"]');
-          if (!(updateRow instanceof HTMLElement)) lastMissing.push('.update-setting-row');
-          if (!(input instanceof HTMLInputElement)) lastMissing.push('input[type="file"]');
-          if (!(uploadButton instanceof HTMLButtonElement)) lastMissing.push('.background-actions .secondary-button');
-          if (lastMissing.length > 0) return null;
-          return { settingsBackdrop, lightBrandMark, darkBrandMark, title, editable, updateRow, input, uploadButton };
-        });
-        if (!completeSettings) {
-          let updateBridgeEvidence = 'unavailable';
-          try {
-            const rawBridge = window.namiDesktop;
-            if (rawBridge && typeof rawBridge.getUpdateStatus === 'function') {
-              updateBridgeEvidence = JSON.stringify(await rawBridge.getUpdateStatus() ?? null);
-            } else {
-              updateBridgeEvidence = String(typeof rawBridge);
-            }
-          } catch (error) {
-            updateBridgeEvidence = 'error: ' + (error instanceof Error ? error.message : String(error));
-          }
-          throw new Error(
-            'Settings controls were not rendered after waiting for the desktop update status. Missing: '
-            + lastMissing.join(', ')
-            + ' | update bridge: ' + updateBridgeEvidence,
-          );
+        const settingsBackdrop = settings.parentElement;
+        const lightBrandMark = await waitFor(() => document.querySelector('.brand-mark-light'));
+        const darkBrandMark = await waitFor(() => document.querySelector('.brand-mark-dark'));
+        const title = await waitFor(() => settings.querySelector('#settings-title'));
+        if (!(settingsBackdrop instanceof HTMLElement) || !(lightBrandMark instanceof HTMLImageElement) || !(darkBrandMark instanceof HTMLImageElement) || !(title instanceof HTMLElement)) {
+          throw new Error('Base settings chrome elements were not rendered.');
         }
-        const { settingsBackdrop, lightBrandMark, darkBrandMark, title, editable, updateRow, input, uploadButton } = completeSettings;
         const brandName = document.querySelector('.brand-row strong')?.textContent?.trim() ?? '';
 
         const displayTextUnselectable = getComputedStyle(title).userSelect === 'none';
-        const editableTextSelectable = getComputedStyle(editable).userSelect === 'text';
         const settingsBackdropStyle = snapshotBackdrop(settingsBackdrop);
         const restoreDefaultsButton = settings.querySelector('.settings-footer .secondary-button');
         if (!(restoreDefaultsButton instanceof HTMLButtonElement)) throw new Error('Settings confirmation trigger was not rendered.');
@@ -1032,6 +997,25 @@ export async function inspectDesktopSettingsUi(): Promise<DesktopSettingsUiSmoke
         if (!(cancelConfirmation instanceof HTMLButtonElement)) throw new Error('Settings confirmation dialog has no cancel control.');
         cancelConfirmation.click();
         await waitFor(() => !document.querySelector('.confirmation-card'));
+
+        const desktopNav = await waitFor(() => settings.querySelector('#settings-nav-desktop'));
+        if (!(desktopNav instanceof HTMLButtonElement)) throw new Error('Desktop settings nav button was not rendered.');
+        desktopNav.click();
+        const updateRow = await waitFor(() => settings.querySelector('.update-setting-row'));
+        if (!(updateRow instanceof HTMLElement)) throw new Error('Update setting row was not rendered in desktop panel.');
+        const updateStatusText = updateRow.textContent?.trim() ?? '';
+        const updateActionCount = updateRow.querySelectorAll('button').length;
+
+        const appearanceNav = await waitFor(() => settings.querySelector('#settings-nav-appearance'));
+        if (!(appearanceNav instanceof HTMLButtonElement)) throw new Error('Appearance settings nav button was not rendered.');
+        appearanceNav.click();
+        const editable = await waitFor(() => settings.querySelector('input[type="range"]'));
+        const input = await waitFor(() => settings.querySelector('input[type="file"]'));
+        const uploadButton = await waitFor(() => settings.querySelector('.background-actions .secondary-button'));
+        if (!(editable instanceof HTMLInputElement) || !(input instanceof HTMLInputElement) || !(uploadButton instanceof HTMLButtonElement)) {
+          throw new Error('Appearance controls were not rendered in appearance panel.');
+        }
+        const editableTextSelectable = getComputedStyle(editable).userSelect === 'text';
         const originalDialogs = {
           alert: window.alert,
           confirm: window.confirm,
@@ -1099,8 +1083,8 @@ export async function inspectDesktopSettingsUi(): Promise<DesktopSettingsUiSmoke
             displayTextUnselectable,
             editableTextSelectable,
             updateStatusPresent: true,
-            updateStatusText: updateRow.textContent?.trim() ?? '',
-            updateActionCount: updateRow.querySelectorAll('button').length,
+            updateStatusText,
+            updateActionCount,
           };
         } finally {
           window.alert = originalDialogs.alert;
@@ -1145,6 +1129,11 @@ export async function inspectDesktopSettingsSync(): Promise<DesktopSettingsSyncS
           const settingsButton = document.querySelector('.icon-rail .icon-button');
           if (!(settingsButton instanceof HTMLButtonElement)) throw new Error('Settings button was not rendered.');
           settingsButton.click();
+        }
+        const settings = await waitFor(() => document.querySelector('.settings-modal'));
+        if (settings && !settings.querySelector('.close-behavior-grid')) {
+          const desktopNav = settings.querySelector('#settings-nav-desktop');
+          if (desktopNav instanceof HTMLButtonElement) desktopNav.click();
         }
         const expected = ${JSON.stringify(expected)};
         const selector = '.close-behavior-grid [data-close-behavior="' + expected + '"][aria-pressed="true"]';

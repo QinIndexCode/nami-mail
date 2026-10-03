@@ -1,10 +1,13 @@
-import { Check, Filter, LoaderCircle, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, CircleHelp, Filter, LoaderCircle, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "./api";
 import { mailErrorMessage } from "./errorPresentation";
 import { useI18n, type Translate } from "./i18n";
 import ThemedSelect from "./ThemedSelect";
 import { FormNotice, type Notice } from "./FormNotice";
+import { useDialogFocus } from "./hooks/useDialogFocus";
+import { useDismissTransition } from "./hooks/useDismissTransition";
 import type {
   Account,
   FilterRule,
@@ -18,6 +21,11 @@ export type FilterRulesSectionProps = {
   demoMode?: boolean;
   /** Test seam: preloaded rules skip the API load. */
   initialRules?: FilterRule[];
+  /** Host to portal the modal dialog into, avoiding clipping by .settings-body / .settings-panel */
+  overlayHostRef?: React.RefObject<HTMLElement | null>;
+  /** Notifies parent settings modal when a stacked rule modal opens or closes,
+   *  so the parent modal can suspend its own focus trap and Escape handler. */
+  onOverlayOpenChange?: (open: boolean) => void;
 };
 
 type FilterRuleDraft = {
@@ -130,6 +138,8 @@ export default function FilterRulesSection({
   accounts,
   demoMode = false,
   initialRules,
+  overlayHostRef,
+  onOverlayOpenChange,
 }: FilterRulesSectionProps) {
   const { t } = useI18n();
   const [rules, setRules] = useState<FilterRule[]>(initialRules ?? []);
@@ -141,6 +151,47 @@ export default function FilterRulesSection({
   const [busyRuleId, setBusyRuleId] = useState<string | null>(null);
   const [armedDeleteId, setArmedDeleteId] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  const [modalNotice, setModalNotice] = useState<Notice>(null);
+  const editorPanel = useRef<HTMLElement>(null);
+  const { closing: editorClosing, requestClose: requestEditorClose } = useDismissTransition(() => {
+    setDraft(null);
+    setModalNotice(null);
+  });
+  useDialogFocus(Boolean(draft), editorPanel);
+
+  const lastOverlayOpenRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    const open = Boolean(draft);
+    if (lastOverlayOpenRef.current !== open) {
+      lastOverlayOpenRef.current = open;
+      onOverlayOpenChange?.(open);
+    }
+  }, [draft, onOverlayOpenChange]);
+
+  useEffect(() => {
+    return () => {
+      if (lastOverlayOpenRef.current) {
+        lastOverlayOpenRef.current = false;
+        onOverlayOpenChange?.(false);
+      }
+    };
+  }, [onOverlayOpenChange]);
+
+  const closeEditor = () => {
+    if (!busy) requestEditorClose();
+  };
+
+  useEffect(() => {
+    if (!draft) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || busy) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeEditor();
+    };
+    window.addEventListener("keydown", closeOnEscape, true);
+    return () => window.removeEventListener("keydown", closeOnEscape, true);
+  }, [draft, busy]);
 
   useEffect(() => {
     if (demoMode || initialRules !== undefined) return undefined;
@@ -163,10 +214,22 @@ export default function FilterRulesSection({
 
   if (demoMode) {
     return (
-      <section className="settings-section" aria-labelledby="filter-rules-settings">
+      <section className="settings-section" data-settings-nav="filters" aria-labelledby="filter-rules-settings">
         <div className="settings-section-title">
           <Filter size={16} />
-          <div><span>{t("settings.filterRules.title")}</span><p id="filter-rules-settings">{t("settings.filterRules.description")}</p></div>
+          <div>
+            <span id="filter-rules-settings">
+              {t("settings.filterRules.title")}
+              <span
+                className="field-help-icon"
+                data-tooltip={t("settings.filterRules.description")}
+                aria-label={t("settings.filterRules.description")}
+                tabIndex={0}
+              >
+                <CircleHelp size={12} aria-hidden="true" />
+              </span>
+            </span>
+          </div>
         </div>
         <p className="settings-empty" role="status">{t("settings.filterRules.demoUnavailable")}</p>
       </section>
@@ -181,19 +244,19 @@ export default function FilterRulesSection({
     if (!draft || busy) return;
     const name = draft.name.trim();
     if (!name) {
-      setNotice({ kind: "error", message: t("settings.filterRules.validation.nameRequired") });
+      setModalNotice({ kind: "error", message: t("settings.filterRules.validation.nameRequired") });
       return;
     }
     if (draft.conditions.length === 0) {
-      setNotice({ kind: "error", message: t("settings.filterRules.validation.conditionRequired") });
+      setModalNotice({ kind: "error", message: t("settings.filterRules.validation.conditionRequired") });
       return;
     }
     if (draft.actions.length === 0) {
-      setNotice({ kind: "error", message: t("settings.filterRules.validation.actionRequired") });
+      setModalNotice({ kind: "error", message: t("settings.filterRules.validation.actionRequired") });
       return;
     }
     setBusy(true);
-    setNotice(null);
+    setModalNotice(null);
     const input: FilterRuleInput = {
       name,
       accountId: draft.accountId,
@@ -211,9 +274,9 @@ export default function FilterRulesSection({
         setRules((current) => [...current, result.rule]);
         setNotice({ kind: "success", message: t("settings.filterRules.saved") });
       }
-      setDraft(null);
+      closeEditor();
     } catch (error) {
-      setNotice({
+      setModalNotice({
         kind: "error",
         message: mailErrorMessage(error, t(draft.id ? "settings.filterRules.updateFailed" : "settings.filterRules.saveFailed"), t),
       });
@@ -284,29 +347,249 @@ export default function FilterRulesSection({
 
   const draftFolders = draft ? filterFolderOptions(accounts, draft.accountId) : [];
 
-  return (
-    <section className="settings-section" aria-labelledby="filter-rules-settings">
-      <div className="settings-section-title">
-        <Filter size={16} />
-        <div><span>{t("settings.filterRules.title")}</span><p id="filter-rules-settings">{t("settings.filterRules.description")}</p></div>
-      </div>
-
-      <FormNotice notice={notice} />
-
-      {loading ? (
-        <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("common.loading")}</p>
-      ) : loadError ? (
-        <div className="settings-empty translation-configuration-load-error" role="alert">
-          <span>{mailErrorMessage(loadError, t("settings.filterRules.loadFailed"), t)}</span>
-          <button className="secondary-button" type="button" disabled={busy} onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
-            <RefreshCw size={15} aria-hidden="true" />{t("common.retry")}
+  const modalDialog = draft ? (
+    <div
+      className={`modal-backdrop contact-editor-backdrop${editorClosing ? " closing" : ""}`}
+      role="presentation"
+      onMouseDown={(event) => event.target === event.currentTarget && closeEditor()}
+    >
+      <section
+        ref={editorPanel}
+        className={`modal-card contact-editor-modal filter-rule-modal${editorClosing ? " closing" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="filter-rule-editor-title"
+        tabIndex={-1}
+      >
+        <div className="contact-editor-head filter-rule-modal-head">
+          <h3 id="filter-rule-editor-title" className="contact-editor-title filter-rule-modal-title">
+            {draft.id ? t("settings.filterRules.editTitle") : t("settings.filterRules.addTitle")}
+          </h3>
+          <button
+            className="icon-button filter-rule-close-btn"
+            type="button"
+            aria-label={t("common.close")}
+            disabled={busy}
+            onClick={closeEditor}
+          >
+            <X size={16} />
           </button>
         </div>
-      ) : (
-        <>
-          {rules.length === 0 && !draft ? (
-            <p className="settings-empty">{t("settings.filterRules.empty")}</p>
-          ) : (
+
+        <div className="filter-rule-modal-body">
+          <FormNotice notice={modalNotice} onDismiss={() => setModalNotice(null)} />
+
+          <div className="filter-rule-top-grid">
+            <label className="filter-rule-field" htmlFor="filter-rule-name">
+              <span>{t("settings.filterRules.nameLabel")}</span>
+              <input
+                id="filter-rule-name"
+                type="text"
+                value={draft.name}
+                placeholder={t("settings.filterRules.namePlaceholder")}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={busy}
+                data-dialog-initial-focus
+                onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+              />
+            </label>
+
+            <label className="filter-rule-field" htmlFor="filter-rule-account">
+              <span>{t("settings.filterRules.accountLabel")}</span>
+              <ThemedSelect
+                id="filter-rule-account"
+                className="filter-rule-account-select"
+                value={draft.accountId ?? ""}
+                aria-label={t("settings.filterRules.accountLabel")}
+                disabled={busy}
+                onValueChange={updateDraftAccount}
+              >
+                <option value="">{t("settings.filterRules.accountAll")}</option>
+                {accounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}
+              </ThemedSelect>
+            </label>
+          </div>
+
+          <div className="filter-rule-section-head">
+            <div className="filter-rule-section-title-wrap">
+              <span className="filter-rule-section-title">
+                {t("settings.filterRules.conditionsLabel")}
+                <span
+                  className="field-help-icon"
+                  data-tooltip={t("settings.filterRules.conditionsDescription")}
+                  aria-label={t("settings.filterRules.conditionsDescription")}
+                  tabIndex={0}
+                >
+                  <CircleHelp size={12} aria-hidden="true" />
+                </span>
+              </span>
+            </div>
+            <button
+              className="secondary-button filter-rule-add-button"
+              type="button"
+              disabled={busy}
+              onClick={() => setDraft({ ...draft, conditions: [...draft.conditions, { kind: "from", value: "" }] })}
+            >
+              <Plus size={13} />{t("settings.filterRules.addCondition")}
+            </button>
+          </div>
+          <div className="filter-rule-rows">
+            {draft.conditions.map((condition, index) => (
+              <div className="filter-rule-row-editor" key={index}>
+                <ThemedSelect
+                  id={`filter-rule-condition-kind-${index}`}
+                  value={condition.kind}
+                  aria-label={t("settings.filterRules.condition.kindLabel")}
+                  disabled={busy}
+                  className="filter-rule-kind-select"
+                  onValueChange={(kind) => {
+                    const nextKind = kind as FilterRuleCondition["kind"];
+                    updateDraftCondition(index, conditionFromInput(nextKind, condition.kind === "has_attachments" ? String(condition.value) : condition.value));
+                  }}
+                >
+                  {conditionKindOptions.map((option) => <option key={option.value} value={option.value}>{t(option.labelKey)}</option>)}
+                </ThemedSelect>
+                {condition.kind === "has_attachments" ? (
+                  <ThemedSelect
+                    id={`filter-rule-condition-value-${index}`}
+                    value={condition.value ? "true" : "false"}
+                    aria-label={t("settings.filterRules.condition.hasAttachments")}
+                    disabled={busy}
+                    className="filter-rule-value-select"
+                    onValueChange={(value) => updateDraftCondition(index, { kind: "has_attachments", value: value === "true" })}
+                  >
+                    <option value="true">{t("settings.filterRules.condition.yes")}</option>
+                    <option value="false">{t("settings.filterRules.condition.no")}</option>
+                  </ThemedSelect>
+                ) : (
+                  <input
+                    type="text"
+                    value={condition.value}
+                    placeholder={t("settings.filterRules.condition.valuePlaceholder")}
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={busy}
+                    onChange={(event) => updateDraftCondition(index, { ...condition, value: event.target.value })}
+                  />
+                )}
+                <button className="icon-button danger-icon-button" type="button" aria-label={t("settings.filterRules.removeCondition")} data-tooltip={t("settings.filterRules.removeCondition")} disabled={busy || draft.conditions.length <= 1} onClick={() => setDraft({ ...draft, conditions: draft.conditions.filter((_, itemIndex) => itemIndex !== index) })}>
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="filter-rule-section-head">
+            <div className="filter-rule-section-title-wrap">
+              <span className="filter-rule-section-title">
+                {t("settings.filterRules.actionsLabel")}
+                <span
+                  className="field-help-icon"
+                  data-tooltip={t("settings.filterRules.actionsDescription")}
+                  aria-label={t("settings.filterRules.actionsDescription")}
+                  tabIndex={0}
+                >
+                  <CircleHelp size={12} aria-hidden="true" />
+                </span>
+              </span>
+            </div>
+            <button
+              className="secondary-button filter-rule-add-button"
+              type="button"
+              disabled={busy}
+              onClick={() => setDraft({ ...draft, actions: [...draft.actions, { kind: "mark_seen" }] })}
+            >
+              <Plus size={13} />{t("settings.filterRules.addAction")}
+            </button>
+          </div>
+          <div className="filter-rule-rows">
+            {draft.actions.map((action, index) => (
+              <div className="filter-rule-row-editor" key={index}>
+                <ThemedSelect
+                  id={`filter-rule-action-kind-${index}`}
+                  value={action.kind}
+                  aria-label={t("settings.filterRules.action.kindLabel")}
+                  disabled={busy}
+                  className="filter-rule-action-kind-select"
+                  menuPlacement="top"
+                  onValueChange={(kind) => {
+                    const nextKind = kind as FilterRuleAction["kind"];
+                    updateDraftAction(index, actionFromInput(nextKind, action.kind === "move_to_folder" ? action.folderPath : draftFolders[0]?.path ?? ""));
+                  }}
+                >
+                  {actionKindOptions.map((option) => <option key={option.value} value={option.value}>{t(option.labelKey)}</option>)}
+                </ThemedSelect>
+                {action.kind === "move_to_folder" && (
+                  <ThemedSelect
+                    id={`filter-rule-action-folder-${index}`}
+                    value={action.folderPath}
+                    aria-label={t("settings.filterRules.folderSelectLabel")}
+                    disabled={busy || draftFolders.length === 0}
+                    className="filter-rule-folder-select"
+                    menuPlacement="top"
+                    onValueChange={(folderPath) => updateDraftAction(index, { kind: "move_to_folder", folderPath })}
+                  >
+                    {action.folderPath && !draftFolders.some((folder) => folder.path === action.folderPath) && <option value={action.folderPath}>{action.folderPath}</option>}
+                    {draftFolders.map((folder) => <option key={folder.path} value={folder.path}>{folder.label}</option>)}
+                  </ThemedSelect>
+                )}
+                <button className="icon-button danger-icon-button" type="button" aria-label={t("settings.filterRules.removeAction")} data-tooltip={t("settings.filterRules.removeAction")} disabled={busy || draft.actions.length <= 1} onClick={() => setDraft({ ...draft, actions: draft.actions.filter((_, itemIndex) => itemIndex !== index) })}>
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="contact-editor-actions filter-rule-modal-actions">
+          <button className="secondary-button" type="button" disabled={busy} onClick={closeEditor}>
+            {t("common.cancel")}
+          </button>
+          <button className="primary-button" type="button" disabled={busy || !draft.name.trim()} onClick={() => void saveDraft()}>
+            {busy ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{t("settings.filterRules.save")}
+          </button>
+        </div>
+      </section>
+    </div>
+  ) : null;
+
+  return (
+    <>
+      <section className="settings-section" data-settings-nav="filters" aria-labelledby="filter-rules-settings">
+        <div className="settings-section-title">
+          <Filter size={16} />
+          <div>
+            <span id="filter-rules-settings">
+              {t("settings.filterRules.title")}
+              <span
+                className="field-help-icon"
+                data-tooltip={t("settings.filterRules.description")}
+                aria-label={t("settings.filterRules.description")}
+                tabIndex={0}
+              >
+                <CircleHelp size={12} aria-hidden="true" />
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <FormNotice notice={notice} onDismiss={() => setNotice(null)} />
+
+        {loading ? (
+          <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("common.loading")}</p>
+        ) : loadError ? (
+          <div className="settings-empty translation-configuration-load-error" role="alert">
+            <span>{mailErrorMessage(loadError, t("settings.filterRules.loadFailed"), t)}</span>
+            <button className="secondary-button" type="button" disabled={busy} onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
+              <RefreshCw size={15} aria-hidden="true" />{t("common.retry")}
+            </button>
+          </div>
+        ) : (
+          <>
+            {rules.length === 0 ? (
+              <p className="settings-empty">{t("settings.filterRules.empty")}</p>
+            ) : (
             <div className="filter-rules-list">
               {rules.map((rule) => {
                 const accountScope = rule.accountId
@@ -335,13 +618,14 @@ export default function FilterRulesSection({
                         </button>
                         <button className="icon-button" type="button" aria-label={t("settings.filterRules.edit")} data-tooltip={t("settings.filterRules.edit")} disabled={Boolean(busyRuleId)} onClick={() => {
                           setArmedDeleteId(null);
+                          setModalNotice(null);
                           setDraft({
                             id: rule.id,
                             name: rule.name,
                             enabled: rule.enabled,
                             accountId: rule.accountId,
-                            conditions: rule.conditions,
-                            actions: rule.actions,
+                            conditions: rule.conditions.map((item) => ({ ...item })),
+                            actions: rule.actions.map((item) => ({ ...item })),
                           });
                         }}>
                           <Pencil size={15} />
@@ -368,149 +652,25 @@ export default function FilterRulesSection({
             </div>
           )}
 
-          {draft && (
-            <div className="filter-rule-editor">
-              <label className="translation-setting-field" htmlFor="filter-rule-name">
-                <span><strong>{t("settings.filterRules.nameLabel")}</strong></span>
-                <input
-                  id="filter-rule-name"
-                  type="text"
-                  value={draft.name}
-                  placeholder={t("settings.filterRules.namePlaceholder")}
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={busy}
-                  onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-                />
-              </label>
-
-              <label className="setting-select-row" htmlFor="filter-rule-account">
-                <span><strong>{t("settings.filterRules.accountLabel")}</strong><small>{t("settings.filterRules.accountDescription")}</small></span>
-                <ThemedSelect
-                  id="filter-rule-account"
-                  value={draft.accountId ?? ""}
-                  aria-label={t("settings.filterRules.accountLabel")}
-                  disabled={busy}
-                  onValueChange={updateDraftAccount}
-                >
-                  <option value="">{t("settings.filterRules.accountAll")}</option>
-                  {accounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}
-                </ThemedSelect>
-              </label>
-
-              <div className="setting-subheading"><span>{t("settings.filterRules.conditionsLabel")}</span><small>{t("settings.filterRules.conditionsDescription")}</small></div>
-              <div className="filter-rule-rows">
-                {draft.conditions.map((condition, index) => (
-                  <div className="filter-rule-row-editor" key={index}>
-                    <ThemedSelect
-                      id={`filter-rule-condition-kind-${index}`}
-                      value={condition.kind}
-                      aria-label={t("settings.filterRules.condition.kindLabel")}
-                      disabled={busy}
-                      className="filter-rule-kind-select"
-                      onValueChange={(kind) => {
-                        const nextKind = kind as FilterRuleCondition["kind"];
-                        updateDraftCondition(index, conditionFromInput(nextKind, condition.kind === "has_attachments" ? String(condition.value) : condition.value));
-                      }}
-                    >
-                      {conditionKindOptions.map((option) => <option key={option.value} value={option.value}>{t(option.labelKey)}</option>)}
-                    </ThemedSelect>
-                    {condition.kind === "has_attachments" ? (
-                      <ThemedSelect
-                        id={`filter-rule-condition-value-${index}`}
-                        value={condition.value ? "true" : "false"}
-                        aria-label={t("settings.filterRules.condition.hasAttachments")}
-                        disabled={busy}
-                        className="filter-rule-value-select"
-                        onValueChange={(value) => updateDraftCondition(index, { kind: "has_attachments", value: value === "true" })}
-                      >
-                        <option value="true">{t("settings.filterRules.condition.yes")}</option>
-                        <option value="false">{t("settings.filterRules.condition.no")}</option>
-                      </ThemedSelect>
-                    ) : (
-                      <input
-                        type="text"
-                        value={condition.value}
-                        placeholder={t("settings.filterRules.condition.valuePlaceholder")}
-                        autoComplete="off"
-                        spellCheck={false}
-                        disabled={busy}
-                        onChange={(event) => updateDraftCondition(index, { ...condition, value: event.target.value })}
-                      />
-                    )}
-                    <button className="icon-button danger-icon-button" type="button" aria-label={t("settings.filterRules.removeCondition")} data-tooltip={t("settings.filterRules.removeCondition")} disabled={busy || draft.conditions.length <= 1} onClick={() => setDraft({ ...draft, conditions: draft.conditions.filter((_, itemIndex) => itemIndex !== index) })}>
-                      <X size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <button className="secondary-button" type="button" disabled={busy} onClick={() => setDraft({ ...draft, conditions: [...draft.conditions, { kind: "from", value: "" }] })}>
-                <Plus size={14} />{t("settings.filterRules.addCondition")}
-              </button>
-
-              <div className="setting-subheading"><span>{t("settings.filterRules.actionsLabel")}</span><small>{t("settings.filterRules.actionsDescription")}</small></div>
-              <div className="filter-rule-rows">
-                {draft.actions.map((action, index) => (
-                  <div className="filter-rule-row-editor" key={index}>
-                    <ThemedSelect
-                      id={`filter-rule-action-kind-${index}`}
-                      value={action.kind}
-                      aria-label={t("settings.filterRules.action.kindLabel")}
-                      disabled={busy}
-                      className="filter-rule-action-kind-select"
-                      onValueChange={(kind) => {
-                        const nextKind = kind as FilterRuleAction["kind"];
-                        updateDraftAction(index, actionFromInput(nextKind, action.kind === "move_to_folder" ? action.folderPath : draftFolders[0]?.path ?? ""));
-                      }}
-                    >
-                      {actionKindOptions.map((option) => <option key={option.value} value={option.value}>{t(option.labelKey)}</option>)}
-                    </ThemedSelect>
-                    {action.kind === "move_to_folder" && (
-                      <ThemedSelect
-                        id={`filter-rule-action-folder-${index}`}
-                        value={action.folderPath}
-                        aria-label={t("settings.filterRules.folderSelectLabel")}
-                        disabled={busy || draftFolders.length === 0}
-                        className="filter-rule-folder-select"
-                        onValueChange={(folderPath) => updateDraftAction(index, { kind: "move_to_folder", folderPath })}
-                      >
-                        {action.folderPath && !draftFolders.some((folder) => folder.path === action.folderPath) && <option value={action.folderPath}>{action.folderPath}</option>}
-                        {draftFolders.map((folder) => <option key={folder.path} value={folder.path}>{folder.label}</option>)}
-                      </ThemedSelect>
-                    )}
-                    <button className="icon-button danger-icon-button" type="button" aria-label={t("settings.filterRules.removeAction")} data-tooltip={t("settings.filterRules.removeAction")} disabled={busy || draft.actions.length <= 1} onClick={() => setDraft({ ...draft, actions: draft.actions.filter((_, itemIndex) => itemIndex !== index) })}>
-                      <X size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <button className="secondary-button" type="button" disabled={busy} onClick={() => setDraft({ ...draft, actions: [...draft.actions, { kind: "mark_seen" }] })}>
-                <Plus size={14} />{t("settings.filterRules.addAction")}
-              </button>
-
-              <div className="settings-inline-actions filter-rule-editor-actions">
-                <button className="primary-button" type="button" disabled={busy} onClick={() => void saveDraft()}>
-                  {busy ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{t("settings.filterRules.save")}
-                </button>
-                <button className="secondary-button" type="button" disabled={busy} onClick={() => setDraft(null)}>
-                  {t("common.cancel")}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {!draft && (
-            <div className="settings-inline-actions">
-              <button className="secondary-button" type="button" disabled={Boolean(busyRuleId)} onClick={() => {
+          <div className="settings-inline-actions">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={Boolean(busyRuleId)}
+              onClick={() => {
                 setArmedDeleteId(null);
+                setModalNotice(null);
                 setDraft(emptyDraft());
-              }}>
-                <Plus size={15} />{t("settings.filterRules.addRule")}
-              </button>
-            </div>
-          )}
+              }}
+            >
+              <Plus size={15} />{t("settings.filterRules.addRule")}
+            </button>
+          </div>
         </>
       )}
     </section>
-  );
+
+    {modalDialog && (overlayHostRef?.current ? createPortal(modalDialog, overlayHostRef.current) : modalDialog)}
+  </>
+);
 }

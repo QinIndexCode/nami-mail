@@ -47,6 +47,7 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [notice, setNotice] = useState<Notice>(null);
   const confirmationDialog = useRef<HTMLElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (demoMode || initialTemplates !== undefined) return undefined;
@@ -259,7 +260,7 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
           <div><span>{t("settings.templates.title")}</span><p id="templates-settings">{t("settings.templates.description")}</p></div>
         </div>
 
-        <FormNotice notice={notice} />
+        <FormNotice notice={notice} onDismiss={() => setNotice(null)} />
 
         {loading ? (
           <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("common.loading")}</p>
@@ -274,9 +275,13 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
           <div className="content-enter">
             {showToolbar && (
               <div className="templates-toolbar">
-                <label className="search-wrap templates-search" htmlFor="templates-search-input">
+                <div
+                  className="search-wrap templates-search"
+                  onClick={() => searchInputRef.current?.focus()}
+                >
                   <Search size={14} aria-hidden="true" />
                   <input
+                    ref={searchInputRef}
                     id="templates-search-input"
                     type="search"
                     value={query}
@@ -289,13 +294,28 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
                       setQuery(event.target.value);
                       setPage(1);
                     }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape" && query) {
+                        event.stopPropagation();
+                        setQuery("");
+                      }
+                    }}
                   />
                   {query && (
-                    <button className="icon-button search-clear" type="button" aria-label={t("settings.templates.clearSearch")} onClick={() => setQuery("")}>
+                    <button
+                      className="icon-button search-clear"
+                      type="button"
+                      aria-label={t("settings.templates.clearSearch")}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setQuery("");
+                        searchInputRef.current?.focus();
+                      }}
+                    >
                       <X size={14} />
                     </button>
                   )}
-                </label>
+                </div>
                 {selectedIds.size > 0 ? (
                   <div className="templates-bulk-actions">
                     <span className="templates-bulk-count">{t("settings.templates.selectedCount", { count: selectedIds.size })}</span>
@@ -396,9 +416,21 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
       {draft && (
         <div className={`modal-backdrop settings-modal-backdrop${editorClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && requestEditorClose()}>
           <section className={`modal-card template-editor-card${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="template-editor-title" tabIndex={-1}>
-            <div className="modal-card-header">
-              <span className="eyebrow">{editingId ? t("settings.templates.edit") : t("settings.templates.addTemplate")}</span>
-              <h3 id="template-editor-title">{editingId ? t("settings.templates.editTitle") : t("settings.templates.addTitle")}</h3>
+            <div className="modal-card-header template-editor-head">
+              <div className="template-editor-head-text">
+                <span className="eyebrow">{editingId ? t("settings.templates.edit") : t("settings.templates.addTemplate")}</span>
+                <h3 id="template-editor-title">{editingId ? t("settings.templates.editTitle") : t("settings.templates.addTitle")}</h3>
+              </div>
+              <button
+                className="icon-button template-editor-close-btn"
+                type="button"
+                aria-label={t("common.close")}
+                data-tooltip={t("common.close")}
+                disabled={busy}
+                onClick={requestEditorClose}
+              >
+                <X size={16} />
+              </button>
             </div>
             <div className="template-editor">
               <label className="translation-setting-field" htmlFor="template-editor-name">

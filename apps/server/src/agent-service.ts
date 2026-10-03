@@ -38,6 +38,7 @@ import { getAppSettings, type AgentAccessLevel, type AppSettings } from "./setti
 import { EncryptedAgentAuditStore } from "./agent/audit.js";
 import type { AccountLifecycleStore } from "./agent/lifecycle.js";
 import { createCalendarTools } from "./agent/calendar-tools.js";
+import { createContactTools } from "./agent/contact-tools.js";
 import { createMailTools } from "./agent/mail-tools.js";
 import { EncryptedAgentMemoryStore } from "./agent/memory.js";
 import { createMemoryTools, createAutoReplyDecisionTools } from "./agent/memory-tools.js";
@@ -69,6 +70,7 @@ import { AgentConfirmationLifecycle, type AgentConfirmationResolution } from "./
 import type { AutoReplyEvaluationInput, AutoReplyEvaluationResult } from "./agent/auto-reply.js";
 import { collectAuxiliaryChatText } from "./agent/auxiliary-chat.js";
 import { polishDraftWithProvider, type PolishDraftInput, type PolishDraftResult } from "./agent/writing-polish.js";
+import { sanitizeLinksForScreening } from "./agent/auto-reply-screening.js";
 import type { SupportedLocale } from "./localization.js";
 // 会话/运行域已抽至 agent/run-engine.ts；类型在此再导出以保持公共面不变。
 export type {
@@ -348,6 +350,7 @@ export class AgentService {
         })
         : []),
       ...createCalendarTools(options.db, options.masterKey),
+      ...createContactTools(options.db, options.masterKey),
       ...createTimeTools(),
       ...createSearchTools(),
       ...createMemoryTools(this.memory),
@@ -1064,61 +1067,173 @@ export class AgentService {
    */
   async evaluateAutoReply(input: AutoReplyEvaluationInput): Promise<AutoReplyEvaluationResult> {
     const defaultProviderId = this.providerService.list().defaultProviderId;
-    const configuration = defaultProviderId ? this.providerService.get(defaultProviderId) : undefined;
-    if (!configuration) {
-      throw new AgentServiceError("NOT_FOUND", "未配置默认模型，无法进行自动回复评估。", 404, false);
+    const decisionProviderId = input.decisionProviderId || defaultProviderId;
+    const draftProviderId = input.draftProviderId || defaultProviderId;
+
+    if (!decisionProviderId) {
+      throw new AgentServiceError("NOT_FOUND", "未配置默认模型或决策模型，无法进行自动回复评估。", 404, false);
     }
-    const summary = providerSummary(configuration);
-    if (!summary.configured) {
-      throw new AgentServiceError("PROVIDER_AUTH_FAILED", "模型配置尚未完成。请检查地址、模型名称和 API Key。", 422, false);
+    const decisionConfig = this.providerService.get(decisionProviderId);
+    if (!decisionConfig) {
+      throw new AgentServiceError("NOT_FOUND", `决策模型配置 (${decisionProviderId}) 不存在。`, 404, false);
     }
-    if (summary.cloud && !summary.cloudContentConsent) {
+    const decisionSummary = providerSummary(decisionConfig);
+    if (!decisionSummary.configured) {
+      throw new AgentServiceError("PROVIDER_AUTH_FAILED", "决策模型配置尚未完成。请检查地址、模型名称和 API Key。", 422, false);
+    }
+    if (decisionSummary.cloud && !decisionSummary.cloudContentConsent) {
       throw new AgentServiceError(
         "CLOUD_CONTENT_CONSENT_REQUIRED",
-        "该模型未授权发送邮件内容到云端，无法进行自动回复评估。",
+        "决策模型未授权发送邮件内容到云端，无法进行自动回复评估。",
         403,
         true,
       );
     }
-    const systemPrompt = [
-      "你是 Nami Mail 自动回复 Agent 的邮件审阅者。",
-      "判断一封来信是否需要自动回复，并为需要回复的来信起草纯文本回信。",
-      "规则：",
-      "1. 只输出一个 JSON 对象，禁止输出任何解释、语气词或 Markdown 代码块。",
-      "2. JSON 结构固定为：{\"replyValue\":\"high\"或\"low\",\"sensitive\":true或false,\"reply\":\"回复正文（low 时为空字符串）\"}",
-      "3. replyValue 为 \"low\" 的情形：营销、推广、通知简报、自动消息、明显无需回应或你不该回复的内容。",
-      "4. sensitive 为 true 的情形：来信涉及密码、验证码、支付、银行卡、账户安全、敏感提示，或我准备的回复会暴露收件人隐私。",
-      "5. 回复必须简短自然（一般不超过 200 字）、纯文本、不用 Markdown，且不得索要或泄露任何密码、验证码等敏感信息。",
-      "6. 使用与来信相同的语言回复。",
-    ].join("\n");
+
+    const cleanSnippet = sanitizeLinksForScreening(input.snippet || "");
+    const cleanBody = sanitizeLinksForScreening(input.textBody || "");
     const userPrompt = [
       `【账户】${input.accountEmail || "(未知)"}`,
       `【发件人】${input.fromName || "(无姓名)"} <${input.fromAddress}>`,
       `【主题】${input.subject}`,
-      `【正文摘要】${input.snippet || "(无)"}`,
-      `【正文】${input.textBody || "(无)"}`,
+      `【正文摘要】${cleanSnippet || "(无)"}`,
+      `【正文】${cleanBody || "(无)"}`,
       input.sensitiveKeywords.length > 0 ? `【初筛敏感词】${input.sensitiveKeywords.join("，")}` : "【初筛敏感词】无",
       input.memoryContext ? `【历史记忆】\n${input.memoryContext}` : "",
       "请输出你的判断。",
     ].join("\n");
-    const chat: ProviderChatRequest = {
-      requestId: `auto-reply-${randomUUID()}`,
-      providerId: configuration.id,
-      model: configuration.model,
+
+    // Fast path: when decision and draft models are the same, execute the unified single-pass prompt
+    if (decisionProviderId === draftProviderId) {
+      const systemPrompt = [
+        "你是 Nami Mail 自动回复 Agent 的邮件审阅者。",
+        "判断一封来信是否需要自动回复，并为需要回复的来信起草纯文本回信。",
+        "规则：",
+        "1. 只输出一个 JSON 对象，禁止输出任何解释、语气词或 Markdown 代码块。",
+        "2. JSON 结构固定为：{\"replyValue\":\"high\"或\"low\",\"sensitive\":true或false,\"reply\":\"回复正文（low 时为空字符串）\"}",
+        "3. replyValue 为 \"low\" 的情形：营销、推广、通知简报、自动消息、明显无需回应或你不该回复的内容。",
+        "4. sensitive 为 true 的情形：来信涉及密码、验证码、支付、银行卡、账户安全、敏感提示，或我准备的回复会暴露收件人隐私。",
+        "5. 回复必须简短自然（一般不超过 200 字）、纯文本、不用 Markdown，且不得索要或泄露任何密码、验证码等敏感信息。",
+        "6. 使用与来信相同的语言回复。",
+      ].join("\n");
+
+      const chat: ProviderChatRequest = {
+        requestId: `auto-reply-${randomUUID()}`,
+        providerId: decisionConfig.id,
+        model: decisionConfig.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        tools: [],
+        allowToolCalls: false,
+        responseFormat: "text",
+        temperature: 0.2,
+      };
+      const outcome = await collectAuxiliaryChatText({ runtime: this.runtime, requestId: chat.requestId, chat });
+      if (outcome.status === "error") {
+        throw new AgentServiceError("PROVIDER_ERROR", `自动回复评估失败：${outcome.error.message}`, 502, true);
+      }
+      return parseAutoReplyEvaluation(outcome.text);
+    }
+
+    // Decoupled two-tier path: System 1 (Decision Model) followed by System 2 (Draft Model)
+    const decisionSystemPrompt = [
+      "你是 Nami Mail 自动回复 Agent 的邮件审阅决策者。",
+      "快速判断一封来信是否需要自动回复，以及来信或回复是否涉及敏感内容。",
+      "规则：",
+      "1. 只输出一个 JSON 对象，禁止输出任何解释、语气词或 Markdown 代码块。",
+      "2. JSON 结构固定为：{\"replyValue\":\"high\"或\"low\",\"sensitive\":true或false}",
+      "3. replyValue 为 \"low\" 的情形：营销、推广、通知简报、自动消息、明显无需回应或你不该回复的内容。",
+      "4. sensitive 为 true 的情形：来信涉及密码、验证码、支付、银行卡、账户安全、敏感提示，或可能暴露收件人隐私。",
+    ].join("\n");
+
+    const decisionChat: ProviderChatRequest = {
+      requestId: `auto-reply-decision-${randomUUID()}`,
+      providerId: decisionConfig.id,
+      model: decisionConfig.model,
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: decisionSystemPrompt },
         { role: "user", content: userPrompt },
       ],
       tools: [],
       allowToolCalls: false,
       responseFormat: "text",
-      temperature: 0.2,
+      temperature: 0.1,
     };
-    const outcome = await collectAuxiliaryChatText({ runtime: this.runtime, requestId: chat.requestId, chat });
-    if (outcome.status === "error") {
-      throw new AgentServiceError("PROVIDER_ERROR", `自动回复评估失败：${outcome.error.message}`, 502, true);
+
+    const decisionOutcome = await collectAuxiliaryChatText({
+      runtime: this.runtime,
+      requestId: decisionChat.requestId,
+      chat: decisionChat,
+    });
+    if (decisionOutcome.status === "error") {
+      throw new AgentServiceError("PROVIDER_ERROR", `决策模型评估失败：${decisionOutcome.error.message}`, 502, true);
     }
-    return parseAutoReplyEvaluation(outcome.text);
+    const decisionResult = parseAutoReplyDecision(decisionOutcome.text);
+    if (decisionResult.replyValue !== "high") {
+      return { replyValue: "low", sensitive: decisionResult.sensitive };
+    }
+
+    // High reply value: proceed to drafting with draftProviderId
+    if (!draftProviderId) {
+      throw new AgentServiceError("NOT_FOUND", "未配置回复生成模型，无法起草回复正文。", 404, false);
+    }
+    const draftConfig = this.providerService.get(draftProviderId);
+    if (!draftConfig) {
+      throw new AgentServiceError("NOT_FOUND", `回复生成模型配置 (${draftProviderId}) 不存在。`, 404, false);
+    }
+    const draftSummary = providerSummary(draftConfig);
+    if (!draftSummary.configured) {
+      throw new AgentServiceError("PROVIDER_AUTH_FAILED", "回复生成模型配置尚未完成。请检查地址、模型名称和 API Key。", 422, false);
+    }
+    if (draftSummary.cloud && !draftSummary.cloudContentConsent) {
+      throw new AgentServiceError(
+        "CLOUD_CONTENT_CONSENT_REQUIRED",
+        "回复生成模型未授权发送邮件内容到云端，无法生成自动回复草稿。",
+        403,
+        true,
+      );
+    }
+
+    const draftSystemPrompt = [
+      "你是 Nami Mail 自动回复 Agent。",
+      "请为这封来信起草一份简短、自然、得体的纯文本回复正文。",
+      "规则：",
+      "1. 只输出回复正文，禁止输出任何解释、前后缀或 Markdown 代码块。",
+      "2. 回复必须简短自然（一般不超过 200 字）、纯文本、不用 Markdown，且不得索要或泄露任何密码、验证码等敏感信息。",
+      "3. 使用与来信相同的语言回复。",
+    ].join("\n");
+
+    const draftChat: ProviderChatRequest = {
+      requestId: `auto-reply-draft-${randomUUID()}`,
+      providerId: draftConfig.id,
+      model: draftConfig.model,
+      messages: [
+        { role: "system", content: draftSystemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      tools: [],
+      allowToolCalls: false,
+      responseFormat: "text",
+      temperature: 0.3,
+    };
+
+    const draftOutcome = await collectAuxiliaryChatText({
+      runtime: this.runtime,
+      requestId: draftChat.requestId,
+      chat: draftChat,
+    });
+    if (draftOutcome.status === "error") {
+      throw new AgentServiceError("PROVIDER_ERROR", `回复草稿生成失败：${draftOutcome.error.message}`, 502, true);
+    }
+
+    const rawReply = draftOutcome.text.trim();
+    return {
+      replyValue: "high",
+      sensitive: decisionResult.sensitive,
+      ...(rawReply.length > 0 ? { replyText: rawReply } : {}),
+    };
   }
 
   private requireProvider(id: string): ProviderConfiguration {
@@ -1163,4 +1278,27 @@ function parseAutoReplyEvaluation(output: string): AutoReplyEvaluationResult {
     sensitive,
     ...(replyValue === "high" && rawReply.length > 0 ? { replyText: rawReply } : {}),
   };
+}
+
+/**
+ * Tolerantly parses the decision-only JSON object the decoupled auto-reply
+ * review prompt asks for. Any deviation defaults to a low-value classification
+ * so the pipeline never sends a reply it cannot demonstrate was intended.
+ */
+function parseAutoReplyDecision(output: string): { replyValue: "high" | "low"; sensitive: boolean } {
+  const cleaned = output.trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    parsed = undefined;
+  }
+  const value = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : undefined;
+  const replyValue = value && value.replyValue === "high" ? "high" : "low";
+  const sensitive = value?.sensitive === true;
+  return { replyValue, sensitive };
 }

@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import type { ComposeDraft } from "./mailUi";
+import { isDesktopSettingsRuntime, resolveSettingsCategory, type SettingsCategoryId } from "./settings/settings-categories";
 import type { Message, MessageAttachment } from "./types";
 
 // A key typed into an input/textarea/select (or a themed select-control
@@ -95,8 +96,22 @@ export type ModalKey = (typeof MODAL_KEYS)[number];
  *
  * Every other MODAL_KEYS entry is a backdrop modal that must cover the
  * toasts — including the batch-delete alertdialog, whose `.modal-backdrop`
- * is z-index 30 and would otherwise leave a clickable toast floating above
- * the confirmation.
+ * now sits at z-index 40 and would otherwise leave a clickable toast
+ * floating above the confirmation.
+ *
+ * ── Stacking ladder ──────────────────────────────────────────────────────
+ * This hook owns WHICH overlay is open; styles.css owns the order they paint
+ * in. Two constraints link them, both pinned by overlayStacking.test.ts:
+ *
+ * - At most one MODAL_KEYS entry is open at a time, which is what lets the
+ *   scrim backdrops share rungs (45 / 60 / 70) without a tie ever being
+ *   observable. Adding a modal that can be open ALONGSIDE another needs its
+ *   own rung, not a shared one.
+ * - `.modal-backdrop` is the shared base every `*-backdrop` overrides, so its
+ *   value must not collide with anything. It was 30, which `.agent-workspace`
+ *   also used — the batch-delete alertdialog then lost to the agent workspace
+ *   purely on DOM order. It is 40 now: above the 30 band the in-app workspaces
+ *   occupy, below the 45+ scrim band.
  */
 export const TOAST_RAISED_MODAL_KEYS: readonly ModalKey[] = ["mobileSidebar", "attachmentPreviewOpen", "agentOpen"];
 
@@ -229,6 +244,9 @@ export interface DialogRoutingState {
   composeOpen: boolean;
   composeDraft: ComposeDraft;
   settingsOpen: boolean;
+  /** Deep link into the settings modal; the nonce re-applies the switch while it
+   *  is open and beats the persisted-category restore on a cold mount. */
+  settingsCategoryRequest: { category: SettingsCategoryId; nonce: number } | null;
   contactsOpen: boolean;
   templatesOpen: boolean;
   calendarOpen: boolean;
@@ -267,6 +285,9 @@ export interface DialogRoutingActions {
   openCompose: (draft?: ComposeDraft) => void;
   closeCompose: () => void;
   openSettings: () => void;
+  /** Opens the settings modal already on `category` (cross-modal chains are
+   *  composed from actions, so this lives beside openSettings). */
+  openSettingsTo: (category: SettingsCategoryId) => void;
   closeSettings: () => void;
   openContacts: () => void;
   closeContacts: () => void;
@@ -350,7 +371,22 @@ export function useDialogRouting(appOwnedModals: AppOwnedModals = noAppOwnedModa
   }, []);
   const closeCompose = useCallback(() => setComposeOpen(false), []);
   const openSettings = useCallback(() => setSettingsOpen(true), []);
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const [settingsCategoryRequest, setSettingsCategoryRequest] = useState<{ category: SettingsCategoryId; nonce: number } | null>(null);
+  // A deep link names a category, but the same availability filter the sidebar
+  // uses still applies: linking to "desktop" on the web must not render an
+  // orphan panel the sidebar has no entry for.
+  const openSettingsTo = useCallback((category: SettingsCategoryId) => {
+    const target = resolveSettingsCategory(category, isDesktopSettingsRuntime());
+    setSettingsCategoryRequest((current) => ({ category: target, nonce: (current?.nonce ?? 0) + 1 }));
+    setSettingsOpen(true);
+  }, []);
+  // The request is consumed by the modal it opened: leaving it behind would
+  // hijack every later plain open back to the deep-linked category, and the
+  // modal would then persist that category over the user's remembered choice.
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false);
+    setSettingsCategoryRequest(null);
+  }, []);
   const openContacts = useCallback(() => setContactsOpen(true), []);
   const closeContacts = useCallback(() => setContactsOpen(false), []);
   const openTemplates = useCallback(() => setTemplatesOpen(true), []);
@@ -408,6 +444,7 @@ export function useDialogRouting(appOwnedModals: AppOwnedModals = noAppOwnedModa
     openCompose,
     closeCompose,
     openSettings,
+    openSettingsTo,
     closeSettings,
     openContacts,
     closeContacts,
@@ -426,7 +463,7 @@ export function useDialogRouting(appOwnedModals: AppOwnedModals = noAppOwnedModa
     pruneAttachmentPreviewFor,
     setTranslationTermsOpen,
     setTranslationTermsAccepted,
-  }), [openAddAccount, closeAddAccount, openCompose, closeCompose, openSettings, closeSettings, openContacts, closeContacts, openTemplates, closeTemplates, openCalendar, closeCalendar, openAccounts, closeAccounts, openSendingStatus, closeSendingStatus, openMobileSidebar, closeMobileSidebar, openAttachmentPreview, closeAttachmentPreview, pruneAttachmentPreviewFor]);
+  }), [openAddAccount, closeAddAccount, openCompose, closeCompose, openSettings, openSettingsTo, closeSettings, openContacts, closeContacts, openTemplates, closeTemplates, openCalendar, closeCalendar, openAccounts, closeAccounts, openSendingStatus, closeSendingStatus, openMobileSidebar, closeMobileSidebar, openAttachmentPreview, closeAttachmentPreview, pruneAttachmentPreviewFor]);
 
   return {
     state: {
@@ -434,6 +471,7 @@ export function useDialogRouting(appOwnedModals: AppOwnedModals = noAppOwnedModa
       composeOpen,
       composeDraft,
       settingsOpen,
+      settingsCategoryRequest,
       contactsOpen,
       templatesOpen,
       calendarOpen,

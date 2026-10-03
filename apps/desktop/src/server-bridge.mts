@@ -166,6 +166,8 @@ export type ServerBridgeHostHandlers = {
   onSettingsChanged?: () => void;
   /** Server asks main for the persisted external pairing list. */
   listExternalPairings?: () => Promise<unknown[]>;
+  /** Server asks main to revoke a persisted external pairing. */
+  revokeExternalPairing?: (clientId: string) => Promise<boolean>;
   /** Server asks main to show the native external-confirmation dialog. */
   requestExternalConfirmation?: (input: unknown) => Promise<"approve" | "reject">;
 };
@@ -253,6 +255,11 @@ export function createServerBridgeClient(
       try {
         if (raw.method === "listExternalPairings") {
           reply({ ok: true, value: (await handlers.listExternalPairings?.()) ?? [] });
+          return;
+        }
+        if (raw.method === "revokeExternalPairing") {
+          const clientId = String(raw.params?.[0] ?? "");
+          reply({ ok: true, value: (await handlers.revokeExternalPairing?.(clientId)) ?? false });
           return;
         }
         if (raw.method === "requestExternalConfirmation") {

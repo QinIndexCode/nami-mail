@@ -38,6 +38,8 @@ test-results/
 gui-test-screenshots/
 build/nami-update-trust.json.package-win-original
 scripts/*.png
+/*.png
+dialog-shots/
 .playwright-mcp/
 tmp-pw-out*/
 # Agent and editor workspaces: local notes, never part of the product history.

@@ -52,6 +52,7 @@ import { extractMemorySuggestions, filterMemorySuggestionChunk, stripMemorySugge
 import { canonicalAgentJson } from "./store-crypto.js";
 import { agentT, type AgentMessageKey } from "./agent-messages.js";
 import { supportedLocale, type SupportedLocale } from "../localization.js";
+import { compressContextHistory, estimateMessagesTokens, estimateTokens, pruneToolOutput } from "./context-budget.js";
 
 export type AgentConversationScope = {
   mode: "all_accounts" | "selected_account" | "current_message";
@@ -140,6 +141,9 @@ export type AgentMessageInput = {
   /** Client-generated id of the optimistic user row; the turn is persisted
    *  under it so mid-session revokes address a known row (see schemas.ts). */
   clientMessageId?: string;
+  /** Client-generated id of the optimistic assistant row; the reply is published
+   *  and persisted under it so deltas fold into the client's row (see schemas.ts). */
+  clientAssistantMessageId?: string;
   context?: {
     currentMessageId?: string;
   };
@@ -368,6 +372,8 @@ const allDesktopScopes = [
   "read:calendar",
   "time:read",
   "write:calendar",
+  "read:contacts",
+  "write:contacts",
   "read:rag",
   "write:drafts",
   "write:mail",
@@ -897,13 +903,13 @@ export class AgentRunEngine {
       yield { type: "completed", reason: "error" };
       return;
     }
+    // Adopt the client's optimistic row id when safe (validated at the route), so a
+    // revoke issued seconds later addresses this exact row. The three guards mirror
+    // the assistant id below — non-empty, not the assistant id this turn asks for,
+    // not already in the transcript — so a reused id can never overwrite a row.
+    const userMessageId = input.clientMessageId && input.clientMessageId !== input.clientAssistantMessageId && !state.messages.some((message) => message.id === input.clientMessageId) ? input.clientMessageId : `message-${randomUUID()}`;
     const userMessage: AgentMessage = {
-      // Adopt the client's optimistic row id when supplied (validated at the
-      // route as an agent identifier): a revoke issued seconds after sending
-      // then addresses this exact row, and later server snapshots keep the
-      // same id, so locally-cached revoked marks stay effective. Old clients
-      // and in-process callers without an id fall back to a random one.
-      id: input.clientMessageId ?? `message-${randomUUID()}`,
+      id: userMessageId,
       role: "user",
       content: input.content.trim(),
       createdAt: now(),
@@ -923,8 +929,15 @@ export class AgentRunEngine {
     let mailContextIncluded = false;
     // The in-flight reply is published under the same id it is later persisted
     // with, so a panel that reopens mid-run renders this message and the final
-    // persisted copy is the same row (no duplicate).
-    const assistantMessageId = `message-${randomUUID()}`;
+    // persisted copy is the same row (no duplicate). The client's optimistic
+    // assistant row id is adopted when unused and distinct from the user row —
+    // resolved or requested — so one id sent for both yields two distinct rows.
+    const requestedAssistantId = input.clientAssistantMessageId;
+    const assistantMessageId = requestedAssistantId
+      && requestedAssistantId !== userMessage.id && requestedAssistantId !== input.clientMessageId
+      && !state.messages.some((message) => message.id === requestedAssistantId)
+      ? requestedAssistantId
+      : `message-${randomUUID()}`;
     // Becomes true once the user message has been appended to the
     // conversation. Before that nothing is published as in-flight.
     let turnActive = false;
@@ -1121,11 +1134,20 @@ export class AgentRunEngine {
       };
       let modelMessages = providerMessages;
       let toolRounds = 0;
+      const contextWindow = configuration.contextWindowTokens ?? 8_192;
+      const maxOutputTokens = configuration.maxOutputTokens ?? 2_048;
+      const availableBudget = Math.max(1_000, contextWindow - maxOutputTokens);
+      const toolsTokens = estimateMessagesTokens([], visibleTools);
+      const availableForMessages = Math.max(800, availableBudget - toolsTokens);
+      const messagesWarningThreshold = Math.floor(availableForMessages * 0.75);
       // The loop runs until the model stops requesting tools; every iteration
       // either appends a provider turn, reaches the round limit, or returns a
       // completed response — all paths exit explicitly below.
       while (true) {
         this.assertRunCurrent(lifecycleTasks, controller.signal);
+        if (estimateMessagesTokens(modelMessages) > messagesWarningThreshold) {
+          modelMessages = compressContextHistory(modelMessages, Math.floor(availableForMessages * 0.8));
+        }
         const chat: ProviderChatRequest = {
           requestId,
           providerId: configuration.id,
@@ -1134,6 +1156,7 @@ export class AgentRunEngine {
           tools: visibleTools,
           allowToolCalls: visibleTools.length > 0,
           responseFormat: "text",
+          maxOutputTokens,
         };
         const toolCalls: ToolCall[] = [];
         let turnContent = "";
@@ -1389,10 +1412,20 @@ export class AgentRunEngine {
           toolActivities = [...toolActivities.filter((activity) => activity.id !== activityId), completedActivity];
           yield { type: "tool", activity: completedActivity };
           syncInFlight();
+          const rawOutput = succeeded ? result.output : modelToolError(result.error);
+          let toolMessageContent = toolResultMessage(succeeded, rawOutput);
+          const isSafetyLimitTruncated = toolMessageContent.includes("safety limit");
+          const currentMessagesTokens = estimateMessagesTokens(modelMessages);
+          const messageTokens = estimateTokens(toolMessageContent);
+          if (succeeded && !isSafetyLimitTruncated && (currentMessagesTokens + messageTokens > messagesWarningThreshold)) {
+            const maxToolTokens = Math.min(2_000, Math.floor(availableForMessages * 0.4));
+            const prunedOutput = pruneToolOutput(rawOutput, maxToolTokens);
+            toolMessageContent = toolResultMessage(succeeded, prunedOutput);
+          }
           modelMessages = [...modelMessages, {
             role: "tool",
             toolCallId: call.id,
-            content: toolResultMessage(succeeded, succeeded ? result.output : modelToolError(result.error)),
+            content: toolMessageContent,
           }];
         }
       }

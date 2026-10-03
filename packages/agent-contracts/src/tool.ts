@@ -11,6 +11,7 @@ export const agentToolCategories = [
   "threads",
   "attachments",
   "calendar",
+  "contacts",
   "rag",
   "drafts",
   "mail",

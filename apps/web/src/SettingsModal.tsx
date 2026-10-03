@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode, type RefObject } from "react";
 import {
   Bell,
   Bot,
-  Check,
-  Clock3,
-  Download,
+  Cable,
+  Cpu,
+  Filter,
   KeyRound,
   Laptop,
   Languages,
@@ -12,27 +12,27 @@ import {
   Palette,
   RefreshCw,
   RotateCcw,
-  SkipForward,
+  Search,
+  SearchX,
+  Server,
   Trash2,
   Undo2,
-
-  Volume2,
-  VolumeX,
   X,
   Zap,
   type LucideIcon,
 } from "lucide-react";
 import { api, type TranslationConfiguration, type TranslationProviderId } from "./api";
-import type { ExternalPairingSummary } from "./agentTypes";
+import type { AgentBootstrap, AgentProviderList, ExternalPairingSummary } from "./agentTypes";
 import { desktopBridge, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
+import { searchSettings } from "./settings/settings-search";
 
 import FilterRulesSection from "./FilterRulesSection";
 import AgentMemoryDialog from "./AgentMemoryDialog";
 import AutoReplyPendingDialog from "./AutoReplyPendingDialog";
 import AutoReplyDecisionsDialog from "./AutoReplyDecisionsDialog";
+import AutoReplySandboxDialog from "./settings/AutoReplySandboxDialog";
 import { useI18n } from "./i18n";
 import { playNotificationSound, primeNotificationSound } from "./sounds";
-import ThemedSelect from "./ThemedSelect";
 import {
   hasUnsavedTranslationConfiguration,
   translationConfigurationErrorMessage,
@@ -54,20 +54,53 @@ import type {
 import { defaultAppSettings } from "./types";
 import { FormNotice, type Notice } from "./FormNotice";
 import {
-  soundOptions,
-  closeBehaviorOptions,
   errorMessage,
   backgroundContentTypeForFile,
   revokeDemoObjectUrl,
 
+  expandedThemedSelectOwnsEscape,
   maxBackgroundUploadBytes,
+  type PendingSettingsConfirmation,
 } from "./settings/settings-utils";
-import { Switch, CloseBehaviorIcon } from "./settings/SettingsUIComponents";
+import {
+  SETTINGS_CATEGORY_STORAGE_KEY,
+  SETTINGS_NAV_GROUPS,
+  readStoredSettingsCategory,
+  settingsNavGroupLabelKeys,
+  type SettingsCategoryId,
+} from "./settings/settings-categories";
 import SettingsAgentSection from "./settings/SettingsAgentSection";
+import SettingsModelsSection from "./settings/SettingsModelsSection";
+import SettingsConnectionsSection from "./settings/SettingsConnectionsSection";
 import SettingsTranslationSection from "./settings/SettingsTranslationSection";
 import SettingsAppearanceSection from "./settings/SettingsAppearanceSection";
+import {
+  SettingsDesktopPanel,
+  SettingsLanguagePanel,
+  SettingsNotificationsPanel,
+  SettingsSyncPanel,
+} from "./settings/SettingsCategoryPanels";
 
 const isDesktopRuntime = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("desktop") === "1";
+
+/** Sidebar icon + label per category; grouping and order live in settings-categories. */
+const categoryMeta: Record<SettingsCategoryId, { icon: LucideIcon; labelKey: string }> = {
+  language: { icon: Languages, labelKey: "language.title" },
+  appearance: { icon: Palette, labelKey: "settings.appearance.title" },
+  notifications: { icon: Bell, labelKey: "settings.notifications.title" },
+  desktop: { icon: Laptop, labelKey: "settings.desktop.title" },
+  sync: { icon: RefreshCw, labelKey: "settings.sync.title" },
+  filters: { icon: Filter, labelKey: "settings.nav.filters.title" },
+  models: { icon: Cpu, labelKey: "settings.nav.models.title" },
+  mcp: { icon: Server, labelKey: "settings.nav.mcp.title" },
+  connections: { icon: Cable, labelKey: "settings.nav.connections.title" },
+  agent: { icon: Bot, labelKey: "agent.launch" },
+  translation: { icon: KeyRound, labelKey: "settings.translation.title" },
+};
+
+const visibleNavGroups = SETTINGS_NAV_GROUPS
+  .map((group) => ({ ...group, items: group.items.filter((id) => isDesktopRuntime || id !== "desktop") }))
+  .filter((group) => group.items.length > 0);
 
 
 export type SettingsModalProps = {
@@ -82,34 +115,21 @@ export type SettingsModalProps = {
   onTestSound?: (sound: NotificationSound) => void | Promise<void>;
   /** Refreshes reader translation status after service configuration changes. */
   onTranslationConfigurationChanged?: () => void | Promise<void>;
-  /** Opens the existing model-provider manager after this dialog has closed. */
-  onOpenAgentProviderSettings: () => void;
+  /** Seeds the embedded models panel's first frame from the App-level agent
+   *  bootstrap preload; the panel still refetches the list when it mounts. */
+  agentProviderSeed?: Pick<AgentBootstrap, "providers" | "defaultProviderId">;
+  /** Notified when the embedded models panel saves or deletes a provider, so
+   *  the host can sync the workspace (composer badge, model picker). */
+  onAgentProviderListChanged?: (providers: AgentProviderList) => void;
+  /** Deep link: when `nonce` changes — including on a cold mount with the
+   *  request already present — the modal switches to `category`. The nonce
+   *  beats the persisted-category restore. */
+  categoryRequest?: { category: SettingsCategoryId; nonce: number } | null;
   /** Visible control used only when the original trigger disappears, such as a closed mobile drawer. */
   fallbackFocusRef?: RefObject<HTMLElement | null>;
   /** Demo settings are intentionally in-memory and are never sent to the local API. */
   demoMode?: boolean;
 };
-
-type EscapeTarget = Pick<Element, "closest">;
-
-export function expandedThemedSelectOwnsEscape(
-  eventTarget: EscapeTarget | null,
-  activeElement: EscapeTarget | null,
-): boolean {
-  const selectControl = eventTarget?.closest(".select-control")
-    ?? activeElement?.closest(".select-control");
-  return Boolean(selectControl?.querySelector('[role="combobox"][aria-expanded="true"]'));
-}
-
-type PendingSettingsConfirmation =
-  | "clear-background"
-  | "restore-defaults"
-  | "install-update"
-  | "remove-translation-configuration"
-  | "remove-translation-api-key"
-  | "discard-translation-changes"
-  | "discard-translation-changes-and-open-agent"
-  | "enable-full-access";
 
 const restoreDefaultsPatch: AppSettingsPatch = {
   theme: defaultAppSettings.theme,
@@ -139,7 +159,9 @@ export default function SettingsModal({
   onTestNotification,
   onTestSound,
   onTranslationConfigurationChanged,
-  onOpenAgentProviderSettings,
+  agentProviderSeed,
+  onAgentProviderListChanged,
+  categoryRequest = null,
   fallbackFocusRef,
   demoMode = false,
 }: SettingsModalProps) {
@@ -172,46 +194,70 @@ export default function SettingsModal({
   const [autoReplyDialogOpen, setAutoReplyDialogOpen] = useState(false);
   const [autoReplyDecisionsOpen, setAutoReplyDecisionsOpen] = useState(false);
   const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
+  const [autoReplySandboxOpen, setAutoReplySandboxOpen] = useState(false);
   const [externalGuideCopied, setExternalGuideCopied] = useState<string | null>(null);
   const [externalPairings, setExternalPairings] = useState<ExternalPairingSummary[] | null>(null);
   const [externalPairingsError, setExternalPairingsError] = useState<unknown>(null);
-  const [activeNavKey, setActiveNavKey] = useState<string | null>(null);
+  // Reported by the models panel: a form dialog stacked over it, and whether a
+  // save / connection check is running there. Both gate this dialog's own close
+  // paths, because a models save also checks the connection and can take tens
+  // of seconds — closing now would hide the result the user is waiting for.
+  const [modelsOverlayOpen, setModelsOverlayOpen] = useState(false);
+  const [modelsBusy, setModelsBusy] = useState(false);
+  const [connectionsOverlayOpen, setConnectionsOverlayOpen] = useState(false);
+  const [connectionsBusy, setConnectionsBusy] = useState(false);
+  const [filtersOverlayOpen, setFiltersOverlayOpen] = useState(false);
+  // One visible panel at a time; the sidebar switches categories instead of
+  // scrolling. The choice persists so reopening the modal lands where the user
+  // left off, and a stored "desktop" is ignored on browser runtimes. A deep
+  // link present at mount wins over the persisted category.
+  const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>(() => categoryRequest?.category ?? readStoredSettingsCategory(isDesktopRuntime));
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Sidebar nav: keep the highlighted entry in sync with the section that is
-  // currently at the top of the scrollable content column.
   useEffect(() => {
-    const body = settingsBody.current;
-    if (!body) return;
-    const sections = Array.from(body.querySelectorAll<HTMLElement>("[data-settings-nav]"));
-    if (sections.length === 0) return;
-    const onScroll = () => {
-      const marker = body.getBoundingClientRect().top + 1;
-      let active: string | null = null;
-      for (const section of sections) {
-        if (section.getBoundingClientRect().top <= marker) active = section.dataset.settingsNav ?? null;
-        else break;
-      }
-      // At the very bottom the last section may be too tall to align at the
-      // top of the content column; treat it as active so the highlight
-      // always lands on a real section.
-      if (body.scrollTop + body.clientHeight >= body.scrollHeight - 2) {
-        active = sections[sections.length - 1]?.dataset.settingsNav ?? null;
-      }
-      setActiveNavKey(active);
-    };
-    onScroll();
-    body.addEventListener("scroll", onScroll, { passive: true });
-    return () => body.removeEventListener("scroll", onScroll);
-  }, []);
+    try {
+      window.localStorage.setItem(SETTINGS_CATEGORY_STORAGE_KEY, activeCategory);
+    } catch {
+      // Storage may be unavailable (private mode); the choice simply does not persist.
+    }
+    setNotice(null);
+  }, [activeCategory]);
+  // Deep-link requests arriving while the modal is open (workspace "configure
+  // model" buttons): each nonce is applied once. The ref is seeded with the
+  // mount-time nonce, which the initial state above already adopted.
+  const lastCategoryRequestNonceRef = useRef<number | null>(categoryRequest?.nonce ?? null);
+  useEffect(() => {
+    if (!categoryRequest || lastCategoryRequestNonceRef.current === categoryRequest.nonce) return;
+    // A models form, connections dialog or filter-rules modal stacked over the panel owns the interaction.
+    // Switching now would unmount the panel under it and drop its draft without ever asking.
+    // The nonce is deliberately not consumed: the deep link lands as soon as the overlay is gone.
+    if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) return;
+    lastCategoryRequestNonceRef.current = categoryRequest.nonce;
+    setActiveCategory(categoryRequest.category);
+    if (settingsBody.current) settingsBody.current.scrollTop = 0;
+  }, [categoryRequest, modelsOverlayOpen, filtersOverlayOpen, connectionsOverlayOpen]);
+  // The embedded models panel hosts both inner tabs (providers / MCP servers);
+  // switching them swaps the body in place so the panel never remounts.
   const [externalPairingsReload, setExternalPairingsReload] = useState(0);
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadButton = useRef<HTMLButtonElement>(null);
   const settingsDialog = useRef<HTMLElement>(null);
+  // Portal host for the models forms (see SettingsModelsSection): the panel
+  // they used to render under keeps a transformed ancestor alive through its
+  // entry animation, which would capture their `position: fixed` backdrop.
+  const settingsBackdrop = useRef<HTMLDivElement>(null);
   const settingsBody = useRef<HTMLDivElement>(null);
   const confirmationDialog = useRef<HTMLElement>(null);
   const backgroundAlert = useRef<HTMLElement>(null);
   const activeLocale = currentSettings.locale || locale;
-  const controlsBusy = Boolean(busyAction || updateActionBusy === "install");
+  const controlsBusy = Boolean(busyAction || updateActionBusy === "install" || modelsBusy || connectionsBusy);
+  // While a models form or filter rule modal is stacked over the panel, close is owned by that form.
+  // The header X and "done" therefore look like live buttons that silently do
+  // nothing: they show as disabled and say why.
+  const formsOverlayOpen = modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen;
+  const closeBlocked = controlsBusy || formsOverlayOpen;
+  const closeBlockedHint = (modelsOverlayOpen || connectionsOverlayOpen) ? t("settings.models.formOpenHint") : null;
   const updatePresentation = updateStatus ? presentUpdateSnapshot(updateStatus, t) : null;
   const hasUnsavedTranslationDraft = hasUnsavedTranslationConfiguration(translationConfiguration, {
     endpoint: translationEndpoint,
@@ -221,7 +267,7 @@ export default function SettingsModal({
     backup: translationBackup,
   });
   const pendingTranslationDiscard = pendingConfirmation === "discard-translation-changes"
-    || pendingConfirmation === "discard-translation-changes-and-open-agent";
+    || pendingConfirmation === "discard-translation-changes-and-open-models";
 
   const dismissBackgroundUploadError = () => {
     setBackgroundUploadError(null);
@@ -235,22 +281,32 @@ export default function SettingsModal({
 
   const requestClose = useCallback(() => {
     if (controlsBusy) return;
+    // Same yield Escape already makes below: a stacked models form, connections dialog or filter rules modal
+    // owns the interaction. Closing here would unmount the panel under it and drop the
+    // draft it holds without ever asking.
+    if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) return;
     if (hasUnsavedTranslationDraft) {
       resetConfirmClosing();
       setPendingConfirmation("discard-translation-changes");
       return;
     }
     requestExit();
-  }, [controlsBusy, hasUnsavedTranslationDraft, requestExit, resetConfirmClosing]);
+  }, [connectionsOverlayOpen, controlsBusy, filtersOverlayOpen, hasUnsavedTranslationDraft, modelsOverlayOpen, requestExit, resetConfirmClosing]);
 
-  const requestAgentProviderSettings = () => {
-    if (controlsBusy || demoMode) return;
+  // The "configure model" entry (agent panel button, translation-discard
+  // confirmation) now switches to the models category in place — the embedded
+  // panel lives here, so the dialog never closes to jump to the workspace.
+  const openModelsCategory = () => {
     if (hasUnsavedTranslationDraft) {
       resetConfirmClosing();
-      setPendingConfirmation("discard-translation-changes-and-open-agent");
+      setPendingConfirmation("discard-translation-changes-and-open-models");
       return;
     }
-    onOpenAgentProviderSettings();
+    selectCategory("models");
+  };
+
+  const openConnectionsCategory = () => {
+    selectCategory("connections");
   };
 
   useEffect(() => {
@@ -355,6 +411,11 @@ export default function SettingsModal({
       // before the combobox has a chance to close only its own menu. The
       // active element fallback covers retargeted key events.
       if (expandedThemedSelectOwnsEscape(target, activeElement)) return;
+      if (searchInputRef.current && (target === searchInputRef.current || activeElement === searchInputRef.current) && searchQuery) return;
+      // The models form dialog, connections dialog or filter rules modal owns Escape while it is up. Yield before stopping the
+      // event, otherwise the inner layer never sees it and this dialog would
+      // close underneath the form.
+      if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (controlsBusy) return;
@@ -370,9 +431,9 @@ export default function SettingsModal({
     };
     window.addEventListener("keydown", closeOnEscape, true);
     return () => window.removeEventListener("keydown", closeOnEscape, true);
-  }, [backgroundUploadError, controlsBusy, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose]);
+  }, [backgroundUploadError, connectionsOverlayOpen, controlsBusy, filtersOverlayOpen, modelsOverlayOpen, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose, searchQuery]);
 
-  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || autoReplyDecisionsOpen || memoryDialogOpen) });
+  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || autoReplyDecisionsOpen || memoryDialogOpen || autoReplySandboxOpen || modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) });
   useDialogFocus(Boolean(pendingConfirmation), confirmationDialog, { fallbackFocusRef: settingsDialog });
   useDialogFocus(Boolean(backgroundUploadError), backgroundAlert, { restoreFocusRef: uploadButton });
 
@@ -886,347 +947,369 @@ export default function SettingsModal({
           ? t("settings.confirmation.removeTranslationApiKeyAction")
           : pendingConfirmation === "enable-full-access"
             ? t("settings.agent.fullAccessWarningAction")
-            : pendingConfirmation === "discard-translation-changes-and-open-agent"
-            ? t("settings.confirmation.discardTranslationChangesAndOpenAgentAction")
+            : pendingConfirmation === "discard-translation-changes-and-open-models"
+            ? t("settings.confirmation.discardTranslationChangesAndOpenModelsAction")
             : pendingConfirmation === "discard-translation-changes"
             ? t("settings.confirmation.discardTranslationChangesAction")
             : t("settings.confirmation.restoreDefaultsAction");
-  const navItems: { key: string; icon: LucideIcon; label: string }[] = [
-    { key: "language", icon: Languages, label: t("language.title") },
-    { key: "appearance", icon: Palette, label: t("settings.appearance.title") },
-    { key: "notifications", icon: Bell, label: t("settings.notifications.title") },
-    ...(isDesktopRuntime ? [{ key: "desktop", icon: Laptop, label: t("settings.desktop.title") }] : []),
-    { key: "sync", icon: RefreshCw, label: t("settings.sync.title") },
-    { key: "agent", icon: Bot, label: t("agent.launch") },
-    { key: "translation", icon: KeyRound, label: t("settings.translation.title") },
-  ];
-  const scrollToSection = (key: string) => {
-    const body = settingsBody.current;
-    if (!body) return;
-    const section = body.querySelector<HTMLElement>(`[data-settings-nav="${key}"]`);
-    if (!section) return;
-    // Scroll only the content column. The header and the sidebar stay fixed
-    // (the modal itself does not scroll), so no offset is needed and nothing
-    // outside the dialog can shift.
-    body.scrollTo({
-      top: section.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop,
-      behavior: "smooth",
-    });
+  const selectCategory = (next: SettingsCategoryId) => {
+    if (next === activeCategory) return;
+    setActiveCategory(next);
+    // A category switch is a fresh browsing context: entering it starts at the
+    // top instead of carrying over the previous panel's scroll offset. Direct
+    // scrollTop assignment keeps the reset instant (and testable in jsdom).
+    if (settingsBody.current) settingsBody.current.scrollTop = 0;
+  };
+
+  const searchResults = useMemo(() => searchSettings(searchQuery, t, isDesktopRuntime), [searchQuery, t]);
+
+  useEffect(() => {
+    if (searchResults && searchResults.length > 0) {
+      if (!searchResults.some((r) => r.categoryId === activeCategory)) {
+        selectCategory(searchResults[0].categoryId);
+      }
+    }
+  }, [searchResults, activeCategory]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const navigateToTarget = (categoryId: SettingsCategoryId, targetId?: string) => {
+    selectCategory(categoryId);
+    if (targetId) {
+      requestAnimationFrame(() => {
+        const el = document.getElementById(targetId) || document.querySelector(targetId);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+    }
+  };
+
+  // The record keys are the full category set, so TypeScript rejects a nav
+  // entry whose panel is missing (the old scroll-nav could point at nothing).
+  const panels: Record<SettingsCategoryId, ReactNode> = {
+    language: (
+      <SettingsLanguagePanel
+        t={t}
+        locales={locales}
+        activeLocale={activeLocale}
+        controlsBusy={controlsBusy}
+        changeLocale={changeLocale}
+      />
+    ),
+    appearance: (
+      <SettingsAppearanceSection
+        t={t}
+        currentSettings={currentSettings}
+        controlsBusy={controlsBusy}
+        busyAction={busyAction}
+        demoMode={demoMode}
+        intensityDraft={intensityDraft}
+        hasCustomBackground={hasCustomBackground}
+        applyOptimisticSettings={applyOptimisticSettings}
+        choosePreset={choosePreset}
+        setIntensityDraft={setIntensityDraft}
+        commitIntensity={commitIntensity}
+        chooseCustomBackground={chooseCustomBackground}
+        uploadBackground={uploadBackground}
+        resetConfirmClosing={resetConfirmClosing}
+        setPendingConfirmation={setPendingConfirmation}
+        uploadButtonRef={uploadButton}
+      />
+    ),
+    notifications: (
+      <SettingsNotificationsPanel
+        t={t}
+        currentSettings={currentSettings}
+        controlsBusy={controlsBusy}
+        busyAction={busyAction}
+        applyOptimisticSettings={applyOptimisticSettings}
+        testNotification={testNotification}
+        testSound={testSound}
+      />
+    ),
+    desktop: (
+      <SettingsDesktopPanel
+        t={t}
+        currentSettings={currentSettings}
+        controlsBusy={controlsBusy}
+        updateControlsBusy={updateControlsBusy}
+        updateStatus={updateStatus}
+        updatePresentation={updatePresentation}
+        updateActionBusy={updateActionBusy}
+        updateSnoozeMinutes={updateSnoozeMinutes}
+        setUpdateSnoozeMinutes={setUpdateSnoozeMinutes}
+        checkForUpdates={checkForUpdates}
+        downloadUpdate={downloadUpdate}
+        skipUpdate={skipUpdate}
+        snoozeUpdate={snoozeUpdate}
+        applyOptimisticSettings={applyOptimisticSettings}
+        resetConfirmClosing={resetConfirmClosing}
+        setPendingConfirmation={setPendingConfirmation}
+      />
+    ),
+    sync: (
+      <SettingsSyncPanel
+        t={t}
+        currentSettings={currentSettings}
+        controlsBusy={controlsBusy}
+        applyOptimisticSettings={applyOptimisticSettings}
+      />
+    ),
+    filters: (
+      <FilterRulesSection
+        accounts={accounts}
+        demoMode={demoMode}
+        overlayHostRef={settingsBackdrop}
+        onOverlayOpenChange={setFiltersOverlayOpen}
+      />
+    ),
+    models: (
+      <SettingsModelsSection
+        view="providers"
+        t={t}
+        demoMode={demoMode}
+        initialProviders={agentProviderSeed?.providers ?? []}
+        initialDefaultProviderId={agentProviderSeed?.defaultProviderId ?? null}
+        onProvidersChanged={(providers) => onAgentProviderListChanged?.(providers)}
+        onOverlayOpenChange={setModelsOverlayOpen}
+        onBusyChange={setModelsBusy}
+        overlayHostRef={settingsBackdrop}
+      />
+    ),
+    mcp: (
+      <SettingsModelsSection
+        view="mcp"
+        t={t}
+        demoMode={demoMode}
+        initialProviders={agentProviderSeed?.providers ?? []}
+        initialDefaultProviderId={agentProviderSeed?.defaultProviderId ?? null}
+        onProvidersChanged={(providers) => onAgentProviderListChanged?.(providers)}
+        onOverlayOpenChange={setModelsOverlayOpen}
+        onBusyChange={setModelsBusy}
+        overlayHostRef={settingsBackdrop}
+      />
+    ),
+    connections: (
+      <SettingsConnectionsSection
+        t={t}
+        formatDate={formatDate}
+        accounts={accounts}
+        currentSettings={currentSettings}
+        controlsBusy={controlsBusy}
+        demoMode={demoMode}
+        applyOptimisticSettings={applyOptimisticSettings}
+        requestAccessLevelChange={requestAccessLevelChange}
+        onOverlayOpenChange={setConnectionsOverlayOpen}
+        onBusyChange={setConnectionsBusy}
+        overlayHostRef={settingsBackdrop}
+      />
+    ),
+    agent: (
+      <SettingsAgentSection
+        t={t}
+        formatDate={formatDate}
+        accounts={accounts}
+        currentSettings={currentSettings}
+        controlsBusy={controlsBusy}
+        demoMode={demoMode}
+        openModelSettings={openModelsCategory}
+        openConnectionsSettings={openConnectionsCategory}
+        requestAccessLevelChange={requestAccessLevelChange}
+        applyOptimisticSettings={applyOptimisticSettings}
+        externalGuideCopied={externalGuideCopied}
+        setExternalGuideCopied={setExternalGuideCopied}
+        externalPairings={externalPairings}
+        externalPairingsError={externalPairingsError}
+        setExternalPairingsReload={setExternalPairingsReload}
+        setAutoReplyDialogOpen={setAutoReplyDialogOpen}
+        setAutoReplyDecisionsOpen={setAutoReplyDecisionsOpen}
+        setMemoryDialogOpen={setMemoryDialogOpen}
+        setAutoReplySandboxOpen={setAutoReplySandboxOpen}
+        overlayHostRef={settingsBackdrop}
+      />
+    ),
+    translation: (
+      <SettingsTranslationSection
+        t={t}
+        controlsBusy={controlsBusy}
+        busyAction={busyAction}
+        demoMode={demoMode}
+        translationConfiguration={translationConfiguration}
+        translationConfigurationLoading={translationConfigurationLoading}
+        translationConfigurationError={translationConfigurationError}
+        translationEndpoint={translationEndpoint}
+        setTranslationEndpoint={setTranslationEndpoint}
+        translationApiKey={translationApiKey}
+        setTranslationApiKey={setTranslationApiKey}
+        translationApiKeyVisible={translationApiKeyVisible}
+        setTranslationApiKeyVisible={setTranslationApiKeyVisible}
+        translationTimeoutMs={translationTimeoutMs}
+        setTranslationTimeoutMs={setTranslationTimeoutMs}
+        translationPrimary={translationPrimary}
+        setTranslationPrimary={setTranslationPrimary}
+        translationBackup={translationBackup}
+        setTranslationBackup={setTranslationBackup}
+        translationConfigurationNeedsReplacementKey={translationConfigurationNeedsReplacementKey}
+        translationApiKeyHint={translationApiKeyHint}
+        saveTranslationConfiguration={saveTranslationConfiguration}
+        retryTranslationConfigurationLoad={retryTranslationConfigurationLoad}
+        resetConfirmClosing={resetConfirmClosing}
+        setPendingConfirmation={setPendingConfirmation}
+      />
+    ),
   };
 
   return (
-    <div className={`modal-backdrop settings-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
+    <div ref={settingsBackdrop} className={`modal-backdrop settings-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
       <section ref={settingsDialog} className={`modal-card settings-modal${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1}>
         <header className="modal-heading settings-heading">
-          <div>
-            <span className="eyebrow">{t("settings.eyebrow")}</span>
-            <h2 id="settings-title">{t("settings.title")}</h2>
-          </div>
-          <button className="icon-button" type="button" aria-label={t("common.close")} data-tooltip={t("common.close")} onClick={requestClose}>
+          <h2 id="settings-title">{t("settings.title")}</h2>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label={t("common.close")}
+            disabled={closeBlocked}
+            data-tooltip={closeBlockedHint ?? t("common.close")}
+            onClick={requestClose}
+          >
             <X size={18} />
           </button>
         </header>
 
         <div className="settings-layout">
           <nav className="settings-nav" aria-label={t("settings.nav.title")}>
-            <p className="settings-nav-title">{t("settings.nav.title")}</p>
-            {navItems.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                className={`settings-nav-item${activeNavKey === item.key ? " active" : ""}`}
-                aria-current={activeNavKey === item.key ? "true" : undefined}
-                onClick={() => scrollToSection(item.key)}
-              >
-                <item.icon size={14} />{item.label}
-              </button>
-            ))}
+            <div className="settings-nav-search">
+              <Search size={13} className="settings-nav-search-icon" aria-hidden="true" />
+              <input
+                ref={searchInputRef}
+                type="search"
+                className="settings-nav-search-input"
+                placeholder={t("settings.search.placeholder")}
+                aria-label={t("settings.search.placeholder")}
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape" && searchQuery) {
+                    event.stopPropagation();
+                    setSearchQuery("");
+                  } else if (event.key === "Enter" && searchResults && searchResults.length > 0) {
+                    selectCategory(searchResults[0].categoryId);
+                  }
+                }}
+                spellCheck={false}
+                autoComplete="off"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  className="settings-nav-search-clear"
+                  aria-label={t("settings.search.clear")}
+                  onClick={() => {
+                    setSearchQuery("");
+                    searchInputRef.current?.focus();
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+
+            {searchResults !== null ? (
+              searchResults.length === 0 ? (
+                <div className="settings-nav-search-empty" role="status">
+                  <SearchX size={20} />
+                  <span>{t("settings.search.noResults")}</span>
+                </div>
+              ) : (
+                <div className="settings-nav-group">
+                  <p className="settings-nav-group-label">
+                    {t("settings.search.resultsTitle")} ({searchResults.length})
+                  </p>
+                  {searchResults.map((result) => {
+                    const id = result.categoryId;
+                    const meta = categoryMeta[id];
+                    const active = activeCategory === id;
+                    return (
+                      <div key={id} className="settings-search-result-group">
+                        <button
+                          key={id}
+                          type="button"
+                          id={`settings-nav-${id}`}
+                          className={`settings-nav-item${active ? " active" : ""}`}
+                          aria-current={active ? "true" : undefined}
+                          onClick={() => selectCategory(id)}
+                        >
+                          <meta.icon size={14} />
+                          <span>{t(meta.labelKey)}</span>
+                        </button>
+                        {result.matchedItems.length > 0 && (
+                          <div className="settings-search-match-tags">
+                            {result.matchedItems.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                className="settings-search-match-tag"
+                                onClick={() => navigateToTarget(id, item.targetId)}
+                              >
+                                {item.title}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            ) : (
+              visibleNavGroups.map((group) => (
+                <div className="settings-nav-group" key={group.key}>
+                  <p className="settings-nav-group-label">{t(settingsNavGroupLabelKeys[group.key])}</p>
+                  {group.items.map((id) => {
+                    const meta = categoryMeta[id];
+                    const active = activeCategory === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        id={`settings-nav-${id}`}
+                        className={`settings-nav-item${active ? " active" : ""}`}
+                        aria-current={active ? "true" : undefined}
+                        onClick={() => selectCategory(id)}
+                      >
+                        <meta.icon size={14} />{t(meta.labelKey)}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))
+            )}
           </nav>
           <div className="settings-body" ref={settingsBody}>
-            <FormNotice notice={notice} />
-
-            <section className="settings-section" data-settings-nav="language" aria-labelledby="language-settings">
-              <div className="settings-section-title">
-                <Languages size={16} />
-                <div><span id="language-settings">{t("language.title")}</span></div>
-              </div>
-              <label className="setting-select-row" htmlFor="interface-language">
-                <span><strong>{t("language.label")}</strong><small>{t("settings.language.applyImmediately")}</small></span>
-                <ThemedSelect
-                  id="interface-language"
-                  value={activeLocale}
-                  aria-label={t("language.label")}
-                  disabled={controlsBusy}
-                  onValueChange={changeLocale}
-                >
-                  {locales.map((option) => <option key={option.locale} value={option.locale}>{option.nativeName}</option>)}
-                </ThemedSelect>
-              </label>
-            </section>
-
-            <SettingsAppearanceSection
-              t={t}
-              currentSettings={currentSettings}
-              controlsBusy={controlsBusy}
-              busyAction={busyAction}
-              demoMode={demoMode}
-              intensityDraft={intensityDraft}
-              hasCustomBackground={hasCustomBackground}
-              applyOptimisticSettings={applyOptimisticSettings}
-              choosePreset={choosePreset}
-              setIntensityDraft={setIntensityDraft}
-              commitIntensity={commitIntensity}
-              chooseCustomBackground={chooseCustomBackground}
-              uploadBackground={uploadBackground}
-              resetConfirmClosing={resetConfirmClosing}
-              setPendingConfirmation={setPendingConfirmation}
-              uploadButtonRef={uploadButton}
-            />
-
-            <section className="settings-section" data-settings-nav="notifications" aria-labelledby="notification-settings">
-              <div className="settings-section-title">
-                <Bell size={16} />
-                <div><span id="notification-settings">{t("settings.notifications.title")}</span></div>
-              </div>
-              <Switch
-                checked={currentSettings.notificationsEnabled}
-                disabled={controlsBusy}
-                label={t("settings.notifications.desktop.label")}
-                onChange={() => void applyOptimisticSettings({ notificationsEnabled: !currentSettings.notificationsEnabled }, null)}
-              />
-              <Switch
-                checked={currentSettings.notifyWhenFocused}
-                disabled={controlsBusy || !currentSettings.notificationsEnabled}
-                label={t("settings.notifications.focused.label")}
-                onChange={() => void applyOptimisticSettings({ notifyWhenFocused: !currentSettings.notifyWhenFocused }, null)}
-              />
-
-              <div className={`setting-subheading${currentSettings.notificationsEnabled ? "" : " muted"}`}><span>{t("settings.sound.title")}</span>{!currentSettings.notificationsEnabled && <small>{t("settings.sound.enableNotificationsFirst")}</small>}</div>
-              <div className="settings-option-grid sound-option-grid" role="group" aria-label={t("settings.sound.groupLabel")}>
-                {soundOptions.map((option) => (
-                  <button
-                    key={option.value}
-                    className={`settings-option sound-option${currentSettings.notificationSound === option.value ? " active" : ""}`}
-                    type="button"
-                    aria-pressed={currentSettings.notificationSound === option.value}
-                    disabled={controlsBusy || !currentSettings.notificationsEnabled}
-                    onClick={() => void applyOptimisticSettings({ notificationSound: option.value }, null)}
-                  >
-                    {option.value === "none" ? <VolumeX size={16} /> : <Volume2 size={16} />}
-                    <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
-                    {currentSettings.notificationSound === option.value && <Check className="option-check" size={15} />}
-                  </button>
-                ))}
-              </div>
-              <div className="settings-inline-actions">
-                <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => void testNotification()}>
-                  {busyAction === "notification-test" ? <LoaderCircle className="spin" size={15} /> : <Bell size={15} />}{t("settings.notifications.test")}
-                </button>
-                <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => void testSound()}>
-                  {busyAction === "sound-test" ? <LoaderCircle className="spin" size={15} /> : <Volume2 size={15} />}{t("settings.sound.test")}
-                </button>
-              </div>
-            </section>
-
-            {isDesktopRuntime && (
-              <section className="settings-section" data-settings-nav="desktop" aria-labelledby="desktop-settings">
-                <div className="settings-section-title">
-                  <Laptop size={16} />
-                  <div><span>{t("settings.desktop.title")}</span><p id="desktop-settings">{t("settings.desktop.description")}</p></div>
-                </div>
-                <div className="settings-option-grid close-behavior-grid" role="group" aria-label={t("settings.closeBehavior.groupLabel")}>
-                  {closeBehaviorOptions.map((option) => (
-                    <button
-                      key={option.value}
-                      className={`settings-option${currentSettings.closeBehavior === option.value ? " active" : ""}`}
-                      type="button"
-                      data-close-behavior={option.value}
-                      aria-pressed={currentSettings.closeBehavior === option.value}
-                      disabled={controlsBusy}
-                      onClick={() => void applyOptimisticSettings({ closeBehavior: option.value }, null)}
-                    >
-                      <CloseBehaviorIcon value={option.value} />
-                      <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
-                      {currentSettings.closeBehavior === option.value && <Check className="option-check" size={15} />}
-                    </button>
-                  ))}
-                </div>
-                <Switch
-                  checked={currentSettings.launchAtStartup}
-                  disabled={controlsBusy}
-                  label={t("settings.launchAtStartup.label")}
-                  onChange={() => void applyOptimisticSettings({ launchAtStartup: !currentSettings.launchAtStartup }, null)}
-                />
-                <Switch
-                  checked={currentSettings.globalShortcutEnabled}
-                  disabled={controlsBusy}
-                  label={t("settings.shortcut.label")}
-                  description={t("settings.shortcut.description")}
-                  onChange={() => void applyOptimisticSettings({ globalShortcutEnabled: !currentSettings.globalShortcutEnabled }, null)}
-                />
-                {updateStatus && updatePresentation && (
-                  <div className="setting-row update-setting-row">
-                    <div>
-                      <strong>{updateStatus.targetVersion ? t("settings.update.targetVersion", { version: updateStatus.targetVersion }) : t("settings.update.currentVersion", { version: updateStatus.currentVersion })}</strong>
-                      <span className={updatePresentation.isError ? "account-error" : ""} aria-live="polite">{updatePresentation.status}</span>
-                      {updateStatus.percent !== null && ["available", "downloading", "ready"].includes(updateStatus.phase) && (
-                        <progress aria-label={t("settings.update.downloadProgress")} max={100} value={updateStatus.percent} />
-                      )}
-                    </div>
-                    <div className="settings-inline-actions">
-                      {updateStatus.phase === "ready" && updateStatus.suppression === "none" ? (
-                        <>
-                          <button className="primary-button" type="button" disabled={updateControlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("install-update"); }}>
-                            <RotateCcw size={15} />{t("settings.update.restartAndUpdate")}
-                          </button>
-                          <button className="secondary-button" type="button" disabled={updateControlsBusy} onClick={skipUpdate}>
-                            {updateActionBusy === "skip" ? <LoaderCircle className="spin" size={15} /> : <SkipForward size={15} />}{t("settings.update.skipVersion")}
-                          </button>
-                        </>
-                      ) : updateStatus.phase === "available" && updateStatus.suppression === "none" ? (
-                        <>
-                          <button className="primary-button" type="button" disabled={updateControlsBusy} onClick={downloadUpdate}>
-                            {updateActionBusy === "download" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}{t("settings.update.updateVersion")}
-                          </button>
-                          <button className="secondary-button" type="button" disabled={updateControlsBusy} onClick={skipUpdate}>
-                            {updateActionBusy === "skip" ? <LoaderCircle className="spin" size={15} /> : <SkipForward size={15} />}{t("settings.update.skipVersion")}
-                          </button>
-                        </>
-                      ) : updateStatus.phase !== "unavailable" ? (
-                        <button
-                          className="secondary-button"
-                          type="button"
-                          disabled={updateControlsBusy || ["checking", "downloading"].includes(updateStatus.phase)}
-                          onClick={checkForUpdates}
-                        >
-                          {updateActionBusy === "check" || updateStatus.phase === "checking" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}
-                          {t("settings.update.check")}
-                        </button>
-                      ) : null}
-                    </div>
-                    {["available", "ready"].includes(updateStatus.phase) && updateStatus.suppression === "none" && (
-                      <div className="update-snooze-controls" role="group" aria-label={t("settings.update.snoozeGroupLabel")}>
-                        <span><Clock3 size={14} aria-hidden="true" />{t("settings.update.snooze")}</span>
-                        <ThemedSelect
-                          id="settings-update-snooze"
-                          value={updateSnoozeMinutes}
-                          aria-label={t("settings.update.snoozeSelectLabel")}
-                          disabled={updateControlsBusy}
-                          onValueChange={(value) => setUpdateSnoozeMinutes(Number(value))}
-                        >
-                          <option value={60}>{t("settings.update.snooze.oneHour")}</option>
-                          <option value={1440}>{t("settings.update.snooze.oneDay")}</option>
-                          <option value={10080}>{t("settings.update.snooze.oneWeek")}</option>
-                          <option value={43200}>{t("settings.update.snooze.thirtyDays")}</option>
-                        </ThemedSelect>
-                        <button className="secondary-button" type="button" disabled={updateControlsBusy} onClick={snoozeUpdate}>
-                          {updateActionBusy === "snooze" ? <LoaderCircle className="spin" size={15} /> : <Clock3 size={15} />}{t("settings.update.remindMe")}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </section>
-            )}
-
-            <section className="settings-section" data-settings-nav="sync" aria-labelledby="sync-settings">
-              <div className="settings-section-title">
-                <RefreshCw size={16} />
-                <div><span id="sync-settings">{t("settings.sync.title")}</span></div>
-              </div>
-              <label className="setting-select-row" htmlFor="refresh-interval">
-                <span><strong>{t("settings.sync.refresh.label")}</strong></span>
-                <ThemedSelect
-                  id="refresh-interval"
-                  value={currentSettings.refreshIntervalSeconds}
-                  aria-label={t("settings.sync.refresh.label")}
-                  disabled={controlsBusy}
-                  onValueChange={(value) => void applyOptimisticSettings({ refreshIntervalSeconds: Number(value) as AppSettings["refreshIntervalSeconds"] }, null)}
-                >
-                  <option value={30}>{t("settings.sync.refresh.thirtySeconds")}</option>
-                  <option value={60}>{t("settings.sync.refresh.oneMinute")}</option>
-                  <option value={180}>{t("settings.sync.refresh.threeMinutes")}</option>
-                  <option value={300}>{t("settings.sync.refresh.fiveMinutes")}</option>
-                </ThemedSelect>
-              </label>
-              <label className="setting-select-row" htmlFor="sync-message-limit">
-                <span><strong>{t("settings.sync.limit.label")}</strong><small>{t("settings.sync.limit.description")}</small></span>
-                <ThemedSelect
-                  id="sync-message-limit"
-                  value={currentSettings.syncMessageLimit}
-                  aria-label={t("settings.sync.limit.label")}
-                  disabled={controlsBusy}
-                  onValueChange={(value) => void applyOptimisticSettings({ syncMessageLimit: Number(value) as AppSettings["syncMessageLimit"] }, null)}
-                >
-                  <option value={0}>{t("settings.sync.limit.all")}</option>
-                  <option value={200}>200</option>
-                  <option value={500}>500</option>
-                  <option value={1000}>1000</option>
-                  <option value={2000}>2000</option>
-                  <option value={5000}>5000</option>
-                </ThemedSelect>
-              </label>
-              {currentSettings.effectiveSyncMessageLimit != null && currentSettings.effectiveSyncMessageLimit !== currentSettings.syncMessageLimit && (
-                <p className="settings-note" role="status">{t("settings.sync.limit.effectiveHint", { limit: currentSettings.effectiveSyncMessageLimit })}</p>
-              )}
-              <Switch
-                checked={currentSettings.realtimePushEnabled}
-                disabled={controlsBusy}
-                label={t("settings.sync.realtime.label")}
-                description={t("settings.sync.realtime.description")}
-                onChange={() => void applyOptimisticSettings({ realtimePushEnabled: !currentSettings.realtimePushEnabled }, null)}
-              />
-            </section>
-
-            <FilterRulesSection accounts={accounts} demoMode={demoMode} />
-
-            <SettingsAgentSection
-              t={t}
-              formatDate={formatDate}
-              accounts={accounts}
-              currentSettings={currentSettings}
-              controlsBusy={controlsBusy}
-              demoMode={demoMode}
-              requestAgentProviderSettings={requestAgentProviderSettings}
-              requestAccessLevelChange={requestAccessLevelChange}
-              applyOptimisticSettings={applyOptimisticSettings}
-              externalGuideCopied={externalGuideCopied}
-              setExternalGuideCopied={setExternalGuideCopied}
-              externalPairings={externalPairings}
-              externalPairingsError={externalPairingsError}
-              setExternalPairingsReload={setExternalPairingsReload}
-              setAutoReplyDialogOpen={setAutoReplyDialogOpen}
-              setAutoReplyDecisionsOpen={setAutoReplyDecisionsOpen}
-              setMemoryDialogOpen={setMemoryDialogOpen}
-            />
-
-            <SettingsTranslationSection
-              t={t}
-              controlsBusy={controlsBusy}
-              busyAction={busyAction}
-              demoMode={demoMode}
-              translationConfiguration={translationConfiguration}
-              translationConfigurationLoading={translationConfigurationLoading}
-              translationConfigurationError={translationConfigurationError}
-              translationEndpoint={translationEndpoint}
-              setTranslationEndpoint={setTranslationEndpoint}
-              translationApiKey={translationApiKey}
-              setTranslationApiKey={setTranslationApiKey}
-              translationApiKeyVisible={translationApiKeyVisible}
-              setTranslationApiKeyVisible={setTranslationApiKeyVisible}
-              translationTimeoutMs={translationTimeoutMs}
-              setTranslationTimeoutMs={setTranslationTimeoutMs}
-              translationPrimary={translationPrimary}
-              setTranslationPrimary={setTranslationPrimary}
-              translationBackup={translationBackup}
-              setTranslationBackup={setTranslationBackup}
-              translationConfigurationNeedsReplacementKey={translationConfigurationNeedsReplacementKey}
-              translationApiKeyHint={translationApiKeyHint}
-              saveTranslationConfiguration={saveTranslationConfiguration}
-              retryTranslationConfigurationLoad={retryTranslationConfigurationLoad}
-              resetConfirmClosing={resetConfirmClosing}
-              setPendingConfirmation={setPendingConfirmation}
-            />
+            <FormNotice notice={notice} onDismiss={() => setNotice(null)} />
+            <div
+              className="settings-panel"
+              key={activeCategory}
+              // A nav + region pair, not a tablist: the sidebar is a list of
+              // links with aria-current, so the panel must not claim to be the
+              // tab half of a tab pattern it does not implement.
+              role="region"
+              id="settings-active-panel"
+              aria-labelledby={`settings-nav-${activeCategory}`}
+            >
+              {panels[activeCategory]}
+            </div>
           </div>
         </div>
 
@@ -1234,7 +1317,7 @@ export default function SettingsModal({
           <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => { resetConfirmClosing(); setPendingConfirmation("restore-defaults"); }}>
             {busyAction === "restore-defaults" ? <LoaderCircle className="spin" size={15} /> : <Undo2 size={15} />}{t("settings.defaults.restore")}
           </button>
-          <button className="primary-button" type="button" disabled={controlsBusy} onClick={requestClose}>{t("settings.done")}</button>
+          <button className="primary-button" type="button" disabled={closeBlocked} data-tooltip={closeBlockedHint ?? undefined} onClick={requestClose}>{t("settings.done")}</button>
         </footer>
       </section>
       {pendingConfirmation && (
@@ -1257,7 +1340,7 @@ export default function SettingsModal({
                   else if (action === "install-update") void installUpdate();
                   else if (action === "remove-translation-configuration") void removeTranslationConfiguration();
                   else if (action === "remove-translation-api-key") void removeTranslationApiKey();
-                  else if (action === "discard-translation-changes-and-open-agent") onOpenAgentProviderSettings();
+                  else if (action === "discard-translation-changes-and-open-models") selectCategory("models");
                   else if (action === "discard-translation-changes") onClose();
                   else if (action === "enable-full-access" && pendingFullAccess) void applyOptimisticSettings(pendingFullAccess.patch, pendingFullAccess.successMessage);
                   else void restoreDefaults();
@@ -1300,6 +1383,13 @@ export default function SettingsModal({
         <AgentMemoryDialog
           accounts={accounts}
           onClose={() => setMemoryDialogOpen(false)}
+          fallbackFocusRef={settingsDialog}
+        />
+      )}
+      {autoReplySandboxOpen && (
+        <AutoReplySandboxDialog
+          t={t}
+          onClose={() => setAutoReplySandboxOpen(false)}
           fallbackFocusRef={settingsDialog}
         />
       )}

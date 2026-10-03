@@ -33,6 +33,7 @@ type ThemedSelectProps = {
   disabled?: boolean;
   className?: string;
   containerClassName?: string;
+  menuPlacement?: "bottom" | "top";
   "aria-describedby"?: string;
   "aria-invalid"?: boolean | "true" | "false";
   "aria-label"?: string;
@@ -82,6 +83,7 @@ export default function ThemedSelect({
   disabled = false,
   className = "",
   containerClassName = "",
+  menuPlacement = "bottom",
   "aria-describedby": ariaDescribedBy,
   "aria-invalid": ariaInvalid,
   "aria-label": ariaLabel,
@@ -188,45 +190,46 @@ export default function ThemedSelect({
     }
   };
 
-  return (
-    <span
-      ref={rootRef}
-      className={`select-control ${containerClassName}`.trim()}
-      onBlur={(event) => {
-        const nextFocusTarget = event.relatedTarget;
-        if (!(nextFocusTarget instanceof Node) || !rootRef.current?.contains(nextFocusTarget)) beginMenuClose();
-      }}
-    >
-      <button
-        ref={triggerRef}
-        id={id}
-        className={`themed-select ${className}`.trim()}
-        type="button"
-        role="combobox"
-        aria-describedby={ariaDescribedBy}
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        aria-controls={open ? listboxId : undefined}
-        aria-activedescendant={activeOptionId}
-        aria-invalid={ariaInvalid}
-        aria-label={ariaLabel}
-        disabled={disabled}
-        onClick={() => {
-          if (!disabled) {
-            if (open) beginMenuClose();
-            else openMenu();
-          }
+    const isDropup = menuPlacement === "top" || containerClassName.includes("dropup");
+    return (
+      <span
+        ref={rootRef}
+        className={`select-control${isDropup ? " dropup" : ""} ${containerClassName}`.trim()}
+        onBlur={(event) => {
+          const nextFocusTarget = event.relatedTarget;
+          if (!(nextFocusTarget instanceof Node) || !rootRef.current?.contains(nextFocusTarget)) beginMenuClose();
         }}
-        onKeyDown={handleKeyDown}
       >
-        <span className="themed-select-value">{selected?.label ?? t("common.notSelected")}</span>
-        <ChevronDown className={`select-control-icon${open ? " open" : ""}`} size={15} aria-hidden="true" />
-      </button>
-      {menuMounted && (
-        <span
-          id={listboxId}
-          className={`themed-select-menu${menuClosing ? " closing" : ""}`}
-          role="listbox"
+        <button
+          ref={triggerRef}
+          id={id}
+          className={`themed-select ${className}`.trim()}
+          type="button"
+          role="combobox"
+          aria-describedby={ariaDescribedBy}
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          aria-controls={open ? listboxId : undefined}
+          aria-activedescendant={activeOptionId}
+          aria-invalid={ariaInvalid}
+          aria-label={ariaLabel}
+          disabled={disabled}
+          onClick={() => {
+            if (!disabled) {
+              if (open) beginMenuClose();
+              else openMenu();
+            }
+          }}
+          onKeyDown={handleKeyDown}
+        >
+          <span className="themed-select-value">{selected?.label ?? t("common.notSelected")}</span>
+          <ChevronDown className={`select-control-icon${open ? " open" : ""}`} size={15} aria-hidden="true" />
+        </button>
+        {menuMounted && (
+          <span
+            id={listboxId}
+            className={`themed-select-menu${isDropup ? " dropup" : ""}${menuClosing ? " closing" : ""}`}
+            role="listbox"
           aria-label={ariaLabel}
           aria-labelledby={ariaLabel ? undefined : id}
         >

@@ -29,6 +29,65 @@ export type AgentProviderInput = {
   timeoutMs: number;
   allowCloudMailContent: boolean;
   makeDefault?: boolean;
+  contextWindowTokens?: number;
+  maxOutputTokens?: number;
+};
+
+export type AutoReplySimulateInput = {
+  accountEmail?: string;
+  fromName?: string;
+  fromAddress: string;
+  subject: string;
+  textBody: string;
+  snippet?: string;
+  mailbox?: string;
+  folderSpecialUse?: string;
+  autoSubmitted?: string;
+  listUnsubscribe?: string;
+  precedence?: string;
+  simulateAsContact?: boolean;
+  forceLlm?: boolean;
+};
+
+export type AutoReplySimulateResult = {
+  linkStats: {
+    originalLength: number;
+    sanitizedLength: number;
+    replacedCount: number;
+    estimatedTokensSaved: number;
+    sanitizedSnippet: string;
+  };
+  screening: {
+    passed: boolean;
+    reason?: string;
+    details?: string;
+  };
+  scope: {
+    passed: boolean;
+    reason?: string;
+    details?: string;
+  };
+  sensitiveKeywords: string[];
+  decision?: {
+    evaluated: boolean;
+    replyValue?: "high" | "low";
+    sensitive?: boolean;
+    reply?: string;
+    error?: string;
+  };
+  finalAction:
+    | "would_reply"
+    | "ignored_offline_rule"
+    | "ignored_scope"
+    | "ignored_low_value"
+    | "sensitive_requires_confirmation";
+  timings?: {
+    linkSanitizationMs: number;
+    screeningMs: number;
+    scopeMs: number;
+    llmMs?: number;
+    totalMs: number;
+  };
 };
 
 /** Non-secret external MCP server details returned by the local Agent service. */
@@ -156,6 +215,11 @@ export type AgentMessageRequest = {
    *  snapshot replacing the transcript) address the SAME row instead of a
    *  server-random id the client has never seen. */
   clientMessageId?: string;
+  /** The client-generated id of the optimistic assistant row. The server
+   *  publishes the in-flight reply and persists the turn under this id, so
+   *  streamed deltas keep folding into the row the client already rendered
+   *  instead of a server-random id the client has never seen. */
+  clientAssistantMessageId?: string;
   quote?: string;
   /** Files uploaded by the user; token is present when usable as a mail attachment. */
   attachments?: AgentMessageAttachment[];

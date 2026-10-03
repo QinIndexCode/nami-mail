@@ -78,6 +78,7 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
   const [notice, setNotice] = useState<Notice>(null);
   const confirmationDialog = useRef<HTMLElement>(null);
   const editorPanel = useRef<HTMLElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (demoMode || initialContacts !== undefined) return undefined;
@@ -328,7 +329,7 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
           <div><span>{t("settings.contacts.title")}</span><p id="contacts-settings">{t("settings.contacts.description")}</p></div>
         </div>
 
-        <FormNotice notice={notice} />
+        <FormNotice notice={notice} onDismiss={() => setNotice(null)} />
 
         {loading ? (
           <p className="settings-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("common.loading")}</p>
@@ -343,9 +344,13 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
           <div className="content-enter">
             {showToolbar && (
               <div className="contacts-toolbar">
-                <label className="search-wrap contacts-search" htmlFor="contacts-search-input">
+                <div
+                  className="search-wrap contacts-search"
+                  onClick={() => searchInputRef.current?.focus()}
+                >
                   <Search size={14} aria-hidden="true" />
                   <input
+                    ref={searchInputRef}
                     id="contacts-search-input"
                     type="search"
                     value={query}
@@ -358,13 +363,28 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
                       setQuery(event.target.value);
                       setPage(1);
                     }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape" && query) {
+                        event.stopPropagation();
+                        setQuery("");
+                      }
+                    }}
                   />
                   {query && (
-                    <button className="icon-button search-clear" type="button" aria-label={t("settings.contacts.clearSearch")} onClick={() => setQuery("")}>
+                    <button
+                      className="icon-button search-clear"
+                      type="button"
+                      aria-label={t("settings.contacts.clearSearch")}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setQuery("");
+                        searchInputRef.current?.focus();
+                      }}
+                    >
                       <X size={14} />
                     </button>
                   )}
-                </label>
+                </div>
                 {selectedIds.size > 0 ? (
                   <div className="contacts-bulk-actions">
                     <span className="contacts-bulk-count">{t("settings.contacts.selectedCount", { count: selectedIds.size })}</span>
@@ -502,10 +522,20 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
             <div className="contact-editor" role="form" aria-label={draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")}>
               <div className="contact-editor-head">
                 <AvatarEditor name={draft.name} address={draft.email} current={draft.avatarDataUrl} disabled={busy} onChange={(dataUrl) => setDraft({ ...draft, avatarDataUrl: dataUrl })} />
-                <div>
+                <div className="contact-editor-head-text">
                   <span className="eyebrow">{draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")}</span>
                   <h3 id="contact-editor-title" className="contact-editor-title">{draft.name.trim() || draft.email || t("settings.contacts.title")}</h3>
                 </div>
+                <button
+                  className="icon-button contact-editor-close-btn"
+                  type="button"
+                  aria-label={t("common.close")}
+                  data-tooltip={t("common.close")}
+                  disabled={busy}
+                  onClick={closeEditor}
+                >
+                  <X size={16} />
+                </button>
               </div>
               {draft.id && draft.autoCollected && (
                 <div className="contact-editor-source">

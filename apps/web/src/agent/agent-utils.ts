@@ -113,6 +113,25 @@ export function writeRevokedIds(conversationId: string, ids: Set<string>): void 
 }
 
 // ---------------------------------------------------------------------------
+// Provider selection
+// ---------------------------------------------------------------------------
+
+/**
+ * The provider the composer should start on: the server's default, else the
+ * first fully configured one, else whatever exists. Shared by the workspace
+ * and the settings models panel so both agree on the same fallback order.
+ */
+export function configuredProviderId(
+  providers: readonly { id: string; configured: boolean }[],
+  defaultProviderId: string | null,
+): string {
+  return providers.find((provider) => provider.id === defaultProviderId)?.id
+    ?? providers.filter((provider) => provider.configured)[0]?.id
+    ?? providers[0]?.id
+    ?? "";
+}
+
+// ---------------------------------------------------------------------------
 // Mail reference / mention types
 // ---------------------------------------------------------------------------
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "vitest";
+import { maxJsonDepth } from "@nami/agent-contracts";
 import { AnthropicMessagesProvider } from "../src/agent/anthropic-provider.js";
 
 // Assembled at runtime so secret scanners do not flag the synthetic test key.
@@ -216,4 +217,101 @@ it("Anthropic provider completes at message_stop without waiting for the connect
   }))) events.push(event);
   assert.deepEqual(events.map((event) => event.type), ["response_started", "text_delta", "usage", "completed"]);
   assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
+});
+
+// A pre-filled tool_use input arrives already parsed, so it never passes
+// through the input_json_delta budget the streaming branch enforces. These
+// cases pin that the branch is guarded on its own terms.
+// Wire text is built by string repetition, never by JSON.stringify of a deep
+// object: the engine's serializer is the recursive walk being guarded.
+function deepJson(levels: number): string {
+  return `${'{"nested":'.repeat(levels)}"leaf"${"}".repeat(levels)}`;
+}
+
+function depthOf(value: unknown): number {
+  let current = value;
+  let depth = 0;
+  while (current && typeof current === "object" && !Array.isArray(current) && "nested" in current) {
+    current = (current as { nested: unknown }).nested;
+    depth += 1;
+  }
+  return depth;
+}
+
+function prefilledInputProvider(toolInput: string): { provider: AnthropicMessagesProvider; requests: CapturedRequest[] } {
+  const requests: CapturedRequest[] = [];
+  const provider = new AnthropicMessagesProvider({
+    id: "anthropic-prefilled",
+    endpoint: "https://api.anthropic.com",
+    apiKey: TEST_API_KEY,
+    fetchImpl: async (input, init) => {
+      captureRequest(requests, input, init);
+      return sseResponse([
+        'data: {"type":"message_start","message":{"usage":{"input_tokens":7}}}',
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"messages.search","input":'
+          + toolInput
+          + "}}",
+        'data: {"type":"message_stop"}',
+      ]);
+    },
+  });
+  return { provider, requests };
+}
+
+async function drainPrefilled(toolInput: string) {
+  const { provider, requests } = prefilledInputProvider(toolInput);
+  // A guard that raised instead of yielding would reject here.
+  const events = [];
+  for await (const event of provider.streamChat(chatRequest({ providerId: "anthropic-prefilled" }))) events.push(event);
+  return { events, requests };
+}
+
+it("Anthropic provider rejects a pre-filled tool input nested past the depth budget", async () => {
+  const { events, requests } = await drainPrefilled(deepJson(5_000));
+
+  assert.deepEqual(events.map((event) => event.type), ["response_started", "error", "completed"]);
+  const failure = events.find((event) => event.type === "error");
+  assert.equal(failure?.type === "error" && failure.error.code, "TOOL_INPUT_INVALID");
+  assert.equal(failure?.type === "error" && failure.error.retryable, false);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "content-filter" });
+  // The refusal is terminal: the incomplete call never reaches the model.
+  assert.equal(requests.length, 1);
+});
+
+it("Anthropic provider rejects a pre-filled tool input past the argument byte budget", async () => {
+  const oversized = JSON.stringify({ blob: "x".repeat(210 * 1024) });
+  const { events } = await drainPrefilled(oversized);
+
+  const failure = events.find((event) => event.type === "error");
+  assert.equal(failure?.type === "error" && failure.error.code, "TOOL_INPUT_INVALID");
+  assert.equal(failure?.type === "error" && failure.error.retryable, false);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "content-filter" });
+});
+
+it("Anthropic provider still accepts a pre-filled tool input nested exactly at the budget", async () => {
+  const { events } = await drainPrefilled(deepJson(maxJsonDepth));
+
+  const toolCall = events.find((event) => event.type === "tool_call");
+  assert.equal(toolCall?.type, "tool_call");
+  assert.equal(toolCall?.type === "tool_call" && depthOf(toolCall.call.input), maxJsonDepth);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "tool-calls" });
+  assert.equal(events.some((event) => event.type === "error"), false);
+});
+
+it("Anthropic provider refuses to resend a history carrying an inadmissible tool input", async () => {
+  const { provider, requests } = prefilledInputProvider("{}");
+  const events = [];
+  for await (const event of provider.streamChat(chatRequest({
+    messages: [
+      { role: "user", content: "Find invoices" },
+      { role: "assistant", content: "", toolCalls: [{ id: "toolu_a", toolName: "messages.search", input: JSON.parse(deepJson(5_000)), requestedAt: "2026-01-01T00:00:00.000Z" }] },
+    ],
+  }))) events.push(event);
+
+  // The guard fires before the request body is serialized, so no call is made.
+  assert.deepEqual(requests.length, 0);
+  assert.deepEqual(events, [
+    { type: "error", error: { code: "TOOL_INPUT_INVALID", message: "The provider returned tool call arguments that are not usable JSON input.", retryable: false } },
+    { type: "completed", finishReason: "content-filter" },
+  ]);
 });

@@ -1,5 +1,6 @@
 import { ApiError } from "./api";
 import { translate, type Translate } from "./i18n";
+import { providerCredentialHint } from "./providerCopy";
 import type { Account } from "./types";
 
 export type MailIssueKind =
@@ -22,6 +23,9 @@ export type MailErrorPresentation = {
   guidance: string;
   retryable: boolean;
 };
+
+/** What the caller knows about the failing account, used to sharpen guidance. */
+export type MailErrorContext = { providerId?: string | null };
 
 type ErrorDetails = {
   code?: string;
@@ -75,10 +79,28 @@ function localizedPresentation(
 }
 
 /**
+ * Keeps the generic recovery steps and appends the account provider's own
+ * credential hint. The server attaches the same hint in Chinese prose to these
+ * codes, which is dropped for known codes; resolving the preset copy here keeps
+ * an English account from reading it. A custom mailbox has no preset hint worth
+ * adding, and a hint already spelled out by the guidance would just repeat it.
+ */
+function withCredentialHint(
+  issue: MailErrorPresentation,
+  context: MailErrorContext | undefined,
+  t: Translate,
+): MailErrorPresentation {
+  if (issue.kind !== "authentication" || context?.providerId === "custom") return issue;
+  const hint = providerCredentialHint(t, context?.providerId);
+  if (!hint || issue.guidance.includes(hint)) return issue;
+  return { ...issue, guidance: `${issue.guidance} ${hint}` };
+}
+
+/**
  * Converts stable server error codes and legacy saved text into focused,
  * localized recovery guidance without exposing transport implementation details.
  */
-export function presentMailError(error: unknown, t: Translate = defaultTranslate): MailErrorPresentation {
+export function presentMailError(error: unknown, t: Translate = defaultTranslate, context?: MailErrorContext): MailErrorPresentation {
   const { code: rawCode, message: rawMessage, status } = errorDetails(error);
   const code = rawCode?.trim().toLowerCase();
   const message = rawMessage.trim();
@@ -127,13 +149,13 @@ export function presentMailError(error: unknown, t: Translate = defaultTranslate
     return localizedPresentation("protocol", "imapDisabled", true, t);
   }
   if (code === "smtp_auth_failed" || /(?:发件服务器拒绝了登录凭据|smtp.*(?:凭据|auth|login))/i.test(normalized)) {
-    return localizedPresentation("authentication", "smtpAuthFailed", false, t);
+    return withCredentialHint(localizedPresentation("authentication", "smtpAuthFailed", false, t), context, t);
   }
   if (code === "imap_auth_failed" || /(?:收件服务器拒绝了登录凭据|imap.*(?:凭据|auth|login))/i.test(normalized)) {
-    return localizedPresentation("authentication", "imapAuthFailed", false, t);
+    return withCredentialHint(localizedPresentation("authentication", "imapAuthFailed", false, t), context, t);
   }
   if (code === "invalid_credential" || /(?:凭据|授权码|应用专用密码|密码).*(?:拒绝|错误|无效)|(?:authentication|credentials|login).*(?:failed|invalid|reject)/i.test(normalized)) {
-    return localizedPresentation("authentication", "invalidCredential", false, t);
+    return withCredentialHint(localizedPresentation("authentication", "invalidCredential", false, t), context, t);
   }
   if (code === "account_exists" || /(?:邮箱已经添加|邮箱已添加|account exists)/i.test(normalized)) {
     return localizedPresentation("unknown", "accountExists", false, t);
@@ -153,8 +175,8 @@ function fallbackSentence(fallback: string): string {
   return fallback.trim().replace(/[。！？!?]+$/, "");
 }
 
-export function mailErrorMessage(error: unknown, fallback?: string, t: Translate = defaultTranslate): string {
-  const issue = presentMailError(error, t);
+export function mailErrorMessage(error: unknown, fallback?: string, t: Translate = defaultTranslate, context?: MailErrorContext): string {
+  const issue = presentMailError(error, t, context);
   if (issue.kind === "unknown") {
     return t("error.fullUnknown", { fallback: fallbackSentence(fallback ?? t("error.operationIncomplete")), guidance: issue.guidance });
   }
@@ -162,8 +184,8 @@ export function mailErrorMessage(error: unknown, fallback?: string, t: Translate
 }
 
 /** Keeps transient notices compact; full recovery steps belong in the form or account health panel. */
-export function mailErrorToastMessage(error: unknown, fallback?: string, t: Translate = defaultTranslate): string {
-  const issue = presentMailError(error, t);
+export function mailErrorToastMessage(error: unknown, fallback?: string, t: Translate = defaultTranslate, context?: MailErrorContext): string {
+  const issue = presentMailError(error, t, context);
   if (issue.kind === "unknown") {
     return t("error.toastUnknown", { fallback: fallbackSentence(fallback ?? t("error.operationIncomplete")) });
   }
@@ -171,13 +193,13 @@ export function mailErrorToastMessage(error: unknown, fallback?: string, t: Tran
 }
 
 export function accountHealthIssue(
-  account: Pick<Account, "status" | "lastError" | "lastErrorCode" | "lastSyncWarningCode">,
+  account: Pick<Account, "status" | "lastError" | "lastErrorCode" | "lastSyncWarningCode"> & { provider?: string },
   t: Translate = defaultTranslate,
 ): MailErrorPresentation | null {
   if (account.status === "connected" && !account.lastError && !account.lastSyncWarningCode) return null;
   if (account.status === "reauth_required") return presentMailError({ code: "reauth_required", message: account.lastError ?? "" }, t);
   if (account.lastErrorCode || account.lastError) {
-    return presentMailError({ code: account.lastErrorCode ?? undefined, message: account.lastError ?? "" }, t);
+    return presentMailError({ code: account.lastErrorCode ?? undefined, message: account.lastError ?? "" }, t, { providerId: account.provider });
   }
   // A warning is not an error: the sync succeeded, only older mail was
   // skipped. It must not offer a retry action or displace the freshness text.

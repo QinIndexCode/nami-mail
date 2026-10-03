@@ -21,7 +21,9 @@ import { describe, expect, it } from "vitest";
  * over the canvas, which is the darkest surface in the default configuration.
  */
 
-const stylesheet = readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8").replace(/\r\n/g, "\n");
+import { loadAggregatedCss } from "./testUtils/loadStyles";
+
+const stylesheet = loadAggregatedCss();
 
 type Rgb = [number, number, number];
 

@@ -181,4 +181,112 @@ describe("client-supplied message id and mid-session revocation", () => {
     const persisted = service.getConversation(conversation.id).messages;
     expect(persisted.find((message) => message.role === "user")?.id).toMatch(/^message-/);
   });
+
+  it("persists and publishes the assistant turn under clientAssistantMessageId so live deltas fold into the optimistic row", async () => {
+    // Regression for the "switching conversations loses the parked tail" defect:
+    // the optimistic assistant row carries a client-generated id, and the
+    // server used to publish the reply under a random one — every server
+    // snapshot adoption then renamed the live row, and queued deltas hit the
+    // `if (!row) return` lookup and vanished.
+    const { service, provider, conversation } = serviceFixture();
+    mockRunPath(service);
+
+    const run = (async () => {
+      for await (const event of service.streamMessage(conversation.id, {
+        content: "Check project status",
+        providerId: provider.id,
+        mode: "agent",
+        scope: conversation.scope,
+        clientMessageId: "user-client-1",
+        clientAssistantMessageId: "assistant-client-1",
+      })) {
+        if (event.type !== "text_delta") continue;
+        // The engine is suspended at its delta yield here: the in-flight reply
+        // is observable right now, and it must already carry the client's id.
+        const inFlight = service.getConversation(conversation.id).messages.find((message) => message.role === "assistant");
+        expect(inFlight).toMatchObject({ id: "assistant-client-1", state: "streaming" });
+        break;
+      }
+    })();
+    await run;
+
+    // The persisted turn uses the same id, so re-reading never renames the row.
+    const persisted = service.getConversation(conversation.id).messages;
+    expect(persisted.find((message) => message.id === "assistant-client-1")).toMatchObject({ role: "assistant", state: "complete" });
+  });
+
+  it("falls back to a server-generated user id when clientMessageId is empty, duplicated, or collides with the assistant row", async () => {
+    const { service, provider, conversation } = serviceFixture();
+    mockRunPath(service);
+    const base = { content: "Check project status", providerId: provider.id, mode: "agent" as const, scope: conversation.scope };
+
+    // Empty: a blank id must not become a row id.
+    for await (const _event of service.streamMessage(conversation.id, { ...base, clientMessageId: "" })) {
+      // Drain the run.
+    }
+    expect(service.getConversation(conversation.id).messages.find((message) => message.role === "user")?.id).toMatch(/^message-/);
+
+    // Duplicated: the second turn re-uses the first turn's user id, which now
+    // exists in the transcript — it must fall back rather than overwrite it.
+    for await (const _event of service.streamMessage(conversation.id, { ...base, clientMessageId: "user-client-1" })) {
+      // Drain the run.
+    }
+    for await (const _event of service.streamMessage(conversation.id, { ...base, clientMessageId: "user-client-1" })) {
+      // Drain the run.
+    }
+    let messages = service.getConversation(conversation.id).messages;
+    const userIds = messages.filter((message) => message.role === "user").map((message) => message.id);
+    expect(userIds.filter((id) => id === "user-client-1")).toHaveLength(1);
+    expect(userIds[userIds.length - 1]).toMatch(/^message-/);
+
+    // Collides with the assistant row id the same turn asks for: both rows must
+    // fall back so neither can overwrite the other.
+    for await (const _event of service.streamMessage(conversation.id, { ...base, clientMessageId: "user-client-2", clientAssistantMessageId: "user-client-2" })) {
+      // Drain the run.
+    }
+    messages = service.getConversation(conversation.id).messages;
+    const lastUser = messages[messages.length - 2]!;
+    const lastAssistant = messages[messages.length - 1]!;
+    expect(lastUser).toMatchObject({ role: "user" });
+    expect(lastAssistant).toMatchObject({ role: "assistant" });
+    expect(lastUser.id).toMatch(/^message-/);
+    expect(lastAssistant.id).toMatch(/^message-/);
+    expect(lastUser.id).not.toBe(lastAssistant.id);
+  });
+
+  it("falls back to a server-generated assistant id when clientAssistantMessageId is missing, duplicated, or collides with the user row", async () => {
+    const { service, provider, conversation } = serviceFixture();
+    mockRunPath(service);
+    const base = { content: "Check project status", providerId: provider.id, mode: "agent" as const, scope: conversation.scope };
+
+    // Missing.
+    for await (const _event of service.streamMessage(conversation.id, { ...base, clientMessageId: "user-client-1" })) {
+      // Drain the run.
+    }
+    let messages = service.getConversation(conversation.id).messages;
+    expect(messages.find((message) => message.role === "assistant")?.id).toMatch(/^message-/);
+
+    // Duplicated: the second turn's id is adopted (nothing used it yet), then
+    // the third turn re-uses that same id — it must fall back.
+    for await (const _event of service.streamMessage(conversation.id, { ...base, clientMessageId: "user-client-2", clientAssistantMessageId: "assistant-client-1" })) {
+      // Drain the run.
+    }
+    for await (const _event of service.streamMessage(conversation.id, { ...base, clientMessageId: "user-client-3", clientAssistantMessageId: "assistant-client-1" })) {
+      // Drain the run.
+    }
+    messages = service.getConversation(conversation.id).messages;
+    const assistantIds = messages.filter((message) => message.role === "assistant").map((message) => message.id);
+    expect(assistantIds.filter((id) => id === "assistant-client-1")).toHaveLength(1);
+    expect(assistantIds[assistantIds.length - 1]).toMatch(/^message-/);
+
+    // Collides with the user row id.
+    for await (const _event of service.streamMessage(conversation.id, { ...base, clientMessageId: "user-client-4", clientAssistantMessageId: "user-client-4" })) {
+      // Drain the run.
+    }
+    messages = service.getConversation(conversation.id).messages;
+    const lastAssistant = messages[messages.length - 1]!;
+    expect(lastAssistant).toMatchObject({ role: "assistant" });
+    expect(lastAssistant.id).toMatch(/^message-/);
+    expect(lastAssistant.id).not.toBe("user-client-4");
+  });
 });

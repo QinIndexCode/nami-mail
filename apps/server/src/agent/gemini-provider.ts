@@ -1,16 +1,19 @@
 import {
   awaitAbortable,
   endpointUrl,
+  hasUnsafeToolArguments,
   linesFrom,
   maximumSseLineBytes,
   providerRequest,
   safeMessage,
   statusError,
+  unsafeToolArgumentsError,
   asRecord,
   type ProviderResponseLease,
 } from "./provider-common.js";
 import {
   createAgentError,
+  safeStringifyJson,
   type AgentToolDescriptor,
   type LlmProvider,
   type ProviderCapabilities,
@@ -202,6 +205,11 @@ export class GeminiProvider implements LlmProvider {
   }
 
   async *streamChat(request: ProviderChatRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): AsyncIterable<ProviderStreamEvent> {
+    if (hasUnsafeToolArguments(request.messages)) {
+      yield { type: "error", error: unsafeToolArgumentsError() };
+      yield { type: "completed", finishReason: "content-filter" };
+      return;
+    }
     const functionCalls = new Map<number, PendingFunctionCall>();
     let nextCallIndex = 0;
       let finishReason: ProviderFinishReason = "stop";
@@ -292,7 +300,15 @@ export class GeminiProvider implements LlmProvider {
               } else if (part.functionCall) {
                 const call = asRecord(part.functionCall);
                 if (call && typeof call.name === "string" && call.name) {
-                  const argsText = JSON.stringify(call.args ?? {});
+                  // Admissibility has to be decided before serialization: the
+                  // byte budget can only be measured on a string that the
+                  // engine managed to produce at all.
+                  const argsText = safeStringifyJson(call.args ?? {});
+                  if (argsText === undefined) {
+                    yield { type: "error", error: unsafeToolArgumentsError() };
+                    yield { type: "completed", finishReason: "content-filter" };
+                    return;
+                  }
                   if (argsText.length > maximumToolArgumentsBytes) {
                     throw new Error("Tool call arguments exceeded the provider safety limit.");
                   }

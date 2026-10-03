@@ -1,0 +1,184 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import FilterRulesSection from "./FilterRulesSection";
+import { I18nProvider } from "./i18n";
+import type { Account } from "./types";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const dummyAccounts: Account[] = [
+  {
+    id: "acc-1",
+    email: "user@example.com",
+    provider: "custom",
+    authMethod: "password",
+    providerName: "Demo",
+    status: "connected",
+    lastError: null,
+    lastSyncedAt: null,
+    signature: "",
+    createdAt: "",
+    folders: [
+      { path: "INBOX", name: "Inbox", specialUse: "\\Inbox", total: 1, unseen: 0 },
+    ],
+  },
+];
+
+describe("FilterRulesSection modal and portal behavior", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it("portals the editor modal into overlayHostRef when clicking addRule and closes on close button", async () => {
+    const portalHost = document.createElement("div");
+    portalHost.id = "test-portal-host";
+    document.body.appendChild(portalHost);
+    const hostRef = { current: portalHost };
+
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <FilterRulesSection
+            accounts={dummyAccounts}
+            initialRules={[]}
+            overlayHostRef={hostRef}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    expect(portalHost.querySelector(".filter-rule-modal")).toBeNull();
+
+    const addBtn = container.querySelector(".settings-inline-actions button") as HTMLButtonElement;
+    expect(addBtn).not.toBeNull();
+
+    await act(async () => {
+      addBtn.click();
+    });
+
+    // The modal should be portalled directly into portalHost, NOT inside the panel container
+    const modal = portalHost.querySelector(".filter-rule-modal");
+    expect(modal).not.toBeNull();
+    expect(container.querySelector(".filter-rule-modal")).toBeNull();
+    expect(portalHost.querySelector("#filter-rule-editor-title")?.textContent).toBe("新建过滤规则");
+
+    // Close via close button
+    const closeBtn = portalHost.querySelector(".filter-rule-close-btn") as HTMLButtonElement;
+    expect(closeBtn).not.toBeNull();
+
+    await act(async () => {
+      closeBtn.click();
+    });
+
+    portalHost.remove();
+  });
+
+  it("notifies onOverlayOpenChange and renders compact top grid and inline add buttons", async () => {
+    const portalHost = document.createElement("div");
+    portalHost.id = "test-portal-host-2";
+    document.body.appendChild(portalHost);
+    const hostRef = { current: portalHost };
+    const overlayChanges: boolean[] = [];
+
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <FilterRulesSection
+            accounts={dummyAccounts}
+            initialRules={[]}
+            overlayHostRef={hostRef}
+            onOverlayOpenChange={(open) => overlayChanges.push(open)}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    expect(overlayChanges).toEqual([false]);
+
+    const addBtn = container.querySelector(".settings-inline-actions button") as HTMLButtonElement;
+    await act(async () => {
+      addBtn.click();
+    });
+
+    expect(overlayChanges).toEqual([false, true]);
+
+    // Check top grid and inline add buttons exist
+    const topGrid = portalHost.querySelector(".filter-rule-top-grid");
+    expect(topGrid).not.toBeNull();
+    expect(topGrid?.querySelector("#filter-rule-name")).not.toBeNull();
+    expect(topGrid?.querySelector("#filter-rule-account")).not.toBeNull();
+    expect(topGrid?.querySelector(".filter-rule-account-select")).not.toBeNull();
+
+    const sectionHeads = portalHost.querySelectorAll(".filter-rule-section-head");
+    expect(sectionHeads.length).toBe(2);
+
+    const addButtons = portalHost.querySelectorAll(".filter-rule-add-button");
+    expect(addButtons.length).toBe(2);
+
+    // Verify closing notifies overlayChange false after dismiss transition
+    const closeBtn = portalHost.querySelector(".filter-rule-close-btn") as HTMLButtonElement;
+    await act(async () => {
+      closeBtn.click();
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    });
+
+    expect(overlayChanges).toEqual([false, true, false]);
+    portalHost.remove();
+  });
+
+  it("allows reaching and focusing condition and action inputs inside the modal", async () => {
+    const portalHost = document.createElement("div");
+    portalHost.id = "test-portal-host-3";
+    document.body.appendChild(portalHost);
+    const hostRef = { current: portalHost };
+
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <FilterRulesSection
+            accounts={dummyAccounts}
+            initialRules={[]}
+            overlayHostRef={hostRef}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    const addBtn = container.querySelector(".settings-inline-actions button") as HTMLButtonElement;
+    await act(async () => {
+      addBtn.click();
+    });
+
+    const nameInput = portalHost.querySelector("#filter-rule-name") as HTMLInputElement;
+    expect(nameInput).not.toBeNull();
+
+    const conditionInput = portalHost.querySelector(".filter-rule-rows input[type=text]") as HTMLInputElement;
+    expect(conditionInput).not.toBeNull();
+
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(r));
+      await new Promise((r) => setTimeout(r, 10));
+      conditionInput.focus();
+    });
+
+    expect(document.activeElement).toBe(conditionInput);
+    portalHost.remove();
+  });
+});

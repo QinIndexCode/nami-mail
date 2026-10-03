@@ -464,11 +464,11 @@
 
 ## 交付记录（续）：Batch BC（2026-10-01，已随 `1d0181f` 提交并推送）
 
-- Batch BC（2026-10-01 完成）：**微软 OAuth 入口诚实化 + 内置 client ID 机制 + 服务商接入修正 + 磁贴选中指示**（用户两张截图实测触发，缺陷固化为 issue #116）。
+- Batch BC（2026-10-01 完成）：**微软 OAuth 入口诚实化 + 内置 client ID 机制 + 服务商接入修正 + 磁贴选中指示**（用户两张截图实测触发，缺陷固化为 issue #120）。
   - **入口判定抽纯函数**：`apps/web/src/oauth-entry.ts`（+ `oauth-entry.test.ts` 10 组真值表）。三处刻意修正：`providerPrefersOAuth` 不再依赖 `oauthAvailable`（未配置时 OAuth 面板仍渲染，禁用按钮与说明可见）；`authMethods` 回退到已选服务商卡（选卡即分类）；`oauthOnly` 只看 authMethods（半截 outlook 地址不再闪现误导密码框）。
-  - **微软文案真实化**：行动卡/凭据/抽屉原死路文案（引用不存在的按钮、教一条走不通的应用密码路径）重写为真实 OAuth 旅程（点击 → 浏览器授权 → 自动绑定 → 完成）；指引抽屉新增"一次性配置"卡；未配置态明确"本版本暂未开放 + 已列入后续计划"。issue #116 固化根因/恢复路径/验收标准；docs/ROADMAP 中英新增恢复条目。
+  - **微软文案真实化**：行动卡/凭据/抽屉原死路文案（引用不存在的按钮、教一条走不通的应用密码路径）重写为真实 OAuth 旅程（点击 → 浏览器授权 → 自动绑定 → 完成）；指引抽屉新增"一次性配置"卡；未配置态明确"本版本暂未开放 + 已列入后续计划"。issue #120 固化根因/恢复路径/验收标准；docs/ROADMAP 中英新增恢复条目。
   - **注册平台口径修正（推翻 Batch AK 的 Web 结论）**：按重定向 URI 官方文档复核——localhost 回环 URI **忽略端口**、**靠路径区分**（`http://localhost/MyWebApp` ≠ `http://localhost/MyNativeApp`）；Electron 属移动和桌面平台，带路径自定义 URI 任意端口可匹配；Web 平台精确端口匹配在安装版动态端口（`PORT=0`）下必败。README 中英、EMAIL-PROVIDERS 中英、抽屉指引四处对齐（AK 当时只否定了"平台自动登记的不带路径 URI"，未考虑带路径自定义 URI 可登记于桌面平台）。
-  - **内置 client ID 机制**：`apps/server/src/config.ts` 预留 `builtinGoogleOAuthClientId`/`builtinMicrosoftOAuthClientId`（环境变量优先）；嵌入一次登记的 client ID 即全用户零配置，无 secret、仅 PKCE。Google 侧受限范围有 100 测试用户上限 + CASA 评估门槛，暂不内置（issue #116 记录）。
+  - **内置 client ID 机制**：`apps/server/src/config.ts` 预留 `builtinGoogleOAuthClientId`/`builtinMicrosoftOAuthClientId`（环境变量优先）；嵌入一次登记的 client ID 即全用户零配置，无 secret、仅 PKCE。Google 侧受限范围有 100 测试用户上限 + CASA 评估门槛，暂不内置（issue #120 记录）。
   - **其他服务商接入修正**：网易门户按域名分流（yeah/188/vip → 各自门户，`neteasePortalUrl` + 测试）；iCloud 官方带连字符 App 密码归一化（`normalizeAppPassword` + 测试，消除误导警告）；Gmail FAQ 幽灵"应用内代理设置"改系统代理表述；QQ 卡片标签对齐 mail.qq.com 目标页。
   - **磁贴选中指示**：收起态浮出选中的非核心磁贴（`surfacesExtraProvider` 纯函数 + `has-surfaced` 高度档 168px/窄窗 224px + `provider-extra-in` 入场动画 + 勾选标记常驻节点缩放淡入淡出；`prefers-reduced-motion` 降级）。styles.css 棘轮有记录上调 18_440→18_483（下轮瘦身优先收回）；AddAccountModal 1924/1927。
   - **实景验证**：六类服务商 `?demo=1` 全链路（发现 → 凭据 → 提交）逐个走通并截图目检，0 console 错误；微软未配置态、指引配置卡、磁贴三路径（非核心点击/打字自动选/核心收起）均有截图证据。

@@ -72,7 +72,7 @@ export function ManagementDialogShell({
           <div className="management-heading-actions">
             {actions}
             <button className="icon-button" type="button" aria-label={t("common.close")} data-tooltip={t("common.close")} onClick={requestClose}>
-              <X size={18} />
+              <X size={16} />
             </button>
           </div>
         </header>

@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Transform, type TransformCallback } from "node:stream";
+import { checkJsonValue, isSafeJsonValue, maxJsonDepth } from "@nami/agent-contracts";
 import { serverLog } from "../logging.js";
 
 /**
@@ -22,7 +23,6 @@ import { serverLog } from "../logging.js";
 export const mcpProtocolVersion = "2025-03-26";
 
 const maxStdioLineLength = 1_000_000;
-const unsafeObjectKeys = new Set(["__proto__", "constructor", "prototype"]);
 const defaultConnectTimeoutMs = 15_000;
 const defaultRequestTimeoutMs = 60_000;
 const defaultToolLimit = 100;
@@ -46,15 +46,6 @@ const defaultToolLimit = 100;
 const maxStdioLineFloodBytes = 8 * 1024 * 1024;
 const maxStdioSessionFloodBytes = 64 * 1024 * 1024;
 const newlineByte = 0x0a;
-
-/**
- * Deepest JSON nesting accepted from (or handed to) an MCP peer. Real
- * `tools/list` schemas are an order of magnitude shallower than this, so the
- * bound costs nothing legitimate while removing the stack-overflow vector:
- * `isSafeJsonValue` recurses once per level, and a hostile document tens of
- * thousands of levels deep used to blow the stack from inside the validator.
- */
-export const maxJsonDepth = 64;
 
 /**
  * Variables that must never be inherited by an external MCP server process.
@@ -151,53 +142,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Why a value failed the JSON-safety walk. Depth is reported separately from
- * an ordinary shape rejection because it is the one case that says something
- * about the peer (a document tens of thousands of levels deep) rather than
- * about the value, and it is worth a log line instead of a silent drop.
+ * The JSON admissibility walk is shared with the desktop MCP host so both ends
+ * of a peer connection enforce one depth budget and one prototype-pollution
+ * rule. Re-exported under its original names because it is part of this
+ * module's published surface for callers that validate peer values directly.
  */
-type JsonVerdict = { safe: true } | { safe: false; reason: "shape" | "depth" };
-
-const jsonSafe: JsonVerdict = { safe: true };
-const jsonUnsafeShape: JsonVerdict = { safe: false, reason: "shape" };
-const jsonUnsafeDepth: JsonVerdict = { safe: false, reason: "depth" };
-
-function checkJsonValue(value: unknown, visited: WeakSet<object>, depth: number): JsonVerdict {
-  if (value === null || typeof value === "boolean" || typeof value === "string") return jsonSafe;
-  if (typeof value === "number") return Number.isFinite(value) ? jsonSafe : jsonUnsafeShape;
-  if (!value || typeof value !== "object") return jsonUnsafeShape;
-  // Checked before recursing, so the walk itself can never overflow the stack
-  // no matter how deep the document claims to be.
-  if (depth >= maxJsonDepth) return jsonUnsafeDepth;
-  if (visited.has(value)) return jsonUnsafeShape;
-  visited.add(value);
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const verdict = checkJsonValue(entry, visited, depth + 1);
-      if (!verdict.safe) return verdict;
-    }
-    return jsonSafe;
-  }
-  if (!isPlainObject(value)) return jsonUnsafeShape;
-  for (const [key, entry] of Object.entries(value)) {
-    if (unsafeObjectKeys.has(key)) return jsonUnsafeShape;
-    const verdict = checkJsonValue(entry, visited, depth + 1);
-    if (!verdict.safe) return verdict;
-  }
-  return jsonSafe;
-}
-
-/**
- * Rejects values that are not plain JSON, that carry a prototype-polluting key,
- * that form a cycle, or that nest deeper than `maxJsonDepth`.
- *
- * Exported for the depth-bound unit test: the depth rule is a pure predicate
- * over a value and is worth pinning down without having to stage a child
- * process to reach it.
- */
-export function isSafeJsonValue(value: unknown, visited = new WeakSet<object>(), depth = 0): boolean {
-  return checkJsonValue(value, visited, depth).safe;
-}
+export { isSafeJsonValue, maxJsonDepth };
 
 type StdioFloodReason = "line" | "session";
 

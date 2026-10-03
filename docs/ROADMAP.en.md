@@ -4,7 +4,7 @@ This document tracks features that have been confirmed but are not yet scheduled
 
 ## Microsoft mailbox OAuth built-in authorization (Outlook / Hotmail access recovery)
 
-**Status**: blocked (2026-10-01). Details, recovery path and acceptance criteria in [issue #116](https://github.com/QinIndexCode/nami-mail/issues/116).
+**Status**: blocked (2026-10-01). Details, recovery path and acceptance criteria in [issue #120](https://github.com/QinIndexCode/nami-mail/issues/120).
 
 **Situation**: Microsoft disabled IMAP/SMTP basic authentication for Outlook.com in Sept 2024 (plain and app passwords are rejected server-side), so OAuth is the only path; current builds do not bundle an OAuth client ID, so default installs cannot add Outlook / Hotmail accounts. Developer-side Azure app registration requires a payment card (Mastercard/Visa), which is the current blocker; the frontend explains this state honestly.
 

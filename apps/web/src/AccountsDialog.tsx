@@ -65,6 +65,7 @@ export default function AccountsDialog({
     Object.fromEntries(accounts.map((account) => [account.id, getAccountDisplayName(account.email) ?? ""])),
   );
   const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [page, setPage] = useState(1);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -215,7 +216,7 @@ export default function AccountsDialog({
         message: syncResultNoticeMessage(summary, result.limitReached, t),
       });
     } catch (error) {
-      setNotice({ kind: "error", message: t("settings.account.syncFailed", { email: account.email, message: mailErrorMessage(error, undefined, t) }) });
+      setNotice({ kind: "error", message: t("settings.account.syncFailed", { email: account.email, message: mailErrorMessage(error, undefined, t, { providerId: account.provider }) }) });
     } finally {
       setBusyAction(null);
     }
@@ -233,7 +234,7 @@ export default function AccountsDialog({
       setEditingId(null);
       setNotice({ kind: "success", message: t("settings.account.signatureSaved", { email: account.email }) });
     } catch (error) {
-      setNotice({ kind: "error", message: mailErrorMessage(error, t("settings.error.saveSignature"), t) });
+      setNotice({ kind: "error", message: mailErrorMessage(error, t("settings.error.saveSignature"), t, { providerId: account.provider }) });
     } finally {
       setBusyAction(null);
     }
@@ -371,7 +372,7 @@ export default function AccountsDialog({
       >
         <section className="settings-section settings-accounts">
           <span className="visually-hidden" role="status" aria-live="polite">{copyAnnouncement}</span>
-          <FormNotice notice={notice} />
+          <FormNotice notice={notice} onDismiss={() => setNotice(null)} />
           {accounts.length === 0 ? (
             <div className="settings-empty-card accounts-empty-card">
               <Mail className="empty-icon" size={32} strokeWidth={1.5} />
@@ -394,20 +395,39 @@ export default function AccountsDialog({
             <>
               {showToolbar && (
                 <div className="accounts-toolbar">
-                  <div className="search-wrap accounts-search">
+                  <div
+                    className="search-wrap accounts-search"
+                    onClick={() => searchInputRef.current?.focus()}
+                  >
                     <Search size={14} aria-hidden="true" />
                     <input
+                      ref={searchInputRef}
                       type="search"
                       value={searchQuery}
                       onChange={(event) => {
                         setSearchQuery(event.target.value);
                         setPage(1);
                       }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape" && searchQuery) {
+                          event.stopPropagation();
+                          setSearchQuery("");
+                        }
+                      }}
                       placeholder={t("settings.account.searchPlaceholder")}
                       aria-label={t("settings.account.searchAriaLabel")}
                     />
                     {searchQuery && (
-                      <button className="icon-button search-clear" type="button" aria-label={t("settings.account.clearSearch")} onClick={() => setSearchQuery("")}>
+                      <button
+                        className="icon-button search-clear"
+                        type="button"
+                        aria-label={t("settings.account.clearSearch")}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSearchQuery("");
+                          searchInputRef.current?.focus();
+                        }}
+                      >
                         <X size={14} />
                       </button>
                     )}

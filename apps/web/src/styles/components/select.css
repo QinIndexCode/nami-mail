@@ -1,0 +1,143 @@
+.select-control
+{
+min-width:0;
+display:block;
+position:relative
+}
+.calendar-field .select-control,.provider-catalog-select .select-control,.manual-server-grid .select-control,.compose-row .select-control
+{
+width:100%
+}
+.setting-select-row .select-control
+{
+min-width:118px
+}
+.select-control>.themed-select
+{
+cursor:pointer;
+width:100%;
+min-height:34px;
+font:inherit;
+font-size:12px;
+text-align:left;
+justify-content:space-between;
+align-items:center;
+gap:8px;
+display:flex;
+position:relative;
+padding-right:34px!important
+}
+.select-control>.themed-select:disabled
+{
+cursor:default;
+opacity:.5
+}
+.themed-select-value
+{
+text-overflow:ellipsis;
+white-space:nowrap;
+min-width:0;
+display:block;
+overflow:hidden
+}
+.select-control-icon
+{
+width:14px;
+height:14px;
+color:var(--text-faint);
+pointer-events:none;
+position:absolute;
+top:50%;
+right:11px;
+transform:translateY(-50%)
+}
+.select-control-icon.open
+{
+transform:translateY(-50%)rotate(180deg)
+}
+.themed-select:disabled .select-control-icon
+{
+opacity:.46
+}
+.themed-select-menu
+{
+z-index:58;
+border:1px solid var(--line-strong);
+background:var(--panel-solid);
+max-height:min(280px,44dvh);
+/* left:0/right:0 stretches the menu to the trigger's width, so a narrow trigger
+   (the 96px filter-rule value select, the 150px kind selects, the 132px
+   auto-reply rule select) ellipsised every option. min-width raises the floor to
+   the widest option, leaving wider triggers exactly as they were. A
+   `min(max-content,90vw)` cap is NOT usable here: Chromium's CSS parser drops
+   any math function that contains an intrinsic sizing keyword, so the whole
+   declaration is discarded (verified in-browser). The option labels are short
+   enum values and account addresses, so nothing here reaches the viewport edge;
+   flipping the menu near one stays a separate portal follow-up. */
+min-width:max-content;
+box-shadow:var(--shadow-raised);
+border-radius:var(--radius-sm);
+flex-direction:column;
+padding:5px;
+display:flex;
+position:absolute;
+top:calc(100% + 6px);
+left:0;
+right:0;
+overflow-y:auto
+}
+.themed-select-menu.dropup { top:auto; bottom:calc(100% + 6px) }
+.themed-select-group
+{
+color:var(--text-faint);
+padding:6px 8px 4px;
+font-family:DM Mono,monospace;
+font-size:9px;
+font-weight:700;
+display:block
+}
+.themed-select-option
+{
+width:100%;
+min-height:32px;
+color:var(--text-soft);
+cursor:pointer;
+font:inherit;
+text-align:left;
+background:0 0;
+border:1px solid #0000;
+border-radius:6px;
+justify-content:space-between;
+align-items:center;
+gap:8px;
+padding:6px 8px;
+font-size:12px;
+display:flex
+}
+.themed-select-option:hover,.themed-select-option.active
+{
+background:var(--hover);
+color:var(--text)
+}
+.themed-select-option.selected
+{
+border-color:var(--line);
+background:var(--selected);
+color:var(--text)
+}
+.themed-select-option:disabled
+{
+cursor:default;
+opacity:.45
+}
+.themed-select-option>span
+{
+text-overflow:ellipsis;
+white-space:nowrap;
+min-width:0;
+overflow:hidden
+}
+.themed-select-option>svg
+{
+flex:none
+}

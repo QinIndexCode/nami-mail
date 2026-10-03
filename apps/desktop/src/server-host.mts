@@ -143,6 +143,7 @@ export async function startServerHost(
             transport.send({ event: "settings-changed", payload: { at: new Date().toISOString() } });
           },
           listExternalPairings: () => requestMain<unknown[]>("listExternalPairings"),
+          revokeExternalPairing: (clientId: string) => requestMain<boolean>("revokeExternalPairing", [clientId]),
           externalConfirmation: {
             request: async (input: unknown) => {
               const decision = await requestMain<"approve" | "reject">("requestExternalConfirmation", [input]);

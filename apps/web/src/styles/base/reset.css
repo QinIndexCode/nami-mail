@@ -1,0 +1,50 @@
+html.theme-transitioning,html.theme-transitioning *,html.theme-transitioning :before,html.theme-transitioning :after
+{
+transition:none!important
+}
+*
+{
+box-sizing:border-box
+}
+html,body,#root
+{
+width:100%;
+min-width:320px;
+height:100%;
+margin:0
+}
+body
+{
+background:radial-gradient(circle at 22% 0%, var(--body-glow), transparent 32%), var(--canvas);
+color:var(--text);
+overflow:hidden
+}
+button,input,textarea,select
+{
+font:inherit;
+color:inherit
+}
+button
+{
+-webkit-tap-highlight-color:transparent
+}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible
+{
+outline:2px solid var(--focus-ring);
+outline-offset:2px
+}
+.workspace-canvas,.workspace-canvas *
+{
+-webkit-user-select:none!important;
+user-select:none!important
+}
+.workspace-canvas :is(input,textarea,select,option,optgroup,[contenteditable]:not([contenteditable=false])),.workspace-canvas :is(.mail-title h2,.mail-people-copy>strong,.mail-people time,.mail-recipient-details,.mail-recipient-details *,.mail-content,.mail-content *,.translation-text,.translation-text *,.verification-code-panel>div,.verification-code-panel>div *,.attachment-card>span>strong,.attachment-card>span>small,.sending-status-row-title,.sending-status-row-recipients,.sending-status-row-message,.sending-status-details-fields dd)
+{
+-webkit-user-select:text!important;
+user-select:text!important
+}
+.workspace-canvas .mail-content :is(button,input,textarea,select)
+{
+-webkit-user-select:none!important;
+user-select:none!important
+}

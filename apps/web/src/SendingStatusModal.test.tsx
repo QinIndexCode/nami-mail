@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { I18nProvider, translate } from "./i18n";
+import { I18nProvider, translate, type TranslationValues } from "./i18n";
 import SendingStatusModal, { submissionNoticeMessage } from "./SendingStatusModal";
 import type { Account, OutboundSubmission } from "./types";
 
@@ -11,7 +11,7 @@ beforeAll(() => {
   (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 });
 
-const zh = (key: string, values?: Record<string, string | number>) => translate("zh-CN", key, values);
+const zh = (key: string, values?: TranslationValues) => translate("zh-CN", key, values);
 
 const account: Account = {
   id: "account-1",
@@ -126,6 +126,35 @@ describe("sending status modal presentation (SSR)", () => {
 
     expect(markup).toContain(zh("sending.notice.unknownDelivery"));
     expect(markup).not.toContain("socket hang up");
+  });
+
+  it("tells a rejected send which provider credential to use", () => {
+    const rejected = {
+      ...submission,
+      deliveryStatus: "failed" as const,
+      errorCode: "smtp_auth_failed",
+      errorMessage: "发件服务器拒绝了登录凭据。",
+    };
+
+    expect(submissionNoticeMessage(rejected, zh, account.provider)).toContain(zh("provider.copy.gmail.credentialHint"));
+
+    const markup = renderToStaticMarkup(
+      <I18nProvider>
+        <SendingStatusModal
+          accounts={[account]}
+          submissions={[rejected]}
+          loading={false}
+          loadError={null}
+          onClose={() => undefined}
+          onRefresh={async () => undefined}
+          onSyncAccount={async () => undefined}
+          onCreateNewMessage={() => undefined}
+          onCancelScheduled={async () => undefined}
+        />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain(zh("provider.copy.gmail.credentialHint"));
   });
 
   it("shows the scheduled send time, an overdue notice, and a cancel action only for pending scheduled sends", () => {

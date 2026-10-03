@@ -38,6 +38,8 @@ const DEFAULT_AUTO_REPLY: AutoReplyConfig = {
   enabled: false,
   accountIds: [],
   mode: "llm",
+  decisionProviderId: null,
+  draftProviderId: null,
   template: { text: "", skipConfirmation: false },
   scope: { contactsOnly: false, threadOnce: true, rules: [] },
   requireConfirmation: true,

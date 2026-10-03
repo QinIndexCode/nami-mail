@@ -1,26 +1,21 @@
+import { useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
   Bot,
-  ChevronDown,
-  LoaderCircle,
+  Cable,
+  CircleHelp,
+  FlaskConical,
   MessageSquareReply,
   MessageSquareX,
-
   Wrench,
 } from "lucide-react";
+import { api } from "../api";
 import type { Translate } from "../i18n";
 import type { Account, AgentAccessLevel, AppSettings } from "../types";
-import type { ExternalPairingSummary } from "../agentTypes";
+import type { AgentProviderSummary, ExternalPairingSummary } from "../agentTypes";
 import AutoReplyScopeEditor from "../AutoReplyScopeEditor";
-import {
-  agentAccessLevelOptions,
-  externalCliGuideCode,
-  externalMcpGuideCode,
-  externalServiceGuideCode,
-  externalDocsUrl,
-  copyTextToClipboard,
-} from "./settings-utils";
-import { ExternalGuideBlock, NumberStepper, Switch } from "./SettingsUIComponents";
+import { agentAccessLevelOptions } from "./settings-utils";
+import { NumberStepper, Switch } from "./SettingsUIComponents";
 import ThemedSelect from "../ThemedSelect";
 
 export type SettingsAgentSectionProps = {
@@ -30,7 +25,9 @@ export type SettingsAgentSectionProps = {
   currentSettings: AppSettings;
   controlsBusy: boolean;
   demoMode: boolean;
-  requestAgentProviderSettings: () => void;
+  /** Switches the settings modal to the models category in place. */
+  openModelSettings: () => void;
+  openConnectionsSettings?: () => void;
   requestAccessLevelChange: (patch: { agentAccessLevel?: AgentAccessLevel; agentCliAccessLevel?: AgentAccessLevel; agentMcpAccessLevel?: AgentAccessLevel }, value: AgentAccessLevel, successMessage: string | null) => void;
   applyOptimisticSettings: (patch: Record<string, unknown>, successMessage: string | null) => Promise<unknown>;
   externalGuideCopied: string | null;
@@ -41,6 +38,8 @@ export type SettingsAgentSectionProps = {
   setAutoReplyDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setAutoReplyDecisionsOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setMemoryDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  setAutoReplySandboxOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  overlayHostRef?: React.RefObject<HTMLElement | null>;
 };
 
 export default function SettingsAgentSection({
@@ -50,7 +49,8 @@ export default function SettingsAgentSection({
   currentSettings,
   controlsBusy,
   demoMode,
-  requestAgentProviderSettings,
+  openModelSettings,
+  openConnectionsSettings,
   requestAccessLevelChange,
   applyOptimisticSettings,
   externalGuideCopied,
@@ -61,40 +61,107 @@ export default function SettingsAgentSection({
   setAutoReplyDialogOpen,
   setAutoReplyDecisionsOpen,
   setMemoryDialogOpen,
+  setAutoReplySandboxOpen,
+  overlayHostRef,
 }: SettingsAgentSectionProps) {
-  const copyExternalGuide = (text: string, id: string) => {
-    void copyTextToClipboard(text).then((copied) => {
-      if (!copied) return;
-      setExternalGuideCopied(id);
-      window.setTimeout(() => {
-        setExternalGuideCopied((current) => current === id ? null : current);
-      }, 1_800);
-    });
-  };
+  const [providers, setProviders] = useState<AgentProviderSummary[]>([]);
+  const [defaultProviderId, setDefaultProviderId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (demoMode) {
+      setProviders([]);
+      setDefaultProviderId(null);
+      return undefined;
+    }
+    let active = true;
+    api.agentProviders().then((res) => {
+      if (active) {
+        setProviders(res.items);
+        setDefaultProviderId(res.defaultProviderId);
+      }
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [demoMode]);
+
+  const defaultProvider = useMemo(
+    () => providers.find((p) => p.id === defaultProviderId),
+    [providers, defaultProviderId],
+  );
+
+  const modelSelectOptions = useMemo(() => {
+    const defaultLabel = defaultProvider
+      ? `${t("settings.agent.autoReplyFollowDefault")} (${defaultProvider.label})`
+      : t("settings.agent.autoReplyFollowDefault");
+    const options: Array<{ value: string; label: string }> = [{ value: "", label: defaultLabel }];
+    for (const p of providers) {
+      if (p.configured) {
+        options.push({
+          value: p.id,
+          label: `${p.label} (${p.model})${p.id === defaultProviderId ? ` · ${t("agent.providers.defaultBadge")}` : ""}`,
+        });
+      }
+    }
+    const currentDecision = currentSettings.autoReply.decisionProviderId;
+    if (currentDecision && !options.some((opt) => opt.value === currentDecision)) {
+      options.push({ value: currentDecision, label: currentDecision });
+    }
+    const currentDraft = currentSettings.autoReply.draftProviderId;
+    if (currentDraft && !options.some((opt) => opt.value === currentDraft)) {
+      options.push({ value: currentDraft, label: currentDraft });
+    }
+    return options;
+  }, [providers, defaultProvider, currentSettings.autoReply.decisionProviderId, currentSettings.autoReply.draftProviderId, t]);
 
   return (
     <section className="settings-section" data-settings-nav="agent" aria-labelledby="agent-settings">
       <div className="settings-section-title">
         <Bot size={16} />
-        <div><span>{t("agent.launch")}</span><p id="agent-settings">{demoMode ? t("agent.demo.description") : t("agent.providers.description")}</p></div>
+        <div>
+          <span id="agent-settings">
+            {t("agent.launch")}
+            <span
+              className="field-help-icon"
+              data-tooltip={demoMode ? t("agent.demo.description") : t("agent.providers.description")}
+              aria-label={demoMode ? t("agent.demo.description") : t("agent.providers.description")}
+              tabIndex={0}
+            >
+              <CircleHelp size={12} aria-hidden="true" />
+            </span>
+          </span>
+        </div>
       </div>
       {demoMode ? (
         <p className="settings-empty" role="status">{t("agent.demo.actionUnavailable")}</p>
       ) : (
         <>
-          <div className="setting-row agent-provider-settings-row">
+          <div className="setting-row">
             <div>
-              <strong>{t("agent.providers.title")}</strong>
-              <span>{t("agent.providers.emptyDescription")}</span>
+              <strong>
+                {t("agent.providers.title")}
+                <span
+                  className="field-help-icon"
+                  data-tooltip={t("agent.providers.emptyDescription")}
+                  aria-label={t("agent.providers.emptyDescription")}
+                  tabIndex={0}
+                >
+                  <CircleHelp size={12} aria-hidden="true" />
+                </span>
+              </strong>
             </div>
-            <button className="secondary-button" type="button" disabled={controlsBusy} onClick={requestAgentProviderSettings}>
+            <button className="secondary-button" type="button" disabled={controlsBusy} onClick={openModelSettings}>
               <Wrench size={15} />{t("agent.providers.configure")}
             </button>
           </div>
           <div className="setting-row">
             <div>
-              <strong>{t("settings.agent.toolRoundLimit")}</strong>
-              <span>{t("settings.agent.toolRoundLimitDesc")}</span>
+              <strong>
+                {t("settings.agent.toolRoundLimit")}
+                <span className="field-help-icon" data-tooltip={t("settings.agent.toolRoundLimitDesc")} aria-label={t("settings.agent.toolRoundLimitDesc")} tabIndex={0}>
+                  <CircleHelp size={12} aria-hidden="true" />
+                </span>
+              </strong>
             </div>
             <NumberStepper
               value={currentSettings.agentToolRoundLimit}
@@ -106,7 +173,7 @@ export default function SettingsAgentSection({
               onChange={(value) => void applyOptimisticSettings({ agentToolRoundLimit: value }, null)}
             />
           </div>
-          <div className="setting-subheading"><span>{t("settings.agent.autoReplyGroup")}</span><small>{t("settings.agent.autoReplyGroupDesc")}</small></div>
+          <div className="setting-subheading"><span>{t("settings.agent.autoReplyGroup")}</span></div>
           {currentSettings.autoReplyInvalid && (
             <p className="form-status error" role="alert">{t("settings.agent.autoReplyInvalidWarning")}</p>
           )}
@@ -123,8 +190,17 @@ export default function SettingsAgentSection({
               <>
                 <div className="setting-row setting-column-row">
                   <div>
-                    <strong>{t("settings.agent.autoReplyAccounts")}</strong>
-                    <span>{t("settings.agent.autoReplyAccountsDesc")}</span>
+                    <strong>
+                      {t("settings.agent.autoReplyAccounts")}
+                      <span
+                        className="field-help-icon"
+                        data-tooltip={t("settings.agent.autoReplyAccountsDesc")}
+                        aria-label={t("settings.agent.autoReplyAccountsDesc")}
+                        tabIndex={0}
+                      >
+                        <CircleHelp size={12} aria-hidden="true" />
+                      </span>
+                    </strong>
                   </div>
                   <div className="auto-reply-account-list" role="group" aria-label={t("settings.agent.autoReplyAccounts")}>
                     {accounts.length === 0 && <p className="settings-empty">{t("settings.agent.autoReplyNoAccounts")}</p>}
@@ -179,11 +255,83 @@ export default function SettingsAgentSection({
                     </button>
                   </div>
                 </div>
+                {currentSettings.autoReply.mode === "llm" && (
+                  <>
+                    <label className="setting-select-row" htmlFor="agent-auto-reply-decision-provider">
+                      <span>
+                        <strong>
+                          {t("settings.agent.autoReplyDecisionProvider")}
+                          <span
+                            className="field-help-icon"
+                            data-tooltip={t("settings.agent.autoReplyDecisionProviderDesc")}
+                            aria-label={t("settings.agent.autoReplyDecisionProviderDesc")}
+                            tabIndex={0}
+                          >
+                            <CircleHelp size={12} aria-hidden="true" />
+                          </span>
+                        </strong>
+                      </span>
+                      <ThemedSelect
+                        id="agent-auto-reply-decision-provider"
+                        value={currentSettings.autoReply.decisionProviderId ?? ""}
+                        aria-label={t("settings.agent.autoReplyDecisionProvider")}
+                        disabled={controlsBusy}
+                        onValueChange={(value) => void applyOptimisticSettings(
+                          { autoReply: { ...currentSettings.autoReply, decisionProviderId: value || null } },
+                          null,
+                        )}
+                      >
+                        {modelSelectOptions.map((opt) => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                      </ThemedSelect>
+                    </label>
+                    <label className="setting-select-row" htmlFor="agent-auto-reply-draft-provider">
+                      <span>
+                        <strong>
+                          {t("settings.agent.autoReplyDraftProvider")}
+                          <span
+                            className="field-help-icon"
+                            data-tooltip={t("settings.agent.autoReplyDraftProviderDesc")}
+                            aria-label={t("settings.agent.autoReplyDraftProviderDesc")}
+                            tabIndex={0}
+                          >
+                            <CircleHelp size={12} aria-hidden="true" />
+                          </span>
+                        </strong>
+                      </span>
+                      <ThemedSelect
+                        id="agent-auto-reply-draft-provider"
+                        value={currentSettings.autoReply.draftProviderId ?? ""}
+                        aria-label={t("settings.agent.autoReplyDraftProvider")}
+                        disabled={controlsBusy}
+                        onValueChange={(value) => void applyOptimisticSettings(
+                          { autoReply: { ...currentSettings.autoReply, draftProviderId: value || null } },
+                          null,
+                        )}
+                      >
+                        {modelSelectOptions.map((opt) => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                      </ThemedSelect>
+                    </label>
+                  </>
+                )}
                 {currentSettings.autoReply.mode === "template" && (
                   <>
                     <div className="setting-row setting-column-row">
                       <div>
-                        <strong>{t("settings.agent.autoReplyTemplate")}</strong>
+                        <strong>
+                          {t("settings.agent.autoReplyTemplate")}
+                          <span
+                            className="field-help-icon"
+                            data-tooltip={t("settings.agent.autoReplyTemplateHint")}
+                            aria-label={t("settings.agent.autoReplyTemplateHint")}
+                            tabIndex={0}
+                          >
+                            <CircleHelp size={12} aria-hidden="true" />
+                          </span>
+                        </strong>
                       </div>
                       <textarea
                         className="auto-reply-template-input"
@@ -198,13 +346,12 @@ export default function SettingsAgentSection({
                           null,
                         )}
                       />
-                      <p className="auto-reply-template-hint">{t("settings.agent.autoReplyTemplateHint")}</p>
                     </div>
                     <Switch
                       checked={currentSettings.autoReply.template.skipConfirmation}
                       disabled={controlsBusy}
                       label={t("settings.agent.autoReplySkipConfirmation")}
-                      description={t("settings.agent.autoReplySkipConfirmationDesc")}
+                      tooltip={t("settings.agent.autoReplySkipConfirmationDesc")}
                       onChange={() => void applyOptimisticSettings(
                         { autoReply: { ...currentSettings.autoReply, template: { ...currentSettings.autoReply.template, skipConfirmation: !currentSettings.autoReply.template.skipConfirmation } } },
                         null,
@@ -215,6 +362,7 @@ export default function SettingsAgentSection({
                 <AutoReplyScopeEditor
                   scope={currentSettings.autoReply.scope}
                   disabled={controlsBusy}
+                  overlayHostRef={overlayHostRef}
                   onChange={(scope) => void applyOptimisticSettings(
                     { autoReply: { ...currentSettings.autoReply, scope } },
                     null,
@@ -222,8 +370,12 @@ export default function SettingsAgentSection({
                 />
                 <div className="setting-row">
                   <div>
-                    <strong>{t("settings.agent.autoReplyDailyLimit")}</strong>
-                    <span>{t("settings.agent.autoReplyDailyLimitDesc")}</span>
+                    <strong>
+                      {t("settings.agent.autoReplyDailyLimit")}
+                      <span className="field-help-icon" data-tooltip={t("settings.agent.autoReplyDailyLimitDesc")} aria-label={t("settings.agent.autoReplyDailyLimitDesc")} tabIndex={0}>
+                        <CircleHelp size={12} aria-hidden="true" />
+                      </span>
+                    </strong>
                   </div>
                   <NumberStepper
                     value={currentSettings.autoReply.dailyLimitPerAccount}
@@ -254,6 +406,9 @@ export default function SettingsAgentSection({
                 <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setMemoryDialogOpen(true)}>
                   <BookOpen size={15} />{t("settings.agent.autoReplyToolsMemory")}
                 </button>
+                <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => setAutoReplySandboxOpen(true)}>
+                  <FlaskConical size={15} />{t("settings.agent.autoReplyToolsSandbox")}
+                </button>
               </div>
             </div>
         </>
@@ -273,116 +428,25 @@ export default function SettingsAgentSection({
           ))}
         </ThemedSelect>
       </label>
-      <label className="setting-select-row" htmlFor="agent-cli-access-level">
-        <span><strong>{t("settings.agent.cliAccessLevel")}</strong></span>
-        <ThemedSelect
-          id="agent-cli-access-level"
-          value={currentSettings.agentCliAccessLevel}
-          aria-label={t("settings.agent.cliAccessLevel")}
-          disabled={controlsBusy}
-          onValueChange={(value) => requestAccessLevelChange({ agentCliAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, null)}
-        >
-          {agentAccessLevelOptions.map((option) => (
-            <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
-          ))}
-        </ThemedSelect>
-      </label>
-      <label className="setting-select-row" htmlFor="agent-mcp-access-level">
-        <span><strong>{t("settings.agent.mcpAccessLevel")}</strong></span>
-        <ThemedSelect
-          id="agent-mcp-access-level"
-          value={currentSettings.agentMcpAccessLevel}
-          aria-label={t("settings.agent.mcpAccessLevel")}
-          disabled={controlsBusy}
-          onValueChange={(value) => requestAccessLevelChange({ agentMcpAccessLevel: value as AgentAccessLevel }, value as AgentAccessLevel, null)}
-        >
-          {agentAccessLevelOptions.map((option) => (
-            <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
-          ))}
-        </ThemedSelect>
-      </label>
-      {/* Developer-facing access (CLI / MCP guides, pairings) stays collapsed
-          by default so the common permission controls remain above the fold. */}
-      <details className="settings-advanced">
-        <summary>
-          <span className="setting-subheading"><span>{t("settings.agent.externalGuide.title")}</span><small>{t("settings.agent.externalGuide.desc")}</small></span>
-          <ChevronDown className="settings-advanced-chevron" size={15} aria-hidden="true" />
-        </summary>
-        <div className="external-guide">
-          <p className="external-guide-note">{t("settings.agent.externalGuide.steps.intro")}</p>
-          <ol className="external-guide-steps">
-            <li>{t("settings.agent.externalGuide.steps.1")}</li>
-            <li>{t("settings.agent.externalGuide.steps.2")} <code>namimail service start</code></li>
-            <li>{t("settings.agent.externalGuide.steps.3")}</li>
-            <li>{t("settings.agent.externalGuide.steps.4")}</li>
-          </ol>
-          <ExternalGuideBlock
-            id="cli"
-            label={t("settings.agent.externalGuide.cli.label")}
-            hint={t("settings.agent.externalGuide.cli.hint", { cmd: "namimail accounts list" })}
-            code={externalCliGuideCode}
-            copiedId={externalGuideCopied}
-            onCopy={copyExternalGuide}
-          />
-          <ExternalGuideBlock
-            id="mcp"
-            label={t("settings.agent.externalGuide.mcp.label")}
-            hint={t("settings.agent.externalGuide.mcp.hint")}
-            code={externalMcpGuideCode}
-            copiedId={externalGuideCopied}
-            onCopy={copyExternalGuide}
-          />
-          <ExternalGuideBlock
-            id="service"
-            label={t("settings.agent.externalGuide.service.label")}
-            hint={t("settings.agent.externalGuide.service.hint")}
-            code={externalServiceGuideCode}
-            copiedId={externalGuideCopied}
-            onCopy={copyExternalGuide}
-          />
-          <p className="external-guide-docs">{t("settings.agent.externalGuide.docs")}<a href={externalDocsUrl} target="_blank" rel="noopener noreferrer">github.com/QinIndexCode/nami-mail</a></p>
+      {openConnectionsSettings && (
+        <div className="agent-connections-card">
+          <div className="agent-connections-card-icon">
+            <Cable size={18} />
+          </div>
+          <div className="agent-connections-card-content">
+            <strong>{t("settings.connections.agentLink.title")}</strong>
+            <p>{t("settings.connections.agentLink.banner")}</p>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={openConnectionsSettings}
+          >
+            <Cable size={13} />
+            <span>{t("settings.connections.agentLink.action")}</span>
+          </button>
         </div>
-        <div className="setting-subheading">
-          <span>{t("settings.agent.externalPairings.title")}</span>
-          <small>{t("settings.agent.externalPairings.desc")}</small>
-        </div>
-        <div className="external-pairings">
-          {externalPairingsError ? (
-            <p className="external-pairings-empty">{t("settings.agent.externalPairings.loadError")}</p>
-          ) : externalPairings === null ? (
-            <p className="external-pairings-empty" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("common.loading")}</p>
-          ) : externalPairings.length === 0 ? (
-            <p className="external-pairings-empty">{t("settings.agent.externalPairings.empty", { cmd: "namimail pair" })}</p>
-          ) : (
-            <ul className="external-pairings-list">
-              {externalPairings.map((pairing) => {
-                const currentIds = new Set(accounts.map((account) => account.id));
-                const drifted = pairing.status === "active"
-                  && (pairing.accountIds.length !== currentIds.size || pairing.accountIds.some((id) => !currentIds.has(id)));
-                return (
-                  <li key={pairing.clientId} className={`external-pairing-row external-pairing-${pairing.status}`}>
-                    <span className="external-pairing-id" title={pairing.clientId}>{pairing.clientId.slice(0, 20)}</span>
-                    <span className="external-pairing-meta">
-                      {t("settings.agent.externalPairings.created", { date: formatDate(pairing.createdAt) })}
-                      {pairing.expiresAt ? ` · ${t("settings.agent.externalPairings.expires", { date: formatDate(pairing.expiresAt) })}` : ""}
-                      {` · ${t("settings.agent.externalPairings.accountCount", { count: pairing.accountIds.length })}`}
-                    </span>
-                    <span className="external-pairing-status">{t(`settings.agent.externalPairings.status.${pairing.status}`)}</span>
-                    {drifted ? <span className="external-pairing-drift">{t("settings.agent.externalPairings.drift")}</span> : null}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-        <button
-          className="secondary-button external-pairings-refresh"
-          type="button"
-          onClick={() => setExternalPairingsReload((value) => value + 1)}
-        >
-          {t("settings.agent.externalPairings.refresh")}
-        </button>
-      </details>
+      )}
     </section>
   );
 }

@@ -189,8 +189,8 @@ function manualConfigFor(email: string, provider?: ProviderDiscovery): ManualAcc
   };
 }
 
-function friendlyError(error: unknown, t: Translate): string {
-  return mailErrorMessage(error, undefined, t);
+function friendlyError(error: unknown, t: Translate, providerId?: string): string {
+  return mailErrorMessage(error, undefined, t, { providerId });
 }
 
 function serverModeLabel(transport: MailTransport): string {
@@ -837,7 +837,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
         showError(mailErrorMessage({
           code: result.code ?? (result.status === "expired" ? "oauth_expired" : "oauth_failed"),
           message: result.message ?? "",
-        }, undefined, t));
+        }, undefined, t, { providerId: targetProviderId }));
       } catch (error) {
         if (!mountedRef.current || activeOAuthAttemptRef.current !== attemptId) return;
         clearOAuthPolling();
@@ -845,11 +845,11 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
         setOauthUrl(null);
         activeOAuthAttemptRef.current = null;
         setBusyAction("idle");
-        showError(friendlyError(error, t));
+        showError(friendlyError(error, t, targetProviderId));
       }
     };
     void poll();
-  }, [clearOAuthPolling, finishAddedAccount, showError, t]);
+  }, [clearOAuthPolling, finishAddedAccount, showError, t, targetProviderId]);
 
   const startOAuth = async () => {
     if (!validEmail(normalizedEmail)) {
@@ -911,7 +911,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
       setOauthUrl(null);
       activeOAuthAttemptRef.current = null;
       setBusyAction("idle");
-      showError(friendlyError(error, t));
+      showError(friendlyError(error, t, targetProviderId));
     }
   };
 
@@ -974,7 +974,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
       const issue = presentMailError(error, t);
       // A network, TLS, or protocol problem is not corrected by retyping a
       // password, so keep focus on the status guidance in those cases.
-      showError(friendlyError(error, t), issue.kind === "authentication" ? (manualOpen ? "manual" : "password") : undefined);
+      showError(friendlyError(error, t, targetProviderId), issue.kind === "authentication" ? (manualOpen ? "manual" : "password") : undefined);
     } finally {
       if (mountedRef.current) setBusyAction("idle");
     }

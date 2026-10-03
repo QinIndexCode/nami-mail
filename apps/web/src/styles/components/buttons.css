@@ -1,0 +1,40 @@
+.primary-button,.secondary-button
+{
+cursor:pointer;
+border-radius:var(--radius-sm);
+justify-content:center;
+align-items:center;
+gap:8px;
+min-height:36px;
+padding:8px 13px;
+font-size:11px;
+font-weight:650;
+transition:transform .16s,opacity .16s;
+display:inline-flex
+}
+.primary-button
+{
+border:1px solid var(--button);
+background:var(--button);
+color:var(--button-text)
+}
+.primary-button.large
+{
+width:100%;
+padding:11px 14px
+}
+.primary-button:hover:not(:disabled),.secondary-button:hover:not(:disabled)
+{
+transform:translateY(-1px)
+}
+.primary-button:disabled,.secondary-button:disabled
+{
+cursor:default;
+opacity:.45
+}
+.secondary-button
+{
+border:1px solid var(--line-strong);
+background:var(--panel-muted);
+color:var(--text-soft)
+}

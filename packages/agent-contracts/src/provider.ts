@@ -129,6 +129,8 @@ export const agentProviderSummarySchema = z.object({
   streaming: z.boolean(),
   /** Whether the configured model accepts image inputs; gates image attachments. */
   vision: z.boolean(),
+  contextWindowTokens: z.number().int().positive().optional(),
+  maxOutputTokens: z.number().int().positive().optional(),
   health: providerHealthSchema.optional(),
 });
 

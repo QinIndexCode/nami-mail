@@ -1,16 +1,14 @@
 /**
  * useAgentSession: the streaming conversation state machine lifted out of
- * AgentWorkspace.tsx. Owns everything about a run's lifecycle that is
- * independent of the surrounding UI:
+ * AgentWorkspace.tsx. Owns a run's lifecycle wherever it is independent of the
+ * surrounding UI:
  *
- *  - streaming / streamStatus / ghostConversationId / backgroundRunIds flags
- *  - the per-conversation session buffer (sessionStreamsRef) and replay on
- *    re-entry (replayBackgroundSession)
+ *  - streaming / streamStatus / ghostConversationId / backgroundRunIds flags,
+ *    the per-conversation session buffer (sessionStreamsRef) and replay on
+ *    re-entry, the background-run pickup/fold-in poll, the cancel/stop
+ *    affordances and the interrupt-to-send path
  *  - the frame-batched reveal-pacing pipeline (pendingStreamPieces / rAF /
  *    pacing) that folds text/tool/citation deltas onto the active transcript
- *  - the background-run pickup/fold-in poll
- *  - cancel/stop affordances (stopStreaming / stopGhostRun) and the
- *    interrupt-to-send path (prepareInterruptToSend)
  *  - the run-driving entry point (runStream)
  *
  * It is deliberately "injection-driven": `active` (and its setter) live in the
@@ -21,10 +19,9 @@
  * bookkeeping, setPendingMemorySuggestions for memory suggestions) and exposes
  * back the session flags + run controls the component renders against.
  *
- * Design constraints:
- *  - Behaviour is identical to the pre-extraction code; this is a structural
- *    lift, no semantics change.
- *  - No new runtime dependency; plain React hooks + AbortController.
+ * Design constraints: no new runtime dependency (plain React hooks +
+ * AbortController), and the reveal-pacing layer may only change *when* a
+ * character appears — never which characters, or in what order.
  */
 
 import {
@@ -56,14 +53,11 @@ import {
 } from "./agent-utils";
 
 /**
- * A run that may outlive the conversation currently being viewed. When the user
- * switches away mid-reply, the run keeps streaming into this buffer instead of
- * touching the UI (rendering to a transcript nobody is looking at). Re-entering
- * the conversation replays the buffered events so the reply appears exactly
- * where it left off — the server's `inFlight` snapshot plus the missing tail —
- * then live events resume the same row. Terminal runs are removed once the
- * server has persisted the final turn, so re-entry just renders the persisted
- * transcript.
+ * A run that may outlive the conversation currently being viewed: when the user
+ * switches away mid-reply the run keeps streaming into this buffer rather than
+ * rendering to a transcript nobody is looking at. Re-entry replays the buffered
+ * events so the reply appears where it left off, then live events resume the
+ * same row. Terminal runs are dropped once the server has persisted the turn.
  */
 type SessionStream = {
   conversationId: string;
@@ -79,11 +73,27 @@ type SessionStream = {
   done: boolean;
 };
 
-/** Reveal pacing tuning (chars/sec). Kept as module constants like the source. */
-const STREAM_PACING_WINDOW_MS = 800;   // arrival rate is measured over this window
-const STREAM_PACING_SMOOTHING = 0.22;  // how quickly the reveal speed hunts arrival
-const STREAM_PACING_MIN_RATE = 24;     // chars/sec floor: slow output still flows
-const STREAM_PACING_MAX_RATE = 280;    // chars/sec ceiling: a burst stays readable
+/**
+ * Reveal pacing, as two independent limits because one `rate * dt` budget gives
+ * neither: THROUGHPUT (`rateMin`..`rateMax`, chars/sec) follows the model's
+ * arrival rate, and STEP (`stepChars`..`stepCharsCeiling`, chars per paint)
+ * caps a single paint, so a longer delta is sliced and its tail re-queued.
+ * Exported so tests state the invariants in these terms; the measurements
+ * behind every value live in useAgentSession.pacing.test.tsx.
+ */
+export const STREAM_REVEAL = {
+  rateMin: 24, // chars/sec floor: a slow model still produces visible movement
+  rateMax: 1200, // chars/sec ceiling: tracks a fast model, so the queue does not grow
+  arrivalWindowMs: 300, // arrival-rate window (further clamped to the time since the last flush)
+  smoothingTauMs: 160, // reveal-rate low-pass time constant; time-based, so 60 Hz == 144 Hz
+  stepChars: 12, // characters one paint adds while the reveal keeps up
+  stepCharsCeiling: 24, // hard ceiling for one paint: no frame can ever dump a backlog
+  stepCatchupChars: 200, // backlog at which the step is fully widened to that ceiling
+  catchUpSeconds: 0.35, // drain horizon for a backlog the model has stopped feeding
+  hiddenStepChars: 480, // characters one hidden tick may reveal (bounded work; nobody is watching)
+  dtClampMs: 250, // hard cap on the time one flush charges, so a stall can never become one big reveal
+  hiddenTickMs: 250, // hidden-window drain cadence: a heartbeat, not a debounce
+} as const;
 
 /** Agent tools whose successful completion mutates primary mail state. Their
  *  completion notifies the app so the mail list refreshes in step with the
@@ -129,6 +139,8 @@ export type UseAgentSessionResult = {
   getSession: (conversationId: string) => SessionStream | undefined;
   /** Clears any pending frame-batched deltas (conversation switch / new run). */
   clearPendingFlush: () => void;
+  /** Paints every queued delta onto the CURRENT transcript in one pass (the switch drain). */
+  drainPendingFlush: () => void;
   /** Consumes (and clears) a cached background-run failure for a conversation. */
   takeBackgroundError: (conversationId: string) => { code: string; message: string; retryable?: boolean } | undefined;
   /** Drops the streaming / status affordances when leaving a live conversation (run keeps streaming). */
@@ -154,14 +166,12 @@ export type UseAgentSessionResult = {
 };
 
 /**
- * Folds a server transcript snapshot into what is already on screen.
- *
- * A poll or a conversation fetch can return a snapshot taken before the text
- * that has since streamed into the local buffer. Adopting it wholesale rewinds
- * the reply the user is reading — the visible symptom of "the answer went
- * backwards". While a run is still live for the conversation, keep whichever
- * copy of a row is further along; once the run ends the server is authoritative
- * again, so nothing is held back indefinitely.
+ * Folds a server transcript snapshot into what is already on screen. A poll or
+ * a conversation fetch can return a snapshot taken before the text that has
+ * since streamed in, and adopting it wholesale rewinds the reply — the visible
+ * symptom of "the answer went backwards". While a run is live for the
+ * conversation keep whichever copy of a row is further along; once it ends the
+ * server is authoritative again, so nothing is held back indefinitely.
  */
 export function keepAheadTranscript(
   current: AgentConversation,
@@ -200,11 +210,11 @@ export function useAgentSession({
   const [streaming, setStreaming] = useState(false);
   const [streamStatus, setStreamStatus] = useState<string | null>(null);
   /**
-   * A turn that outlived the panel is being picked up: the fold-in poll is
-   * watching this conversation because its newest message is a user message
-   * (or a server streaming snapshot) with no local session attached. While set,
-   * the composer shows a stop affordance backed by cancelAgentRun — the usual
-   * in-session interrupt cannot reach a run without a local controller.
+   * A turn that outlived the panel is being picked up: the fold-in poll watches
+   * this conversation because its newest message is a user message (or a server
+   * streaming snapshot) with no local session attached. While set, the composer
+   * shows a stop affordance backed by cancelAgentRun — the usual in-session
+   * interrupt cannot reach a run without a local controller.
    */
   const [ghostConversationId, setGhostConversationId] = useState<string | null>(null);
   const [backgroundRunIds, setBackgroundRunIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -213,20 +223,16 @@ export function useAgentSession({
   // Run bookkeeping refs
   // ---------------------------------------------------------------------------
   const abortRef = useRef<AbortController | null>(null);
-  // Conversations with a live run streaming in the background (not the one on
-  // screen); drives the sidebar spinner so a run the user left keeps being
-  // visible elsewhere.
   // Failures of background runs (the user left the conversation while it ran).
   // The server persists most failure turns itself, but requests rejected before
-  // any record is written (scope/slash validation, transport failure, an
-  // exhausted CONFLICT retry) leave the conversation with neither a row nor an
-  // error — re-entry would silently show a bare user message. Keyed by
-  // conversation, consumed (and cleared) once re-surfaced in the view.
+  // any record is written leave the conversation with neither a row nor an
+  // error — re-entry would silently show a bare user message. Consumed once
+  // re-surfaced in the view.
   const backgroundErrorRef = useRef(new Map<string, { code: string; message: string; retryable?: boolean }>());
   // A pickup the user explicitly abandoned (stop) is recorded so the poll can
-  // never re-arm for the same last message: the server run was cancelled and
-  // can never complete. Recording the message id keeps a fresh turn (a new
-  // last message) on an independent poll.
+  // never re-arm for the same last message: that run was cancelled server-side
+  // and can never complete. Recording the message id keeps a fresh turn on an
+  // independent poll.
   const abandonedPickupRef = useRef<{ conversationId: string; lastMessageId: string } | null>(null);
   // Live runs keyed by conversation: while the user browses a different
   // conversation, a run keeps streaming into its buffer (no UI cost) and is
@@ -254,7 +260,7 @@ export function useAgentSession({
     lastTick: number;
     value: number; // current reveal rate, chars/sec
     arrivals: { t: number; c: number }[]; // text deltas pushed by the foreground run
-  }>({ lastTick: performance.now(), value: STREAM_PACING_MIN_RATE, arrivals: [] });
+  }>({ lastTick: performance.now(), value: STREAM_REVEAL.rateMin, arrivals: [] });
 
   // ---------------------------------------------------------------------------
   // Background run spinner sync
@@ -276,15 +282,33 @@ export function useAgentSession({
   // ---------------------------------------------------------------------------
   // rAF flush + reveal pacing
   // ---------------------------------------------------------------------------
-  // Arm the next frame-batched flush pass. While the window is visible it runs
-  // on requestAnimationFrame so it batches with paints; while the window is
-  // hidden rAF may stop firing entirely on some platforms, which would let a
-  // long background stream pile an unbounded backlog that all flushes at once
-  // on restore. Falling back to a bounded setTimeout keeps the hidden backlog
-  // draining at a fixed pace, so restoring never hits a giant flush. The active
-  // id lives in whichever ref matches the path taken; every cancellation point
-  // clears both so a stale id can never fire into the wrong context.
+  // Arm the next frame-batched flush pass: requestAnimationFrame while visible
+  // (rAF may stop firing entirely while hidden), a fixed setTimeout otherwise.
+  // That timer is a HEARTBEAT, not a debounce — armed only when none is pending,
+  // and re-armed by the flush while a backlog remains, so a delta arriving
+  // mid-window rides the pending tick instead of starving it (the old
+  // clear-then-re-arm never fired at all, and the whole hidden backlog landed on
+  // the first visible frame). The active id lives in whichever ref matches the
+  // path taken; every cancellation point clears both.
   const armStreamFlush = useCallback(() => {
+    if (document.hidden) {
+      if (streamHiddenTimerRef.current === null) {
+        streamHiddenTimerRef.current = window.setTimeout(flushPendingStreamPiecesRef.current, STREAM_REVEAL.hiddenTickMs);
+      }
+      return;
+    }
+    if (streamHiddenTimerRef.current !== null) {
+      window.clearTimeout(streamHiddenTimerRef.current);
+      streamHiddenTimerRef.current = null;
+    }
+    if (streamRafRef.current === null) {
+      streamRafRef.current = requestAnimationFrame(flushPendingStreamPiecesRef.current);
+    }
+  }, []);
+
+  // Cancels the armed flush (rAF + hidden heartbeat): the teardown every
+  // cancellation point (clear / drain / flush-now / restart / unmount) shares.
+  const cancelStreamFlush = useCallback(() => {
     if (streamRafRef.current !== null) {
       cancelAnimationFrame(streamRafRef.current);
       streamRafRef.current = null;
@@ -293,62 +317,81 @@ export function useAgentSession({
       window.clearTimeout(streamHiddenTimerRef.current);
       streamHiddenTimerRef.current = null;
     }
-    if (document.hidden) {
-      streamHiddenTimerRef.current = window.setTimeout(flushPendingStreamPiecesRef.current, 250);
-    } else {
-      streamRafRef.current = requestAnimationFrame(flushPendingStreamPiecesRef.current);
-    }
   }, []);
 
-  const flushPendingStreamPieces = useCallback(() => {
+  // Folds the pending queue onto the active transcript. `drainAll` (a switch)
+  // paints every queued piece in one pass; pacing slices text and re-queues.
+  const applyStreamPieces = useCallback((drainAll: boolean) => {
     streamRafRef.current = null;
     streamHiddenTimerRef.current = null;
     const queue = pendingStreamPiecesRef.current;
     if (queue.length === 0) return;
     pendingStreamPiecesRef.current = [];
-    // A terminal event ends the run: absolutely nothing else is coming, so the
-    // stream is flushed completely this frame (ignoring the pacing). This is
-    // what lets the assistant row reach its final state immediately. Without it
-    // a pacing tail keeps trickling in after completion, the message stays
-    // "streaming", the pickup poll re-arms and races the rAF flush with a server
-    // snapshot — the transcript flash / sidebar blink we guard against.
-    const hasTerminal = queue.some((piece) => piece.event.type === "completed" || piece.event.type === "error");
-    // Measure the model's arrival rate over a sliding window and let the reveal
-    // speed follow it (smoothing keeps a speed change gradual rather than a jump).
     const pacing = streamPacingRef.current;
     const now = performance.now();
-    const dt = Math.min(now - pacing.lastTick, 250);
-    pacing.lastTick = now;
-    const cutoff = now - STREAM_PACING_WINDOW_MS;
-    while (pacing.arrivals.length > 0 && pacing.arrivals[0].t < cutoff) pacing.arrivals.shift();
-    let windowChars = 0;
-    for (const arrival of pacing.arrivals) windowChars += arrival.c;
-    const arrivalRate = windowChars / (STREAM_PACING_WINDOW_MS / 1000);
-    const targetRate = Math.min(STREAM_PACING_MAX_RATE, Math.max(arrivalRate, STREAM_PACING_MIN_RATE));
-    pacing.value += (targetRate - pacing.value) * STREAM_PACING_SMOOTHING;
-    // Consume text_delta only within this frame's reveal budget unless the run
-    // has ended; anything beyond it stays queued and drains on later frames.
-    let consumed = 0;
-    let charBudget = hasTerminal ? Number.POSITIVE_INFINITY : Math.max((pacing.value * dt) / 1000, 1);
-    while (consumed < queue.length) {
-      const piece = queue[consumed]!;
-      if (piece.event.type === "text_delta") {
-        const length = piece.event.delta.length;
-        // The front piece must always render, even when it alone exceeds the
-        // budget: fast models can emit a whole word/sentence in a single delta,
-        // and blocking it would starve the stream (a permanent freeze). We only
-        // stop once the budget is genuinely spent and at least one piece has
-        // already been consumed, which keeps the smooth paced read for steady
-        // small-token output while never deadlocking on an oversized token.
-        if (length > charBudget && consumed > 0) break;
-        charBudget -= length;
-      }
-      consumed += 1;
+    let budget = Number.POSITIVE_INFINITY;
+    if (drainAll) pacing.arrivals = []; // ∞ budget: a switch paints the whole queue at once
+    else {
+      const dt = Math.min(Math.max(now - pacing.lastTick, 0), STREAM_REVEAL.dtClampMs);
+      // The arrival window is clamped to the time since the last flush: a longer
+      // one counts characters this flush is not charged for (no under-drain).
+      const windowMs = Math.min(STREAM_REVEAL.arrivalWindowMs, Math.max(dt, 1));
+      const cutoff = now - windowMs;
+      while (pacing.arrivals.length > 0 && pacing.arrivals[0]!.t < cutoff) pacing.arrivals.shift();
+      let backlog = 0;
+      for (const piece of queue) if (piece.event.type === "text_delta") backlog += piece.event.delta.length;
+      let windowChars = 0;
+      for (const arrival of pacing.arrivals) windowChars += arrival.c;
+      // A backlog the model stopped feeding (tool call, thinking pause, terminal
+      // tail) implies a drain rate of its own; the arrival rate is the larger.
+      const targetRate = Math.min(STREAM_REVEAL.rateMax, Math.max(
+        windowChars / (windowMs / 1000), backlog / STREAM_REVEAL.catchUpSeconds, STREAM_REVEAL.rateMin,
+      ));
+      pacing.value += (targetRate - pacing.value) * (1 - Math.exp(-dt / STREAM_REVEAL.smoothingTauMs));
+      // This paint's budget: the tracked rate allows in `dt`, clamped to the
+      // per-paint step (bounded work while hidden).
+      const stepMax = document.hidden ? STREAM_REVEAL.hiddenStepChars : Math.round(
+        STREAM_REVEAL.stepChars
+        + (STREAM_REVEAL.stepCharsCeiling - STREAM_REVEAL.stepChars) * Math.min(1, backlog / STREAM_REVEAL.stepCatchupChars),
+      );
+      // Whole characters, rounded not floored (slicing truncates; flooring
+      // dropped one character nearly every frame). At least one, always.
+      budget = Math.max(1, Math.round(Math.min((pacing.value * dt) / 1000, stepMax)));
     }
-    const pieces = queue.slice(0, consumed);
-    const leftovers = queue.slice(consumed);
+    pacing.lastTick = now;
+    // Split the queue into what this paint reveals and what goes back into the
+    // pending queue, order preserved in both halves (content is a pure append).
+    const applied: { id: string; event: AgentStreamEvent }[] = [];
+    const leftovers: { id: string; event: AgentStreamEvent }[] = [];
+    for (let index = 0; index < queue.length; index += 1) {
+      const piece = queue[index]!;
+      const event = piece.event;
+      if (event.type === "text_delta" && !drainAll) {
+        const take = Math.min(event.delta.length, budget);
+        if (take <= 0) {
+          leftovers.push(piece);
+          continue;
+        }
+        budget -= take;
+        if (take === event.delta.length) applied.push(piece);
+        else {
+          applied.push({ id: piece.id, event: { type: "text_delta", delta: event.delta.slice(0, take) } });
+          leftovers.push({ id: piece.id, event: { type: "text_delta", delta: event.delta.slice(take) } });
+        }
+        continue;
+      }
+      // Never budget-gated; under a drain every remaining piece applies in full.
+      applied.push(piece);
+      if ((event.type !== "completed" && event.type !== "error") || drainAll) continue;
+      // A terminal event lands in this very frame even with characters queued
+      // behind it — the row reaches its final state at once, so the transcript
+      // does not sit in "streaming", the pickup poll does not re-arm against it
+      // and the sidebar does not blink. (A drain has no tail: ∞ budget applied.)
+      for (let rest = index + 1; rest < queue.length; rest += 1) leftovers.push(queue[rest]!);
+      break;
+    }
     const byId = new Map<string, AgentStreamEvent[]>();
-    for (const piece of pieces) {
+    for (const piece of applied) {
       const events = byId.get(piece.id);
       if (events) events.push(piece.event);
       else byId.set(piece.id, [piece.event]);
@@ -364,18 +407,19 @@ export function useAgentSession({
       });
       return messages === current.messages ? current : { ...current, messages };
     });
-    // The pieces beyond this frame's budget must go back into the pending
-    // queue: the queue was detached at the top of this flush, so leaving them
-    // only in the local `leftovers` slice would orphan those deltas forever
-    // (text loss until a re-render rebuilds the row from the server
-    // snapshot). Backfill, then drain on the next frame at the same bounded
-    // pace. Safe to assign directly — nothing can enqueue between the detach
-    // above and here (synchronous, no await).
+    // Whatever this paint did not take goes back into the pending queue (the
+    // queue was detached above). Safe to assign directly — nothing can enqueue
+    // in between.
     if (leftovers.length > 0) {
       pendingStreamPiecesRef.current = leftovers;
       armStreamFlush();
     }
   }, [armStreamFlush, setActive]);
+  // Zero-arg shell on purpose: rAF invokes its callback with a truthy
+  // timestamp, so a boolean first parameter would read every frame as a drain.
+  const flushPendingStreamPieces = useCallback(() => {
+    applyStreamPieces(false);
+  }, [applyStreamPieces]);
   flushPendingStreamPiecesRef.current = flushPendingStreamPieces;
 
   // Live runs keyed by conversation, so a run the user navigated away from can
@@ -385,10 +429,9 @@ export function useAgentSession({
     const session = sessionStreamsRef.current.get(conversationId);
     if (!session || session.assistantMessageId !== messageId) return;
     // A completed write-tool event means primary mail state just changed
-    // server-side (e.g. the agent marked a message read). Notify the app so
-    // the mail list refreshes in step with the conversation instead of
-    // lagging until the next poll. Fires on the live arrival only; replays
-    // re-render the buffered row but do not re-notify.
+    // server-side (e.g. the agent marked a message read). Notify the app so the
+    // mail list refreshes in step instead of lagging until the next poll. Live
+    // arrivals only; replays re-render the row but do not re-notify.
     if (event.type === "tool" && event.activity.state === "completed" && MAIL_STATE_MUTATING_TOOLS.has(event.activity.toolName)) {
       onMailStateChangedRef.current?.();
     }
@@ -427,14 +470,7 @@ export function useAgentSession({
       if (event.type === "text_delta") streamPacingRef.current.arrivals.push({ t: performance.now(), c: event.delta.length });
       pendingStreamPiecesRef.current.push({ id: messageId, event });
       if (flushNow) {
-        if (streamRafRef.current !== null) {
-          cancelAnimationFrame(streamRafRef.current);
-          streamRafRef.current = null;
-        }
-        if (streamHiddenTimerRef.current !== null) {
-          window.clearTimeout(streamHiddenTimerRef.current);
-          streamHiddenTimerRef.current = null;
-        }
+        cancelStreamFlush();
         flushPendingStreamPieces();
         return;
       }
@@ -463,28 +499,22 @@ export function useAgentSession({
     // turns, so re-entry would otherwise show a bare user message with no error.
     if (event.type === "error") backgroundErrorRef.current.set(conversationId, event.error);
     session.events.push(event);
-  }, [activeIdRef, armStreamFlush, flushPendingStreamPieces, setActive, setConversations, setPendingMemorySuggestions]);
+  }, [activeIdRef, armStreamFlush, cancelStreamFlush, flushPendingStreamPieces, setActive, setConversations, setPendingMemorySuggestions]);
 
-  // Close the panel is a "leave", not a "cancel". Drop every local stream (the
+  // Close the panel is a "leave", not a "cancel": drop every local stream (the
   // fetch rejection aborts the SSE, which on the server only stops event
-  // delivery — the run keeps draining and persists the completed turn, per the
-  // /messages route contract). We must NOT call cancelAgentRun here: that aborts
-  // the server run and its finally skips persisting the assistant row, so
-  // reopening shows just the orphaned user message with no reply and no tool
-  // calls. The completed reply is instead picked up on reopen by the poll.
+  // delivery). We must NOT call cancelAgentRun here — it aborts the server run
+  // and its finally skips persisting the assistant row, so reopening would show
+  // the orphaned user message with no reply. The reply is picked up by the poll.
   useEffect(() => {
     const streamsRef = sessionStreamsRef;
     return () => {
       for (const session of streamsRef.current.values()) {
         session.controller.abort();
       }
-      if (streamRafRef.current !== null) cancelAnimationFrame(streamRafRef.current);
-      if (streamHiddenTimerRef.current !== null) {
-        window.clearTimeout(streamHiddenTimerRef.current);
-        streamHiddenTimerRef.current = null;
-      }
+      cancelStreamFlush();
     };
-  }, []);
+  }, [cancelStreamFlush]);
 
   // ---------------------------------------------------------------------------
   // Background pickup / fold-in poll
@@ -595,18 +625,16 @@ export function useAgentSession({
   // ---------------------------------------------------------------------------
   const replayBackgroundSession = useCallback((session: SessionStream, conversationView: AgentConversation) => {
     const messages = conversationView.messages;
-    // Only a streaming assistant row *after the last user message* can
-    // belong to the current run: an interrupted previous run's inFlight row
-    // sits before that user message and must never be adopted or replaced,
-    // or the new run's deltas would graft onto the old partial reply.
+    // Only a streaming assistant row *after the last user message* can belong to
+    // the current run: an interrupted run's inFlight row sits before that user
+    // message and must never be adopted, or the new deltas graft onto it.
     const lastUserIndex = messages.reduce((acc, message, i) => (message.role === "user" ? i : acc), -1);
     const liveIndex = messages.findIndex((message, i) => i > lastUserIndex && message.role === "assistant" && message.state === "streaming");
-    // A reply the server already sealed (its snapshot row is terminal) must
-    // not get a second row: the server may still hold the SSE open (e.g. the
-    // title bump after `completed`), so by the time the user returns the
-    // client session can outlive the server's inFlight row. When no live
-    // streaming row exists, the server's terminal row is authoritative and
-    // any client-side rebuild risks grafting a stale streaming copy on top.
+    // A reply the server already sealed (its snapshot row is terminal) must not
+    // get a second row: the server may still hold the SSE open, so the client
+    // session can outlive the server's inFlight row. With no live streaming row
+    // the server's terminal row is authoritative, and a rebuild risks grafting a
+    // stale streaming copy on top.
     const sealedAfterLastUser = messages.some((message, i) => i > lastUserIndex && message.role === "assistant");
     let next = messages;
     if (session.events.length === 0) {
@@ -653,10 +681,9 @@ export function useAgentSession({
     }
     setActive({ ...conversationView, messages: next });
     // Only a replay that ended up with an actual streaming target is a live
-    // run; a sealed reply (server terminal row kept) is not, and must not arm
-    // the streaming affordance readers can't act on (spinner, stop, blocks).
-    // A sealed run's last status is stale by definition — only restore status
-    // for a run still in flight (memory suggestions are durable and stay).
+    // run; a sealed reply must not arm affordances readers can't act on (spinner,
+    // stop, blocks), and its last status is stale by definition — memory
+    // suggestions are durable and stay.
     const hasLiveTarget = next.some((message, i) => i > lastUserIndex && message.role === "assistant" && message.state === "streaming");
     if (!session.done && hasLiveTarget) {
       setStreaming(true);
@@ -688,9 +715,8 @@ export function useAgentSession({
       session.done = true;
       void api.cancelAgentRun(session.conversationId).catch(() => undefined);
       // Drop the affordances now rather than waiting for the aborted fetch to
-      // reject and unwind: the stop button the user just pressed must not stay
-      // armed for the round-trip, and the run's own teardown becomes a no-op
-      // once it sees it is no longer the bound run.
+      // unwind: the button the user just pressed must not stay armed for the
+      // round-trip, and the run's teardown becomes a no-op once it is unbound.
       setStreaming(false);
       setStreamStatus(null);
     }
@@ -710,11 +736,9 @@ export function useAgentSession({
     setGhostConversationId((current) => (current === conversationId ? null : current));
   }, [ghostConversationId, active?.id, pollLastMessageId]);
 
-  // Interrupt-to-send: if the current conversation hosts a live run, sending a
-  // new message folds the running reply into an "interrupted" state and cancels
-  // that run (via its own controller, not the shared abortRef) before the new
-  // one starts. Only the on-screen conversation is affected — a run streaming
-  // in the background for another conversation keeps going.
+  // Interrupt-to-send: sending a new message folds a live reply to
+  // "interrupted" and cancels that run (via its own controller, not the shared
+  // abortRef) first. Only the on-screen conversation is affected.
   const prepareInterruptToSend = useCallback(() => {
     const activeSession = sessionStreamsRef.current.get(active?.id ?? "");
     if (activeSession && !activeSession.done) {
@@ -757,19 +781,20 @@ export function useAgentSession({
     return sessionStreamsRef.current.get(conversationId);
   }, []);
 
-  // Pending frame-batched deltas belong to the outgoing transcript; drop them
-  // so they can never land on a different conversation (switch / new run).
+  // Drops pending frame-batched deltas (switch / new run). CONFLICT retries keep
+  // this drop: a rejected attempt's deltas belong to a run that never happened.
   const clearPendingFlush = useCallback(() => {
-    if (streamRafRef.current !== null) {
-      cancelAnimationFrame(streamRafRef.current);
-      streamRafRef.current = null;
-    }
-    if (streamHiddenTimerRef.current !== null) {
-      window.clearTimeout(streamHiddenTimerRef.current);
-      streamHiddenTimerRef.current = null;
-    }
+    cancelStreamFlush();
     pendingStreamPiecesRef.current = [];
-  }, []);
+  }, [cancelStreamFlush]);
+
+  // A switch drains instead of dropping: the queued tail paints onto the
+  // outgoing transcript in one pass before the view swaps, and the drain resets
+  // the pacing window so the next paced flush cannot inherit a stale dt.
+  const drainPendingFlush = useCallback(() => {
+    cancelStreamFlush();
+    applyStreamPieces(true);
+  }, [applyStreamPieces, cancelStreamFlush]);
 
   // Consumes (and clears) a cached background-run failure for a conversation.
   const takeBackgroundError = useCallback((conversationId: string) => {
@@ -839,26 +864,22 @@ export function useAgentSession({
       done: false,
     };
     const controller = streamSession.controller;
-    // The run is now live from this moment: raise the streaming affordance so
-    // the composer disables and the stop affordance appears. (The pre-extraction
-    // code did this in sendMessage before starting the pipeline; it belongs to
-    // the run lifecycle, so it lives here in the hook.)
+    // The run is live from this moment: raise the streaming affordance so the
+    // composer disables and the stop affordance appears. (Pre-extraction this
+    // sat in sendMessage; it belongs to the run lifecycle.)
     setStreaming(true);
     setStreamStatus(null);
-    // A run may already be bound to this conversation slot — the interrupt path
-    // above covers the visible case, but a concurrent send (double-send through
-    // the creation lock) or one whose teardown is still unwinding can arrive
-    // here with a live session still in place. The slot rebind silences the old
-    // run, so fold its assistant row now; otherwise its earlier transcript row
-    // never gets a terminal event and lingers as a spinning placeholder with no
-    // self-healing path.
+    // A run may already be bound to this slot — the interrupt path above covers
+    // the visible case, but a concurrent send or one whose teardown is still
+    // unwinding can arrive here with a live session in place. The rebind
+    // silences the old run, so fold its assistant row now; otherwise that row
+    // never gets a terminal event and lingers as a spinning placeholder.
     const prior = sessionStreamsRef.current.get(conversation.id);
     if (prior && !prior.done) {
       prior.controller.abort();
       // Aborting the socket only stops delivery — the server's run unwinds to
-      // completion and keeps claiming the conversation's active-run slot
-      // (tokens keep burning, and the new stream below would eat CONFLICTs).
-      // Cancel the server-side run like every other supersede path does.
+      // completion and keeps claiming the conversation's active-run slot, so
+      // cancel it server-side like every other supersede path does.
       void api.cancelAgentRun(prior.conversationId).catch(() => undefined);
       setActive((current) => current && current.id === conversation.id
         ? {
@@ -875,25 +896,17 @@ export function useAgentSession({
     syncBackgroundRuns();
     // A new run must not inherit frame-batched deltas of an interrupted one,
     // and restarts the reveal pacing from its floor (no stale rate samples).
-    if (streamRafRef.current !== null) {
-      cancelAnimationFrame(streamRafRef.current);
-      streamRafRef.current = null;
-    }
-    if (streamHiddenTimerRef.current !== null) {
-      window.clearTimeout(streamHiddenTimerRef.current);
-      streamHiddenTimerRef.current = null;
-    }
+    cancelStreamFlush();
     pendingStreamPiecesRef.current = [];
     const pacing = streamPacingRef.current;
     pacing.arrivals = [];
-    pacing.value = STREAM_PACING_MIN_RATE;
+    pacing.value = STREAM_REVEAL.rateMin;
     pacing.lastTick = performance.now();
     // A new run supersedes any previously cached background failure for this
     // conversation; its outcome (successful or a fresh error) replaces it.
     backgroundErrorRef.current.delete(conversation.id);
-    // A still-unwinding previous run on the server can briefly reject the new
-    // stream with CONFLICT. We retry a few times (swallowing the conflict and
-    // its trailing events) until the old run finishes tearing down.
+    // A still-unwinding previous run can briefly reject the new stream with
+    // CONFLICT; retry a few times (swallowing it and its trailing events).
     let conflictRetries = 0;
     const MAX_CONFLICT_RETRIES = 5;
     // Set when this run ends in an error terminal. The failure row must stay
@@ -921,12 +934,10 @@ export function useAgentSession({
         if (!conflictRetry) break;
         if (controller.signal.aborted) return;
         conflictRetries += 1;
-        // The attempt the server rejected may already have buffered deltas. They
-        // belong to a run that never happened and would otherwise be flushed onto
-        // the retry's reply as a duplicated or truncated fragment.
+        // The rejected attempt may already have buffered deltas; they belong to
+        // a run that never happened and would graft onto the retry's reply.
         clearPendingFlush();
-        // The retry pause belongs to the run that is waiting; only surface the
-        // busy notice on the screen if that run is the one being viewed.
+        // Only surface the busy notice if the waiting run is the one on screen.
         if (activeIdRef.current === conversation.id) setStreamStatus(t("agent.error.streamBusy"));
         // Give the superseded run time to release the conversation on the server.
         await new Promise((resolve) => window.setTimeout(resolve, 400));
@@ -934,15 +945,13 @@ export function useAgentSession({
         // that is no longer wanted.
         if (controller.signal.aborted) return;
       }
-      // A successful turn clears stale failure rows — both the one the retry
+      // A successful turn clears stale failure rows — the one the retry
       // targeted and any others left behind — so the transcript stops showing
-      // outdated errors once the conversation moves on. A run that itself
-      // failed keeps its error row for the user to retry. Only touch the
-      // transcript when it is the one on screen; a run that finished in the
-      // background cleans up its own view on re-entry via the server snapshot.
-      // The run identity matters as much as the conversation: a superseded or
-      // background-finished run must not clear error rows belonging to the run
-      // that replaced it on screen.
+      // outdated errors. A run that itself failed keeps its row for the retry.
+      // Only touch the transcript when it is the one on screen; a run that
+      // finished in the background cleans up its own view on re-entry. Run
+      // identity matters as much as conversation identity: a superseded run
+      // must not clear rows belonging to the run that replaced it.
       if (!turnFailed && activeIdRef.current === conversation.id && isCurrentRun()) {
         setActive((current) => current ? {
           ...current,
@@ -966,10 +975,8 @@ export function useAgentSession({
         enqueueStreamPiece(conversation.id, streamSession.assistantMessageId, { type: "error", error: { code, message, retryable: true } }, true);
       }
     } finally {
-      // Only the latest run may clear shared run state; a superseded run's
-      // teardown must not drop the streaming flag of the run that replaced it.
-      // A background-completed run clears nothing: the streaming flag belongs
-      // to whatever conversation is on screen.
+      // Only the latest run may clear shared run state, and a background-
+      // completed run clears nothing: the flag belongs to whatever is on screen.
       if (isCurrentRun()) {
         if (abortRef.current === controller) abortRef.current = null;
         if (activeIdRef.current === conversation.id) {
@@ -977,10 +984,10 @@ export function useAgentSession({
           setStreamStatus(null);
         }
       }
-      // Remove this run's session once it ends. Re-entry afterwards simply
-      // renders the server-persisted transcript, so the client buffer is no
-      // longer needed. Guarded by controller identity so an interrupt-to-send
-      // that replaced this session cannot be wiped by the old run's teardown.
+      // Remove this run's session once it ends: re-entry renders the persisted
+      // transcript, so the client buffer is no longer needed. Guarded by
+      // controller identity so an interrupt-to-send cannot be wiped by the old
+      // run's teardown.
       const ended = sessionStreamsRef.current.get(conversation.id);
       if (ended && ended.controller === controller) sessionStreamsRef.current.delete(conversation.id);
       syncBackgroundRuns();
@@ -989,7 +996,7 @@ export function useAgentSession({
       const bound = sessionStreamsRef.current.get(conversation.id);
       return bound !== undefined && bound.controller === controller;
     }
-  }, [activeIdRef, clearPendingFlush, conversationSearch, enqueueStreamPiece, getT, refreshConversations, setActive, syncBackgroundRuns]);
+  }, [activeIdRef, cancelStreamFlush, clearPendingFlush, conversationSearch, enqueueStreamPiece, getT, refreshConversations, setActive, syncBackgroundRuns]);
 
   // The session buffers and run controls exposed to the component.
   return useMemo(() => ({
@@ -1001,6 +1008,7 @@ export function useAgentSession({
     hasLiveRun,
     getSession,
     clearPendingFlush,
+    drainPendingFlush,
     takeBackgroundError,
     clearLiveRunIndicators,
     restoreLiveRunIndicators,
@@ -1019,6 +1027,7 @@ export function useAgentSession({
     hasLiveRun,
     getSession,
     clearPendingFlush,
+    drainPendingFlush,
     takeBackgroundError,
     clearLiveRunIndicators,
     restoreLiveRunIndicators,

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "vitest";
+import { maxJsonDepth } from "@nami/agent-contracts";
 import { OpenAiResponsesProvider } from "../src/agent/openai-responses-provider.js";
 
 // Assembled at runtime so secret scanners do not flag the synthetic test key.
@@ -225,4 +226,67 @@ it("OpenAI Responses provider completes at [DONE] without waiting for the connec
   for await (const event of provider.streamChat(chatRequest({ providerId: "responses-hold-open", model: "gpt-4.1" }))) events.push(event);
   assert.deepEqual(events.map((event) => event.type), ["response_started", "text_delta", "completed"]);
   assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
+});
+
+// The input items an assistant turn contributes are re-serialized into the
+// next request body, so a model-controlled tool payload arrives here with no
+// depth bound of its own.
+// Built by string repetition, never by JSON.stringify of a deep object: the
+// engine's serializer is the recursive walk being guarded.
+function deepJson(levels: number): unknown {
+  return JSON.parse(`${'{"nested":'.repeat(levels)}"leaf"${"}".repeat(levels)}`);
+}
+
+it("OpenAI Responses provider refuses to resend a history carrying an inadmissible tool input", async () => {
+  const requests: CapturedRequest[] = [];
+  const provider = new OpenAiResponsesProvider({
+    id: "responses-test",
+    endpoint: "https://api.openai.com/v1",
+    apiKey: TEST_API_KEY,
+    fetchImpl: async (input, init) => {
+      captureRequest(requests, input, init);
+      return sseResponse(["data: [DONE]"]);
+    },
+  });
+
+  const events = [];
+  // A guard that raised instead of yielding would reject here.
+  for await (const event of provider.streamChat(chatRequest({
+    messages: [
+      { role: "user", content: "Find invoices" },
+      { role: "assistant", content: "", toolCalls: [{ id: "call_1", toolName: "messages.search", input: deepJson(5_000), requestedAt: "2026-01-01T00:00:00.000Z" }] },
+    ],
+  }))) events.push(event);
+
+  // The guard fires before the request body is serialized, so no call is made.
+  assert.deepEqual(requests.length, 0);
+  assert.deepEqual(events, [
+    { type: "error", error: { code: "TOOL_INPUT_INVALID", message: "The provider returned tool call arguments that are not usable JSON input.", retryable: false } },
+    { type: "completed", finishReason: "content-filter" },
+  ]);
+});
+
+it("OpenAI Responses provider still replays a tool input nested exactly at the budget", async () => {
+  const requests: CapturedRequest[] = [];
+  const provider = new OpenAiResponsesProvider({
+    id: "responses-test",
+    endpoint: "https://api.openai.com/v1",
+    apiKey: TEST_API_KEY,
+    fetchImpl: async (input, init) => {
+      captureRequest(requests, input, init);
+      return sseResponse(['data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{}}}', "data: [DONE]"]);
+    },
+  });
+
+  const events = [];
+  for await (const event of provider.streamChat(chatRequest({
+    messages: [
+      { role: "user", content: "Find invoices" },
+      { role: "assistant", content: "", toolCalls: [{ id: "call_1", toolName: "messages.search", input: deepJson(maxJsonDepth), requestedAt: "2026-01-01T00:00:00.000Z" }] },
+    ],
+  }))) events.push(event);
+
+  assert.deepEqual(requests.length, 1);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
+  assert.equal(events.some((event) => event.type === "error"), false);
 });

@@ -173,6 +173,14 @@ test("account deletion is an explicit confirmation action with a manage scope", 
   assert.ok(agentPermissionScopes.includes("manage:accounts" as (typeof agentPermissionScopes)[number]));
 });
 
+test("contact write actions are explicit confirmation actions with contact scopes", () => {
+  assert.ok(agentConfirmationActions.includes("create-contact" as (typeof agentConfirmationActions)[number]));
+  assert.ok(agentConfirmationActions.includes("update-contact" as (typeof agentConfirmationActions)[number]));
+  assert.ok(agentConfirmationActions.includes("delete-contact" as (typeof agentConfirmationActions)[number]));
+  assert.ok(agentPermissionScopes.includes("read:contacts" as (typeof agentPermissionScopes)[number]));
+  assert.ok(agentPermissionScopes.includes("write:contacts" as (typeof agentPermissionScopes)[number]));
+});
+
 test("UI stream schema accepts every event variant of the server/web wire vocabulary", () => {
   const citation = {
     id: "c1", messageId: "m1", accountId: "a1", subject: "Hello", sender: "s@example.test",

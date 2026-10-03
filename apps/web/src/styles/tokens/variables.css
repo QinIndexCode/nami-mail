@@ -1,0 +1,93 @@
+:root
+{
+--lightningcss-light:initial;
+--lightningcss-dark: ;
+color-scheme:light;
+font-synthesis:none;
+--canvas:#ececef;--bg-canvas-tint:#d9dce2;--bg-vignette:rgba(20,27,44,.22);
+--body-glow:#ffffffb3;
+--frame:#f8f8f9eb;
+--panel:#ffffffdb;
+--panel-solid:#fff;
+--panel-muted:#f7f7f8db;
+--hover:#1212140b;
+--selected:#12121413;
+--selected-strong:#1212141d;
+--text:#151517;
+--text-soft:#5f5f66;
+--text-faint:#66666c;
+--line:#12121417;
+--line-strong:#12121424;
+--button:#171719;
+--button-text:#fff;
+--danger:#b43838;
+--success:#347a4a;
+--warning:#9a6510;
+--info:#4f7294;
+--cal-blue:#2d599f;--cal-green:#206f54;--cal-amber:#8c5a21;--cal-red:#a32e2e;--cal-purple:#7537ae;--cal-teal:#206f68;
+--kind-code:#6234b2;--kind-media:#a6306b;
+--focus-ring:var(--text);
+--focus-ring-subtle:#15151721;
+--shadow:0 28px 80px #17171b26, 0 2px 10px #17171b0f;
+--shadow-raised:0 16px 38px #17171b2e, 0 2px 8px #17171b12;
+--shadow-sm:0 6px 16px #17171b1a, 0 1px 3px #17171b0d;
+--shadow-drawer:20px 0 60px #17171b2e;
+--scrim-base:#05050799;
+--scrim-settings:#050507a3;
+--scrim-nested:#05050785;
+--scrim-alert:#05050794;
+--scrim-drawer:#0505078a;
+--scrim-global:6%;
+--scrim-region:6%;
+--bg-panel-opacity:100%;
+--radius-sm:8px;
+--radius-md:12px;
+--radius-lg:20px;
+--radius-pill:999px;
+/* Prose measure for plain-text mail only. The reading column itself is fluid —
+   it fills the reader pane the way Gmail does — because capping it reflows
+   provider-authored HTML: a 600px-wide newsletter table squeezed into a narrower
+   column breaks words (which is what Apple's promo mail did). Only plain text,
+   which has no layout of its own, is held to a readable line length: 960px is
+   ~105 characters at the 16px Georgia body font. Recompute if that changes. */
+--measure:960px;
+--dur-fast:.12s;
+--dur-base:.16s;
+--dur-slow:.32s;
+font-family:Inter,-apple-system,BlinkMacSystemFont,SF Pro Display,Segoe UI,sans-serif
+}
+:root[data-theme=dark]
+{
+--lightningcss-light: ;
+--lightningcss-dark:initial;
+color-scheme:dark;
+--canvas:#050506;--bg-canvas-tint:#050506;--bg-vignette:transparent;
+--body-glow:#fff0;
+--frame:#0e0e0ff0;
+--panel:#141416e0;
+--panel-solid:#171719;
+--panel-muted:#19191be0;
+--hover:#ffffff0e;
+--selected:#ffffff18;
+--selected-strong:#ffffff24;
+--text:#f5f5f6;
+--text-soft:#b8b8be;
+--text-faint:#9898a0;
+--line:#ffffff17;
+--line-strong:#ffffff26;
+--button:#f1f1f2;
+--button-text:#111113;
+--danger:#e47070;
+--success:#75b98a;
+--warning:#d49233;
+--info:#7ba1c4;
+--cal-blue:#7ea9dd;--cal-green:#6bc7a5;--cal-amber:#d6b151;--cal-red:#e07b7b;--cal-purple:#b88ee1;--cal-teal:#55c3b5;
+--kind-code:#ad8ee1;--kind-media:#dd88b3;
+--focus-ring:var(--text);
+--focus-ring-subtle:#f5f5f629;
+--shadow:0 32px 90px #00000094, 0 2px 14px #00000057;
+--shadow-raised:0 16px 38px #0000008c, 0 2px 8px #0000004d;
+--shadow-sm:0 6px 16px #00000073, 0 1px 3px #00000040;
+--shadow-drawer:20px 0 60px #00000080;
+--bg-panel-opacity:100%
+}

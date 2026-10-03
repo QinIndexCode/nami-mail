@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { maxJsonDepth } from "@nami/agent-contracts";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { EncryptedConversationStore } from "../src/agent/conversations.js";
 import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
@@ -15,6 +16,7 @@ import { encryptPersistentAgentRecord } from "../src/agent/record-envelopes.js";
 import {
   createAccountDataKey,
   agentOpaqueDigest,
+  AgentStoreCryptoError,
   canonicalAgentJson,
   decryptMultiAccountAgentRecord,
   encryptMultiAccountAgentRecord,
@@ -593,5 +595,29 @@ describe("Agent schema migration", () => {
     `);
     expect(() => applyAgentStoreSchema(db)).toThrow("The Agent store agent_rag_index schema is incomplete.");
     db.close();
+  });
+});
+
+describe("Canonical Agent JSON depth budget", () => {
+  // Built by string repetition and parsed, never by JSON.stringify of a deep
+  // object: the engine's serializer is the recursive walk being guarded here,
+  // so constructing the fixture that way would crash the runner first.
+  const nested = (levels: number): unknown =>
+    JSON.parse(`${'{"nested":'.repeat(levels)}"leaf"${"}".repeat(levels)}`);
+
+  it("canonicalizes a record nested exactly at the budget", () => {
+    expect(canonicalAgentJson(nested(maxJsonDepth))).toBeTypeOf("string");
+  });
+
+  it("refuses a record nested past the budget instead of overflowing the stack", () => {
+    expect(() => canonicalAgentJson(nested(maxJsonDepth + 1))).toThrow(/nested past the supported JSON depth/);
+    expect(() => canonicalAgentJson(nested(50_000))).toThrow(AgentStoreCryptoError);
+  });
+
+  it("leaves ordinary records byte-identical", () => {
+    expect(canonicalAgentJson({ b: 1, a: { d: 2, c: [3, "four", null, true] } }))
+      .toBe('{"a":{"c":[3,"four",null,true],"d":2},"b":1}');
+    expect(() => canonicalAgentJson({ self: (() => { const value: Record<string, unknown> = {}; value.self = value; return value; })() }))
+      .toThrow("Agent record contains a cycle.");
   });
 });

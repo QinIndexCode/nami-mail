@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "vitest";
+import { maxJsonDepth } from "@nami/agent-contracts";
 import { GeminiProvider } from "../src/agent/gemini-provider.js";
 
 // Assembled at runtime so secret scanners do not flag the synthetic test key.
@@ -221,4 +222,78 @@ it("Gemini provider completes at [DONE] without waiting for the connection to cl
   })) events.push(event);
   assert.deepEqual(events.map((event) => event.type), ["response_started", "text_delta", "completed"]);
   assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
+});
+
+// A Gemini functionCall carries its arguments already parsed, so the byte
+// budget that guards the other adapters' delta streams never applies to it.
+// These cases pin that the functionCall branch is guarded on its own terms.
+// Wire text is built by string repetition, never by JSON.stringify of a deep
+// object: the engine's serializer is the recursive walk being guarded.
+function deepJson(levels: number): string {
+  return `${'{"nested":'.repeat(levels)}"leaf"${"}".repeat(levels)}`;
+}
+
+function functionCallProvider(args: string): { provider: GeminiProvider; requests: CapturedRequest[] } {
+  const requests: CapturedRequest[] = [];
+  const provider = new GeminiProvider({
+    id: "gemini-test",
+    endpoint: "https://generativelanguage.googleapis.com/v1beta",
+    apiKey: TEST_API_KEY,
+    fetchImpl: async (input, init) => {
+      captureRequest(requests, input, init);
+      return sseResponse([
+        'data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"messages.search","args":'
+          + args
+          + '}}]},"finishReason":"FUNCTION_CALL"}]}',
+        "data: [DONE]",
+      ]);
+    },
+  });
+  return { provider, requests };
+}
+
+async function drainFunctionCall(args: string) {
+  const { provider, requests } = functionCallProvider(args);
+  // A guard that raised instead of yielding would reject here.
+  const events = [];
+  for await (const event of provider.streamChat(chatRequest())) events.push(event);
+  return { events, requests };
+}
+
+it("Gemini provider rejects function call arguments nested past the depth budget", async () => {
+  const { events, requests } = await drainFunctionCall(deepJson(5_000));
+
+  assert.deepEqual(events.map((event) => event.type), ["response_started", "error", "completed"]);
+  const failure = events.find((event) => event.type === "error");
+  assert.equal(failure?.type === "error" && failure.error.code, "TOOL_INPUT_INVALID");
+  assert.equal(failure?.type === "error" && failure.error.retryable, false);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "content-filter" });
+  assert.equal(requests.length, 1);
+});
+
+it("Gemini provider still accepts function call arguments nested exactly at the budget", async () => {
+  const { events } = await drainFunctionCall(deepJson(maxJsonDepth));
+
+  const toolCall = events.find((event) => event.type === "tool_call");
+  assert.equal(toolCall?.type, "tool_call");
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "tool-calls" });
+  assert.equal(events.some((event) => event.type === "error"), false);
+});
+
+it("Gemini provider refuses to resend a history carrying an inadmissible tool input", async () => {
+  const { provider, requests } = functionCallProvider("{}");
+  const events = [];
+  for await (const event of provider.streamChat(chatRequest({
+    messages: [
+      { role: "user", content: "Find invoices" },
+      { role: "assistant", content: "", toolCalls: [{ id: "gemini-0", toolName: "messages.search", input: JSON.parse(deepJson(5_000)), requestedAt: "2026-01-01T00:00:00.000Z" }] },
+    ],
+  }))) events.push(event);
+
+  // The guard fires before the request body is serialized, so no call is made.
+  assert.deepEqual(requests.length, 0);
+  assert.deepEqual(events, [
+    { type: "error", error: { code: "TOOL_INPUT_INVALID", message: "The provider returned tool call arguments that are not usable JSON input.", retryable: false } },
+    { type: "completed", finishReason: "content-filter" },
+  ]);
 });

@@ -206,6 +206,8 @@ export const agentProviderSchema = z.object({
   timeoutMs: z.number().int().min(1_000).max(120_000),
   allowCloudMailContent: z.boolean(),
   makeDefault: z.boolean().optional(),
+  contextWindowTokens: z.number().int().min(1_000).max(2_000_000).optional(),
+  maxOutputTokens: z.number().int().min(256).max(64_000).optional(),
 }).strict();
 
 export const agentMcpServerSchema = z.object({
@@ -244,6 +246,10 @@ export const agentMessageSchema = z.object({
   // The server persists the turn under it so a mid-session revoke addresses a
   // row the server knows instead of 404-ing on a client-only id.
   clientMessageId: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "Expected an opaque identifier.").max(128).optional(),
+  // Client-generated id of the optimistic assistant row (same charset): the
+  // in-flight reply and the persisted turn are published under it so streamed
+  // deltas keep folding into the row the client already rendered.
+  clientAssistantMessageId: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "Expected an opaque identifier.").max(128).optional(),
   // Historical field kept optional for old clients; the current UI no longer
   // sends it (references carry the user-chosen mail context instead).
   context: z.object({
@@ -294,4 +300,20 @@ export const agentMemoryCreateSchema = z.object({
   summary: z.string().trim().min(1).max(500),
   detail: z.string().trim().max(4_000).optional(),
   occurredAt: z.string().trim().min(1).max(64).optional(),
+}).strict();
+
+export const autoReplySimulateSchema = z.object({
+  accountEmail: z.string().trim().email().optional().or(z.literal("")),
+  fromName: z.string().trim().max(128).optional(),
+  fromAddress: z.string().trim().email(),
+  subject: z.string().trim().max(512),
+  textBody: z.string().max(100_000),
+  snippet: z.string().max(2_000).optional(),
+  mailbox: z.string().trim().default("INBOX"),
+  folderSpecialUse: z.string().trim().optional(),
+  autoSubmitted: z.string().trim().optional(),
+  listUnsubscribe: z.string().trim().optional(),
+  precedence: z.string().trim().optional(),
+  simulateAsContact: z.boolean().optional(),
+  forceLlm: z.boolean().optional(),
 }).strict();

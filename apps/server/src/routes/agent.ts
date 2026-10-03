@@ -24,9 +24,12 @@ import {
   agentMemoryQuerySchema,
   agentMcpServerSchema,
   agentProviderSchema,
+  autoReplySimulateSchema,
   emptyBodySchema,
 } from "../schemas.js";
+import { simulateAutoReply } from "../agent/auto-reply-simulator.js";
 import { getAppSettings } from "../settings.js";
+import { listContacts } from "../contacts.js";
 import type { RuntimeContext } from "../types.js";
 import { ROUTE_ERROR_CODES } from "./error-codes.js";
 
@@ -483,6 +486,32 @@ export function registerAgentRoutes(app: FastifyInstance, deps: AgentRouteDeps):
     }
   });
 
+  app.post("/api/agent/auto-reply/simulate", async (request, reply) => {
+    if (!agentService) {
+      return reply.code(503).send({ ok: false, code: ROUTE_ERROR_CODES.agent_unavailable, message: "Agent 当前不可用。" });
+    }
+    const parsed = autoReplySimulateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
+    }
+    try {
+      const config = getAppSettings(context.db).autoReply;
+      let contacts: Set<string> | undefined;
+      if (config.scope?.contactsOnly) {
+        try {
+          const loaded = listContacts(context.db, context.masterKey);
+          contacts = new Set(loaded.map((c) => c.email.trim().toLowerCase()).filter(Boolean));
+        } catch {
+          contacts = new Set();
+        }
+      }
+      const result = await simulateAutoReply(agentService, parsed.data, config, contacts);
+      return { ok: true, result };
+    } catch (error) {
+      return agentFailure(reply, error);
+    }
+  });
+
   app.get("/api/agent/pairings", async (_request, reply) => {
     const pairings = (await context.listExternalPairings?.()) ?? [];
     const now = Date.now();
@@ -499,5 +528,16 @@ export function registerAgentRoutes(app: FastifyInstance, deps: AgentRouteDeps):
         };
       }),
     };
+  });
+
+  app.delete<{ Params: { clientId: string } }>("/api/agent/pairings/:clientId", async (request, reply) => {
+    if (!context.revokeExternalPairing) {
+      return reply.code(503).send({ ok: false, code: ROUTE_ERROR_CODES.agent_unavailable, message: "当前环境不支持撤销外部连接配对。" });
+    }
+    const revoked = await context.revokeExternalPairing(request.params.clientId);
+    if (!revoked) {
+      return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "未找到该配对记录。" });
+    }
+    return { ok: true as const };
   });
 }

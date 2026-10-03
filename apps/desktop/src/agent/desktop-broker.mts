@@ -27,6 +27,11 @@ import {
   type DesktopSafeStorage,
 } from "./broker-state.mjs";
 import { AGENT_PROTOCOL_VERSION, agentDesktopError, asAgentDesktopError } from "./contracts.mjs";
+import {
+  isSupportedBrokerTransport,
+  isValidBrokerEndpointPath,
+  type SupportedBrokerTransport,
+} from "./ipc-transport.mjs";
 import { WindowsSidDaclPipeRelay, expectedPipePath, maximumMessageLength } from "./secure-pipe-relay.mjs";
 
 const discoveryVersion = 1;
@@ -48,10 +53,11 @@ export type ExternalAgentToolBridge = {
 
 export type DesktopBrokerDiscovery = {
   schemaVersion: typeof discoveryVersion;
-  transport: "windows-named-pipe";
-  pipeName: string;
+  transport: SupportedBrokerTransport;
+  pipeName?: string;
   path: string;
-  ownerSid: string;
+  ownerSid?: string;
+  ownerUid?: number;
   hostId: string;
   hostPublicKeyPem: string;
   bootId: string;
@@ -136,13 +142,16 @@ function isJsonValue(value: unknown, seen = new WeakSet<object>()): value is Bro
 function validDiscovery(value: unknown): value is DesktopBrokerDiscovery {
   return isPlainObject(value)
     && value.schemaVersion === discoveryVersion
-    && value.transport === "windows-named-pipe"
-    && typeof value.pipeName === "string"
-    && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.pipeName)
+    && isSupportedBrokerTransport(value.transport)
     && typeof value.path === "string"
-    && value.path === expectedPipePath(value.pipeName)
-    && typeof value.ownerSid === "string"
-    && /^S-1-(?:0|1|2|3|5|15|16|18)-(?:\d+-){1,14}\d+$/.test(value.ownerSid)
+    && isValidBrokerEndpointPath(value.path, value.transport)
+    && (value.transport === "windows-named-pipe"
+      ? typeof value.pipeName === "string"
+        && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.pipeName)
+        && value.path === expectedPipePath(value.pipeName)
+        && typeof value.ownerSid === "string"
+        && /^S-1-(?:0|1|2|3|5|15|16|18)-(?:\d+-){1,14}\d+$/.test(value.ownerSid)
+      : (value.ownerUid === undefined || typeof value.ownerUid === "number"))
     && typeof value.hostId === "string"
     && identifierPattern.test(value.hostId)
     && typeof value.hostPublicKeyPem === "string"
@@ -380,7 +389,7 @@ function requestIdentity(value: unknown): { requestId: string; counter: string }
 
 async function requestPipe(pathname: string, request: string, timeoutMs = brokerTimeoutMs): Promise<string> {
   if (
-    !pathname.startsWith("\\\\.\\pipe\\")
+    !isValidBrokerEndpointPath(pathname)
     || request.length > maximumMessageLength
     || !Number.isInteger(timeoutMs)
     || timeoutMs < 100
@@ -813,7 +822,7 @@ export class DesktopAgentBrokerHost {
 
 /** Managed CLI/MCP client that signs a single request over the SID-DACL pipe. */
 export class DesktopAgentBrokerClient {
-  readonly transport = "windows-named-pipe" as const;
+  readonly transport: SupportedBrokerTransport = "windows-named-pipe";
   private readonly profiles: DesktopClientProfileStore;
 
   constructor(private readonly options: DesktopBrokerClientOptions) {

@@ -29,14 +29,13 @@ export function ExternalGuideBlock(props: {
           <small>{props.hint}</small>
         </span>
         <button
-          className="secondary-button"
+          className={`secondary-button settings-copy-btn${copied ? " copied" : ""}`}
           type="button"
-          disabled={copied}
           aria-label={copied ? t("settings.agent.externalGuide.copied") : `${t("settings.agent.externalGuide.copy")} ${props.label}`}
           onClick={() => props.onCopy(props.code, props.id)}
         >
-          {copied ? <Check size={12} /> : <Copy size={12} />}
-          {copied ? t("settings.agent.externalGuide.copied") : t("settings.agent.externalGuide.copy")}
+          {copied ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
+          <span>{copied ? t("settings.agent.externalGuide.copied") : t("settings.agent.externalGuide.copy")}</span>
         </button>
       </div>
       <pre className="external-guide-code"><code>{props.code}</code></pre>
@@ -49,6 +48,7 @@ export function Switch({
   disabled = false,
   label,
   description,
+  tooltip,
   privacyNote,
   onChange,
 }: {
@@ -57,6 +57,8 @@ export function Switch({
   label: string;
   /** Optional: omit when the label is self-explanatory. */
   description?: string;
+  /** Optional hover tooltip for extra context without static clutter. */
+  tooltip?: string;
   /** Optional data-flow statement (e.g. what leaves the device when enabled). */
   privacyNote?: string;
   onChange: () => void;
@@ -64,7 +66,20 @@ export function Switch({
   return (
     <div className="setting-row setting-switch-row">
       <div>
-        <strong>{label}</strong>
+        <strong className="setting-switch-label">
+          {label}
+          {tooltip && (
+            <span
+              className="field-help-icon"
+              data-tooltip={tooltip}
+              aria-label={tooltip}
+              tabIndex={0}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <CircleHelp size={12} aria-hidden="true" />
+            </span>
+          )}
+        </strong>
         {description && <span>{description}</span>}
         {privacyNote && <PrivacyNote note={privacyNote} />}
       </div>

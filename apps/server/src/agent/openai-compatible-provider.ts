@@ -14,6 +14,7 @@ import {
   type ProviderTokenUsage,
   type ToolCall,
 } from "@nami/agent-contracts";
+import { hasUnsafeToolArguments, unsafeToolArgumentsError } from "./provider-common.js";
 import { isLoopbackHostname } from "../endpoint-guard.js";
 import { detectVendorAdapter, type VendorAdapter } from "./vendor-adapters.js";
 
@@ -565,6 +566,11 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
   }
 
   async *streamChat(request: ProviderChatRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): AsyncIterable<ProviderStreamEvent> {
+    if (hasUnsafeToolArguments(request.messages)) {
+      yield { type: "error", error: unsafeToolArgumentsError() };
+      yield { type: "completed", finishReason: "content-filter" };
+      return;
+    }
     const calls = new Map<number, PendingToolCall>();
     let sawCompleted = false;
     let sawDone = false;

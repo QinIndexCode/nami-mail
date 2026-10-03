@@ -319,7 +319,111 @@ describe("Agent service auxiliary provider calls ride the runtime seam", () => {
     masterKey.fill(0);
     db.close();
   });
+
+  it("decouples decision and draft models: short-circuits when decision is low", async () => {
+    const { db, masterKey, service, provider } = fixture();
+    const draftProvider = service.createProvider({
+      label: "Draft Model",
+      kind: "openai-compatible",
+      endpoint: "https://api.example.test/v1",
+      model: "heavy-draft-model",
+      apiKey: PROVIDER_SECRET_CANARY,
+      timeoutMs: 30_000,
+      allowCloudMailContent: true,
+      makeDefault: false,
+    });
+    const internals = internalRuntime(service);
+    const requests: RuntimeChatRequest[] = [];
+    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request) {
+      requests.push(request);
+      yield { type: "text_delta", delta: '{"replyValue":"low","sensitive":false}' };
+      yield { type: "completed", reason: "stop" };
+    });
+
+    const result = await service.evaluateAutoReply({
+      accountEmail: "owner@example.test",
+      fromName: "Marketing Bot",
+      fromAddress: "news@example.test",
+      subject: "Weekly Newsletter",
+      snippet: "Check out our latest sales",
+      textBody: "Check out our latest sales",
+      sensitiveKeywords: [],
+      memoryContext: "",
+      decisionProviderId: provider.id,
+      draftProviderId: draftProvider.id,
+    });
+
+    expect(result).toEqual({ replyValue: "low", sensitive: false });
+    // Decision model called once, draft model was short-circuited and NEVER called!
+    expect(streamChat).toHaveBeenCalledTimes(1);
+    expect(requests[0]?.chat.providerId).toBe(provider.id);
+    expect(requests[0]?.chat.messages[0]).toMatchObject({
+      role: "system",
+      content: expect.stringContaining("自动回复 Agent 的邮件审阅决策者"),
+    });
+
+    await service.close();
+    masterKey.fill(0);
+    db.close();
+  });
+
+  it("decouples decision and draft models: calls draft model when decision is high", async () => {
+    const { db, masterKey, service, provider } = fixture();
+    const draftProvider = service.createProvider({
+      label: "Draft Model",
+      kind: "openai-compatible",
+      endpoint: "https://api.example.test/v1",
+      model: "heavy-draft-model",
+      apiKey: PROVIDER_SECRET_CANARY,
+      timeoutMs: 30_000,
+      allowCloudMailContent: true,
+      makeDefault: false,
+    });
+    const internals = internalRuntime(service);
+    const requests: RuntimeChatRequest[] = [];
+    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request) {
+      requests.push(request);
+      if (request.chat.providerId === provider.id) {
+        // System 1 Decision Model output
+        yield { type: "text_delta", delta: '{"replyValue":"high","sensitive":false}' };
+      } else {
+        // System 2 Draft Model output
+        yield { type: "text_delta", delta: "Hello! We are working on this and will follow up soon." };
+      }
+      yield { type: "completed", reason: "stop" };
+    });
+
+    const result = await service.evaluateAutoReply({
+      accountEmail: "owner@example.test",
+      fromName: "Client",
+      fromAddress: "client@example.test",
+      subject: "Urgent issue",
+      snippet: "Can you help with the deployment?",
+      textBody: "Can you help with the deployment?",
+      sensitiveKeywords: [],
+      memoryContext: "",
+      decisionProviderId: provider.id,
+      draftProviderId: draftProvider.id,
+    });
+
+    expect(result).toEqual({
+      replyValue: "high",
+      sensitive: false,
+      replyText: "Hello! We are working on this and will follow up soon.",
+    });
+    // Both decision model and draft model called in sequence
+    expect(streamChat).toHaveBeenCalledTimes(2);
+    expect(requests[0]?.chat.providerId).toBe(provider.id);
+    expect(requests[0]?.chat.messages[0]?.content).toContain("邮件审阅决策者");
+    expect(requests[1]?.chat.providerId).toBe(draftProvider.id);
+    expect(requests[1]?.chat.messages[0]?.content).toContain("请为这封来信起草");
+
+    await service.close();
+    masterKey.fill(0);
+    db.close();
+  });
 });
+
 
 /**
  * Translation is the third host-initiated provider chat, and the only one whose

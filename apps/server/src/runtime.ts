@@ -84,6 +84,7 @@ export type RunningServer = {
   listExternalPairingAccountIds: () => string[];
   /** Non-secret pairing summaries made available to the renderer settings panel. */
   listExternalPairings: () => readonly ExternalPairingSummary[] | Promise<readonly ExternalPairingSummary[]>;
+  revokeExternalPairing: (clientId: string) => Promise<boolean> | boolean;
   getSettings: () => AppSettings;
   updateSettings: (patch: AppSettingsPatch) => AppSettings;
   close: () => Promise<void>;
@@ -126,6 +127,7 @@ export type ServerRuntimeOptions = {
    * empty list.
    */
   listExternalPairings?: () => readonly ExternalPairingSummary[] | Promise<readonly ExternalPairingSummary[]>;
+  revokeExternalPairing?: (clientId: string) => Promise<boolean> | boolean;
   /**
    * Desktop-only loopback capability, passed explicitly instead of through
    * process.env so spawned child processes can never inherit it. Browser
@@ -582,6 +584,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
         else void idleWatcher?.close();
       },
       ...(options.listExternalPairings ? { listExternalPairings: options.listExternalPairings } : {}),
+      ...(options.revokeExternalPairing ? { revokeExternalPairing: options.revokeExternalPairing } : {}),
     };
     const fastify = await buildApp(runtimeContext, {
       localApiAccessToken: options.localApiAccessToken?.trim() || config.localApiAccessToken || undefined,
@@ -656,6 +659,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       invokeExternalAgentTool: (input: ExternalAgentToolInvocation) => agentService!.invokeExternalTool(input),
       listExternalPairingAccountIds: () => agentService!.listExternalPairingAccountIds(),
       listExternalPairings: () => options.listExternalPairings?.() ?? [],
+      revokeExternalPairing: (clientId: string) => options.revokeExternalPairing?.(clientId) ?? false,
       getSettings: () => getAppSettings(database),
       updateSettings: (patch) => updateAppSettings(database, patch),
       ...(options.desktopConfirmation ? {

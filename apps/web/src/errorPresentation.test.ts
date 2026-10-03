@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
-import { accountHealthIssue, mailErrorToastMessage, presentMailError } from "./errorPresentation";
+import { accountHealthIssue, mailErrorMessage, mailErrorToastMessage, presentMailError } from "./errorPresentation";
 import { translate, type Translate } from "./i18n";
+import { providerCopyKeys } from "./providerCopy";
 
 const zh: Translate = (key, values) => translate("zh-CN", key, values);
 const en: Translate = (key, values) => translate("en-US", key, values);
+
+const AUTH_CODES = [
+  ["imap_auth_failed", "imapAuthFailed"],
+  ["smtp_auth_failed", "smtpAuthFailed"],
+  ["invalid_credential", "invalidCredential"],
+] as const;
+
+const credentialHint = (locale: Translate, providerId: string): string => locale(providerCopyKeys[providerId]!.credentialHint!);
 
 describe("presentMailError", () => {
   it("keeps TLS failures separate from network reachability", () => {
@@ -150,5 +159,90 @@ describe("presentMailError", () => {
     expect(
       accountHealthIssue({ status: "connected", lastError: null, lastErrorCode: null, lastSyncWarningCode: null }),
     ).toBeNull();
+  });
+});
+
+describe("provider credential hint in authentication guidance", () => {
+  it("appends the account provider's own hint in Chinese", () => {
+    const issue = presentMailError(new ApiError("凭据被拒绝", "imap_auth_failed", 422), zh, { providerId: "qq" });
+
+    expect(issue.kind).toBe("authentication");
+    expect(issue.guidance).toBe(`${zh("error.imapAuthFailed.guidance")} ${credentialHint(zh, "qq")}`);
+    expect(issue.message).toBe(zh("error.imapAuthFailed.message"));
+  });
+
+  it("appends the localized hint for an English account instead of server prose", () => {
+    const issue = presentMailError(new ApiError("凭据被拒绝", "invalid_credential", 422), en, { providerId: "gmail" });
+
+    expect(issue.guidance).toBe(`${en("error.invalidCredential.guidance")} ${credentialHint(en, "gmail")}`);
+    expect(issue.guidance).toContain("16-character app password");
+  });
+
+  it.each([
+    ["a provider id with no preset copy", "acme-mail"],
+    ["an empty provider id", ""],
+    ["a custom mailbox", "custom"],
+  ])("falls back to the plain guidance for %s", (_label, providerId) => {
+    const issue = presentMailError(new ApiError("凭据被拒绝", "smtp_auth_failed", 422), zh, { providerId });
+
+    expect(issue.guidance).toBe(zh("error.smtpAuthFailed.guidance"));
+  });
+
+  it("leaves the guidance untouched when the caller passes no provider", () => {
+    const issue = presentMailError(new ApiError("凭据被拒绝", "invalid_credential", 422), zh);
+
+    expect(issue.guidance).toBe(zh("error.invalidCredential.guidance"));
+    expect(issue.guidance).toBe(presentMailError(new ApiError("凭据被拒绝", "invalid_credential", 422), zh, {}).guidance);
+  });
+
+  it("keeps the provider hint out of issues that are not credential problems", () => {
+    const issue = presentMailError(new ApiError("连接邮箱服务器超时", "timeout", 504), zh, { providerId: "qq" });
+
+    expect(issue.kind).toBe("connection");
+    expect(issue.guidance).toBe(zh("error.timeout.guidance"));
+  });
+
+  it("covers every preset with an English hint and no Chinese leakage", () => {
+    for (const [code, copyKey] of AUTH_CODES) {
+      for (const providerId of Object.keys(providerCopyKeys)) {
+        const issue = presentMailError(new ApiError("rejected", code, 422), en, { providerId });
+        expect(`${issue.title} ${issue.message} ${issue.guidance}`, `${providerId}/${code}`).not.toMatch(/[\u4E00-\u9FFF]/);
+        if (providerId === "custom") {
+          expect(issue.guidance, `${providerId}/${code}`).toBe(en(`error.${copyKey}.guidance`));
+          continue;
+        }
+        expect(issue.guidance, `${providerId}/${code}`).toContain(credentialHint(en, providerId));
+      }
+    }
+  });
+
+  it("merges the hint into the full message a form shows", () => {
+    const message = mailErrorMessage(new ApiError("凭据被拒绝", "smtp_auth_failed", 422), undefined, zh, { providerId: "netease-163" });
+
+    expect(message).toBe(zh("error.fullKnown", {
+      title: zh("error.smtpAuthFailed.title"),
+      message: zh("error.smtpAuthFailed.message"),
+      guidance: `${zh("error.smtpAuthFailed.guidance")} ${credentialHint(zh, "netease-163")}`,
+    }));
+    expect(message).toContain(credentialHint(zh, "netease-163"));
+  });
+
+  it("keeps the transient toast unchanged by the provider", () => {
+    const error = new ApiError("凭据被拒绝", "invalid_credential", 422);
+
+    expect(mailErrorToastMessage(error, undefined, zh, { providerId: "qq" }))
+      .toBe(zh("error.toastCheckSettings", { title: zh("error.invalidCredential.title") }));
+  });
+
+  it("sharpens the account health banner of a failing QQ mailbox", () => {
+    const issue = accountHealthIssue({
+      status: "error",
+      lastErrorCode: "imap_auth_failed",
+      lastError: "收件服务器拒绝了登录凭据。",
+      provider: "qq",
+    });
+
+    expect(issue?.kind).toBe("authentication");
+    expect(issue?.guidance).toBe(`${zh("error.imapAuthFailed.guidance")} ${credentialHint(zh, "qq")}`);
   });
 });

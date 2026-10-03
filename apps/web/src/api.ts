@@ -26,6 +26,8 @@ import type {
   AgentProviderSummary,
   AgentStreamEvent,
   AutoReplyPendingSummary,
+  AutoReplySimulateInput,
+  AutoReplySimulateResult,
   ExternalPairingSummary,
 } from "./agentTypes";
 import type { Account, AccountDiscoveryResult, AppSettings, AppSettingsPatch, AutoReplyDecisionRecord, CalendarEvent, CalendarEventInput, CalendarEventUpdate, Contact, ContactInput, ContactUpdate, FilterRule, FilterRuleInput, FilterRuleUpdate, MailTemplate, MailTemplateInput, MailTemplateUpdate, ManualAccountConfig, Message, MessageDetail, OAuthAttempt, OAuthAttemptStatus, OAuthProvider, OutboundAttachment, OutboundSubmission, ProviderInfo, Stats } from "./types";
@@ -427,6 +429,11 @@ export const api = {
     return request<{ items: AutoReplyDecisionRecord[] }>(`/api/agent/auto-reply/decisions${query ? `?${query}` : ""}`);
   },
   autoReplyDecisionDelete: (id: string) => request<{ ok: true }>(`/api/agent/auto-reply/decisions/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  autoReplySimulate: (input: AutoReplySimulateInput) =>
+    request<{ ok: true; result: AutoReplySimulateResult }>("/api/agent/auto-reply/simulate", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   // List rows carry no body (a bounded text preview, no HTML part); the
   // reader, quoting, translation and drafts ask for the message itself.
   messages: (query = "") => request<MessagePage>(`/api/messages${query ? `?${query}` : ""}`),
@@ -718,6 +725,7 @@ export const api = {
     request<{ ok: true }>(`/api/agent/mcp-servers/${encodeURIComponent(id)}`, { method: "DELETE" }),
   agentBootstrap: () => request<AgentBootstrap>("/api/agent/bootstrap"),
   agentPairings: () => request<{ pairings: ExternalPairingSummary[] }>("/api/agent/pairings"),
+  deleteAgentPairing: (clientId: string) => request<{ ok: true }>(`/api/agent/pairings/${encodeURIComponent(clientId)}`, { method: "DELETE" }),
   agentConversations: (query = "") => request<{ items: AgentConversationSummary[] }>(`/api/agent/conversations${query ? `?${query}` : ""}`),
   agentConversation: (id: string) => request<AgentConversation>(`/api/agent/conversations/${encodeURIComponent(id)}`),
   createAgentConversation: (input: { title?: string; providerId?: string; scope?: AgentConversationScope }) =>

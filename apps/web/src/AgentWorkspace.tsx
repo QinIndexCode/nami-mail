@@ -1,6 +1,7 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   Bot,
+  Brain,
   CalendarDays,
   Check,
   CircleAlert,
@@ -56,7 +57,7 @@ import type { Account, AgentAccessLevel, Message } from "./types";
 import { useI18n } from "./i18n";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
-import { AgentProviderSettings, type AgentSettingsPane, configuredProviderId } from "./agent/AgentProviderSettings";
+import { configuredProviderId } from "./agent/agent-utils";
 import { AgentMessageRow } from "./agent/AgentMessageRow";
 
 import { AgentConfirmationCard } from "./agent/AgentConfirmationCard";
@@ -108,8 +109,15 @@ type AgentWorkspaceProps = {
   onOpenMessage: (messageId: string) => void;
   restoreFocusRef?: RefObject<HTMLElement | null>;
   demoMode?: boolean;
-  providerSettingsRequestId?: number;
   preloadedBootstrap?: AgentBootstrap;
+  /** True while an App overlay (the settings modal) covers the workspace, so the
+   *  workspace's focus trap stands down and the overlay's Escape routing wins. */
+  overlayOpen?: boolean;
+  /** Bumped by App when the settings models panel edited the provider list. */
+  providerListVersion?: number;
+  /** Opens the settings models category WITHOUT closing the workspace (a live
+   *  run keeps streaming behind the modal). */
+  onOpenModelSettings?: () => void;
   /** Agent permission level, persisted in app settings. */
   agentAccessLevel?: AgentAccessLevel;
   /** Persists a newly selected Agent permission level. */
@@ -128,7 +136,7 @@ type AgentWorkspaceProps = {
  * native buttons, so Enter/Space activate them without extra wiring.
  */
 
-export default function AgentWorkspace({ accounts, currentMessage, onClose, onOpenMessage, restoreFocusRef, demoMode = false, providerSettingsRequestId = 0, preloadedBootstrap, agentAccessLevel = "send-confirmed", onAgentAccessLevelChange, onMailStateChanged }: AgentWorkspaceProps) {
+export default function AgentWorkspace({ accounts, currentMessage, onClose, onOpenMessage, restoreFocusRef, demoMode = false, overlayOpen = false, providerListVersion = 0, onOpenModelSettings, preloadedBootstrap, agentAccessLevel = "send-confirmed", onAgentAccessLevelChange, onMailStateChanged }: AgentWorkspaceProps) {
   const { locale, t } = useI18n();
   const [bootstrap, setBootstrap] = useState<AgentBootstrap | null>(null);
   const [conversations, setConversations] = useState<AgentBootstrap["conversations"]>([]);
@@ -170,6 +178,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const mentionCursorRef = useRef<string | null>(null);
   /** Memory summaries the agent suggested saving; each needs a save or dismiss. */
   const [pendingMemorySuggestions, setPendingMemorySuggestions] = useState<string[]>([]);
+  const [leavingMemorySummaries, setLeavingMemorySummaries] = useState<Set<string>>(() => new Set());
   const [mode, setMode] = useState<AgentMode>("agent");
   const [providerId, setProviderId] = useState("");
   // The header scope picker's selection: the account the agent searches (a
@@ -255,9 +264,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   }, [conversationProviders]);
   const [renaming, setRenaming] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
-  // The provider and MCP settings share one dialog; switching panes swaps the
-  // body in place so the dialog never unmounts (no open/close flicker).
-  const [agentSettingsPane, setAgentSettingsPane] = useState<AgentSettingsPane | null>(null);
   const [mobileConversationsOpen, setMobileConversationsOpen] = useState(false);
   const [confirmationErrors, setConfirmationErrors] = useState<Record<string, string>>({});
   /** Confirmations whose card is playing its leave animation — the decision
@@ -306,7 +312,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const stickToBottomRef = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const providerSettingsTriggerRef = useRef<HTMLButtonElement>(null);
   const workspaceRef = useRef<HTMLElement>(null);
   const accessConfirmRef = useRef<HTMLElement>(null);
   const deleteConfirmRef = useRef<HTMLElement>(null);
@@ -344,7 +349,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
 
   useDialogFocus(true, workspaceRef, {
     restoreFocusRef,
-    suspended: agentSettingsPane !== null || Boolean(pendingAccessLevel) || Boolean(deleteConfirm),
+    suspended: overlayOpen || Boolean(pendingAccessLevel) || Boolean(deleteConfirm),
   });
   useDialogFocus(Boolean(pendingAccessLevel), accessConfirmRef, { restoreFocusRef: workspaceRef });
   useDialogFocus(Boolean(deleteConfirm), deleteConfirmRef, { restoreFocusRef: workspaceRef });
@@ -459,7 +464,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     backgroundRunIds,
     syncBackgroundRuns,
     getSession,
-    clearPendingFlush,
+    drainPendingFlush,
     takeBackgroundError,
     clearLiveRunIndicators,
     restoreLiveRunIndicators,
@@ -490,6 +495,43 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     if (session) session.suggestions = session.suggestions.filter((item) => item !== summary);
   }, [getSession]);
 
+  const dismissMemorySuggestion = useCallback((summary: string) => {
+    setLeavingMemorySummaries((prev) => new Set(prev).add(summary));
+    window.setTimeout(() => {
+      consumeAgentSuggestion(summary);
+      setPendingMemorySuggestions((suggestions) => suggestions.filter((item) => item !== summary));
+      setLeavingMemorySummaries((prev) => {
+        const next = new Set(prev);
+        next.delete(summary);
+        return next;
+      });
+    }, 180);
+  }, [consumeAgentSuggestion]);
+
+  const saveMemorySuggestion = useCallback((summary: string) => {
+    setLeavingMemorySummaries((prev) => new Set(prev).add(summary));
+    void api.agentMemoryCreate({ summary })
+      .then(() => {
+        window.setTimeout(() => {
+          consumeAgentSuggestion(summary);
+          setPendingMemorySuggestions((suggestions) => suggestions.filter((item) => item !== summary));
+          setLeavingMemorySummaries((prev) => {
+            const next = new Set(prev);
+            next.delete(summary);
+            return next;
+          });
+        }, 180);
+      })
+      .catch((error) => {
+        setLeavingMemorySummaries((prev) => {
+          const next = new Set(prev);
+          next.delete(summary);
+          return next;
+        });
+        setLoadError(error instanceof Error ? error.message : t("agent.error.saveMemory"));
+      });
+  }, [consumeAgentSuggestion, t]);
+
   const applyProviderList = useCallback((snapshot: AgentProviderList) => {
     setBootstrap((current) => current ? {
       ...current,
@@ -497,7 +539,11 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       defaultProviderId: snapshot.defaultProviderId,
       configured: snapshot.items.some((provider) => provider.configured),
     } : current);
-    setProviderId(configuredProviderId(snapshot.items, snapshot.defaultProviderId));
+    // An explicit choice survives a settings-side edit as long as that provider
+    // is still configured; only a deleted or half-configured one falls back.
+    setProviderId((current) => (snapshot.items.some((provider) => provider.id === current && provider.configured)
+      ? current
+      : configuredProviderId(snapshot.items, snapshot.defaultProviderId)));
   }, []);
 
   const loadBootstrap = useCallback(async () => {
@@ -632,17 +678,22 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [permissionOpen, modelPickerOpen, scopePickerOpen]);
+  // The models panel edited the provider list: refetch so the picker stays honest.
   useEffect(() => {
-    if (demoMode || providerSettingsRequestId === 0) return;
-    setAgentSettingsPane("providers");
-  }, [demoMode, providerSettingsRequestId]);
+    if (demoMode || providerListVersion === 0) return;
+    let active = true;
+    void api.agentProviders().then((snapshot) => { if (active) applyProviderList(snapshot); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [applyProviderList, demoMode, providerListVersion]);
   // Auto-scroll the transcript as the assistant streams new tokens. We track a
   // "stick to bottom" ref: while true, every content change scrolls to the
   // bottom instantly (instant scroll is smoother than smooth-scroll for fast
   // token streams). When the user scrolls up manually, we stop following; when
   // they scroll back to the bottom (or click the scroll-to-bottom button), we
   // resume. Using a ref avoids re-renders on every scroll tick.
-  useEffect(() => {
+  // Layout, not passive: this must land before paint, or every token frame
+  // paints at the previous offset and the transcript crawls a frame behind.
+  useLayoutEffect(() => {
     if (!stickToBottomRef.current) return;
     const el = transcriptRef.current;
     if (!el) return;
@@ -671,9 +722,8 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     stickToBottomRef.current = true;
     messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
   }, []);
-  // Scrubber: re-measure user-message anchors whenever the set of user
-  // messages changes (streamed assistant tokens never move earlier messages,
-  // so measuring on message-identity changes keeps this cheap).
+  // Scrubber: re-measure user-message anchors whenever the set of user messages
+  // changes — keyed on the joined id list, or every token frame pays a layout.
   const userMessages = useMemo(
     () => active?.messages.filter((message) => message.role === "user" && !message.revoked) ?? [],
     [active?.messages],
@@ -689,8 +739,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     return -1;
   }, [active?.messages]);
   // Memoised: streaming replaces the transcript on every token, and rebuilding
-  // this list (then splitting the joined key back apart) on each of those
-  // renders was pure churn — the ids only change when the user rows do.
+  // this list per render was pure churn — it only changes with the user rows.
   const userMessageIds = useMemo(() => userMessages.map((message) => message.id), [userMessages]);
   // Stable placeholder row for a run picked up after the panel reopened. The
   // transcript re-renders on every streamed token, and a fresh object literal
@@ -708,7 +757,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     : undefined), [active?.id]);
   const userMessageIdsKey = useMemo(() => userMessageIds.join("|"), [userMessageIds]);
   useEffect(() => {
-    const ids = userMessageIds;
+    const ids = userMessageIdsKey ? userMessageIdsKey.split("|") : [];
     const el = transcriptRef.current;
     if (!el || ids.length === 0) {
       setUserMarkerPositions([]);
@@ -722,7 +771,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       // so bars stay aligned regardless of where the transcript is scrolled.
       return node.getBoundingClientRect().top - containerRect.top + el.scrollTop;
     }));
-  }, [userMessageIds]);
+  }, [userMessageIdsKey]);
   // Initialise the scrubber viewport whenever the bar group changes or the
   // track resizes: centre the group when it fits, bottom-anchor it (newest
   // visible) once it overflows. Kept in sync with the ref the handlers read.
@@ -1073,9 +1122,8 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     // is replayed when they come back. The spinner/stop affordance belongs to
     // whatever is on screen, so it must follow the newly selected conversation.
     clearLiveRunIndicators();
-    // Pending frame-batched deltas belong to the outgoing transcript; drop them
-    // so they can never land on a different conversation.
-    clearPendingFlush();
+    // Drain queued deltas onto the outgoing transcript (never drop); no await may sit between this and the flip below.
+    drainPendingFlush();
     // Memory suggestions belong to the reply that produced them; switching
     // conversations discards whatever is undecided (a background session's
     // suggestions are replayed on re-entry).
@@ -1163,16 +1211,17 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       restoreLiveRunIndicators(id);
       setLoadError(error instanceof Error ? error.message : t("agent.error.loadConversation"));
     }
-  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, clearLiveRunIndicators, clearPendingFlush, conversationProviders, conversations, currentMessage, getSession, providers, replayBackgroundSession, restoreLiveRunIndicators, syncBackgroundRuns, t, takeBackgroundError]);
+  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, clearLiveRunIndicators, conversationProviders, conversations, currentMessage, drainPendingFlush, getSession, providers, replayBackgroundSession, restoreLiveRunIndicators, syncBackgroundRuns, t, takeBackgroundError]);
 
   const createConversation = useCallback(async () => {
     // Starting a new conversation does not cancel the current one — a live run
     // keeps streaming into its session buffer and resumes if the user returns.
     clearLiveRunIndicators();
-    clearPendingFlush();
+    // Drain (not drop) queued deltas; no await may sit between this and the flip below.
+    drainPendingFlush();
     setPendingMemorySuggestions([]);
     if (!selectedProvider) {
-      setAgentSettingsPane("providers");
+      onOpenModelSettings?.();
       // The early return abandons the switch; restore the live indicators the
       // cleared status above so a still-running reply keeps its affordances.
       restoreLiveRunIndicators(active?.id ?? "");
@@ -1200,7 +1249,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     setRenaming(false);
     setLoadError(null);
     window.requestAnimationFrame(() => composerRef.current?.focus());
-  }, [active?.id, clearLiveRunIndicators, clearPendingFlush, restoreLiveRunIndicators, selectedProvider, syncBackgroundRuns]);
+  }, [active?.id, clearLiveRunIndicators, drainPendingFlush, onOpenModelSettings, restoreLiveRunIndicators, selectedProvider, syncBackgroundRuns]);
 
   const renameConversation = useCallback(async () => {
     if (!active || !draftTitle.trim()) return;
@@ -1337,7 +1386,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     const userText = (contentOverride ?? composer).trim();
     if (!userText) return;
     if (!selectedProvider || !selectedProvider.configured) {
-      setAgentSettingsPane("providers");
+      onOpenModelSettings?.();
       return;
     }
     // The keyboard path reaches this directly, so the send button's availability
@@ -1446,18 +1495,18 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       providerId: selectedProvider.id,
       mode,
       scope,
-      // Let the server persist this turn under the optimistic row's id: a
-      // revoke issued seconds later (the recall-and-resend flow) then addresses
-      // a row the server actually knows, instead of 404-ing on a client-only
-      // id and rolling the optimistic revoke back (the "revoked messages
-      // came back" bug).
+      // Let the server persist both optimistic rows' ids: a revoke issued
+      // seconds later (the recall-and-resend flow) then addresses rows the
+      // server knows instead of 404-ing on client-only ids, and the reply
+      // streams under the assistant row's id so deltas fold into that row.
       clientMessageId: userMessage.id,
+      clientAssistantMessageId: assistantMessage.id,
       ...(truncatedQuote ? { quote: truncatedQuote } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(mailReferences.length > 0 ? { references: mailReferences.map((reference) => ({ id: reference.id, subject: reference.subject })) } : {}),
     };
     await runStream({ conversation, assistantMessage, streamPayload });
-  }, [active, attachedFiles, bootstrap?.enabled, composer, demoMode, loadingConversationId, mailReferences, mode, prepareInterruptToSend, quoteContext, runStream, scope, selectedProvider, t]);
+  }, [active, attachedFiles, bootstrap?.enabled, composer, demoMode, loadingConversationId, mailReferences, mode, onOpenModelSettings, prepareInterruptToSend, quoteContext, runStream, scope, selectedProvider, t]);
 
   // Slash command menu: while the composer holds a bare "/token" the matching
   // commands are offered. Parameterless commands send immediately; commands
@@ -1641,13 +1690,13 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     || loadingConversationId === active?.id;
 
   const latestCitations = useMemo(() => {
-    if (!active) return [];
-    for (let i = active.messages.length - 1; i >= 0; i--) {
-      const msg = active.messages[i]!;
+    const messages = active?.messages ?? [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i]!;
       if (msg.role === "assistant" && msg.citations.length > 0) return dedupeCitations(msg.citations);
     }
     return [];
-  }, [active]);
+  }, [active?.messages]);
 
   const desktopConfirmationAvailable = Boolean(desktopBridge()?.onAgentConfirmationResult);
   // The active confirmation (one at a time) floats above the composer, opencode
@@ -1657,7 +1706,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       if (message.confirmation?.state === "pending") return message.confirmation;
     }
     return undefined;
-  }, [active]);
+  }, [active?.messages]);
   // The confirmation card owns a local ticking countdown, so a waiting
   // confirmation no longer re-renders the whole transcript every second.
   const confirmationDeadline = pendingConfirmation ? Date.parse(pendingConfirmation.expiresAt) : 0;
@@ -1889,8 +1938,8 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
               )}
             </div>
             <button className="agent-mobile-conversations-button" type="button" aria-label={mobileConversationsOpen ? t("agent.conversation.closeList") : t("agent.conversation.openList")} aria-expanded={mobileConversationsOpen} data-tooltip={mobileConversationsOpen ? t("agent.conversation.closeList") : t("agent.conversation.openList")} onClick={() => setMobileConversationsOpen((open) => !open)}><PanelLeftClose size={17} /></button>
-            {!hasConfiguredProvider ? <button ref={providerSettingsTriggerRef} className="agent-configure-provider-action" type="button" onClick={() => setAgentSettingsPane("providers")}><Wrench size={15} />{t("agent.providers.configure")}</button> : null}
-            {hasConfiguredProvider && <button ref={providerSettingsTriggerRef} className="icon-button" type="button" onClick={() => setAgentSettingsPane("providers")} aria-label={t("agent.provider.settings")} data-tooltip={t("agent.provider.settings")} data-tooltip-placement="bottom"><Wrench size={17} /></button>}
+            {!hasConfiguredProvider ? <button className="agent-configure-provider-action" type="button" onClick={() => onOpenModelSettings?.()}><Wrench size={15} />{t("agent.providers.configure")}</button> : null}
+            {hasConfiguredProvider && <button className="icon-button" type="button" onClick={() => onOpenModelSettings?.()} aria-label={t("agent.provider.settings")} data-tooltip={t("agent.provider.settings")} data-tooltip-placement="bottom"><Wrench size={17} /></button>}
             <button className="icon-button" type="button" onClick={onClose} aria-label={t("agent.workspace.close")} data-tooltip={t("agent.workspace.close")} data-tooltip-placement="bottom"><ArrowLeft size={20} strokeWidth={2.4} /></button>
           </div>
         </header>
@@ -1932,7 +1981,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
               </article>
             </div>
           )}
-          {!loading && !active && <div className="agent-empty-state"><span className="agent-wordmark" aria-hidden="true">{"NamiMailAgent".split("").map((char, index) => <span key={index} style={{ animationDelay: `${index * 0.05}s` }}>{char}</span>)}</span>{hasConfiguredProvider ? <div className="agent-suggestion-cards"><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.today"))}><CalendarDays size={17} /><span>{t("agent.suggestion.today")}</span></button><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.actionItems"))}><ClipboardList size={17} /><span>{t("agent.suggestion.actionItems")}</span></button><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.reply"))}><Reply size={17} /><span>{t("agent.suggestion.reply")}</span></button></div> : <button className="agent-configure-provider-button" type="button" onClick={() => setAgentSettingsPane("providers")}><Wrench size={16} />{t("agent.providers.configure")}</button>}</div>}
+          {!loading && !active && <div className="agent-empty-state"><span className="agent-wordmark" aria-hidden="true">{"NamiMailAgent".split("").map((char, index) => <span key={index} style={{ animationDelay: `${index * 0.05}s` }}>{char}</span>)}</span>{hasConfiguredProvider ? <div className="agent-suggestion-cards"><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.today"))}><CalendarDays size={17} /><span>{t("agent.suggestion.today")}</span></button><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.actionItems"))}><ClipboardList size={17} /><span>{t("agent.suggestion.actionItems")}</span></button><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.reply"))}><Reply size={17} /><span>{t("agent.suggestion.reply")}</span></button></div> : <button className="agent-configure-provider-button" type="button" onClick={() => onOpenModelSettings?.()}><Wrench size={16} />{t("agent.providers.configure")}</button>}</div>}
           {active?.messages.map((message, index) => (
             <AgentMessageRow
               key={message.id}
@@ -2213,26 +2262,32 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             {pendingMemorySuggestions.length > 0 && (
               <div className="agent-memory-suggestions" role="status">
                 {pendingMemorySuggestions.map((summary) => (
-                  <div className="agent-memory-suggestion" key={summary}>
-                    <span className="agent-memory-suggestion-label">{t("agent.memory.suggestion.title")}</span>
-                    <span className="agent-memory-suggestion-text">{summary}</span>
-                    <button
-                      className="agent-memory-suggestion-save"
-                      type="button"
-                      onClick={() => {
-                        void api.agentMemoryCreate({ summary })
-                          .then(() => {
-                            consumeAgentSuggestion(summary);
-                            setPendingMemorySuggestions((suggestions) => suggestions.filter((item) => item !== summary));
-                          })
-                          .catch((error) => {
-                            // Keep the chip so the user can retry; the error
-                            // banner explains what went wrong.
-                            setLoadError(error instanceof Error ? error.message : t("agent.error.saveMemory"));
-                          });
-                      }}
-                    >{t("agent.memory.suggestion.save")}</button>
-                    <button className="agent-memory-suggestion-dismiss" type="button" onClick={() => { consumeAgentSuggestion(summary); setPendingMemorySuggestions((suggestions) => suggestions.filter((item) => item !== summary)); }}>{t("agent.memory.suggestion.dismiss")}</button>
+                  <div className={`agent-memory-suggestion${leavingMemorySummaries.has(summary) ? " leaving" : ""}`} key={summary}>
+                    <div className="agent-memory-suggestion-header">
+                      <Brain size={14} className="agent-memory-suggestion-icon" />
+                      <span className="agent-memory-suggestion-label">{t("agent.memory.suggestion.title")}</span>
+                    </div>
+                    <div className="agent-memory-suggestion-body">
+                      <span className="agent-memory-suggestion-text" title={summary}>{summary}</span>
+                    </div>
+                    <div className="agent-memory-suggestion-actions">
+                      <button
+                        className="agent-memory-suggestion-dismiss"
+                        type="button"
+                        onClick={() => dismissMemorySuggestion(summary)}
+                      >
+                        <X size={12} />
+                        <span>{t("agent.memory.suggestion.dismiss")}</span>
+                      </button>
+                      <button
+                        className="agent-memory-suggestion-save"
+                        type="button"
+                        onClick={() => saveMemorySuggestion(summary)}
+                      >
+                        <Check size={12} />
+                        <span>{t("agent.memory.suggestion.save")}</span>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2341,16 +2396,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
           </div>
         </div>
       )}
-      <AgentProviderSettings
-        open={agentSettingsPane !== null}
-        pane={agentSettingsPane ?? "providers"}
-        onPaneChange={setAgentSettingsPane}
-        initialProviders={providers}
-        initialDefaultProviderId={bootstrap?.defaultProviderId ?? null}
-        onClose={() => setAgentSettingsPane(null)}
-        onProvidersChanged={applyProviderList}
-        restoreFocusRef={providerSettingsTriggerRef}
-      />
       {deleteConfirm && (
         <div
           className={`modal-backdrop confirmation-backdrop${deleteConfirmClosing ? " closing" : ""}`}

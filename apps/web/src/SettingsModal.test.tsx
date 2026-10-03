@@ -1,8 +1,30 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider, translate } from "./i18n";
-import SettingsModal, { expandedThemedSelectOwnsEscape } from "./SettingsModal";
+import SettingsModal from "./SettingsModal";
+import { expandedThemedSelectOwnsEscape } from "./settings/settings-utils";
 import { defaultAppSettings } from "./types";
+
+// The modal renders one category panel at a time and reads the active category
+// from localStorage during render. These suites run in the plain node
+// environment (no DOM), so the window stub keeps the desktop-runtime probe
+// false and lets each describe pin the category whose panel it asserts on.
+const categoryStore = vi.hoisted(() => {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, "window", {
+    value: {
+      location: { search: "" },
+      localStorage: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          store.set(key, value);
+        },
+      },
+    },
+    configurable: true,
+  });
+  return store;
+});
 
 const zh = (key: string) => translate("zh-CN", key);
 
@@ -15,13 +37,16 @@ function renderSettings(demoMode: boolean): string {
         demoMode={demoMode}
         onClose={() => undefined}
         onSettingsChange={() => undefined}
-        onOpenAgentProviderSettings={() => undefined}
       />
     </I18nProvider>,
   );
 }
 
 describe("settings model provider entry", () => {
+  beforeEach(() => {
+    categoryStore.set("nami.settings.category", "agent");
+  });
+
   it("exposes the existing model-provider manager from settings", () => {
     const markup = renderSettings(false);
 
@@ -29,7 +54,7 @@ describe("settings model provider entry", () => {
     expect(markup).toContain(zh("agent.launch"));
     expect(markup).toContain(zh("agent.providers.title"));
     expect(markup).toContain(zh("agent.providers.configure"));
-    expect(markup).toContain('class="setting-row agent-provider-settings-row"');
+    expect(markup).toContain('class="setting-row"');
   });
 
   it("does not offer a nonfunctional model configuration route in demo mode", () => {
@@ -39,17 +64,23 @@ describe("settings model provider entry", () => {
     expect(markup).not.toContain(zh("agent.providers.configure"));
   });
 
-  it("shows the external CLI/MCP access guide with copyable snippets", () => {
+  it("offers a dedicated link card to external connections from the agent panel", () => {
     const markup = renderSettings(false);
 
-    expect(markup).toContain(zh("settings.agent.externalGuide.title"));
+    expect(markup).toContain(zh("settings.connections.agentLink.title"));
+    expect(markup).toContain(zh("settings.connections.agentLink.banner"));
+    expect(markup).toContain(zh("settings.connections.agentLink.action"));
+  });
+
+  it("shows the external connections panel with MCP setup and tools", () => {
+    categoryStore.set("nami.settings.category", "connections");
+    const markup = renderSettings(false);
+
+    expect(markup).toContain(zh("settings.connections.title"));
     expect(markup).toContain("namimail pair");
-    expect(markup).toContain("namimail status");
-    expect(markup).toContain('&quot;command&quot;: &quot;cmd.exe&quot;');
+    expect(markup).toContain("cmd.exe");
     expect(markup).toContain("namimail mcp start");
-    expect(markup).toContain("namimail service start");
-    expect(markup).toContain(zh("settings.agent.externalGuide.copy"));
-    expect(markup).toContain('class="external-guide-code"');
+    expect(markup).toContain("namimail_accounts_list");
   });
 
   it("keeps the desktop-only behavior toggles out of browser mode", () => {
@@ -62,6 +93,10 @@ describe("settings model provider entry", () => {
 });
 
 describe("settings per-folder sync limit picker", () => {
+  beforeEach(() => {
+    categoryStore.set("nami.settings.category", "sync");
+  });
+
   it("renders the sync cap picker in the sync section with the default selected", () => {
     const markup = renderSettings(false);
 
@@ -82,7 +117,6 @@ describe("settings per-folder sync limit picker", () => {
           demoMode={false}
           onClose={() => undefined}
           onSettingsChange={() => undefined}
-          onOpenAgentProviderSettings={() => undefined}
         />
       </I18nProvider>,
     );
@@ -99,7 +133,6 @@ describe("settings per-folder sync limit picker", () => {
           demoMode={false}
           onClose={() => undefined}
           onSettingsChange={() => undefined}
-          onOpenAgentProviderSettings={() => undefined}
         />
       </I18nProvider>,
     );
@@ -117,7 +150,6 @@ describe("settings per-folder sync limit picker", () => {
           demoMode={false}
           onClose={() => undefined}
           onSettingsChange={() => undefined}
-          onOpenAgentProviderSettings={() => undefined}
         />
       </I18nProvider>,
     );

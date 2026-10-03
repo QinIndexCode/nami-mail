@@ -59,6 +59,8 @@ test.describe("Nami Mail demo smoke", () => {
     await page.locator(".icon-rail button[aria-label='设置']").click();
     await expect(page.locator(".settings-modal")).toBeVisible();
 
+    await page.locator("#settings-nav-appearance").click();
+
     const darkOption = page.getByRole("button", { name: "深色 适合低光环境" });
     await darkOption.click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");

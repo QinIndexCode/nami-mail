@@ -9,6 +9,7 @@ import {
   externalReadMailInputJsonSchema,
   externalWriteMailContracts,
   externalWriteMailInputJsonSchema,
+  isSafeJsonValue,
   type AgentError,
   type AgentResponseEnvelope,
   type ExternalReadMailContract,
@@ -19,8 +20,8 @@ import {
 } from "@nami/agent-contracts";
 import { asAgentDesktopError, agentDesktopError } from "./contracts.mjs";
 import type { JsonValue } from "./broker-protocol.mjs";
+import type { SupportedBrokerTransport } from "./ipc-transport.mjs";
 
-const unsafeObjectKeys = new Set(["__proto__", "constructor", "prototype"]);
 const maxStdioLineLength = 1_000_000;
 
 export const mcpReadOnlyToolNames: readonly ExternalReadMailMcpToolName[] = externalReadMailContracts.map((tool) => tool.mcpToolName);
@@ -63,15 +64,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function isSafeJsonValue(value: unknown, visited = new WeakSet<object>()): value is JsonValue {
-  if (value === null || typeof value === "boolean" || typeof value === "string") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (!value || typeof value !== "object") return false;
-  if (visited.has(value)) return false;
-  visited.add(value);
-  if (Array.isArray(value)) return value.every((entry) => isSafeJsonValue(entry, visited));
-  if (!isPlainObject(value)) return false;
-  return Object.entries(value).every(([key, entry]) => !unsafeObjectKeys.has(key) && isSafeJsonValue(entry, visited));
+/**
+ * The shared guard answers a boolean; the envelope builders still need the
+ * narrowing, and re-deriving a second walk here is what used to leave this host
+ * without a depth budget at all.
+ */
+function isJsonValue(value: unknown): value is JsonValue {
+  return isSafeJsonValue(value);
 }
 
 function isSafeJsonObject(value: unknown): value is McpJsonObject {
@@ -126,7 +125,7 @@ export type McpBrokerRequest = {
 };
 
 export interface NamiMailMcpBrokerClient {
-  readonly transport: "windows-named-pipe";
+  readonly transport: SupportedBrokerTransport;
   invoke(request: McpBrokerRequest): Promise<JsonValue>;
 }
 
@@ -198,12 +197,12 @@ export class NamiMailMcpToolAdapter {
     if (!parsedArguments.success || !isSafeJsonObject(parsedArguments.data)) {
       return mcpToolResult(failureEnvelope(requestId, toolError("TOOL_INPUT_INVALID", "The NamiMail MCP tool arguments do not match its published schema."), duration(startedAt, now)));
     }
-    if (this.options.broker.transport !== "windows-named-pipe") {
-      return mcpToolResult(failureEnvelope(requestId, toolError("BROKER_SECURITY_UNAVAILABLE", "NamiMail MCP requires secured Windows named-pipe Agent IPC."), duration(startedAt, now)));
+    if (this.options.broker.transport !== "windows-named-pipe" && this.options.broker.transport !== "unix-domain-socket") {
+      return mcpToolResult(failureEnvelope(requestId, toolError("BROKER_SECURITY_UNAVAILABLE", "NamiMail MCP requires secured local Agent IPC."), duration(startedAt, now)));
     }
     try {
       const data = await this.options.broker.invoke({ command: tool.brokerCommand, arguments: parsedArguments.data, requestId });
-      if (!isSafeJsonValue(data)) {
+      if (!isJsonValue(data)) {
         return mcpToolResult(failureEnvelope(requestId, toolError("TOOL_EXECUTION_FAILED", "The NamiMail Agent host returned an invalid MCP tool result."), duration(startedAt, now)));
       }
       return mcpToolResult(successEnvelope(requestId, data, duration(startedAt, now)));

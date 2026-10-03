@@ -184,6 +184,32 @@ describe("AgentService model request retry", () => {
     await service.close();
   });
 
+  // A refused tool payload is a property of the turn, not of the transport:
+  // resending the identical history cannot make it admissible, so it must not
+  // be amplified into five requests by the retry budget.
+  it("never resends a rejected tool input", async () => {
+    const { service, provider, conversation } = fixture([5, 5, 5, 5, 5]);
+    const internals = internalRuntime(service);
+    vi.spyOn(internals.rag, "search").mockResolvedValue([]);
+    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
+      if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
+      yield modelError("TOOL_INPUT_INVALID", false);
+      yield { type: "completed", reason: "error" };
+    });
+
+    const events = await drain(service, conversation, provider.id);
+
+    expect(streamChat).toHaveBeenCalledTimes(1);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "error",
+      error: expect.objectContaining({ code: "TOOL_INPUT_INVALID", retryable: false }),
+    }));
+    expect(events).toContainEqual({ type: "completed", reason: "error" });
+    expect(events.some((event) => event.type === "status"
+      && typeof event.message === "string" && event.message.includes("网络波动"))).toBe(false);
+    await service.close();
+  });
+
   it("exhausts the retry budget and then surfaces the final error once", async () => {
     const { service, provider, conversation } = fixture([5, 5]);
     const internals = internalRuntime(service);

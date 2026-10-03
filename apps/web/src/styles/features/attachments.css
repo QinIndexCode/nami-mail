@@ -1,0 +1,145 @@
+
+/* ---------------------------------------------------------------------------
+ * Attachment display polish
+ * 1. Kind-colored file tiles (both compose and reader).
+ * 2. Green "done" badge on freshly attached / already downloaded files.
+ * 3. Animated indeterminate transfer bar while uploading / downloading.
+ * ------------------------------------------------------------------------- */
+.attachment-file-icon
+{
+position:relative
+}
+.attachment-file-icon.kind-image
+{
+background:color-mix(in srgb, var(--accent,var(--info)) 12%, var(--panel-muted));
+border-color:color-mix(in srgb, var(--accent,var(--info)) 42%, var(--line));
+color:color-mix(in srgb, var(--accent,var(--info)) 84%, var(--text))
+}
+.attachment-file-icon.kind-spreadsheet
+{
+background:color-mix(in srgb, var(--success) 13%, var(--panel-muted));
+border-color:color-mix(in srgb, var(--success) 42%, var(--line));
+color:color-mix(in srgb, var(--success) 84%, var(--text))
+}
+.attachment-file-icon.kind-pdf
+{
+background:color-mix(in srgb, var(--danger) 10%, var(--panel-muted));
+border-color:color-mix(in srgb, var(--danger) 38%, var(--line));
+color:color-mix(in srgb, var(--danger) 84%, var(--text))
+}
+.attachment-file-icon.kind-archive
+{
+background:color-mix(in srgb, var(--warning) 14%, var(--panel-muted));
+border-color:color-mix(in srgb, var(--warning) 44%, var(--line));
+color:color-mix(in srgb, var(--warning) 88%, var(--text))
+}
+.attachment-file-icon.kind-document,.attachment-file-icon.kind-text,.attachment-file-icon.kind-other
+{
+background:color-mix(in srgb, var(--text-soft) 9%, var(--panel-muted));
+border-color:color-mix(in srgb, var(--text-soft) 26%, var(--line));
+color:var(--text-soft)
+}
+.attachment-file-icon.kind-code
+{
+background:color-mix(in srgb, var(--kind-code) 12%, var(--panel-muted));
+border-color:color-mix(in srgb, var(--kind-code) 42%, var(--line));
+color:color-mix(in srgb, var(--kind-code) 84%, var(--text))
+}
+.attachment-file-icon.kind-media
+{
+background:color-mix(in srgb, var(--kind-media) 11%, var(--panel-muted));
+border-color:color-mix(in srgb, var(--kind-media) 40%, var(--line));
+color:color-mix(in srgb, var(--kind-media) 84%, var(--text))
+}
+.compose-attachment-item.is-success .attachment-file-icon::after,.attachment-card.is-ready .attachment-file-icon::after
+{
+content:"";
+position:absolute;
+right:-4px;
+bottom:-4px;
+width:15px;
+height:15px;
+border-radius:50%;
+background:var(--success) url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center/9px no-repeat;
+box-shadow:0 0 0 2px var(--panel-solid)
+}
+.compose-attachment-item.is-uploading,.attachment-card.is-downloading
+{
+position:relative;
+overflow:hidden
+}
+.compose-attachment-item.is-uploading::before,.attachment-card.is-downloading::before
+{
+content:"";
+position:absolute;
+left:0;
+right:0;
+bottom:0;
+height:3px;
+pointer-events:none;
+background:linear-gradient(90deg, transparent 30%, var(--accent,var(--text-soft)) 50%, transparent 70%);
+background-size:200% 100%;
+animation:nami-transfer-slide 1.15s linear infinite
+}
+@keyframes nami-transfer-slide
+{
+from
+{
+background-position:200% 0
+}
+to
+{
+background-position:-200% 0
+}
+}
+@media (prefers-reduced-motion: reduce)
+{
+.compose-attachment-item.is-uploading::before,.attachment-card.is-downloading::before
+{
+animation:none;
+background:color-mix(in srgb, var(--accent,var(--text-soft)) 42%, transparent)
+}
+}
+
+/* User-turn attachments sit above the bubble, aligned to its right edge;
+   assistant attachments keep the inline-below layout. */
+.agent-message.user
+{
+display:flex;
+flex-direction:column
+}
+.agent-message.user .agent-message-attachments
+{
+order:-1;
+justify-content:flex-end;
+margin-top:0;
+margin-bottom:8px
+}
+.agent-message-attachment .attachment-file-icon
+{
+width:24px;
+height:24px;
+border-radius:5px
+}
+
+/* Overflow toggle for long attachment lists: dashed, low-key chip. */
+.agent-message-attachment.is-more
+{
+border-style:dashed;
+background:color-mix(in srgb, var(--focus-ring) 7%, var(--panel-muted));
+color:var(--text-soft)
+}
+.agent-message-attachment.is-more:hover
+{
+background:color-mix(in srgb, var(--focus-ring) 12%, var(--panel-muted));
+border-color:var(--text-soft)
+}
+.agent-message-attachment.is-more>svg
+{
+color:inherit
+}
+.agent-message-attachment.is-more>span
+{
+color:inherit
+}
+

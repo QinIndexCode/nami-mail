@@ -44,7 +44,6 @@ describe("settings language picker interaction", () => {
             demoMode
             onClose={() => undefined}
             onSettingsChange={onSettingsChange as never}
-            onOpenAgentProviderSettings={() => undefined}
           />
         </I18nProvider>,
       );
