@@ -3953,30 +3953,28 @@ const emptyMessageList = useMemo(() => (query.trim()
           </div>
 
           <div className="sidebar-footer">
-            <div><ShieldCheck size={16} /><span><strong>{t("app.dataStaysLocal")}</strong><small>{t("app.credentialsLocal")}</small></span></div>
-            <div className="sidebar-footer-actions">
-              <span className="version">v{__NAMI_APP_VERSION__}</span>
-              {desktopUpdateStatus && desktopUpdateStatus.phase === "available" && desktopUpdateStatus.suppression === "none" && !updateBadgeHidden && desktopUpdateStatus.targetVersion && (
+            {desktopUpdateStatus && desktopUpdateStatus.phase === "available" && desktopUpdateStatus.suppression === "none" && !updateBadgeHidden && desktopUpdateStatus.targetVersion && (
+              <div className="sidebar-footer-update-row">
                 <div className={`update-badge${updateBadgeDismissed ? " dismissed" : ""}`}>
-                  <span className="update-badge-icon" aria-hidden="true"><ArrowDown size={15} /></span>
+                  <span className="update-badge-icon" aria-hidden="true"><ArrowDown size={14} /></span>
                   <span className="update-badge-pop">
                     <span className="update-badge-text">{t("update.badge.available", { version: desktopUpdateStatus.targetVersion })}</span>
                     <button type="button" className="update-badge-download" disabled={updateFooterBusy} onClick={() => void runUpdateFooterAction({ kind: "download" })}>{t("update.badge.download")}</button>
-                    <button type="button" className="update-badge-close" aria-label={t("update.badge.dismiss")} onClick={dismissUpdateBadge}><X size={13} /></button>
+                    <button type="button" className="update-badge-close" aria-label={t("update.badge.dismiss")} onClick={dismissUpdateBadge}><X size={12} /></button>
                   </span>
                 </div>
-              )}
-              {updateFooterAction && (
-                <button type="button" className="update-footer-button" disabled={updateFooterBusy || updateFooterAction.kind === "downloading"} onClick={() => void runUpdateFooterAction(updateFooterAction)}>
-                  {updateFooterAction.kind === "downloading" ? (
-                    <><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("update.footer.downloading", { percent: updateFooterAction.percent })}</>
-                  ) : updateFooterAction.kind === "install" ? (
-                    <><RotateCcw size={13} aria-hidden="true" />{t("update.footer.ready")}</>
-                  ) : (
-                    <><CircleAlert size={13} aria-hidden="true" />{t("update.footer.retry")}</>
-                  )}
+              </div>
+            )}
+            {updateFooterAction && (
+              <div className="sidebar-footer-update-row">
+                <button type="button" className={`update-footer-button update-footer-button--${updateFooterAction.kind}`} disabled={updateFooterBusy || updateFooterAction.kind === "downloading"} onClick={() => void runUpdateFooterAction(updateFooterAction)}>
+                  {updateFooterAction.kind === "downloading" ? <><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("update.footer.downloading", { percent: updateFooterAction.percent })}</> : updateFooterAction.kind === "install" ? <><RotateCcw size={13} aria-hidden="true" />{t("update.footer.ready")}</> : <><CircleAlert size={13} aria-hidden="true" />{t("update.footer.retry")}</>}
                 </button>
-              )}
+              </div>
+            )}
+            <div className="sidebar-footer-info">
+              <div className="sidebar-footer-privacy"><ShieldCheck size={14} /><span><strong>{t("app.dataStaysLocal")}</strong><small>{t("app.credentialsLocal")}</small></span></div>
+              <span className="version">v{__NAMI_APP_VERSION__}</span>
             </div>
           </div>
         </aside>

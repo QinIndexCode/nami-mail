@@ -19,6 +19,7 @@ import { AutoReplyEngine, registerAutoReplyEngine, type AutoReplyUiEvent } from 
 import { AccountLifecycleStore } from "./agent/lifecycle.js";
 import { AgentMailStateEvents } from "./agent/mail-state-events.js";
 import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
+import { closeActiveEventStreams } from "./routes/events.js";
 
 /**
  * Local web confirmation authority used when Electron does not inject a
@@ -635,6 +636,12 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
           await closeMicrosoftOAuthCallbackBridge(microsoftOAuthCallbackBridge);
         } finally {
           try {
+            closeActiveEventStreams();
+            try {
+              fastify.server.closeAllConnections?.();
+            } catch {
+              // Ignore socket close errors during teardown
+            }
             await Promise.all([
               scheduler?.close(),
               idleWatcher?.close(),
@@ -678,6 +685,12 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     // A start that failed after the scheduler was created can still have a
     // pass in flight; the database it writes to is about to close.
     syncAbortController.abort();
+    closeActiveEventStreams();
+    try {
+      app?.server.closeAllConnections?.();
+    } catch {
+      // Ignore
+    }
     await closeMicrosoftOAuthCallbackBridge(microsoftOAuthCallbackBridge).catch(() => undefined);
     await scheduler?.close();
     await idleWatcher?.close();
