@@ -512,7 +512,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
           howToEnable: t("account.actionCard.generic.howToEnable"),
         };
     }
-  }, [domain, guideOnboarding?.helpLabel, guideProvider, guideProviderName, providerKind, t]);
+  }, [domain, guideOnboarding?.helpLabel, guideProvider, guideProviderName, matchedProvider, providerKind, t]);
 
   const {
     activeOAuthProvider,

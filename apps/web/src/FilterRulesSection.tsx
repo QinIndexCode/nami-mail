@@ -1,5 +1,5 @@
 import { Check, CircleHelp, Filter, LoaderCircle, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
 import { mailErrorMessage } from "./errorPresentation";
@@ -177,9 +177,9 @@ export default function FilterRulesSection({
     };
   }, [onOverlayOpenChange]);
 
-  const closeEditor = () => {
+  const closeEditor = useCallback(() => {
     if (!busy) requestEditorClose();
-  };
+  }, [busy, requestEditorClose]);
 
   useEffect(() => {
     if (!draft) return undefined;
@@ -191,7 +191,7 @@ export default function FilterRulesSection({
     };
     window.addEventListener("keydown", closeOnEscape, true);
     return () => window.removeEventListener("keydown", closeOnEscape, true);
-  }, [draft, busy]);
+  }, [draft, busy, closeEditor]);
 
   useEffect(() => {
     if (demoMode || initialRules !== undefined) return undefined;

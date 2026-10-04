@@ -44,7 +44,6 @@ export type SettingsAgentSectionProps = {
 
 export default function SettingsAgentSection({
   t,
-  formatDate,
   accounts,
   currentSettings,
   controlsBusy,
@@ -53,11 +52,6 @@ export default function SettingsAgentSection({
   openConnectionsSettings,
   requestAccessLevelChange,
   applyOptimisticSettings,
-  externalGuideCopied,
-  setExternalGuideCopied,
-  externalPairings,
-  externalPairingsError,
-  setExternalPairingsReload,
   setAutoReplyDialogOpen,
   setAutoReplyDecisionsOpen,
   setMemoryDialogOpen,
@@ -112,7 +106,7 @@ export default function SettingsAgentSection({
       options.push({ value: currentDraft, label: currentDraft });
     }
     return options;
-  }, [providers, defaultProvider, currentSettings.autoReply.decisionProviderId, currentSettings.autoReply.draftProviderId, t]);
+  }, [providers, defaultProvider, defaultProviderId, currentSettings.autoReply.decisionProviderId, currentSettings.autoReply.draftProviderId, t]);
 
   return (
     <section className="settings-section" data-settings-nav="agent" aria-labelledby="agent-settings">

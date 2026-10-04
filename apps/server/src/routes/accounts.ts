@@ -36,7 +36,7 @@ import {
 } from "../outbound-attachments.js";
 import { submissionForId, submissionsForAccount } from "../outbox.js";
 import { emitAccountSynced, emitSyncProgress } from "../events.js";
-import { getSyncMessageLimit, updateAppSettings } from "../settings.js";
+import { getSyncMessageLimit } from "../settings.js";
 import { syncAccount } from "../sync.js";
 import {
   publicAccount,
@@ -81,7 +81,7 @@ export function registerAccountRoutes(
           oauthProvider && context.oauthService?.isConfigured(oauthProvider),
         ),
       };
-    } catch (error) {
+    } catch {
       log.warn(
         { domain: parsed.data.email.slice(parsed.data.email.lastIndexOf("@") + 1) },
         "Mailbox provider discovery failed",

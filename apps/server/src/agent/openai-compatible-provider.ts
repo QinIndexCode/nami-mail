@@ -16,7 +16,7 @@ import {
 } from "@nami/agent-contracts";
 import { hasUnsafeToolArguments, unsafeToolArgumentsError } from "./provider-common.js";
 import { isLoopbackHostname } from "../endpoint-guard.js";
-import { detectVendorAdapter, type VendorAdapter } from "./vendor-adapters.js";
+import { detectVendorAdapter } from "./vendor-adapters.js";
 
 const maximumSseLineBytes = 512 * 1024;
 const maximumToolArgumentsBytes = 200 * 1024;

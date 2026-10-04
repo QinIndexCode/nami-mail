@@ -42,7 +42,7 @@ export function getBaselineCss() {
       encoding: "utf8",
       maxBuffer: 50 * 1024 * 1024,
     }).replace(/\r\n/g, "\n");
-  } catch (err) {
+  } catch {
     console.warn(`Warning: Could not fetch from git ${BASELINE_COMMIT}, falling back to HEAD...`);
     return execSync("git show HEAD:apps/web/src/styles.css", {
       encoding: "utf8",

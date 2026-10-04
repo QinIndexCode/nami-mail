@@ -2,6 +2,11 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { beforeAll, beforeEach, afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type * as appModule from "../src/app.js";
+import type * as dbModule from "../src/db.js";
+import type * as mailModule from "../src/mail.js";
+import type * as syncMovesModule from "../src/sync-moves.js";
+import type * as syncModule from "../src/sync.js";
 
 /**
  * Shutdown vs. route-triggered syncs.
@@ -24,22 +29,22 @@ const { moveMessage } = vi.hoisted(() => ({ moveMessage: vi.fn() }));
 const { syncAccount } = vi.hoisted(() => ({ syncAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, testAccountConnection };
 });
 
 vi.mock("../src/sync-moves.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/sync-moves.js")>();
+  const actual = await importOriginal<typeof syncMovesModule>();
   return { ...actual, moveMessage };
 });
 
 vi.mock("../src/sync.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/sync.js")>();
+  const actual = await importOriginal<typeof syncModule>();
   return { ...actual, syncAccount };
 });
 
-let buildApp: typeof import("../src/app.js").buildApp;
-let openDatabase: typeof import("../src/db.js").openDatabase;
+let buildApp: typeof appModule.buildApp;
+let openDatabase: typeof dbModule.openDatabase;
 let boundPort = 0;
 
 async function freeLoopbackPort(): Promise<number> {
@@ -149,7 +154,7 @@ async function get(path: string): Promise<{ statusCode?: number; body: string }>
 
 describe("a process shutdown stops the syncs routes started", () => {
   const originalPort = process.env.PORT;
-  let app: Awaited<ReturnType<typeof import("../src/app.js").buildApp>> | undefined;
+  let app: Awaited<ReturnType<typeof appModule.buildApp>> | undefined;
   let db: ReturnType<typeof openDatabase> | undefined;
   let shutdownController: AbortController;
 
@@ -293,3 +298,5 @@ describe("a process shutdown stops the syncs routes started", () => {
     expect(JSON.parse(response.body)).toMatchObject({ ok: false, code: "cancelled" });
   }, 20_000);
 });
+
+

@@ -3,6 +3,7 @@ import { request as httpRequest } from "node:http";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import type * as mailModule from "../src/mail.js";
 
 // Generated per run so the fixture carries no credential literal; the value
 // only has to prove that the token header flows through to the routes.
@@ -36,7 +37,7 @@ vi.hoisted(() => {
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
 });
 
@@ -1340,7 +1341,7 @@ it("keeps an Agent stream running after the client closes its response", async (
       (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("flag-a-1") as { flags_json: string }).flags_json,
     );
     expect(flagged).toEqual(["\\Seen"]);
-    for (const attempt of [0, 0, 0, 0, 0]) {
+    for (const _attempt of [0, 0, 0, 0, 0]) {
       const pending = db.prepare(`
         SELECT COUNT(*) c FROM operation_queue
         WHERE kind = 'flags-push' AND status IN ('pending', 'running')
@@ -1960,3 +1961,4 @@ describe("composeAttachmentContent", () => {
     expect(composeAttachmentContent("plain", [{ name: "a.txt", type: "text/plain", token: "out_00000000-0000-4000-8000-000000000000" }])).toBe("plain");
   });
 });
+

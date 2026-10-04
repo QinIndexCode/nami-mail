@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as mailModule from "../src/mail.js";
 
 // Fastify's inject stamps "Host: localhost:80" on requests that carry no host
 // header, and the token-less Host allowlist in src/app.ts only accepts this
@@ -11,7 +12,7 @@ vi.hoisted(() => {
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
 });
 
@@ -234,3 +235,4 @@ describe("startup reconciliation", () => {
     expect(markerOf(db, "queued")).toBe(1);
   });
 });
+

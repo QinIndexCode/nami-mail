@@ -3,6 +3,7 @@ import { inflateRawSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import { ZipFile } from "yazl";
 import { PassThrough } from "node:stream";
+import type * as mailModule from "../src/mail.js";
 
 // The backup used to hand every fetched source straight to yazl and move on.
 // yazl's addBuffer() queues an async zlib.deflateRaw and returns, and its
@@ -25,7 +26,7 @@ import { PassThrough } from "node:stream";
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
 });
 
@@ -402,3 +403,4 @@ describe("collectMailBackup when the download is closed mid-run", () => {
     expect(loggedOut).toBe(true);
   });
 });
+

@@ -1,13 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ZipFile } from "yazl";
+import type * as mailModule from "../src/mail.js";
 
 // Backup streams RFC822 sources from the provider; stub the IMAP transport so
 // the collect step never touches a real network.
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
 });
 

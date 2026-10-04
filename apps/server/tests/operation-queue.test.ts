@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as syncMovesModule from "../src/sync-moves.js";
 
 const { moveMessage, batchMoveMessages } = vi.hoisted(() => ({
   moveMessage: vi.fn(),
@@ -8,7 +9,7 @@ const { moveMessage, batchMoveMessages } = vi.hoisted(() => ({
 // The operation queue serializes through the real sync write locks, so only
 // the executor entry points are replaced.
 vi.mock("../src/sync-moves.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/sync-moves.js")>();
+  const actual = await importOriginal<typeof syncMovesModule>();
   return { ...actual, moveMessage, batchMoveMessages };
 });
 
@@ -285,3 +286,4 @@ describe("operation queue", () => {
     }
   });
 });
+

@@ -4,6 +4,10 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as attachmentsModule from "../src/attachments.js";
+import type * as draftsModule from "../src/drafts.js";
+import type * as mailModule from "../src/mail.js";
+import type * as syncModule from "../src/sync.js";
 
 const { sendMail, saveDraft, downloadMessageAttachment } = vi.hoisted(() => ({
   sendMail: vi.fn(),
@@ -13,22 +17,22 @@ const { sendMail, saveDraft, downloadMessageAttachment } = vi.hoisted(() => ({
 const { scheduleSentSubmissionVerification } = vi.hoisted(() => ({ scheduleSentSubmissionVerification: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, sendMail };
 });
 
 vi.mock("../src/drafts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/drafts.js")>();
+  const actual = await importOriginal<typeof draftsModule>();
   return { ...actual, saveDraft };
 });
 
 vi.mock("../src/sync.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/sync.js")>();
+  const actual = await importOriginal<typeof syncModule>();
   return { ...actual, scheduleSentSubmissionVerification };
 });
 
 vi.mock("../src/attachments.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/attachments.js")>();
+  const actual = await importOriginal<typeof attachmentsModule>();
   return { ...actual, downloadMessageAttachment };
 });
 
@@ -251,3 +255,4 @@ describe("outbound attachment API", () => {
     expect(overLimit.statusCode).toBe(413);
   });
 });
+

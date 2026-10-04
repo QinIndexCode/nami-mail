@@ -2261,7 +2261,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       window.removeEventListener("pointerdown", closeOnOutsidePointer);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [readerMoreOpen]);
+  }, [readerMoreOpen, beginReaderMoreClose]);
 
   // The compact sort/filter panel behaves like the other popovers: close on
   // outside click and Escape.
@@ -3111,7 +3111,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       window.removeEventListener("pointerdown", closeOnOutsidePointer);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [snoozeOpen]);
+  }, [snoozeOpen, beginSnoozeClose]);
 
   const applyLocalSnooze = useCallback((messageId: string, until: string | null, previousUntil: string | null) => {
     const wasSnoozed = Boolean(previousUntil && new Date(previousUntil).getTime() > Date.now());

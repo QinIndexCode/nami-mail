@@ -4,14 +4,14 @@
  * These are pure functions with no mutable state — safe to import from
  * route modules without creating circular dependencies.
  */
-import { z } from "zod";
+import type { z } from "zod";
 import { type AccountCredentialIdentity } from "./account-credentials.js";
 import type { ProviderDiscovery, ProviderProfile } from "@nami/agent-contracts";
 import { OutboundAttachmentError } from "./outbound-attachments.js";
 import { mailErrorHttpStatus, safeMailError } from "./mail.js";
 import { OAuthError } from "./oauth.js";
-import { detectProvider, loginUsername, providerPresets, type DetectedProvider, type ProviderPreset } from "./providers.js";
-import { manualAccountSchema } from "./schemas.js";
+import { providerPresets, type DetectedProvider, type ProviderPreset } from "./providers.js";
+import type { manualAccountSchema } from "./schemas.js";
 
 // Allow contemporary 4K/8K wallpapers without retaining their original size.
 // The image is still normalized and the persisted WebP remains capped.

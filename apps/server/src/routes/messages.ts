@@ -918,7 +918,7 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
           submission.accountId,
           requestPayload.attachmentTokens,
         );
-      } catch (error) {
+      } catch {
         // The durable submission is already gone. Orphaned files are cleaned
         // up by the next startup pass; do not fail the cancellation for it.
         request.log.warn({ submissionId: request.params.id }, "Could not release cancelled scheduled send attachments");

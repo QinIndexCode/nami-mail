@@ -20,7 +20,6 @@ import {
   submissionForId,
   submissionRequestForId,
 } from "./outbox.js";
-import type { AccountRecord } from "./types.js";
 
 export type ScheduledSendDependencies = {
   /** Outbound temporary-attachment directory resolved from runtime config. */

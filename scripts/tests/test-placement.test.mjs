@@ -5,7 +5,6 @@ import { test } from "node:test";
 
 const repoRoot = join(import.meta.dirname, "..", "..");
 const scriptsDir = join(repoRoot, "scripts");
-const testsDir = join(scriptsDir, "tests");
 const testsPrefix = `tests${sep}`;
 
 function walk(dir) {

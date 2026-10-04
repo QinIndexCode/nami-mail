@@ -1,14 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import type {
+  AgentService} from "../agent-service.js";
 import {
-  AgentService,
   AgentServiceError,
   type AgentConversationScope,
   type AgentMcpServerInput,
   type AgentMessageInput,
   type AgentProviderInput,
 } from "../agent-service.js";
-import { EncryptedAgentMemoryStore } from "../agent/memory.js";
+import type { EncryptedAgentMemoryStore } from "../agent/memory.js";
 import { MAX_POLISH_TEXT_LENGTH } from "../agent/writing-polish.js";
 import { getAutoReplyEngine } from "../agent/auto-reply.js";
 import { autoReplyDecisionReasons, type AutoReplyDecisionReason } from "../agent/auto-reply-decisions.js";
@@ -512,7 +513,7 @@ export function registerAgentRoutes(app: FastifyInstance, deps: AgentRouteDeps):
     }
   });
 
-  app.get("/api/agent/pairings", async (_request, reply) => {
+  app.get("/api/agent/pairings", async (_request, _reply) => {
     const pairings = (await context.listExternalPairings?.()) ?? [];
     const now = Date.now();
     return {

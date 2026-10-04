@@ -151,7 +151,7 @@ describe("memory tools", () => {
   });
 
   it("bounds inputs through the input schemas", async () => {
-    const { registry, context } = fixture();
+    const { registry, context: _context } = fixture();
     const save = registry.get("memory.save")!;
     expect(save.inputSchema.safeParse({ note: "" }).success).toBe(false);
     expect(save.inputSchema.safeParse({ note: "x".repeat(501) }).success).toBe(false);

@@ -80,7 +80,7 @@ test("captures screenshots of settings connections, mcp and agent panels", async
   });
   console.log("ALIGNMENT METRICS:", JSON.stringify(metrics, null, 2));
 
-  const connStyles = await page.evaluate(() => {
+  const _connStyles = await page.evaluate(() => {
     const connSelect = document.querySelector('.connections-compact-select');
     const connButton = document.querySelector('.connections-compact-select .themed-select');
     const connIcon = document.querySelector('.connections-compact-select .select-control-icon');

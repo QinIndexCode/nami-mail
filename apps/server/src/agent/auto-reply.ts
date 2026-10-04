@@ -487,7 +487,7 @@ export class AutoReplyEngine {
     this.timers.set(confirmation.id, setTimeout(() => this.expirePending(confirmation.id), remaining));
     try {
       await this.options.confirmationStore.create(confirmation);
-    } catch (error) {
+    } catch {
       const timer = this.timers.get(confirmation.id);
       if (timer) clearTimeout(timer);
       this.timers.delete(confirmation.id);

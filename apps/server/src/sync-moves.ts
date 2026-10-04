@@ -754,7 +754,7 @@ export async function batchMoveMessages(
         outcome.failed += groupOutcome.failures.length;
         outcome.failures.push(...groupOutcome.failures);
         for (const pending of groupOutcome.pendingAccounts) outcome.pendingAccounts.add(pending);
-      } catch (error) {
+      } catch {
         // Fall back to per-message moves so a group-level failure (e.g. a
         // guard error) keeps the previous per-message granularity.
         for (const entry of group) {

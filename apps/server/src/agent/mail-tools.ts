@@ -1,6 +1,13 @@
 import { z } from "zod";
 import type {
-  externalMailDraftOutputSchema} from "@nami/agent-contracts";
+  externalMailAccountOutputSchema,
+  externalMailAttachmentOutputSchema,
+  externalMailContactOutputSchema,
+  externalMailDraftOutputSchema,
+  externalMailFolderOutputSchema,
+  externalMailMessageDetailOutputSchema,
+  externalMailMessageMetadataOutputSchema,
+} from "@nami/agent-contracts";
 import {
   createAgentError,
   externalAccountsListInputSchema,
@@ -9,12 +16,6 @@ import {
   externalAttachmentsListOutputSchema,
   externalFoldersListOutputSchema,
   externalFoldersListInputSchema,
-  externalMailAccountOutputSchema,
-  externalMailAttachmentOutputSchema,
-  externalMailContactOutputSchema,
-  externalMailFolderOutputSchema,
-  externalMailMessageDetailOutputSchema,
-  externalMailMessageMetadataOutputSchema,
   externalMailReadBounds,
   externalMessageGetInputSchema,
   externalMessageGetOutputSchema,
@@ -81,14 +82,6 @@ const MAX_SUBJECT_CHARACTERS = externalMailReadBounds.subjectCharacters;
 const MAX_RECIPIENTS = externalMailReadBounds.recipientResults;
 const MAX_TOTAL_RECIPIENTS = externalMailReadBounds.totalRecipients;
 
-const contactOutputSchema = externalMailContactOutputSchema;
-
-const accountOutputSchema = externalMailAccountOutputSchema;
-const folderOutputSchema = externalMailFolderOutputSchema;
-const messageMetadataOutputSchema = externalMailMessageMetadataOutputSchema;
-const messageDetailOutputSchema = externalMailMessageDetailOutputSchema;
-const attachmentOutputSchema = externalMailAttachmentOutputSchema;
-
 const emptyInputSchema = externalAccountsListInputSchema;
 const listMessagesInputSchema = externalMessagesListInputSchema;
 const summarizeInputSchema = externalMailSummarizeInputSchema;
@@ -123,7 +116,6 @@ type DeleteDraftOutput = z.infer<typeof externalDraftDeleteOutputSchema>;
 type MoveMessageOutput = z.infer<typeof externalMoveMailOutputSchema>;
 type SetFlagOutput = z.infer<typeof externalSetFlagOutputSchema>;
 type SendMailOutput = z.infer<typeof externalSendMailOutputSchema>;
-type ReplyDraftInput = z.infer<typeof externalReplyMailInputSchema>;
 type SearchMessagesOutput = z.infer<typeof searchMessagesOutputSchema>;
 
 function clipped(value: string, maximum: number): string {
@@ -258,11 +250,11 @@ async function fromMailApplication<T>(
   }
 }
 
-function contact(value: { name: string; address: string }): z.infer<typeof contactOutputSchema> {
+function contact(value: { name: string; address: string }): z.infer<typeof externalMailContactOutputSchema> {
   return { name: clipped(value.name, 256), address: clipped(value.address, 320).trim() };
 }
 
-function account(value: MailAccountView): z.infer<typeof accountOutputSchema> {
+function account(value: MailAccountView): z.infer<typeof externalMailAccountOutputSchema> {
   return {
     id: value.id,
     email: clipped(value.email, 320).trim(),
@@ -273,7 +265,7 @@ function account(value: MailAccountView): z.infer<typeof accountOutputSchema> {
   };
 }
 
-function folder(value: MailFolderView): z.infer<typeof folderOutputSchema> {
+function folder(value: MailFolderView): z.infer<typeof externalMailFolderOutputSchema> {
   return {
     accountId: value.accountId,
     path: clipped(value.path, MAX_MAILBOX_CHARACTERS).trim(),
@@ -284,7 +276,7 @@ function folder(value: MailFolderView): z.infer<typeof folderOutputSchema> {
   };
 }
 
-function messageMetadata(value: MailMessageView): z.infer<typeof messageMetadataOutputSchema> {
+function messageMetadata(value: MailMessageView): z.infer<typeof externalMailMessageMetadataOutputSchema> {
   return {
     id: value.id,
     accountId: value.accountId,
@@ -299,7 +291,7 @@ function messageMetadata(value: MailMessageView): z.infer<typeof messageMetadata
   };
 }
 
-function messageDetail(value: MailMessageDetail): z.infer<typeof messageDetailOutputSchema> {
+function messageDetail(value: MailMessageDetail): z.infer<typeof externalMailMessageDetailOutputSchema> {
   const to = value.to.slice(0, MAX_RECIPIENTS).map(contact);
   const cc = value.cc.slice(0, Math.min(MAX_RECIPIENTS, MAX_TOTAL_RECIPIENTS - to.length)).map(contact);
   return {
@@ -311,7 +303,7 @@ function messageDetail(value: MailMessageDetail): z.infer<typeof messageDetailOu
   };
 }
 
-function attachment(value: MailAttachmentView): z.infer<typeof attachmentOutputSchema> {
+function attachment(value: MailAttachmentView): z.infer<typeof externalMailAttachmentOutputSchema> {
   return {
     partId: clipped(value.partId, 256).trim(),
     filename: clipped(value.filename, 512),
@@ -540,7 +532,7 @@ function messagesBatchGetTool(mailApplication: MailApplicationService): AgentToo
       // De-duplicate requested ids up front (order preserved): reading the same
       // message twice wastes a DB hit and would leak duplicates into the result.
       const messageIds = [...new Set(input.messageIds)];
-      const results: z.infer<typeof messageDetailOutputSchema>[] = [];
+      const results: z.infer<typeof externalMailMessageDetailOutputSchema>[] = [];
       const notFound: string[] = [];
       for (const messageId of messageIds) {
         const messageDenied = requireMessage<BatchMessagesOutput>(context, messageId);
@@ -894,7 +886,7 @@ function moveMessageTool(mailApplication: MailApplicationService): AgentTool<z.i
     },
     inputSchema: externalMoveMailInputSchema,
     outputSchema: externalMoveMailOutputSchema,
-    resolveAccountIds: (input) => [],
+    resolveAccountIds: (_input) => [],
     confirmationPreview: (input, locale) => moveMailConfirmationPreview(locale, input),
     execute: async (context, input) => {
       const messageDenied = requireMessage<MoveMessageOutput>(context, input.messageId);
@@ -927,7 +919,7 @@ function setFlagTool(mailApplication: MailApplicationService): AgentTool<z.infer
     },
     inputSchema: externalSetFlagInputSchema,
     outputSchema: externalSetFlagOutputSchema,
-    resolveAccountIds: (input) => [],
+    resolveAccountIds: (_input) => [],
     confirmationPreview: (input, locale) => setFlagConfirmationPreview(locale, input),
     execute: async (context, input) => {
       const messageDenied = requireMessage<SetFlagOutput>(context, input.messageId);

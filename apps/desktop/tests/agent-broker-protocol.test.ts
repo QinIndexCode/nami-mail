@@ -170,7 +170,7 @@ test("accepts pairings whose expiry is still in the future", async () => {
 });
 
 test("lists pairing records across statuses without private key material", async () => {
-  const { client, pairing } = createFixture();
+  const { client: _client, pairing } = createFixture();
   const store = new InMemoryBrokerPairingStore();
   await store.save({ ...pairing, accountIds: ["074-account-01"], expiresAt: "2099-01-01T00:00:00.000Z" });
   await store.save({ ...pairing, clientId: "client-identity-02", accountIds: ["074-account-01"] });

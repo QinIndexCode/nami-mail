@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import type * as draftsModule from "../src/drafts.js";
 
 const { saveDraft } = vi.hoisted(() => ({ saveDraft: vi.fn() }));
 
 vi.mock("../src/drafts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/drafts.js")>();
+  const actual = await importOriginal<typeof draftsModule>();
   return { ...actual, saveDraft };
 });
 
@@ -210,3 +211,4 @@ describe("SqliteMailApplicationService message scope", () => {
     }
   });
 });
+

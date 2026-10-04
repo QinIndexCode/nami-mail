@@ -6,7 +6,6 @@
  * sync.ts for the account lookup and outbox helpers for submission state.
  */
 import type { ListResponse } from "imapflow";
-import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import type { DatabaseHandle } from "./db.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import { markSubmissionConfirmed, submissionForId } from "./outbox.js";

@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as mailModule from "../src/mail.js";
 
 // Accepted batch jobs run in the background; stub the IMAP transport so a
 // created job settles without touching the network.
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
 });
 

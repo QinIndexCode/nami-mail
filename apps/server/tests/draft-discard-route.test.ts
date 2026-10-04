@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as mailModule from "../src/mail.js";
 
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
 });
 
@@ -82,3 +83,4 @@ describe("draft discard API", () => {
     expect(db!.prepare("SELECT id FROM messages WHERE id = ?").get("draft-1")).toEqual({ id: "draft-1" });
   });
 });
+

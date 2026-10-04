@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
+import type * as mailModule from "../src/mail.js";
 
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
 });
 
@@ -185,3 +186,4 @@ describe("sync batch deletes keep the FTS index consistent", () => {
     expect(ftsIndexedIds()).not.toContain("trigger-probe");
   });
 });
+

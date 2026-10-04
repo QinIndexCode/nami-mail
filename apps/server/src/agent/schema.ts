@@ -359,25 +359,6 @@ CREATE TABLE IF NOT EXISTS agent_rag_repair_state (
 );
 `;
 
-const agentTableNames = [
-  "agent_account_lifecycle",
-  "agent_source_events",
-  "agent_rag_pages",
-  "agent_conversations",
-  "agent_conversation_scopes",
-  "agent_conversation_records",
-  "agent_conversation_streaming",
-  "agent_audit_intents",
-  "agent_audit_events",
-  "agent_gui_confirmation_records",
-  "agent_provider_configurations",
-  "agent_mcp_servers",
-  "agent_memory_records",
-  "agent_rag_index",
-  "agent_rag_index_stats",
-  "agent_rag_repair_state",
-] as const;
-
 function tableExists(db: DatabaseHandle, name: string): boolean {
   return Boolean(db.prepare(`
     SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?

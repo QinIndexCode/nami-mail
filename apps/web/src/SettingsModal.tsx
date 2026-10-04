@@ -910,14 +910,14 @@ export default function SettingsModal({
             : pendingConfirmation === "discard-translation-changes"
             ? t("settings.confirmation.discardTranslationChangesAction")
             : t("settings.confirmation.restoreDefaultsAction");
-  const selectCategory = (next: SettingsCategoryId) => {
+  const selectCategory = useCallback((next: SettingsCategoryId) => {
     if (next === activeCategory) return;
     setActiveCategory(next);
     // A category switch is a fresh browsing context: entering it starts at the
     // top instead of carrying over the previous panel's scroll offset. Direct
     // scrollTop assignment keeps the reset instant (and testable in jsdom).
     if (settingsBody.current) settingsBody.current.scrollTop = 0;
-  };
+  }, [activeCategory]);
 
   const searchResults = useMemo(() => searchSettings(searchQuery, t, isDesktopRuntime), [searchQuery, t]);
 
@@ -927,7 +927,7 @@ export default function SettingsModal({
         selectCategory(searchResults[0].categoryId);
       }
     }
-  }, [searchResults, activeCategory]);
+  }, [searchResults, activeCategory, selectCategory]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

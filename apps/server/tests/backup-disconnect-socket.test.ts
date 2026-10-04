@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { buildApp } from "../src/app.js";
 import type { openDatabase } from "../src/db.js";
 import type { AccountRecord } from "../src/types.js";
+import type * as mailModule from "../src/mail.js";
 
 /**
  * The backup export over a real socket that goes away mid-transfer.
@@ -31,7 +32,7 @@ import type { AccountRecord } from "../src/types.js";
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
 });
 
@@ -177,3 +178,5 @@ describe("a backup download that is aborted over a real socket", () => {
     expect(logouts.length).toBeGreaterThan(0);
   }, 20_000);
 });
+
+

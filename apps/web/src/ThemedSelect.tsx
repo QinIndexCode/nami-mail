@@ -120,7 +120,7 @@ export default function ThemedSelect({
     };
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
-  }, [open]);
+  }, [open, beginMenuClose]);
 
   useEffect(() => {
     if (!open) setActiveValue(selectedEnabledValue);

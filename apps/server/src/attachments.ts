@@ -9,7 +9,6 @@ import {
   messagePayloadForRow,
   type MessageStorageRow,
 } from "./message-storage.js";
-import type { AccountRecord } from "./types.js";
 
 const attachmentPartIdPattern = /^(?:[1-9]\d*)(?:\.[1-9]\d*)*$/;
 const maxAttachmentPartIdLength = 128;
