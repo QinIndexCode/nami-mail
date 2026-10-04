@@ -641,47 +641,49 @@ font-family:DM Mono,monospace;
 font-size:10px;
 display:block
 }
-.sidebar-footer
-{
+.sidebar-footer {
 border-top:1px solid var(--line);
 margin-top:auto;
 padding:10px 8px 6px;
 display:flex;
 flex-direction:column;
-gap:6px
+gap:6px;
 }
-.sidebar-footer-update-row
-{
+.sidebar-footer-update-row {
 display:flex;
 align-items:center;
-width:100%
+width:100%;
+animation:sidebarFooterFadeIn .22s cubic-bezier(.16, 1, .3, 1);
 }
-.sidebar-footer-info
-{
+@keyframes sidebarFooterFadeIn {
+from { opacity:0; transform:translateY(3px); }
+to { opacity:1; transform:translateY(0); }
+}
+@media (prefers-reduced-motion:reduce) {
+.sidebar-footer-update-row { animation:none; }
+}
+.sidebar-footer-info {
 display:flex;
 justify-content:space-between;
 align-items:center;
 width:100%;
-gap:6px
+gap:6px;
 }
-.sidebar-footer-privacy
-{
+.sidebar-footer-privacy {
 color:var(--text-soft);
 align-items:center;
 gap:6px;
 display:flex;
 min-width:0;
-flex:1
+flex:1;
 }
-.sidebar-footer-privacy svg
-{
-flex-shrink:0
+.sidebar-footer-privacy svg {
+flex-shrink:0;
 }
-.sidebar-footer-privacy>span
-{
+.sidebar-footer-privacy>span {
 flex-direction:column;
 display:flex;
-min-width:0
+min-width:0;
 }
 .sidebar-footer strong
 {
@@ -699,15 +701,13 @@ white-space:nowrap;
 overflow:hidden;
 text-overflow:ellipsis
 }
-.sidebar-footer .version
-{
+.sidebar-footer .version {
 font-family:DM Mono,monospace;
 font-size:9px;
 color:var(--text-faint);
-flex-shrink:0
+flex-shrink:0;
 }
-.update-footer-button
-{
+.update-footer-button {
 color:var(--text);
 border:1px solid var(--line);
 border-radius:var(--radius-pill);
@@ -724,35 +724,43 @@ width:100%;
 overflow:hidden;
 white-space:nowrap;
 text-overflow:ellipsis;
-transition:background .15s ease,border-color .15s ease,color .15s ease
+transition:background .2s cubic-bezier(.16, 1, .3, 1),border-color .2s cubic-bezier(.16, 1, .3, 1),color .2s cubic-bezier(.16, 1, .3, 1),transform .15s ease;
 }
-.update-footer-button:hover:not(:disabled)
-{
+.update-footer-button:hover:not(:disabled) {
 border-color:var(--focus-ring);
 background:var(--hover);
-color:var(--text)
+color:var(--text);
+transform:translateY(-0.5px);
 }
-.update-footer-button.update-footer-button--retry
-{
+.update-footer-button:active:not(:disabled) {
+transform:translateY(0);
+}
+.update-footer-button.update-footer-button--retry {
 color:var(--danger, #ef4444);
 border-color:color-mix(in srgb, var(--danger, #ef4444) 35%, var(--line));
-background:color-mix(in srgb, var(--danger, #ef4444) 10%, var(--panel-muted))
+background:color-mix(in srgb, var(--danger, #ef4444) 10%, var(--panel-muted));
 }
-.update-footer-button.update-footer-button--retry:hover:not(:disabled)
-{
+.update-footer-button.update-footer-button--retry:hover:not(:disabled) {
 border-color:var(--danger, #ef4444);
-background:color-mix(in srgb, var(--danger, #ef4444) 18%, var(--panel-muted))
+background:color-mix(in srgb, var(--danger, #ef4444) 18%, var(--panel-muted));
 }
-.update-footer-button.update-footer-button--install
-{
+.update-footer-button.update-footer-button--storage {
+color:var(--warning-text, #d97706);
+border-color:color-mix(in srgb, var(--warning-text, #d97706) 38%, var(--line));
+background:color-mix(in srgb, var(--warning-text, #d97706) 10%, var(--panel-muted));
+}
+.update-footer-button.update-footer-button--storage:hover:not(:disabled) {
+border-color:var(--warning-text, #d97706);
+background:color-mix(in srgb, var(--warning-text, #d97706) 18%, var(--panel-muted));
+}
+.update-footer-button.update-footer-button--install {
 color:var(--focus-ring);
 border-color:color-mix(in srgb, var(--focus-ring) 45%, var(--line));
-background:color-mix(in srgb, var(--focus-ring) 10%, var(--panel-muted))
+background:color-mix(in srgb, var(--focus-ring) 10%, var(--panel-muted));
 }
-.update-footer-button.update-footer-button--install:hover:not(:disabled)
-{
+.update-footer-button.update-footer-button--install:hover:not(:disabled) {
 border-color:var(--focus-ring);
-background:color-mix(in srgb, var(--focus-ring) 18%, var(--panel-muted))
+background:color-mix(in srgb, var(--focus-ring) 18%, var(--panel-muted));
 }
 .update-footer-button:disabled
 {

@@ -20,10 +20,13 @@ export function resolveDemoUpdateSnapshot(isDemo: boolean): DesktopUpdateSnapsho
   const activeParam = param || "ready";
   if (activeParam === "none" || activeParam === "false" || activeParam === "0") return null;
 
+  const isStorage = activeParam === "storage" || activeParam === "storageInsufficient";
   const phase = (
     ["available", "ready", "downloading", "error"].includes(activeParam)
       ? activeParam
-      : "ready"
+      : isStorage
+        ? "error"
+        : "ready"
   ) as DesktopUpdateSnapshot["phase"];
 
   return {
@@ -31,7 +34,15 @@ export function resolveDemoUpdateSnapshot(isDemo: boolean): DesktopUpdateSnapsho
     currentVersion: typeof __NAMI_APP_VERSION__ !== "undefined" ? __NAMI_APP_VERSION__ : "0.4.3",
     targetVersion: "0.4.4",
     phase,
-    reason: phase === "ready" ? "downloadReady" : phase === "available" ? "releaseAvailable" : phase === "downloading" ? "downloading" : "mailDataBusy",
+    reason: isStorage
+      ? "storageInsufficient"
+      : phase === "ready"
+        ? "downloadReady"
+        : phase === "available"
+          ? "releaseAvailable"
+          : phase === "downloading"
+            ? "downloading"
+            : "mailDataBusy",
     percent: phase === "downloading" ? 68 : phase === "ready" ? 100 : null,
     suppression: "none",
     remindAt: null,

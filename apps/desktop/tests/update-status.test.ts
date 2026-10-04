@@ -14,6 +14,8 @@ test("keeps TLS, signature, integrity, release, rate-limit, and unknown failures
   assert.equal(classifyUpdateError(new Error("SHA512 checksum mismatch")), "integrityInvalid");
   assert.equal(classifyUpdateError(new Error("404 latest.yml not found")), "releaseUnavailable");
   assert.equal(classifyUpdateError(new Error("GitHub API rate limit 403")), "rateLimited");
+  assert.equal(classifyUpdateError(new Error("ENOSPC: no space left on device")), "storageInsufficient");
+  assert.equal(classifyUpdateError(new Error("There is not enough space on the disk")), "storageInsufficient");
   assert.equal(classifyUpdateError(new Error("unexpected updater state")), "unknown");
 });
 

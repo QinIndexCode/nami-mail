@@ -35,6 +35,7 @@ export type DesktopUpdateReason =
   | "installerNotStarted"
   | "installResult"
   | "installNotApplied"
+  | "storageInsufficient"
   | "unknown";
 
 export type DesktopUpdateInstallStage =
@@ -74,7 +75,14 @@ function updateErrorEvidence(error: unknown): string {
 
 export type DesktopUpdateErrorReason = Extract<
   DesktopUpdateReason,
-  "network" | "tls" | "signatureInvalid" | "integrityInvalid" | "releaseUnavailable" | "rateLimited" | "unknown"
+  | "network"
+  | "tls"
+  | "signatureInvalid"
+  | "integrityInvalid"
+  | "releaseUnavailable"
+  | "rateLimited"
+  | "storageInsufficient"
+  | "unknown"
 >;
 
 export function classifyUpdateError(error: unknown): DesktopUpdateErrorReason {
@@ -84,6 +92,9 @@ export function classifyUpdateError(error: unknown): DesktopUpdateErrorReason {
   }
   if (/cert_|certificate|self signed|unable to verify|tls|ssl/.test(evidence)) {
     return "tls";
+  }
+  if (/storage_insufficient|enospc|disk full|not enough space|not enough disk space|insufficient storage/.test(evidence)) {
+    return "storageInsufficient";
   }
   if (/integrity|sha.?512|manifest[_ ]invalid|checksum|hash.?mismatch/.test(evidence)) {
     return "integrityInvalid";
