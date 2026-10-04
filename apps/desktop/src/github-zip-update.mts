@@ -452,6 +452,27 @@ export async function downloadGitHubZipUpdate(options: {
   const parentDirectory = path.dirname(archivePath);
   const temporaryPath = `${archivePath}.part`;
   await fs.mkdir(parentDirectory, { recursive: true });
+
+  if (typeof fs.statfs === "function") {
+    try {
+      const stats = await fs.statfs(parentDirectory);
+      if (stats && typeof stats.bavail === "number" && typeof stats.bsize === "number") {
+        const availableBytes = BigInt(stats.bavail) * BigInt(stats.bsize);
+        const requiredBytes = BigInt(Math.max(options.update.archiveSize * 3, 256 * 1024 * 1024));
+        if (availableBytes < requiredBytes) {
+          throw new GitHubZipUpdateError(
+            "STORAGE_INSUFFICIENT",
+            `Insufficient disk space for update. Available: ${Math.round(Number(availableBytes / (1024n * 1024n)))}MB, required: ${Math.round(Number(requiredBytes / (1024n * 1024n)))}MB.`,
+          );
+        }
+      }
+    } catch (error) {
+      if (error instanceof GitHubZipUpdateError) {
+        throw error;
+      }
+    }
+  }
+
   await fs.rm(temporaryPath, { force: true });
 
   try {

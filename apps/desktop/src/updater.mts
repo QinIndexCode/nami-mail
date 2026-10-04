@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   discoverGitHubZipUpdate,
@@ -452,6 +453,21 @@ export class DesktopUpdater {
     if (!await hasVerifiedCachedUpdate(this.cacheDirectory, update)) {
       const snapshot = this.transition("error", "archiveIntegrityInvalid", { percent: null });
       return { accepted: false, snapshot };
+    }
+    if (typeof fs.statfs === "function") {
+      try {
+        const stats = await fs.statfs(this.cacheDirectory);
+        if (stats && typeof stats.bavail === "number" && typeof stats.bsize === "number") {
+          const availableBytes = BigInt(stats.bavail) * BigInt(stats.bsize);
+          const requiredBytes = BigInt(Math.max(update.archiveSize * 2, 200 * 1024 * 1024));
+          if (availableBytes < requiredBytes) {
+            const snapshot = this.transition("error", "storageInsufficient", { percent: null });
+            return { accepted: false, snapshot };
+          }
+        }
+      } catch {
+        // Fall through if statfs is unavailable
+      }
     }
     try {
       const result = await prepareAndBeginUpdateInstall(

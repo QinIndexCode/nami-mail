@@ -41,6 +41,7 @@ const statusKeyByReason: Record<DesktopUpdateSnapshot["reason"], string> = {
   installerNotStarted: "update.status.installerNotStarted",
   installResult: "update.status.installResult",
   installNotApplied: "update.status.installNotApplied",
+  storageInsufficient: "update.status.storageInsufficient",
   unknown: "update.status.unknown",
 };
 

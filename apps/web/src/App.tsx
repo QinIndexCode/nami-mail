@@ -3966,8 +3966,8 @@ const emptyMessageList = useMemo(() => (query.trim()
             )}
             {updateFooterAction && (
               <div className="sidebar-footer-update-row">
-                <button type="button" className={`update-footer-button update-footer-button--${updateFooterAction.kind}`} disabled={updateFooterBusy || updateFooterAction.kind === "downloading"} onClick={() => void runUpdateFooterAction(updateFooterAction)}>
-                  {updateFooterAction.kind === "downloading" ? <><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("update.footer.downloading", { percent: updateFooterAction.percent })}</> : updateFooterAction.kind === "install" ? <><RotateCcw size={13} aria-hidden="true" />{t("update.footer.ready")}</> : <><CircleAlert size={13} aria-hidden="true" />{t("update.footer.retry")}</>}
+                <button type="button" className={`update-footer-button update-footer-button--${desktopUpdateStatus?.reason === "storageInsufficient" ? "storage" : updateFooterAction.kind}`} title={desktopUpdateStatus?.reason === "storageInsufficient" ? t("update.status.storageInsufficient") : undefined} disabled={updateFooterBusy || updateFooterAction.kind === "downloading"} onClick={() => void runUpdateFooterAction(updateFooterAction)}>
+                  {updateFooterAction.kind === "downloading" ? <><LoaderCircle className="spin" size={13} aria-hidden="true" />{t("update.footer.downloading", { percent: updateFooterAction.percent })}</> : updateFooterAction.kind === "install" ? <><RotateCcw size={13} aria-hidden="true" />{t("update.footer.ready")}</> : desktopUpdateStatus?.reason === "storageInsufficient" ? <><CircleAlert size={13} aria-hidden="true" />{t("update.footer.storageInsufficient")}</> : <><CircleAlert size={13} aria-hidden="true" />{t("update.footer.retry")}</>}
                 </button>
               </div>
             )}

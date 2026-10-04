@@ -91,6 +91,8 @@ function updateStatus(snapshot: DesktopUpdateSnapshot, t: Translate): string {
     case "installNotApplied":
       // The installer reported success but the running version never changed.
       return t("update.status.installNotApplied", { version });
+    case "storageInsufficient":
+      return t("update.status.storageInsufficient");
     case "unknown":
       return t("update.status.unknown");
   }
@@ -136,7 +138,8 @@ function promptPresentation(
       || snapshot.reason === "installerNotStarted"
       || snapshot.reason === "archiveIntegrityInvalid"
       || snapshot.reason === "installResult"
-      || snapshot.reason === "installNotApplied";
+      || snapshot.reason === "installNotApplied"
+      || snapshot.reason === "storageInsufficient";
     return {
       eyebrow: t("update.prompt.error.eyebrow"),
       title: t("update.prompt.error.title"),

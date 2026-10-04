@@ -78,6 +78,7 @@ const updateReasons = [
   "installerNotStarted",
   "installResult",
   "installNotApplied",
+  "storageInsufficient",
   "unknown",
 ] as const;
 
