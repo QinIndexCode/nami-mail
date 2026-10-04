@@ -22,7 +22,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { api, type TranslationConfiguration, type TranslationProviderId } from "./api";
-import type { AgentBootstrap, AgentProviderList, ExternalPairingSummary } from "./agentTypes";
+import type { AgentBootstrap, AgentProviderList } from "./agentTypes";
 import { desktopBridge, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
 import { searchSettings } from "./settings/settings-search";
 
@@ -176,9 +176,6 @@ export default function SettingsModal({
   const [autoReplyDecisionsOpen, setAutoReplyDecisionsOpen] = useState(false);
   const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
   const [autoReplySandboxOpen, setAutoReplySandboxOpen] = useState(false);
-  const [externalGuideCopied, setExternalGuideCopied] = useState<string | null>(null);
-  const [externalPairings, setExternalPairings] = useState<ExternalPairingSummary[] | null>(null);
-  const [externalPairingsError, setExternalPairingsError] = useState<unknown>(null);
   // Reported by the models panel: a form dialog stacked over it, and whether a
   // save / connection check is running there. Both gate this dialog's own close
   // paths, because a models save also checks the connection and can take tens
@@ -220,7 +217,6 @@ export default function SettingsModal({
   }, [categoryRequest, modelsOverlayOpen, filtersOverlayOpen, connectionsOverlayOpen]);
   // The embedded models panel hosts both inner tabs (providers / MCP servers);
   // switching them swaps the body in place so the panel never remounts.
-  const [externalPairingsReload, setExternalPairingsReload] = useState(0);
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadButton = useRef<HTMLButtonElement>(null);
   const settingsDialog = useRef<HTMLElement>(null);
@@ -302,27 +298,6 @@ export default function SettingsModal({
   useEffect(() => {
     setIntensityDraft(currentSettings.backgroundIntensity);
   }, [currentSettings.backgroundIntensity]);
-
-  useEffect(() => {
-    if (demoMode) {
-      setExternalPairings([]);
-      setExternalPairingsError(null);
-      return undefined;
-    }
-    let active = true;
-    setExternalPairingsError(null);
-    api.agentPairings().then(({ pairings }) => {
-      if (active) setExternalPairings(pairings);
-    }).catch((error: unknown) => {
-      if (active) {
-        setExternalPairings(null);
-        setExternalPairingsError(error);
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, [demoMode, externalPairingsReload]);
 
   useEffect(() => {
     if (demoMode) {
@@ -1076,7 +1051,6 @@ export default function SettingsModal({
     agent: (
       <SettingsAgentSection
         t={t}
-        formatDate={formatDate}
         accounts={accounts}
         currentSettings={currentSettings}
         controlsBusy={controlsBusy}
@@ -1085,11 +1059,6 @@ export default function SettingsModal({
         openConnectionsSettings={openConnectionsCategory}
         requestAccessLevelChange={requestAccessLevelChange}
         applyOptimisticSettings={applyOptimisticSettings}
-        externalGuideCopied={externalGuideCopied}
-        setExternalGuideCopied={setExternalGuideCopied}
-        externalPairings={externalPairings}
-        externalPairingsError={externalPairingsError}
-        setExternalPairingsReload={setExternalPairingsReload}
         setAutoReplyDialogOpen={setAutoReplyDialogOpen}
         setAutoReplyDecisionsOpen={setAutoReplyDecisionsOpen}
         setMemoryDialogOpen={setMemoryDialogOpen}
