@@ -771,7 +771,14 @@ function quitForUpdateInstall(): void {
   if (!agentUpdateDrain.completeUpdateHandoff()) {
     console.error("Nami Mail could not record the Agent host update handoff.");
   }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.destroy();
+  }
   app.quit();
+  const exitTimer = setTimeout(() => {
+    app.exit(0);
+  }, 1_000);
+  exitTimer.unref?.();
 }
 
 /** Opens external URLs through the shared opener, which prefers Chrome on Windows. */
