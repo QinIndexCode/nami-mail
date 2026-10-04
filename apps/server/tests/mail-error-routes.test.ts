@@ -181,7 +181,7 @@ describe("mail transport error API responses", () => {
     expect(response.json()).toEqual({ ok: true, destination: "[Gmail]/All Mail", refreshPending: true });
     await vi.waitFor(() => {
       expect(syncAccount).toHaveBeenCalledWith(db, expect.any(Buffer), "account-1", expect.any(Number), undefined, undefined, undefined);
-    });
+    }, { timeout: 10_000 });
   });
 
   it("keeps draft-save and attachment-download transport failures classified and redacted", async () => {

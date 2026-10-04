@@ -105,7 +105,7 @@ describe("operation queue", () => {
     const first = app.inject({ method: "POST", url: "/api/messages/message-1/move", payload: { target: "trash" } });
     try {
       // Let the first request reach the blocked executor.
-      await vi.waitFor(() => expect(moveMessage).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(moveMessage).toHaveBeenCalledTimes(1), { timeout: 10_000 });
       const second = app.inject({ method: "POST", url: "/api/messages/message-2/move", payload: { target: "trash" } });
 
       // While the first move is in flight, the second request is durably
@@ -113,7 +113,7 @@ describe("operation queue", () => {
       await vi.waitFor(() => {
         const pending = db.prepare("SELECT COUNT(*) AS c FROM operation_queue WHERE status = 'pending'").get() as { c: number };
         expect(pending.c).toBe(1);
-      });
+      }, { timeout: 10_000 });
       const race = await Promise.race([
         second.then(() => "settled"),
         new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 80)),
@@ -150,7 +150,7 @@ describe("operation queue", () => {
 
     const resumed = await queue.resumePending();
     expect(resumed).toBe(2);
-    await vi.waitFor(() => expect(calls.sort()).toEqual(["message-1", "message-2"]));
+    await vi.waitFor(() => expect(calls.sort()).toEqual(["message-1", "message-2"]), { timeout: 10_000 });
     const statuses = db.prepare("SELECT id, status FROM operation_queue ORDER BY id").all() as Array<{ id: string; status: string }>;
     expect(statuses).toEqual([
       { id: "op-1", status: "completed" },

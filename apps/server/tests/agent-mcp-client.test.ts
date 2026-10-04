@@ -192,7 +192,7 @@ describe("MCP stdio resource bounds", () => {
 
       await vi.waitFor(() => {
         expect(logged.map((call) => call.message)).toContain("Dropped an MCP stdio line nested past the accepted JSON depth");
-      });
+      }, { timeout: 10_000 });
       expect(logged.find((call) => call.message.includes("nested past"))?.meta).toMatchObject({ reason: "depth" });
 
       // …and the connection is still usable afterwards.

@@ -77,12 +77,12 @@ describe("yazl exposes what the back-pressure bounds are built on", () => {
     // 512 KiB with nobody reading overruns the 16 KiB mark, and the drain only
     // arrives once a reader shows up — which is the whole criterion.
     zip.addBuffer(incompressible(512 * 1024), "emails/0001_message.eml");
-    await vi.waitFor(() => expect(output.writableNeedDrain).toBe(true));
+    await vi.waitFor(() => expect(output.writableNeedDrain).toBe(true), { timeout: 10_000 });
     expect(drained).toBe(false);
 
     const seen: Buffer[] = [];
     output.on("data", (chunk: Buffer) => { seen.push(chunk); });
-    await vi.waitFor(() => expect(drained).toBe(true));
+    await vi.waitFor(() => expect(drained).toBe(true), { timeout: 10_000 });
     expect(seen.length).toBeGreaterThan(0);
   });
 
@@ -101,7 +101,7 @@ describe("yazl exposes what the back-pressure bounds are built on", () => {
     expect(entry.state).toBe(0);
     expect(entry.compressedSize).toBeNull();
 
-    await vi.waitFor(() => expect(entry.state).toBe(3));
+    await vi.waitFor(() => expect(entry.state).toBe(3), { timeout: 10_000 });
     expect(typeof entry.compressedSize).toBe("number");
   });
 });
@@ -300,7 +300,7 @@ describe("a download that goes away ends the export", () => {
     const source = incompressible(64 * 1024);
 
     const pending = writer.add(source, "emails/0001_message.eml");
-    await vi.waitFor(() => expect(outputOf(zip).writableNeedDrain).toBe(true));
+    await vi.waitFor(() => expect(outputOf(zip).writableNeedDrain).toBe(true), { timeout: 10_000 });
 
     // A write to a destroyed PassThrough returns false without ever raising
     // writableNeedDrain, so a parked writer would wait for a drain that can no

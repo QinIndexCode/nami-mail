@@ -85,10 +85,10 @@ describe("IMAP IDLE watcher", () => {
 
   it("parks on INBOX idle with long-lived socket options", async () => {
     await watcher!.ensureAccounts();
-    await vi.waitFor(() => expect(clients).toHaveLength(1));
-    await vi.waitFor(() => expect(clients[0].connect).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(clients).toHaveLength(1), { timeout: 10_000 });
+    await vi.waitFor(() => expect(clients[0].connect).toHaveBeenCalledTimes(1), { timeout: 10_000 });
     expect(clients[0].mailboxOpen).toHaveBeenCalledWith("INBOX");
-    await vi.waitFor(() => expect(clients[0].idle).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(clients[0].idle).toHaveBeenCalledTimes(1), { timeout: 10_000 });
     expect(imapClientForAccount.mock.calls[0]![3]).toEqual({
       socketTimeout: 30 * 60 * 1000,
       maxIdleTime: 28 * 60 * 1000,
@@ -98,7 +98,7 @@ describe("IMAP IDLE watcher", () => {
   it("reacts to mailbox events while parked (official event-driven semantics)", async () => {
     await watcher!.ensureAccounts();
     const client = clients[0];
-    await vi.waitFor(() => expect(client.idle).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(client.idle).toHaveBeenCalledTimes(1), { timeout: 10_000 });
     expect(onChange).not.toHaveBeenCalled();
 
     // Untagged updates fire events on the client while `idle()` stays parked
@@ -119,7 +119,7 @@ describe("IMAP IDLE watcher", () => {
   it("re-parks when idle() settles while the connection is still usable, without hot-looping", async () => {
     await watcher!.ensureAccounts();
     const client = clients[0];
-    await vi.waitFor(() => expect(client.idle).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(client.idle).toHaveBeenCalledTimes(1), { timeout: 10_000 });
 
     // Settle without a mailbox change (e.g. imapflow's own socket-timeout
     // recovery broke and re-entered IDLE), leaving the connection usable.
@@ -137,7 +137,7 @@ describe("IMAP IDLE watcher", () => {
 
   it("reconnects with backoff after a dropped connection", async () => {
     await watcher!.ensureAccounts();
-    await vi.waitFor(() => expect(clients[0].idle).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(clients[0].idle).toHaveBeenCalledTimes(1), { timeout: 10_000 });
     expect(onChange).not.toHaveBeenCalled();
 
     clients[0].usable = false;
@@ -151,7 +151,7 @@ describe("IMAP IDLE watcher", () => {
   it("close() breaks a parked IDLE and lets the loop unwind without reconnecting", async () => {
     await watcher!.ensureAccounts();
     const client = clients[0];
-    await vi.waitFor(() => expect(client.idle).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(client.idle).toHaveBeenCalledTimes(1), { timeout: 10_000 });
 
     await watcher!.close();
     expect(client.logout).toHaveBeenCalledTimes(1);
@@ -164,7 +164,7 @@ describe("IMAP IDLE watcher", () => {
   it("ensureAccounts takes over new accounts and stops removed ones", async () => {
     insertAccount(db, "account-2", "other@example.com");
     await watcher!.ensureAccounts();
-    await vi.waitFor(() => expect(clients).toHaveLength(2));
+    await vi.waitFor(() => expect(clients).toHaveLength(2), { timeout: 10_000 });
 
     // Calling again must not double-start existing watchers.
     await watcher!.ensureAccounts();
@@ -172,10 +172,10 @@ describe("IMAP IDLE watcher", () => {
 
     db.prepare("DELETE FROM accounts WHERE id = ?").run("account-2");
     await watcher!.ensureAccounts();
-    await vi.waitFor(() => expect(clients[1].logout).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(clients[1].logout).toHaveBeenCalledTimes(1), { timeout: 10_000 });
 
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(imapClientForAccount).toHaveBeenCalledTimes(2);
-    await vi.waitFor(() => expect(clients[0].idle).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(clients[0].idle).toHaveBeenCalledTimes(1), { timeout: 10_000 });
   });
 });

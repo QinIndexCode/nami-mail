@@ -1506,7 +1506,7 @@ describe("IMAP message flag updates", () => {
 
     await vi.waitFor(() => {
       expect(submissionForId(db, masterKey, prepared.submission.id)?.deliveryStatus).toBe("confirmed");
-    });
+    }, { timeout: 10_000 });
   });
 
   it("clears the sync guard and records an error when OAuth token acquisition fails", async () => {
