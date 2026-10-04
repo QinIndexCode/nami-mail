@@ -45,13 +45,7 @@ import {
   SquareCheckBig,
   Sparkles,
   Star,
-  Sun,
-  Users,
-  Trash2,
-  WifiOff,
-  X,
-  Printer,
-  UserRound,
+  Sun, Users, Trash2, WifiOff, X, Printer, UserRound,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
 import { MailTextBody } from "./MailTextBody";
@@ -69,6 +63,7 @@ import { attachmentsZipFilename, buildAttachmentsZipBlob, triggerBlobDownload } 
 import { calendarEventIcs, exportDownloadFilename, vCardText } from "./contactExport";
 import { desktopBridge, type DesktopAutoReplyNotice, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
 import { resolveUpdateFooter, type UpdateFooterAction } from "./updateFooter";
+import { handleDemoUpdateFooterAction, isDemoPromptRequested, resolveDemoUpdateSnapshot } from "./demoUpdateMock";
 import { demoDataSnapshot, ensureDemoLoaded } from "./demo-loader";
 import { mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
 import { AccountHealthBanner, accountShowsFreshness, accountStatusDotClass, useAccountHealth } from "./accountHealth";
@@ -441,7 +436,7 @@ export default function App() {
   const [toast, setToast] = useState<ToastNotice>(null);
   const [autoReplyNotices, setAutoReplyNotices] = useState<DesktopAutoReplyNotice[]>([]);
   const [fatalError, setFatalError] = useState<MailErrorPresentation | null>(null);
-  const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateSnapshot | null>(null);
+  const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateSnapshot | null>(() => resolveDemoUpdateSnapshot(isDemo));
   // Bumped by every pushed update-status event: an action's own snapshot was
   // taken before any event broadcast while it ran, so it may only win when no
   // event intervened.
@@ -1263,6 +1258,10 @@ await refreshSubmissions(nextAccounts, { silent: true });
 
   const runUpdateFooterAction = useCallback(async (action: UpdateFooterAction) => {
     const bridge = desktopBridge();
+    if (!bridge && isDemo) {
+      handleDemoUpdateFooterAction(action, setDesktopUpdateStatus, showToast, t);
+      return;
+    }
     if (!bridge || updateFooterBusy) return;
     setUpdateFooterBusy(true);
     // A download/check broadcasts progress while it runs; the snapshot the call
@@ -4313,7 +4312,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       <Suspense fallback={null}><StartupUpdatePrompt
         snapshot={desktopUpdateStatus}
         onSnapshot={setDesktopUpdateStatus}
-        defer={state.anyModalOrSidebar || syncing}
+        defer={state.anyModalOrSidebar || syncing || (isDemo && !desktopBridge() && !isDemoPromptRequested())}
         onVisibilityChange={setUpdatePromptOpen}
       /></Suspense>
       {pendingBatchDelete && (
