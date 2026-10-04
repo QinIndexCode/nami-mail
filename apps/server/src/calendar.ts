@@ -241,3 +241,37 @@ export function updateCalendarEvent(
 export function deleteCalendarEvent(db: DatabaseHandle, id: string): boolean {
   return db.prepare("DELETE FROM calendar_events WHERE id = ?").run(id).changes === 1;
 }
+
+export function clearAllCalendarEvents(db: DatabaseHandle): number {
+  return db.prepare("DELETE FROM calendar_events").run().changes;
+}
+
+export type CalendarImportMode = "append" | "replace";
+
+export type CalendarImportResult = {
+  imported: number;
+  replaced: boolean;
+};
+
+export function importCalendarEvents(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+  events: Array<z.infer<typeof calendarEventCreateSchema>>,
+  mode: CalendarImportMode = "append",
+): CalendarImportResult {
+  const runTransaction = db.transaction((items: Array<z.infer<typeof calendarEventCreateSchema>>) => {
+    if (mode === "replace") {
+      db.prepare("DELETE FROM calendar_events").run();
+    }
+    for (const input of items) {
+      createCalendarEvent(db, masterKey, input);
+    }
+  });
+
+  runTransaction(events);
+  return {
+    imported: events.length,
+    replaced: mode === "replace",
+  };
+}
+

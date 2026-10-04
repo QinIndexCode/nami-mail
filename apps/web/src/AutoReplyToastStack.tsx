@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import { CheckCheck, CornerDownLeft, MessageSquareReply, ShieldAlert, X } from "lucide-react";
 import { api } from "./api";
 import type { DesktopAutoReplyNotice } from "./desktop";
@@ -45,14 +45,7 @@ function AutoReplyToastItem({
       "data-nami-agent-confirmation-id": notice.confirmationId,
     }
     : {};
-  useEffect(() => {
-    if (notice.kind !== "pending" || closing) return undefined;
-    // The confirmation dies at its TTL; the popup has no valid action left
-    // and must not linger with a dead cancel button.
-    const remaining = Math.max(0, Date.parse(notice.expiresAt) - Date.now());
-    const timer = window.setTimeout(requestClose, remaining);
-    return () => window.clearTimeout(timer);
-  }, [closing, notice, requestClose]);
+
   const resolve = (confirmationId: string, decision: "approve" | "reject") => {
     setBusy(true);
     setResolveFailed(false);

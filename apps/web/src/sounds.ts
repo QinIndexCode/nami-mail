@@ -52,12 +52,26 @@ export function playNotificationSound(sound: NotificationSound): boolean {
   try {
     const start = context.currentTime + 0.025;
     if (sound === "soft") {
-      tone(context, start, 659.25, 0.23, 0.055);
-      tone(context, start + 0.12, 783.99, 0.34, 0.042);
-    } else {
-      tone(context, start, 880, 0.14, 0.06);
-      tone(context, start + 0.1, 1174.66, 0.18, 0.052);
-      tone(context, start + 0.22, 1567.98, 0.28, 0.04);
+      tone(context, start, 659.25, 0.23, 0.75);
+      tone(context, start + 0.12, 783.99, 0.34, 0.60);
+    } else if (sound === "bright") {
+      tone(context, start, 880, 0.14, 0.75);
+      tone(context, start + 0.1, 1174.66, 0.18, 0.65);
+      tone(context, start + 0.22, 1567.98, 0.28, 0.50);
+    } else if (sound === "chime") {
+      tone(context, start, 1046.50, 0.22, 0.70);
+      tone(context, start + 0.1, 1318.51, 0.35, 0.55);
+      tone(context, start + 0.11, 2093.00, 0.20, 0.25);
+    } else if (sound === "bubble") {
+      tone(context, start, 587.33, 0.08, 0.65);
+      tone(context, start + 0.05, 1174.66, 0.16, 0.75);
+    } else if (sound === "calm") {
+      tone(context, start, 440.00, 0.22, 0.50);
+      tone(context, start + 0.07, 554.37, 0.26, 0.45);
+      tone(context, start + 0.14, 659.25, 0.34, 0.40);
+    } else if (sound === "ping") {
+      tone(context, start, 783.99, 0.32, 0.70);
+      tone(context, start, 1567.98, 0.15, 0.22);
     }
     return true;
   } catch {

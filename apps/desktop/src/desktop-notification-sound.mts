@@ -1,5 +1,5 @@
 import { exec } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { minimalSpawnEnvironment } from "./spawn-environment.mjs";
@@ -15,25 +15,69 @@ import { minimalSpawnEnvironment } from "./spawn-environment.mjs";
  * AudioContext state — and it removes any need to ship audio assets.
  */
 
-export type CustomNotificationSound = "soft" | "bright";
+export const CUSTOM_NOTIFICATION_SOUNDS = [
+  "soft",
+  "bright",
+  "chime",
+  "bubble",
+  "calm",
+  "ping",
+] as const;
+
+export type CustomNotificationSound = (typeof CUSTOM_NOTIFICATION_SOUNDS)[number];
+
+export function isCustomNotificationSound(sound: unknown): sound is CustomNotificationSound {
+  return typeof sound === "string" && (CUSTOM_NOTIFICATION_SOUNDS as readonly string[]).includes(sound);
+}
 
 type ToneSpec = { freq: number; start: number; duration: number; volume: number };
 
 const softTones: ToneSpec[] = [
-  { freq: 659.25, start: 0.025, duration: 0.23, volume: 0.055 },
-  { freq: 783.99, start: 0.145, duration: 0.34, volume: 0.042 },
+  { freq: 659.25, start: 0.025, duration: 0.23, volume: 0.75 },
+  { freq: 783.99, start: 0.145, duration: 0.34, volume: 0.60 },
 ];
 
 const brightTones: ToneSpec[] = [
-  { freq: 880, start: 0.025, duration: 0.14, volume: 0.06 },
-  { freq: 1174.66, start: 0.125, duration: 0.18, volume: 0.052 },
-  { freq: 1567.98, start: 0.245, duration: 0.28, volume: 0.04 },
+  { freq: 880, start: 0.025, duration: 0.14, volume: 0.75 },
+  { freq: 1174.66, start: 0.125, duration: 0.18, volume: 0.65 },
+  { freq: 1567.98, start: 0.245, duration: 0.28, volume: 0.50 },
 ];
+
+const chimeTones: ToneSpec[] = [
+  { freq: 1046.50, start: 0.025, duration: 0.22, volume: 0.70 },
+  { freq: 1318.51, start: 0.125, duration: 0.35, volume: 0.55 },
+  { freq: 2093.00, start: 0.135, duration: 0.20, volume: 0.25 },
+];
+
+const bubbleTones: ToneSpec[] = [
+  { freq: 587.33, start: 0.025, duration: 0.08, volume: 0.65 },
+  { freq: 1174.66, start: 0.075, duration: 0.16, volume: 0.75 },
+];
+
+const calmTones: ToneSpec[] = [
+  { freq: 440.00, start: 0.025, duration: 0.22, volume: 0.50 },
+  { freq: 554.37, start: 0.095, duration: 0.26, volume: 0.45 },
+  { freq: 659.25, start: 0.165, duration: 0.34, volume: 0.40 },
+];
+
+const pingTones: ToneSpec[] = [
+  { freq: 783.99, start: 0.025, duration: 0.32, volume: 0.70 },
+  { freq: 1567.98, start: 0.025, duration: 0.15, volume: 0.22 },
+];
+
+const toneMap: Record<CustomNotificationSound, ToneSpec[]> = {
+  soft: softTones,
+  bright: brightTones,
+  chime: chimeTones,
+  bubble: bubbleTones,
+  calm: calmTones,
+  ping: pingTones,
+};
 
 /** Generates a 16-bit PCM mono WAV buffer for the given tone specification. */
 export function generateNotificationSoundWav(sound: CustomNotificationSound): Buffer {
   const sampleRate = 44100;
-  const tones = sound === "soft" ? softTones : brightTones;
+  const tones = toneMap[sound] ?? softTones;
   const totalDuration = Math.max(...tones.map((t) => t.start + t.duration)) + 0.03;
   const totalSamples = Math.ceil(totalDuration * sampleRate);
   const dataSize = totalSamples * 2; // 16-bit mono
@@ -88,10 +132,8 @@ export function getNotificationSoundFile(sound: CustomNotificationSound): string
   if (cached) return cached;
   try {
     const filePath = path.join(tmpdir(), `nami-notification-${sound}.wav`);
-    if (!existsSync(filePath)) {
-      const wav = generateNotificationSoundWav(sound);
-      writeFileSync(filePath, wav);
-    }
+    const wav = generateNotificationSoundWav(sound);
+    writeFileSync(filePath, wav);
     soundFilePathCache[sound] = filePath;
     return filePath;
   } catch {
@@ -149,7 +191,7 @@ const WIN32_PLAYER_WARMUP_MS = 10_000;
  * skips its ~1.5s cold start. Best effort — failures are ignored because the
  * caller logs them again when an actual notification needs the sound. */
 export function warmUpNotificationSoundPlayer(runExec: PlayerRunner = exec): void {
-  for (const sound of ["soft", "bright"] as const) {
+  for (const sound of CUSTOM_NOTIFICATION_SOUNDS) {
     getNotificationSoundFile(sound);
   }
   if (process.platform !== "win32") return;

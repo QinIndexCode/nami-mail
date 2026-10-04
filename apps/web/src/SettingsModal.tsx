@@ -40,28 +40,9 @@ import {
 import { presentUpdateSnapshot } from "./updatePresentation";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
-import type {
-  Account,
-  AgentAccessLevel,
-  AppSettings,
-  AppSettingsPatch,
-
-  BackgroundPreset,
-
-
-  NotificationSound,
-} from "./types";
-import { defaultAppSettings } from "./types";
+import { defaultAppSettings, type Account, type AgentAccessLevel, type AppSettings, type AppSettingsPatch, type BackgroundPreset, type NotificationSound } from "./types";
 import { FormNotice, type Notice } from "./FormNotice";
-import {
-  errorMessage,
-  backgroundContentTypeForFile,
-  revokeDemoObjectUrl,
-
-  expandedThemedSelectOwnsEscape,
-  maxBackgroundUploadBytes,
-  type PendingSettingsConfirmation,
-} from "./settings/settings-utils";
+import { errorMessage, backgroundContentTypeForFile, revokeDemoObjectUrl, expandedThemedSelectOwnsEscape, maxBackgroundUploadBytes, type PendingSettingsConfirmation } from "./settings/settings-utils";
 import {
   SETTINGS_CATEGORY_STORAGE_KEY,
   SETTINGS_NAV_GROUPS,
@@ -648,22 +629,14 @@ export default function SettingsModal({
     new Notification(t("app.name"), { body: t("settings.notifications.testBody"), silent });
   };
 
-  const playSoundTest = async () => {
-    if (currentSettings.notificationSound === "none") {
-      setNotice({ kind: "success", message: t("settings.sound.silentTest") });
-      return;
-    }
-    if (currentSettings.notificationSound === "system") {
-      await notifyInBrowser(false);
-      return;
-    }
+  const previewSound = async (sound: NotificationSound) => {
+    if (sound === "none") return;
     if (onTestSound) {
-      await onTestSound(currentSettings.notificationSound);
+      await onTestSound(sound);
       return;
     }
     const primed = await primeNotificationSound();
-    if (primed && playNotificationSound(currentSettings.notificationSound)) return;
-    await notifyInBrowser(false);
+    if (primed) playNotificationSound(sound);
   };
 
   const testNotification = async () => {
@@ -676,7 +649,7 @@ export default function SettingsModal({
         // process custom sound on desktop), so nothing extra to play here.
         await onTestNotification(currentSettings);
       } else {
-        const customSound = currentSettings.notificationSound === "soft" || currentSettings.notificationSound === "bright";
+        const customSound = currentSettings.notificationSound !== "none" && currentSettings.notificationSound !== "system";
         if (customSound) {
           const primed = await primeNotificationSound();
           const audible = primed && playNotificationSound(currentSettings.notificationSound);
@@ -693,21 +666,6 @@ export default function SettingsModal({
       setNotice({ kind: "success", message: t("settings.notifications.testSent") });
     } catch (error) {
       setNotice({ kind: "error", message: errorMessage(error, t("settings.error.sendTestNotification"), t) });
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const testSound = async () => {
-    if (busyAction) return;
-    setBusyAction("sound-test");
-    setNotice(null);
-    try {
-      await playSoundTest();
-      if (currentSettings.notificationSound === "system") setNotice({ kind: "success", message: t("settings.sound.systemTestSent") });
-      else if (currentSettings.notificationSound !== "none") setNotice({ kind: "success", message: t("settings.sound.testPlayed") });
-    } catch (error) {
-      setNotice({ kind: "error", message: errorMessage(error, t("settings.error.playSound"), t) });
     } finally {
       setBusyAction(null);
     }
@@ -1035,7 +993,7 @@ export default function SettingsModal({
         busyAction={busyAction}
         applyOptimisticSettings={applyOptimisticSettings}
         testNotification={testNotification}
-        testSound={testSound}
+        previewSound={previewSound}
       />
     ),
     desktop: (

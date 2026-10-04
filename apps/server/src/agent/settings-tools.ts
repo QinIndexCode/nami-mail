@@ -98,7 +98,7 @@ export function createSettingsTools(db: DatabaseHandle, hooks: SettingsToolHooks
           "avatarGravatarEnabled: boolean (show sender photos via Gravatar; hashes the email to a third party — enable only when the user asks);",
           "notificationsEnabled: boolean;",
           "notifyWhenFocused: boolean;",
-          "notificationSound: 'system' | 'soft' | 'bright' | 'none';",
+          "notificationSound: 'system' | 'soft' | 'bright' | 'chime' | 'bubble' | 'calm' | 'ping' | 'none';",
           "closeBehavior: 'ask' | 'tray' | 'quit'.",
           "For 'custom' background: the user must already have uploaded an image via the settings page — this tool cannot receive an image. If no custom image exists, ask the user to upload one instead.",
         ].join(" "),

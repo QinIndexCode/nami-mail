@@ -17,7 +17,7 @@ import { agentAccessLevelSchema } from "./caller.js";
 
 /** Wallpaper presets. "custom" requires an uploaded background file. */
 export const BACKGROUND_PRESETS = ["none", "paper", "mist", "coast", "dawn", "night", "custom"] as const;
-export const NOTIFICATION_SOUNDS = ["system", "soft", "bright", "none"] as const;
+export const NOTIFICATION_SOUNDS = ["system", "soft", "bright", "chime", "bubble", "calm", "ping", "none"] as const;
 /** What happens when the last window closes. */
 export const CLOSE_BEHAVIORS = ["ask", "tray", "quit"] as const;
 export const LIST_DENSITIES = ["comfortable", "compact"] as const;

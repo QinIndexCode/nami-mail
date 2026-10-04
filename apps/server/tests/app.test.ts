@@ -914,7 +914,7 @@ it("keeps an Agent stream running after the client closes its response", async (
       { backgroundIntensity: -1 },
       // The intensity range is 0-100, so the boundary one past the top is 101.
       { backgroundIntensity: 101 },
-      { notificationSound: "chime" },
+      { notificationSound: "unknown-sound" },
       { refreshIntervalSeconds: 45 },
       { closeBehavior: "minimize" },
       { unknownSetting: true },

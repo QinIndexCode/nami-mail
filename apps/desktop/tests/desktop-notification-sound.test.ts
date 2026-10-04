@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, statSync } from "node:fs";
 import test from "node:test";
-import { generateNotificationSoundWav, getNotificationSoundFile, playCustomNotificationSound, warmUpNotificationSoundPlayer, type PlayerRunner } from "../src/desktop-notification-sound.mts";
+import { CUSTOM_NOTIFICATION_SOUNDS, generateNotificationSoundWav, getNotificationSoundFile, playCustomNotificationSound, warmUpNotificationSoundPlayer, type PlayerRunner } from "../src/desktop-notification-sound.mts";
 
 /** Minimal RIFF/WAVE reader so the assertions describe the container, not offsets. */
 function readWavHeader(buffer: Buffer) {
@@ -45,10 +45,6 @@ test("generates a valid 16-bit mono PCM WAV container", () => {
 });
 
 test("renders distinct, non-silent audio for each sound", () => {
-  const soft = generateNotificationSoundWav("soft");
-  const bright = generateNotificationSoundWav("bright");
-  assert.notEqual(soft.length, bright.length);
-
   const peak = (buffer: Buffer) => {
     let max = 0;
     for (let offset = 44; offset < buffer.length; offset += 2) {
@@ -56,13 +52,15 @@ test("renders distinct, non-silent audio for each sound", () => {
     }
     return max;
   };
-  // Both stay inside int16 and actually contain signal.
-  assert.ok(peak(soft) > 500 && peak(soft) <= 32767);
-  assert.ok(peak(bright) > 500 && peak(bright) <= 32767);
 
-  // The envelope must start and end at silence, so the tone never clicks.
-  assert.equal(soft.readInt16LE(44), 0);
-  assert.equal(soft.readInt16LE(soft.length - 2), 0);
+  for (const sound of CUSTOM_NOTIFICATION_SOUNDS) {
+    const wav = generateNotificationSoundWav(sound);
+    // Stays inside int16 with headroom and has standard notification amplitude.
+    assert.ok(peak(wav) >= 15000 && peak(wav) <= 32000, `${sound} expected to have standard notification peak`);
+    // The envelope must start and end at silence, so the tone never clicks.
+    assert.equal(wav.readInt16LE(44), 0, `${sound} expected to start with zero`);
+    assert.equal(wav.readInt16LE(wav.length - 2), 0, `${sound} expected to end with zero`);
+  }
 });
 
 test("caches the generated file and reuses it across calls", () => {

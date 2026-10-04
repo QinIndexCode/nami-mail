@@ -43,9 +43,9 @@ import {
   Settings,
   ShieldCheck,
   SquareCheckBig,
-  Sparkles,
+  Info,
   Star,
-  Sun, Users, Trash2, WifiOff, X, Printer, UserRound,
+  Sun, Users, Trash2, WifiOff, X, Printer, UserRound, CalendarPlus, Video,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
 import { MailTextBody } from "./MailTextBody";
@@ -57,10 +57,14 @@ import { calendarCache, contactsCache, templatesCache } from "./dialogPrefetch";
 import DatePicker from "./DatePicker";
 import { canPreviewAttachment } from "./attachmentPreview";
 import { attachmentKinds, presentAttachment, type AttachmentKind } from "./attachmentPresentation";
-import { AttachmentFileIcon, FolderNavigationIcon, formatFileSize, isoFromDatetimeLocal, IconButton, type ToastKind } from "./mailUi";
+import { AttachmentFileIcon, FolderNavigationIcon, formatFileSize, isoFromDatetimeLocal, IconButton } from "./mailUi";
 import { parseMailtoUrl } from "./mailtoLink";
-import { attachmentsZipFilename, buildAttachmentsZipBlob, triggerBlobDownload } from "./attachmentZip";
-import { calendarEventIcs, exportDownloadFilename, vCardText } from "./contactExport";
+import { downloadAllAttachmentsZip, triggerBlobDownload } from "./attachmentZip";
+import { triggerCalendarIcsExport, triggerContactVcfExport } from "./contactExport";
+import { isIcsAttachment } from "./calendar/calendarUtils";
+import { useCalendarReminders } from "./calendar/useCalendarReminders";
+import { useToastQueue } from "./notifications/useToastQueue";
+import MailCalendarInviteBanner from "./calendar/MailCalendarInviteBanner";
 import { desktopBridge, type DesktopAutoReplyNotice, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
 import { resolveUpdateFooter, type UpdateFooterAction } from "./updateFooter";
 import { handleDemoUpdateFooterAction, isDemoPromptRequested, resolveDemoUpdateSnapshot } from "./demoUpdateMock";
@@ -161,6 +165,7 @@ const AttachmentPreviewModal = lazy(() => import("./AttachmentPreviewModal"));
 const SettingsModal = lazy(() => import("./SettingsModal"));
 const AccountsDialog = lazy(() => import("./AccountsDialog"));
 const CalendarDialog = lazy(() => import("./CalendarDialog"));
+const CalendarImportModal = lazy(() => import("./calendar/CalendarImportModal"));
 const ManagementDialogs = lazy(async () => {
   const module = await import("./ManagementDialogs");
   return { default: module.ContactsDialog };
@@ -178,8 +183,6 @@ const ComposeModal = lazy(async () => {
 });
 
 type MailView = MessageListQuery["messageView"];
-type ToastAction = { label: string; run: () => void };
-type ToastNotice = { kind: ToastKind; message: string; action?: ToastAction } | null;
 
 // Interface-switch ("fade hand-off") phases between the mail workspace and the
 // Agent workspace. Each interface fades out/in in two layers — the mail
@@ -433,7 +436,7 @@ export default function App() {
   const { mounted: readerMoreMounted, closing: readerMoreClosing, beginClose: beginReaderMoreClose } = usePopupExitTransition(readerMoreOpen, () => setReaderMoreOpen(false));
   const { mounted: snoozeMounted, closing: snoozeClosing, beginClose: beginSnoozeClose } = usePopupExitTransition(snoozeOpen, () => setSnoozeOpen(false));
   const [snoozeCustomUntil, setSnoozeCustomUntil] = useState("");
-  const [toast, setToast] = useState<ToastNotice>(null);
+  const { toast, showToast, dismissToast } = useToastQueue();
   const [autoReplyNotices, setAutoReplyNotices] = useState<DesktopAutoReplyNotice[]>([]);
   const [fatalError, setFatalError] = useState<MailErrorPresentation | null>(null);
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateSnapshot | null>(() => resolveDemoUpdateSnapshot(isDemo));
@@ -537,9 +540,6 @@ export default function App() {
   const submissionOutstandingCount = submissionAttentionCount + submissionActiveCount;
   const sidebarCounts = useMemo(() => sidebarBadgeCounts(stats), [stats]);
   useDialogFocus(state.mobileSidebar, sidebarRef);
-  const showToast = useCallback((message: string, kind: ToastKind = "success", action?: ToastAction) => {
-    setToast({ kind, message, action });
-  }, []);
 
   // Block-assembly switch between the mail workspace and the Agent workspace.
   // Opening: mail blocks leave in order, then the Agent workspace mounts and
@@ -1403,11 +1403,6 @@ await refreshSubmissions(nextAccounts, { silent: true });
     // identity on every list load, which would restart this effect (resetting
     // the timer and the attempt budget) before the first poll ever fired.
   }, [accountIdsKey, refreshSubmissions, submissionStatusRefreshIdsKey]);
-  useEffect(() => {
-    if (!toast) return;
-    const timer = window.setTimeout(() => setToast(null), toast.action ? 6000 : toast.kind === "warning" ? 9000 : toast.kind === "error" ? 6000 : 3200);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
   // Floating-UI tooltips: a single reused bubble positioned by
   // @floating-ui/dom. flip() turns the bubble over when there is no room on
   // the preferred side and shift() nudges it along the axis, with the app
@@ -3178,18 +3173,9 @@ const emptyMessageList = useMemo(() => (query.trim()
   const selectedIsSnoozed = selected ? isSnoozedMessage(selected) : false;
 
   const downloadAttachment = async (message: Message, attachment: MessageAttachment) => {
-    if (pendingArchiveMovesRef.current.some((move) => move.id === message.id) || message.movePending) {
-      showToast(t("mail.action.moveRefreshing"), "info");
-      return;
-    }
-    if (message.moveLocationUnverified) {
-      showToast(t("mail.action.locationUnverified"), "info");
-      return;
-    }
-    if (isDemo) {
-      showToast(t("mail.attachment.demoUnavailable"), "info");
-      return;
-    }
+    if (pendingArchiveMovesRef.current.some((move) => move.id === message.id) || message.movePending) return showToast(t("mail.action.moveRefreshing"), "info");
+    if (message.moveLocationUnverified) return showToast(t("mail.action.locationUnverified"), "info");
+    if (isDemo) return showToast(t("mail.attachment.demoUnavailable"), "info");
     const downloadKey = `${message.id}:${attachment.partId}`;
     if (attachmentDownloads[downloadKey]?.phase === "downloading") return;
     setAttachmentDownloads((current) => ({ ...current, [downloadKey]: { phase: "downloading" } }));
@@ -3215,23 +3201,13 @@ const emptyMessageList = useMemo(() => (query.trim()
 
   const zipAllAttachments = async () => {
     if (!selected) return;
-    if (selectedMovePending || selected.movePending) {
-      showToast(t("mail.action.moveRefreshing"), "info");
-      return;
-    }
-    if (selected.moveLocationUnverified) {
-      showToast(t("mail.action.locationUnverified"), "info");
-      return;
-    }
-    if (isDemo) {
-      showToast(t("mail.attachment.demoUnavailable"), "info");
-      return;
-    }
+    if (selectedMovePending || selected.movePending) return showToast(t("mail.action.moveRefreshing"), "info");
+    if (selectedMoveLocationUnverified) return showToast(t("mail.action.locationUnverified"), "info");
+    if (isDemo) return showToast(t("mail.attachment.demoUnavailable"), "info");
     if (zipAllPhase === "zipping") return;
     setZipAllPhase("zipping");
     try {
-      const blob = await buildAttachmentsZipBlob(visibleAttachments, (partId) => api.downloadAttachment(selected.id, partId));
-      triggerBlobDownload(blob, attachmentsZipFilename(selected.subject));
+      await downloadAllAttachmentsZip(selected.id, selected.subject, visibleAttachments, (id, pId) => api.downloadAttachment(id, pId));
       showToast(t("mail.attachment.zipStarted", { count: visibleAttachments.length }));
     } catch (error) {
       showToast(mailErrorToastMessage(error, t("mail.error.zipAttachments"), t), "error");
@@ -3242,18 +3218,9 @@ const emptyMessageList = useMemo(() => (query.trim()
 
   const exportSelectedEml = async () => {
     if (!selected) return;
-    if (selectedMovePending || selected.movePending) {
-      showToast(t("mail.action.moveRefreshing"), "info");
-      return;
-    }
-    if (selectedMoveLocationUnverified) {
-      showToast(t("mail.action.locationUnverified"), "info");
-      return;
-    }
-    if (isDemo) {
-      showToast(t("mail.action.exportDemoUnavailable"), "info");
-      return;
-    }
+    if (selectedMovePending || selected.movePending) return showToast(t("mail.action.moveRefreshing"), "info");
+    if (selectedMoveLocationUnverified) return showToast(t("mail.action.locationUnverified"), "info");
+    if (isDemo) return showToast(t("mail.action.exportDemoUnavailable"), "info");
     try {
       const { blob, filename } = await api.downloadMessageEml(selected.id);
       triggerBlobDownload(blob, filename);
@@ -3265,34 +3232,34 @@ const emptyMessageList = useMemo(() => (query.trim()
 
   const printSelectedMessage = () => {
     if (!selected) return;
-    if (isDemo) {
-      showToast(t("mail.action.printDemoUnavailable"), "info");
-      return;
-    }
+    if (isDemo) return showToast(t("mail.action.printDemoUnavailable"), "info");
     window.print();
   };
 
   const exportContactVcf = () => {
     if (!selected) return;
-    const card = vCardText(selected.from.name, selected.from.address);
-    triggerBlobDownload(new Blob([card], { type: "text/vcard" }), exportDownloadFilename(selected.from.name, "contact", "vcf"));
-    showToast(t("mail.action.exportStarted", { filename: exportDownloadFilename(selected.from.name, "contact", "vcf") }));
+    const filename = triggerContactVcfExport(selected.from);
+    showToast(t("mail.action.exportStarted", { filename }));
   };
 
   const exportCalendarIcs = () => {
     if (!selected) return;
-    const start = new Date(selected.sentAt);
-    const end = new Date(start.getTime() + 60 * 60 * 1000);
-    const ics = calendarEventIcs({
-      summary: selected.subject || "(no subject)",
-      description: selected.from.address,
-      start,
-      end,
-      uid: `${selected.id}@nami-mail`,
-    });
-    const filename = exportDownloadFilename(selected.subject, "event", "ics");
-    triggerBlobDownload(new Blob([ics], { type: "text/calendar" }), filename);
+    const filename = triggerCalendarIcsExport(selected);
     showToast(t("mail.action.exportStarted", { filename }));
+  };
+
+  const [calendarImportPayload, setCalendarImportPayload] = useState<{ open: boolean; content: string; filename: string } | null>(null);
+  const openCalendarImport = (content: string, filename: string) => {
+    setCalendarImportPayload({ open: true, content, filename });
+  };
+  const handleIcsAttachmentImport = async (message: Message, attachment: MessageAttachment) => {
+    try {
+      const blob = await api.downloadAttachment(message.id, attachment.partId);
+      const text = await blob.text();
+      openCalendarImport(text, attachment.filename);
+    } catch (error) {
+      showToast(mailErrorToastMessage(error, t("calendar.loadError"), t), "error");
+    }
   };
 
   const openAttachmentPreview = (message: Message, attachment: MessageAttachment) => {
@@ -3398,7 +3365,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     // In the browser there is no main-process player: prime the AudioContext
     // from this user gesture and play the tone alongside the banner. A failed
     // prime falls back to the audible default instead of a silent banner.
-    const customSound = testSettings.notificationSound === "soft" || testSettings.notificationSound === "bright";
+    const customSound = testSettings.notificationSound !== "none" && testSettings.notificationSound !== "system";
     if (customSound) {
       const primed = await primeNotificationSound();
       if (primed && playNotificationSound(testSettings.notificationSound)) {
@@ -3411,20 +3378,11 @@ const emptyMessageList = useMemo(() => (query.trim()
 
   const testNotificationSound = useCallback(async (sound: AppSettings["notificationSound"]) => {
     if (sound === "none") return;
-    if (desktopBridge()?.testNativeNotification) {
-      // Desktop: the sound test runs through the real pipeline (a localized
-      // banner plus the main-process playback) via testDesktopNotification.
-      await testDesktopNotification({ ...settings, notificationSound: sound });
-      return;
-    }
-    if (sound === "system") {
-      await testDesktopNotification({ ...settings, notificationSound: sound });
-      return;
-    }
-    // Browser preview: prime from this user gesture and play the WebAudio tone.
     const primed = await primeNotificationSound();
     if (primed && playNotificationSound(sound)) return;
-    await testDesktopNotification({ ...settings, notificationSound: "system" });
+    if (sound === "system") {
+      await testDesktopNotification({ ...settings, notificationSound: sound });
+    }
   }, [settings, testDesktopNotification]);
 
   const openNotifiedMessage = useCallback(async (messageId: string) => {
@@ -3496,9 +3454,13 @@ const emptyMessageList = useMemo(() => (query.trim()
       if (!notice.shouldAlert) return;
       // The custom sound (soft/bright) is played by the main process before
       // the native banner goes out; nothing for the renderer to play here.
-      handlers.showToast(notice.count === 1
-        ? handlers.t("mail.notification.singleToast", { sender: notice.fromName || notice.fromAddress || handlers.t("mail.notification.newContact") })
-        : handlers.t("mail.notification.multipleToast", { count: notice.count }));
+      handlers.showToast(
+        notice.count === 1
+          ? handlers.t("mail.notification.singleToast", { sender: notice.fromName || notice.fromAddress || handlers.t("mail.notification.newContact") })
+          : handlers.t("mail.notification.multipleToast", { count: notice.count }),
+        "info",
+        { priority: "low", icon: "mail" },
+      );
     });
     const unsubscribeOpenMessage = bridge.onOpenMessage((messageId) => {
       void bridgeHandlersRef.current.openNotifiedMessage(messageId);
@@ -3655,6 +3617,14 @@ const emptyMessageList = useMemo(() => (query.trim()
       ]);
     })();
   }, [locale]);
+
+  useCalendarReminders({
+    demoMode: isDemo,
+    locale,
+    onOpenCalendar: actions.openCalendar,
+    showToast,
+    notificationsEnabled: settings.notificationsEnabled,
+  });
 
   useEffect(() => {
     if (!isDesktopSmoke) return;
@@ -4240,6 +4210,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                   onCancel={cancelTranslation}
                 />
                 )}
+                <MailCalendarInviteBanner messageId={selected.id} attachments={selected.attachments} onImportClick={openCalendarImport} onViewCalendar={() => actions.openCalendar()} demoMode={isDemo} />
                 <div className="mail-content">{selected.htmlBody
                   ? <div className="mail-html" dangerouslySetInnerHTML={{ __html: readerHtml }} />
                   : <div className="mail-text"><MailTextBody body={readerTextParts.quote ? readerTextParts.body : readerTextSource} suffix={readerTextParts.quote ? <button type="button" className="mail-quote-toggle" onClick={() => setQuotedExpanded(true)}>{t("mail.reader.showQuoted")}</button> : null} /></div>}
@@ -4266,6 +4237,9 @@ const emptyMessageList = useMemo(() => (query.trim()
                           <div className="attachment-actions">
                             {canPreviewAttachment(attachment.filename, attachment.contentType) && (
                               <IconButton label={t("mail.attachment.preview", { filename: attachment.filename })} disabled={selectedRemoteActionsBlocked} onClick={() => openAttachmentPreview(selected, attachment)}><Eye size={16} /></IconButton>
+                            )}
+                            {isIcsAttachment(attachment) && (
+                              <IconButton label={t("calendar.importFromEmailAttachment")} disabled={selectedRemoteActionsBlocked} onClick={() => void handleIcsAttachmentImport(selected, attachment)}><CalendarPlus size={16} /></IconButton>
                             )}
                             <IconButton label={selectedMoveActionLabel ?? (download?.phase === "error" ? t("mail.attachment.retryDownload", { filename: attachment.filename }) : t("mail.attachment.download", { filename: attachment.filename }))} disabled={isDownloading || selectedRemoteActionsBlocked} onClick={() => void downloadAttachment(selected, attachment)}>{isDownloading ? <LoaderCircle className="spin" size={16} /> : download?.phase === "error" ? <RefreshCw size={16} /> : <Download size={16} />}</IconButton>
                           </div>
@@ -4301,11 +4275,20 @@ const emptyMessageList = useMemo(() => (query.trim()
       </main>
 
       {state.addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} existingAccounts={accounts} onClose={() => actions.closeAddAccount()} onAdded={handleAccountAdded} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
-      {state.composeOpen && <Suspense fallback={null}><ComposeModal accounts={accounts} draft={state.composeDraft} onClose={() => actions.closeCompose()} onSent={(message, kind, undoDraft, sentAccountId) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), run: () => { window.setTimeout(() => { actions.openCompose(undoDraft); }, 0); } }); else showToast(message, kind); if (sentAccountId && !isDemo) { void api.sync(sentAccountId).then(() => load({ silent: true })).catch(() => undefined).finally(() => setThreadRefreshTick((value) => value + 1)); } }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {state.composeOpen && <Suspense fallback={null}><ComposeModal accounts={accounts} draft={state.composeDraft} onClose={() => actions.closeCompose()} onSent={(message, kind, undoDraft, sentAccountId) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), icon: "undo", run: () => { window.setTimeout(() => { actions.openCompose(undoDraft); }, 0); } }); else showToast(message, kind); if (sentAccountId && !isDemo) { void api.sync(sentAccountId).then(() => load({ silent: true })).catch(() => undefined).finally(() => setThreadRefreshTick((value) => value + 1)); } }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.settingsOpen && <Suspense fallback={null}><SettingsModal settings={settings} accounts={accounts} onClose={() => actions.closeSettings()} onSettingsChange={applySettings} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} agentProviderSeed={agentProviderSnapshot ?? preloadedAgentBootstrap ?? undefined} categoryRequest={state.settingsCategoryRequest} onAgentProviderListChanged={(snapshot) => { setAgentProviderSnapshot({ providers: snapshot.items, defaultProviderId: snapshot.defaultProviderId }); setPreloadedAgentBootstrap((current) => current && { ...current, providers: snapshot.items, defaultProviderId: snapshot.defaultProviderId, configured: snapshot.items.some((provider) => provider.configured) }); setAgentProviderListVersion((version) => version + 1); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
       {state.contactsOpen && <Suspense fallback={null}><ManagementDialogs demoMode={isDemo} onClose={() => actions.closeContacts()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.templatesOpen && <Suspense fallback={null}><TemplatesDialog demoMode={isDemo} onClose={() => actions.closeTemplates()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.calendarOpen && <Suspense fallback={null}><CalendarDialog demoMode={isDemo} onClose={() => actions.closeCalendar()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {calendarImportPayload?.open && (
+        <Suspense fallback={null}><CalendarImportModal
+          open={calendarImportPayload.open}
+          initialIcsContent={calendarImportPayload.content}
+          initialFileName={calendarImportPayload.filename}
+          onClose={() => setCalendarImportPayload(null)}
+          onSuccess={(count, replaced) => showToast(t(replaced ? "calendar.importSuccessReplace" : "calendar.importSuccessAppend", { count }), "success")}
+        /></Suspense>
+      )}
       {state.accountsOpen && <Suspense fallback={null}><AccountsDialog accounts={accounts} demoMode={isDemo} onClose={() => actions.closeAccounts()} onAddAccount={() => { actions.closeAccounts(); actions.openAddAccount(); }} onAccountRemoved={removeAccountFromView} onAccountSignatureChanged={updateAccountSignatureInState} onAccountSync={retryAccountSync} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.sendingStatusOpen && <Suspense fallback={null}><SendingStatusModal accounts={accounts} submissions={submissions} loading={submissionLoading} loadError={submissionLoadError} onClose={() => actions.closeSendingStatus()} onRefresh={() => refreshSubmissions(accounts)} onSyncAccount={async (accountId) => { await retryAccountSync(accountId); }} onCreateNewMessage={(draft) => { actions.closeSendingStatus(); actions.openCompose(draft); }} onCancelScheduled={cancelScheduledSubmission} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       <Suspense fallback={null}><TranslationTermsDialog open={state.translationTermsOpen} onAccept={acceptTranslationTerms} onDecline={declineTranslationTerms} /></Suspense>
@@ -4335,31 +4318,13 @@ const emptyMessageList = useMemo(() => (query.trim()
             tabIndex={-1}
           >
             <span className="eyebrow">{t("mail.selection.deleteConfirmEyebrow")}</span>
-            <h3 id="batch-delete-confirmation-title">
-              {t("mail.selection.deleteConfirmTitle", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}
-            </h3>
-            <p id="batch-delete-confirmation-description">
-              {t("mail.selection.deleteConfirmDescription", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}
-            </p>
+            <h3 id="batch-delete-confirmation-title">{t("mail.selection.deleteConfirmTitle", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}</h3>
+            <p id="batch-delete-confirmation-description">{t("mail.selection.deleteConfirmDescription", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}</p>
             <div className="confirmation-actions">
-              <button
-                className="secondary-button"
-                type="button"
-                data-dialog-initial-focus
-                disabled={batchBusy}
-                onClick={requestBatchDeleteConfirmClose}
-              >
+              <button className="secondary-button" type="button" data-dialog-initial-focus disabled={batchBusy} onClick={requestBatchDeleteConfirmClose}>
                 {t("common.cancel")}
               </button>
-              <button
-                className="secondary-button danger-button"
-                type="button"
-                disabled={batchBusy}
-                onClick={() => {
-                  setPendingBatchDelete(false);
-                  void batchMoveMessages("trash");
-                }}
-              >
+              <button className="secondary-button danger-button" type="button" disabled={batchBusy} onClick={() => { setPendingBatchDelete(false); void batchMoveMessages("trash"); }}>
                 {batchBusy ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}
                 {t("mail.selection.deleteConfirmAction")}
               </button>
@@ -4368,7 +4333,21 @@ const emptyMessageList = useMemo(() => (query.trim()
         </div>
       )}
       {state.mobileSidebar && <button className="mobile-scrim" aria-label={t("navigation.closeMenu")} onClick={() => actions.closeMobileSidebar()} />}
-      {toast && <div className={`toast ${toast.kind}`} role={toast.kind === "error" || toast.kind === "warning" ? "alert" : "status"} aria-atomic="true"><span className="toast-icon" aria-hidden="true">{toast.kind === "error" || toast.kind === "warning" ? <CircleAlert size={17} /> : toast.kind === "info" ? <Sparkles size={17} /> : <Check size={17} />}</span><span className="toast-message">{toast.message}</span>{toast.action && <button className="toast-action" type="button" onClick={() => { setToast(null); toast.action?.run(); }}>{toast.action.label}</button>}<button className="toast-dismiss" type="button" aria-label={t("common.closeNotification")} data-tooltip={t("common.closeNotification")} onClick={() => setToast(null)}><X size={16} /></button></div>}
+      {toast && (
+        <div className={`toast ${toast.kind}`} role={toast.kind === "error" || toast.kind === "warning" ? "alert" : "status"} aria-atomic="true">
+          <span className="toast-icon" aria-hidden="true">
+            {toast.icon === "mail" ? <Mail size={17} /> : toast.icon === "video" ? <Video size={17} /> : toast.icon === "calendar" ? <Calendar size={17} /> : toast.icon === "undo" ? <RotateCcw size={17} /> : toast.kind === "error" || toast.kind === "warning" ? <CircleAlert size={17} /> : toast.kind === "info" || toast.icon === "info" ? <Info size={17} /> : <Check size={17} />}
+          </span>
+          <span className="toast-message">{toast.message}</span>
+          {toast.action && (
+            <button className="toast-action" type="button" onClick={() => { dismissToast(); toast.action?.run(); }}>
+              {toast.action.icon === "undo" && <RotateCcw size={13} aria-hidden="true" />}
+              <span>{toast.action.label}</span>
+            </button>
+          )}
+          <button className="toast-dismiss" type="button" aria-label={t("common.closeNotification")} data-tooltip={t("common.closeNotification")} onClick={dismissToast}><X size={16} /></button>
+        </div>
+      )}
       {autoReplyNotices.length > 0 && <AutoReplyToastStack behindModal={state.anyModalOpen} inAgent={agentOpen} notices={autoReplyNotices} onDismiss={(notice) => setAutoReplyNotices((items) => items.filter((item) => autoReplyNoticeKey(item) !== autoReplyNoticeKey(notice)))} />}
       </div>
     </div>
