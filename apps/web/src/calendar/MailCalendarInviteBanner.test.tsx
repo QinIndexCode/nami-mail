@@ -3,7 +3,8 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import MailCalendarInviteBanner from "./MailCalendarInviteBanner";
+import MailCalendarInviteBanner, { clearIcsParseCache } from "./MailCalendarInviteBanner";
+import { api } from "../api";
 import { I18nProvider } from "../i18n";
 import type { MessageAttachment } from "../types";
 
@@ -37,6 +38,9 @@ describe("MailCalendarInviteBanner", () => {
   let onViewCalendar: ReturnType<typeof vi.fn<() => void>>;
 
   beforeEach(() => {
+    clearIcsParseCache();
+    // vi.mock is module-scoped, so call history leaks across tests without this.
+    vi.mocked(api.downloadAttachment).mockClear();
     container = document.createElement("div");
     document.body.appendChild(container);
     onImportClick = vi.fn();
@@ -114,5 +118,68 @@ describe("MailCalendarInviteBanner", () => {
     });
 
     expect(onViewCalendar).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves repeated selections of the same attachment from the cache without re-downloading", async () => {
+    const attachmentsWithIcs: MessageAttachment[] = [
+      { partId: "1", filename: "invite.ics", contentType: "text/calendar", size: 512, related: false, disposition: "attachment" },
+    ];
+    const downloadMock = vi.mocked(api.downloadAttachment);
+
+    const renderInto = (target: Root) => {
+      act(() => {
+        target.render(
+          <I18nProvider>
+            <MailCalendarInviteBanner
+              messageId="msg-cache"
+              attachments={attachmentsWithIcs}
+              onImportClick={onImportClick}
+              onViewCalendar={onViewCalendar}
+            />
+          </I18nProvider>,
+        );
+      });
+    };
+
+    renderInto(root);
+    await act(async () => {});
+    expect(downloadMock).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("Product Strategy Sync");
+
+    // A fresh mount forces the effect to re-run; the parse cache must serve
+    // the second visit without another network round-trip.
+    const secondContainer = document.createElement("div");
+    document.body.appendChild(secondContainer);
+    const secondRoot = createRoot(secondContainer);
+    renderInto(secondRoot);
+    await act(async () => {});
+    expect(downloadMock).toHaveBeenCalledTimes(1);
+    expect(secondContainer.textContent).toContain("Product Strategy Sync");
+
+    act(() => secondRoot.unmount());
+    secondContainer.remove();
+  });
+
+  it("rejects oversized attachments before downloading", async () => {
+    const oversized: MessageAttachment[] = [
+      { partId: "9", filename: "huge.ics", contentType: "text/calendar", size: 10_000_001, related: false, disposition: "attachment" },
+    ];
+
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <MailCalendarInviteBanner
+            messageId="msg-2"
+            attachments={oversized}
+            onImportClick={onImportClick}
+            onViewCalendar={onViewCalendar}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    expect(api.downloadAttachment).not.toHaveBeenCalled();
+    expect(container.querySelector(".mail-calendar-invite-error")).not.toBeNull();
+    expect(container.textContent).toContain("10MB");
   });
 });

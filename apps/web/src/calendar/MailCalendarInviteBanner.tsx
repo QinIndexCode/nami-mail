@@ -6,6 +6,17 @@ import { useI18n } from "../i18n";
 import type { MessageAttachment } from "../types";
 import { formatEventTimeSpan, isIcsAttachment } from "./calendarUtils";
 
+// Parse-content cache keyed by "messageId:partId". Selecting back and forth
+// between mails re-runs this effect; without the cache each visit re-downloads
+// the whole attachment just to re-parse identical bytes. Cleared by tests via
+// clearIcsParseCache. Attachment content is immutable once stored, so no TTL.
+const icsContentCache = new Map<string, string>();
+const maximumBannerIcsBytes = 10_000_000;
+
+export function clearIcsParseCache(): void {
+  icsContentCache.clear();
+}
+
 export type MailCalendarInviteBannerProps = {
   messageId: string;
   attachments?: MessageAttachment[];
@@ -23,7 +34,8 @@ export default function MailCalendarInviteBanner({
   const { locale, t } = useI18n();
   const [content, setContent] = useState<string>("");
   const [loading, setLoading] = useState(false);
-  const [_error, setError] = useState(false);
+  // false | "error" | "oversized"; surfaced in the banner body below.
+  const [failure, setFailure] = useState<null | "error" | "oversized">(null);
 
   const icsAttachment = useMemo(() => {
     return attachments?.find((att) => !att.related && isIcsAttachment(att));
@@ -33,22 +45,48 @@ export default function MailCalendarInviteBanner({
     if (!icsAttachment) {
       setContent("");
       setLoading(false);
+      setFailure(null);
+      return;
+    }
+    const cacheKey = `${messageId}:${icsAttachment.partId}`;
+    // Reject oversized payloads before the network round-trip when the
+    // attachment metadata carries the size, mirroring the server's import cap.
+    if (icsAttachment.size > maximumBannerIcsBytes) {
+      setContent("");
+      setLoading(false);
+      setFailure("oversized");
+      return;
+    }
+    const cached = icsContentCache.get(cacheKey);
+    if (cached !== undefined) {
+      setContent(cached);
+      setLoading(false);
+      setFailure(null);
       return;
     }
     let cancelled = false;
     setLoading(true);
-    setError(false);
+    setFailure(null);
     api.downloadAttachment(messageId, icsAttachment.partId)
       .then(async (blob) => {
+        if (blob.size > maximumBannerIcsBytes) {
+          if (!cancelled) {
+            setFailure("oversized");
+            setLoading(false);
+          }
+          return;
+        }
         const text = await blob.text();
         if (!cancelled) {
+          icsContentCache.set(cacheKey, text);
           setContent(text);
+          setFailure(null);
           setLoading(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setError(true);
+          setFailure("error");
           setLoading(false);
         }
       });
@@ -92,6 +130,14 @@ export default function MailCalendarInviteBanner({
         <strong className="mail-calendar-invite-title">
           {firstEvent?.title || icsAttachment.filename}
         </strong>
+
+        {failure && (
+          <div className="mail-calendar-invite-error" role="status">
+            {failure === "oversized"
+              ? t("calendar.inviteBannerOversized")
+              : t("calendar.inviteBannerError")}
+          </div>
+        )}
 
         {firstEvent && (
           <div className="mail-calendar-invite-details">

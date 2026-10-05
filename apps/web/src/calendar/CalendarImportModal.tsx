@@ -59,6 +59,13 @@ export default function CalendarImportModal({
     const file = e.target.files?.[0];
     if (!file) return;
     setFileName(file.name);
+    // Mirror the server's import cap before reading: a >10MB file would just
+    // fail server-side anyway, so fail fast with a clear local message.
+    if (file.size > 10_000_000) {
+      setFileContent("");
+      setNotice({ kind: "error", message: t("calendar.importOversized") });
+      return;
+    }
     setNotice(null);
     const reader = new FileReader();
     reader.onload = (event) => {
@@ -80,6 +87,7 @@ export default function CalendarImportModal({
     setNotice(null);
     try {
       const payload = parsedEvents.map((evt) => ({
+        uid: evt.uid,
         title: evt.title,
         description: evt.description || undefined,
         location: evt.location || undefined,
@@ -90,7 +98,9 @@ export default function CalendarImportModal({
       }));
       const res = await api.importCalendarEvents(payload, mode);
       if (res.ok) {
-        onSuccess(res.imported, res.replaced);
+        // Updated events count toward the summary: from the user's view the
+        // calendar now holds that many imported entries.
+        onSuccess(res.imported + res.updated, res.replaced);
         requestClose();
       } else {
         setNotice({ kind: "error", message: t("calendar.loadError") });

@@ -45,6 +45,26 @@ test("calendar-ics: parseIcsDurationMs handles ISO durations", () => {
   assert.equal(parseIcsDurationMs("P1D"), 86400_000);
 });
 
+test("calendar-ics: generateIcs emits the stored UID verbatim and it re-imports as the same UID", () => {
+  const event: CalendarEventExportSource = {
+    id: "row-uuid-1",
+    uid: "invite-42@vendor.example",
+    title: "Roundtrip Meeting",
+    startAt: "2026-11-05T14:00:00.000Z",
+    endAt: "2026-11-05T15:00:00.000Z",
+  };
+  const ics = generateIcs([event], "Test");
+  assert.ok(ics.includes("UID:invite-42@vendor.example\r\n"));
+  const parsed = parseIcs(ics);
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0]?.uid, "invite-42@vendor.example");
+});
+
+test("calendar-ics: parseIcs rejects payloads beyond the line cap", () => {
+  const huge = Array.from({ length: 50_001 }, () => "X-PROP:value").join("\r\n");
+  assert.throws(() => parseIcs(`BEGIN:VCALENDAR\r\n${huge}\r\nEND:VCALENDAR`), /line limit/);
+});
+
 test("calendar-ics: generateIcs and parseIcs roundtrip", () => {
   const events: CalendarEventExportSource[] = [
     {

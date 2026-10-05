@@ -824,9 +824,9 @@ export const api = {
   deleteCalendarEvent: (id: string) =>
     request<{ ok: boolean }>(`/api/calendar/events/${encodeURIComponent(id)}`, { method: "DELETE" }),
   importCalendarEvents: (events: CalendarEventInput[], mode: "append" | "replace" = "append") =>
-    request<{ ok: boolean; imported: number; replaced: boolean }>("/api/calendar/import", { method: "POST", body: JSON.stringify({ events, mode }) }),
+    request<{ ok: boolean; imported: number; updated: number; replaced: boolean }>("/api/calendar/import", { method: "POST", body: JSON.stringify({ events, mode }) }),
   importCalendarIcs: (ics: string, mode: "append" | "replace" = "append") =>
-    request<{ ok: boolean; imported: number; replaced: boolean }>("/api/calendar/import-ics", { method: "POST", body: JSON.stringify({ ics, mode }) }),
+    request<{ ok: boolean; imported: number; updated: number; replaced: boolean }>("/api/calendar/import-ics", { method: "POST", body: JSON.stringify({ ics, mode }) }),
   exportCalendarIcsUrl: (range?: { after?: string; before?: string }) => {
     const q = new URLSearchParams();
     if (range?.after) q.set("after", range.after);

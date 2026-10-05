@@ -8,6 +8,8 @@ import { calendarEventColors, type CalendarEventColor } from "./mail-dto.js";
 
 export type CalendarEventExportSource = {
   id: string;
+  /** Stored ICS UID; emitted verbatim so export->import cycles stay deduped. */
+  uid?: string;
   title: string;
   description?: string;
   location?: string;
@@ -206,7 +208,11 @@ export function generateIcs(events: readonly CalendarEventExportSource[], calend
     const effectiveEnd = isValidEnd && endDate >= startDate ? endDate : new Date(startDate.getTime() + 3600_000);
 
     lines.push("BEGIN:VEVENT");
-    lines.push(`UID:${event.id || `nami-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`}@namimail`);
+    // Round-trip the stored ICS UID verbatim when present so an exported
+    // calendar re-imports as updates instead of duplicates (appending a
+    // suffix here would change the UID on every export/import cycle).
+    // event.id is the fallback for manual events, matching historical behavior.
+    lines.push(`UID:${event.uid || event.id || `nami-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`}`);
     lines.push(`DTSTAMP:${nowUtc}`);
 
     if (event.allDay) {
@@ -256,8 +262,16 @@ export function generateIcs(events: readonly CalendarEventExportSource[], calend
 /**
  * Parses an RFC 5545 iCalendar string into structured events ready for Nami Mail.
  */
+// Upper bound on unfolded ICS lines accepted from a single payload. A 10MB
+// invite with millions of tiny lines would otherwise pin the event loop
+// during parsing; real-world calendars stay orders of magnitude below this.
+const maximumIcsLines = 50_000;
+
 export function parseIcs(icsContent: string): ParsedIcsEvent[] {
   const unfoldedLines = unfoldIcsLines(icsContent);
+  if (unfoldedLines.length > maximumIcsLines) {
+    throw new Error(`ICS content exceeds the ${maximumIcsLines}-line limit.`);
+  }
   const events: ParsedIcsEvent[] = [];
 
   let inVEvent = false;

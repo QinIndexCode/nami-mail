@@ -19,6 +19,8 @@ export type { CalendarEventColor };
 
 export type CalendarEvent = {
   id: string;
+  /** ICS UID when the event came from (or was later matched by) an import; absent for manual events. */
+  uid?: string;
   title: string;
   description: string;
   location: string;
@@ -56,6 +58,9 @@ function normalizeTimestamp(value: string): string {
 
 export const calendarEventCreateSchema = z.object({
   title: z.string().trim().min(1).max(maximumEventTitleLength),
+  // ICS UID of the importing event; dedup key for repeat imports. Manual
+  // creation omits it. Bounded because attacker-supplied ICS content lands here.
+  uid: z.string().trim().min(1).max(500).optional(),
   description: z.string().trim().max(maximumEventDescriptionLength).optional(),
   location: z.string().trim().max(maximumEventLocationLength).optional(),
   startAt: z.string().datetime({ offset: true }),
@@ -87,6 +92,7 @@ export const calendarEventUpdateSchema = z.object({
 
 type CalendarEventRow = {
   id: string;
+  uid: string | null;
   title_enc: string;
   description_enc: string;
   location_enc: string;
@@ -98,7 +104,7 @@ type CalendarEventRow = {
   updated_at: string;
 };
 
-const calendarEventSelectColumns = "id, title_enc, description_enc, location_enc, start_at, end_at, all_day, color, created_at, updated_at";
+const calendarEventSelectColumns = "id, uid, title_enc, description_enc, location_enc, start_at, end_at, all_day, color, created_at, updated_at";
 
 function isCalendarEventColor(value: string): value is CalendarEventColor {
   return (calendarEventColors as readonly string[]).includes(value);
@@ -107,6 +113,7 @@ function isCalendarEventColor(value: string): value is CalendarEventColor {
 export function calendarEventFromRow(row: CalendarEventRow, masterKey: Buffer): CalendarEvent {
   return withCalendarKey(masterKey, (key) => ({
     id: row.id,
+    uid: row.uid ?? undefined,
     title: decryptTextEnvelope(row.title_enc, key, calendarAad(row.id)),
     description: decryptTextEnvelope(row.description_enc, key, calendarAad(row.id)),
     location: decryptTextEnvelope(row.location_enc, key, calendarAad(row.id)),
@@ -124,6 +131,7 @@ function writeCalendarEvent(
   masterKey: Buffer,
   id: string,
   values: {
+    uid?: string;
     title: string;
     description: string;
     location: string;
@@ -137,10 +145,11 @@ function writeCalendarEvent(
 ): CalendarEvent {
   withCalendarKey(masterKey, (key) => {
     db.prepare(`
-      INSERT INTO calendar_events (id, title_enc, description_enc, location_enc, start_at, end_at, all_day, color, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO calendar_events (id, uid, title_enc, description_enc, location_enc, start_at, end_at, all_day, color, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
+      values.uid ?? null,
       encryptTextEnvelope(values.title, key, calendarAad(id)),
       encryptTextEnvelope(values.description, key, calendarAad(id)),
       encryptTextEnvelope(values.location, key, calendarAad(id)),
@@ -191,6 +200,7 @@ export function createCalendarEvent(
   const id = randomUUID();
   const now = new Date().toISOString();
   return writeCalendarEvent(db, masterKey, id, {
+    uid: input.uid,
     title: input.title,
     description: input.description ?? "",
     location: input.location ?? "",
@@ -249,9 +259,17 @@ export function clearAllCalendarEvents(db: DatabaseHandle): number {
 export type CalendarImportMode = "append" | "replace";
 
 export type CalendarImportResult = {
+  /** Events created fresh by this import. */
   imported: number;
+  /** Events matched by ICS UID and updated in place (keeps the original id). */
+  updated: number;
   replaced: boolean;
 };
+
+function calendarEventForUid(db: DatabaseHandle, masterKey: Buffer, uid: string): CalendarEvent | undefined {
+  const row = db.prepare(`SELECT ${calendarEventSelectColumns} FROM calendar_events WHERE uid = ? LIMIT 1`).get(uid) as CalendarEventRow | undefined;
+  return row ? calendarEventFromRow(row, masterKey) : undefined;
+}
 
 export function importCalendarEvents(
   db: DatabaseHandle,
@@ -259,19 +277,37 @@ export function importCalendarEvents(
   events: Array<z.infer<typeof calendarEventCreateSchema>>,
   mode: CalendarImportMode = "append",
 ): CalendarImportResult {
+  let imported = 0;
+  let updated = 0;
   const runTransaction = db.transaction((items: Array<z.infer<typeof calendarEventCreateSchema>>) => {
     if (mode === "replace") {
       db.prepare("DELETE FROM calendar_events").run();
     }
     for (const input of items) {
-      createCalendarEvent(db, masterKey, input);
+      // UID dedup: the same invite attached to several mails, or one file
+      // imported twice, must update the existing row (keeping its id so
+      // reminders and external references survive) instead of double-booking.
+      // A NULL-uid legacy row is never a match — uid is NULL there.
+      const existing = input.uid === undefined ? undefined : calendarEventForUid(db, masterKey, input.uid);
+      if (mode === "append" && existing) {
+        updateCalendarEvent(db, masterKey, existing.id, {
+          title: input.title,
+          description: input.description ?? "",
+          location: input.location ?? "",
+          startAt: input.startAt,
+          endAt: input.endAt,
+          allDay: input.allDay ?? false,
+          color: input.color ?? "blue",
+        });
+        updated += 1;
+      } else {
+        createCalendarEvent(db, masterKey, input);
+        imported += 1;
+      }
     }
   });
 
   runTransaction(events);
-  return {
-    imported: events.length,
-    replaced: mode === "replace",
-  };
+  return { imported, updated, replaced: mode === "replace" };
 }
 

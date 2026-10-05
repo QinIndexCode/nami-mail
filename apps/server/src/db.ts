@@ -362,6 +362,7 @@ CREATE TABLE IF NOT EXISTS mail_templates (
 -- date-range queries used by the month view never need to decrypt rows.
 CREATE TABLE IF NOT EXISTS calendar_events (
   id TEXT PRIMARY KEY,
+  uid TEXT,
   title_enc TEXT NOT NULL,
   description_enc TEXT NOT NULL,
   location_enc TEXT NOT NULL,
@@ -375,6 +376,7 @@ CREATE TABLE IF NOT EXISTS calendar_events (
 
 CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start_at);
 CREATE INDEX IF NOT EXISTS idx_calendar_events_end ON calendar_events(end_at);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_uid ON calendar_events(uid) WHERE uid IS NOT NULL;
 
 -- Durable write-operation queue. Every user-initiated message write (move,
 -- flag update) is recorded here before it dispatches to the provider, so a
@@ -694,6 +696,18 @@ function migrateDatabase(db: DatabaseHandle): void {
     // UIDVALIDITY epoch.
     db.exec("ALTER TABLE folders ADD COLUMN uid_validity TEXT");
   }
+
+  // Calendar events carry the ICS UID so re-importing the same invite (or the
+  // same event attached to two different mails) updates in place instead of
+  // double-booking. Legacy rows stay NULL: they keep behaving like
+  // uid-less manual events until the next import of the same file backfills
+  // them. The uid stays plaintext because it is a public identifier in the
+  // source ICS and the dedup lookup must query it directly.
+  const calendarColumns = db.prepare("PRAGMA table_info(calendar_events)").all() as Array<{ name: string }>;
+  if (!calendarColumns.some((column) => column.name === "uid")) {
+    db.exec("ALTER TABLE calendar_events ADD COLUMN uid TEXT");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_calendar_events_uid ON calendar_events(uid) WHERE uid IS NOT NULL");
 
   const settingsColumns = db.prepare("PRAGMA table_info(app_settings)").all() as Array<{ name: string }>;
   const addSettingsColumn = (name: string, definition: string) => {

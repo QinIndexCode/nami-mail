@@ -68,7 +68,7 @@ export function registerCalendarRoutes(app: FastifyInstance, deps: CalendarRoute
     }).strict().safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
     const result = importCalendarEvents(context.db, context.masterKey, parsed.data.events, parsed.data.mode);
-    return { ok: true, imported: result.imported, replaced: result.replaced };
+    return { ok: true, imported: result.imported, updated: result.updated, replaced: result.replaced };
   });
 
   app.post("/api/calendar/import-ics", async (request, reply) => {
@@ -84,6 +84,7 @@ export function registerCalendarRoutes(app: FastifyInstance, deps: CalendarRoute
     const validatedEvents: Array<z.infer<typeof calendarEventCreateSchema>> = [];
     for (const item of parsedEvents) {
       const valid = calendarEventCreateSchema.safeParse({
+        uid: item.uid,
         title: item.title,
         description: item.description,
         location: item.location,
@@ -100,7 +101,7 @@ export function registerCalendarRoutes(app: FastifyInstance, deps: CalendarRoute
       return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "解析出的日程事件校验未通过。" });
     }
     const result = importCalendarEvents(context.db, context.masterKey, validatedEvents, parsed.data.mode);
-    return { ok: true, imported: result.imported, replaced: result.replaced };
+    return { ok: true, imported: result.imported, updated: result.updated, replaced: result.replaced };
   });
 
   app.get("/api/calendar/export.ics", async (request, reply) => {
