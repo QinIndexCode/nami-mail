@@ -1545,6 +1545,14 @@ await refreshSubmissions(nextAccounts, { silent: true });
     chooseFolder(target.path);
   }
   const selectedFolderRecord = selectedAccountRecord?.folders.find((folder) => folder.path === selectedFolder);
+  // Folder display name shared by the column header and the empty state:
+  // single-account view uses the account's own record; the unified ("all
+  // accounts") view falls back to the first carrying account's folder name so
+  // localized names survive there too; the raw path (last segment) is the
+  // final fallback for a folder that just vanished from the account tree.
+  const selectedFolderName = selectedFolderRecord?.name
+    ?? accounts.flatMap((account) => account.folders).find((folder) => folder.path === selectedFolder)?.name
+    ?? (selectedFolder ? selectedFolder.split("/").pop() || selectedFolder : "");
 const emptyMessageList = useMemo(() => (query.trim()
     ? { title: t("mail.empty.searchTitle"), description: t("mail.empty.searchDescription"), canClearSearch: true }
     : view === "unread"
@@ -1555,9 +1563,9 @@ const emptyMessageList = useMemo(() => (query.trim()
       ? { title: t("mail.empty.archiveTitle"), description: t("mail.empty.archiveDescription"), canClearSearch: false }
     : view === "attachments"
       ? { title: t("mail.empty.attachmentsTitle"), description: t("mail.empty.attachmentsDescription"), canClearSearch: false }
-    : selectedFolderRecord
-        ? { title: t("mail.empty.folderTitle", { folder: selectedFolderRecord.name }), description: t("mail.empty.folderDescription"), canClearSearch: false }
-        : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false }), [query, selectedFolderRecord, t, view]);
+    : selectedFolder
+      ? { title: t("mail.empty.folderTitle", { folder: selectedFolderName || selectedFolder }), description: t("mail.empty.folderDescription"), canClearSearch: false }
+      : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false }), [query, selectedFolderName, selectedFolder, t, view]);
   const { issues: accountIssues, accountsNeedingAttention, primaryAccountNeedingAttention, primaryAccountIssue, healthAlert, dismissHealthAlert } = useAccountHealth(accounts, t);
   const safeHtml = useMemo(
     () => selected?.htmlBody ? sanitizeMailHtml(selected.htmlBody, theme === "dark") : "",
@@ -2681,7 +2689,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         <section className="message-column">
           <header className="column-header">
             <IconButton label={t("navigation.openMenu")} className="mobile-only" buttonRef={mobileMenuButtonRef} onClick={() => actions.openMobileSidebar()}><Menu size={19} /></IconButton>
-            <div><span className="eyebrow">{selectedAccount === "all" ? t("mail.unifiedMailbox") : selectedAccountRecord ? localizedProviderName(selectedAccountRecord).toUpperCase() : ""}</span><h1>{query.trim() ? t("mail.search.resultsTitle", { query: query.trim() }) : view === "unread" ? t("mail.unread") : view === "starred" ? t("mail.starred") : view === "archived" ? t("mail.action.archive") : view === "snoozed" ? t("mail.snoozed") : view === "attachments" ? t("mail.attachments") : selectedFolderRecord?.name || (selectedFolder ? selectedFolder.split("/").pop() || selectedFolder : t("mail.inbox"))}</h1></div>
+            <div><span className="eyebrow">{selectedAccount === "all" ? t("mail.unifiedMailbox") : selectedAccountRecord ? localizedProviderName(selectedAccountRecord).toUpperCase() : ""}</span><h1>{query.trim() ? t("mail.search.resultsTitle", { query: query.trim() }) : view === "unread" ? t("mail.unread") : view === "starred" ? t("mail.starred") : view === "archived" ? t("mail.action.archive") : view === "snoozed" ? t("mail.snoozed") : view === "attachments" ? t("mail.attachments") : selectedFolderName || t("mail.inbox")}</h1></div>
             <div className={`search-wrap${searchOpen ? " expanded" : ""}`} ref={searchWrapRef}><IconButton label={searchOpen ? t("mail.search.collapse") : t("mail.search")} className="search-toggle" onClick={() => setSearchOpen((open) => !open)} expanded={searchOpen}><Search size={17} /></IconButton><label className="visually-hidden" htmlFor="mail-search">{t("mail.search")}</label><input id="mail-search" ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("mail.searchPlaceholder")} />{query && <IconButton label={t("mail.clearSearch")} className="search-clear" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}><X size={15} /></IconButton>}</div>
             <div className="list-filter-wrap" ref={listToolbarRef}>
               <button type="button" className={`list-filter-toggle${filterPanelOpen ? " active" : ""}`} onClick={() => setFilterPanelOpen((open) => !open)} aria-expanded={filterPanelOpen} aria-haspopup="menu" aria-label={t("mail.listFilter.menuLabel")} data-tooltip={t("mail.listFilter.menuLabel")}><ListFilter size={16} /></button>
