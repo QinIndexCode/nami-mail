@@ -20,7 +20,9 @@ import {
   listAccountRows,
   listFolderRows,
   updateAccountSignature,
-} from "../account-store.js";import {
+} from "../account-store.js";
+import { isAccountSyncing } from "../sync-locks.js";
+import {
   accountDiscoverySchema,
   accountSignaturePatchSchema,
   credentialsSchema,
@@ -197,7 +199,7 @@ export function registerAccountRoutes(
       .code(201)
       .send({
         ok: true,
-        account: publicAccount(row),
+        account: publicAccount(row, isAccountSyncing(row.id)),
         sync: null,
         syncWarning: row.last_sync_warning_code,
       });
@@ -241,7 +243,7 @@ export function registerAccountRoutes(
     const rows = listAccountRows(context.db);
     const folderRows = listFolderRows(context.db);
     return rows.map((row) => ({
-      ...publicAccount(row),
+      ...publicAccount(row, isAccountSyncing(row.id)),
       folders: folderRows
         .filter((folder) => folder.account_id === row.id)
         .sort(
@@ -343,7 +345,7 @@ export function registerAccountRoutes(
       .code(201)
       .send({
         ok: true,
-        account: publicAccount(row),
+        account: publicAccount(row, isAccountSyncing(row.id)),
         sync: null,
         syncWarning: row.last_sync_warning_code,
       });

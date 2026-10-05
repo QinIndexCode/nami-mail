@@ -22,6 +22,7 @@ import { indexMessageFts } from "../src/message-search.js";
 import { LIST_TEXT_PREVIEW_CHARS } from "../src/message-wire.js";
 import { MAX_STORED_HTML_BODY_BYTES, TRUNCATED_BODY_NOTICE } from "../src/message-body-limits.js";
 import type { OAuthService } from "../src/oauth.js";
+import { markAccountSyncing, unmarkAccountSyncing } from "../src/sync-locks.js";
 
 // Fastify's inject stamps a synthetic default of "Host: localhost:80" on
 // every request that does not carry an explicit host header. The token-less
@@ -665,6 +666,37 @@ it("keeps an Agent stream running after the client closes its response", async (
       lastErrorCode: null,
       lastSyncWarningCode: "sync_limit",
     });
+  });
+
+  it("exposes the in-memory syncing flag on account rows", async () => {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, 'custom', 'Demo', 'encrypted', 'imap.example.test', 993, 1,
+        'smtp.example.test', 465, 1, 'email', 'error', ?)
+    `).run("syncing-demo", "syncing@example.test", now);
+
+    const syncFlag = (response: { json: () => unknown }) => {
+      const accounts = response.json() as Array<Record<string, unknown>>;
+      return accounts.find((row) => row.id === "syncing-demo")?.syncing;
+    };
+
+    const idle = await app.inject({ method: "GET", url: "/api/accounts" });
+    expect(syncFlag(idle)).toBe(false);
+
+    markAccountSyncing("syncing-demo");
+    try {
+      const busy = await app.inject({ method: "GET", url: "/api/accounts" });
+      expect(syncFlag(busy)).toBe(true);
+    } finally {
+      unmarkAccountSyncing("syncing-demo");
+    }
+
+    const after = await app.inject({ method: "GET", url: "/api/accounts" });
+    expect(syncFlag(after)).toBe(false);
   });
 
   it("returns complete provider onboarding metadata without adding form fields", async () => {

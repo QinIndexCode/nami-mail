@@ -109,8 +109,11 @@ export type RuntimeContext = {
   onAccountDeleted?: (accountId: string) => Promise<void> | void;
 };
 
-/** Serializes an account row for the wire. Shape authority: `AccountWire` in @nami/agent-contracts. */
-export function publicAccount(row: AccountRecord): AccountWire {
+/** Serializes an account row for the wire. Shape authority: `AccountWire` in @nami/agent-contracts.
+ * `syncing` is the runtime in-progress flag from the in-memory sync lock, not
+ * the DB row: every endpoint exposing an account must pass its live value so
+ * the client can show "syncing" instead of a stale error state. */
+export function publicAccount(row: AccountRecord, syncing: boolean): AccountWire {
   return {
     id: row.id,
     email: row.email,
@@ -118,6 +121,7 @@ export function publicAccount(row: AccountRecord): AccountWire {
     providerName: row.provider_name,
     authMethod: row.auth_method,
     status: row.status,
+    syncing,
     lastError: row.last_error,
     lastErrorCode: row.last_error_code,
     lastSyncWarningCode: row.last_sync_warning_code,

@@ -2602,11 +2602,15 @@ const emptyMessageList = useMemo(() => (query.trim()
                 }
               };
               const rowLabel = displayName ? `${displayName} (${account.email})` : account.email;
+              // A mid-flight sync pass outranks both the freshness line and
+              // the last error: the outcome is about to refresh, so showing
+              // "cannot connect" during the pass would read as stale.
+              const isSyncing = account.syncing === true;
               const rowInner = (
                 <>
                   <CustomAvatar name={displayName || account.email} address={account.email} tone={accountTone(account.email)} className="account-avatar" />
-                  <span className="account-copy"><strong>{displayName || account.email.split("@")[0]}</strong><small>{accountShowsFreshness(issue) ? t("mail.accountFreshness", { provider: providerName, freshness }) : issue!.title}</small></span>
-                  <span className={`status-dot ${accountStatusDotClass(issue, account.status)}`} aria-hidden="true" />
+                  <span className="account-copy"><strong>{displayName || account.email.split("@")[0]}</strong><small>{isSyncing ? t("mail.accountSyncing") : accountShowsFreshness(issue) ? t("mail.accountFreshness", { provider: providerName, freshness }) : issue!.title}</small></span>
+                  <span className={`status-dot ${isSyncing ? "syncing" : accountStatusDotClass(issue, account.status)}`} aria-hidden="true" />
                 </>
               );
               // One DOM shape serves both modes: focused mode folds the other

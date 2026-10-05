@@ -46,8 +46,11 @@ describe("styles.css size ratchet", () => {
   // （tokens/, base/, components/, overlays/, features/ 共 29 个模块）。
   // 根 styles.css 保持纯粹的导入索引（≤ 40 行）。
   // 聚合总样式继续保持严格的防膨胀棘轮限制（FROZEN_AGGREGATED_MAX_LINES）。
+  // 2026-10-05 有记录的一次上调（17_600 → 17_610）：账户连接状态进行时态——
+  // 侧边栏账户行同步中状态点 .status-dot.syncing（脉冲动画 + reduced-motion
+  // 降级，共 10 行）；下轮 CSS 瘦身时应优先收回。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 17_600;
+  const FROZEN_AGGREGATED_MAX_LINES = 17_610;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

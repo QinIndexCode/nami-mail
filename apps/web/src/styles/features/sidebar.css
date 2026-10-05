@@ -605,6 +605,32 @@ box-shadow:none
 background:var(--warning);
 box-shadow:0 0 0 3px color-mix(in srgb, var(--warning) 16%, transparent)
 }
+.status-dot.syncing
+{
+background:var(--accent);
+box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+animation:status-dot-syncing 1.2s ease-in-out infinite
+}
+@keyframes status-dot-syncing
+{
+0%,100%
+{
+transform:scale(1);
+opacity:1
+}
+50%
+{
+transform:scale(.55);
+opacity:.45
+}
+}
+@media (prefers-reduced-motion:reduce)
+{
+.status-dot.syncing
+{
+animation:none
+}
+}
 .folder-list
 {
 border-top:1px solid var(--line);

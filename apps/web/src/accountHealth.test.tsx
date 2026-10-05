@@ -162,6 +162,17 @@ describe("useAccountHealth", () => {
     expect(latest.healthAlert).toBeNull();
   });
 
+  it("suppresses issues while the account is mid-sync, then restores them", () => {
+    const { rerender } = mountHealth([makeAccount({ ...brokenAccount("a1", "a1@example.com"), syncing: true })]);
+    expect(latest.issues.size).toBe(0);
+    expect(latest.accountsNeedingAttention).toHaveLength(0);
+    expect(latest.healthAlert).toBeNull();
+    // Once the pass finishes (syncing flag gone) the last error shows again.
+    rerender([brokenAccount("a1", "a1@example.com")]);
+    expect(latest.issues.size).toBe(1);
+    expect(latest.healthAlert).not.toBeNull();
+  });
+
   it("dismisses the alert on demand", () => {
     mountHealth([brokenAccount("a1", "a1@example.com")]);
     act(() => { latest.dismissHealthAlert(); });

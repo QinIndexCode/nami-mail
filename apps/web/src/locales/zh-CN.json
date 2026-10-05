@@ -797,6 +797,7 @@
     "mail.notification.multipleToast": "收到 {count} 封新邮件",
     "mail.accountCount": "{count} 个账户",
     "mail.accountFreshness": "{provider} · {freshness}",
+    "mail.accountSyncing": "正在同步…",
     "mail.accountIssueTooltip": "{title}：{guidance}",
     "mail.accountAttention": "{count} 个账户需要处理",
     "mail.accountProblem": "{email}：{title}",
