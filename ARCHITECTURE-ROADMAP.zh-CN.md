@@ -24,7 +24,7 @@
 - `console.log` 8 处：`App.tsx` 4 + `main.tsx` 2 为有意 `[nami-startup]` 埋点（桌面 host 转发进 startup-log，见 `main.tsx:8-11` 注释），`AgentWorkspace.poll.test.tsx` 2 为调试输出——原“零残留”口径过时。
 - help 按钮 `tabIndex={-1}` 已清零（12 处，`AgentProviderSettings.tsx` 8 + `AgentMcpServerPane.tsx` 4，2026-09-06 去掉后恢复可聚焦，web typecheck 全绿）。
 - `SYNC_MESSAGE_LIMIT`：server 默认 2000（`config.ts:68`），README 也是 2000；desktop 源码无 200 硬编码（仅 `spawn-environment.mts` / `local-configuration.mts` 透传变量）——“桌面默认 200”记述过时，待实测桌面 spawn 实际值后定论。
-- e2e：`e2e/` 4 个 spec 文件，默认 `test:e2e` 只跑 3 个（smoke / interactions / update-footer）；`ui-stress.spec.ts` 需种子数据 + 100 分钟超时，是独立压测通道，排除是刻意的。
+- e2e：`e2e/` 8 个 spec 文件，默认 `test:e2e` 跑 4 个（smoke / interactions / update-footer / geometry）；`ui-stress.spec.ts` 需种子数据 + 100 分钟超时，是独立压测通道，排除是刻意的；`capture-all-modals` / `capture-connections` / `shots` 是无入口的手动截图工具。
 - 测试文件数：web 69 / server tests 94 / desktop tests 24（文件数口径，非用例数；用例数 628/766/135/26 待下次全量回归刷新）。
 - 工作区现状：`main` ahead 3 + 在途改动（locale-boot / latest-first sync 等 24 文件已暂存 + help 按钮 2 文件未暂存），与“绝不 push main”约束存在偏差，收尾时需处理。
 
@@ -83,7 +83,7 @@
    - 低：对话行 `aria-pressed` 宜改 role="checkbox"（用户拍板保留 button 语义，勿再提）；ThemedSelect 缺 listbox 语义；虚拟列表 tab 序随滚动漂移。
    - 焦点管理测试从 Batch P 起有锚定（AttachmentPreviewModal.focus.test.tsx 2 条），但覆盖仍薄、无键盘 e2e——后续键盘工作继续补。键盘门控逻辑本体已于 Batch O 补 64 条单测锚定。
 2. **桌面同步上限默认 200**（2026-09-06 勘误：记述过时，待实测）：desktop 源码已无 200 硬编码（仅透传 `SYNC_MESSAGE_LIMIT`，见 `spawn-environment.mts:22` / `local-configuration.mts:11`），server 默认与 README 均为 2000（`config.ts:68`）。原“桌面 spawn 默认 200”出自 sync-message-limit-diagnosis 记忆，需实测桌面 spawn 实际值后再定是改默认还是只改文档；Batch L 的警告链（last_sync_warning_code + 三态圆点）不受影响。
-3. **e2e 覆盖薄**：默认 `test:e2e` 只跑三套 spec（smoke / interactions / update-footer），邮件主链路（同步、写信发送回环）无端到端自动化。`e2e/ui-stress.spec.ts` 是第四套独立压测通道（需种子数据 + 100 分钟超时，见文件头注释），排除出默认命令是刻意的，不算缺口。
+3. **e2e 覆盖薄**：默认 `test:e2e` 只跑四套 spec（smoke / interactions / update-footer / geometry），邮件主链路（同步、写信发送回环）无端到端自动化。`e2e/ui-stress.spec.ts` 是独立压测通道（需种子数据 + 100 分钟超时，见文件头注释），排除出默认命令是刻意的，不算缺口；`capture-all-modals` / `capture-connections` / `shots` 是无入口的手动截图工具。
 4. **更新链路剩余两项**（2026-09-10 评估后**刻意不做**，理由已核实，勿轻率补做）：
    - **stable/beta 通道**：现状是 `/releases/latest` + 拒绝 prerelease（`github-zip-update.mts:187,343`）。加通道不是加一个偏好项那么简单——prerelease 版本字符串（`1.0.0-beta.1`）会撞上三处按 `x.y.z` 写死的校验：`github-zip-update.mts` 的 `isStableVersion`、`zip-update-installer.mts:11` 的 `stableVersionPattern`（安装器计划校验，安全敏感）、`update-install-result.mts:4` 的失败记录解析。要做需先设计 semver prerelease 解析并同时放宽安装器计划校验，风险与收益不匹配，暂缓。
    - **版本回滚**：NSIS 就地覆盖安装目录，**没有程序文件备份**，安装助手只能在失败时重启旧 exe（`zip-update-installer.mts:310-330`）。真回滚需要安装前备份整个安装目录（磁盘占用 + 恢复失败路径复杂）。Batch V 改为覆盖同一类用户损失的更低风险做法：**"安装程序报成功但版本未变"的静默失败可见化**（见下）。
