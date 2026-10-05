@@ -390,7 +390,7 @@ export default function AutoReplySandboxDialog({
                     </div>
                     <div>{t("settings.agent.sandbox.linksReplaced")}<strong>{result.linkStats.replacedCount}</strong></div>
                     <div>{t("settings.agent.sandbox.lengthReduced")}{result.linkStats.originalLength} → {result.linkStats.sanitizedLength}</div>
-                    <div style={{ color: "var(--accent)", fontWeight: 600 }}>
+                    <div style={{ color: "var(--info)", fontWeight: 600 }}>
                       {t("settings.agent.sandbox.tokensSaved", { count: result.linkStats.estimatedTokensSaved })}
                     </div>
                   </div>
