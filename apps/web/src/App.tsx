@@ -1561,6 +1561,8 @@ const emptyMessageList = useMemo(() => (query.trim()
       ? { title: t("mail.empty.starredTitle"), description: t("mail.empty.starredDescription"), canClearSearch: false }
     : view === "archived"
       ? { title: t("mail.empty.archiveTitle"), description: t("mail.empty.archiveDescription"), canClearSearch: false }
+    : view === "snoozed"
+      ? { title: t("mail.empty.snoozedTitle"), description: t("mail.empty.snoozedDescription"), canClearSearch: false }
     : view === "attachments"
       ? { title: t("mail.empty.attachmentsTitle"), description: t("mail.empty.attachmentsDescription"), canClearSearch: false }
     : selectedFolder

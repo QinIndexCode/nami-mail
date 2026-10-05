@@ -617,6 +617,8 @@
     "mail.empty.starredDescription": "Star important messages to find them quickly later.",
     "mail.empty.archiveTitle": "Your Archive is empty",
     "mail.empty.archiveDescription": "Archived messages will appear here.",
+    "mail.empty.snoozedTitle": "Nothing snoozed for later",
+    "mail.empty.snoozedDescription": "Snoozed messages reappear here when their scheduled time arrives.",
     "mail.empty.attachmentsTitle": "No messages with attachments",
     "mail.empty.attachmentsDescription": "Messages that carry files, across every folder of your mailbox, will appear here.",
     "mail.empty.searchTitle": "No messages found",
