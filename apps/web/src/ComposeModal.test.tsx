@@ -223,6 +223,28 @@ describe("compose contact suggestions", () => {
     expect(toInput().getAttribute("aria-expanded")).toBe("false");
     expect(toInput().getAttribute("aria-activedescendant")).toBeNull();
   });
+
+  it("looks up only the trailing recipient token in a multi-recipient field", async () => {
+    renderCompose();
+    typeTo("ada@example.com, wa");
+    await settleContactDebounce();
+
+    // The lookup needle is the token after the last separator, not the whole
+    // field value, or a completed first address would starve every query.
+    expect(h.contacts).toHaveBeenCalledWith("wa", 8);
+    expect(toInput().getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("keeps earlier space-separated recipients when applying a suggestion", async () => {
+    renderCompose();
+    typeTo("ada@example.com wa");
+    await settleContactDebounce();
+
+    pressKey("Enter");
+    // recipients() also splits on whitespace, so the applied address must be
+    // appended after the preceding recipient instead of replacing the field.
+    expect(toInput().value).toBe("ada@example.com alice@example.com");
+  });
 });
 
 describe("compose template picker", () => {
