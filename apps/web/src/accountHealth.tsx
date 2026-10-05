@@ -49,6 +49,10 @@ export function useAccountHealth(accounts: Account[], t: Translate): AccountHeal
   const issues = useMemo(() => {
     const issues = new Map<string, MailErrorPresentation>();
     for (const account of accounts) {
+      // A mid-flight sync outranks the last recorded error: the pass is about
+      // to refresh the status, so showing "cannot connect" now reads as stale.
+      // If the pass fails again the refreshed state restores the issue.
+      if (account.syncing === true) continue;
       const issue = accountHealthIssue(account, t);
       if (issue) issues.set(account.id, issue);
     }

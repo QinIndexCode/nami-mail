@@ -19,7 +19,7 @@ export type FilterRuleRouteDeps = {
 };
 
 export function registerFilterRuleRoutes(app: FastifyInstance, deps: FilterRuleRouteDeps): void {
-  const { context, log } = deps;
+  const { context } = deps;
 
   app.get("/api/filter-rules", async (request, reply) => {
     const parsed = z.object({ accountId: z.string().trim().min(1).max(128).optional() }).strict().safeParse(request.query);

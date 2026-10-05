@@ -12,18 +12,20 @@ import {
 } from "../src/account-credentials.js";
 import { openDatabase } from "../src/db.js";
 import type { AccountRecord } from "../src/types.js";
+import type * as accountCredentialsModule from "../src/account-credentials.js";
+import type * as mailModule from "../src/mail.js";
 
 const { testOAuthAccountConnection } = vi.hoisted(() => ({
   testOAuthAccountConnection: vi.fn(),
 }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, testOAuthAccountConnection };
 });
 
 vi.mock("../src/account-credentials.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/account-credentials.js")>();
+  const actual = await importOriginal<typeof accountCredentialsModule>();
   return {
     ...actual,
     decryptOAuthRefreshToken: vi.fn((account: AccountCredentialIdentity, payload: string, masterKey: Buffer) =>
@@ -350,3 +352,5 @@ describe("OAuthService refresh tokens", () => {
     expect(decryptOAuthRefreshToken(account, stored.encrypted_secret, masterKey)).toBe("refresh-out-of-band");
   });
 });
+
+

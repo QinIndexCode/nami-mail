@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Download,
   List,
   LoaderCircle,
   MapPin,
@@ -13,12 +14,13 @@ import {
   Plus,
   Search,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { api } from "./api";
 import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
-import type { CalendarEvent, CalendarEventColor, CalendarEventInput } from "./types";
+import type { CalendarEvent, CalendarEventInput } from "./types";
 import { calendarEventColors } from "./types";
 import DatePicker from "./DatePicker";
 import { demoTranslate } from "./demo";
@@ -27,82 +29,18 @@ import { useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { calendarCache } from "./dialogPrefetch";
 import { FormNotice, type Notice } from "./FormNotice";
-
-type EventDraft = {
-  title: string;
-  description: string;
-  location: string;
-  startDate: string;
-  startTime: string;
-  endDate: string;
-  endTime: string;
-  allDay: boolean;
-  color: CalendarEventColor;
-};
-
-function pad(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
-function localDateKey(date: Date): string {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function isoToDate(iso: string): string {
-  const date = new Date(iso);
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function isoToTime(iso: string): string {
-  const date = new Date(iso);
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function dateTimeToIso(date: string, time: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  const [hours, minutes] = time.split(":").map(Number);
-  return new Date(year, month - 1, day, hours, minutes, 0, 0).toISOString();
-}
-
-function dateToStartIso(date: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(year, month - 1, day, 0, 0, 0, 0).toISOString();
-}
-
-function dateToEndIso(date: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(year, month - 1, day, 23, 59, 59, 999).toISOString();
-}
-
-function draftFromEvent(event: CalendarEvent): EventDraft {
-  return {
-    title: event.title,
-    description: event.description,
-    location: event.location,
-    startDate: isoToDate(event.startAt),
-    startTime: isoToTime(event.startAt),
-    endDate: isoToDate(event.endAt),
-    endTime: isoToTime(event.endAt),
-    allDay: event.allDay,
-    color: event.color,
-  };
-}
-
-/** Local dates (inclusive) covered by an event, so multi-day events render on every day. */
-function eventDayKeys(event: CalendarEvent): string[] {
-  const start = new Date(event.startAt);
-  const end = new Date(event.endAt);
-  const keys: string[] = [];
-  let cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-  const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
-  let guard = 0;
-  while (cursor.getTime() <= endDay.getTime() && guard < 400) {
-    keys.push(localDateKey(cursor));
-    cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
-    guard += 1;
-  }
-  return keys;
-}
+import CalendarImportModal from "./calendar/CalendarImportModal";
+import {
+  type EventDraft,
+  dateTimeToIso,
+  dateToEndIso,
+  dateToStartIso,
+  draftFromEvent,
+  eventDayKeys,
+  isoToDate,
+  localDateKey,
+  pad,
+} from "./calendar/calendarUtils";
 
 function emptyDraft(dayKey: string, now = new Date()): EventDraft {
   const date = new Date(`${dayKey}T12:00:00`);
@@ -209,6 +147,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
   const [jumpOpen, setJumpOpen] = useState(false);
   const [jumpYear, setJumpYear] = useState(() => new Date().getFullYear());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [importModalOpen, setImportModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [page, setPage] = useState(1);
@@ -578,6 +517,47 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     setBusy(false);
   };
 
+  const handleExportIcs = async () => {
+    try {
+      setBusy(true);
+      const blob = await fetch(api.exportCalendarIcsUrl()).then((r) => r.blob()).catch(() => null);
+      if (blob) {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `nami-calendar-${localDateKey(new Date())}.ics`;
+        link.click();
+        URL.revokeObjectURL(url);
+        setNotice({ kind: "success", message: t("calendar.exportSuccess") });
+      } else {
+        setNotice({ kind: "error", message: t("calendar.loadError") });
+      }
+    } catch (error) {
+      setNotice({ kind: "error", message: mailErrorMessage(error, t("calendar.loadError"), t) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleImportSuccess = (count: number, replaced: boolean) => {
+    calendarCache.refresh();
+    void calendarCache.get().then((all) => {
+      setListEvents(all);
+      const rangeStart = new Date(viewMonth.getFullYear(), viewMonth.getMonth() - 1, 1).getTime();
+      const rangeEnd = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 2, 0, 23, 59, 59, 999).getTime();
+      setEvents(all.filter((evt) => {
+        const start = new Date(evt.startAt).getTime();
+        return start >= rangeStart && start <= rangeEnd;
+      }));
+    });
+    setNotice({
+      kind: "success",
+      message: replaced
+        ? t("calendar.importSuccessReplace", { count })
+        : t("calendar.importSuccessAppend", { count }),
+    });
+  };
+
   const toggleSelect = (eventId: string) => {
     setSelectedIds((previous) => {
       const next = new Set(previous);
@@ -652,6 +632,12 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
                     {monthLabel}<ChevronDown size={13} aria-hidden="true" />
                   </button>
                   <div className="calendar-toolbar-end">
+                    <button className="secondary-button calendar-tool-btn" type="button" onClick={() => setImportModalOpen(true)} title={t("calendar.importIcs")}>
+                      <Download size={13} /><span>{t("calendar.import")}</span>
+                    </button>
+                    <button className="secondary-button calendar-tool-btn" type="button" onClick={() => void handleExportIcs()} title={t("calendar.exportIcs")}>
+                      <Upload size={13} /><span>{t("calendar.export")}</span>
+                    </button>
                     <button className="secondary-button calendar-view-switch" type="button" onClick={() => setView("list")}>
                       <List size={14} />{t("calendar.eventsList")}
                     </button>
@@ -734,8 +720,14 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
           ) : (
             <>
               <div className="calendar-toolbar">
-                <button className="secondary-button" type="button" onClick={() => openNewEvent(localDateKey(new Date()))}>
+                <button className="secondary-button calendar-new-button" type="button" onClick={() => openNewEvent(localDateKey(new Date()))}>
                   <Plus size={14} />{t("calendar.newEvent")}
+                </button>
+                <button className="secondary-button calendar-tool-btn" type="button" onClick={() => setImportModalOpen(true)} title={t("calendar.importIcs")}>
+                  <Download size={13} /><span>{t("calendar.import")}</span>
+                </button>
+                <button className="secondary-button calendar-tool-btn" type="button" onClick={() => void handleExportIcs()} title={t("calendar.exportIcs")}>
+                  <Upload size={13} /><span>{t("calendar.export")}</span>
                 </button>
                 <strong className="calendar-list-title">{t("calendar.eventsList")}</strong>
                 <button className="secondary-button calendar-view-switch" type="button" onClick={() => setView("month")}>
@@ -972,6 +964,12 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
           </section>
         </div>
       )}
+      <CalendarImportModal
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onSuccess={handleImportSuccess}
+        existingCount={events.length}
+      />
     </>
   );
 }

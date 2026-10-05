@@ -61,3 +61,15 @@ export function triggerBlobDownload(blob: Blob, filename: string): void {
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1_000);
 }
+
+export async function downloadAllAttachmentsZip(
+  messageId: string,
+  subject: string,
+  attachments: readonly MessageAttachment[],
+  downloadAttachment: (messageId: string, partId: string) => Promise<Blob>,
+): Promise<string> {
+  const blob = await buildAttachmentsZipBlob(attachments, (partId) => downloadAttachment(messageId, partId));
+  const filename = attachmentsZipFilename(subject);
+  triggerBlobDownload(blob, filename);
+  return filename;
+}

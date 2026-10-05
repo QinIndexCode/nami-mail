@@ -94,6 +94,10 @@ export default function AccountsDialog({
         || providerName.toLocaleLowerCase().includes(needle)
       );
     });
+    // accountDisplayNameVersion is an external-store revision used to
+    // invalidate this memo when a display name changes; the lint rule cannot
+    // see the indirect getAccountDisplayName usage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts, searchQuery, showToolbar, locale, t, accountDisplayNameVersion]);
 
   const pageCount = Math.max(1, Math.ceil(filteredAccounts.length / ACCOUNTS_PER_PAGE));

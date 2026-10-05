@@ -180,4 +180,153 @@ describe("calendar events", () => {
     expect(calendarEventUpdateSchema.safeParse({ title: "Renamed" }).success).toBe(true);
     expect(calendarEventUpdateSchema.safeParse({}).success).toBe(false);
   });
+
+  it("supports batch import with append and replace modes", async () => {
+    // Seed initial event
+    createCalendarEvent(db, masterKey, {
+      title: "Initial Event",
+      startAt: "2026-10-01T09:00:00Z",
+      endAt: "2026-10-01T10:00:00Z",
+    });
+    expect(listCalendarEvents(db, masterKey)).toHaveLength(1);
+
+    // Append mode
+    const appendRes = await app.inject({
+      method: "POST",
+      url: "/api/calendar/import",
+      payload: {
+        events: [
+          { title: "Appended 1", startAt: "2026-10-02T09:00:00Z", endAt: "2026-10-02T10:00:00Z" },
+          { title: "Appended 2", startAt: "2026-10-03T09:00:00Z", endAt: "2026-10-03T10:00:00Z" },
+        ],
+        mode: "append",
+      },
+    });
+    expect(appendRes.statusCode).toBe(200);
+    expect(appendRes.json()).toEqual({ ok: true, imported: 2, updated: 0, replaced: false });
+    expect(listCalendarEvents(db, masterKey)).toHaveLength(3);
+
+    // Replace mode
+    const replaceRes = await app.inject({
+      method: "POST",
+      url: "/api/calendar/import",
+      payload: {
+        events: [
+          { title: "New Only", startAt: "2026-10-15T09:00:00Z", endAt: "2026-10-15T10:00:00Z" },
+        ],
+        mode: "replace",
+      },
+    });
+    expect(replaceRes.statusCode).toBe(200);
+    expect(replaceRes.json()).toEqual({ ok: true, imported: 1, updated: 0, replaced: true });
+    const events = listCalendarEvents(db, masterKey);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.title).toBe("New Only");
+  });
+
+  it("imports and exports standard RFC 5545 ICS format", async () => {
+    const sampleIcs = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//Test//Test//EN",
+      "BEGIN:VEVENT",
+      "UID:evt-101@test.com",
+      "SUMMARY:ICS Meeting",
+      "DESCRIPTION:Important sync",
+      "LOCATION:Main Conference Room",
+      "DTSTART:20261101T020000Z",
+      "DTEND:20261101T030000Z",
+      "CATEGORIES:purple",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+
+    const importRes = await app.inject({
+      method: "POST",
+      url: "/api/calendar/import-ics",
+      payload: {
+        ics: sampleIcs,
+        mode: "replace",
+      },
+    });
+    expect(importRes.statusCode).toBe(200);
+    expect(importRes.json()).toEqual({ ok: true, imported: 1, updated: 0, replaced: true });
+
+    const items = listCalendarEvents(db, masterKey);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.title).toBe("ICS Meeting");
+    expect(items[0]?.color).toBe("purple");
+    expect(items[0]?.uid).toBe("evt-101@test.com");
+
+    // Export route
+    const exportRes = await app.inject({
+      method: "GET",
+      url: "/api/calendar/export.ics",
+    });
+    expect(exportRes.statusCode).toBe(200);
+    expect(exportRes.headers["content-type"]).toContain("text/calendar");
+    expect(exportRes.payload).toContain("BEGIN:VCALENDAR");
+    expect(exportRes.payload).toContain("SUMMARY:ICS Meeting");
+    expect(exportRes.payload).toContain("LOCATION:Main Conference Room");
+    // The stored ICS UID round-trips verbatim (no suffix mutation), so the
+    // exported file re-imports as an update instead of a duplicate.
+    expect(exportRes.payload).toContain("UID:evt-101@test.com");
+    expect(exportRes.payload).toContain("END:VCALENDAR");
+  });
+
+  it("updates in place instead of double-booking when the same UIDs are re-imported", async () => {
+    const baseEvent = {
+      uid: "recurring-meeting@corp.example",
+      title: "Weekly Sync",
+      startAt: "2026-10-20T09:00:00Z",
+      endAt: "2026-10-20T10:00:00Z",
+    };
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/calendar/import",
+      payload: { events: [baseEvent], mode: "append" },
+    });
+    expect(first.json()).toEqual({ ok: true, imported: 1, updated: 0, replaced: false });
+
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/calendar/import",
+      payload: {
+        events: [{ ...baseEvent, title: "Weekly Sync (moved)", endAt: "2026-10-20T11:00:00Z" }],
+        mode: "append",
+      },
+    });
+    expect(second.json()).toEqual({ ok: true, imported: 0, updated: 1, replaced: false });
+
+    const events = listCalendarEvents(db, masterKey);
+    expect(events).toHaveLength(1);
+    // The original row id survives so reminders and references stay valid.
+    expect(events[0]?.title).toBe("Weekly Sync (moved)");
+    expect(events[0]?.uid).toBe("recurring-meeting@corp.example");
+  });
+
+  it("deduplicates the same event delivered by two different ICS payloads", async () => {
+    const buildIcs = (summary: string) => [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//Test//Test//EN",
+      "BEGIN:VEVENT",
+      "UID:same-invite@vendor.example",
+      `SUMMARY:${summary}`,
+      "DTSTART:20261105T140000Z",
+      "DTEND:20261105T150000Z",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+
+    await app.inject({ method: "POST", url: "/api/calendar/import-ics", payload: { ics: buildIcs("Vendor Demo") } });
+    // A second mail carries the same invite (same UID, edited summary).
+    await app.inject({ method: "POST", url: "/api/calendar/import-ics", payload: { ics: buildIcs("Vendor Demo (Updated)") } });
+
+    const events = listCalendarEvents(db, masterKey);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.title).toBe("Vendor Demo (Updated)");
+    expect(events[0]?.uid).toBe("same-invite@vendor.example");
+  });
 });

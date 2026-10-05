@@ -2,6 +2,7 @@ export * from "./agent-commands.js";
 export * from "./audit.js";
 export * from "./auto-reply.js";
 export * from "./broker.js";
+export * from "./calendar-ics.js";
 export * from "./caller.js";
 export * from "./citation.js";
 export * from "./confirmation.js";

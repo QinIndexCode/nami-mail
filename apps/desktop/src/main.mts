@@ -32,7 +32,7 @@ import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
 import { DesktopDiagnostics, serializeRuntimeError } from "./desktop-diagnostics.mjs";
 import { installDesktopRuntimeDiagnostics } from "./desktop-runtime-diagnostics.mjs";
 import { openInBrowser as openExternalUrl, isHttpUrl } from "./desktop-external-open.mjs";
-import { playCustomNotificationSound, warmUpNotificationSoundPlayer } from "./desktop-notification-sound.mjs";
+import { isCustomNotificationSound, playCustomNotificationSound, warmUpNotificationSoundPlayer } from "./desktop-notification-sound.mjs";
 import {
   getClosePromptSmokeSession,
   getDesktopSmokeDiagnostics,
@@ -904,10 +904,10 @@ async function notifyNewMail(messages: NewMailPayload[]): Promise<void> {
   // alerts are disabled. shouldAlert only controls user-facing interruption.
   const shouldAlert = settings.notificationsEnabled && (!mainWindow?.isFocused() || settings.notifyWhenFocused);
   const { notificationSound } = settings;
-  // Custom sounds (soft/bright) are played from the main process via a
+  // Custom sounds are played from the main process via a
   // generated WAV file, which works regardless of window focus or AudioContext
   // state. The renderer no longer needs to play the custom sound.
-  const useMainProcessCustomSound = shouldAlert && (notificationSound === "soft" || notificationSound === "bright");
+  const useMainProcessCustomSound = shouldAlert && isCustomNotificationSound(notificationSound);
   mainWindow?.webContents.send("nami:new-mail", {
     id: first.id,
     subject: first.subject,
@@ -1948,7 +1948,7 @@ if (desktopCliArguments !== undefined) {
     const settings = localServer?.getSettings();
     const sound = settings?.notificationSound;
     let customSoundPlayed = false;
-    if (sound === "soft" || sound === "bright") {
+    if (isCustomNotificationSound(sound)) {
       customSoundPlayed = await playCustomNotificationSound(sound);
       if (!customSoundPlayed) {
         desktopDiagnostics.appendRuntimeLog("notification-sound-failed", {

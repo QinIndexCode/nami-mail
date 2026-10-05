@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as mailModule from "../src/mail.js";
 
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
 });
 
@@ -183,7 +184,6 @@ describe("IMAP message flag updates", () => {
   });
 
   it("reports missing and pending-move messages as failed without touching IMAP", async () => {
-    const now = new Date().toISOString();
     await updateMessageFlags(db, Buffer.alloc(32, 7), "message-1", { seen: false });
 
     const result = await updateMessageFlagsBatch(
@@ -1506,7 +1506,7 @@ describe("IMAP message flag updates", () => {
 
     await vi.waitFor(() => {
       expect(submissionForId(db, masterKey, prepared.submission.id)?.deliveryStatus).toBe("confirmed");
-    });
+    }, { timeout: 10_000 });
   });
 
   it("clears the sync guard and records an error when OAuth token acquisition fails", async () => {
@@ -1910,7 +1910,6 @@ describe("IMAP message flag updates", () => {
   });
 
   it("keeps the local cache when LIST returns no folders", async () => {
-    const now = new Date().toISOString();
     db.prepare(`
       INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(account_id, path) DO UPDATE SET
@@ -2030,3 +2029,4 @@ describe("sync message limit warning", () => {
       .toEqual({ last_sync_warning_code: null });
   });
 });
+

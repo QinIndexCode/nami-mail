@@ -1,8 +1,7 @@
 import { randomBytes } from "node:crypto";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { z } from "zod";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { CallerContext } from "@nami/agent-contracts";
 import type { ToolRegistry } from "@nami/agent-core";
 import { PermissionEngine } from "@nami/agent-core";

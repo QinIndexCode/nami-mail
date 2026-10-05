@@ -12,7 +12,7 @@ import {
 import { api } from "../api";
 import type { Translate } from "../i18n";
 import type { Account, AgentAccessLevel, AppSettings } from "../types";
-import type { AgentProviderSummary, ExternalPairingSummary } from "../agentTypes";
+import type { AgentProviderSummary } from "../agentTypes";
 import AutoReplyScopeEditor from "../AutoReplyScopeEditor";
 import { agentAccessLevelOptions } from "./settings-utils";
 import { NumberStepper, Switch } from "./SettingsUIComponents";
@@ -20,7 +20,6 @@ import ThemedSelect from "../ThemedSelect";
 
 export type SettingsAgentSectionProps = {
   t: Translate;
-  formatDate: (value: string) => string;
   accounts: Account[];
   currentSettings: AppSettings;
   controlsBusy: boolean;
@@ -30,11 +29,6 @@ export type SettingsAgentSectionProps = {
   openConnectionsSettings?: () => void;
   requestAccessLevelChange: (patch: { agentAccessLevel?: AgentAccessLevel; agentCliAccessLevel?: AgentAccessLevel; agentMcpAccessLevel?: AgentAccessLevel }, value: AgentAccessLevel, successMessage: string | null) => void;
   applyOptimisticSettings: (patch: Record<string, unknown>, successMessage: string | null) => Promise<unknown>;
-  externalGuideCopied: string | null;
-  setExternalGuideCopied: React.Dispatch<React.SetStateAction<string | null>>;
-  externalPairings: ExternalPairingSummary[] | null;
-  externalPairingsError: unknown;
-  setExternalPairingsReload: React.Dispatch<React.SetStateAction<number>>;
   setAutoReplyDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setAutoReplyDecisionsOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setMemoryDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -44,7 +38,6 @@ export type SettingsAgentSectionProps = {
 
 export default function SettingsAgentSection({
   t,
-  formatDate,
   accounts,
   currentSettings,
   controlsBusy,
@@ -53,11 +46,6 @@ export default function SettingsAgentSection({
   openConnectionsSettings,
   requestAccessLevelChange,
   applyOptimisticSettings,
-  externalGuideCopied,
-  setExternalGuideCopied,
-  externalPairings,
-  externalPairingsError,
-  setExternalPairingsReload,
   setAutoReplyDialogOpen,
   setAutoReplyDecisionsOpen,
   setMemoryDialogOpen,
@@ -112,7 +100,7 @@ export default function SettingsAgentSection({
       options.push({ value: currentDraft, label: currentDraft });
     }
     return options;
-  }, [providers, defaultProvider, currentSettings.autoReply.decisionProviderId, currentSettings.autoReply.draftProviderId, t]);
+  }, [providers, defaultProvider, defaultProviderId, currentSettings.autoReply.decisionProviderId, currentSettings.autoReply.draftProviderId, t]);
 
   return (
     <section className="settings-section" data-settings-nav="agent" aria-labelledby="agent-settings">

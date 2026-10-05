@@ -25,6 +25,13 @@ export default defineConfig({
   ],
   test: {
     setupFiles: ["./src/test-setup.ts"],
+    // Heavy suites (overlayStacking CSS census, AgentWorkspace integration)
+    // take 8-12s per file even on an idle machine; the 5s default testTimeout
+    // turns any CPU oversubscription (builds, other test runs) into flaky
+    // timeouts. Mirrors apps/server/vitest.config.ts: the ceiling only widens
+    // the pass window, it does not weaken any assertion.
+    testTimeout: 15_000,
+    hookTimeout: 30_000,
   },
   define: {
     __NAMI_APP_VERSION__: JSON.stringify(appVersion.version),

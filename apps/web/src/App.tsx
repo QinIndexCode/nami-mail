@@ -3,69 +3,53 @@ import { computePosition, flip, offset, shift } from "@floating-ui/dom";
 import {
   Archive,
   ArrowDown,
-  ArrowLeft,
   AtSign,
   Calendar,
-  CalendarArrowDown,
   Check,
   ChevronDown,
   ChevronRight,
   CircleAlert,
   Clock,
-  Copy,
-  Download,
-  Eye,
   FilePenLine,
   Focus,
   FolderTree,
-  Forward,
   Inbox,
   Layers3,
   LayoutTemplate,
   ListChecks,
   ListFilter,
   LoaderCircle,
-  Languages,
   Mail,
   MailOpen,
   Menu,
-  MoreHorizontal,
   Moon,
   Paperclip,
   PenLine,
   Plus,
   RefreshCw,
-  Reply,
-  ReplyAll,
   RotateCcw,
   Search,
   Send,
   Settings,
   ShieldCheck,
   SquareCheckBig,
-  Sparkles,
   Star,
-  Sun, Users, Trash2, WifiOff, X, Printer, UserRound,
+  Sun, Users, Trash2, WifiOff, X,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
-import { MailTextBody } from "./MailTextBody";
 import { CustomAvatar, SenderAvatar } from "./SenderAvatar";
 import { WindowBar } from "./WindowBar";
-import { ApiError, api, type BatchJobCreatePayload, type BatchJobQuery, type BatchJobSnapshot, type MoveTarget } from "./api";
-import { createBatchJobRunner, type BatchJobRunOptions } from "./batchJobRunner";
+import { api, type BatchJobSnapshot, type MoveTarget } from "./api";
 import { calendarCache, contactsCache, templatesCache } from "./dialogPrefetch";
 import DatePicker from "./DatePicker";
-import { canPreviewAttachment } from "./attachmentPreview";
-import { attachmentKinds, presentAttachment, type AttachmentKind } from "./attachmentPresentation";
-import { AttachmentFileIcon, FolderNavigationIcon, formatFileSize, isoFromDatetimeLocal, IconButton, type ToastKind } from "./mailUi";
-import { parseMailtoUrl } from "./mailtoLink";
-import { attachmentsZipFilename, buildAttachmentsZipBlob, triggerBlobDownload } from "./attachmentZip";
-import { calendarEventIcs, exportDownloadFilename, vCardText } from "./contactExport";
-import { desktopBridge, type DesktopAutoReplyNotice, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
-import { resolveUpdateFooter, type UpdateFooterAction } from "./updateFooter";
-import { handleDemoUpdateFooterAction, isDemoPromptRequested, resolveDemoUpdateSnapshot } from "./demoUpdateMock";
+import { attachmentKinds, type AttachmentKind } from "./attachmentPresentation";
+import { FolderNavigationIcon, IconButton } from "./mailUi";
+import { useCalendarReminders } from "./calendar/useCalendarReminders";
+import { useToastQueue } from "./notifications/useToastQueue";
+import { desktopBridge, type DesktopAutoReplyNotice } from "./desktop";
+import { useDesktopUpdateUi } from "./app/useDesktopUpdateUi";
 import { demoDataSnapshot, ensureDemoLoaded } from "./demo-loader";
-import { mailErrorMessage, mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
+import { mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
 import { AccountHealthBanner, accountShowsFreshness, accountStatusDotClass, useAccountHealth } from "./accountHealth";
 import { useRealtimeSync, type SyncProgressPayload } from "./realtimeSync";
 import { useCoalescedRefresh } from "./useCoalescedRefresh";
@@ -74,9 +58,7 @@ import { buildForwardDraft, buildReplyDraft, isOwnSentMessage } from "./mailActi
 // ComposeModal loaded lazily below
 import { sortMessages } from "./mailImportance";
 import { collapseDuplicateMembers, groupMessagesByThread, mergeThreadMembers, mergeThreadSnapshot, shouldCollapseThread, sortThreadByTimeline, type ThreadSnapshot } from "./threads";
-import { ErrorBoundary } from "./ErrorBoundary";
 import {
-  applyBatchSeenChange as applyBatchSeenChangeState,
   applyMessageMove,
   applyMessageMoveConfirmation,
   applyMessageSeenChange,
@@ -84,12 +66,9 @@ import {
   appendMessageCursorChain,
   canLoadMoreMessagePage,
   isArchivedMessage,
-  isInboxMessage,
-  isSnoozedMessage,
   matchesServerMessageQuery,
   mergePendingArchiveMoves,
   mergePendingLocalState,
-  mergeRolledBackMessages,
   mergeUnreadViewSnapshot,
   nextMessageTotalForMove,
   nextMessageTotalForSnapshot,
@@ -105,7 +84,6 @@ import {
   unpinFlagOverride,
 } from "./mailListState";
 import { beginSpan, markInterval, recordCommit } from "./perfTelemetry";
-import { mergeSubmissionSnapshots, sortSubmissions, submissionStatusNeedsRefresh } from "./sendingStatus";
 import { providerDisplayName } from "./providerOnboarding";
 import { playNotificationSound, primeNotificationSound } from "./sounds";
 import { saveLocalePreference } from "./localePreference";
@@ -113,19 +91,19 @@ import { getAccountDisplayName, useAccountDisplayNames } from "./accountDisplayN
 import { loadFolderDisplayMode, saveFolderDisplayMode, type FolderDisplayMode } from "./folderDisplayMode";
 import { shouldShowLoading, type MailboxSelection } from "./folderNavigation";
 import { createSettingsLoadCoordinator } from "./settingsLoadCoordinator";
-import TranslationPanel, { type TranslationAvailability, type TranslationContent, type TranslationPanelState } from "./TranslationPanel";
-import { applyMailTranslation, extractMailTextSegments, isMailMatchingLocale } from "./mailDomTranslation";
-import { extractMailVisualStyle, llmTranslationErrorMessage, translationErrorMessage } from "./translationPresentation";
-import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type MessageAttachment, type OutboundAttachment, type OutboundSubmission, type ProviderInfo, type Stats } from "./types";
+import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type OutboundAttachment, type ProviderInfo, type Stats } from "./types";
 import { useDialogFocus } from "./hooks/useDialogFocus";
-import { useDismissTransition } from "./hooks/useDismissTransition";
 import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import { dialogKeydownDecision, useDialogRouting } from "./dialogRouting";
-import { findVerificationCodes } from "./verificationCode";
+import { useBatchSelection } from "./app/useBatchSelection";
+import { useQuickMessageActions } from "./app/useQuickMessageActions";
+import { useAttachmentExports } from "./app/useAttachmentExports";
+import { useDesktopBridgeHandlers } from "./app/useDesktopBridgeHandlers";
 import { resolveLocale, useI18n } from "./i18n";
 import type { AgentBootstrap } from "./agentTypes";
+import { AppDialogs } from "./AppDialogs";
+import { MailReader } from "./MailReader";
 import MessageList from "./MessageList";
-import { AutoReplyToastStack, autoReplyNoticeKey } from "./AutoReplyToastStack";
 import {
   formatMessageTime,
   formatFullDate,
@@ -148,38 +126,17 @@ import {
   SWITCH_FADE_MS,
   MAIL_FADE_STAGGER_MS,
   AGENT_FADE_STAGGER_MS,
-  MAX_LLM_TRANSLATION_TEXT_LENGTH,
-  type AttachmentDownloadState,
   localizeMessageLinks,
 } from "./app/app-utils";
 import { useMessageBody } from "./app/useMessageBody";
-import { copyVerificationCodeToClipboard } from "./app/verificationClipboard";
+import { useMailTranslation } from "./app/useMailTranslation";
+import { useSplashDismiss } from "./app/useSplashDismiss";
+import { useOutboundSubmissions } from "./app/useOutboundSubmissions";
+import { sortSubmissions } from "./sendingStatus";
 
 const AgentWorkspace = lazy(() => import("./AgentWorkspace"));
-const AccountConnectionModal = lazy(() => import("./AddAccountModal"));
-const AttachmentPreviewModal = lazy(() => import("./AttachmentPreviewModal"));
-const SettingsModal = lazy(() => import("./SettingsModal"));
-const AccountsDialog = lazy(() => import("./AccountsDialog"));
-const CalendarDialog = lazy(() => import("./CalendarDialog"));
-const ManagementDialogs = lazy(async () => {
-  const module = await import("./ManagementDialogs");
-  return { default: module.ContactsDialog };
-});
-const TemplatesDialog = lazy(async () => {
-  const module = await import("./ManagementDialogs");
-  return { default: module.TemplatesDialog };
-});
-const SendingStatusModal = lazy(() => import("./SendingStatusModal"));
-const StartupUpdatePrompt = lazy(() => import("./StartupUpdatePrompt"));
-const TranslationTermsDialog = lazy(() => import("./TranslationTermsDialog"));
-const ComposeModal = lazy(async () => {
-  const module = await import("./ComposeModal");
-  return { default: module.ComposeModal };
-});
 
 type MailView = MessageListQuery["messageView"];
-type ToastAction = { label: string; run: () => void };
-type ToastNotice = { kind: ToastKind; message: string; action?: ToastAction } | null;
 
 // Interface-switch ("fade hand-off") phases between the mail workspace and the
 // Agent workspace. Each interface fades out/in in two layers — the mail
@@ -192,22 +149,6 @@ const MAIL_SWITCH_TOTAL_MS = SWITCH_FADE_MS + MAIL_FADE_STAGGER_MS;
 /** Sidebar spinner grace period: faster loads show no spinner at all. */
 const SIDEBAR_LOADING_SPINNER_DELAY_MS = 250;
 const AGENT_SWITCH_TOTAL_MS = SWITCH_FADE_MS + AGENT_FADE_STAGGER_MS;
-type TranslationSession = {
-  messageId: string;
-  targetLocale: string;
-  state: TranslationPanelState;
-};
-
-function retainedTranslationContent(state: TranslationPanelState): TranslationContent | undefined {
-  if (state.phase === "ready") {
-    return {
-      translatedText: state.translatedText,
-      ...(state.detectedLanguage ? { detectedLanguage: state.detectedLanguage } : {}),
-      visible: state.visible,
-    };
-  }
-  return state.phase === "loading" || state.phase === "error" ? state.previous : undefined;
-}
 
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 // Only the desktop smoke uses this: it runs the renderer in demo mode, which
@@ -267,9 +208,6 @@ export default function App() {
   const [stats, setStats] = useState<Stats>({ accounts: 0, messages: 0, unread: 0 });
   const [unreadViewRecentlyReadIds, setUnreadViewRecentlyReadIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [translationSession, setTranslationSession] = useState<TranslationSession | null>(null);
-  const [forceShowTranslationId, setForceShowTranslationId] = useState<string | null>(null);
-  const [translationAvailability, setTranslationAvailability] = useState<TranslationAvailability>(isDemo ? "available" : "checking");
   // The shell's modal/panel routing and the global keydown decisions live in
   // useDialogRouting; the update prompt, reader-domain, and agent-workspace
   // routing stay here. The two modals App renders itself go in as arguments so
@@ -387,24 +325,13 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>("idle");
   const [agentProviderListVersion, setAgentProviderListVersion] = useState(0);
-  const [submissions, setSubmissions] = useState<OutboundSubmission[]>([]);
-  const [submissionLoading, setSubmissionLoading] = useState(true);
-  const [submissionLoadError, setSubmissionLoadError] = useState<string | null>(null);
   const [messageAction, setMessageAction] = useState<MoveTarget | null>(null);
   const [messageFlagging, setMessageFlagging] = useState(false);
-  const [selectionMode, setSelectionMode] = useState(false);
-  const [selectedMessageIds, setSelectedMessageIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selectAllPaged, setSelectAllPaged] = useState(false);
   // The message the last shift+J/K expansion radiated from; plain J/K
   // navigation clears it so the next expansion starts from the opened row.
   const keyboardSelectionAnchorIdRef = useRef<string | null>(null);
   const [batchJob, setBatchJob] = useState<BatchJobSnapshot | null>(null);
-  const [batchBusy, setBatchBusy] = useState(false);
-  const { closing: batchDeleteConfirmClosing, requestClose: requestBatchDeleteConfirmClose, reset: resetBatchDeleteConfirmClosing } = useDismissTransition(
-    useCallback(() => setPendingBatchDelete(false), []),
-  );
-  const batchDeleteDialogRef = useRef<HTMLElement | null>(null);
-  useDialogFocus(pendingBatchDelete, batchDeleteDialogRef);
   const [attachmentKindFilter, setAttachmentKindFilter] = useState<AttachmentKind | undefined>(undefined);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -422,43 +349,55 @@ export default function App() {
     }
     return { after, before };
   }, [dateFrom, dateTo]);
-  const [attachmentDownloads, setAttachmentDownloads] = useState<Record<string, AttachmentDownloadState>>({});
-  const [zipAllPhase, setZipAllPhase] = useState<"idle" | "zipping">("idle");
   const [recipientDetailsOpen, setRecipientDetailsOpen] = useState(false);
   const [readerMoreOpen, setReaderMoreOpen] = useState(false);
-  const [snoozeOpen, setSnoozeOpen] = useState(false);
   // The reader popovers animate their exit: user dismissals route through
   // beginClose (keep mounted with the closing class), parent-driven closes
   // (opening another view, selecting another message) stay instant.
   const { mounted: readerMoreMounted, closing: readerMoreClosing, beginClose: beginReaderMoreClose } = usePopupExitTransition(readerMoreOpen, () => setReaderMoreOpen(false));
-  const { mounted: snoozeMounted, closing: snoozeClosing, beginClose: beginSnoozeClose } = usePopupExitTransition(snoozeOpen, () => setSnoozeOpen(false));
-  const [snoozeCustomUntil, setSnoozeCustomUntil] = useState("");
-  const [toast, setToast] = useState<ToastNotice>(null);
+  const { toast, showToast, dismissToast } = useToastQueue();
+  const {
+    submissions,
+    submissionLoading,
+    submissionLoadError,
+    submissionAttentionCount,
+    submissionOutstandingCount,
+    refreshSubmissions,
+    cancelScheduledSubmission,
+    applyDemoSubmissions,
+    reportLoadFailure: reportSubmissionsLoadFailure,
+  } = useOutboundSubmissions({ isDemo, locale, t, showToast, accounts });
+  const {
+    desktopUpdateStatus,
+    setDesktopUpdateStatus,
+    runUpdateFooterAction,
+    updateFooterAction,
+    updateFooterBusy,
+    updateBadgeDismissed,
+    updateBadgeHidden,
+    dismissUpdateBadge,
+  } = useDesktopUpdateUi({ isDemo, t, showToast });
   const [autoReplyNotices, setAutoReplyNotices] = useState<DesktopAutoReplyNotice[]>([]);
   const [fatalError, setFatalError] = useState<MailErrorPresentation | null>(null);
-  const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateSnapshot | null>(() => resolveDemoUpdateSnapshot(isDemo));
-  // Bumped by every pushed update-status event: an action's own snapshot was
-  // taken before any event broadcast while it ran, so it may only win when no
-  // event intervened.
-  const updateEventSeqRef = useRef(0);
   const [updatePromptOpen, setUpdatePromptOpen] = useState(false);
-  const [updateFooterBusy, setUpdateFooterBusy] = useState(false);
   const [preloadedAgentBootstrap, setPreloadedAgentBootstrap] = useState<AgentBootstrap | null>(null);
   // The provider slice of the bootstrap, kept apart so the settings panel can publish
   // it when the splash preload never landed: patching the bootstrap in place was
   // dropped while it was null, pinning the AI-translation switch to startup state.
   const [agentProviderSnapshot, setAgentProviderSnapshot] = useState<Pick<AgentBootstrap, "providers" | "defaultProviderId"> | null>(null);
-  const splashAnimationDoneRef = useRef(false);
-  const splashDataDoneRef = useRef(false);
-  const splashAgentDoneRef = useRef(false);
-  const splashDismissedRef = useRef(false);
+  const {
+    dismissSplash,
+    splashAnimationDoneRef,
+    splashDataDoneRef,
+    splashAgentDoneRef,
+    splashDismissedRef,
+  } = useSplashDismiss();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const agentLaunchButtonRef = useRef<HTMLButtonElement>(null);
   const readerTitleRef = useRef<HTMLHeadingElement>(null);
   const readerMoreRef = useRef<HTMLDivElement>(null);
-  const snoozeRef = useRef<HTMLDivElement>(null);
   /** Anchors the compact sort/filter panel and closes it on outside clicks. */
   const listToolbarRef = useRef<HTMLDivElement>(null);
   /** Anchors the collapsible header search box so an outside click closes it. */
@@ -490,17 +429,9 @@ export default function App() {
   }, []);
   const viewRef = useRef<MailView>("inbox");
   const lastOpenedMessageIdRef = useRef<string | null>(null);
-  const translationRequestIdRef = useRef(0);
-  const translationAvailabilityRequestIdRef = useRef(0);
-  const translationAbortRef = useRef<AbortController | null>(null);
-  const llmTranslationAbortRef = useRef<AbortController | null>(null);
   const settingsLoadCoordinatorRef = useRef(createSettingsLoadCoordinator());
   const demoLoadedRef = useRef(false);
   const loadRequestRef = useRef(0);
-  const submissionLoadRequestRef = useRef(0);
-  // Submissions the user cancelled locally: the server's list can lag the
-  // cancellation, and a snapshot fetched before it must not re-add the row.
-  const cancelledSubmissionIdsRef = useRef(new Set<string>());
   const loadingMoreRef = useRef(false);
   const messageListRef = useRef<HTMLDivElement>(null);
   // Scroll anchor for background refreshes: which row the user is reading, and
@@ -517,7 +448,6 @@ export default function App() {
     activeBackgroundUrl && theme === "light"
       ? Math.min(1, (settings.backgroundIntensity * 1.22) / 100)
       : settings.backgroundIntensity / 100;
-  const accountIdsKey = accounts.map((account) => account.id).sort().join("|");
   // Identity of the list on screen. The list component keys its viewport on
   // `listSnapshotKey` (bumped with each settled row swap above) so a switch
   // remounts the viewport once, at the data change, and can fade the arriving
@@ -527,19 +457,8 @@ export default function App() {
     ...pendingArchiveMoves.map((move) => move.id),
     ...messages.filter((message) => message.movePending === true).map((message) => message.id),
   ])].sort().join("|");
-  const submissionStatusRefreshIdsKey = submissions
-    .filter((submission) => submissionStatusNeedsRefresh(submission.deliveryStatus))
-    .map((submission) => submission.id)
-    .sort()
-    .join("|");
-  const submissionAttentionCount = submissions.filter((submission) => ["unknown_delivery", "failed"].includes(submission.deliveryStatus)).length;
-  const submissionActiveCount = submissions.filter((submission) => ["pending", "submitting", "submitted"].includes(submission.deliveryStatus)).length;
-  const submissionOutstandingCount = submissionAttentionCount + submissionActiveCount;
   const sidebarCounts = useMemo(() => sidebarBadgeCounts(stats), [stats]);
   useDialogFocus(state.mobileSidebar, sidebarRef);
-  const showToast = useCallback((message: string, kind: ToastKind = "success", action?: ToastAction) => {
-    setToast({ kind, message, action });
-  }, []);
 
   // Block-assembly switch between the mail workspace and the Agent workspace.
   // Opening: mail blocks leave in order, then the Agent workspace mounts and
@@ -632,32 +551,6 @@ export default function App() {
     unreadViewRecentlyReadIdsRef.current = next;
     setUnreadViewRecentlyReadIds(next);
   }, []);
-  const cancelScheduledSubmission = useCallback(async (submissionId: string) => {
-    // Two guards, because the server's own list can lag the cancel by a moment:
-    // invalidate any list refresh already in flight (it was fetched before the
-    // cancellation), and remember the id so a snapshot that still reports it
-    // cannot re-add the row. The registration clears itself once every account
-    // answers without it (see refreshSubmissions).
-    submissionLoadRequestRef.current += 1;
-    cancelledSubmissionIdsRef.current.add(submissionId);
-    const forget = () => cancelledSubmissionIdsRef.current.delete(submissionId);
-    if (isDemo) {
-      setSubmissions((current) => current.filter((item) => item.id !== submissionId));
-      showToast(t("sending.cancelled.success"));
-      return;
-    }
-    const result = await api.cancelScheduledSend(submissionId).catch((error: unknown) => {
-      // The row is still on the server, so stop hiding it.
-      forget();
-      throw error;
-    });
-    if (!result.cancelled) {
-      forget();
-      throw new ApiError(t("sending.error.cancel"), "scheduled_send_not_cancellable");
-    }
-    setSubmissions((current) => current.filter((item) => item.id !== submissionId));
-    showToast(t("sending.cancelled.success"));
-  }, [showToast, t]);
   const updateUnreadViewRecentlyRead = useCallback((message: Pick<Message, "id" | "seen">, nextSeen: boolean) => {
     const next = nextUnreadViewRecentlyReadIds(
       unreadViewRecentlyReadIdsRef.current,
@@ -668,58 +561,6 @@ export default function App() {
     unreadViewRecentlyReadIdsRef.current = next;
     setUnreadViewRecentlyReadIds(next);
   }, []);
-
-  const refreshSubmissions = useCallback(async (
-    targetAccounts: Account[],
-    { silent = false }: { silent?: boolean } = {},
-  ): Promise<void> => {
-    const requestId = ++submissionLoadRequestRef.current;
-    if (!silent) setSubmissionLoading(true);
-    if (isDemo || targetAccounts.length === 0) {
-      setSubmissions(isDemo ? sortSubmissions((await ensureDemoLoaded()).createDemoSubmissions(locale)) : []);
-      setSubmissionLoadError(null);
-      setSubmissionLoading(false);
-      return;
-    }
-
-    const settled = await Promise.allSettled(targetAccounts.map(async (account) => ({
-      accountId: account.id,
-      items: (await api.submissions(account.id, 100)).items,
-    })));
-    if (requestId !== submissionLoadRequestRef.current) return;
-
-    const fulfilled = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
-    const failedAccountIds = new Set(targetAccounts
-      .filter((_, index) => settled[index]?.status === "rejected")
-      .map((account) => account.id));
-    const currentAccountIds = new Set(targetAccounts.map((account) => account.id));
-    const incoming = fulfilled.flatMap((result) => result.items);
-    // The list is refetched from several independent triggers, so responses land
-    // out of order; only drop a cancellation registration once every account has
-    // answered without that row, or a partial snapshot would un-hide it.
-    if (cancelledSubmissionIdsRef.current.size > 0 && failedAccountIds.size === 0) {
-      const presentIds = new Set(incoming.map((item) => item.id));
-      for (const id of [...cancelledSubmissionIdsRef.current]) {
-        if (!presentIds.has(id)) cancelledSubmissionIdsRef.current.delete(id);
-      }
-    }
-    setSubmissions((current) => {
-      const merged = mergeSubmissionSnapshots(incoming, current, { cancelledIds: cancelledSubmissionIdsRef.current });
-      const keptFromFailedAccounts = current.filter((item) => currentAccountIds.has(item.accountId)
-        && failedAccountIds.has(item.accountId)
-        && !cancelledSubmissionIdsRef.current.has(item.id));
-      return sortSubmissions([...merged, ...keptFromFailedAccounts]);
-    });
-
-    const firstFailure = settled.find((result) => result.status === "rejected");
-    setSubmissionLoadError(firstFailure?.status === "rejected"
-      ? t("sending.loadError", {
-        count: failedAccountIds.size,
-        message: mailErrorToastMessage(firstFailure.reason, t("error.localServiceUnavailable.title"), t),
-      })
-      : null);
-    setSubmissionLoading(false);
-  }, [locale, t]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -887,9 +728,7 @@ export default function App() {
         // The demo dataset is handed to the list whole, so there is nothing left
         // to page: the chain starts already exhausted.
         setMessageNextCursor(null);
-        setSubmissions(sortSubmissions(demo.createDemoSubmissions(locale)));
-        setSubmissionLoadError(null);
-        setSubmissionLoading(false);
+        applyDemoSubmissions(sortSubmissions(demo.createDemoSubmissions(locale)), true);
       } else {
         const messageQuery = buildMessageQuery({ accountId, folder, search, messageView, searchScope: scope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before });
         const [nextAccounts, nextProviders, firstPage, nextStats] = await Promise.all([
@@ -962,8 +801,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     } catch (error) {
       if (requestId === loadRequestRef.current) {
         setFatalError(presentMailError(error, t));
-        setSubmissionLoading(false);
-        setSubmissionLoadError(mailErrorToastMessage(error, t("sending.error.load"), t));
+        reportSubmissionsLoadFailure(mailErrorToastMessage(error, t("sending.error.load"), t));
       }
     } finally {
       if (requestId === loadRequestRef.current) {
@@ -979,7 +817,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         }
       }
     }
-  }, [locale, selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, searchScope, t, view, attachmentKindFilter, dateBounds.after, dateBounds.before]);
+  }, [applyDemoSubmissions, locale, selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, reportSubmissionsLoadFailure, searchScope, splashAgentDoneRef, splashAnimationDoneRef, splashDataDoneRef, splashDismissedRef, t, view, attachmentKindFilter, dateBounds.after, dateBounds.before]);
   // A batch job's poll loop keeps the closure it started with for the whole run,
   // so its final reconciliation reload would otherwise use the account/folder
   // the job started in — yanking the user back there when the job ends. Reading
@@ -1189,34 +1027,6 @@ await refreshSubmissions(nextAccounts, { silent: true });
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { void loadSettings(); }, [loadSettings]);
 
-  // Splash screen coordination: dismiss when the animation timeline completes
-  // (~2s) AND both the mail data load and agent bootstrap preload finish.
-  const dismissSplash = useCallback(() => {
-    if (splashDismissedRef.current) return;
-    if (!splashAnimationDoneRef.current || !splashDataDoneRef.current || !splashAgentDoneRef.current) return;
-    splashDismissedRef.current = true;
-    console.log("[nami-startup] renderer-splash-dismissed");
-    const el = document.getElementById("nami-splash");
-    if (el) {
-      el.classList.add("done");
-      setTimeout(() => el.remove(), 600);
-    }
-  }, []);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      splashAnimationDoneRef.current = true;
-      console.log("[nami-startup] renderer-splash-animation-done(2s)");
-      // If data or agent is still loading, show the loading bar
-      if (!splashDataDoneRef.current || !splashAgentDoneRef.current) {
-        const loader = document.querySelector(".nami-splash-loader");
-        if (loader) loader.classList.add("visible");
-      }
-      dismissSplash();
-    }, 2000);
-    return () => clearTimeout(timer);
-  }, [dismissSplash]);
-
   // Preload agent conversations during splash so the assistant panel is ready
   // instantly when the user opens it. Only keep recent summaries to bound memory.
   useEffect(() => {
@@ -1234,75 +1044,8 @@ await refreshSubmissions(nextAccounts, { silent: true });
       console.log("[nami-startup] renderer-agent-bootstrap-done");
       dismissSplash();
     });
-  }, [dismissSplash]);
-  useEffect(() => {
-    const bridge = desktopBridge();
-    if (!bridge) return undefined;
-    let active = true;
-    let receivedUpdateEvent = false;
-    const removeListener = bridge.onUpdateStatus((snapshot) => {
-      receivedUpdateEvent = true;
-      updateEventSeqRef.current += 1;
-      if (active) setDesktopUpdateStatus(snapshot);
-    });
-    void bridge.getUpdateStatus().then((snapshot) => {
-      // Prefer a broadcast received after subscription over an older IPC
-      // snapshot, so a just-found release cannot be hidden by a race.
-      if (active && !receivedUpdateEvent && snapshot) setDesktopUpdateStatus(snapshot);
-    }).catch(() => undefined);
-    return () => {
-      active = false;
-      removeListener();
-    };
-  }, []);
+  }, [dismissSplash, splashAgentDoneRef]);
 
-  const runUpdateFooterAction = useCallback(async (action: UpdateFooterAction) => {
-    const bridge = desktopBridge();
-    if (!bridge && isDemo) {
-      handleDemoUpdateFooterAction(action, setDesktopUpdateStatus, showToast, t);
-      return;
-    }
-    if (!bridge || updateFooterBusy) return;
-    setUpdateFooterBusy(true);
-    // A download/check broadcasts progress while it runs; the snapshot the call
-    // resolves with was taken before those events, so applying it blindly would
-    // walk the progress bar backwards. Only a snapshot from a window with no
-    // intervening event may win (same rule the subscription above uses).
-    const seqAtStart = updateEventSeqRef.current;
-    const applyIfNewest = (snapshot: DesktopUpdateSnapshot | undefined | null) => {
-      if (snapshot && updateEventSeqRef.current === seqAtStart) setDesktopUpdateStatus(snapshot);
-    };
-    try {
-      if (action.kind === "download") {
-        applyIfNewest(await bridge.downloadUpdate());
-      } else if (action.kind === "install") {
-        const result = await bridge.installUpdate();
-        setDesktopUpdateStatus((current) => result.snapshot ?? current);
-        if (!result.accepted && !result.snapshot) showToast(t("update.prompt.error.notReady"), "error");
-      } else {
-        applyIfNewest(await bridge.checkForUpdates());
-      }
-    } catch (error) {
-      showToast(updateBridgeErrorMessage(error, t("update.prompt.error.action"), t), "error");
-    } finally {
-      setUpdateFooterBusy(false);
-    }
-  }, [updateFooterBusy, showToast, t]);
-  const updateFooterAction = resolveUpdateFooter(desktopUpdateStatus);
-  // Update badge (available phase): a circular arrow chip that expands into a
-  // pill on hover. Dismissing fades the pill back into the circle and then
-  // out entirely; any phase/version change brings a fresh badge back.
-  const [updateBadgeDismissed, setUpdateBadgeDismissed] = useState(false);
-  const [updateBadgeHidden, setUpdateBadgeHidden] = useState(false);
-  const dismissUpdateBadge = useCallback(() => {
-    setUpdateBadgeDismissed(true);
-    window.setTimeout(() => setUpdateBadgeHidden(true), 560);
-  }, []);
-  const updateBadgeVersion = desktopUpdateStatus?.phase === "available" ? desktopUpdateStatus.targetVersion : null;
-  useEffect(() => {
-    setUpdateBadgeDismissed(false);
-    setUpdateBadgeHidden(false);
-  }, [updateBadgeVersion]);
   useEffect(() => {
     const bridge = desktopBridge();
     if (!bridge || isDemo) return undefined;
@@ -1382,32 +1125,6 @@ await refreshSubmissions(nextAccounts, { silent: true });
       window.clearTimeout(timer);
     };
   }, [load, pendingMoveVerificationKey, replacePendingArchiveMoves]);
-  useEffect(() => {
-    if (isDemo || !submissionStatusRefreshIdsKey || !accountIdsKey) return undefined;
-    let cancelled = false;
-    let attempts = 0;
-    let timer = 0;
-    const targetAccounts = accountsRef.current;
-    const poll = async () => {
-      if (cancelled) return;
-      attempts += 1;
-      await refreshSubmissions(targetAccounts, { silent: true });
-      if (!cancelled && attempts < 12) timer = window.setTimeout(() => void poll(), 1_250);
-    };
-    timer = window.setTimeout(() => void poll(), 750);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-    // `accounts` is deliberately read through the ref: a refresh swaps the array
-    // identity on every list load, which would restart this effect (resetting
-    // the timer and the attempt budget) before the first poll ever fired.
-  }, [accountIdsKey, refreshSubmissions, submissionStatusRefreshIdsKey]);
-  useEffect(() => {
-    if (!toast) return;
-    const timer = window.setTimeout(() => setToast(null), toast.action ? 6000 : toast.kind === "warning" ? 9000 : toast.kind === "error" ? 6000 : 3200);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
   // Floating-UI tooltips: a single reused bubble positioned by
   // @floating-ui/dom. flip() turns the bubble over when there is no room on
   // the preferred side and shift() nudges it along the axis, with the app
@@ -1570,6 +1287,62 @@ await refreshSubmissions(nextAccounts, { silent: true });
         ? t("mail.loaded", { loaded: loadedServerMessageCount, total: currentMessageTotal })
         : t("mail.recentlySynced");
 
+  // Multi-select + bulk operations live in useBatchSelection. Predicate-wide
+  // selection state (selectAllPaged/batchJob) and the delete-confirmation flag
+  // stay up here because `load` and useDialogRouting precede this call.
+  const {
+    selectionMode,
+    selectedMessageIds,
+    batchBusy,
+    batchDeleteConfirmClosing,
+    requestBatchDeleteConfirmClose,
+    resetBatchDeleteConfirmClosing,
+    batchDeleteDialogRef,
+    toggleSelectionMode,
+    toggleMessageSelected,
+    selectMessageRange,
+    selectAllVisibleMessages,
+    exitSelectionMode,
+    applyBatchFlaggedChange,
+    batchUpdateFlags,
+    batchMoveMessages,
+  } = useBatchSelection({
+    isDemo,
+    t,
+    showToast,
+    sortOrder,
+    filteredMessages,
+    messages,
+    accounts,
+    stats,
+    loadedServerMessageCount,
+    currentMessageTotal,
+    searchScope,
+    debouncedQuery,
+    selectedAccount,
+    selectedFolder,
+    view,
+    attachmentKindFilter,
+    dateBounds,
+    load,
+    loadRef,
+    loadRequestRef,
+    messagesRef,
+    pendingLocalStateRef,
+    viewRef,
+    selectAllPaged,
+    setSelectAllPaged,
+    setBatchJob,
+    pendingBatchDelete,
+    setPendingBatchDelete,
+    pinMovedAway,
+    unpinMovedAway,
+    setMessages,
+    setAccounts,
+    setStats,
+    setMessageTotal,
+  });
+
   useEffect(() => {
     if (!selectedId || filteredMessages.some((message) => message.id === selectedId)) return;
     // A message opened from the conversation strip legitimately lives outside
@@ -1709,45 +1482,6 @@ await refreshSubmissions(nextAccounts, { silent: true });
     : selectedMoveLocationUnverified
       ? t("mail.action.locationUnverified")
       : null;
-  const translationState = useMemo<TranslationPanelState>(() => selected
-    && translationSession?.messageId === selected.id
-    && translationSession.targetLocale === locale
-    ? translationSession.state
-    : { phase: "idle" }, [locale, selected, translationSession]);
-  const forceShowTranslation = selected ? forceShowTranslationId === selected.id : false;
-  const isMailLanguageMatching = useMemo(() => {
-    if (!selected) return true;
-    return isMailMatchingLocale(selected, locale);
-  }, [selected, locale]);
-  const shouldRenderTranslationPanel =
-    translationState.phase !== "idle" ||
-    forceShowTranslation ||
-    !isMailLanguageMatching;
-  // Whether at least one LLM provider is configured AND authorized for mail
-  // content, enabling AI translation. Cloud providers require the explicit
-  // "allowCloudMailContent" consent; local providers (e.g. Ollama) always qualify.
-  const llmTranslationAvailable = useMemo(
-    () => !isDemo && Boolean(agentProviderSnapshot?.providers.some(
-      (provider) => provider.configured && (!provider.cloud || provider.cloudContentConsent),
-    )),
-    [agentProviderSnapshot],
-  );
-  const refreshTranslationAvailability = useCallback(async () => {
-    const requestId = ++translationAvailabilityRequestIdRef.current;
-    if (isDemo) {
-      setTranslationAvailability("available");
-      return;
-    }
-    setTranslationAvailability("checking");
-    try {
-      const status = await api.translationStatus();
-      if (requestId === translationAvailabilityRequestIdRef.current) {
-        setTranslationAvailability(status.configurationError ? "invalid" : status.enabled ? "available" : "unavailable");
-      }
-    } catch {
-      if (requestId === translationAvailabilityRequestIdRef.current) setTranslationAvailability("unknown");
-    }
-  }, []);
   const selectedMessageAccount = selected ? accounts.find((account) => account.id === selected.accountId) : undefined;
   // Sent-vs-received display: a message whose sender is one of the user's own
   // addresses is rendered recipient-first (Gmail style) — the reader header
@@ -1811,6 +1545,14 @@ await refreshSubmissions(nextAccounts, { silent: true });
     chooseFolder(target.path);
   }
   const selectedFolderRecord = selectedAccountRecord?.folders.find((folder) => folder.path === selectedFolder);
+  // Folder display name shared by the column header and the empty state:
+  // single-account view uses the account's own record; the unified ("all
+  // accounts") view falls back to the first carrying account's folder name so
+  // localized names survive there too; the raw path (last segment) is the
+  // final fallback for a folder that just vanished from the account tree.
+  const selectedFolderName = selectedFolderRecord?.name
+    ?? accounts.flatMap((account) => account.folders).find((folder) => folder.path === selectedFolder)?.name
+    ?? (selectedFolder ? selectedFolder.split("/").pop() || selectedFolder : "");
 const emptyMessageList = useMemo(() => (query.trim()
     ? { title: t("mail.empty.searchTitle"), description: t("mail.empty.searchDescription"), canClearSearch: true }
     : view === "unread"
@@ -1819,11 +1561,13 @@ const emptyMessageList = useMemo(() => (query.trim()
       ? { title: t("mail.empty.starredTitle"), description: t("mail.empty.starredDescription"), canClearSearch: false }
     : view === "archived"
       ? { title: t("mail.empty.archiveTitle"), description: t("mail.empty.archiveDescription"), canClearSearch: false }
+    : view === "snoozed"
+      ? { title: t("mail.empty.snoozedTitle"), description: t("mail.empty.snoozedDescription"), canClearSearch: false }
     : view === "attachments"
       ? { title: t("mail.empty.attachmentsTitle"), description: t("mail.empty.attachmentsDescription"), canClearSearch: false }
-    : selectedFolderRecord
-        ? { title: t("mail.empty.folderTitle", { folder: selectedFolderRecord.name }), description: t("mail.empty.folderDescription"), canClearSearch: false }
-        : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false }), [query, selectedFolderRecord, t, view]);
+    : selectedFolder
+      ? { title: t("mail.empty.folderTitle", { folder: selectedFolderName || selectedFolder }), description: t("mail.empty.folderDescription"), canClearSearch: false }
+      : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false }), [query, selectedFolderName, selectedFolder, t, view]);
   const { issues: accountIssues, accountsNeedingAttention, primaryAccountNeedingAttention, primaryAccountIssue, healthAlert, dismissHealthAlert } = useAccountHealth(accounts, t);
   const safeHtml = useMemo(
     () => selected?.htmlBody ? sanitizeMailHtml(selected.htmlBody, theme === "dark") : "",
@@ -1837,6 +1581,37 @@ const emptyMessageList = useMemo(() => (query.trim()
   useEffect(() => {
     setQuotedExpanded(false);
   }, [selected?.id]);
+  const {
+    translationState,
+    shouldRenderTranslationPanel,
+    llmTranslationAvailable,
+    translationMailStyle,
+    verificationCodes,
+    translationAvailability,
+    setForceShowTranslationId,
+    refreshTranslationAvailability,
+    translateSelectedMessage,
+    translateSelectedMessageWithLlm,
+    showSelectedTranslation,
+    hideSelectedTranslation,
+    cancelTranslation,
+    acceptTranslationTerms,
+    declineTranslationTerms,
+    copyDetectedVerificationCode,
+  } = useMailTranslation({
+    selected,
+    safeHtml,
+    locale,
+    t,
+    theme,
+    isDemo,
+    showToast,
+    agentProviderSnapshot,
+    translationTermsAccepted: state.translationTermsAccepted,
+    translationTermsPendingRef,
+    setTranslationTermsOpen: actions.setTranslationTermsOpen,
+    setTranslationTermsAccepted: actions.setTranslationTermsAccepted,
+  });
   const readerHtml = useMemo(() => {
     if (!safeHtml) return "";
     const translatedHtml = translationState.phase === "ready" && translationState.visible ? translationState.translatedHtml : null;
@@ -1848,273 +1623,6 @@ const emptyMessageList = useMemo(() => (query.trim()
     () => quotedExpanded ? { body: readerTextSource, quote: "" } : splitQuotedMailText(readerTextSource),
     [readerTextSource, quotedExpanded],
   );
-  // Inherit the message's branded backdrop so a translated result keeps the
-  // provider-authored look instead of falling back to a plain app panel.
-  const translationMailStyle = useMemo(
-    () => selected?.htmlBody ? extractMailVisualStyle(selected.htmlBody) : undefined,
-    [selected?.htmlBody],
-  );
-  const verificationCodes = useMemo(() => {
-    if (!selected) return [];
-    const htmlText = textFromSanitizedMailHtml(safeHtml);
-    return findVerificationCodes({
-      subject: selected.subject,
-      body: [selected.textBody, selected.snippet, htmlText].filter(Boolean).join("\n"),
-    });
-  }, [safeHtml, selected]);
-  useEffect(() => {
-    // Translation is view-local and target-language specific. Never retain a
-    // result when the user changes the selected mail or interface language.
-    translationRequestIdRef.current += 1;
-    setTranslationSession(null);
-  }, [locale, selected?.id]);
-  useEffect(() => {
-    void refreshTranslationAvailability();
-    return () => {
-      translationAvailabilityRequestIdRef.current += 1;
-    };
-  }, [refreshTranslationAvailability]);
-  const translateSelectedMessage = useCallback(async () => {
-    if (!selected || translationState.phase === "loading") return;
-    if (!state.translationTermsAccepted) {
-      translationTermsPendingRef.current = "free";
-      actions.setTranslationTermsOpen(true);
-      return;
-    }
-    const messageId = selected.id;
-    const targetLocale = locale;
-    const previous = retainedTranslationContent(translationState);
-    const requestId = ++translationRequestIdRef.current;
-    translationAbortRef.current?.abort();
-    const controller = new AbortController();
-    translationAbortRef.current = controller;
-    setTranslationSession({ messageId, targetLocale, state: { phase: "loading", ...(previous ? { previous } : {}) } });
-    try {
-      // HTML-bodied messages keep their markup, links, and inline styles by
-      // translating the visible text nodes in place (Immersive-Translate style)
-      // instead of replacing the whole body with a plain-text translation.
-      if (!isDemo && selected.htmlBody) {
-        const sanitized = sanitizeMailHtml(selected.htmlBody, theme === "dark");
-        const template = document.createElement("template");
-        template.innerHTML = sanitized;
-        const segments = extractMailTextSegments(template.content);
-        if (segments.length > 0) {
-          const { translations } = await api.translateMessageSegments(
-            segments.map((segment) => segment.text),
-            targetLocale,
-            controller.signal,
-          );
-          for (let index = 0; index < segments.length; index++) {
-            applyMailTranslation(template.content, segments[index]!.path, translations[index]!);
-          }
-          if (requestId !== translationRequestIdRef.current) return;
-          setTranslationSession({
-            messageId,
-            targetLocale,
-            state: {
-              phase: "ready",
-              // The panel preview stays plain text; the styled version lives in
-              // translatedHtml and replaces the body in the reader.
-              translatedText: translations.join("\n"),
-              translatedHtml: template.innerHTML,
-              visible: true,
-            },
-          });
-          return;
-        }
-      }
-      if (isDemo) {
-        const demo = await ensureDemoLoaded();
-        const result = demo.demoMessageTranslation(selected, targetLocale);
-        if (requestId !== translationRequestIdRef.current) return;
-        setTranslationSession({
-          messageId,
-          targetLocale,
-          state: {
-            phase: "ready",
-            translatedText: result.translatedText,
-            ...(result.detectedLanguage ? { detectedLanguage: result.detectedLanguage } : {}),
-            visible: true,
-          },
-        });
-      } else {
-        const result = await api.translateMessageStream(
-          messageId,
-          targetLocale,
-          (partial) => {
-            if (requestId !== translationRequestIdRef.current) return;
-            setTranslationSession({
-              messageId,
-              targetLocale,
-              state: { phase: "ready", translatedText: partial, visible: true, streaming: true },
-            });
-          },
-          controller.signal,
-        );
-        if (requestId !== translationRequestIdRef.current) return;
-        setTranslationSession({
-          messageId,
-          targetLocale,
-          state: {
-            phase: "ready",
-            translatedText: result.translatedText,
-            ...(result.detectedLanguage ? { detectedLanguage: result.detectedLanguage } : {}),
-            visible: true,
-          },
-        });
-      }
-    } catch (error) {
-      if (requestId !== translationRequestIdRef.current) return;
-      // User cancelled the streaming translation �?keep any partial result
-      // already shown instead of surfacing an error.
-      if (controller.signal.aborted) {
-        setTranslationSession((current) => {
-          if (!current || current.messageId !== messageId || current.targetLocale !== targetLocale) return current;
-          if (current.state.phase === "ready" && current.state.streaming) {
-            return { ...current, state: { ...current.state, streaming: false } };
-          }
-          return previous
-            ? { messageId, targetLocale, state: { phase: "ready", ...previous, visible: true } }
-            : null;
-        });
-        return;
-      }
-      const llmAvailable = error instanceof ApiError && error.llmAvailable;
-      setTranslationSession({
-        messageId,
-        targetLocale,
-        state: { phase: "error", message: translationErrorMessage(error, t), ...(previous ? { previous } : {}), ...(llmAvailable ? { llmAvailable } : {}) },
-      });
-    }
-  }, [actions, locale, selected, t, theme, translationState, translationTermsPendingRef, state.translationTermsAccepted]);
-  const translateSelectedMessageWithLlm = useCallback(async () => {
-    if (!selected || translationState.phase === "loading") return;
-    if (!state.translationTermsAccepted) {
-      translationTermsPendingRef.current = "llm";
-      actions.setTranslationTermsOpen(true);
-      return;
-    }
-    const messageId = selected.id;
-    const targetLocale = locale;
-    const previous = retainedTranslationContent(translationState);
-    // Mirror the server-side size guard so oversized messages fail fast
-    // without ever sending their body to an LLM provider.
-    const bodyText = selected.textBody?.trim() ?? "";
-    const translatableLength = bodyText
-      ? bodyText.length
-      : selected.htmlBody?.trim()
-        ? selected.htmlBody.trim().replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").length
-        : 0;
-    if (translatableLength > MAX_LLM_TRANSLATION_TEXT_LENGTH) {
-      setTranslationSession({ messageId, targetLocale, state: { phase: "error", message: t("translation.error.requestTooLarge"), ...(previous ? { previous } : {}) } });
-      return;
-    }
-    const requestId = ++translationRequestIdRef.current;
-    llmTranslationAbortRef.current?.abort();
-    const controller = new AbortController();
-    llmTranslationAbortRef.current = controller;
-    setTranslationSession({ messageId, targetLocale, state: { phase: "loading", ...(previous ? { previous } : {}) } });
-    try {
-      const providers = isDemo ? { items: [], defaultProviderId: null } : await api.agentProviders();
-      const configured = providers.items.filter((p) => p.configured);
-      const provider = configured.find((p) => p.id === providers.defaultProviderId) ?? configured[0];
-      if (!provider) {
-        if (requestId !== translationRequestIdRef.current) return;
-        setTranslationSession({ messageId, targetLocale, state: { phase: "error", message: t("translation.llmNoProvider"), ...(previous ? { previous } : {}) } });
-        return;
-      }
-      const result = await api.translateMessageWithLlmStream(
-        messageId,
-        targetLocale,
-        provider.id,
-        undefined,
-        (partial) => {
-          if (requestId !== translationRequestIdRef.current) return;
-          setTranslationSession({
-            messageId,
-            targetLocale,
-            state: { phase: "ready", translatedText: partial, visible: true, streaming: true },
-          });
-        },
-        controller.signal,
-      );
-      if (requestId !== translationRequestIdRef.current) return;
-      setTranslationSession({
-        messageId, targetLocale,
-        state: { phase: "ready", translatedText: result.translatedText, visible: true },
-      });
-    } catch (error) {
-      if (requestId !== translationRequestIdRef.current) return;
-      // User cancelled the LLM translation �?restore any previous result
-      // instead of surfacing an error.
-      if (controller.signal.aborted) {
-        setTranslationSession((current) => {
-          if (!current || current.messageId !== messageId || current.targetLocale !== targetLocale) return current;
-          if (current.state.phase === "ready" && current.state.streaming) {
-            return { ...current, state: { ...current.state, streaming: false } };
-          }
-          return previous
-            ? { messageId, targetLocale, state: { phase: "ready", ...previous, visible: true } }
-            : null;
-        });
-        return;
-      }
-      setTranslationSession({
-        messageId, targetLocale,
-        state: { phase: "error", message: llmTranslationErrorMessage(error, t), ...(previous ? { previous } : {}) },
-      });
-    } finally {
-      if (llmTranslationAbortRef.current === controller) llmTranslationAbortRef.current = null;
-    }
-  }, [actions, locale, selected, t, translationState, translationTermsPendingRef, state.translationTermsAccepted]);
-  const showSelectedTranslation = useCallback(() => {
-    setTranslationSession((current) => {
-      if (!selected || !current || current.messageId !== selected.id || current.targetLocale !== locale || current.state.phase !== "ready") {
-        return current;
-      }
-      return { ...current, state: { ...current.state, visible: true } };
-    });
-  }, [locale, selected]);
-  const hideSelectedTranslation = useCallback(() => {
-    setTranslationSession((current) => {
-      if (!selected || !current || current.messageId !== selected.id || current.targetLocale !== locale || current.state.phase !== "ready") {
-        return current;
-      }
-      return { ...current, state: { ...current.state, visible: false } };
-    });
-  }, [locale, selected]);
-  const cancelTranslation = useCallback(() => {
-    translationAbortRef.current?.abort();
-    translationAbortRef.current = null;
-    llmTranslationAbortRef.current?.abort();
-    llmTranslationAbortRef.current = null;
-  }, []);
-  const acceptTranslationTerms = useCallback(() => {
-    try { localStorage.setItem("nami-mail:translation-terms-accepted", "1"); } catch { /* localStorage may be unavailable */ }
-    // Also set a cookie so the acceptance survives port changes across restarts
-    // (Chromium shares cookies across ports on the same domain).
-    try { document.cookie = "nami-mail-translation-terms=1; max-age=31536000; path=/; SameSite=Lax"; } catch { /* cookie may be unavailable */ }
-    actions.setTranslationTermsAccepted(true);
-    actions.setTranslationTermsOpen(false);
-    const pending = translationTermsPendingRef.current;
-    translationTermsPendingRef.current = null;
-    if (pending === "free") void translateSelectedMessage();
-    else if (pending === "llm") void translateSelectedMessageWithLlm();
-  }, [actions, translateSelectedMessage, translateSelectedMessageWithLlm, translationTermsPendingRef]);
-  const declineTranslationTerms = useCallback(() => {
-    actions.setTranslationTermsOpen(false);
-    const pending = translationTermsPendingRef.current;
-    translationTermsPendingRef.current = null;
-    if (!pending) {
-      if (window.namiDesktop?.quit) window.namiDesktop.quit();
-      else window.close();
-    }
-  }, [actions, translationTermsPendingRef]);
-  const copyDetectedVerificationCode = useCallback(async (code: string) => {
-    const copied = await copyVerificationCodeToClipboard(code);
-    showToast(copied ? t("mail.verification.copied", { code }) : t("mail.verification.copyFailed"), copied ? "success" : "error");
-  }, [showToast, t]);
-
   const applyLocalSeenChange = useCallback((message: Message, nextSeen: boolean) => {
     if (message.seen === nextSeen) return;
     setMessages((items) => {
@@ -2266,7 +1774,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       window.removeEventListener("pointerdown", closeOnOutsidePointer);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [readerMoreOpen]);
+  }, [readerMoreOpen, beginReaderMoreClose]);
 
   // The compact sort/filter panel behaves like the other popovers: close on
   // outside click and Escape.
@@ -2309,18 +1817,6 @@ const emptyMessageList = useMemo(() => (query.trim()
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [searchOpen]);
-
-  useEffect(() => {
-    if (!pendingBatchDelete) return undefined;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if (!batchBusy) requestBatchDeleteConfirmClose();
-    };
-    window.addEventListener("keydown", closeOnEscape, true);
-    return () => window.removeEventListener("keydown", closeOnEscape, true);
-  }, [batchBusy, pendingBatchDelete, requestBatchDeleteConfirmClose]);
 
   const openReply = useCallback(() => {
     if (!selected) return;
@@ -2522,213 +2018,6 @@ const emptyMessageList = useMemo(() => (query.trim()
     }
   };
 
-  const applyBatchSeenChange = useCallback((ids: readonly string[], seen: boolean) => {
-    const result = applyBatchSeenChangeState(accounts, messages, stats, ids, seen);
-    messagesRef.current = result.messages;
-    setMessages(result.messages);
-    setAccounts(result.accounts);
-    setStats(result.stats);
-    if (viewRef.current === "unread" && result.changedCount) {
-      setMessageTotal((total) => Math.max(0, total + (seen ? -result.changedCount : result.changedCount)));
-    }
-  }, [accounts, messages, stats]);
-
-  const applyBatchFlaggedChange = useCallback((ids: readonly string[], flagged: boolean) => {
-    setMessages((items) => {
-      const selected = new Set(ids);
-      const next = items.map((item) => {
-        if (!selected.has(item.id) || item.flagged === flagged) return item;
-        const flags = new Set(item.flags);
-        if (flagged) flags.add("\\Flagged");
-        else flags.delete("\\Flagged");
-        return { ...item, flagged, flags: [...flags] };
-      });
-      messagesRef.current = next;
-      return next;
-    });
-  }, []);
-
-  const toggleSelectionMode = useCallback(() => {
-    setSelectionMode((current) => {
-      const next = !current;
-      if (!next) setSelectedMessageIds(new Set());
-      return next;
-    });
-  }, []);
-
-  const toggleMessageSelected = useCallback((id: string) => {
-    // Any manual toggle (Ctrl/Shift click included) enters selection mode and
-    // exits a predicate-wide selection back to explicit ids.
-    setSelectionMode(true);
-    setSelectAllPaged(false);
-    setSelectedMessageIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
-
-  const selectMessageRange = useCallback((ids: string[]) => {
-    // Shift+click range: merge the whole span into the selection. Re-entering
-    // selection mode is a no-op when it is already active.
-    setSelectionMode(true);
-    setSelectAllPaged(false);
-    setSelectedMessageIds((current) => {
-      if (ids.every((id) => current.has(id))) return current;
-      const next = new Set(current);
-      for (const id of ids) next.add(id);
-      return next;
-    });
-  }, []);
-
-  const selectAllVisibleMessages = useCallback(() => {
-    setSelectedMessageIds(new Set(filteredMessages.map((message) => message.id)));
-    // Gmail-style two-step select-all: once every loaded row is selected and
-    // more matches exist on the server, the next click upgrades to the whole
-    // matching view (handled server-side as a batch job).
-    if (!isDemo && loadedServerMessageCount < currentMessageTotal) setSelectAllPaged(true);
-  }, [currentMessageTotal, filteredMessages, loadedServerMessageCount]);
-
-  const exitSelectionMode = useCallback(() => {
-    setSelectionMode(false);
-    setSelectedMessageIds(new Set());
-    setSelectAllPaged(false);
-    setBatchJob(null);
-    setPendingBatchDelete(false);
-  }, []);
-
-  // The current view expressed as a server-side filter scope for predicate
-  // batch operations. Mirrors buildMessageQuery so the job touches exactly
-  // what the list shows.
-  const selectionJobQuery = useMemo<BatchJobQuery | null>(() => {
-    if (!selectAllPaged || isDemo) return null;
-    if (searchScope === "all" && debouncedQuery.trim()) {
-      // Global search selection: no account/folder/view restriction, the
-      // server matches the same FTS candidate set the list shows. Kind and
-      // date refinements still narrow the selection like the visible list.
-      return {
-        q: debouncedQuery.trim(),
-        scope: "all",
-        attachmentKind: attachmentKindFilter,
-        after: dateBounds.after,
-        before: dateBounds.before,
-      };
-    }
-    return {
-      accountId: selectedAccount === "all" ? undefined : selectedAccount,
-      folder: selectedFolder || undefined,
-      q: debouncedQuery || undefined,
-      unread: view === "unread" ? true : undefined,
-      archived: view === "archived" ? true : undefined,
-      starred: view === "starred" ? true : undefined,
-      snoozed: view === "snoozed" ? true : undefined,
-      hasAttachments: view === "attachments" ? true : undefined,
-      attachmentKind: attachmentKindFilter,
-      after: dateBounds.after,
-      before: dateBounds.before,
-    };
-  }, [attachmentKindFilter, dateBounds, debouncedQuery, searchScope, selectAllPaged, selectedAccount, selectedFolder, view]);
-
-  // Batch job state machine lives in batchJobRunner.ts (unit-tested there);
-  // App wires the React-side callbacks: snapshot/busy state, toasts, reload.
-  const batchJobRunner = useMemo(() => createBatchJobRunner({
-    showToast,
-    t,
-    reload: (opts) => loadRef.current(opts),
-    exitSelectionMode,
-    onSnapshot: setBatchJob,
-    onBusy: setBatchBusy,
-  }), [exitSelectionMode, showToast, t]);
-
-  const startBatchJob = useCallback((payload: BatchJobCreatePayload, opts: BatchJobRunOptions) => {
-    batchJobRunner.start(payload, opts);
-  }, [batchJobRunner]);
-
-  const batchUpdateFlags = async (patch: { seen?: boolean; flagged?: boolean }, successKey: string) => {
-    const ids = [...selectedMessageIds];
-    if ((!ids.length && !selectAllPaged) || !Object.keys(patch).length) return;
-    if (batchBusy) showToast(t("mail.action.queued"), "info");
-    // Every path applies the patch optimistically to the loaded rows: the user
-    // must see the effect (and not re-trigger it) while the server catches up.
-    // The optimistic state is pinned so refreshes racing the server commit
-    // cannot flip the rows back mid-batch.
-    const affectedIds = selectionJobQuery ? filteredMessages.map((message) => message.id) : ids;
-    if (!affectedIds.length && !selectionJobQuery) return;
-    const pin = (list: readonly string[]) => {
-      for (const id of list) pinFlagOverride(pendingLocalStateRef.current, id);
-    };
-    const unpin = (list: readonly string[]) => {
-      for (const id of list) unpinFlagOverride(pendingLocalStateRef.current, id);
-    };
-    // Predicate scope: the server resolves every matching id behind a job (the
-    // local list only holds a page of them).
-    if (selectionJobQuery) {
-      pin(affectedIds);
-      if (patch.seen !== undefined) applyBatchSeenChange(affectedIds, patch.seen);
-      if (patch.flagged !== undefined) applyBatchFlaggedChange(affectedIds, patch.flagged);
-      startBatchJob({ kind: "flags", patch, query: selectionJobQuery }, {
-        successKey,
-        // The action is done, so the selection has no further purpose; leaving
-        // it armed means the next click on any row fires another batch.
-        exitOnSuccess: true,
-        onSettled: () => unpin(affectedIds),
-      });
-      return;
-    }
-    setBatchBusy(true);
-    pin(ids);
-    // Telemetry: the optimistic apply runs on the main thread for every
-    // selected row and the chunk loop paces server work — both are the
-    // suspected jank sources of a bulk operation, before and after it lands.
-    const finishApply = beginSpan("batch.apply-optimistic");
-    if (patch.seen !== undefined) applyBatchSeenChange(ids, patch.seen);
-    if (patch.flagged !== undefined) applyBatchFlaggedChange(ids, patch.flagged);
-    finishApply({ count: ids.length });
-    const finishBatch = beginSpan("batch.flags");
-    // Cleared on any failure so a selection the user may want to retry stays
-    // armed; a completed action drops it below.
-    let applied = true;
-    try {
-      if (!isDemo) {
-        // One request = one local commit = milliseconds. The IMAP STORE is
-        // pushed server-side by the durable write-behind queue, so the
-        // response never queues behind a running sync or batch.
-        const result = await api.batchUpdateMessageFlags(ids, patch);
-        if (result.failed) {
-          applied = false;
-          // The rows the server refused never got their optimistic flags. Drop
-          // their pins *before* the reconciling reload so it restores the
-          // server's truth for them instead of re-applying the optimistic value.
-          unpin((result.failures ?? []).map((failure) => failure.id));
-          showToast(t("mail.selection.partialFailure", { done: result.updated, failed: result.failed }), "error");
-        }
-      }
-      showToast(t(successKey, { count: ids.length }));
-    } catch (error) {
-      // The server owns the authoritative flags; reload to restore truth.
-      applied = false;
-      showToast(mailErrorToastMessage(error, t("mail.error.batchUpdate"), t), "error");
-    } finally {
-      finishBatch({ count: ids.length });
-      // The reconciling reload doubles as the pin barrier: it bumps the load
-      // epoch (discarding any in-flight stale refresh) and lands a server
-      // snapshot taken after the local commit. Only then may pins drop.
-      try {
-        await load({ silent: true });
-      } catch {
-        // load handles its own errors; pins still clear below.
-      }
-      unpin(ids);
-      // The action landed and the list is reconciled, so the selection is spent:
-      // drop it (and leave multi-select) rather than leaving rows armed for an
-      // accidental second batch. A failed action keeps the selection so the user
-      // can retry it.
-      if (applied) exitSelectionMode();
-      setBatchBusy(false);
-    }
-  };
-
   const clearSearch = useCallback(() => {
     setQuery("");
     setDebouncedQuery("");
@@ -2741,160 +2030,6 @@ const emptyMessageList = useMemo(() => (query.trim()
   const onMessageListRender = useCallback((id: string, phase: string, actualDuration: number) => {
     recordCommit(id, actualDuration, phase);
   }, []);
-
-  const batchMoveMessages = async (target: MoveTarget) => {
-    const ids = [...selectedMessageIds];
-    if (!ids.length && !selectAllPaged) return;
-    if (batchBusy) showToast(t("mail.action.queued"), "info");
-    // Predicate scope: server moves every matching id behind a job.
-    if (selectionJobQuery) {
-      startBatchJob({ kind: "move", target, query: selectionJobQuery }, { successKey: moveActionKey(target, true), exitOnSuccess: true });
-      return;
-    }
-    setBatchBusy(true);
-    // The selection leaves the list and the toolbar immediately; failures are
-    // rolled back (re-inserted and re-selected) once the server responds.
-    exitSelectionMode();
-    // Set when the inner settle throws so the success toast below cannot
-    // overwrite the error toast on the shared toast slot.
-    let settleFailed = false;
-    try {
-      if (isDemo) {
-        setMessages((items) => {
-          let next = items;
-          for (const id of ids) {
-            const current = next.find((item) => item.id === id);
-            if (!current) continue;
-            const destination = demoMoveDestination(accounts, current.accountId, target);
-            next = applyMessageMove(accounts, next, stats, id, destination).messages;
-          }
-          messagesRef.current = next;
-          return next;
-        });
-        setAccounts((items) => {
-          let next = items;
-          for (const id of ids) {
-            const current = messages.find((item) => item.id === id);
-            if (!current) continue;
-            const destination = demoMoveDestination(accounts, current.accountId, target);
-            next = applyMessageMove(next, [current], stats, id, destination).accounts;
-          }
-          return next;
-        });
-        setStats((current) => {
-          let next = current;
-          for (const id of ids) {
-            const msg = messages.find((item) => item.id === id);
-            if (!msg) continue;
-            const destination = demoMoveDestination(accounts, msg.accountId, target);
-            next = applyMessageMove(accounts, [msg], next, id, destination).stats;
-          }
-          return next;
-        });
-      } else {
-        // Optimistic: drop the selection from the list immediately; whatever
-        // the server cannot move is rolled back into the list at its sorted
-        // position, re-selected, and explained in the toast.
-        const selectedSet = new Set(ids);
-        const snapshots = messagesRef.current.filter((item) => selectedSet.has(item.id));
-        const snapshotById = new Map<string, Message>(snapshots.map((item) => [item.id, item]));
-        const inViewById = new Map<string, boolean>(ids.map((id) => [id, filteredMessages.some((item) => item.id === id)]));
-        const inViewCount = ids.reduce((count, id) => count + (inViewById.get(id) ? 1 : 0), 0);
-        // Invalidate any in-flight reload so it cannot resurrect the removed
-        // rows from pre-move server state.
-        loadRequestRef.current += 1;
-        const requestAtStart = loadRequestRef.current;
-        messagesRef.current = messagesRef.current.filter((item) => !selectedSet.has(item.id));
-        setMessages(messagesRef.current);
-        // The epoch bump only discards requests that were already in flight.
-        // Hold the rows out of every snapshot that starts afterwards too — a
-        // reload triggered by another operation finishing, or a poll tick —
-        // until the server reports them at the destination.
-        for (const id of ids) {
-          const snapshot = snapshotById.get(id);
-          if (snapshot) pinMovedAway([id], demoMoveDestination(accounts, snapshot.accountId, target));
-        }
-        if (inViewCount) setMessageTotal((total) => Math.max(0, total - inViewCount));
-
-        const rollback = (failedIds: ReadonlySet<string>) => {
-          const failed = ids
-            .filter((id) => failedIds.has(id))
-            .map((id) => snapshotById.get(id))
-            .filter((message): message is Message => Boolean(message));
-          if (failed.length) {
-            setMessages((items) => {
-              const next = mergeRolledBackMessages(items, failed, sortOrder);
-              messagesRef.current = next;
-              return next;
-            });
-          }
-          // A reload that landed mid-flight already owns the authoritative
-          // total (which still includes the failed messages); only restore
-          // the optimistic decrement when it is still the live value.
-          if (loadRequestRef.current === requestAtStart) {
-            const restoredInView = ids.reduce((count, id) => count + (failedIds.has(id) && inViewById.get(id) ? 1 : 0), 0);
-            if (restoredInView) setMessageTotal((total) => total + restoredInView);
-          }
-          if (failed.length) {
-            setSelectionMode(true);
-            setSelectedMessageIds(new Set(failedIds));
-          }
-        };
-
-        // The server caps a single batch at 100 ids; split large selections
-        // into chunks exactly like batchUpdateFlags so moves never fail with
-        // a 400 for size alone. The counters live outside the try so the
-        // catch can distinguish processed chunks from unprocessed ones.
-        const CHUNK_SIZE = 100;
-        let updated = 0;
-        let failed = 0;
-        let processed = 0;
-        const failedIds = new Set<string>();
-        const failureReasons: string[] = [];
-        try {
-          for (let offset = 0; offset < ids.length; offset += CHUNK_SIZE) {
-            const chunk = ids.slice(offset, offset + CHUNK_SIZE);
-            const result = await api.batchMoveMessages(chunk, target);
-            updated += result.updated;
-            failed += result.failed;
-            for (const failure of result.failures ?? []) {
-              failedIds.add(failure.id);
-              if (failureReasons.length < 1 && failure.message) failureReasons.push(failure.message);
-            }
-            processed += chunk.length;
-          }
-          if (failedIds.size) {
-            rollback(failedIds);
-            const detail = failureReasons[0] ? ` — ${failureReasons[0]}` : "";
-            showToast(`${t("mail.selection.partialFailure", { done: updated, failed })}${detail}`, "error");
-            return;
-          }
-          // The list already reflects the move; reload to reconcile the
-          // server-side truth (mapped UIDs, folder counts). Await it: the pins
-          // are released in the `finally` below, and dropping them before this
-          // snapshot lands would let an older in-flight refresh re-add the rows
-          // — the same barrier order batchUpdateFlags uses.
-          await load({ silent: true });
-        } catch (error) {
-          // A mid-stream failure leaves earlier chunks moved server-side; roll
-          // back only the unprocessed remainder plus any recorded failures,
-          // then let a reload settle the rest. Same pin barrier as above.
-          settleFailed = true;
-          const unreconciled = new Set(ids.slice(processed));
-          for (const id of failedIds) unreconciled.add(id);
-          rollback(unreconciled);
-          await load({ silent: true });
-          showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
-        }
-      }
-      if (!settleFailed) showToast(t(moveActionKey(target, true), { count: ids.length }));
-    } catch (error) {
-      showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
-    } finally {
-      unpinMovedAway(ids);
-      setBatchBusy(false);
-    }
-  };
 
   const toggleSelectedStar = async () => {
     if (!selected || selectedRemoteActionsBlocked) return;
@@ -2941,375 +2076,87 @@ const emptyMessageList = useMemo(() => (query.trim()
     }
   };
 
-  const quickToggleStar = useCallback(async (message: Message) => {
-    if (selectedRemoteActionsBlocked) return;
-    if (messageFlagging || messageAction) showToast(t("mail.action.queued"), "info");
-    const nextFlagged = !message.flagged;
-    setMessageFlagging(true);
-    pinFlagOverride(pendingLocalStateRef.current, message.id);
-    applyBatchFlaggedChange([message.id], nextFlagged);
-    try {
-      if (!isDemo) await api.updateMessageFlags(message.id, { flagged: nextFlagged });
-      showToast(nextFlagged ? t("mail.action.starred") : t("mail.action.unstarred"));
-    } catch (error) {
-      applyBatchFlaggedChange([message.id], message.flagged);
-      showToast(mailErrorToastMessage(error, t("mail.error.updateStar"), t), "error");
-    } finally {
-      unpinFlagOverride(pendingLocalStateRef.current, message.id);
-      setMessageFlagging(false);
-    }
-  }, [applyBatchFlaggedChange, messageAction, messageFlagging, selectedRemoteActionsBlocked, showToast, t]);
+  // Quick row/reader actions (star/seen/move) and the snooze popup live in
+  // useQuickMessageActions; the shared busy flags (messageFlagging and
+  // messageAction) stay up here because the reader-domain actions above also
+  // flip them.
+  const {
+    snoozeOpen,
+    setSnoozeOpen,
+    snoozeMounted,
+    snoozeClosing,
+    beginSnoozeClose,
+    snoozeRef,
+    snoozeCustomUntil,
+    setSnoozeCustomUntil,
+    snoozeOptions,
+    selectedIsSnoozed,
+    setSelectedSnoozed,
+    clearSelectedSnooze,
+    quickToggleStar,
+    quickToggleSeen,
+    quickMoveMessage,
+  } = useQuickMessageActions({
+    selected,
+    selectedRemoteActionsBlocked,
+    isDemo,
+    t,
+    showToast,
+    accounts,
+    messages,
+    stats,
+    filteredMessages,
+    filterQuery,
+    viewRef,
+    messageFlagging,
+    messageAction,
+    setMessageFlagging,
+    setMessageAction,
+    batchBusy,
+    applyBatchFlaggedChange,
+    pendingLocalStateRef,
+    messagesRef,
+    loadRequestRef,
+    load,
+    pinMovedAway,
+    unpinMovedAway,
+    setMessages,
+    setAccounts,
+    setStats,
+    setMessageTotal,
+    applyLocalSeenChange,
+    updateUnreadViewRecentlyRead,
+    setSelectedId,
+  });
 
-  const quickToggleSeen = useCallback(async (message: Message) => {
-    if (selectedRemoteActionsBlocked) return;
-    // The seen queue allows one in-flight mutation per message; a second
-    // click on the same row while the first is still pending is ignored.
-    if (pendingLocalStateRef.current.flagOverrides.has(message.id)) return;
-    if (messageFlagging || messageAction) showToast(t("mail.action.queued"), "info");
-    const nextSeen = !message.seen;
-    pinFlagOverride(pendingLocalStateRef.current, message.id);
-    updateUnreadViewRecentlyRead(message, nextSeen);
-    applyLocalSeenChange(message, nextSeen);
-    try {
-      if (!isDemo) await api.updateMessageFlags(message.id, { seen: nextSeen });
-      showToast(nextSeen ? t("mail.action.markedRead") : t("mail.action.markedUnread"));
-    } catch (error) {
-      const changedMessage = { ...message, seen: nextSeen, flags: nextSeen ? [...new Set([...message.flags, "\\Seen"])] : message.flags.filter((flag) => flag !== "\\Seen") };
-      updateUnreadViewRecentlyRead(changedMessage, message.seen);
-      applyLocalSeenChange(changedMessage, message.seen);
-      showToast(mailErrorToastMessage(error, t("mail.error.updateRead"), t), "error");
-    } finally {
-      unpinFlagOverride(pendingLocalStateRef.current, message.id);
-    }
-  }, [applyLocalSeenChange, messageAction, messageFlagging, selectedRemoteActionsBlocked, showToast, t, updateUnreadViewRecentlyRead]);
-
-  const quickMoveMessage = useCallback(async (message: Message, target: MoveTarget) => {
-    // The server queues a second write behind the in-flight one; surface that
-    // instead of silently dropping the click.
-    if (batchBusy || messageAction !== null || messageFlagging) showToast(t("mail.action.queued"), "info");
-    // Keep an in-flight reload from resurrecting the row from pre-move state
-    // while the optimistic apply is live.
-    if (!isDemo) loadRequestRef.current += 1;
-    const requestAtStart = loadRequestRef.current;
-    setMessageAction(target);
-    // Same hold as the reader path: without it, a refresh triggered by a
-    // *different* operation finishing re-adds this row from pre-move server
-    // state even though it was already removed optimistically.
-    pinMovedAway([message.id], demoMoveDestination(accounts, message.accountId, target));
-    try {
-      if (isDemo) {
-        const destination = demoMoveDestination(accounts, message.accountId, target);
-        setMessages((items) => {
-          const next = applyMessageMove(accounts, items, stats, message.id, destination).messages;
-          messagesRef.current = next;
-          return next;
-        });
-        setAccounts((items) => {
-          const current = messages.find((item) => item.id === message.id);
-          if (!current) return items;
-          const destination2 = demoMoveDestination(items, current.accountId, target);
-          return applyMessageMove(items, [current], stats, message.id, destination2).accounts;
-        });
-        setStats((current) => {
-          const msg = messages.find((item) => item.id === message.id);
-          if (!msg) return current;
-          const destination3 = demoMoveDestination(accounts, msg.accountId, target);
-          return applyMessageMove(accounts, [msg], current, message.id, destination3).stats;
-        });
-      } else {
-        const destination = demoMoveDestination(accounts, message.accountId, target);
-        // Optimistic: map the row to its destination before the provider
-        // round-trip; a failure restores the original snapshot and counts.
-        const optimisticSnapshot = destination && destination !== message.mailbox
-          ? applyMessageMove(accounts, [message], stats, message.id, destination).messages[0]
-          : undefined;
-        const optimisticAccounts = optimisticSnapshot
-          ? applyMessageMove(accounts, [message], stats, message.id, destination).accounts
-          : null;
-        const optimisticStats = optimisticSnapshot
-          ? applyMessageMove(accounts, [message], stats, message.id, destination).stats
-          : null;
-        if (optimisticSnapshot) {
-          const wasIncluded = filteredMessages.some((item) => item.id === message.id);
-          const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, filterQuery);
-          if (wasIncluded !== remainsIncluded) {
-            setMessageTotal((total) => nextMessageTotalForMove(total, wasIncluded, remainsIncluded));
-          }
-          // Sync the ref synchronously (like load) so a fast failure can gate
-          // its rollback on the exact optimistic state it must reverse.
-          messagesRef.current = applyMessageMove(accounts, messagesRef.current, stats, message.id, destination).messages;
-          setMessages(messagesRef.current);
-          setAccounts((items) => applyMessageMove(items, [message], stats, message.id, destination).accounts);
-          setStats((current) => applyMessageMove(accounts, [message], current, message.id, destination).stats);
-        }
-        try {
-          const result = await api.moveMessage(message.id, target);
-          if (!result.ok) throw new Error(t("mail.error.move"));
-          void load({ silent: true });
-        } catch (error) {
-          if (optimisticSnapshot && optimisticAccounts && optimisticStats) {
-            // A reload that landed mid-flight already holds server truth (the
-            // message restored at its source); leave it alone in that case.
-            if (messagesRef.current.some((item) => item.id === message.id && item.mailbox === destination)) {
-              const restored = revertMessageMove(optimisticAccounts, messagesRef.current, optimisticStats, message, destination);
-              messagesRef.current = restored.messages;
-              setMessages(restored.messages);
-              setAccounts(restored.accounts);
-              setStats(restored.stats);
-            }
-          }
-          if (loadRequestRef.current === requestAtStart && optimisticSnapshot) {
-            const wasIncluded = filteredMessages.some((item) => item.id === message.id);
-            const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, filterQuery);
-            if (wasIncluded !== remainsIncluded) {
-              setMessageTotal((total) => nextMessageTotalForMove(total, remainsIncluded, wasIncluded));
-            }
-          }
-          showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
-          return;
-        }
-      }
-      showToast(t(moveActionKey(target, false)));
-    } catch (error) {
-      void load({ silent: true });
-      showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
-    } finally {
-      unpinMovedAway([message.id]);
-      setMessageAction(null);
-    }
-  }, [accounts, batchBusy, filteredMessages, filterQuery, load, messageAction, messageFlagging, messages, pinMovedAway, showToast, stats, t, unpinMovedAway]);
-
-  const snoozeOptions = useMemo(() => [
-    { key: "inOneHour", label: t("mail.snooze.inOneHour"), compute: () => new Date(Date.now() + 60 * 60_000) },
-    { key: "tonight", label: t("mail.snooze.tonight"), compute: () => {
-      const date = new Date();
-      date.setHours(23, 0, 0, 0);
-      if (date.getTime() <= Date.now()) date.setDate(date.getDate() + 1);
-      return date;
-    } },
-    { key: "tomorrowMorning", label: t("mail.snooze.tomorrowMorning"), compute: () => {
-      const date = new Date();
-      date.setDate(date.getDate() + 1);
-      date.setHours(9, 0, 0, 0);
-      return date;
-    } },
-    { key: "nextWeek", label: t("mail.snooze.nextWeek"), compute: () => {
-      const date = new Date();
-      date.setDate(date.getDate() + 7);
-      date.setHours(9, 0, 0, 0);
-      return date;
-    } },
-  ], [t]);
-
-  useEffect(() => {
-    if (!snoozeOpen) return;
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (snoozeRef.current?.contains(event.target as Node)) return;
-      beginSnoozeClose();
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") beginSnoozeClose();
-    };
-    window.addEventListener("pointerdown", closeOnOutsidePointer);
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      window.removeEventListener("pointerdown", closeOnOutsidePointer);
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [snoozeOpen]);
-
-  const applyLocalSnooze = useCallback((messageId: string, until: string | null, previousUntil: string | null) => {
-    const wasSnoozed = Boolean(previousUntil && new Date(previousUntil).getTime() > Date.now());
-    const willBeSnoozed = Boolean(until && new Date(until).getTime() > Date.now());
-    const current = messagesRef.current.find((item) => item.id === messageId);
-    if (!current) return;
-    setMessages((items) => {
-      const next = items.map((item) => item.id === messageId ? { ...item, snoozedUntil: until } : item);
-      messagesRef.current = next;
-      return next;
-    });
-    if (wasSnoozed === willBeSnoozed || !isInboxMessage(current, accounts)) return;
-    // Leaving the inbox for a snooze, or returning from one, adjusts the
-    // unified inbox counts exactly like an archive move.
-    const isSnoozing = !wasSnoozed && willBeSnoozed;
-    const unseenDelta = current.seen ? 0 : isSnoozing ? -1 : 1;
-    setStats((currentStats) => ({
-      ...currentStats,
-      messages: Math.max(0, currentStats.messages + (isSnoozing ? -1 : 1)),
-      unread: Math.max(0, currentStats.unread + unseenDelta),
-    }));
-  }, [accounts]);
-
-  const setSelectedSnoozed = async (untilIso: string) => {
-    if (!selected || selectedRemoteActionsBlocked) return;
-    const previousUntil = selected.snoozedUntil ?? null;
-    setSnoozeOpen(false);
-    setSnoozeCustomUntil("");
-    // Optimistic: apply the local snooze before the provider round-trip; a
-    // failure restores the previous state and counts.
-    applyLocalSnooze(selected.id, untilIso, previousUntil);
-    try {
-      if (!isDemo) await api.snoozeMessage(selected.id, untilIso);
-      showToast(t("mail.snooze.scheduled"));
-    } catch (error) {
-      applyLocalSnooze(selected.id, previousUntil, untilIso);
-      showToast(mailErrorToastMessage(error, t("mail.error.snooze"), t), "error");
-    }
-  };
-
-  const clearSelectedSnooze = async () => {
-    if (!selected) return;
-    const previousUntil = selected.snoozedUntil ?? null;
-    setSnoozeOpen(false);
-    // Optimistic: the row leaves the snoozed view (and the reader closes)
-    // immediately; a failure restores both.
-    if (viewRef.current === "snoozed") setSelectedId(null);
-    applyLocalSnooze(selected.id, null, previousUntil);
-    try {
-      if (!isDemo) await api.clearMessageSnooze(selected.id);
-      showToast(t("mail.snooze.cleared"));
-    } catch (error) {
-      applyLocalSnooze(selected.id, previousUntil, null);
-      if (viewRef.current === "snoozed") setSelectedId(selected.id);
-      showToast(mailErrorToastMessage(error, t("mail.error.snooze"), t), "error");
-    }
-  };
-
-  const selectedIsSnoozed = selected ? isSnoozedMessage(selected) : false;
-
-  const downloadAttachment = async (message: Message, attachment: MessageAttachment) => {
-    if (pendingArchiveMovesRef.current.some((move) => move.id === message.id) || message.movePending) {
-      showToast(t("mail.action.moveRefreshing"), "info");
-      return;
-    }
-    if (message.moveLocationUnverified) {
-      showToast(t("mail.action.locationUnverified"), "info");
-      return;
-    }
-    if (isDemo) {
-      showToast(t("mail.attachment.demoUnavailable"), "info");
-      return;
-    }
-    const downloadKey = `${message.id}:${attachment.partId}`;
-    if (attachmentDownloads[downloadKey]?.phase === "downloading") return;
-    setAttachmentDownloads((current) => ({ ...current, [downloadKey]: { phase: "downloading" } }));
-    try {
-      const blob = await api.downloadAttachment(message.id, attachment.partId);
-      triggerBlobDownload(blob, attachment.filename);
-      setAttachmentDownloads((current) => ({ ...current, [downloadKey]: { phase: "ready" } }));
-      window.setTimeout(() => {
-        setAttachmentDownloads((current) => {
-          if (current[downloadKey]?.phase !== "ready") return current;
-          const next = { ...current };
-          delete next[downloadKey];
-          return next;
-        });
-      }, 3_600);
-      showToast(t("mail.attachment.downloadStarted", { filename: attachment.filename }));
-    } catch (error) {
-      const detail = mailErrorMessage(error, t("mail.error.downloadAttachment"), t);
-      setAttachmentDownloads((current) => ({ ...current, [downloadKey]: { phase: "error", detail } }));
-      showToast(mailErrorToastMessage(error, t("mail.error.downloadAttachment"), t), "error");
-    }
-  };
-
-  const zipAllAttachments = async () => {
-    if (!selected) return;
-    if (selectedMovePending || selected.movePending) {
-      showToast(t("mail.action.moveRefreshing"), "info");
-      return;
-    }
-    if (selected.moveLocationUnverified) {
-      showToast(t("mail.action.locationUnverified"), "info");
-      return;
-    }
-    if (isDemo) {
-      showToast(t("mail.attachment.demoUnavailable"), "info");
-      return;
-    }
-    if (zipAllPhase === "zipping") return;
-    setZipAllPhase("zipping");
-    try {
-      const blob = await buildAttachmentsZipBlob(visibleAttachments, (partId) => api.downloadAttachment(selected.id, partId));
-      triggerBlobDownload(blob, attachmentsZipFilename(selected.subject));
-      showToast(t("mail.attachment.zipStarted", { count: visibleAttachments.length }));
-    } catch (error) {
-      showToast(mailErrorToastMessage(error, t("mail.error.zipAttachments"), t), "error");
-    } finally {
-      setZipAllPhase("idle");
-    }
-  };
-
-  const exportSelectedEml = async () => {
-    if (!selected) return;
-    if (selectedMovePending || selected.movePending) {
-      showToast(t("mail.action.moveRefreshing"), "info");
-      return;
-    }
-    if (selectedMoveLocationUnverified) {
-      showToast(t("mail.action.locationUnverified"), "info");
-      return;
-    }
-    if (isDemo) {
-      showToast(t("mail.action.exportDemoUnavailable"), "info");
-      return;
-    }
-    try {
-      const { blob, filename } = await api.downloadMessageEml(selected.id);
-      triggerBlobDownload(blob, filename);
-      showToast(t("mail.action.exportStarted", { filename }));
-    } catch (error) {
-      showToast(mailErrorToastMessage(error, t("mail.error.exportEml"), t), "error");
-    }
-  };
-
-  const printSelectedMessage = () => {
-    if (!selected) return;
-    if (isDemo) {
-      showToast(t("mail.action.printDemoUnavailable"), "info");
-      return;
-    }
-    window.print();
-  };
-
-  const exportContactVcf = () => {
-    if (!selected) return;
-    const card = vCardText(selected.from.name, selected.from.address);
-    triggerBlobDownload(new Blob([card], { type: "text/vcard" }), exportDownloadFilename(selected.from.name, "contact", "vcf"));
-    showToast(t("mail.action.exportStarted", { filename: exportDownloadFilename(selected.from.name, "contact", "vcf") }));
-  };
-
-  const exportCalendarIcs = () => {
-    if (!selected) return;
-    const start = new Date(selected.sentAt);
-    const end = new Date(start.getTime() + 60 * 60 * 1000);
-    const ics = calendarEventIcs({
-      summary: selected.subject || "(no subject)",
-      description: selected.from.address,
-      start,
-      end,
-      uid: `${selected.id}@nami-mail`,
-    });
-    const filename = exportDownloadFilename(selected.subject, "event", "ics");
-    triggerBlobDownload(new Blob([ics], { type: "text/calendar" }), filename);
-    showToast(t("mail.action.exportStarted", { filename }));
-  };
-
-  const openAttachmentPreview = (message: Message, attachment: MessageAttachment) => {
-    if (pendingArchiveMovesRef.current.some((move) => move.id === message.id) || message.movePending) {
-      showToast(t("mail.action.moveRefreshing"), "info");
-      return;
-    }
-    if (message.moveLocationUnverified) {
-      showToast(t("mail.action.locationUnverified"), "info");
-      return;
-    }
-    if (isDemo) {
-      showToast(t("mail.attachment.previewDemoUnavailable"), "info");
-      return;
-    }
-    actions.openAttachmentPreview(message, attachment);
-  };
+  // Attachment/exports surface (single download, zip-all, EML/print/VCF/ICS,
+  // preview) lives in useAttachmentExports; the calendar import dialog it can
+  // open is rendered by the dialog block below.
+  const {
+    attachmentDownloads,
+    zipAllPhase,
+    calendarImportPayload,
+    setCalendarImportPayload,
+    downloadAttachment,
+    zipAllAttachments,
+    exportSelectedEml,
+    printSelectedMessage,
+    exportContactVcf,
+    exportCalendarIcs,
+    openCalendarImport,
+    handleIcsAttachmentImport,
+    openAttachmentPreview,
+  } = useAttachmentExports({
+    selected,
+    selectedMovePending,
+    selectedMoveLocationUnverified,
+    isDemo,
+    t,
+    showToast,
+    visibleAttachments,
+    pendingArchiveMovesRef,
+    openAttachmentPreviewRoute: actions.openAttachmentPreview,
+  });
 
   const removeAccountFromView = useCallback((accountId: string) => {
     const account = accounts.find((item) => item.id === accountId);
@@ -3398,7 +2245,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     // In the browser there is no main-process player: prime the AudioContext
     // from this user gesture and play the tone alongside the banner. A failed
     // prime falls back to the audible default instead of a silent banner.
-    const customSound = testSettings.notificationSound === "soft" || testSettings.notificationSound === "bright";
+    const customSound = testSettings.notificationSound !== "none" && testSettings.notificationSound !== "system";
     if (customSound) {
       const primed = await primeNotificationSound();
       if (primed && playNotificationSound(testSettings.notificationSound)) {
@@ -3411,20 +2258,11 @@ const emptyMessageList = useMemo(() => (query.trim()
 
   const testNotificationSound = useCallback(async (sound: AppSettings["notificationSound"]) => {
     if (sound === "none") return;
-    if (desktopBridge()?.testNativeNotification) {
-      // Desktop: the sound test runs through the real pipeline (a localized
-      // banner plus the main-process playback) via testDesktopNotification.
-      await testDesktopNotification({ ...settings, notificationSound: sound });
-      return;
-    }
-    if (sound === "system") {
-      await testDesktopNotification({ ...settings, notificationSound: sound });
-      return;
-    }
-    // Browser preview: prime from this user gesture and play the WebAudio tone.
     const primed = await primeNotificationSound();
     if (primed && playNotificationSound(sound)) return;
-    await testDesktopNotification({ ...settings, notificationSound: "system" });
+    if (sound === "system") {
+      await testDesktopNotification({ ...settings, notificationSound: sound });
+    }
   }, [settings, testDesktopNotification]);
 
   const openNotifiedMessage = useCallback(async (messageId: string) => {
@@ -3464,158 +2302,21 @@ const emptyMessageList = useMemo(() => (query.trim()
     actions.closeMobileSidebar();
   }, [actions, beginNavigation, clearUnreadViewRecentlyRead, selectedAccount]);
 
-  // Latest handlers for the desktop-bridge subscribers below, read at call time.
-  // The subscriptions are installed once (their deps are effectively empty),
-  // because re-installing them whenever a callback identity changes — a view
-  // switch re-creates `chooseView`, a settings edit re-creates the toast helper —
-  // leaves a window in which the main process delivers a new-mail notification to
-  // nobody. The refresh fallback hides the loss; the alert and the toast do not.
-  const bridgeHandlersRef = useRef({
-    requestRefresh,
-    showToast,
+  // Desktop-bridge subscriptions (new-mail toasts, notification clicks,
+  // compose/inbox deep links, auto-reply events) plus the mailto-document
+  // handler and the web-runtime auto-reply poll live in
+  // useDesktopBridgeHandlers; autoReplyNotices stays here because the toast
+  // stack below renders it.
+  useDesktopBridgeHandlers({
+    isDemo,
     t,
+    showToast,
+    requestRefresh,
     openNotifiedMessage,
     chooseView,
     openCompose: actions.openCompose,
+    setAutoReplyNotices,
   });
-  bridgeHandlersRef.current = {
-    requestRefresh,
-    showToast,
-    t,
-    openNotifiedMessage,
-    chooseView,
-    openCompose: actions.openCompose,
-  };
-
-  useEffect(() => {
-    const bridge = desktopBridge();
-    if (!bridge || isDemo) return undefined;
-    const unsubscribeNewMail = bridge.onNewMail((notice) => {
-      const handlers = bridgeHandlersRef.current;
-      handlers.requestRefresh();
-      if (!notice.shouldAlert) return;
-      // The custom sound (soft/bright) is played by the main process before
-      // the native banner goes out; nothing for the renderer to play here.
-      handlers.showToast(notice.count === 1
-        ? handlers.t("mail.notification.singleToast", { sender: notice.fromName || notice.fromAddress || handlers.t("mail.notification.newContact") })
-        : handlers.t("mail.notification.multipleToast", { count: notice.count }));
-    });
-    const unsubscribeOpenMessage = bridge.onOpenMessage((messageId) => {
-      void bridgeHandlersRef.current.openNotifiedMessage(messageId);
-    });
-    const unsubscribeComposeNew = bridge.onComposeNew?.((mailtoUrl) => {
-      bridgeHandlersRef.current.openCompose(parseMailtoUrl(mailtoUrl ?? "") ?? {});
-    });
-    const unsubscribeOpenInbox = bridge.onOpenInbox?.(() => {
-      bridgeHandlersRef.current.chooseView("inbox");
-    });
-    const unsubscribeAutoReply = bridge.onAutoReply?.((notice) => {
-      setAutoReplyNotices((items) => {
-        const key = autoReplyNoticeKey(notice);
-        if (items.some((item) => autoReplyNoticeKey(item) === key)) return items;
-        return [...items.slice(-4), notice];
-      });
-    });
-    const unsubscribeConfirmationResult = bridge.onAgentConfirmationResult?.((result) => {
-      if (!result.ok) return;
-      // The draft was approved or rejected elsewhere (pending dialog, popup
-      // cancel); a stale "awaiting approval" popup must not linger.
-      setAutoReplyNotices((items) => items.filter((item) => !(item.kind === "pending" && item.confirmationId === result.confirmationId)));
-    });
-    return () => {
-      unsubscribeNewMail();
-      unsubscribeOpenMessage();
-      unsubscribeComposeNew?.();
-      unsubscribeOpenInbox?.();
-      unsubscribeAutoReply?.();
-      unsubscribeConfirmationResult?.();
-    };
-    // The handlers are read through bridgeHandlersRef, so this subscription
-    // is installed exactly once.
-  }, []);
-
-  // A mailto link anywhere in the document (sidebar, message body, agent
-  // answer) opens a pre-filled compose window instead of the OS default
-  // client. Modified clicks and already-handled links pass through untouched.
-  useEffect(() => {
-    const handleMailtoClick = (event: MouseEvent) => {
-      if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-      if (!(event.target instanceof Element)) return;
-      const anchor = event.target.closest<HTMLAnchorElement>("a[href]");
-      if (!anchor) return;
-      const href = anchor.getAttribute("href") ?? "";
-      if (!href.toLowerCase().startsWith("mailto:")) return;
-      event.preventDefault();
-      actions.openCompose(parseMailtoUrl(href) ?? {});
-    };
-    document.addEventListener("click", handleMailtoClick);
-    return () => document.removeEventListener("click", handleMailtoClick);
-  }, [actions]);
-
-  // Plain web sessions have no desktop bridge to push auto-reply events, so
-  // poll the pending list and surface newly drafted replies as toasts. The
-  // bridge-owned effect above handles the desktop runtime exclusively.
-  useEffect(() => {
-    if (isDemo || desktopBridge()) return undefined;
-    let known = new Set<string>();
-    let disposed = false;
-    let inFlight = false;
-    const poll = async () => {
-      // A poll that outlives the 20s interval would race its successor: the
-      // stale response could re-add already-known notices or prune notices the
-      // fresher response just surfaced. Skip while one is still running.
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const { items } = await api.autoReplyPending();
-        if (disposed) return;
-        const nextKnown = new Set(items.map((item) => item.confirmationId));
-        const additions = items
-          .filter((item) => !known.has(item.confirmationId))
-          .map((item): DesktopAutoReplyNotice => ({
-            kind: "pending",
-            confirmationId: item.confirmationId,
-            requestId: item.requestId,
-            accountId: item.accountId,
-            messageId: item.messageId,
-            subject: item.subject,
-            fromName: item.fromName,
-            fromAddress: item.fromAddress,
-            sensitive: item.sensitive,
-            createdAt: item.createdAt,
-            expiresAt: item.expiresAt,
-            replyPreview: item.preview.summary,
-          }));
-        known = nextKnown;
-        if (additions.length > 0) {
-          setAutoReplyNotices((current) => {
-            const merged = [...current];
-            for (const notice of additions) {
-              if (!merged.some((item) => autoReplyNoticeKey(item) === autoReplyNoticeKey(notice))) merged.push(notice);
-            }
-            return merged.slice(-5);
-          });
-        }
-        // Drafts that were resolved or expired elsewhere must not linger.
-        setAutoReplyNotices((current) => current.filter((item) => item.kind === "sent" || nextKnown.has(item.confirmationId)));
-      } catch {
-        // Polling failures are silent; the review dialog surfaces errors.
-      } finally {
-        inFlight = false;
-      }
-    };
-    void poll();
-    const timer = window.setInterval(() => {
-      // A hidden tab needs no fresh toast data; the next tick after the user
-      // returns catches up (at most one interval stale).
-      if (document.hidden) return;
-      void poll();
-    }, 20_000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, []);
 
   // Demo copy is seeded per locale; a language switch re-seeds accounts and
   // submissions so folder names, signatures and subjects follow the UI.
@@ -3626,9 +2327,9 @@ const emptyMessageList = useMemo(() => (query.trim()
       setAccounts(demo.createDemoAccounts(locale));
       setMessages(demo.demoMessages);
       setStats(demo.demoStats);
-      setSubmissions(sortSubmissions(demo.createDemoSubmissions(locale)));
+      applyDemoSubmissions(sortSubmissions(demo.createDemoSubmissions(locale)));
     })();
-  }, [locale]);
+  }, [applyDemoSubmissions, locale]);
 
   // Demo mode surfaces a realistic auto-reply confirmation so the product
   // preview shows the pending-draft review card without a live agent.
@@ -3655,6 +2356,14 @@ const emptyMessageList = useMemo(() => (query.trim()
       ]);
     })();
   }, [locale]);
+
+  useCalendarReminders({
+    demoMode: isDemo,
+    locale,
+    onOpenCalendar: actions.openCalendar,
+    showToast,
+    notificationsEnabled: settings.notificationsEnabled,
+  });
 
   useEffect(() => {
     if (!isDesktopSmoke) return;
@@ -3741,11 +2450,23 @@ const emptyMessageList = useMemo(() => (query.trim()
     if (!accounts.length || syncing) return;
     clearUnreadViewRecentlyRead();
     setSyncing(true);
+    const targets = selectedAccount === "all" ? accounts : accounts.filter((account) => account.id === selectedAccount);
+    const targetIds = new Set(targets.map((account) => account.id));
+    // Optimistically flag the target rows so "Syncing…" shows for the whole
+    // pass; the server-side flag only reaches the client via the refresh
+    // below, which would otherwise leave the row blind until the pass ends.
+    const setLocalSyncing = (flag: boolean) => {
+      setAccounts((items) => items.map((item) => targetIds.has(item.id) ? { ...item, syncing: flag } : item));
+    };
+    setLocalSyncing(true);
+    // Whether the post-sync refresh actually ran; if it did not, the
+    // optimistic flag is stale and must be dropped instead of pulsing forever.
+    let refreshed = false;
     try {
       if (!isDemo) {
-        const targets = selectedAccount === "all" ? accounts : accounts.filter((account) => account.id === selectedAccount);
         const settled = await Promise.allSettled(targets.map((account) => api.sync(account.id)));
         await load({ silent: true });
+        refreshed = true;
         const results = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
         const failedAccounts = settled.length - results.length;
         const synced = results.reduce((sum, result) => sum + result.synced, 0);
@@ -3763,13 +2484,17 @@ const emptyMessageList = useMemo(() => (query.trim()
               ? t("mail.sync.partialAccounts", { synced, accounts: failedAccounts, issue: failureIssue?.title ?? "" })
               : t("mail.sync.partialFolders", { synced, folders: failedFolders })
             : t("mail.sync.completed", { synced, folders }),
-          partialFailure ? "error" : "success",
+          // Folder-level failures leave the account degraded (warning dot and
+          // freshness line); an error toast would contradict that row state.
+          failedAccounts ? "error" : partialFailure ? "warning" : "success",
         );
       } else {
         await new Promise((resolve) => setTimeout(resolve, 700));
+        setLocalSyncing(false);
         showToast(t("mail.sync.demoRefreshed"));
       }
     } catch (error) {
+      if (!refreshed) setLocalSyncing(false);
       showToast(t("mail.sync.failed", { message: mailErrorToastMessage(error, undefined, t) }), "error");
     } finally {
       setSyncing(false);
@@ -3893,11 +2618,15 @@ const emptyMessageList = useMemo(() => (query.trim()
                 }
               };
               const rowLabel = displayName ? `${displayName} (${account.email})` : account.email;
+              // A mid-flight sync pass outranks both the freshness line and
+              // the last error: the outcome is about to refresh, so showing
+              // "cannot connect" during the pass would read as stale.
+              const isSyncing = account.syncing === true;
               const rowInner = (
                 <>
                   <CustomAvatar name={displayName || account.email} address={account.email} tone={accountTone(account.email)} className="account-avatar" />
-                  <span className="account-copy"><strong>{displayName || account.email.split("@")[0]}</strong><small>{accountShowsFreshness(issue) ? t("mail.accountFreshness", { provider: providerName, freshness }) : issue!.title}</small></span>
-                  <span className={`status-dot ${accountStatusDotClass(issue, account.status)}`} aria-hidden="true" />
+                  <span className="account-copy"><strong>{displayName || account.email.split("@")[0]}</strong><small>{isSyncing ? t("mail.accountSyncing") : accountShowsFreshness(issue) ? t("mail.accountFreshness", { provider: providerName, freshness }) : issue!.title}</small></span>
+                  <span className={`status-dot ${isSyncing ? "syncing" : accountStatusDotClass(issue, account.status)}`} aria-hidden="true" />
                 </>
               );
               // One DOM shape serves both modes: focused mode folds the other
@@ -3982,7 +2711,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         <section className="message-column">
           <header className="column-header">
             <IconButton label={t("navigation.openMenu")} className="mobile-only" buttonRef={mobileMenuButtonRef} onClick={() => actions.openMobileSidebar()}><Menu size={19} /></IconButton>
-            <div><span className="eyebrow">{selectedAccount === "all" ? t("mail.unifiedMailbox") : selectedAccountRecord ? localizedProviderName(selectedAccountRecord).toUpperCase() : ""}</span><h1>{query.trim() ? t("mail.search.resultsTitle", { query: query.trim() }) : view === "unread" ? t("mail.unread") : view === "starred" ? t("mail.starred") : view === "archived" ? t("mail.action.archive") : view === "snoozed" ? t("mail.snoozed") : view === "attachments" ? t("mail.attachments") : selectedFolderRecord?.name || (selectedFolder ? selectedFolder.split("/").pop() || selectedFolder : t("mail.inbox"))}</h1></div>
+            <div><span className="eyebrow">{selectedAccount === "all" ? t("mail.unifiedMailbox") : selectedAccountRecord ? localizedProviderName(selectedAccountRecord).toUpperCase() : ""}</span><h1>{query.trim() ? t("mail.search.resultsTitle", { query: query.trim() }) : view === "unread" ? t("mail.unread") : view === "starred" ? t("mail.starred") : view === "archived" ? t("mail.action.archive") : view === "snoozed" ? t("mail.snoozed") : view === "attachments" ? t("mail.attachments") : selectedFolderName || t("mail.inbox")}</h1></div>
             <div className={`search-wrap${searchOpen ? " expanded" : ""}`} ref={searchWrapRef}><IconButton label={searchOpen ? t("mail.search.collapse") : t("mail.search")} className="search-toggle" onClick={() => setSearchOpen((open) => !open)} expanded={searchOpen}><Search size={17} /></IconButton><label className="visually-hidden" htmlFor="mail-search">{t("mail.search")}</label><input id="mail-search" ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("mail.searchPlaceholder")} />{query && <IconButton label={t("mail.clearSearch")} className="search-clear" onClick={() => { setQuery(""); setDebouncedQuery(""); searchInputRef.current?.focus(); }}><X size={15} /></IconButton>}</div>
             <div className="list-filter-wrap" ref={listToolbarRef}>
               <button type="button" className={`list-filter-toggle${filterPanelOpen ? " active" : ""}`} onClick={() => setFilterPanelOpen((open) => !open)} aria-expanded={filterPanelOpen} aria-haspopup="menu" aria-label={t("mail.listFilter.menuLabel")} data-tooltip={t("mail.listFilter.menuLabel")}><ListFilter size={16} /></button>
@@ -4123,166 +2852,90 @@ const emptyMessageList = useMemo(() => (query.trim()
           </Profiler>
         </section>
 
-        <section className={`reader-column ${selected ? "has-message" : ""}`}>
-          {selected ? (
-            <ErrorBoundary key={selected.id} t={t} area={t("mail.readerArea")}>
-              <header className="reader-toolbar">
-                <IconButton label={t("mail.reader.backToList")} className="reader-back" onClick={() => closeReader(true)}><ArrowLeft size={18} /></IconButton>
-                <div className="reader-actions">
-                  <IconButton label={t("mail.action.reply")} onClick={openReply}><Reply size={18} /></IconButton>
-                  <IconButton label={t("mail.action.replyAll")} className="reader-action-secondary" onClick={openReplyAll}><ReplyAll size={18} /></IconButton>
-                  <IconButton label={t("mail.action.forward")} className="reader-action-secondary" onClick={openForward}><Forward size={18} /></IconButton>
-                  <span className="toolbar-divider" aria-hidden="true" />
-                  <IconButton label={selectedMoveActionLabel ?? (selected.seen ? t("mail.action.markUnread") : t("mail.action.markRead"))} onClick={() => void toggleSelectedSeen()} disabled={selectedRemoteActionsBlocked}>{selected.seen ? <Mail size={18} /> : <MailOpen size={18} />}</IconButton>
-                  <IconButton label={selectedMoveActionLabel ?? (selected.flagged ? t("mail.action.unstar") : t("mail.action.star"))} className={selected.flagged ? "active-star" : ""} onClick={() => void toggleSelectedStar()} disabled={selectedRemoteActionsBlocked}><Star size={18} fill={selected.flagged ? "currentColor" : "none"} /></IconButton>
-                  <IconButton label={selectedMoveActionLabel ?? t("mail.action.archive")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("archive")} disabled={selectedRemoteActionsBlocked || selectedIsArchived}><Archive size={18} /></IconButton>
-                  <IconButton label={selectedMoveActionLabel ?? t("mail.action.moveToTrash")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("trash")} disabled={selectedRemoteActionsBlocked}><Trash2 size={18} /></IconButton>
-                  <div className="reader-snooze" ref={snoozeRef}>
-                    <IconButton label={selectedIsSnoozed ? t("mail.snooze.reschedule") : t("mail.snooze.title")} className={`reader-action-secondary${selectedIsSnoozed ? " snoozed" : ""}`} onClick={() => { if (snoozeOpen) { beginSnoozeClose(); } else { setSnoozeOpen(true); } setSnoozeCustomUntil(""); }} expanded={snoozeOpen} disabled={selectedRemoteActionsBlocked}><Clock size={18} /></IconButton>
-                    {snoozeMounted && (
-                      <div className={`snooze-menu${snoozeClosing ? " closing" : ""}`} role="menu" aria-label={t("mail.snooze.title")}>
-                        {selectedIsSnoozed && selected.snoozedUntil && (
-                          <>
-                            <div className="snooze-current" role="status"><Clock size={14} />{t("mail.snooze.current", { until: formatFullDate(selected.snoozedUntil, locale) })}</div>
-                            <button type="button" role="menuitem" onClick={() => void clearSelectedSnooze()}><X size={15} />{t("mail.snooze.clear")}</button>
-                          </>
-                        )}
-                        {snoozeOptions.map((option) => (
-                          <button key={option.key} type="button" role="menuitem" onClick={() => void setSelectedSnoozed(option.compute().toISOString())}><Clock size={15} />{option.label}</button>
-                        ))}
-                        <div className="snooze-custom">
-                          <label htmlFor="snooze-custom-input">{t("mail.snooze.customLabel")}</label>
-                          <span className="snooze-custom-controls">
-                            <DatePicker mode="datetime" value={snoozeCustomUntil} onChange={setSnoozeCustomUntil} aria-label={t("mail.snooze.customLabel")} />
-                            <button type="button" onClick={() => { const iso = isoFromDatetimeLocal(snoozeCustomUntil); if (iso) void setSelectedSnoozed(iso); }} disabled={!snoozeCustomUntil}>{t("common.ok")}</button>
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="reader-more" ref={readerMoreRef}>
-                    <IconButton label={t("mail.action.more")} className="reader-more-toggle" onClick={() => { if (readerMoreOpen) { beginReaderMoreClose(); } else { setReaderMoreOpen(true); } }} expanded={readerMoreOpen}><MoreHorizontal size={19} /></IconButton>
-                    {readerMoreMounted && (
-                      <div className={`reader-more-menu${readerMoreClosing ? " closing" : ""}`} role="menu" aria-label={t("mail.action.more")}>
-                        <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openReplyAll(); }}><ReplyAll size={16} />{t("mail.action.replyAll")}</button>
-                        <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openForward(); }}><Forward size={16} />{t("mail.action.forward")}</button>
-                        <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked || selectedIsArchived} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />{t("mail.action.archive")}</button>
-                        <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void exportSelectedEml(); }}><Download size={16} />{t("mail.action.exportEml")}</button>
-                        <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportContactVcf(); }}><UserRound size={16} />{t("mail.action.saveVcf")}</button>
-                        <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportCalendarIcs(); }}><CalendarArrowDown size={16} />{t("mail.action.exportIcs")}</button>
-                        {!shouldRenderTranslationPanel && (
-                          <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); setForceShowTranslationId(selected.id); }}><Languages size={16} />{t("translation.action", { language: locales.find((item) => item.locale === locale)?.nativeName ?? locale })}</button>
-                        )}
-                        <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); printSelectedMessage(); }}><Printer size={16} />{t("mail.action.print")}</button>
-                        {!selectedIsInJunk && (
-                          <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("junk"); }}><ShieldCheck size={16} />{t("mail.action.reportSpam")}</button>
-                        )}
-                        {selectedIsInJunk && (
-                          <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("inbox"); }}><Inbox size={16} />{t("mail.action.notSpam")}</button>
-                        )}
-                        <button type="button" role="menuitem" className="reader-more-danger" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("trash"); }}><Trash2 size={16} />{t("mail.action.moveToTrash")}</button>
-                      </div>
-                    )}
-                  </div>
-                  <button className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button>
-                </div>
-              </header>
-                {selectedThread && selectedThread.length > 1 && (
-                  <section className="thread-strip" aria-label={t("mail.thread.label", { count: selectedThread.length })}>
-                    <span className="thread-strip-caption">{t("mail.thread.label", { count: selectedThread.length })}</span>
-                    <div className="thread-strip-messages">
-                      {threadCollapsed
-                        ? (<>
-                            {renderThreadStripItem(selectedThread[0]!)}
-                            <button type="button" className="thread-strip-fold" onClick={() => setThreadCollapsedPref(false)} aria-label={t("mail.thread.expand", { count: selectedThread.length - 2 })} data-tooltip={t("mail.thread.expand", { count: selectedThread.length - 2 })}>
-                              <MoreHorizontal size={15} /><span>{t("mail.thread.folded", { count: selectedThread.length - 2 })}</span>
-                            </button>
-                            {renderThreadStripItem(selectedThread[selectedThread.length - 1]!)}
-                          </>)
-                        : selectedThread.map((threadMessage) => renderThreadStripItem(threadMessage))}
-                    </div>
-                    {threadCollapsible && (
-                      <button type="button" className={`thread-strip-toggle${threadCollapsed ? "" : " expanded"}`} onClick={() => setThreadCollapsedPref((value) => !value)} aria-expanded={!threadCollapsed}>
-                        {t(threadCollapsed ? "mail.thread.expandAll" : "mail.thread.collapse", { count: selectedThread.length })}
-                      </button>
-                    )}
-                  </section>
-                )}
-                {selectedMoveLocationUnverified && <section className="move-location-notice" role="status"><CircleAlert size={18} /><div><strong>{t("mail.moveLocationUnverified.title")}</strong><p>{t("mail.moveLocationUnverified.description")}</p></div></section>}
-                <div className="reader-split">
-                <article className="mail-reader">
-                <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people">{(() => { const headerPerson = selectedSentRecipient ?? selected.from; return <><SenderAvatar name={headerPerson.name} address={headerPerson.address} tone={accountTone(headerPerson.address)} size="large" gravatarEnabled={settings.avatarGravatarEnabled} bimiEnabled={settings.avatarBimiEnabled} /><div className="mail-people-copy"><strong>{headerPerson.name || headerPerson.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={headerPerson.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{selectedSentRecipient ? t("mail.reader.toRecipient", { recipient: headerPerson.name || headerPerson.address }) : t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div></>; })()}<time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
-                {verificationCodes.length > 0 && (
-                  <section className="verification-code-list" aria-label={t("mail.verification.detected") }>
-                    {verificationCodes.map((candidate, index) => {
-                      const isPrimaryVerificationCode = index === 0;
-                      const sourceLabel = candidate.source === "subject" ? t("mail.verification.subject") : t("mail.verification.body");
-                      return (
-                        <section className={`verification-code-panel ${isPrimaryVerificationCode ? "primary" : "candidate"}`} key={`${candidate.code}:${candidate.source}`} aria-label={isPrimaryVerificationCode ? t("mail.verification.detected") : t("mail.verification.otherCandidate")}>
-                          <div><span>{isPrimaryVerificationCode ? t("mail.verification.label", { source: sourceLabel }) : t("mail.verification.otherLabel", { source: sourceLabel })}</span><strong>{candidate.code}</strong></div>
-                          <button className="secondary-button verification-code-copy" type="button" onClick={() => void copyDetectedVerificationCode(candidate.code)} aria-label={t("mail.verification.copyAria", { code: candidate.code })} data-tooltip={t("mail.verification.copyTooltip")}><Copy size={15} />{isPrimaryVerificationCode ? t("mail.verification.copy") : t("common.copy")}</button>
-                        </section>
-                      );
-                    })}
-                  </section>
-                )}
-                {shouldRenderTranslationPanel && (
-                  <TranslationPanel
-                  availability={translationAvailability}
-                  state={translationState}
-                  llmAvailable={llmTranslationAvailable}
-                  mailStyle={translationMailStyle}
-                  onCheckAvailability={() => void refreshTranslationAvailability()}
-                  onTranslate={() => void translateSelectedMessage()}
-                  onTranslateWithLlm={() => void translateSelectedMessageWithLlm()}
-                  onShow={showSelectedTranslation}
-                  onHide={hideSelectedTranslation}
-                  onCancel={cancelTranslation}
-                />
-                )}
-                <div className="mail-content">{selected.htmlBody
-                  ? <div className="mail-html" dangerouslySetInnerHTML={{ __html: readerHtml }} />
-                  : <div className="mail-text"><MailTextBody body={readerTextParts.quote ? readerTextParts.body : readerTextSource} suffix={readerTextParts.quote ? <button type="button" className="mail-quote-toggle" onClick={() => setQuotedExpanded(true)}>{t("mail.reader.showQuoted")}</button> : null} /></div>}
-                </div>
-                {visibleAttachments.length > 0 && (
-                  <section className="attachment-list" aria-label={t("mail.attachment.aria", { count: visibleAttachments.length })}>
-                    <div className="attachment-list-heading"><Paperclip size={15} /><span>{t("compose.attachments")}</span><small>{t("mail.attachment.fileCount", { count: visibleAttachments.length })}</small><span className="attachment-heading-actions"><IconButton label={t("mail.attachment.downloadAllZip")} disabled={zipAllPhase === "zipping" || selectedMovePending || selected.movePending || selected.moveLocationUnverified} onClick={() => void zipAllAttachments()}>{zipAllPhase === "zipping" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}</IconButton></span></div>
-                    {visibleAttachments.map((attachment) => {
-                      const presentation = presentAttachment(attachment.filename, attachment.contentType, t);
-                      const downloadKey = `${selected.id}:${attachment.partId}`;
-                      const download = attachmentDownloads[downloadKey];
-                      const isDownloading = download?.phase === "downloading";
-                      const downloadDetail = isDownloading
-                        ? t("mail.attachment.preparing")
-                        : download?.phase === "ready"
-                          ? t("mail.attachment.ready", { type: presentation.label, size: formatFileSize(attachment.size) })
-                          : download?.phase === "error"
-                            ? t("mail.attachment.failed", { message: download.detail ?? t("error.retry") })
-                            : t("mail.attachment.detail", { type: presentation.label, size: formatFileSize(attachment.size) });
-                      return (
-                        <div className={`attachment-card${download?.phase ? ` is-${download.phase}` : ""}`} key={attachment.partId}>
-                          <AttachmentFileIcon kind={presentation.kind} />
-                          <span><strong className="truncated-tooltip" data-tooltip={attachment.filename}><span>{attachment.filename}</span></strong><small className="truncated-tooltip" aria-live="polite" data-tooltip={download?.detail}><span>{downloadDetail}</span></small></span>
-                          <div className="attachment-actions">
-                            {canPreviewAttachment(attachment.filename, attachment.contentType) && (
-                              <IconButton label={t("mail.attachment.preview", { filename: attachment.filename })} disabled={selectedRemoteActionsBlocked} onClick={() => openAttachmentPreview(selected, attachment)}><Eye size={16} /></IconButton>
-                            )}
-                            <IconButton label={selectedMoveActionLabel ?? (download?.phase === "error" ? t("mail.attachment.retryDownload", { filename: attachment.filename }) : t("mail.attachment.download", { filename: attachment.filename }))} disabled={isDownloading || selectedRemoteActionsBlocked} onClick={() => void downloadAttachment(selected, attachment)}>{isDownloading ? <LoaderCircle className="spin" size={16} /> : download?.phase === "error" ? <RefreshCw size={16} /> : <Download size={16} />}</IconButton>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </section>
-                )}
-                <footer className="quick-reply"><CustomAvatar name={selected.accountEmail} address={selected.accountEmail} tone={accountTone(selected.accountEmail)} size="small" /><button onClick={openReply}>{t("mail.reader.replyTo", { sender: quickReplySender })}</button></footer>
-              </article>
-              {state.attachmentPreview && <Suspense fallback={null}><AttachmentPreviewModal messageId={state.attachmentPreview.message.id} attachment={state.attachmentPreview.attachment} onClose={() => actions.closeAttachmentPreview()} /></Suspense>}
-              </div>
-            </ErrorBoundary>
-          ) : (
-            <div className="reader-empty"><div className="reader-orb"><Mail size={32} /></div><h2>{t("mail.reader.emptyTitle")}</h2><p>{t("mail.reader.emptyDescription")}</p></div>
-          )}
-</section>
+        <MailReader
+          state={state}
+          actions={actions}
+          t={t}
+          locale={locale}
+          locales={locales}
+          isDemo={isDemo}
+          settings={settings}
+          selected={selected}
+          selectedThread={selectedThread}
+          selectedMessageAccount={selectedMessageAccount}
+          selectedSentRecipient={selectedSentRecipient}
+          quickReplySender={quickReplySender}
+          selectedMovePending={selectedMovePending}
+          selectedMoveLocationUnverified={selectedMoveLocationUnverified}
+          selectedRemoteActionsBlocked={selectedRemoteActionsBlocked}
+          selectedIsArchived={selectedIsArchived}
+          selectedIsInJunk={selectedIsInJunk}
+          selectedIsSnoozed={selectedIsSnoozed}
+          selectedMoveActionLabel={selectedMoveActionLabel}
+          localizedProviderName={localizedProviderName}
+          closeReader={closeReader}
+          openReply={openReply}
+          openReplyAll={openReplyAll}
+          openForward={openForward}
+          toggleSelectedSeen={toggleSelectedSeen}
+          toggleSelectedStar={toggleSelectedStar}
+          moveSelectedMessage={moveSelectedMessage}
+          openAgentWorkspace={openAgentWorkspace}
+          openCalendarImport={openCalendarImport}
+          exportSelectedEml={exportSelectedEml}
+          printSelectedMessage={printSelectedMessage}
+          exportContactVcf={exportContactVcf}
+          exportCalendarIcs={exportCalendarIcs}
+          snoozeOpen={snoozeOpen}
+          setSnoozeOpen={setSnoozeOpen}
+          snoozeMounted={snoozeMounted}
+          snoozeClosing={snoozeClosing}
+          beginSnoozeClose={beginSnoozeClose}
+          snoozeRef={snoozeRef}
+          snoozeCustomUntil={snoozeCustomUntil}
+          setSnoozeCustomUntil={setSnoozeCustomUntil}
+          snoozeOptions={snoozeOptions}
+          setSelectedSnoozed={setSelectedSnoozed}
+          clearSelectedSnooze={clearSelectedSnooze}
+          readerMoreOpen={readerMoreOpen}
+          setReaderMoreOpen={setReaderMoreOpen}
+          readerMoreMounted={readerMoreMounted}
+          readerMoreClosing={readerMoreClosing}
+          beginReaderMoreClose={beginReaderMoreClose}
+          readerMoreRef={readerMoreRef}
+          recipientDetailsOpen={recipientDetailsOpen}
+          setRecipientDetailsOpen={setRecipientDetailsOpen}
+          readerTitleRef={readerTitleRef}
+          threadCollapsed={threadCollapsed}
+          threadCollapsible={threadCollapsible}
+          setThreadCollapsedPref={setThreadCollapsedPref}
+          renderThreadStripItem={renderThreadStripItem}
+          verificationCodes={verificationCodes}
+          copyDetectedVerificationCode={copyDetectedVerificationCode}
+          shouldRenderTranslationPanel={shouldRenderTranslationPanel}
+          translationAvailability={translationAvailability}
+          translationState={translationState}
+          llmTranslationAvailable={llmTranslationAvailable}
+          translationMailStyle={translationMailStyle}
+          refreshTranslationAvailability={refreshTranslationAvailability}
+          translateSelectedMessage={translateSelectedMessage}
+          translateSelectedMessageWithLlm={translateSelectedMessageWithLlm}
+          showSelectedTranslation={showSelectedTranslation}
+          hideSelectedTranslation={hideSelectedTranslation}
+          cancelTranslation={cancelTranslation}
+          setForceShowTranslationId={setForceShowTranslationId}
+          readerHtml={readerHtml}
+          readerTextParts={readerTextParts}
+          readerTextSource={readerTextSource}
+          setQuotedExpanded={setQuotedExpanded}
+          visibleAttachments={visibleAttachments}
+          attachmentDownloads={attachmentDownloads}
+          zipAllPhase={zipAllPhase}
+          zipAllAttachments={zipAllAttachments}
+          downloadAttachment={downloadAttachment}
+          handleIcsAttachmentImport={handleIcsAttachmentImport}
+          openAttachmentPreview={openAttachmentPreview}
+        />
         </div>
         {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} overlayOpen={state.settingsOpen} providerListVersion={agentProviderListVersion} onOpenModelSettings={() => actions.openSettingsTo("models")} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
           closeAgentWorkspace();
@@ -4300,76 +2953,62 @@ const emptyMessageList = useMemo(() => (query.trim()
         </aside>
       </main>
 
-      {state.addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} existingAccounts={accounts} onClose={() => actions.closeAddAccount()} onAdded={handleAccountAdded} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
-      {state.composeOpen && <Suspense fallback={null}><ComposeModal accounts={accounts} draft={state.composeDraft} onClose={() => actions.closeCompose()} onSent={(message, kind, undoDraft, sentAccountId) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), run: () => { window.setTimeout(() => { actions.openCompose(undoDraft); }, 0); } }); else showToast(message, kind); if (sentAccountId && !isDemo) { void api.sync(sentAccountId).then(() => load({ silent: true })).catch(() => undefined).finally(() => setThreadRefreshTick((value) => value + 1)); } }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      {state.settingsOpen && <Suspense fallback={null}><SettingsModal settings={settings} accounts={accounts} onClose={() => actions.closeSettings()} onSettingsChange={applySettings} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} agentProviderSeed={agentProviderSnapshot ?? preloadedAgentBootstrap ?? undefined} categoryRequest={state.settingsCategoryRequest} onAgentProviderListChanged={(snapshot) => { setAgentProviderSnapshot({ providers: snapshot.items, defaultProviderId: snapshot.defaultProviderId }); setPreloadedAgentBootstrap((current) => current && { ...current, providers: snapshot.items, defaultProviderId: snapshot.defaultProviderId, configured: snapshot.items.some((provider) => provider.configured) }); setAgentProviderListVersion((version) => version + 1); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
-      {state.contactsOpen && <Suspense fallback={null}><ManagementDialogs demoMode={isDemo} onClose={() => actions.closeContacts()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      {state.templatesOpen && <Suspense fallback={null}><TemplatesDialog demoMode={isDemo} onClose={() => actions.closeTemplates()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      {state.calendarOpen && <Suspense fallback={null}><CalendarDialog demoMode={isDemo} onClose={() => actions.closeCalendar()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      {state.accountsOpen && <Suspense fallback={null}><AccountsDialog accounts={accounts} demoMode={isDemo} onClose={() => actions.closeAccounts()} onAddAccount={() => { actions.closeAccounts(); actions.openAddAccount(); }} onAccountRemoved={removeAccountFromView} onAccountSignatureChanged={updateAccountSignatureInState} onAccountSync={retryAccountSync} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      {state.sendingStatusOpen && <Suspense fallback={null}><SendingStatusModal accounts={accounts} submissions={submissions} loading={submissionLoading} loadError={submissionLoadError} onClose={() => actions.closeSendingStatus()} onRefresh={() => refreshSubmissions(accounts)} onSyncAccount={async (accountId) => { await retryAccountSync(accountId); }} onCreateNewMessage={(draft) => { actions.closeSendingStatus(); actions.openCompose(draft); }} onCancelScheduled={cancelScheduledSubmission} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
-      <Suspense fallback={null}><TranslationTermsDialog open={state.translationTermsOpen} onAccept={acceptTranslationTerms} onDecline={declineTranslationTerms} /></Suspense>
-      <Suspense fallback={null}><StartupUpdatePrompt
-        snapshot={desktopUpdateStatus}
-        onSnapshot={setDesktopUpdateStatus}
-        defer={state.anyModalOrSidebar || syncing || (isDemo && !desktopBridge() && !isDemoPromptRequested())}
-        onVisibilityChange={setUpdatePromptOpen}
-      /></Suspense>
-      {pendingBatchDelete && (
-        <div
-          className={`modal-backdrop confirmation-backdrop${batchDeleteConfirmClosing ? " closing" : ""}`}
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !batchBusy) {
-              requestBatchDeleteConfirmClose();
-            }
-          }}
-        >
-          <section
-            ref={batchDeleteDialogRef}
-            className={`confirmation-card${batchDeleteConfirmClosing ? " closing" : ""}`}
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="batch-delete-confirmation-title"
-            aria-describedby="batch-delete-confirmation-description"
-            tabIndex={-1}
-          >
-            <span className="eyebrow">{t("mail.selection.deleteConfirmEyebrow")}</span>
-            <h3 id="batch-delete-confirmation-title">
-              {t("mail.selection.deleteConfirmTitle", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}
-            </h3>
-            <p id="batch-delete-confirmation-description">
-              {t("mail.selection.deleteConfirmDescription", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}
-            </p>
-            <div className="confirmation-actions">
-              <button
-                className="secondary-button"
-                type="button"
-                data-dialog-initial-focus
-                disabled={batchBusy}
-                onClick={requestBatchDeleteConfirmClose}
-              >
-                {t("common.cancel")}
-              </button>
-              <button
-                className="secondary-button danger-button"
-                type="button"
-                disabled={batchBusy}
-                onClick={() => {
-                  setPendingBatchDelete(false);
-                  void batchMoveMessages("trash");
-                }}
-              >
-                {batchBusy ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}
-                {t("mail.selection.deleteConfirmAction")}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-      {state.mobileSidebar && <button className="mobile-scrim" aria-label={t("navigation.closeMenu")} onClick={() => actions.closeMobileSidebar()} />}
-      {toast && <div className={`toast ${toast.kind}`} role={toast.kind === "error" || toast.kind === "warning" ? "alert" : "status"} aria-atomic="true"><span className="toast-icon" aria-hidden="true">{toast.kind === "error" || toast.kind === "warning" ? <CircleAlert size={17} /> : toast.kind === "info" ? <Sparkles size={17} /> : <Check size={17} />}</span><span className="toast-message">{toast.message}</span>{toast.action && <button className="toast-action" type="button" onClick={() => { setToast(null); toast.action?.run(); }}>{toast.action.label}</button>}<button className="toast-dismiss" type="button" aria-label={t("common.closeNotification")} data-tooltip={t("common.closeNotification")} onClick={() => setToast(null)}><X size={16} /></button></div>}
-      {autoReplyNotices.length > 0 && <AutoReplyToastStack behindModal={state.anyModalOpen} inAgent={agentOpen} notices={autoReplyNotices} onDismiss={(notice) => setAutoReplyNotices((items) => items.filter((item) => autoReplyNoticeKey(item) !== autoReplyNoticeKey(notice)))} />}
+      <AppDialogs
+        state={state}
+        actions={actions}
+        t={t}
+        isDemo={isDemo}
+        syncing={syncing}
+        agentOpen={agentOpen}
+        accounts={accounts}
+        providers={providers}
+        settings={settings}
+        mobileMenuButtonRef={mobileMenuButtonRef}
+        toast={toast}
+        showToast={showToast}
+        dismissToast={dismissToast}
+        handleAccountAdded={handleAccountAdded}
+        load={load}
+        setThreadRefreshTick={setThreadRefreshTick}
+        setMessages={setMessages}
+        setSelectedId={setSelectedId}
+        applySettings={applySettings}
+        testDesktopNotification={testDesktopNotification}
+        testNotificationSound={testNotificationSound}
+        refreshTranslationAvailability={refreshTranslationAvailability}
+        acceptTranslationTerms={acceptTranslationTerms}
+        declineTranslationTerms={declineTranslationTerms}
+        agentProviderSnapshot={agentProviderSnapshot}
+        preloadedAgentBootstrap={preloadedAgentBootstrap}
+        setAgentProviderSnapshot={setAgentProviderSnapshot}
+        setPreloadedAgentBootstrap={setPreloadedAgentBootstrap}
+        setAgentProviderListVersion={setAgentProviderListVersion}
+        calendarImportPayload={calendarImportPayload}
+        setCalendarImportPayload={setCalendarImportPayload}
+        submissions={submissions}
+        submissionLoading={submissionLoading}
+        submissionLoadError={submissionLoadError}
+        refreshSubmissions={refreshSubmissions}
+        cancelScheduledSubmission={cancelScheduledSubmission}
+        removeAccountFromView={removeAccountFromView}
+        updateAccountSignatureInState={updateAccountSignatureInState}
+        retryAccountSync={retryAccountSync}
+        desktopUpdateStatus={desktopUpdateStatus}
+        setDesktopUpdateStatus={setDesktopUpdateStatus}
+        setUpdatePromptOpen={setUpdatePromptOpen}
+        autoReplyNotices={autoReplyNotices}
+        setAutoReplyNotices={setAutoReplyNotices}
+        pendingBatchDelete={pendingBatchDelete}
+        batchDeleteConfirmClosing={batchDeleteConfirmClosing}
+        batchBusy={batchBusy}
+        requestBatchDeleteConfirmClose={requestBatchDeleteConfirmClose}
+        batchDeleteDialogRef={batchDeleteDialogRef}
+        selectAllPaged={selectAllPaged}
+        currentMessageTotal={currentMessageTotal}
+        selectedMessageIds={selectedMessageIds}
+        setPendingBatchDelete={setPendingBatchDelete}
+        batchMoveMessages={batchMoveMessages}
+      />
       </div>
     </div>
   );

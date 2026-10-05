@@ -67,6 +67,10 @@ export const soundOptions: Array<TranslatedOption<NotificationSound>> = [
   { value: "system", labelKey: "settings.sound.system.label", detailKey: "settings.sound.system.detail" },
   { value: "soft", labelKey: "settings.sound.soft.label", detailKey: "settings.sound.soft.detail" },
   { value: "bright", labelKey: "settings.sound.bright.label", detailKey: "settings.sound.bright.detail" },
+  { value: "chime", labelKey: "settings.sound.chime.label", detailKey: "settings.sound.chime.detail" },
+  { value: "bubble", labelKey: "settings.sound.bubble.label", detailKey: "settings.sound.bubble.detail" },
+  { value: "calm", labelKey: "settings.sound.calm.label", detailKey: "settings.sound.calm.detail" },
+  { value: "ping", labelKey: "settings.sound.ping.label", detailKey: "settings.sound.ping.detail" },
   { value: "none", labelKey: "settings.sound.none.label", detailKey: "settings.sound.none.detail" },
 ];
 

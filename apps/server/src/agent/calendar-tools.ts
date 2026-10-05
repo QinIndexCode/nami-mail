@@ -14,7 +14,7 @@ import {
   externalCalendarUpdateOutputSchema,
   type AgentError,
 } from "@nami/agent-contracts";
-import type { AgentTool, ToolExecutionOutcome } from "@nami/agent-core";
+import type { AgentTool } from "@nami/agent-core";
 import {
   CalendarEventTimeConflictError,
   createCalendarEvent,
@@ -180,7 +180,7 @@ function calendarUpdateTool(db: DatabaseHandle, masterKey: Buffer): AgentTool<Ca
   };
 }
 
-function calendarDeleteTool(db: DatabaseHandle, masterKey: Buffer): AgentTool<CalendarDeleteInput, CalendarDeleteOutput> {
+function calendarDeleteTool(db: DatabaseHandle, _masterKey: Buffer): AgentTool<CalendarDeleteInput, CalendarDeleteOutput> {
   return {
     descriptor: {
       name: "calendar.delete",

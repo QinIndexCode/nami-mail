@@ -952,90 +952,63 @@ gap:3px;
 min-width:0;
 display:flex
 }
-.calendar-list-copy strong
-{
-text-overflow:ellipsis;
-white-space:nowrap;
-font-size:12px;
-overflow:hidden
-}
-.calendar-list-copy small
-{
-text-overflow:ellipsis;
-white-space:nowrap;
-color:var(--text-faint);
-align-items:center;
-gap:4px;
-font-size:10px;
-display:inline-flex;
-overflow:hidden
-}
-.calendar-list-copy small svg
-{
-flex:none
-}
-.calendar-list-copy .calendar-list-location
-{
-color:var(--text-soft)
-}
-.calendar-list-actions
-{
-flex:none;
-align-items:center;
-gap:8px;
-display:flex
-}
-.calendar-list-actions .secondary-button
-{
-white-space:nowrap;
-min-height:30px;
-padding:6px 10px;
-font-size:11px
-}
-.calendar-list-pager
-{
-justify-content:center;
-align-items:center;
-gap:12px;
-margin-top:14px;
-display:flex
-}
-.calendar-list-pager .secondary-button
-{
-white-space:nowrap;
-min-height:30px;
-padding:6px 10px;
-font-size:11px
-}
-.calendar-list-pager-status
-{
-color:var(--text-soft);
-font-variant-numeric:tabular-nums;
-font-size:11px
-}
-.calendar-editor-backdrop
-{
-z-index:60;
-background:var(--scrim-nested)
-}
-.calendar-editor-modal
-{
-border:1px solid var(--line-strong);
-background:var(--panel-solid);
-border-radius:16px;
-width:min(520px,100%);
-max-height:calc(100vh - 40px);
-padding:24px;
-animation:.2s cubic-bezier(.2,.8,.2,1) both modal-in;
-overscroll-behavior:contain;
-overflow-y:auto
-}
-.calendar-editor-modal.closing
-{
-pointer-events:none;
-animation:.17s cubic-bezier(.2,.8,.2,1) both modal-out
-}
-.calendar-editor-modal .calendar-editor
-{
-margin-top:0
+.calendar-list-copy strong { text-overflow:ellipsis; white-space:nowrap; font-size:12px; overflow:hidden; }
+.calendar-list-copy small { text-overflow:ellipsis; white-space:nowrap; color:var(--text-faint); align-items:center; gap:4px; font-size:10px; display:inline-flex; overflow:hidden; }
+.calendar-list-copy small svg { flex:none; }
+.calendar-list-copy .calendar-list-location { color:var(--text-soft); }
+.calendar-list-actions { flex:none; align-items:center; gap:8px; display:flex; }
+.calendar-list-actions .secondary-button { white-space:nowrap; min-height:30px; padding:6px 10px; font-size:11px; }
+.calendar-list-pager { justify-content:center; align-items:center; gap:12px; margin-top:14px; display:flex; }
+.calendar-list-pager .secondary-button { white-space:nowrap; min-height:30px; padding:6px 10px; font-size:11px; }
+.calendar-list-pager-status { color:var(--text-soft); font-variant-numeric:tabular-nums; font-size:11px; }
+.calendar-editor-backdrop { z-index:60; background:var(--scrim-nested); }
+.calendar-editor-modal { border:1px solid var(--line-strong); background:var(--panel-solid); border-radius:16px; width:min(520px,100%); max-height:calc(100vh - 40px); padding:24px; animation:.2s cubic-bezier(.2,.8,.2,1) both modal-in; overscroll-behavior:contain; overflow-y:auto; }
+.calendar-editor-modal.closing { pointer-events:none; animation:.17s cubic-bezier(.2,.8,.2,1) both modal-out; }
+.calendar-editor-modal .calendar-editor { margin-top:0; }
+.calendar-tool-btn { display:inline-flex; align-items:center; gap:5px; font-size:12px; padding:6px 10px; font-weight:500; }
+.calendar-import-modal { width:min(500px,100%); }
+.calendar-import-upload-zone { border:1.5px dashed var(--line-strong); border-radius:12px; padding:28px 20px; text-align:center; cursor:pointer; background:var(--panel-muted); display:flex; flex-direction:column; align-items:center; gap:10px; transition:border-color .15s, background .15s; }
+.calendar-import-upload-zone:hover { border-color:var(--accent); background:var(--hover); }
+.calendar-import-upload-icon { color:var(--text-soft); }
+.calendar-import-upload-text { font-size:13px; color:var(--text-soft); margin:0; }
+.calendar-import-pick-btn { font-size:12px; padding:6px 14px; }
+.calendar-import-meta { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 14px; background:var(--panel-muted); border-radius:10px; border:1px solid var(--line); margin-bottom:12px; }
+.calendar-import-filename { font-size:13px; font-weight:550; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.calendar-import-badge { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--accent-subtle); color:var(--accent); font-weight:550; white-space:nowrap; }
+.calendar-import-section-title { font-size:12px; font-weight:600; color:var(--text-soft); text-transform:uppercase; letter-spacing:.03em; margin:0 0 8px; }
+.calendar-import-preview-list { display:flex; flex-direction:column; gap:6px; max-height:150px; overflow-y:auto; padding:2px; margin-bottom:14px; }
+.calendar-import-preview-item { display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:8px; background:var(--panel-muted); border:1px solid var(--line); }
+.calendar-import-preview-content { display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; }
+.calendar-import-preview-title { font-size:12px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.calendar-import-preview-time { font-size:11px; color:var(--text-soft); }
+.calendar-import-preview-loc { font-size:11px; color:var(--text-faint); display:flex; align-items:center; gap:4px; }
+.calendar-import-preview-more { font-size:11px; color:var(--text-soft); text-align:center; padding:4px; }
+.calendar-import-mode-section { margin-top:8px; margin-bottom:14px; }
+.calendar-import-modes { display:flex; flex-direction:column; gap:8px; margin-top:6px; }
+.calendar-import-mode-card { display:flex; align-items:flex-start; gap:10px; padding:10px 14px; border:1px solid var(--line); border-radius:10px; cursor:pointer; background:var(--panel-muted); transition:border-color .15s, background .15s; }
+.calendar-import-mode-card:hover { background:var(--hover); }
+.calendar-import-mode-card.is-active { border-color:var(--accent); background:var(--accent-subtle); }
+.calendar-import-mode-card input { margin-top:3px; }
+.calendar-import-mode-info { display:flex; flex-direction:column; gap:2px; }
+.calendar-import-mode-title { font-size:13px; font-weight:550; color:var(--text); }
+.calendar-import-mode-hint { font-size:11px; color:var(--text-soft); line-height:1.4; }
+.calendar-import-warning-box { display:flex; align-items:center; gap:8px; padding:10px 12px; border-radius:8px; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.35); color:#d97706; font-size:12px; margin-top:10px; line-height:1.4; }
+[data-theme=dark] .calendar-import-warning-box { color:#fbbf24; background:rgba(245,158,11,0.15); border-color:rgba(245,158,11,0.4); }
+.mail-calendar-invite-banner { display:flex; align-items:center; gap:12px; padding:12px 16px; margin:0 48px 14px; border-radius:var(--radius-sm); border:1px solid var(--line); background:color-mix(in srgb, var(--accent-subtle) 40%, var(--panel-muted)); }
+.mail-calendar-invite-badge { flex:none; width:36px; height:36px; border-radius:10px; background:var(--accent-subtle); color:var(--focus-ring); display:flex; align-items:center; justify-content:center; }
+.mail-calendar-invite-content { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+.mail-calendar-invite-header { display:flex; align-items:center; gap:8px; }
+.mail-calendar-invite-tag { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--focus-ring); }
+.mail-calendar-invite-count { font-size:10px; color:var(--text-soft); }
+.mail-calendar-invite-title { font-size:13px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mail-calendar-invite-error { font-size:11px; color:var(--danger); margin-top:2px; }
+.mail-calendar-invite-details { display:flex; align-items:center; gap:12px; font-size:11px; color:var(--text-soft); margin-top:1px; }
+.mail-calendar-invite-time { display:flex; align-items:center; gap:4px; }
+.mail-calendar-invite-loc { display:flex; align-items:center; gap:4px; color:var(--text-faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mail-calendar-invite-actions { flex:none; display:flex; align-items:center; gap:8px; }
+.mail-calendar-invite-btn, .mail-calendar-import-btn { font-size:12px; padding:6px 12px; display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+.mail-calendar-view-btn { font-size:12px; padding:6px 10px; display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+@media (max-width: 640px) {
+  .mail-calendar-invite-banner { margin:0 12px 10px; flex-wrap:wrap; }
+  .mail-calendar-invite-actions { width:100%; justify-content:flex-end; }
 }

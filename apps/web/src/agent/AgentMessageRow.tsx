@@ -57,7 +57,7 @@ export const AgentMessageRow = memo(function AgentMessageRowInner({
       className={`agent-message ${message.role} ${message.state === "streaming" ? "streaming" : ""}${message.interrupted ? " interrupted" : ""}`}
       ref={message.role === "user" ? userMessageRef : undefined}
     >
-      {!message.revoked && (
+      {message.revoked ? null : (
         <>
           {message.quote && <div className="agent-message-quote"><span className="agent-quote-mark" aria-hidden="true">"</span><span className="agent-quote-text">{truncateForPreview(message.quote)}</span><span className="agent-quote-mark" aria-hidden="true">"</span></div>}
           {message.references && message.references.length > 0 && (
@@ -73,7 +73,7 @@ export const AgentMessageRow = memo(function AgentMessageRowInner({
           {message.error && <div className="agent-message-error"><CircleAlert size={15} /><span>{message.error.message}{message.error.suggestion ? ` ${message.error.suggestion}` : ""}</span>{message.error.retryable && <button type="button" onClick={onRetry}>{t("agent.message.retry")}</button>}</div>}
         </>
       )}
-      <div className="agent-message-meta">{message.role === "system" && <span className="agent-message-role">{t("agent.message.system")}</span>}{message.interrupted && <span className="agent-message-interrupted">{t("agent.message.interrupted")}</span>}<time>{shortDate(message.createdAt, locale)}</time>{!message.revoked && <span className="agent-message-actions">{message.content && <CopyMessageButton content={message.content} label={t("agent.message.copy")} />}{message.role === "user" && <AgentRecallButton disabled={!message.content || message.state === "streaming"} onRevoke={() => onRevoke(message.id)} label={t("agent.message.revoke")} confirmLabel={t("agent.message.revokeConfirm")} />}</span>}</div>
+      <div className="agent-message-meta">{message.role === "system" && <span className="agent-message-role">{t("agent.message.system")}</span>}{message.interrupted && <span className="agent-message-interrupted">{t("agent.message.interrupted")}</span>}<time>{shortDate(message.createdAt, locale)}</time><span className="agent-message-actions">{message.content && <CopyMessageButton content={message.content} label={t("agent.message.copy")} />}{message.role === "user" && <AgentRecallButton disabled={!message.content || message.state === "streaming"} onRevoke={() => onRevoke(message.id)} label={t("agent.message.revoke")} confirmLabel={t("agent.message.revokeConfirm")} />}</span></div>
     </article>
   );
 });

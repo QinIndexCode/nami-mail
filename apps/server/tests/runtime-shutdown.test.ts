@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as idleModule from "../src/idle.js";
 
 const mocks = vi.hoisted(() => ({
   AccountLifecycleStore: vi.fn(),
@@ -64,7 +65,7 @@ vi.mock("../src/config.js", () => ({ config: mocks.config }));
 vi.mock("../src/crypto.js", () => ({ loadOrCreateMasterKey: mocks.loadOrCreateMasterKey }));
 vi.mock("../src/db.js", () => ({ openDatabase: mocks.openDatabase }));
 vi.mock("../src/idle.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/idle.js")>();
+  const actual = await importOriginal<typeof idleModule>();
   return {
     ...actual,
     // The watcher itself stays real; the host's onChange hook is recorded so a
@@ -369,3 +370,4 @@ describe("server runtime shutdown", () => {
     }
   });
 });
+

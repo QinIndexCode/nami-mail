@@ -16,7 +16,7 @@ import {
 import type { DesktopUpdateSnapshot } from "../desktop";
 import type { LocaleMetadata, Translate } from "../i18n";
 import ThemedSelect from "../ThemedSelect";
-import type { AppSettings, AppSettingsPatch } from "../types";
+import type { AppSettings, AppSettingsPatch, NotificationSound } from "../types";
 import {
   closeBehaviorOptions,
   soundOptions,
@@ -73,7 +73,7 @@ export type SettingsNotificationsPanelProps = {
   busyAction: string | null;
   applyOptimisticSettings: ApplySettings;
   testNotification: () => Promise<void>;
-  testSound: () => Promise<void>;
+  previewSound?: (sound: NotificationSound) => void | Promise<void>;
 };
 
 export function SettingsNotificationsPanel({
@@ -83,7 +83,7 @@ export function SettingsNotificationsPanel({
   busyAction,
   applyOptimisticSettings,
   testNotification,
-  testSound,
+  previewSound,
 }: SettingsNotificationsPanelProps) {
   return (
     <section className="settings-section" data-settings-nav="notifications" aria-labelledby="notification-settings">
@@ -127,7 +127,12 @@ export function SettingsNotificationsPanel({
             type="button"
             aria-pressed={currentSettings.notificationSound === option.value}
             disabled={controlsBusy || !currentSettings.notificationsEnabled}
-            onClick={() => void applyOptimisticSettings({ notificationSound: option.value }, null)}
+            onClick={() => {
+              void applyOptimisticSettings({ notificationSound: option.value }, null);
+              if (option.value !== "none") {
+                void previewSound?.(option.value);
+              }
+            }}
           >
             {option.value === "none" ? <VolumeX size={16} /> : <Volume2 size={16} />}
             <span><strong>{t(option.labelKey)}</strong><small>{t(option.detailKey)}</small></span>
@@ -138,9 +143,6 @@ export function SettingsNotificationsPanel({
       <div className="settings-inline-actions">
         <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => void testNotification()}>
           {busyAction === "notification-test" ? <LoaderCircle className="spin" size={15} /> : <Bell size={15} />}{t("settings.notifications.test")}
-        </button>
-        <button className="secondary-button" type="button" disabled={controlsBusy} onClick={() => void testSound()}>
-          {busyAction === "sound-test" ? <LoaderCircle className="spin" size={15} /> : <Volume2 size={15} />}{t("settings.sound.test")}
         </button>
       </div>
     </section>

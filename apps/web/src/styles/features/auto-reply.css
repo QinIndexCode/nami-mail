@@ -1127,7 +1127,8 @@ transform:scale(.96)
 width:auto;
 left:12px;
 right:12px;
-bottom:max(56px, calc(env(safe-area-inset-bottom) + 36px))
+top:max(16px, calc(env(safe-area-inset-top) + 8px));
+bottom:auto
 }
 
 }

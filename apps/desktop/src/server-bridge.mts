@@ -87,7 +87,7 @@ export class PendingRequests {
 }
 
 export type CloseBehavior = "ask" | "tray" | "quit";
-export type NotificationSound = "system" | "soft" | "bright" | "none";
+export type NotificationSound = "system" | "soft" | "bright" | "chime" | "bubble" | "calm" | "ping" | "none";
 
 /**
  * The settings subset the main process needs *synchronously*. It mirrors the

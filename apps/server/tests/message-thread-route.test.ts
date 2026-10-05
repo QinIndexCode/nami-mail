@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as cryptoModule from "../src/crypto.js";
 
 const { decryptTextEnvelope } = vi.hoisted(() => ({ decryptTextEnvelope: vi.fn() }));
 
@@ -7,7 +8,7 @@ const { decryptTextEnvelope } = vi.hoisted(() => ({ decryptTextEnvelope: vi.fn()
 // actually decrypted — the whole point of the abandoned-scan and header-cache
 // assertions below.
 vi.mock("../src/crypto.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/crypto.js")>();
+  const actual = await importOriginal<typeof cryptoModule>();
   decryptTextEnvelope.mockImplementation(actual.decryptTextEnvelope);
   return { ...actual, decryptTextEnvelope };
 });
@@ -257,3 +258,4 @@ describe("GET /api/messages/:id/thread at scale", () => {
     expect(after.json().items.map((item: { id: string }) => item.id)).not.toContain("bulk-599");
   });
 });
+

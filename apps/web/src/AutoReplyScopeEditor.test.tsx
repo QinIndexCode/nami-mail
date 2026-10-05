@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import AutoReplyScopeEditor from "./AutoReplyScopeEditor";
 import { I18nProvider } from "./i18n";
-import type { AutoReplyScope, AutoReplyScopeRule } from "./types";
+import type { AutoReplyScope } from "./types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

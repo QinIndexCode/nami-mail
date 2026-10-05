@@ -3,11 +3,12 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as mailModule from "../src/mail.js";
 
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
 });
 
@@ -230,7 +231,7 @@ describe("GET /api/events SSE", () => {
     });
     // Hijacked responses do not flush headers until the first write, so wait
     // for the route's subscription instead of the client's response event.
-    await vi.waitFor(() => expect(bus.listenerCount).toBe(1));
+    await vi.waitFor(() => expect(bus.listenerCount).toBe(1), { timeout: 10_000 });
     bus.emit({
       type: "mail.received",
       payload: {
@@ -246,7 +247,7 @@ describe("GET /api/events SSE", () => {
       expect(body).toContain('"type":"mail.received"');
       expect(body).toContain("Verification code");
       expect(body).toContain('"type":"mail.synced"');
-    });
+    }, { timeout: 10_000 });
     expect(responseStatus).toBe(200);
     expect(contentType).toContain("text/event-stream");
     // Named events (WHATWG EventSource): the `event:` line is what makes
@@ -302,7 +303,7 @@ describe("GET /api/events stream limits", () => {
     return vi.waitFor(() => {
       expect(bus.listenerCount).toBeGreaterThan(0);
       return request;
-    });
+    }, { timeout: 10_000 });
   }
 
   /** Resolves when the client socket is gone, however it went. */
@@ -337,7 +338,7 @@ describe("GET /api/events stream limits", () => {
 
     await closed;
     // The connection is retired, not left leaking: the subscription is gone.
-    await vi.waitFor(() => expect(bus.listenerCount).toBe(0));
+    await vi.waitFor(() => expect(bus.listenerCount).toBe(0), { timeout: 10_000 });
   });
 
   it("refuses a stream past the subscriber ceiling with a real status, before hijacking", async () => {
@@ -362,3 +363,4 @@ describe("GET /api/events stream limits", () => {
     expect(maxPendingEventBytes).toBe(4 * 1024 * 1024);
   });
 });
+

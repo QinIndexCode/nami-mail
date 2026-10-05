@@ -6,8 +6,9 @@ import {
   parseCliArguments,
   type NamiMailBrokerClient,
 } from "../src/agent/cli.mts";
+import type {
+  createAgentHostLaunchPlan} from "../src/agent/service-start.mts";
 import {
-  createAgentHostLaunchPlan,
   ElectronAgentHostServiceStarter,
 } from "../src/agent/service-start.mts";
 

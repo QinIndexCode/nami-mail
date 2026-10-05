@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { LoaderCircle, Sparkles, Undo2 } from "lucide-react";
+import { LoaderCircle, PenLine, Undo2 } from "lucide-react";
 import { api } from "./api";
 import { ApiError, apiError, boundedRequest, requestResponse } from "./apiTransport";
 import { mailErrorMessage } from "./errorPresentation";
@@ -192,7 +192,7 @@ export function ComposePolishControls({ polish, t }: { polish: ComposePolish; t:
         disabled={polishing}
         onClick={run}
       >
-        {polishing ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}
+        {polishing ? <LoaderCircle className="spin" size={15} /> : <PenLine size={15} />}
         {polishing ? t("compose.polish.running") : t("compose.polish.action")}
       </button>
       {undoAvailable && (

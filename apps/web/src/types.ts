@@ -148,6 +148,8 @@ export type { CalendarEventColor };
 /** A local calendar event. Timestamps are UTC ISO strings. */
 export type CalendarEvent = {
   id: string;
+  /** ICS UID when the event came from an import; absent for manual events. */
+  uid?: string;
   title: string;
   description: string;
   location: string;
@@ -161,6 +163,8 @@ export type CalendarEvent = {
 
 export type CalendarEventInput = {
   title: string;
+  /** ICS UID of the importing event; enables dedup on repeat imports. */
+  uid?: string;
   description?: string;
   location?: string;
   startAt: string;

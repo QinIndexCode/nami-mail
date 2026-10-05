@@ -11,8 +11,8 @@ import {
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import { accountById } from "./account-store.js";
 import { updateMessageFlagsBatch, type MessageFlagsPatch } from "./sync-flags.js";
-import { AgentMailStateEvents } from "./agent/mail-state-events.js";
-import { OAuthService } from "./oauth.js";
+import type { AgentMailStateEvents } from "./agent/mail-state-events.js";
+import type { OAuthService } from "./oauth.js";
 import { getSyncMessageLimit } from "./settings.js";
 
 // In-memory batch jobs for predicate-scoped ("select all matching this view")

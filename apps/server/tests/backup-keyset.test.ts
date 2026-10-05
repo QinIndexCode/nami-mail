@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import type * as mailModule from "../src/mail.js";
 
 // The backup used to read the whole messages table in one SELECT and group it
 // in memory, looking the account row up once per message. It now streams the
@@ -18,7 +19,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
 });
 
@@ -665,3 +666,4 @@ describe("backup holds a bounded number of rows", () => {
     expect(accountQueries[0]?.rows).toBe(LARGE_ACCOUNTS.length);
   });
 });
+

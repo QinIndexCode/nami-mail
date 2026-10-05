@@ -7,9 +7,11 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
-import { AgentService, AgentServiceError } from "../agent-service.js";
+import type { AgentService} from "../agent-service.js";
+import { AgentServiceError } from "../agent-service.js";
 import { BuiltinTranslationChain } from "../builtin-translation.js";
-import { TranslationConfigurationStore, type TranslationConfigurationPatch, type TranslationConfigurationSummary } from "../translation-configuration.js";
+import type { TranslationConfigurationStore} from "../translation-configuration.js";
+import { type TranslationConfigurationPatch, type TranslationConfigurationSummary } from "../translation-configuration.js";
 import { MAX_TRANSLATION_TEXT_LENGTH, TranslationServiceError, splitTranslationChunks, translationErrorStatus, translationLanguageForLocale } from "../translation.js";
 import { protectTranslationUrls, restoreTranslationUrls } from "../translation-url-guard.js";
 import { buildTranslationBlocks, splitTranslatedBlock } from "../translation-segments.js";

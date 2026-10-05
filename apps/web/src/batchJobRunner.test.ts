@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BatchJobCreatePayload } from "./api";
 import { createBatchJobRunner, type BatchJobRunnerDeps } from "./batchJobRunner";
+import type * as apiModule from "./api";
 
 const apiMocks = vi.hoisted(() => ({
   batchJobCreate: vi.fn(),
@@ -9,7 +10,7 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api")>();
+  const actual = await importOriginal<typeof apiModule>();
   return {
     ...actual,
     api: {
@@ -272,3 +273,4 @@ describe("createBatchJobRunner", () => {
     expect(onSettled).toHaveBeenCalledTimes(1);
   });
 });
+

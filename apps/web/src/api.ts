@@ -818,15 +818,19 @@ export const api = {
     return request<{ ok: boolean; items: CalendarEvent[] }>(`/api/calendar/events?${searchParams.toString()}`);
   },
   createCalendarEvent: (input: CalendarEventInput) =>
-    request<{ ok: boolean; event: CalendarEvent }>("/api/calendar/events", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
+    request<{ ok: boolean; event: CalendarEvent }>("/api/calendar/events", { method: "POST", body: JSON.stringify(input) }),
   updateCalendarEvent: (id: string, patch: CalendarEventUpdate) =>
-    request<{ ok: boolean; event: CalendarEvent }>(`/api/calendar/events/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      body: JSON.stringify(patch),
-    }),
+    request<{ ok: boolean; event: CalendarEvent }>(`/api/calendar/events/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteCalendarEvent: (id: string) =>
     request<{ ok: boolean }>(`/api/calendar/events/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  importCalendarEvents: (events: CalendarEventInput[], mode: "append" | "replace" = "append") =>
+    request<{ ok: boolean; imported: number; updated: number; replaced: boolean }>("/api/calendar/import", { method: "POST", body: JSON.stringify({ events, mode }) }),
+  importCalendarIcs: (ics: string, mode: "append" | "replace" = "append") =>
+    request<{ ok: boolean; imported: number; updated: number; replaced: boolean }>("/api/calendar/import-ics", { method: "POST", body: JSON.stringify({ ics, mode }) }),
+  exportCalendarIcsUrl: (range?: { after?: string; before?: string }) => {
+    const q = new URLSearchParams();
+    if (range?.after) q.set("after", range.after);
+    if (range?.before) q.set("before", range.before);
+    return `/api/calendar/export.ics${q.toString() ? `?${q.toString()}` : ""}`;
+  },
 };

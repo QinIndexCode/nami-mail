@@ -1,7 +1,6 @@
 import type { DatabaseHandle } from "./db.js";
 import { accountById } from "./account-store.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
-import type { AccountRecord } from "./types.js";
 import { moveActionBlockedError, messagePayloadForRow, type MessageStorageRow } from "./message-storage.js";
 
 export type MessageSourceDownload = {

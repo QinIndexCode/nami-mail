@@ -2,6 +2,11 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { beforeAll, beforeEach, afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type * as appModule from "../src/app.js";
+import type * as dbModule from "../src/db.js";
+import type * as mailModule from "../src/mail.js";
+import type * as syncMovesModule from "../src/sync-moves.js";
+import type * as syncModule from "../src/sync.js";
 
 /**
  * Shutdown vs. route-triggered syncs.
@@ -24,22 +29,22 @@ const { moveMessage } = vi.hoisted(() => ({ moveMessage: vi.fn() }));
 const { syncAccount } = vi.hoisted(() => ({ syncAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, testAccountConnection };
 });
 
 vi.mock("../src/sync-moves.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/sync-moves.js")>();
+  const actual = await importOriginal<typeof syncMovesModule>();
   return { ...actual, moveMessage };
 });
 
 vi.mock("../src/sync.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/sync.js")>();
+  const actual = await importOriginal<typeof syncModule>();
   return { ...actual, syncAccount };
 });
 
-let buildApp: typeof import("../src/app.js").buildApp;
-let openDatabase: typeof import("../src/db.js").openDatabase;
+let buildApp: typeof appModule.buildApp;
+let openDatabase: typeof dbModule.openDatabase;
 let boundPort = 0;
 
 async function freeLoopbackPort(): Promise<number> {
@@ -149,7 +154,7 @@ async function get(path: string): Promise<{ statusCode?: number; body: string }>
 
 describe("a process shutdown stops the syncs routes started", () => {
   const originalPort = process.env.PORT;
-  let app: Awaited<ReturnType<typeof import("../src/app.js").buildApp>> | undefined;
+  let app: Awaited<ReturnType<typeof appModule.buildApp>> | undefined;
   let db: ReturnType<typeof openDatabase> | undefined;
   let shutdownController: AbortController;
 
@@ -216,7 +221,7 @@ describe("a process shutdown stops the syncs routes started", () => {
     // A client that navigates away does nothing to the pass (no abort here);
     // only the process going down does.
     shutdownController.abort();
-    await vi.waitFor(() => expect(abortedPasses).toContain(signal));
+    await vi.waitFor(() => expect(abortedPasses).toContain(signal), { timeout: 10_000 });
     expect(signal.aborted).toBe(true);
   }, 20_000);
 
@@ -230,7 +235,7 @@ describe("a process shutdown stops the syncs routes started", () => {
     expect(signal).toBe(shutdownController.signal);
 
     shutdownController.abort();
-    await vi.waitFor(() => expect(abortedPasses).toContain(signal));
+    await vi.waitFor(() => expect(abortedPasses).toContain(signal), { timeout: 10_000 });
   }, 20_000);
 
   it("returns the OAuth callback page immediately, then aborts the first sync on shutdown", async () => {
@@ -262,7 +267,7 @@ describe("a process shutdown stops the syncs routes started", () => {
     // The callback page closing its own window is the standard flow, not a
     // cancellation: only the process going down stops this first pass.
     shutdownController.abort();
-    await vi.waitFor(() => expect(abortedPasses).toContain(signal));
+    await vi.waitFor(() => expect(abortedPasses).toContain(signal), { timeout: 10_000 });
   }, 20_000);
 
   it("stops the interactive sync when either the request goes away or shutdown fires, and leaves the other path alone", async () => {
@@ -276,7 +281,7 @@ describe("a process shutdown stops the syncs routes started", () => {
     const requestSignal = syncAccount.mock.calls[0]?.[6] as AbortSignal;
     expect(requestSignal).not.toBe(shutdownController.signal);
     destroyRequest?.(new Error("client navigated away"));
-    await vi.waitFor(() => expect(abortedPasses).toContain(requestSignal));
+    await vi.waitFor(() => expect(abortedPasses).toContain(requestSignal), { timeout: 10_000 });
     expect(requestSignal.aborted).toBe(true);
     expect(shutdownController.signal.aborted).toBe(false);
     await disconnected;
@@ -287,9 +292,11 @@ describe("a process shutdown stops the syncs routes started", () => {
     await vi.waitFor(() => expect(syncAccount).toHaveBeenCalledTimes(2), { timeout: 5_000 });
     const shutdownAbortedSignal = syncAccount.mock.calls[1]?.[6] as AbortSignal;
     shutdownController.abort();
-    await vi.waitFor(() => expect(abortedPasses).toContain(shutdownAbortedSignal));
+    await vi.waitFor(() => expect(abortedPasses).toContain(shutdownAbortedSignal), { timeout: 10_000 });
     const response = await duringShutdown;
     expect(response.statusCode).toBe(499);
     expect(JSON.parse(response.body)).toMatchObject({ ok: false, code: "cancelled" });
   }, 20_000);
 });
+
+

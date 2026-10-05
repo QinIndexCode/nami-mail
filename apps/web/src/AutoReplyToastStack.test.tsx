@@ -1,8 +1,13 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { I18nProvider, translate } from "./i18n";
 import { AutoReplyToastStack, autoReplyNoticeKey } from "./AutoReplyToastStack";
 import type { DesktopAutoReplyNotice } from "./desktop";
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const zh = (key: string, values?: Record<string, string | number>) => translate("zh-CN", key, values);
 
@@ -87,5 +92,32 @@ describe("auto-reply toast stack", () => {
   it("keys pending drafts by confirmation id and sent replies by message id", () => {
     expect(autoReplyNoticeKey(pending)).toBe("pending:confirm_auto_reply_1");
     expect(autoReplyNoticeKey(sent)).toBe("sent:msg-2");
+  });
+
+  it("does not auto-dismiss pending approval notices when timer expires (manual only)", () => {
+    vi.useFakeTimers();
+    try {
+      let dismissed = false;
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      act(() => {
+        root.render(
+          <I18nProvider>
+            <AutoReplyToastStack notices={[pending]} onDismiss={() => { dismissed = true; }} />
+          </I18nProvider>,
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(2 * 60 * 60 * 1000);
+      });
+      expect(dismissed).toBe(false);
+      act(() => {
+        root.unmount();
+      });
+      container.remove();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

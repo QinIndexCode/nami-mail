@@ -1,3 +1,5 @@
+import { triggerBlobDownload } from "./attachmentZip";
+
 /**
  * Client-side generators for vCard (.vcf) and iCalendar (.ics) exports.
  * Both are plain text formats generated locally; nothing leaves the device.
@@ -98,3 +100,25 @@ export function exportDownloadFilename(text: string, fallback: string, extension
     .trim();
   return `${cleaned || fallback}.${extension}`;
 }
+
+export function triggerContactVcfExport(from: { name: string; address: string }): string {
+  const card = vCardText(from.name, from.address);
+  const filename = exportDownloadFilename(from.name, "contact", "vcf");
+  triggerBlobDownload(new Blob([card], { type: "text/vcard" }), filename);
+  return filename;
+}
+
+export function triggerCalendarIcsExport(message: { id: string; subject: string; from: { address: string }; sentAt: string }): string {
+  const start = new Date(message.sentAt);
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+  const ics = calendarEventIcs({
+    summary: message.subject || "(no subject)",
+    description: message.from.address,
+    start,
+    end,
+    uid: `${message.id}@nami-mail`,
+  });
+  const filename = exportDownloadFilename(message.subject, "event", "ics");
+  triggerBlobDownload(new Blob([ics], { type: "text/calendar" }), filename);
+  return filename;
+}

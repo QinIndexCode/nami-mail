@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as mailModule from "../src/mail.js";
+import type * as syncSentVerifyModule from "../src/sync-sent-verify.js";
 
 const { sendMail } = vi.hoisted(() => ({ sendMail: vi.fn() }));
 const { scheduleSentSubmissionVerification } = vi.hoisted(() => ({ scheduleSentSubmissionVerification: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, sendMail };
 });
 
 vi.mock("../src/sync-sent-verify.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/sync-sent-verify.js")>();
+  const actual = await importOriginal<typeof syncSentVerifyModule>();
   return { ...actual, scheduleSentSubmissionVerification };
 });
 
@@ -167,3 +169,4 @@ describe("outbox send route", () => {
     expect(records.body).not.toContain("HTML-MUST-NOT-APPEAR-IN-OUTBOX-DTO");
   });
 });
+

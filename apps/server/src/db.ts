@@ -243,7 +243,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
   background_intensity INTEGER NOT NULL DEFAULT 80 CHECK (background_intensity BETWEEN 0 AND 100),
   notifications_enabled INTEGER NOT NULL DEFAULT 1 CHECK (notifications_enabled IN (0, 1)),
   notify_when_focused INTEGER NOT NULL DEFAULT 0 CHECK (notify_when_focused IN (0, 1)),
-  notification_sound TEXT NOT NULL DEFAULT 'soft' CHECK (notification_sound IN ('system', 'soft', 'bright', 'none')),
+  notification_sound TEXT NOT NULL DEFAULT 'soft' CHECK (notification_sound IN ('system', 'soft', 'bright', 'chime', 'bubble', 'calm', 'ping', 'none')),
   refresh_interval_seconds INTEGER NOT NULL DEFAULT 60 CHECK (refresh_interval_seconds IN (30, 60, 180, 300)),
   realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1)),
   sync_message_limit INTEGER NOT NULL DEFAULT 2000 CHECK (sync_message_limit IN (0, 200, 500, 1000, 2000, 5000)),
@@ -362,6 +362,7 @@ CREATE TABLE IF NOT EXISTS mail_templates (
 -- date-range queries used by the month view never need to decrypt rows.
 CREATE TABLE IF NOT EXISTS calendar_events (
   id TEXT PRIMARY KEY,
+  uid TEXT,
   title_enc TEXT NOT NULL,
   description_enc TEXT NOT NULL,
   location_enc TEXT NOT NULL,
@@ -375,6 +376,7 @@ CREATE TABLE IF NOT EXISTS calendar_events (
 
 CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start_at);
 CREATE INDEX IF NOT EXISTS idx_calendar_events_end ON calendar_events(end_at);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_uid ON calendar_events(uid) WHERE uid IS NOT NULL;
 
 -- Durable write-operation queue. Every user-initiated message write (move,
 -- flag update) is recorded here before it dispatches to the provider, so a
@@ -520,6 +522,54 @@ export function openDatabase(databasePath: string): DatabaseHandle {
   return db;
 }
 
+function rebuildAppSettingsTable(db: DatabaseHandle): void {
+  db.prepare(`
+    CREATE TABLE app_settings_rebuilt (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      theme TEXT NOT NULL DEFAULT 'system' CHECK (theme IN ('system', 'light', 'dark')),
+      background_preset TEXT NOT NULL DEFAULT 'none' CHECK (background_preset IN ('none', 'paper', 'mist', 'coast', 'dawn', 'night', 'custom')),
+      background_intensity INTEGER NOT NULL DEFAULT 80 CHECK (background_intensity BETWEEN 0 AND 100),
+      notifications_enabled INTEGER NOT NULL DEFAULT 1 CHECK (notifications_enabled IN (0, 1)),
+      notify_when_focused INTEGER NOT NULL DEFAULT 0 CHECK (notify_when_focused IN (0, 1)),
+      notification_sound TEXT NOT NULL DEFAULT 'soft' CHECK (notification_sound IN ('system', 'soft', 'bright', 'chime', 'bubble', 'calm', 'ping', 'none')),
+      refresh_interval_seconds INTEGER NOT NULL DEFAULT 60 CHECK (refresh_interval_seconds IN (30, 60, 180, 300)),
+      realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1)),
+      sync_message_limit INTEGER NOT NULL DEFAULT 2000 CHECK (sync_message_limit IN (0, 200, 500, 1000, 2000, 5000)),
+      close_behavior TEXT NOT NULL DEFAULT 'ask' CHECK (close_behavior IN ('ask', 'tray', 'quit')),
+      launch_at_startup INTEGER NOT NULL DEFAULT 0 CHECK (launch_at_startup IN (0, 1)),
+      global_shortcut_enabled INTEGER NOT NULL DEFAULT 0 CHECK (global_shortcut_enabled IN (0, 1)),
+      locale TEXT NOT NULL DEFAULT 'zh-CN',
+      translation_configuration TEXT,
+      translation_configuration_version INTEGER NOT NULL DEFAULT 0,
+      agent_tool_round_limit INTEGER NOT NULL DEFAULT 30 CHECK (agent_tool_round_limit BETWEEN 1 AND 50),
+      list_density TEXT NOT NULL DEFAULT 'comfortable' CHECK (list_density IN ('comfortable', 'compact')),
+      avatar_gravatar_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_gravatar_enabled IN (0, 1)),
+      avatar_bimi_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_bimi_enabled IN (0, 1)),
+      agent_access_level TEXT NOT NULL DEFAULT 'send-confirmed' CHECK (agent_access_level IN ('read-only', 'send-confirmed', 'full-access')),
+      agent_cli_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_cli_access_level IN ('read-only', 'send-confirmed', 'full-access')),
+      agent_mcp_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_mcp_access_level IN ('read-only', 'send-confirmed', 'full-access')),
+      custom_background_filename TEXT,
+      auto_reply_config TEXT,
+      builtin_templates_seeded INTEGER NOT NULL DEFAULT 0 CHECK (builtin_templates_seeded IN (0, 1)),
+      updated_at TEXT NOT NULL
+    )
+  `).run();
+  const currentCols = (db.prepare("PRAGMA table_info(app_settings)").all() as Array<{ name: string }>).map((c) => c.name);
+  const knownCols = [
+    "id", "theme", "background_preset", "background_intensity", "notifications_enabled",
+    "notify_when_focused", "notification_sound", "refresh_interval_seconds", "realtime_push_enabled",
+    "sync_message_limit", "close_behavior", "launch_at_startup", "global_shortcut_enabled",
+    "locale", "translation_configuration", "translation_configuration_version",
+    "agent_tool_round_limit", "list_density", "avatar_gravatar_enabled", "avatar_bimi_enabled",
+    "agent_access_level", "agent_cli_access_level", "agent_mcp_access_level",
+    "custom_background_filename", "auto_reply_config", "builtin_templates_seeded", "updated_at",
+  ];
+  const colList = knownCols.filter((col) => currentCols.includes(col)).join(", ");
+  db.prepare(`INSERT INTO app_settings_rebuilt (${colList}) SELECT ${colList} FROM app_settings`).run();
+  db.prepare("DROP TABLE app_settings").run();
+  db.prepare("ALTER TABLE app_settings_rebuilt RENAME TO app_settings").run();
+}
+
 function migrateDatabase(db: DatabaseHandle): void {
   const accountColumns = db.prepare("PRAGMA table_info(accounts)").all() as Array<{ name: string }>;
   const addAccountColumn = (name: string, definition: string) => {
@@ -647,71 +697,49 @@ function migrateDatabase(db: DatabaseHandle): void {
     db.exec("ALTER TABLE folders ADD COLUMN uid_validity TEXT");
   }
 
+  // Calendar events carry the ICS UID so re-importing the same invite (or the
+  // same event attached to two different mails) updates in place instead of
+  // double-booking. Legacy rows stay NULL: they keep behaving like
+  // uid-less manual events until the next import of the same file backfills
+  // them. The uid stays plaintext because it is a public identifier in the
+  // source ICS and the dedup lookup must query it directly.
+  const calendarColumns = db.prepare("PRAGMA table_info(calendar_events)").all() as Array<{ name: string }>;
+  if (!calendarColumns.some((column) => column.name === "uid")) {
+    db.exec("ALTER TABLE calendar_events ADD COLUMN uid TEXT");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_calendar_events_uid ON calendar_events(uid) WHERE uid IS NOT NULL");
+
   const settingsColumns = db.prepare("PRAGMA table_info(app_settings)").all() as Array<{ name: string }>;
-  if (!settingsColumns.some((column) => column.name === "close_behavior")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN close_behavior TEXT NOT NULL DEFAULT 'ask' CHECK (close_behavior IN ('ask', 'tray', 'quit'))");
-  }
-  if (!settingsColumns.some((column) => column.name === "locale")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN locale TEXT NOT NULL DEFAULT 'zh-CN'");
-  }
-  if (!settingsColumns.some((column) => column.name === "translation_configuration")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN translation_configuration TEXT");
-  }
-  if (!settingsColumns.some((column) => column.name === "translation_configuration_version")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN translation_configuration_version INTEGER NOT NULL DEFAULT 0");
-  }
-  if (!settingsColumns.some((column) => column.name === "list_density")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN list_density TEXT NOT NULL DEFAULT 'comfortable' CHECK (list_density IN ('comfortable', 'compact'))");
-  }
-  if (!settingsColumns.some((column) => column.name === "avatar_gravatar_enabled")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN avatar_gravatar_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_gravatar_enabled IN (0, 1))");
-  }
-  if (!settingsColumns.some((column) => column.name === "avatar_bimi_enabled")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN avatar_bimi_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_bimi_enabled IN (0, 1))");
-  }
-  if (!settingsColumns.some((column) => column.name === "agent_access_level")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN agent_access_level TEXT NOT NULL DEFAULT 'send-confirmed' CHECK (agent_access_level IN ('read-only', 'send-confirmed', 'full-access'))");
-  }
-  if (!settingsColumns.some((column) => column.name === "agent_cli_access_level")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN agent_cli_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_cli_access_level IN ('read-only', 'send-confirmed', 'full-access'))");
-  }
-  if (!settingsColumns.some((column) => column.name === "agent_mcp_access_level")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN agent_mcp_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_mcp_access_level IN ('read-only', 'send-confirmed', 'full-access'))");
-  }
-  if (!settingsColumns.some((column) => column.name === "builtin_templates_seeded")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN builtin_templates_seeded INTEGER NOT NULL DEFAULT 0 CHECK (builtin_templates_seeded IN (0, 1))");
-  }
-  if (!settingsColumns.some((column) => column.name === "auto_reply_config")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN auto_reply_config TEXT");
-  }
-  if (!settingsColumns.some((column) => column.name === "agent_tool_round_limit")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN agent_tool_round_limit INTEGER NOT NULL DEFAULT 30 CHECK (agent_tool_round_limit BETWEEN 1 AND 50)");
-  }
+  const addSettingsColumn = (name: string, definition: string) => {
+    if (!settingsColumns.some((column) => column.name === name)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${definition}`);
+  };
+  addSettingsColumn("close_behavior", "close_behavior TEXT NOT NULL DEFAULT 'ask' CHECK (close_behavior IN ('ask', 'tray', 'quit'))");
+  addSettingsColumn("locale", "locale TEXT NOT NULL DEFAULT 'zh-CN'");
+  addSettingsColumn("translation_configuration", "translation_configuration TEXT");
+  addSettingsColumn("translation_configuration_version", "translation_configuration_version INTEGER NOT NULL DEFAULT 0");
+  addSettingsColumn("list_density", "list_density TEXT NOT NULL DEFAULT 'comfortable' CHECK (list_density IN ('comfortable', 'compact'))");
+  addSettingsColumn("avatar_gravatar_enabled", "avatar_gravatar_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_gravatar_enabled IN (0, 1))");
+  addSettingsColumn("avatar_bimi_enabled", "avatar_bimi_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_bimi_enabled IN (0, 1))");
+  addSettingsColumn("agent_access_level", "agent_access_level TEXT NOT NULL DEFAULT 'send-confirmed' CHECK (agent_access_level IN ('read-only', 'send-confirmed', 'full-access'))");
+  addSettingsColumn("agent_cli_access_level", "agent_cli_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_cli_access_level IN ('read-only', 'send-confirmed', 'full-access'))");
+  addSettingsColumn("agent_mcp_access_level", "agent_mcp_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_mcp_access_level IN ('read-only', 'send-confirmed', 'full-access'))");
+  addSettingsColumn("builtin_templates_seeded", "builtin_templates_seeded INTEGER NOT NULL DEFAULT 0 CHECK (builtin_templates_seeded IN (0, 1))");
+  addSettingsColumn("auto_reply_config", "auto_reply_config TEXT");
+  addSettingsColumn("agent_tool_round_limit", "agent_tool_round_limit INTEGER NOT NULL DEFAULT 30 CHECK (agent_tool_round_limit BETWEEN 1 AND 50)");
   // The Agent tool round limit default moved from 15 to 30. Rows still holding
   // the old default (never explicitly configured) follow along; values the
   // user set on purpose are left untouched.
   db.prepare("UPDATE app_settings SET agent_tool_round_limit = 30 WHERE agent_tool_round_limit = 15").run();
-  if (!settingsColumns.some((column) => column.name === "sync_message_limit")) {
-    // Per-folder mailbox sync cap: 0 syncs the whole mailbox.
-    // The CHECK mirrors the UI picker ladder in settings.ts. The default never
-    // existed in the database before (the old 200 lived in the environment), so
-    // the ALTER's DEFAULT covers every upgrading row without a follow-up update.
-    db.exec("ALTER TABLE app_settings ADD COLUMN sync_message_limit INTEGER NOT NULL DEFAULT 2000 CHECK (sync_message_limit IN (0, 200, 500, 1000, 2000, 5000))");
-  }
-  if (!settingsColumns.some((column) => column.name === "realtime_push_enabled")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1))");
-  }
-  if (!settingsColumns.some((column) => column.name === "launch_at_startup")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN launch_at_startup INTEGER NOT NULL DEFAULT 0 CHECK (launch_at_startup IN (0, 1))");
-  }
-  if (!settingsColumns.some((column) => column.name === "global_shortcut_enabled")) {
-    db.exec("ALTER TABLE app_settings ADD COLUMN global_shortcut_enabled INTEGER NOT NULL DEFAULT 0 CHECK (global_shortcut_enabled IN (0, 1))");
-  }
+  addSettingsColumn("sync_message_limit", "sync_message_limit INTEGER NOT NULL DEFAULT 2000 CHECK (sync_message_limit IN (0, 200, 500, 1000, 2000, 5000))");
+  addSettingsColumn("realtime_push_enabled", "realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1))");
+  addSettingsColumn("launch_at_startup", "launch_at_startup INTEGER NOT NULL DEFAULT 0 CHECK (launch_at_startup IN (0, 1))");
+  addSettingsColumn("global_shortcut_enabled", "global_shortcut_enabled INTEGER NOT NULL DEFAULT 0 CHECK (global_shortcut_enabled IN (0, 1))");
   // Three-level permission model: the retired `draft-only` value maps to the
   // conservative read-only level so an existing user is never silently granted
   // write capabilities by the upgrade (the SQLite CHECK still permits the old
   // value, so the UPDATE passes; new writes only ever use the three levels).
   db.exec("UPDATE app_settings SET agent_access_level = 'read-only' WHERE agent_access_level = 'draft-only'");
+  addSettingsColumn("notification_sound", "notification_sound TEXT NOT NULL DEFAULT 'soft' CHECK (notification_sound IN ('system', 'soft', 'bright', 'chime', 'bubble', 'calm', 'ping', 'none'))");
 
   // The background intensity range widened from 0-80 to 0-100 together with
   // the "no background" shipped default. SQLite cannot ALTER a CHECK
@@ -725,66 +753,27 @@ function migrateDatabase(db: DatabaseHandle): void {
   if (!intensityMigrationDone) {
     const appSettingsSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'").get() as { sql?: string } | undefined)?.sql ?? "";
     if (appSettingsSql.includes("background_intensity BETWEEN 0 AND 80")) {
-      db.prepare(`
-        CREATE TABLE app_settings_rebuilt (
-          id INTEGER PRIMARY KEY CHECK (id = 1),
-          theme TEXT NOT NULL DEFAULT 'system' CHECK (theme IN ('system', 'light', 'dark')),
-          background_preset TEXT NOT NULL DEFAULT 'none' CHECK (background_preset IN ('none', 'paper', 'mist', 'coast', 'dawn', 'night', 'custom')),
-          background_intensity INTEGER NOT NULL DEFAULT 80 CHECK (background_intensity BETWEEN 0 AND 100),
-          notifications_enabled INTEGER NOT NULL DEFAULT 1 CHECK (notifications_enabled IN (0, 1)),
-          notify_when_focused INTEGER NOT NULL DEFAULT 0 CHECK (notify_when_focused IN (0, 1)),
-          notification_sound TEXT NOT NULL DEFAULT 'soft' CHECK (notification_sound IN ('system', 'soft', 'bright', 'none')),
-          refresh_interval_seconds INTEGER NOT NULL DEFAULT 60 CHECK (refresh_interval_seconds IN (30, 60, 180, 300)),
-          realtime_push_enabled INTEGER NOT NULL DEFAULT 1 CHECK (realtime_push_enabled IN (0, 1)),
-          sync_message_limit INTEGER NOT NULL DEFAULT 2000 CHECK (sync_message_limit IN (0, 200, 500, 1000, 2000, 5000)),
-          close_behavior TEXT NOT NULL DEFAULT 'ask' CHECK (close_behavior IN ('ask', 'tray', 'quit')),
-          launch_at_startup INTEGER NOT NULL DEFAULT 0 CHECK (launch_at_startup IN (0, 1)),
-          global_shortcut_enabled INTEGER NOT NULL DEFAULT 0 CHECK (global_shortcut_enabled IN (0, 1)),
-          locale TEXT NOT NULL DEFAULT 'zh-CN',
-          translation_configuration TEXT,
-          translation_configuration_version INTEGER NOT NULL DEFAULT 0,
-          agent_tool_round_limit INTEGER NOT NULL DEFAULT 30 CHECK (agent_tool_round_limit BETWEEN 1 AND 50),
-          list_density TEXT NOT NULL DEFAULT 'comfortable' CHECK (list_density IN ('comfortable', 'compact')),
-          avatar_gravatar_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_gravatar_enabled IN (0, 1)),
-          avatar_bimi_enabled INTEGER NOT NULL DEFAULT 0 CHECK (avatar_bimi_enabled IN (0, 1)),
-          agent_access_level TEXT NOT NULL DEFAULT 'send-confirmed' CHECK (agent_access_level IN ('read-only', 'send-confirmed', 'full-access')),
-          agent_cli_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_cli_access_level IN ('read-only', 'send-confirmed', 'full-access')),
-          agent_mcp_access_level TEXT NOT NULL DEFAULT 'read-only' CHECK (agent_mcp_access_level IN ('read-only', 'send-confirmed', 'full-access')),
-          custom_background_filename TEXT,
-          auto_reply_config TEXT,
-          builtin_templates_seeded INTEGER NOT NULL DEFAULT 0 CHECK (builtin_templates_seeded IN (0, 1)),
-          updated_at TEXT NOT NULL
-        )
-      `).run();
-      db.prepare(`
-        INSERT INTO app_settings_rebuilt (
-          id, theme, background_preset, background_intensity, notifications_enabled,
-          notify_when_focused, notification_sound, refresh_interval_seconds,
-          realtime_push_enabled, sync_message_limit, close_behavior, launch_at_startup,
-          global_shortcut_enabled, locale, translation_configuration,
-          translation_configuration_version, agent_tool_round_limit, list_density,
-          avatar_gravatar_enabled, avatar_bimi_enabled, agent_access_level,
-          agent_cli_access_level, agent_mcp_access_level, custom_background_filename,
-          auto_reply_config, builtin_templates_seeded, updated_at
-        )
-        SELECT
-          id, theme, background_preset, background_intensity, notifications_enabled,
-          notify_when_focused, notification_sound, refresh_interval_seconds,
-          realtime_push_enabled, sync_message_limit, close_behavior, launch_at_startup,
-          global_shortcut_enabled, locale, translation_configuration,
-          translation_configuration_version, agent_tool_round_limit, list_density,
-          avatar_gravatar_enabled, avatar_bimi_enabled, agent_access_level,
-          agent_cli_access_level, agent_mcp_access_level, custom_background_filename,
-          auto_reply_config, builtin_templates_seeded, updated_at
-        FROM app_settings
-      `).run();
-      db.prepare("DROP TABLE app_settings").run();
-      db.prepare("ALTER TABLE app_settings_rebuilt RENAME TO app_settings").run();
+      rebuildAppSettingsTable(db);
     }
     db.prepare(`
       INSERT INTO data_migrations (id, completed_at) VALUES (?, ?)
       ON CONFLICT(id) DO UPDATE SET completed_at = excluded.completed_at
     `).run(APP_SETTINGS_INTENSITY_MIGRATION_ID, new Date().toISOString());
+  }
+
+  // Expanded notification sound palette. Databases created with the older 4-value
+  // check constraint rebuild into the current shape so new sound keys can be saved.
+  const APP_SETTINGS_SOUND_MIGRATION_ID = "app_settings_sound_check_v2";
+  const soundMigrationDone = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?").get(APP_SETTINGS_SOUND_MIGRATION_ID);
+  if (!soundMigrationDone) {
+    const appSettingsSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'").get() as { sql?: string } | undefined)?.sql ?? "";
+    if (appSettingsSql && appSettingsSql.includes("CHECK (notification_sound IN ('system', 'soft', 'bright', 'none'))")) {
+      rebuildAppSettingsTable(db);
+    }
+    db.prepare(`
+      INSERT INTO data_migrations (id, completed_at) VALUES (?, ?)
+      ON CONFLICT(id) DO UPDATE SET completed_at = excluded.completed_at
+    `).run(APP_SETTINGS_SOUND_MIGRATION_ID, new Date().toISOString());
   }
 
   // Write-behind flags pushes add a fourth operation kind. Databases created

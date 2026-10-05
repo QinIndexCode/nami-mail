@@ -22,7 +22,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { api, type TranslationConfiguration, type TranslationProviderId } from "./api";
-import type { AgentBootstrap, AgentProviderList, ExternalPairingSummary } from "./agentTypes";
+import type { AgentBootstrap, AgentProviderList } from "./agentTypes";
 import { desktopBridge, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
 import { searchSettings } from "./settings/settings-search";
 
@@ -40,28 +40,9 @@ import {
 import { presentUpdateSnapshot } from "./updatePresentation";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
-import type {
-  Account,
-  AgentAccessLevel,
-  AppSettings,
-  AppSettingsPatch,
-
-  BackgroundPreset,
-
-
-  NotificationSound,
-} from "./types";
-import { defaultAppSettings } from "./types";
+import { defaultAppSettings, type Account, type AgentAccessLevel, type AppSettings, type AppSettingsPatch, type BackgroundPreset, type NotificationSound } from "./types";
 import { FormNotice, type Notice } from "./FormNotice";
-import {
-  errorMessage,
-  backgroundContentTypeForFile,
-  revokeDemoObjectUrl,
-
-  expandedThemedSelectOwnsEscape,
-  maxBackgroundUploadBytes,
-  type PendingSettingsConfirmation,
-} from "./settings/settings-utils";
+import { errorMessage, backgroundContentTypeForFile, revokeDemoObjectUrl, expandedThemedSelectOwnsEscape, maxBackgroundUploadBytes, type PendingSettingsConfirmation } from "./settings/settings-utils";
 import {
   SETTINGS_CATEGORY_STORAGE_KEY,
   SETTINGS_NAV_GROUPS,
@@ -195,9 +176,6 @@ export default function SettingsModal({
   const [autoReplyDecisionsOpen, setAutoReplyDecisionsOpen] = useState(false);
   const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
   const [autoReplySandboxOpen, setAutoReplySandboxOpen] = useState(false);
-  const [externalGuideCopied, setExternalGuideCopied] = useState<string | null>(null);
-  const [externalPairings, setExternalPairings] = useState<ExternalPairingSummary[] | null>(null);
-  const [externalPairingsError, setExternalPairingsError] = useState<unknown>(null);
   // Reported by the models panel: a form dialog stacked over it, and whether a
   // save / connection check is running there. Both gate this dialog's own close
   // paths, because a models save also checks the connection and can take tens
@@ -239,7 +217,6 @@ export default function SettingsModal({
   }, [categoryRequest, modelsOverlayOpen, filtersOverlayOpen, connectionsOverlayOpen]);
   // The embedded models panel hosts both inner tabs (providers / MCP servers);
   // switching them swaps the body in place so the panel never remounts.
-  const [externalPairingsReload, setExternalPairingsReload] = useState(0);
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadButton = useRef<HTMLButtonElement>(null);
   const settingsDialog = useRef<HTMLElement>(null);
@@ -321,27 +298,6 @@ export default function SettingsModal({
   useEffect(() => {
     setIntensityDraft(currentSettings.backgroundIntensity);
   }, [currentSettings.backgroundIntensity]);
-
-  useEffect(() => {
-    if (demoMode) {
-      setExternalPairings([]);
-      setExternalPairingsError(null);
-      return undefined;
-    }
-    let active = true;
-    setExternalPairingsError(null);
-    api.agentPairings().then(({ pairings }) => {
-      if (active) setExternalPairings(pairings);
-    }).catch((error: unknown) => {
-      if (active) {
-        setExternalPairings(null);
-        setExternalPairingsError(error);
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, [demoMode, externalPairingsReload]);
 
   useEffect(() => {
     if (demoMode) {
@@ -648,22 +604,14 @@ export default function SettingsModal({
     new Notification(t("app.name"), { body: t("settings.notifications.testBody"), silent });
   };
 
-  const playSoundTest = async () => {
-    if (currentSettings.notificationSound === "none") {
-      setNotice({ kind: "success", message: t("settings.sound.silentTest") });
-      return;
-    }
-    if (currentSettings.notificationSound === "system") {
-      await notifyInBrowser(false);
-      return;
-    }
+  const previewSound = async (sound: NotificationSound) => {
+    if (sound === "none") return;
     if (onTestSound) {
-      await onTestSound(currentSettings.notificationSound);
+      await onTestSound(sound);
       return;
     }
     const primed = await primeNotificationSound();
-    if (primed && playNotificationSound(currentSettings.notificationSound)) return;
-    await notifyInBrowser(false);
+    if (primed) playNotificationSound(sound);
   };
 
   const testNotification = async () => {
@@ -676,7 +624,7 @@ export default function SettingsModal({
         // process custom sound on desktop), so nothing extra to play here.
         await onTestNotification(currentSettings);
       } else {
-        const customSound = currentSettings.notificationSound === "soft" || currentSettings.notificationSound === "bright";
+        const customSound = currentSettings.notificationSound !== "none" && currentSettings.notificationSound !== "system";
         if (customSound) {
           const primed = await primeNotificationSound();
           const audible = primed && playNotificationSound(currentSettings.notificationSound);
@@ -693,21 +641,6 @@ export default function SettingsModal({
       setNotice({ kind: "success", message: t("settings.notifications.testSent") });
     } catch (error) {
       setNotice({ kind: "error", message: errorMessage(error, t("settings.error.sendTestNotification"), t) });
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const testSound = async () => {
-    if (busyAction) return;
-    setBusyAction("sound-test");
-    setNotice(null);
-    try {
-      await playSoundTest();
-      if (currentSettings.notificationSound === "system") setNotice({ kind: "success", message: t("settings.sound.systemTestSent") });
-      else if (currentSettings.notificationSound !== "none") setNotice({ kind: "success", message: t("settings.sound.testPlayed") });
-    } catch (error) {
-      setNotice({ kind: "error", message: errorMessage(error, t("settings.error.playSound"), t) });
     } finally {
       setBusyAction(null);
     }
@@ -952,14 +885,14 @@ export default function SettingsModal({
             : pendingConfirmation === "discard-translation-changes"
             ? t("settings.confirmation.discardTranslationChangesAction")
             : t("settings.confirmation.restoreDefaultsAction");
-  const selectCategory = (next: SettingsCategoryId) => {
+  const selectCategory = useCallback((next: SettingsCategoryId) => {
     if (next === activeCategory) return;
     setActiveCategory(next);
     // A category switch is a fresh browsing context: entering it starts at the
     // top instead of carrying over the previous panel's scroll offset. Direct
     // scrollTop assignment keeps the reset instant (and testable in jsdom).
     if (settingsBody.current) settingsBody.current.scrollTop = 0;
-  };
+  }, [activeCategory]);
 
   const searchResults = useMemo(() => searchSettings(searchQuery, t, isDesktopRuntime), [searchQuery, t]);
 
@@ -969,7 +902,7 @@ export default function SettingsModal({
         selectCategory(searchResults[0].categoryId);
       }
     }
-  }, [searchResults, activeCategory]);
+  }, [searchResults, activeCategory, selectCategory]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1035,7 +968,7 @@ export default function SettingsModal({
         busyAction={busyAction}
         applyOptimisticSettings={applyOptimisticSettings}
         testNotification={testNotification}
-        testSound={testSound}
+        previewSound={previewSound}
       />
     ),
     desktop: (
@@ -1118,7 +1051,6 @@ export default function SettingsModal({
     agent: (
       <SettingsAgentSection
         t={t}
-        formatDate={formatDate}
         accounts={accounts}
         currentSettings={currentSettings}
         controlsBusy={controlsBusy}
@@ -1127,11 +1059,6 @@ export default function SettingsModal({
         openConnectionsSettings={openConnectionsCategory}
         requestAccessLevelChange={requestAccessLevelChange}
         applyOptimisticSettings={applyOptimisticSettings}
-        externalGuideCopied={externalGuideCopied}
-        setExternalGuideCopied={setExternalGuideCopied}
-        externalPairings={externalPairings}
-        externalPairingsError={externalPairingsError}
-        setExternalPairingsReload={setExternalPairingsReload}
         setAutoReplyDialogOpen={setAutoReplyDialogOpen}
         setAutoReplyDecisionsOpen={setAutoReplyDecisionsOpen}
         setMemoryDialogOpen={setMemoryDialogOpen}

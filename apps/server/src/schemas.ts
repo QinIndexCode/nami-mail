@@ -9,7 +9,6 @@ import { z } from "zod";
 import {
   agentMemoryKindSchema,
   appSettingsPatchSchema,
-  autoReplyConfigPatchSchema,
 } from "@nami/agent-contracts";
 import { ATTACHMENT_KINDS, type AttachmentKind } from "./attachment-kind.js";
 import { supportedLocale } from "./localization.js";

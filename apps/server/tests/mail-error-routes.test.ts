@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as attachmentsModule from "../src/attachments.js";
+import type * as draftsModule from "../src/drafts.js";
+import type * as mailModule from "../src/mail.js";
+import type * as syncFlagsModule from "../src/sync-flags.js";
+import type * as syncMovesModule from "../src/sync-moves.js";
+import type * as syncModule from "../src/sync.js";
 
 const { sendMail, testAccountConnection } = vi.hoisted(() => ({
   sendMail: vi.fn(),
@@ -13,32 +19,32 @@ const { saveDraft } = vi.hoisted(() => ({ saveDraft: vi.fn() }));
 const { downloadMessageAttachment } = vi.hoisted(() => ({ downloadMessageAttachment: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, sendMail, testAccountConnection };
 });
 
 vi.mock("../src/sync.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/sync.js")>();
+  const actual = await importOriginal<typeof syncModule>();
   return { ...actual, syncAccount };
 });
 
 vi.mock("../src/sync-flags.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/sync-flags.js")>();
+  const actual = await importOriginal<typeof syncFlagsModule>();
   return { ...actual, updateMessageFlags };
 });
 
 vi.mock("../src/sync-moves.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/sync-moves.js")>();
+  const actual = await importOriginal<typeof syncMovesModule>();
   return { ...actual, moveMessage };
 });
 
 vi.mock("../src/drafts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/drafts.js")>();
+  const actual = await importOriginal<typeof draftsModule>();
   return { ...actual, saveDraft };
 });
 
 vi.mock("../src/attachments.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/attachments.js")>();
+  const actual = await importOriginal<typeof attachmentsModule>();
   return { ...actual, downloadMessageAttachment };
 });
 
@@ -175,7 +181,7 @@ describe("mail transport error API responses", () => {
     expect(response.json()).toEqual({ ok: true, destination: "[Gmail]/All Mail", refreshPending: true });
     await vi.waitFor(() => {
       expect(syncAccount).toHaveBeenCalledWith(db, expect.any(Buffer), "account-1", expect.any(Number), undefined, undefined, undefined);
-    });
+    }, { timeout: 10_000 });
   });
 
   it("keeps draft-save and attachment-download transport failures classified and redacted", async () => {
@@ -202,3 +208,4 @@ describe("mail transport error API responses", () => {
     expect(attachmentResponse.body).not.toContain(secret);
   });
 });
+

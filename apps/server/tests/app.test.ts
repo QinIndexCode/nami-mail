@@ -3,6 +3,7 @@ import { request as httpRequest } from "node:http";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import type * as mailModule from "../src/mail.js";
 
 // Generated per run so the fixture carries no credential literal; the value
 // only has to prove that the token header flows through to the routes.
@@ -21,6 +22,7 @@ import { indexMessageFts } from "../src/message-search.js";
 import { LIST_TEXT_PREVIEW_CHARS } from "../src/message-wire.js";
 import { MAX_STORED_HTML_BODY_BYTES, TRUNCATED_BODY_NOTICE } from "../src/message-body-limits.js";
 import type { OAuthService } from "../src/oauth.js";
+import { markAccountSyncing, unmarkAccountSyncing } from "../src/sync-locks.js";
 
 // Fastify's inject stamps a synthetic default of "Host: localhost:80" on
 // every request that does not carry an explicit host header. The token-less
@@ -36,7 +38,7 @@ vi.hoisted(() => {
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/mail.js")>();
+  const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
 });
 
@@ -666,6 +668,37 @@ it("keeps an Agent stream running after the client closes its response", async (
     });
   });
 
+  it("exposes the in-memory syncing flag on account rows", async () => {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure,
+        username_mode, status, created_at
+      ) VALUES (?, ?, 'custom', 'Demo', 'encrypted', 'imap.example.test', 993, 1,
+        'smtp.example.test', 465, 1, 'email', 'error', ?)
+    `).run("syncing-demo", "syncing@example.test", now);
+
+    const syncFlag = (response: { json: () => unknown }) => {
+      const accounts = response.json() as Array<Record<string, unknown>>;
+      return accounts.find((row) => row.id === "syncing-demo")?.syncing;
+    };
+
+    const idle = await app.inject({ method: "GET", url: "/api/accounts" });
+    expect(syncFlag(idle)).toBe(false);
+
+    markAccountSyncing("syncing-demo");
+    try {
+      const busy = await app.inject({ method: "GET", url: "/api/accounts" });
+      expect(syncFlag(busy)).toBe(true);
+    } finally {
+      unmarkAccountSyncing("syncing-demo");
+    }
+
+    const after = await app.inject({ method: "GET", url: "/api/accounts" });
+    expect(syncFlag(after)).toBe(false);
+  });
+
   it("returns complete provider onboarding metadata without adding form fields", async () => {
     const response = await app.inject({ method: "GET", url: "/api/providers" });
     const providers = response.json() as Array<Record<string, unknown>>;
@@ -914,7 +947,7 @@ it("keeps an Agent stream running after the client closes its response", async (
       { backgroundIntensity: -1 },
       // The intensity range is 0-100, so the boundary one past the top is 101.
       { backgroundIntensity: 101 },
-      { notificationSound: "chime" },
+      { notificationSound: "unknown-sound" },
       { refreshIntervalSeconds: 45 },
       { closeBehavior: "minimize" },
       { unknownSetting: true },
@@ -1340,7 +1373,7 @@ it("keeps an Agent stream running after the client closes its response", async (
       (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("flag-a-1") as { flags_json: string }).flags_json,
     );
     expect(flagged).toEqual(["\\Seen"]);
-    for (const attempt of [0, 0, 0, 0, 0]) {
+    for (const _attempt of [0, 0, 0, 0, 0]) {
       const pending = db.prepare(`
         SELECT COUNT(*) c FROM operation_queue
         WHERE kind = 'flags-push' AND status IN ('pending', 'running')
@@ -1960,3 +1993,4 @@ describe("composeAttachmentContent", () => {
     expect(composeAttachmentContent("plain", [{ name: "a.txt", type: "text/plain", token: "out_00000000-0000-4000-8000-000000000000" }])).toBe("plain");
   });
 });
+

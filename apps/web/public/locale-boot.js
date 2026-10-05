@@ -8,7 +8,7 @@
 try {
   var preferred = localStorage.getItem("nami-mail.locale-preference");
   if (preferred) document.documentElement.lang = preferred;
-} catch (error) {
+} catch {
   // A blocked or unavailable storage layer must not stop the paint; the app
   // falls back to the default locale and Settings can still change it later.
 }
@@ -16,7 +16,7 @@ try {
   if (new URLSearchParams(window.location.search).has("desktop")) {
     document.documentElement.classList.add("desktop-splash-instant");
   }
-} catch (error) {
+} catch {
   // A blocked or unavailable storage layer must not stop the paint; the app
   // falls back to the default locale and Settings can still change it later.
 }

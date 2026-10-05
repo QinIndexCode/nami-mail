@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isLoopbackHostname } from "../endpoint-guard.js";
 import {
-  agentAccessLevelSchema,
   providerHealthSchema,
-  autoReplyConfigPatchSchema,
-  autoReplyConfigSchema,
   type AgentProviderKind,
   type AgentProviderSummary,
   type LlmProvider,

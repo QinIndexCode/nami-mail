@@ -5,16 +5,16 @@ left:50%;
 bottom:max(28px, calc(env(safe-area-inset-bottom) + 16px));
 border:1px solid var(--line-strong);
 background:var(--panel-solid);
-width:min(470px,100vw - 32px);
+width:min(480px,100vw - 32px);
 min-height:48px;
 color:var(--text);
 box-shadow:var(--shadow-raised);
 overflow-wrap:anywhere;
 border-radius:10px;
 align-items:center;
-gap:8px;
-padding:8px 8px 8px 12px;
-font-size:11px;
+gap:10px;
+padding:8px 10px 8px 14px;
+font-size:13px;
 line-height:1.45;
 animation:.25s both toast-in;
 display:flex;
@@ -33,25 +33,35 @@ display:grid
 .toast-message
 {
 flex:1;
-min-width:0
+min-width:0;
+font-size:13px;
+line-height:1.42;
+color:var(--text)
 }
 .toast-action
 {
-border:1px solid var(--line-strong);
-background:var(--selected);
-color:var(--text);
-cursor:pointer;
-border-radius:var(--radius-sm);
-flex:none;
-place-items:center;
-padding:6px 10px;
+display:inline-flex;
+align-items:center;
+justify-content:center;
+gap:6px;
+padding:6px 12px;
+font-size:12px;
 font-weight:600;
-display:grid
+line-height:1.2;
+border-radius:var(--radius-sm, 6px);
+border:1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+background:color-mix(in srgb, var(--accent) 12%, transparent);
+color:var(--accent);
+cursor:pointer;
+transition:all .16s ease;
+flex:none;
+white-space:nowrap
 }
 .toast-action:hover
 {
-border-color:var(--focus-ring);
-background:var(--hover)
+background:var(--accent);
+color:#fff;
+border-color:var(--accent)
 }
 .toast-action:active
 {
@@ -59,8 +69,8 @@ transform:scale(.96)
 }
 .toast-dismiss
 {
-width:32px;
-height:32px;
+width:28px;
+height:28px;
 color:var(--text-faint);
 cursor:pointer;
 background:0 0;
@@ -69,7 +79,8 @@ border-radius:var(--radius-sm);
 flex:none;
 place-items:center;
 padding:0;
-display:grid
+display:grid;
+transition:background .14s ease, color .14s ease
 }
 .toast-dismiss:hover
 {
@@ -98,10 +109,10 @@ color:var(--warning)
 }
 .toast.info
 {
-border-color:color-mix(in srgb, var(--text-soft) 38%, var(--line));
+border-color:color-mix(in srgb, var(--accent) 24%, var(--line-strong));
 background:var(--panel-solid)
 }
 .toast.info .toast-icon
 {
-color:var(--text-soft)
+color:var(--accent)
 }

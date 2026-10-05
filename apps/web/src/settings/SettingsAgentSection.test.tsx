@@ -91,7 +91,6 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
         <I18nProvider>
           <SettingsAgentSection
             t={t}
-            formatDate={(s) => s}
             accounts={[]}
             currentSettings={settings}
             controlsBusy={false}
@@ -99,11 +98,6 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
             openModelSettings={vi.fn()}
             requestAccessLevelChange={vi.fn()}
             applyOptimisticSettings={applyOptimistic}
-            externalGuideCopied={null}
-            setExternalGuideCopied={vi.fn()}
-            externalPairings={[]}
-            externalPairingsError={null}
-            setExternalPairingsReload={vi.fn()}
             setAutoReplyDialogOpen={vi.fn()}
             setAutoReplyDecisionsOpen={vi.fn()}
             setMemoryDialogOpen={vi.fn()}
@@ -194,7 +188,6 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
         <I18nProvider>
           <SettingsAgentSection
             t={t}
-            formatDate={(s) => s}
             accounts={[]}
             currentSettings={settings}
             controlsBusy={false}
@@ -202,11 +195,6 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
             openModelSettings={vi.fn()}
             requestAccessLevelChange={vi.fn()}
             applyOptimisticSettings={vi.fn()}
-            externalGuideCopied={null}
-            setExternalGuideCopied={vi.fn()}
-            externalPairings={[]}
-            externalPairingsError={null}
-            setExternalPairingsReload={vi.fn()}
             setAutoReplyDialogOpen={vi.fn()}
             setAutoReplyDecisionsOpen={vi.fn()}
             setMemoryDialogOpen={vi.fn()}

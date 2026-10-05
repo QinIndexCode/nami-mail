@@ -18,7 +18,7 @@ export type TemplateRouteDeps = {
 };
 
 export function registerTemplateRoutes(app: FastifyInstance, deps: TemplateRouteDeps): void {
-  const { context, log } = deps;
+  const { context } = deps;
 
   app.get("/api/templates", async (request, reply) => {
     const parsed = z.object({ q: z.string().trim().max(200).optional(), limit: z.coerce.number().int().min(1).max(1000).optional() }).strict().safeParse(request.query);

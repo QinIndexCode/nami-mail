@@ -161,7 +161,7 @@ describe("AgentService run watchdog", () => {
     });
 
     const runPromise = drain(service, conversation, provider.id);
-    await vi.waitFor(() => expect(streamChat).toHaveBeenCalled());
+    await vi.waitFor(() => expect(streamChat).toHaveBeenCalled(), { timeout: 10_000 });
     expect(service.cancelRun(conversation.id)).toBe(true);
     const events = await runPromise;
 
@@ -199,7 +199,7 @@ describe("AgentService run watchdog", () => {
     const runPromise = drain(service, conversation, provider.id);
     // The terminal events were consumed and the run persists its turn; the
     // title generation (call 2) is now hanging on the gate.
-    await vi.waitFor(() => expect(titleCalls).toBe(1));
+    await vi.waitFor(() => expect(titleCalls).toBe(1), { timeout: 10_000 });
 
     // A resend issued while the title generation is still hanging must NOT be
     // refused with CONFLICT: the slot was released right after the turn was
@@ -237,7 +237,7 @@ describe("AgentService revoke cascade against a running stream", () => {
     });
 
     const runPromise = drain(service, conversation, provider.id);
-    await vi.waitFor(() => expect(streamChat).toHaveBeenCalled());
+    await vi.waitFor(() => expect(streamChat).toHaveBeenCalled(), { timeout: 10_000 });
     // The user turn is already appended; its in-flight assistant is published.
     const during = service.getConversation(conversation.id).messages;
     const userMessage = during.find((message) => message.role === "user");

@@ -40,7 +40,7 @@ describe("EncryptedAutoReplyDecisionStore", () => {
         subject: "Hello",
         detail: "来信价值较低。",
       });
-      const second = store.create({
+      const _second = store.create({
         messageId: "msg-2",
         accountId: "acct-2",
         threadKey: "thread:x",

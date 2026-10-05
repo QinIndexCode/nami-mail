@@ -223,7 +223,6 @@ export default function SettingsConnectionsSection({
   currentSettings,
   controlsBusy,
   demoMode,
-  applyOptimisticSettings,
   requestAccessLevelChange,
   onOverlayOpenChange,
   onBusyChange,

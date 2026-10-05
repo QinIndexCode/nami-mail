@@ -5,11 +5,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { useMessageBody } from "./useMessageBody";
 import type { Message, MessageDetail } from "../types";
 import type { ThreadSnapshot } from "../threads";
+import type * as apiModule from "../api";
 
 const { message } = vi.hoisted(() => ({ message: vi.fn() }));
 
 vi.mock("../api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api")>();
+  const actual = await importOriginal<typeof apiModule>();
   return { ...actual, api: { ...actual.api, message } };
 });
 
@@ -129,3 +130,4 @@ describe("useMessageBody", () => {
     expect(messages[0].htmlBody).toBeUndefined();
   });
 });
+

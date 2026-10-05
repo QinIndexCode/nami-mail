@@ -60,6 +60,11 @@ export const accountWireSchema = z.object({
   providerName: z.string(),
   authMethod: z.enum(["password", "oauth2"]),
   status: z.string(),
+  /** Runtime in-progress flag (in-memory sync lock, not a DB column): true
+   * while a sync pass is mid-flight for this account. Optional so older
+   * responses and test fixtures without the field stay valid; absent reads
+   * as "not syncing". */
+  syncing: z.boolean().optional(),
   lastError: z.string().nullable(),
   lastErrorCode: z.string().nullish(),
   lastSyncWarningCode: z.string().nullish(),

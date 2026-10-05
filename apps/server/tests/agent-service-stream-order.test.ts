@@ -392,7 +392,7 @@ describe("AgentService streamMessage event order (characterization)", () => {
         context: {},
       })[Symbol.asyncIterator]();
 
-      const pending = await readUntilConfirmation(iterator);
+      const _pending = await readUntilConfirmation(iterator);
       expect(value.service.cancelRun(value.conversation.id)).toBe(true);
       // The cancel ends the stream with exactly one CANCELLED error followed by
       // the terminal completed(cancelled); no tool result, assistant text, or

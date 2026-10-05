@@ -16,7 +16,6 @@ import {
   type AgentToolDescriptor,
   type LlmProvider,
   type ProviderCapabilities,
-  type ProviderChatMessage,
   type ProviderChatRequest,
   type ProviderHealth,
   type ProviderStreamEvent,

@@ -1,5 +1,5 @@
 import { Check as CheckIcon, Pencil, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import DatePicker from "./DatePicker";
 import ThemedSelect from "./ThemedSelect";
@@ -104,9 +104,9 @@ export default function AutoReplyScopeEditor({
   });
   useDialogFocus(Boolean(draft), editorPanel);
 
-  const closeEditor = () => {
+  const closeEditor = useCallback(() => {
     requestEditorClose();
-  };
+  }, [requestEditorClose]);
 
   useEffect(() => {
     if (!draft) return undefined;
@@ -118,7 +118,7 @@ export default function AutoReplyScopeEditor({
     };
     window.addEventListener("keydown", closeOnEscape, true);
     return () => window.removeEventListener("keydown", closeOnEscape, true);
-  }, [draft]);
+  }, [draft, closeEditor]);
 
   const dateInput = (key: "startDate" | "endDate") => (
     <DatePicker
