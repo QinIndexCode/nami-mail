@@ -49,8 +49,11 @@ describe("styles.css size ratchet", () => {
   // 2026-10-05 有记录的一次上调（17_600 → 17_610）：账户连接状态进行时态——
   // 侧边栏账户行同步中状态点 .status-dot.syncing（脉冲动画 + reduced-motion
   // 降级，共 10 行）；下轮 CSS 瘦身时应优先收回。
+  // 2026-10-05 第二次有记录的上调（17_610 → 17_612）：同规则修正——
+  // --accent 不存在于 token 集（var 未定义 → 背景透明 → 点隐形），改用
+  // --info 并留 2 行说明注释；下轮 CSS 瘦身时应优先收回。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 17_610;
+  const FROZEN_AGGREGATED_MAX_LINES = 17_612;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

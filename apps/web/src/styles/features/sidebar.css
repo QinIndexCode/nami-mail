@@ -607,8 +607,10 @@ box-shadow:0 0 0 3px color-mix(in srgb, var(--warning) 16%, transparent)
 }
 .status-dot.syncing
 {
-background:var(--accent);
-box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+/* --info, not an accent token: the token set has no --accent, and an
+   undefined var turns the background transparent (invisible dot). */
+background:var(--info);
+box-shadow:0 0 0 3px color-mix(in srgb, var(--info) 16%, transparent);
 animation:status-dot-syncing 1.2s ease-in-out infinite
 }
 @keyframes status-dot-syncing

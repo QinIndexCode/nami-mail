@@ -2450,11 +2450,23 @@ const emptyMessageList = useMemo(() => (query.trim()
     if (!accounts.length || syncing) return;
     clearUnreadViewRecentlyRead();
     setSyncing(true);
+    const targets = selectedAccount === "all" ? accounts : accounts.filter((account) => account.id === selectedAccount);
+    const targetIds = new Set(targets.map((account) => account.id));
+    // Optimistically flag the target rows so "Syncing…" shows for the whole
+    // pass; the server-side flag only reaches the client via the refresh
+    // below, which would otherwise leave the row blind until the pass ends.
+    const setLocalSyncing = (flag: boolean) => {
+      setAccounts((items) => items.map((item) => targetIds.has(item.id) ? { ...item, syncing: flag } : item));
+    };
+    setLocalSyncing(true);
+    // Whether the post-sync refresh actually ran; if it did not, the
+    // optimistic flag is stale and must be dropped instead of pulsing forever.
+    let refreshed = false;
     try {
       if (!isDemo) {
-        const targets = selectedAccount === "all" ? accounts : accounts.filter((account) => account.id === selectedAccount);
         const settled = await Promise.allSettled(targets.map((account) => api.sync(account.id)));
         await load({ silent: true });
+        refreshed = true;
         const results = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
         const failedAccounts = settled.length - results.length;
         const synced = results.reduce((sum, result) => sum + result.synced, 0);
@@ -2472,13 +2484,17 @@ const emptyMessageList = useMemo(() => (query.trim()
               ? t("mail.sync.partialAccounts", { synced, accounts: failedAccounts, issue: failureIssue?.title ?? "" })
               : t("mail.sync.partialFolders", { synced, folders: failedFolders })
             : t("mail.sync.completed", { synced, folders }),
-          partialFailure ? "error" : "success",
+          // Folder-level failures leave the account degraded (warning dot and
+          // freshness line); an error toast would contradict that row state.
+          failedAccounts ? "error" : partialFailure ? "warning" : "success",
         );
       } else {
         await new Promise((resolve) => setTimeout(resolve, 700));
+        setLocalSyncing(false);
         showToast(t("mail.sync.demoRefreshed"));
       }
     } catch (error) {
+      if (!refreshed) setLocalSyncing(false);
       showToast(t("mail.sync.failed", { message: mailErrorToastMessage(error, undefined, t) }), "error");
     } finally {
       setSyncing(false);
