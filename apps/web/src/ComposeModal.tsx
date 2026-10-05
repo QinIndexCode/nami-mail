@@ -84,7 +84,9 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   // local encrypted store, so suggestions never leave the machine.
   const searchContacts = (value: string) => {
     const requestId = ++toSearchRef.current;
-    const needle = value.trim();
+    // The field can already hold complete addresses separated by commas,
+    // semicolons, or whitespace; only the trailing token is the live query.
+    const needle = value.split(/[,;\s]+/).pop() ?? "";
     if (isDemo || !needle) {
       setToSuggestions([]);
       setToSuggestionsOpen(false);
@@ -104,9 +106,10 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     }, 180);
   };
   const applyRecipientSuggestion = (contact: Contact) => {
-    const parts = to.split(",");
-    const lastPart = parts.pop() ?? "";
-    setTo(to.slice(0, to.length - lastPart.length) + contact.email);
+    // recipients() accepts commas, semicolons, and whitespace as separators,
+    // so replace only the trailing token and keep its preceding separator.
+    const match = to.match(/([\s,;]+)([^\s,;]*)$/);
+    setTo(match ? `${to.slice(0, to.length - match[0].length)}${match[1]}${contact.email}` : contact.email);
     setToSuggestions([]);
     setToSuggestionsOpen(false);
     toSearchRef.current += 1;

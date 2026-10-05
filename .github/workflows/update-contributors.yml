@@ -69,11 +69,13 @@ jobs:
       # workflow (GitHub's recursion prevention), so the required check would
       # never report and the auto-merge would stall. workflow_dispatch is the
       # documented exception: dispatch validation onto the PR branch
-      # explicitly, then let the branch's auto-merge finish the job.
+      # explicitly, then enable auto-merge (squash) so it lands once checks
+      # pass.
       - name: Trigger validation for the pull request
         if: steps.pr.outputs.pull-request-number != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run validate.yml --ref "chore/update-contributors"
-          auto-merge: squash
+        run: |
+          gh workflow run validate.yml --ref "chore/update-contributors"
+          gh pr merge --auto --squash "chore/update-contributors"
 
