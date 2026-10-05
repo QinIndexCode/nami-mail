@@ -52,8 +52,11 @@ describe("styles.css size ratchet", () => {
   // 2026-10-05 第二次有记录的上调（17_610 → 17_612）：同规则修正——
   // --accent 不存在于 token 集（var 未定义 → 背景透明 → 点隐形），改用
   // --info 并留 2 行说明注释；下轮 CSS 瘦身时应优先收回。
+  // 2026-10-05 第三次有记录的上调（17_612 → 17_616）：token 普查发现
+  // --accent 被四处引用（toast 操作按钮/账户连接选中态/沙盒统计数字）
+  // 却从未定义，全部静默失效；现于两主题正式定义（值同 --info）。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 17_612;
+  const FROZEN_AGGREGATED_MAX_LINES = 17_616;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {
