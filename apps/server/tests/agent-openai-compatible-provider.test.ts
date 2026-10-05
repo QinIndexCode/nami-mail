@@ -514,3 +514,94 @@ it("OpenAI compatible provider still replays a tool input nested exactly at the 
   assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
   assert.equal(events.some((event) => event.type === "error"), false);
 });
+
+// Self-heal contract shared with anthropic/openai-responses providers: malformed
+// model JSON degrades to an empty tool input so the tool's input validation
+// rejects it and the engine feeds the error back to the model, instead of the
+// provider terminating the turn with a non-retryable error.
+it("OpenAI compatible provider degrades malformed tool JSON to an empty input instead of failing the turn", async () => {
+  const provider = new OpenAiCompatibleProvider({
+    id: "local-ollama",
+    kind: "ollama",
+    endpoint: "http://127.0.0.1:11434/v1",
+    fetchImpl: async () => sseResponse([
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"messages.search","arguments":"{\\"query\\":inv"}}]}}]}',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+      "data: [DONE]",
+    ]),
+  });
+
+  const events = [];
+  for await (const event of provider.streamChat(bareToolStreamRequest())) events.push(event);
+
+  const toolCall = events.find((event) => event.type === "tool_call")?.call;
+  assert.deepEqual(toolCall, { id: "call-1", toolName: "messages.search", input: {}, requestedAt: toolCall?.requestedAt });
+  assert.equal(events.some((event) => event.type === "error"), false);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "tool-calls" });
+});
+
+it("OpenAI compatible provider treats a no-argument tool call as an empty input", async () => {
+  const provider = new OpenAiCompatibleProvider({
+    id: "local-ollama",
+    kind: "ollama",
+    endpoint: "http://127.0.0.1:11434/v1",
+    fetchImpl: async () => sseResponse([
+      // Several compatible services omit the arguments member entirely for
+      // no-arg tools; this must not fail the turn.
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-2","function":{"name":"folders.list"}}]}}]}',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+      "data: [DONE]",
+    ]),
+  });
+
+  const events = [];
+  for await (const event of provider.streamChat(bareToolStreamRequest())) events.push(event);
+
+  const toolCall = events.find((event) => event.type === "tool_call")?.call;
+  assert.deepEqual(toolCall, { id: "call-2", toolName: "folders.list", input: {}, requestedAt: toolCall?.requestedAt });
+  assert.equal(events.some((event) => event.type === "error"), false);
+});
+
+it("OpenAI compatible provider skips tool calls without an id instead of failing the turn", async () => {
+  const provider = new OpenAiCompatibleProvider({
+    id: "local-ollama",
+    kind: "ollama",
+    endpoint: "http://127.0.0.1:11434/v1",
+    fetchImpl: async () => sseResponse([
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"folders.list","arguments":"{}"}}]}}]}',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+      "data: [DONE]",
+    ]),
+  });
+
+  const events = [];
+  for await (const event of provider.streamChat(bareToolStreamRequest())) events.push(event);
+
+  assert.equal(events.some((event) => event.type === "tool_call"), false);
+  assert.equal(events.some((event) => event.type === "error"), false);
+  // The stream's finish_reason still says tool_calls; the runtime maps that
+  // provider-lexical reason onto the UI enum before it reaches the client.
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "tool-calls" });
+});
+
+function bareToolStreamRequest(): Record<string, unknown> {
+  return {
+    requestId: "123e4567-e89b-12d3-a456-426614174050",
+    providerId: "local-ollama",
+    model: "gpt-test",
+    messages: [{ role: "user", content: "List folders" }],
+    tools: [{
+      name: "folders.list",
+      title: "List folders",
+      description: "List mail folders.",
+      category: "folders",
+      executionMode: "read",
+      requiredScopes: ["mail.read"],
+      accountAccess: "required",
+      confirmationPolicy: "never",
+      availableToExternal: true,
+    }],
+    allowToolCalls: true,
+    responseFormat: "text",
+  };
+}

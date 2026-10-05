@@ -238,23 +238,33 @@ function appendToolDelta(calls: Map<number, PendingToolCall>, value: unknown): v
 }
 
 function completedToolCalls(calls: Map<number, PendingToolCall>): ToolCall[] {
-  return [...calls.values()]
-    .sort((left, right) => left.index - right.index)
-    .map((call) => {
-      if (!call.id || !call.name || !call.arguments) throw new Error("The provider returned an incomplete tool call.");
-      let input: unknown;
+  const completed: ToolCall[] = [];
+  for (const call of [...calls.values()].sort((left, right) => left.index - right.index)) {
+    // A call without id/name cannot be answered (the engine replies through
+    // toolCallId), so skip it instead of failing the whole turn; the model
+    // simply continues without that call. Several OpenAI-compatible services
+    // omit the id field or the arguments member on no-arg tools.
+    if (!call.id || !call.name) continue;
+    // Malformed model JSON degrades to an empty payload instead of failing
+    // the turn: the tool's input validation rejects it and the engine feeds
+    // the validation error back to the model, which can retry the call.
+    // (Same self-heal contract as anthropic-provider and openai-responses-provider.)
+    let input: unknown = {};
+    if (call.arguments) {
       try {
         input = JSON.parse(call.arguments) as unknown;
       } catch {
-        throw new Error("The provider returned invalid tool call JSON.");
+        input = {};
       }
-      return {
-        id: call.id,
-        toolName: call.name,
-        input,
-        requestedAt: new Date().toISOString(),
-      } satisfies ToolCall;
-    });
+    }
+    completed.push({
+      id: call.id,
+      toolName: call.name,
+      input,
+      requestedAt: new Date().toISOString(),
+    } satisfies ToolCall);
+  }
+  return completed;
 }
 
 function linesFrom(buffer: string, final: boolean): { lines: string[]; remaining: string } {
