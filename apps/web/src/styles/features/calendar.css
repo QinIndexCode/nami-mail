@@ -375,14 +375,6 @@ opacity:.6
 	animation:.16s cubic-bezier(.2,.8,.2,1) both popup-in;
 	position:fixed
 }
-/* Portaled into a focus-trapped dialog (see DatePicker's panelHost). The
-   dialog's pinned entry animation gives it a transform, so a fixed panel would
-   resolve against the dialog box, not the viewport; absolute matches the
-   strategy Floating-UI then computes with. */
-.date-picker-panel.hosted
-{
-	position:absolute
-}
 .date-picker-nav
 {
 justify-content:space-between;

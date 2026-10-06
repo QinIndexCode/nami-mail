@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import DatePicker from "./DatePicker";
+import { useDialogFocus } from "./hooks/useDialogFocus";
 import { I18nProvider } from "./i18n";
 
 beforeAll(() => {
@@ -190,9 +191,13 @@ describe("DatePicker (panel host)", () => {
 
   // The dialog element must be rendered by React itself: createRoot().render()
   // clears its container, so a pre-appended element would be wiped on mount.
-  function Dialog(): React.ReactElement {
+  // The real useDialogFocus is mounted here, not a stand-in: the whole point of
+  // panelHost is that the trap must not yank focus out of the panel, and only
+  // the actual trap decides that.
+  function Dialog({ trap = true }: { trap?: boolean }): React.ReactElement {
     const ref = useRef<HTMLElement>(null);
     dialogRef = ref;
+    useDialogFocus(trap, ref, { suspended: !trap });
     return (
       <section ref={ref} role="dialog" aria-modal="true" tabIndex={-1}>
         <I18nProvider>
@@ -202,12 +207,12 @@ describe("DatePicker (panel host)", () => {
     );
   }
 
-  function mountInDialog(): HTMLElement {
+  function mountInDialog(options: { trap?: boolean } = {}): HTMLElement {
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);
     act(() => {
-      root.render(<Dialog />);
+      root.render(<Dialog {...options} />);
     });
     const dialog = dialogRef.current as HTMLElement;
     act(() => {
@@ -221,25 +226,60 @@ describe("DatePicker (panel host)", () => {
     host?.remove();
   });
 
-  it("portals the panel into the host so it stays inside the dialog subtree", () => {
-    const dialog = mountInDialog();
+  it("portals the panel to the body so no dialog overflow can clip it", () => {
+    mountInDialog();
     const panel = document.querySelector(".date-picker-panel");
     expect(panel).not.toBeNull();
-    // The whole point of the host: a body-portaled panel sits outside the
-    // dialog, and useDialogFocus yanks focus straight back out of it.
-    expect(dialog.contains(panel)).toBe(true);
-    expect(panel?.parentElement).toBe(dialog);
-    // Hosted panels must not stay viewport-fixed, or the dialog's own pinned
-    // transform animation would become their containing block.
-    expect(panel?.classList.contains("hosted")).toBe(true);
+    // In-dialog placement is what the clipping bug was: every host card has
+    // overflow (hidden on .compose-card, a scroll container on .modal-card and
+    // .calendar-editor-modal), and position:absolute cannot escape it. The
+    // panel stays fixed against the viewport instead.
+    expect(panel?.parentElement).toBe(document.body);
+    // Nothing may re-scope it to the dialog box (the dialogs' entry animation
+    // leaves a transform, which would become the containing block).
+    expect(panel?.classList.contains("hosted")).toBe(false);
   });
 
-  it("keeps day buttons focusable inside the trap", () => {
-    const dialog = mountInDialog();
-    const day = dialog.querySelector<HTMLButtonElement>(".date-picker-day");
+  it("keeps day buttons focusable under the real focus trap", () => {
+    mountInDialog();
+    const panel = document.querySelector(".date-picker-panel");
+    const day = panel?.querySelector<HTMLButtonElement>(".date-picker-day");
     expect(day).not.toBeNull();
     act(() => { day?.focus(); });
-    // The trap's own guard is `dialog.contains(event.target)`.
+    // The trap listens for focusin on document and pulls focus back to the
+    // dialog when the target is outside its scope. The panel is portaled to the
+    // body, so only the portal registration keeps this from being an escape.
+    expect(document.activeElement).toBe(day);
+  });
+
+  it("yanks focus back out of an unregistered panel, proving the registration is load-bearing", () => {
+    // The inverse of the test above: an unhosted panel inside the same real trap
+    // DOES lose focus. Without this, the passing test above could be satisfied
+    // by a trap that was never mounted at all.
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    function Bare(): React.ReactElement {
+      const ref = useRef<HTMLElement>(null);
+      dialogRef = ref;
+      useDialogFocus(true, ref);
+      return (
+        <section ref={ref} role="dialog" aria-modal="true" tabIndex={-1}>
+          <I18nProvider>
+            {/* No panelHost: the panel is not registered with this trap. */}
+            <DatePicker mode="date" value="2026-08-14" onChange={() => undefined} aria-label="选择日期" />
+          </I18nProvider>
+        </section>
+      );
+    }
+    act(() => { root.render(<Bare />); });
+    const dialog = dialogRef.current as HTMLElement;
+    act(() => { dialog.querySelector<HTMLButtonElement>(".date-picker-trigger")?.click(); });
+
+    const day = document.querySelector<HTMLButtonElement>(".date-picker-panel .date-picker-day");
+    expect(day).not.toBeNull();
+    act(() => { day?.focus(); });
+    expect(document.activeElement).not.toBe(day);
     expect(dialog.contains(document.activeElement)).toBe(true);
   });
 
@@ -259,7 +299,6 @@ describe("DatePicker (panel host)", () => {
     });
     const panel = document.querySelector(".date-picker-panel");
     expect(panel?.parentElement).toBe(document.body);
-    expect(panel?.classList.contains("hosted")).toBe(false);
     act(() => localRoot.unmount());
     container.remove();
   });
@@ -402,5 +441,137 @@ describe("DatePicker (grid semantics)", () => {
     expect(document.querySelector(".date-picker-panel.closing")).not.toBeNull();
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
     expect(document.querySelector(".date-picker-panel")).toBeNull();
+  });
+});
+
+describe("DatePicker (cross-month keyboard navigation)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  function mount(value = "2026-08-14", extra: Record<string, unknown> = {}): void {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => {
+      root.render(
+        <I18nProvider>
+          <DatePicker mode="date" value={value} onChange={() => undefined} aria-label="选择日期" {...extra} />
+        </I18nProvider>,
+      );
+    });
+  }
+
+  const openPanel = () => act(() => {
+    document.querySelector<HTMLButtonElement>(".date-picker-trigger")?.click();
+  });
+  const grid = () => document.querySelector<HTMLDivElement>(".date-picker-grid");
+  const press = (key: string) => act(() => {
+    grid()?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+  });
+  /** The focused cell's aria-label: locale-independent, unlike its text. */
+  const focusedLabel = () => document.querySelector(".date-picker-day.focused")?.getAttribute("aria-label");
+  const monthLabel = () => grid()?.getAttribute("aria-label");
+  const tabbable = () => Array.from(document.querySelectorAll<HTMLButtonElement>(".date-picker-day"))
+    .filter((button) => button.tabIndex === 0);
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host?.remove();
+  });
+
+  // Arrowing out of the displayed month changes viewMonth, which is exactly the
+  // dependency the focus-seeding effect used to carry. Re-running it reset the
+  // focus to the selected day — a day the new grid does not even render — so
+  // the grid ended up with no tabbable cell and keyboard navigation was dead.
+  it("follows the focus across a month boundary instead of resetting it", () => {
+    mount();
+    openPanel();
+    expect(focusedLabel()).toBe("2026年8月14日");
+
+    // Walk to the 31st: 17 steps of ArrowRight from the 14th.
+    for (let step = 0; step < 17; step += 1) press("ArrowRight");
+    expect(focusedLabel()).toBe("2026年8月31日");
+    expect(monthLabel()).toContain("8");
+
+    // One more crosses into September, and the focus must go with it.
+    press("ArrowRight");
+    expect(monthLabel()).toContain("9");
+    expect(focusedLabel()).toBe("2026年9月1日");
+    // Still exactly one entry point, and it is the cell the focus is on.
+    expect(tabbable()).toHaveLength(1);
+    expect(tabbable()[0]?.getAttribute("aria-label")).toBe("2026年9月1日");
+
+    // And back the other way, which is the case that used to strand the reader.
+    press("ArrowLeft");
+    expect(monthLabel()).toContain("8");
+    expect(focusedLabel()).toBe("2026年8月31日");
+    expect(tabbable()).toHaveLength(1);
+  });
+
+  it("keeps a tabbable cell after a multi-step walk across several months", () => {
+    mount();
+    openPanel();
+    // 42 cells is six weeks, so this walks well past a single boundary.
+    for (let step = 0; step < 20; step += 1) press("ArrowRight");
+    expect(monthLabel()).toContain("9");
+    expect(focusedLabel()).toBe("2026年9月3日");
+    expect(tabbable()).toHaveLength(1);
+  });
+
+  it("keeps a tabbable cell when the nav arrows step to another month", () => {
+    mount();
+    openPanel();
+    // The nav arrows move the month without moving the focus at all, so
+    // nothing but the component itself can restore the roving tabindex.
+    act(() => {
+      const navs = Array.from(document.querySelectorAll<HTMLButtonElement>(".date-picker-nav-button"));
+      navs[1]?.click();
+    });
+    expect(monthLabel()).toContain("9");
+    expect(tabbable()).toHaveLength(1);
+    // The same day-of-month carries over.
+    expect(focusedLabel()).toBe("2026年9月14日");
+  });
+
+  it("carries the day across a nav step without wrapping past a short month", () => {
+    // 31 January + 1 month has no 31st; the focus must land on the 28th rather
+    // than on nothing at all.
+    mount("2027-01-31");
+    openPanel();
+    expect(focusedLabel()).toContain("1");
+    act(() => {
+      const navs = Array.from(document.querySelectorAll<HTMLButtonElement>(".date-picker-nav-button"));
+      navs[1]?.click();
+    });
+    expect(tabbable()).toHaveLength(1);
+    expect(focusedLabel()).toContain("28");
+  });
+
+  it("never rests the roving tabindex on a day outside minDate/maxDate", () => {
+    // A disabled button is skipped by Tab and refuses programmatic focus, so a
+    // focused one is unreachable: the grid would have no entry point at all.
+    mount("2026-08-14", { minDate: "2026-08-10" });
+    openPanel();
+    // Four steps back from the 14th lands on the 10th, the first enabled day.
+    for (let step = 0; step < 4; step += 1) press("ArrowLeft");
+    expect(focusedLabel()).toBe("2026年8月10日");
+
+    // One more would be the 9th, which is disabled: the step is refused and the
+    // focus holds, rather than parking on an unpickable cell.
+    press("ArrowLeft");
+    expect(focusedLabel()).toBe("2026年8月10日");
+    expect(tabbable()).toHaveLength(1);
+    expect(tabbable()[0]?.disabled).toBe(false);
+    expect(document.querySelector(".date-picker-day.focused")?.getAttribute("aria-label")).toBe("2026年8月10日");
+  });
+
+  it("skips a disabled day rather than stopping on it", () => {
+    // Only the 12th is excluded, so arrowing back from the 14th steps over it.
+    mount("2026-08-14", { minDate: "2026-08-13" });
+    openPanel();
+    press("ArrowLeft");
+    expect(focusedLabel()).toBe("2026年8月13日");
+    expect(tabbable()).toHaveLength(1);
+    expect(tabbable()[0]?.disabled).toBe(false);
   });
 });

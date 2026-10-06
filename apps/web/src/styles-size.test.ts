@@ -90,8 +90,14 @@ describe("styles.css size ratchet", () => {
   //   月/年单元格并入既有 :focus-visible 选择器组，补上 roving-tabindex 的
   //     .focused 焦点环（+1 行，无独立规则）。
   // 下一轮 CSS 瘦身时应优先收回：与上述三条说明注释合并表述。
+  // 2026-10-07 第二次有记录的下调（17_682 → 17_674）：修复「日期选择器面板被
+  // 对话框裁剪」与「跨月方向键焦点被重置」。calendar.css 删除 8 行
+  // .date-picker-panel.hosted —— 面板不再挂载到对话框内部（三个宿主分别是
+  // overflow:hidden 与两个滚动容器，absolute 无法逃出），一律 portal 到
+  // body 并由 useDialogFocus 的 portal 注册表承认，规则连同其 4 行说明一并移除。
+  // 实测聚合 17_662 行（-8），阈值取实测 +12 行缓冲。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 17_682;
+  const FROZEN_AGGREGATED_MAX_LINES = 17_674;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

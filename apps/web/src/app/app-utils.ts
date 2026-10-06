@@ -417,6 +417,36 @@ function rewriteImageSrcset(srcset: string): string {
 const CSS_URL_FUNCTION = /url\(\s*(["']?)([^"')]*)\1\s*\)/gi;
 
 /**
+ * Every element through which a mail body can name a remote subresource, with
+ * the attributes that carry the URL. Each entry was verified by running the
+ * real `rewriteRemoteImagesToProxy(sanitizeMailHtml(...))` chain over it: the
+ * ones listed here survive DOMPurify's html profile intact and were still
+ * fetched directly, because an `img[src]`-shaped rewrite never reached them.
+ *
+ * `type=image` is matched with the `i` flag because the HTML parser does not
+ * lowercase attribute *values*: `<input type="IMAGE">` is still an image button
+ * to the browser, so a case-sensitive selector would wave it through.
+ */
+const REMOTE_SUBRESOURCE_ELEMENTS: { selector: string; attributes: readonly string[] }[] = [
+  // `srcset` is handled separately, because it is a candidate list rather than
+  // one URL — and because a browser prefers it over `src` whenever it is
+  // present. A `<picture>` (or `<video>`) whose `<source srcset>` is remote
+  // never requests the sibling `src` at all, which is what lets a `cid:`-looking
+  // src read as "already handled" while the beacon still fires.
+  { selector: "img", attributes: ["src"] },
+  { selector: "source", attributes: ["src"] },
+  { selector: "video", attributes: ["src", "poster"] },
+  { selector: "audio", attributes: ["src"] },
+  { selector: "track", attributes: ["src"] },
+  { selector: 'input[type="image" i]', attributes: ["src"] },
+  // SVG <image> carries its URL on href/xlink:href rather than src.
+  { selector: "image", attributes: ["href", "xlink:href"] },
+];
+
+/** Elements whose `srcset` the browser resolves and fetches from. */
+const REMOTE_SRCSET_SELECTOR = 'img, source, input[type="image" i]';
+
+/**
  * Routes a mail body's remote images through the server-side image proxy.
  *
  * Opening a mail is itself a disclosure: an `<img src="https://tracker/pixel">`
@@ -435,28 +465,29 @@ const CSS_URL_FUNCTION = /url\(\s*(["']?)([^"')]*)\1\s*\)/gi;
  * Runs over every attribute through which a mail body can trigger a remote
  * fetch, not just `img[src]`: `srcset` alone would otherwise bypass an
  * src-only rewrite, and a `background` attribute, a `style` url() or an SVG
- * `image` is the same pixel by another name.
+ * `image` is the same pixel by another name. The element list is
+ * REMOTE_SUBRESOURCE_ELEMENTS above — `video[poster]`, `source[srcset]` and
+ * `input[type=image][src]` are all reachable, all survive the sanitizer, and
+ * all were measured leaking before this list existed.
  */
 export function rewriteRemoteImagesToProxy(html: string): string {
   if (!html) return html;
   const template = document.createElement("template");
   template.innerHTML = html;
 
-  for (const image of template.content.querySelectorAll("img")) {
-    const proxied = proxiedImageSource(image.getAttribute("src") || "");
-    if (proxied) image.setAttribute("src", proxied);
-    const srcset = image.getAttribute("srcset");
-    if (srcset) {
-      const rewritten = rewriteImageSrcset(srcset);
-      if (rewritten !== srcset) image.setAttribute("srcset", rewritten);
+  for (const { selector, attributes } of REMOTE_SUBRESOURCE_ELEMENTS) {
+    for (const element of template.content.querySelectorAll(selector)) {
+      for (const attribute of attributes) {
+        const proxied = proxiedImageSource(element.getAttribute(attribute) || "");
+        if (proxied) element.setAttribute(attribute, proxied);
+      }
     }
   }
-  // SVG <image> carries its URL on href/xlink:href rather than src.
-  for (const image of template.content.querySelectorAll("image")) {
-    for (const attribute of ["href", "xlink:href"]) {
-      const proxied = proxiedImageSource(image.getAttribute(attribute) || "");
-      if (proxied) image.setAttribute(attribute, proxied);
-    }
+  for (const element of template.content.querySelectorAll(REMOTE_SRCSET_SELECTOR)) {
+    const srcset = element.getAttribute("srcset");
+    if (!srcset) continue;
+    const rewritten = rewriteImageSrcset(srcset);
+    if (rewritten !== srcset) element.setAttribute("srcset", rewritten);
   }
   for (const element of template.content.querySelectorAll("[background]")) {
     const proxied = proxiedImageSource(element.getAttribute("background") || "");

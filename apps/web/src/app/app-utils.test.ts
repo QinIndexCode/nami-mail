@@ -477,12 +477,100 @@ describe("rewriteRemoteImagesToProxy", () => {
     expect(clean).not.toContain("evil.tld/pixel 1x");
   });
 
-  it("keeps data: and same-origin srcset candidates while proxying the remote ones", () => {
-    const clean = rewriteRemoteImagesToProxy(
-      '<img srcset="data:image/png;base64,AAA= 1x, /api/messages/1/inline/p1 2x">',
-    );
+  it("keeps same-origin srcset candidates while proxying the remote ones", () => {
+    const clean = rewriteRemoteImagesToProxy(sanitizeMailHtml(
+      '<img srcset="/api/messages/1/inline/p1 1x, https://evil.tld/pixel 2x">',
+      false,
+    ));
 
-    expect(clean).toContain('srcset="data:image/png;base64,AAA= 1x, /api/messages/1/inline/p1 2x"');
+    // Walk the composed chain, not rewriteRemoteImagesToProxy alone: this
+    // attribute is DOMPurify's to keep or drop, and a rewrite-only assertion
+    // cannot see that. See the next test for what DOMPurify actually does to a
+    // data: candidate.
+    expect(clean).toContain('srcset="/api/messages/1/inline/p1 1x, '
+      + `${proxyUrl("https://evil.tld/pixel")} 2x"`);
+    expect(clean).not.toContain("evil.tld/pixel 2x");
+  });
+
+  it("drops a srcset candidate that carries data:, losing the whole attribute", () => {
+    // Documented, measured DOMPurify behaviour — NOT a leak, and NOT introduced
+    // by the proxy pass. DOMPurify validates srcset candidates against its URI
+    // allow-list and, on any candidate it rejects, drops the entire attribute
+    // rather than the single candidate. So a mail whose srcset mixes an inline
+    // data: candidate with anything else loses its responsive candidates and
+    // falls back to src.
+    //
+    // The previous version of this test asserted the opposite ("keeps data: and
+    // same-origin srcset candidates") while calling rewriteRemoteImagesToProxy
+    // directly. That passed, and was worthless: it described a string the reader
+    // never renders. Whether it is safe here is decided by DOMPurify, so the
+    // assertion has to run DOMPurify too.
+    const clean = rewriteRemoteImagesToProxy(sanitizeMailHtml(
+      '<img srcset="data:image/png;base64,AAA= 1x, /api/messages/1/inline/p1 2x">',
+      false,
+    ));
+
+    expect(clean).toBe("<img>");
+    expect(clean).not.toContain("srcset");
+    expect(clean).not.toContain("data:image/png");
+  });
+
+  it("never lets a remote host reach the reader through a srcset on any element", () => {
+    // srcset beats src whenever it is present, so a same-origin or cid: src
+    // alongside a remote srcset buys nothing: the browser never requests src.
+    // Every element that honours srcset has to be rewritten.
+    const clean = rewriteRemoteImagesToProxy(sanitizeMailHtml(
+      '<picture><source srcset="https://evil.tld/q.gif 2x"><img src="cid:x"></picture>'
+      + '<video><source srcset="https://evil.tld/r.gif 1x"></video>'
+      + '<input type="image" src="cid:y" srcset="https://evil.tld/s.gif 3x">',
+      false,
+    ));
+
+    // Assert on the attribute *value*, not the whole string: the proxied URL
+    // percent-encodes the host inside url=, so a bare host search would match
+    // the very output that proves the rewrite worked.
+    expect(clean).not.toMatch(/srcset="https?:/);
+    expect(clean).not.toMatch(/srcset="\/\//);
+    expect(clean).toContain(`srcset="${proxyUrl("https://evil.tld/q.gif")} 2x"`);
+    expect(clean).toContain(`srcset="${proxyUrl("https://evil.tld/r.gif")} 1x"`);
+    expect(clean).toContain(`srcset="${proxyUrl("https://evil.tld/s.gif")} 3x"`);
+    // The cid: siblings are untouched — they are inline content, not a fetch.
+    expect(clean).toContain('src="cid:x"');
+    expect(clean).toContain('src="cid:y"');
+  });
+
+  it("removes the tracking pixel from the elements that survive the sanitizer", () => {
+    // Each of these was measured leaking through the full chain before the
+    // rewrite covered more than img[src]/SVG image: DOMPurify's html profile
+    // keeps all of them, so the reader really did request these URLs.
+    const vectors: { name: string; html: string; remote: string; proxied: string }[] = [
+      { name: "video poster", html: '<video poster="https://evil.tld/p.gif"></video>', remote: "https://evil.tld/p.gif", proxied: "poster" },
+      { name: "video src", html: '<video src="https://evil.tld/v.mp4"></video>', remote: "https://evil.tld/v.mp4", proxied: "src" },
+      { name: "audio src", html: '<audio src="https://evil.tld/a.mp3" controls></audio>', remote: "https://evil.tld/a.mp3", proxied: "src" },
+      { name: "track src", html: '<video><track src="https://evil.tld/c.vtt"></video>', remote: "https://evil.tld/c.vtt", proxied: "src" },
+      { name: "source src", html: '<video><source src="https://evil.tld/s.mp4"></video>', remote: "https://evil.tld/s.mp4", proxied: "src" },
+      { name: "input type=image src", html: '<input type="image" src="https://evil.tld/r.gif">', remote: "https://evil.tld/r.gif", proxied: "src" },
+    ];
+
+    for (const vector of vectors) {
+      const clean = rewriteRemoteImagesToProxy(sanitizeMailHtml(vector.html, false));
+      expect(clean, vector.name).not.toMatch(/(src|poster)="https?:\/\/evil\.tld/);
+      expect(clean, vector.name).toContain(`${vector.proxied}="${proxyUrl(vector.remote)}"`);
+    }
+  });
+
+  it("matches input[type=image] case-insensitively, as the browser does", () => {
+    // The HTML parser lowercases attribute NAMES but not values, and the image
+    // button state is decided by an ASCII-case-insensitive comparison — so
+    // type="IMAGE" is still an image button to the renderer. A case-sensitive
+    // selector here would leave the whole vector open.
+    const clean = rewriteRemoteImagesToProxy(sanitizeMailHtml(
+      '<input type="IMAGE" src="https://evil.tld/u.gif">',
+      false,
+    ));
+
+    expect(clean).not.toContain('src="https://evil.tld/u.gif"');
+    expect(clean).toContain(`src="${proxyUrl("https://evil.tld/u.gif")}"`);
   });
 
   it("covers the other attributes a mail body can hide a pixel behind", () => {
