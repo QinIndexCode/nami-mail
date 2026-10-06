@@ -6,33 +6,10 @@ import { useI18n } from "./i18n";
 import type { MailErrorPresentation } from "./errorPresentation";
 import { SenderAvatar, accountTone } from "./SenderAvatar";
 import { contextMenuItemIndexForKey } from "./contextMenu";
-import { localizeMessageLinks } from "./app/app-utils";
+import { formatMessageTime, localizeMessageLinks } from "./app/app-utils";
 import { isOwnSentMessage } from "./mailActions";
 import { countThreadMessages } from "./threads";
 import type { Account, AppSettings, Message } from "./types";
-
-// `Intl.DateTimeFormat` construction is not free; per-row-per-frame allocation
-// during scrolling is avoidable. Cache the three variants per locale so each
-// row reuses a formatter instead of rebuilding it every render.
-const messageTimeFormatters = new Map<string, Intl.DateTimeFormat>();
-
-function messageTimeFormatter(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
-  const key = `${locale}\u0000${JSON.stringify(options)}`;
-  const cached = messageTimeFormatters.get(key);
-  if (cached) return cached;
-  const formatter = new Intl.DateTimeFormat(locale, options);
-  messageTimeFormatters.set(key, formatter);
-  return formatter;
-}
-
-function formatMessageTime(value: string, locale: string): string {
-  const date = new Date(value);
-  const now = new Date();
-  const sameDay = date.toDateString() === now.toDateString();
-  if (sameDay) return messageTimeFormatter(locale, { hour: "2-digit", minute: "2-digit" }).format(date);
-  const sameYear = date.getFullYear() === now.getFullYear();
-  return messageTimeFormatter(locale, sameYear ? { month: "numeric", day: "numeric" } : { year: "2-digit", month: "numeric", day: "numeric" }).format(date);
-}
 
 type MailView = MessageListQuery["messageView"];
 

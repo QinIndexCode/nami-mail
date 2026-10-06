@@ -884,20 +884,20 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
                 <label className="calendar-field">
                   <span>{t("calendar.start")}</span>
                   {draft.allDay
-                    ? <DatePicker mode="date" value={draft.startDate} aria-label={t("calendar.start")} onChange={(value) => setDraft((draftValue) => ({ ...draftValue, startDate: value }))} />
+                    ? <DatePicker mode="date" value={draft.startDate} aria-label={t("calendar.start")} onChange={(value) => setDraft((draftValue) => ({ ...draftValue, startDate: value }))} panelHost={editorDialog} />
                     : <DatePicker mode="datetime" value={`${draft.startDate}T${draft.startTime}`} aria-label={t("calendar.start")} onChange={(value) => {
                         const [date, time = "00:00"] = value.split("T");
                         setDraft((draftValue) => ({ ...draftValue, startDate: date, startTime: time }));
-                      }} />}
+                      }} panelHost={editorDialog} />}
                 </label>
                 <label className="calendar-field">
                   <span>{t("calendar.end")}</span>
                   {draft.allDay
-                    ? <DatePicker mode="date" value={draft.endDate} aria-label={t("calendar.end")} onChange={(value) => setDraft((draftValue) => ({ ...draftValue, endDate: value }))} />
+                    ? <DatePicker mode="date" value={draft.endDate} aria-label={t("calendar.end")} onChange={(value) => setDraft((draftValue) => ({ ...draftValue, endDate: value }))} panelHost={editorDialog} />
                     : <DatePicker mode="datetime" value={`${draft.endDate}T${draft.endTime}`} aria-label={t("calendar.end")} onChange={(value) => {
                         const [date, time = "00:00"] = value.split("T");
                         setDraft((draftValue) => ({ ...draftValue, endDate: date, endTime: time }));
-                      }} />}
+                      }} panelHost={editorDialog} />}
                 </label>
               </div>
               <label className="calendar-field">

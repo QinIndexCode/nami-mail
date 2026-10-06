@@ -3,6 +3,7 @@
  * Zero functional changes — all code is moved verbatim.
  */
 import { ApiError } from "../api";
+import { dateTimeFormatter } from "../app/app-utils";
 import type {
   AgentCitation,
   AgentConversation,
@@ -68,7 +69,7 @@ export function shortDate(value: string, locale: string): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "";
   const sameDay = date.toDateString() === new Date().toDateString();
-  return new Intl.DateTimeFormat(locale, sameDay ? { hour: "2-digit", minute: "2-digit" } : { month: "numeric", day: "numeric" }).format(date);
+  return dateTimeFormatter(locale, sameDay ? { hour: "2-digit", minute: "2-digit" } : { month: "numeric", day: "numeric" }).format(date);
 }
 
 export function formatCountdown(remainingMs: number): string {

@@ -7,6 +7,9 @@ import {
   validationMessage,
   mailFailure,
   mailFailureBody,
+  contentDispositionFilename,
+  outboundAttachmentActionErrorMessage,
+  outboundAttachmentErrorStatus,
 } from "../helpers.js";
 import {
   batchMessageFlagsPatchSchema,
@@ -213,15 +216,6 @@ function attachmentErrorStatus(error: unknown): number {
   return 422;
 }
 
-function outboundAttachmentActionErrorMessage(error: unknown): string {
-  if (error instanceof OutboundAttachmentError) return error.message;
-  return "附件处理失败，请重新添加后重试。";
-}
-
-function outboundAttachmentErrorStatus(error: unknown): number {
-  return error instanceof OutboundAttachmentError ? error.statusCode : 422;
-}
-
 function storedDraftMessageId(context: RuntimeContext, accountId: string, localDraftId: string | undefined): string | undefined {
   if (!localDraftId) return undefined;
   const stored = messagePayloadById(context.db, context.masterKey, localDraftId);
@@ -242,10 +236,6 @@ async function readImportedAttachment(content: Readable): Promise<Buffer> {
   }
   if (!size) throw new OutboundAttachmentError("附件内容不能为空。", 400);
   return Buffer.concat(chunks, size);
-}
-
-function contentDispositionFilename(filename: string): string {
-  return encodeURIComponent(filename).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 const submittedVerificationMessage = "邮件已发送，投递状态确认中。";

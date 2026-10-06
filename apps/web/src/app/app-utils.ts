@@ -16,17 +16,35 @@ export const SWITCH_FADE_MS = 240;
 export const MAIL_FADE_STAGGER_MS = 60;
 export const AGENT_FADE_STAGGER_MS = 80;
 
+// `Intl.DateTimeFormat` construction is not free; per-row-per-frame allocation
+// during scrolling is avoidable. Cache one formatter per locale + options pair
+// so repeat renders reuse it instead of rebuilding it every time. The key
+// carries the serialised options because several distinct variants are in play
+// (time-only, day-only, day + year, long form) and they must not share a cache
+// slot. Shared by every render path so the mail list, the reader tooltips and
+// the agent rows all reuse the same instances.
+const dateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+
+export function dateTimeFormatter(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${locale}\u0000${JSON.stringify(options)}`;
+  const cached = dateTimeFormatters.get(key);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat(locale, options);
+  dateTimeFormatters.set(key, formatter);
+  return formatter;
+}
+
 export function formatMessageTime(value: string, locale: string): string {
   const date = new Date(value);
   const now = new Date();
   const sameDay = date.toDateString() === now.toDateString();
-  if (sameDay) return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(date);
+  if (sameDay) return dateTimeFormatter(locale, { hour: "2-digit", minute: "2-digit" }).format(date);
   const sameYear = date.getFullYear() === now.getFullYear();
-  return new Intl.DateTimeFormat(locale, sameYear ? { month: "numeric", day: "numeric" } : { year: "2-digit", month: "numeric", day: "numeric" }).format(date);
+  return dateTimeFormatter(locale, sameYear ? { month: "numeric", day: "numeric" } : { year: "2-digit", month: "numeric", day: "numeric" }).format(date);
 }
 
 export function formatFullDate(value: string, locale: string): string {
-  return new Intl.DateTimeFormat(locale, {
+  return dateTimeFormatter(locale, {
     year: "numeric",
     month: "long",
     day: "numeric",

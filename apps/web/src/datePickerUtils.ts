@@ -32,6 +32,14 @@ export function buildGrid(month: Date): Date[] {
   return Array.from({ length: 42 }, (_, index) => new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + index));
 }
 
+/**
+ * Splits a flat cell list into fixed-size rows, for the `role="row"` wrappers
+ * an ARIA grid requires between `grid` and `gridcell`.
+ */
+export function chunkRows<T>(items: T[], size: number): T[][] {
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, index * size + size));
+}
+
 /** Shift a local date by the given number of days. */
 export function shiftDays(day: Date, delta: number): Date {
   return new Date(day.getFullYear(), day.getMonth(), day.getDate() + delta);

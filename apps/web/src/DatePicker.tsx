@@ -1,13 +1,27 @@
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { autoUpdate, computePosition, flip, offset, shift } from "@floating-ui/dom";
-import { buildGrid, dateKey, pad, parseTime, parseValue, timeValue } from "./datePickerUtils";
+import { buildGrid, chunkRows, dateKey, pad, parseTime, parseValue, timeValue } from "./datePickerUtils";
 import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import ThemedSelect from "./ThemedSelect";
 import { useI18n } from "./i18n";
 
 export type DatePickerMode = "date" | "datetime";
+
+/**
+ * Where the panel is portaled to. A dialog passes the element that owns its
+ * focus trap so the panel lives inside `dialog.contains(...)`; without a host
+ * the panel falls back to document.body. A ref is accepted so callers can hand
+ * over their dialog ref directly: it is dereferenced during this component's
+ * own render, which is always after the dialog element has been attached.
+ */
+type PanelHost = HTMLElement | RefObject<HTMLElement | null> | null | undefined;
+
+function resolvePanelHost(host: PanelHost): HTMLElement | null {
+  if (!host) return null;
+  return "current" in host ? host.current : host;
+}
 
 type DatePickerProps = {
   mode: DatePickerMode;
@@ -21,11 +35,23 @@ type DatePickerProps = {
   minDate?: string;
   /** Optional last date that cannot be picked (inclusive). */
   maxDate?: string;
+  /**
+   * Element the panel is portaled into. Callers inside a focus-trapped dialog
+   * must pass an element the trap covers (usually the dialog element itself):
+   * a panel on document.body sits outside the trap and the trap yanks focus
+   * back the moment a day button takes it. Omit it outside dialogs, where the
+   * body portal is the correct, unclipped placement.
+   */
+  panelHost?: PanelHost;
 };
 
 type PanelView = "day" | "month" | "year";
 
 const MONTHS_PER_YEAR = 12;
+/** Column counts per view; they also drive the arrow-key row stride. */
+const DAY_COLUMNS = 7;
+const MONTH_COLUMNS = 4;
+const YEAR_COLUMNS = 4;
 
 /**
  * A theme-owned date (and optional time) picker. It replaces the browser's
@@ -43,6 +69,7 @@ export default function DatePicker({
   "aria-label": ariaLabel,
   minDate,
   maxDate,
+  panelHost,
 }: DatePickerProps) {
   const { locale, t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -53,6 +80,8 @@ export default function DatePicker({
     return new Date(base.getFullYear(), base.getMonth(), 1);
   });
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  const [focusedMonth, setFocusedMonth] = useState<number | null>(null);
+  const [focusedYear, setFocusedYear] = useState<number | null>(null);
   const rootRef = useRef<HTMLSpanElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -61,11 +90,17 @@ export default function DatePicker({
   const { hour, minute } = useMemo(() => parseTime(parsed.time), [parsed.time]);
   const todayKey = useMemo(() => dateKey(new Date()), []);
   const selectedKey = parsed.date ? dateKey(parsed.date) : "";
+  // A hosted panel is absolutely positioned inside the dialog: the dialog's own
+  // pinned entry animation gives it a transform, which would otherwise make it
+  // the containing block for a fixed descendant and re-anchor the coordinates
+  // to the dialog box. Unhosted keeps the body portal and stays viewport-fixed.
+  const hostElement = resolvePanelHost(panelHost);
+  const hosted = hostElement !== null;
 
-  // The panel renders through a portal into document.body so no dialog's
-  // overflow clipping can cut it off, and Floating-UI owns placement: flip
-  // picks the side with room, shift keeps the panel inside the viewport, and
-  // autoUpdate repositions across scrolling, resizing, and view changes.
+  // Floating-UI owns placement in both cases: flip picks the side with room,
+  // shift keeps the panel inside the viewport (or, when hosted, inside the
+  // dialog's clipping ancestors), and autoUpdate repositions across scrolling,
+  // resizing, and view changes.
   useEffect(() => {
     if (!open) return undefined;
     const trigger = triggerRef.current;
@@ -73,7 +108,7 @@ export default function DatePicker({
     if (!trigger || !panel) return undefined;
     const update = () => {
       void computePosition(trigger, panel, {
-        strategy: "fixed",
+        strategy: hosted ? "absolute" : "fixed",
         placement: "bottom-start",
         middleware: [offset(6), flip(), shift({ padding: 8 })],
       }).then(({ x, y }) => {
@@ -83,20 +118,15 @@ export default function DatePicker({
     };
     update();
     return autoUpdate(trigger, panel, update);
-  }, [open]);
-
-  // Sync the focused day when the panel opens or the selected date changes.
-  useEffect(() => {
-    if (open && view === "day") setFocusedKey(selectedKey || todayKey);
-  }, [open, view, selectedKey, todayKey]);
+  }, [open, hosted]);
 
   useEffect(() => {
     if (!open) return undefined;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      // The panel is portaled to document.body, so the outside-click check
-      // must cover it alongside the trigger wrapper.
+      // The panel is portaled out of the trigger wrapper, so the outside-click
+      // check must cover it explicitly.
       if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return;
       beginPanelClose();
     };
@@ -114,10 +144,28 @@ export default function DatePicker({
   const gridDays = useMemo(() => buildGrid(viewMonth), [viewMonth]);
   const monthLabel = monthLongFormatter.format(viewMonth);
   const year = viewMonth.getFullYear();
+  const viewMonthMonth = viewMonth.getMonth();
 
   // Year view shows a rolling 12-year window centred on the viewed year.
   const yearWindowStart = year - 5;
-  const yearWindow = useMemo(() => Array.from({ length: MONTHS_PER_YEAR }, (_, index) => yearWindowStart + index), [yearWindowStart]);
+  const yearCells = useMemo(
+    () => Array.from({ length: MONTHS_PER_YEAR }, (_, index) => ({ year: yearWindowStart + index })),
+    [yearWindowStart],
+  );
+  const monthCells = useMemo(() => Array.from({ length: MONTHS_PER_YEAR }, (_, index) => index), []);
+
+  // Sync the focused cell when the panel opens, when the view changes, or when
+  // the selected date changes, so every grid has a roving-tabindex entry point.
+  // The deps are the primitive month/year rather than the viewMonth Date:
+  // arrowing the day focus calls setViewMonth with a fresh Date for the same
+  // month, and an object dep would re-run this and snap focus back.
+  useEffect(() => {
+    if (!open) return;
+    if (view === "day") setFocusedKey(selectedKey || todayKey);
+    if (view === "month") setFocusedMonth(viewMonthMonth);
+    if (view === "year") setFocusedYear(year);
+  }, [open, view, selectedKey, todayKey, viewMonthMonth, year]);
+
   const displayValue = useMemo(() => {
     if (!parsed.date) return "";
     const dateFormatter = new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric" });
@@ -194,32 +242,80 @@ export default function DatePicker({
     }
   };
 
-  const handleGridKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+  const NAVIGATION_KEYS = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Enter", " "] as const;
+
+  /**
+   * Roving-focus keyboard handling shared by all three grids. Moving is a pure
+   * index step over the view's cell list (rows are `columns` wide), so the day,
+   * month and year views navigate identically instead of the day view being the
+   * only keyboard-reachable one.
+   */
+  const handleGridKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+    cells: { length: number },
+    columns: number,
+    currentIndex: number,
+    moveTo: (index: number) => void,
+    activate: (index: number) => void,
+  ) => {
     if (event.key === "Escape") {
       event.preventDefault();
       beginPanelClose();
       return;
     }
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Enter", " "].includes(event.key)) return;
-    const currentIndex = gridDays.findIndex((day) => dateKey(day) === focusedKey);
+    if (!(NAVIGATION_KEYS as readonly string[]).includes(event.key)) return;
     if (currentIndex < 0) return;
-    let nextIndex = currentIndex;
-    if (event.key === "ArrowLeft") nextIndex = currentIndex - 1;
-    if (event.key === "ArrowRight") nextIndex = currentIndex + 1;
-    if (event.key === "ArrowUp") nextIndex = currentIndex - 7;
-    if (event.key === "ArrowDown") nextIndex = currentIndex + 7;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      pickDate(gridDays[currentIndex]);
+      activate(currentIndex);
       return;
     }
     event.preventDefault();
-    const nextDay = gridDays[nextIndex];
-    if (!nextDay) return;
-    const nextKey = dateKey(nextDay);
-    setFocusedKey(nextKey);
-    // Keep the view in sync when the focus crosses a month boundary.
-    setViewMonth(new Date(nextDay.getFullYear(), nextDay.getMonth(), 1));
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowLeft") nextIndex = currentIndex - 1;
+    if (event.key === "ArrowRight") nextIndex = currentIndex + 1;
+    if (event.key === "ArrowUp") nextIndex = currentIndex - columns;
+    if (event.key === "ArrowDown") nextIndex = currentIndex + columns;
+    if (nextIndex < 0 || nextIndex >= cells.length) return;
+    moveTo(nextIndex);
+  };
+
+  const handleDayGridKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    handleGridKeyDown(
+      event,
+      gridDays,
+      DAY_COLUMNS,
+      gridDays.findIndex((day) => dateKey(day) === focusedKey),
+      (index) => {
+        const nextDay = gridDays[index];
+        setFocusedKey(dateKey(nextDay));
+        // Keep the view in sync when the focus crosses a month boundary.
+        setViewMonth(new Date(nextDay.getFullYear(), nextDay.getMonth(), 1));
+      },
+      (index) => pickDate(gridDays[index]),
+    );
+  };
+
+  const handleMonthGridKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    handleGridKeyDown(
+      event,
+      monthCells,
+      MONTH_COLUMNS,
+      focusedMonth ?? -1,
+      (index) => setFocusedMonth(index),
+      (index) => selectMonth(index),
+    );
+  };
+
+  const handleYearGridKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    handleGridKeyDown(
+      event,
+      yearCells,
+      YEAR_COLUMNS,
+      focusedYear === null ? -1 : yearCells.findIndex((cell) => cell.year === focusedYear),
+      (index) => setFocusedYear(yearCells[index].year),
+      (index) => selectYear(yearCells[index].year),
+    );
   };
 
   const gridDayProps = (day: Date) => {
@@ -266,8 +362,12 @@ export default function DatePicker({
       <div className="date-picker-weekdays" aria-hidden="true">
         {weekdays.map((weekday) => <span key={weekday}>{weekday}</span>)}
       </div>
-      <div className="date-picker-grid" role="grid" aria-label={monthLabel} onKeyDown={handleGridKeyDown}>
-        {gridDays.map((day) => <button key={dateKey(day)} {...gridDayProps(day)}>{day.getDate()}</button>)}
+      <div className="date-picker-grid" role="grid" aria-label={monthLabel} onKeyDown={handleDayGridKeyDown}>
+        {chunkRows(gridDays, DAY_COLUMNS).map((row) => (
+          <div className="date-picker-grid-row" role="row" key={dateKey(row[0])}>
+            {row.map((day) => <button key={dateKey(day)} {...gridDayProps(day)}>{day.getDate()}</button>)}
+          </div>
+        ))}
       </div>
       {mode === "datetime" && (
         <div className="date-picker-time">
@@ -288,28 +388,57 @@ export default function DatePicker({
   );
 
   const renderMonthView = () => (
-    <div className="date-picker-months" role="grid" aria-label={t("datePicker.chooseMonth")}>
-      {Array.from({ length: MONTHS_PER_YEAR }, (_, index) => {
-        const isCurrent = new Date().getMonth() === index && year === new Date().getFullYear();
-        return (
-          <button key={index} type="button" role="gridcell" className={`date-picker-month${isCurrent ? " today" : ""}`} onClick={() => selectMonth(index)}>
-            {monthFormatter.format(new Date(2000, index, 1))}
-          </button>
-        );
-      })}
+    <div className="date-picker-months" role="grid" aria-label={t("datePicker.chooseMonth")} onKeyDown={handleMonthGridKeyDown}>
+      {chunkRows(monthCells, MONTH_COLUMNS).map((row) => (
+        <div className="date-picker-grid-row" role="row" key={row[0]}>
+          {row.map((index) => {
+            const isCurrent = new Date().getMonth() === index && year === new Date().getFullYear();
+            const isFocused = focusedMonth === index;
+            return (
+              <button
+                key={index}
+                type="button"
+                role="gridcell"
+                className={`date-picker-month${isCurrent ? " today" : ""}${isFocused ? " focused" : ""}`}
+                tabIndex={isFocused ? 0 : -1}
+                aria-selected={isFocused}
+                aria-label={monthLongFormatter.format(new Date(year, index, 1))}
+                onFocus={() => setFocusedMonth(index)}
+                onClick={() => selectMonth(index)}
+              >
+                {monthFormatter.format(new Date(2000, index, 1))}
+              </button>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 
   const renderYearView = () => (
-    <div className="date-picker-years" role="grid" aria-label={t("datePicker.chooseYear")}>
-      {yearWindow.map((yearValue) => {
-        const isCurrent = yearValue === new Date().getFullYear();
-        return (
-          <button key={yearValue} type="button" role="gridcell" className={`date-picker-year${isCurrent ? " today" : ""}`} onClick={() => selectYear(yearValue)}>
-            {yearValue}
-          </button>
-        );
-      })}
+    <div className="date-picker-years" role="grid" aria-label={t("datePicker.chooseYear")} onKeyDown={handleYearGridKeyDown}>
+      {chunkRows(yearCells, YEAR_COLUMNS).map((row) => (
+        <div className="date-picker-grid-row" role="row" key={row[0].year}>
+          {row.map(({ year: yearValue }) => {
+            const isCurrent = yearValue === new Date().getFullYear();
+            const isFocused = focusedYear === yearValue;
+            return (
+              <button
+                key={yearValue}
+                type="button"
+                role="gridcell"
+                className={`date-picker-year${isCurrent ? " today" : ""}${isFocused ? " focused" : ""}`}
+                tabIndex={isFocused ? 0 : -1}
+                aria-selected={isFocused}
+                onFocus={() => setFocusedYear(yearValue)}
+                onClick={() => selectYear(yearValue)}
+              >
+                {yearValue}
+              </button>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 
@@ -334,7 +463,7 @@ export default function DatePicker({
         <div
           id={panelId}
           ref={panelRef}
-          className={`date-picker-panel${panelClosing ? " closing" : ""}`}
+          className={`date-picker-panel${hosted ? " hosted" : ""}${panelClosing ? " closing" : ""}`}
           role="dialog"
           aria-label={ariaLabel || t("datePicker.panelLabel")}
         >
@@ -347,7 +476,9 @@ export default function DatePicker({
           {view === "month" && renderMonthView()}
           {view === "year" && renderYearView()}
         </div>,
-        document.body,
+        // Without a host the body portal keeps the panel clear of every dialog's
+        // overflow clipping; with one it must live inside the trapping dialog.
+        hostElement ?? document.body,
       )}
     </span>
   );

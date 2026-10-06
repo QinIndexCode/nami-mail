@@ -80,8 +80,18 @@ describe("styles.css size ratchet", () => {
   //     （+4 行注释）。
   // 下一轮 CSS 瘦身时应优先收回：先合并 responsive.css 里重复的
   // visually-hidden 配方，再考虑把 tint 说明挪进设计系统文档。
+  // 2026-10-07 有记录的一次上调（17_659 → 17_682）：修复「日期选择器键盘/
+  // 屏幕阅读器不可用」。实测聚合 17_670 行（+11），阈值取实测 +12 行缓冲。
+  // 本轮 +11 行的来源（均为修复缺陷所必需，无 gold-plating）：
+  //   calendar.css 新增 .date-picker-panel.hosted（模态框内面板改用 absolute，
+  //     含 4 行说明为何不能用 fixed——模态框的入场动画会留下 transform）；
+  //   新增 .date-picker-grid-row（ARIA 要求 grid > row > gridcell，含 1 行
+  //     说明）与月/年视图的 4 列行覆盖；
+  //   月/年单元格并入既有 :focus-visible 选择器组，补上 roving-tabindex 的
+  //     .focused 焦点环（+1 行，无独立规则）。
+  // 下一轮 CSS 瘦身时应优先收回：与上述三条说明注释合并表述。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 17_659;
+  const FROZEN_AGGREGATED_MAX_LINES = 17_682;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

@@ -1064,6 +1064,7 @@ export default function SettingsModal({
         setMemoryDialogOpen={setMemoryDialogOpen}
         setAutoReplySandboxOpen={setAutoReplySandboxOpen}
         overlayHostRef={settingsBackdrop}
+        panelHostRef={settingsDialog}
       />
     ),
     translation: (

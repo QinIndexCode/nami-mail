@@ -365,15 +365,23 @@ opacity:.6
 }
 .date-picker-panel
 {
-z-index:70;
-border:1px solid var(--line-strong);
-background:var(--panel-solid);
-width:264px;
-box-shadow:var(--shadow-raised);
-border-radius:var(--radius-md);
-padding:11px;
-animation:.16s cubic-bezier(.2,.8,.2,1) both popup-in;
-position:fixed
+	z-index:70;
+	border:1px solid var(--line-strong);
+	background:var(--panel-solid);
+	width:264px;
+	box-shadow:var(--shadow-raised);
+	border-radius:var(--radius-md);
+	padding:11px;
+	animation:.16s cubic-bezier(.2,.8,.2,1) both popup-in;
+	position:fixed
+}
+/* Portaled into a focus-trapped dialog (see DatePicker's panelHost). The
+   dialog's pinned entry animation gives it a transform, so a fixed panel would
+   resolve against the dialog box, not the viewport; absolute matches the
+   strategy Floating-UI then computes with. */
+.date-picker-panel.hosted
+{
+	position:absolute
 }
 .date-picker-nav
 {
@@ -445,9 +453,16 @@ font-weight:650
 }
 .date-picker-grid
 {
-grid-template-columns:repeat(7,1fr);
-gap:1px;
-display:grid
+	gap:1px;
+	display:flex;
+	flex-direction:column
+}
+/* ARIA needs grid > row > gridcell, so each week is its own row element. */
+.date-picker-grid-row
+{
+	grid-template-columns:repeat(7,1fr);
+	gap:1px;
+	display:grid
 }
 .date-picker-day
 {
@@ -499,9 +514,14 @@ opacity:.35
 }
 .date-picker-months,.date-picker-years
 {
-grid-template-columns:repeat(4,1fr);
-gap:2px;
-display:grid
+	gap:2px;
+	display:flex;
+	flex-direction:column
+}
+.date-picker-months .date-picker-grid-row,.date-picker-years .date-picker-grid-row
+{
+	gap:2px;
+	grid-template-columns:repeat(4,1fr)
 }
 .date-picker-month,.date-picker-year
 {
@@ -521,12 +541,15 @@ color:var(--text)
 }
 .date-picker-month.today,.date-picker-year.today
 {
-color:var(--focus-ring);
-font-weight:700
+	color:var(--focus-ring);
+	font-weight:700
 }
-.date-picker-month:focus-visible,.date-picker-year:focus-visible
+/* :focus-visible for real focus, .focused for the roving-tabindex cell, which
+   arrow keys move without moving DOM focus. */
+.date-picker-month:focus-visible,.date-picker-year:focus-visible,
+.date-picker-month.focused,.date-picker-year.focused
 {
-box-shadow:0 0 0 2px var(--focus-ring) inset
+	box-shadow:0 0 0 2px var(--focus-ring) inset
 }
 .date-picker-time
 {
