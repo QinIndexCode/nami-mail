@@ -37,7 +37,7 @@ import {
   Sun, Users, Trash2, WifiOff, X,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
-import { CustomAvatar, SenderAvatar } from "./SenderAvatar";
+import { CustomAvatar, SenderAvatar, accountTone } from "./SenderAvatar";
 import { WindowBar } from "./WindowBar";
 import { api, type BatchJobSnapshot, type MoveTarget } from "./api";
 import { calendarCache, contactsCache, templatesCache } from "./dialogPrefetch";
@@ -114,12 +114,12 @@ import {
 
   moveActionKey,
   demoMoveDestination,
-  accountTone,
   currentSystemTheme,
   resolveTheme,
   backgroundUrl,
   collapseQuotedMailHtml,
   sanitizeMailHtml,
+  rewriteRemoteImagesToProxy,
   splitQuotedMailText,
   textFromSanitizedMailHtml,
   replyBody,
@@ -1582,7 +1582,11 @@ const emptyMessageList = useMemo(() => (query.trim()
       : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false }), [query, selectedFolderName, selectedFolder, t, view]);
   const { issues: accountIssues, accountsNeedingAttention, primaryAccountNeedingAttention, primaryAccountIssue, healthAlert, dismissHealthAlert } = useAccountHealth(accounts, t);
   const safeHtml = useMemo(
-    () => selected?.htmlBody ? sanitizeMailHtml(selected.htmlBody, theme === "dark") : "",
+    // Sanitize first, then route remote images through the proxy: the reader
+    // must never reach a mail's own image host directly (that request is the
+    // open-time + read-receipt leak), while `data:`, `cid:` and the server's
+    // inline-attachment URLs stay exactly as they are.
+    () => selected?.htmlBody ? rewriteRemoteImagesToProxy(sanitizeMailHtml(selected.htmlBody, theme === "dark")) : "",
     [selected?.htmlBody, theme],
   );
   // Reply quotes collapse to a one-line toggle (Gmail-style). The fold lives

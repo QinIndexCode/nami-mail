@@ -1,4 +1,4 @@
-import { lazy, Suspense, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { lazy, Suspense, useEffect, useRef, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from "react";
 import {
   Archive,
   ArrowLeft,
@@ -30,16 +30,17 @@ import {
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
 import { MailTextBody } from "./MailTextBody";
-import { CustomAvatar, SenderAvatar } from "./SenderAvatar";
+import { CustomAvatar, SenderAvatar, accountTone } from "./SenderAvatar";
 import DatePicker from "./DatePicker";
 import { canPreviewAttachment } from "./attachmentPreview";
+import { hideFailedMailImages } from "./mailImageFallback";
 import { presentAttachment } from "./attachmentPresentation";
 import { AttachmentFileIcon, formatFileSize, isoFromDatetimeLocal, IconButton } from "./mailUi";
 import { isIcsAttachment } from "./calendar/calendarUtils";
 import MailCalendarInviteBanner from "./calendar/MailCalendarInviteBanner";
 import { ErrorBoundary } from "./ErrorBoundary";
 import TranslationPanel from "./TranslationPanel";
-import { accountTone, formatFullDate } from "./app/app-utils";
+import { formatFullDate } from "./app/app-utils";
 import type { splitQuotedMailText } from "./app/app-utils";
 import type { useAttachmentExports } from "./app/useAttachmentExports";
 import type { useMailTranslation } from "./app/useMailTranslation";
@@ -238,6 +239,12 @@ export function MailReader(props: MailReaderProps) {
     openAttachmentPreview,
   } = props;
 
+  // Remote images now load through /api/images/proxy, which fails closed, so a
+  // dead link or a blocked host must cost the reader that one picture and
+  // nothing else. See mailImageFallback.ts.
+  const mailHtmlRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => hideFailedMailImages(mailHtmlRef.current), [readerHtml]);
+
   return (
     <section className={`reader-column ${selected ? "has-message" : ""}`}>
       {selected ? (
@@ -358,7 +365,7 @@ export function MailReader(props: MailReaderProps) {
               )}
               <MailCalendarInviteBanner messageId={selected.id} attachments={selected.attachments} onImportClick={openCalendarImport} onViewCalendar={() => actions.openCalendar()} demoMode={isDemo} />
               <div className="mail-content">{selected.htmlBody
-                ? <div className="mail-html" dangerouslySetInnerHTML={{ __html: readerHtml }} />
+                ? <div className="mail-html" ref={mailHtmlRef} dangerouslySetInnerHTML={{ __html: readerHtml }} />
                 : <div className="mail-text"><MailTextBody body={readerTextParts.quote ? readerTextParts.body : readerTextSource} suffix={readerTextParts.quote ? <button type="button" className="mail-quote-toggle" onClick={() => setQuotedExpanded(true)}>{t("mail.reader.showQuoted")}</button> : null} /></div>}
               </div>
               {visibleAttachments.length > 0 && (

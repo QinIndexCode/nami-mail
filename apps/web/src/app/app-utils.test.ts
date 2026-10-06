@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { collapseQuotedMailHtml, sanitizeMailHtml, splitBodyLinks, splitQuotedMailText } from "./app-utils";
+import { collapseQuotedMailHtml, rewriteRemoteImagesToProxy, sanitizeMailHtml, splitBodyLinks, splitQuotedMailText } from "./app-utils";
+
+/** The exact shape the reader must emit for a remote image. */
+const proxyUrl = (remote: string) => `/api/images/proxy?url=${encodeURIComponent(remote)}`;
 
 describe("collapseQuotedMailHtml", () => {
   it("folds a top-level blockquote into a details toggle", () => {
@@ -260,22 +263,31 @@ describe("sanitizeMailHtml", () => {
     expect(clean).not.toContain("onmouseover");
     expect(clean).not.toContain("onerror");
     expect(clean).toContain("<div>");
-    expect(clean).toContain('src="https://example.com/a.png"');
+    // Sanitization is not the layer that proxies images, so the bare URL is
+    // still here. What must never reach the reader is that URL — assert on the
+    // composed pipeline the reader actually renders.
+    const readerHtml = rewriteRemoteImagesToProxy(clean);
+    expect(readerHtml).not.toContain('src="https://example.com/a.png"');
+    expect(readerHtml).toContain(`src="${proxyUrl("https://example.com/a.png")}"`);
   });
 
   it("strips javascript: and vbscript: URIs while keeping real links and CID images", () => {
-    const clean = sanitizeMailHtml(
+    const clean = rewriteRemoteImagesToProxy(sanitizeMailHtml(
       '<a href="javascript:alert(1)">bad</a><a href="vbscript:msgbox(1)">worse</a><a href="https://example.com/ok">good</a><img src="cid:logo@mail"><img src="https://example.com/a.png">',
       false,
-    );
+    ));
 
     expect(clean).not.toContain("javascript:");
     expect(clean).not.toContain("vbscript:");
+    // An <a href> is the reader's own click to make, so an https target stays.
     expect(clean).toContain('href="https://example.com/ok"');
     // Inline images are rewritten server-side to a cached URL, but a not-yet
-    // resolved cid: must survive sanitization — the URI scheme is allow-listed.
+    // resolved cid: must survive sanitization — the URI scheme is allow-listed,
+    // and the proxy rewrite must not touch it either.
     expect(clean).toContain('src="cid:logo@mail"');
-    expect(clean).toContain('src="https://example.com/a.png"');
+    // A remote img src, by contrast, is proxied: the bare URL does not survive.
+    expect(clean).not.toContain('src="https://example.com/a.png"');
+    expect(clean).toContain(`src="${proxyUrl("https://example.com/a.png")}"`);
   });
 
   it("keeps data: URIs on img, the channel inline and BIMI images legitimately use", () => {
@@ -414,5 +426,135 @@ describe("adversarial SVG and MathML", () => {
     for (const fragment of ["<table", 'width="600"', 'cellpadding="0"', 'bgcolor="#ffffff"', 'align="center"', "<tbody>", "<tr>", "<td", 'valign="top"', "<center>", '<font face="Arial" size="3">', "<strong>"]) {
       expect(clean, fragment).toContain(fragment);
     }
+  });
+});
+
+describe("rewriteRemoteImagesToProxy", () => {
+  it("routes every remote img src through the proxy, keeping the picture working", () => {
+    const clean = rewriteRemoteImagesToProxy(
+      '<p>Report</p><img src="https://evil.tld/pixel?u=victim" width="1" height="1">'
+      + '<img src="http://cdn.example/banner.png"><img src="//tracker.example/p.png">',
+    );
+
+    expect(clean).toContain(`src="${proxyUrl("https://evil.tld/pixel?u=victim")}"`);
+    expect(clean).toContain(`src="${proxyUrl("http://cdn.example/banner.png")}"`);
+    // A protocol-relative URL must arrive at the proxy absolute — the server
+    // has no document base to resolve "//tracker.example/p.png" against.
+    expect(clean).toContain(`src="${proxyUrl("http://tracker.example/p.png")}"`);
+    // Not one bare remote host is left for the renderer to contact directly.
+    expect(clean).not.toMatch(/src="(https?:)?\/\//);
+    // Layout attributes ride along untouched, or tracking-mail layouts shift.
+    expect(clean).toContain('width="1"');
+    expect(clean).toContain('height="1"');
+    expect(clean).toContain("<p>Report</p>");
+  });
+
+  it("leaves data:, cid:, blob: and the server's inline URLs alone", () => {
+    // None of these is a request to a third party, so proxying them would only
+    // break inline images. cid: is rewritten server-side to the inline
+    // endpoint, which is same-origin and must pass through untouched as well.
+    const clean = rewriteRemoteImagesToProxy(
+      '<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=" alt="logo">'
+      + '<img src="cid:logo@mail">'
+      + '<img src="/api/messages/11111111-1111-1111-1111-111111111111/inline/p1">',
+    );
+
+    expect(clean).toContain('src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4="');
+    expect(clean).toContain('src="cid:logo@mail"');
+    expect(clean).toContain('src="/api/messages/11111111-1111-1111-1111-111111111111/inline/p1"');
+    expect(clean).not.toContain("/api/images/proxy");
+  });
+
+  it("rewrites srcset, which would otherwise bypass a src-only fix entirely", () => {
+    // The browser prefers srcset candidates whenever srcset is present and never
+    // requests src at all, so leaving this attribute alone reopens the whole
+    // leak behind a correctly proxied src.
+    const clean = rewriteRemoteImagesToProxy(
+      '<img src="https://cdn.example/hero.png" srcset="https://evil.tld/pixel 1x, https://evil.tld/pixel@2x 2x">',
+    );
+
+    expect(clean).toContain(`srcset="${proxyUrl("https://evil.tld/pixel")} 1x, ${proxyUrl("https://evil.tld/pixel@2x")} 2x"`);
+    expect(clean).not.toContain("evil.tld/pixel 1x");
+  });
+
+  it("keeps data: and same-origin srcset candidates while proxying the remote ones", () => {
+    const clean = rewriteRemoteImagesToProxy(
+      '<img srcset="data:image/png;base64,AAA= 1x, /api/messages/1/inline/p1 2x">',
+    );
+
+    expect(clean).toContain('srcset="data:image/png;base64,AAA= 1x, /api/messages/1/inline/p1 2x"');
+  });
+
+  it("covers the other attributes a mail body can hide a pixel behind", () => {
+    const clean = rewriteRemoteImagesToProxy(
+      '<table background="https://evil.tld/bg.png"><tr><td>x</td></tr></table>'
+      + '<div style="background-image:url(https://evil.tld/css.png)">y</div>'
+      + '<svg><image href="https://evil.tld/svg1.png"/><image xlink:href="https://evil.tld/svg2.png"/></svg>',
+    );
+
+    expect(clean).toContain(`background="${proxyUrl("https://evil.tld/bg.png")}"`);
+    // The double quotes go through attribute serialization as &quot;, which the
+    // parser turns back into real quotes — assert on the decoded value, and on
+    // the fact that the browser still resolves it as a real CSS url().
+    const parsed = document.createElement("template");
+    parsed.innerHTML = clean;
+    const styled = parsed.content.querySelector("div")!;
+    expect(styled.style.backgroundImage).toContain(proxyUrl("https://evil.tld/css.png"));
+    expect(clean).toContain(`href="${proxyUrl("https://evil.tld/svg1.png")}"`);
+    expect(clean).toContain(`xlink:href="${proxyUrl("https://evil.tld/svg2.png")}"`);
+    expect(clean).not.toMatch(/(background|href)="https:\/\/evil\.tld/);
+  });
+
+  it("leaves a non-URL background attribute and a data: url() untouched", () => {
+    // background is overloaded: the overwhelmingly common value is a colour,
+    // and a data: url() is inline content, not a third-party fetch.
+    const clean = rewriteRemoteImagesToProxy(
+      '<table bgcolor="#ffffff"><tr><td background="#f5f5f6">a</td></tr></table>'
+      + '<div style="background-image:url(data:image/png;base64,AAA=)">b</div>',
+    );
+
+    expect(clean).toContain('background="#f5f5f6"');
+    expect(clean).toContain("url(data:image/png;base64,AAA=)");
+    expect(clean).not.toContain("/api/images/proxy");
+  });
+
+  it("is idempotent, so a body can pass through it more than once", () => {
+    // The translation pipeline re-runs the body through its own parse-serialize
+    // passes, and the reader already-proxied URLs resolve same-origin. Applying
+    // it twice must not produce /api/images/proxy?url=/api/images/proxy...
+    const once = rewriteRemoteImagesToProxy('<img src="https://evil.tld/p.png">');
+    expect(rewriteRemoteImagesToProxy(once)).toBe(once);
+  });
+
+  it("never touches an <a href>: a link is the reader's own click to make", () => {
+    const clean = rewriteRemoteImagesToProxy(
+      '<a href="https://example.com/x">Open</a><img src="https://evil.tld/p.png">',
+    );
+
+    expect(clean).toContain('href="https://example.com/x"');
+    expect(clean).toContain(`src="${proxyUrl("https://evil.tld/p.png")}"`);
+  });
+
+  it("returns the input unchanged when there is nothing to rewrite", () => {
+    expect(rewriteRemoteImagesToProxy("")).toBe("");
+    expect(rewriteRemoteImagesToProxy("<p>plain text body</p>")).toBe("<p>plain text body</p>");
+  });
+
+  it("removes the tracking pixel even when it is hidden by a table layout", () => {
+    // The canonical open-time/read-receipt beacon, including the presentation
+    // attributes real beacon mail uses to stay invisible.
+    const readerHtml = rewriteRemoteImagesToProxy(sanitizeMailHtml(
+      '<table role="presentation" width="0" cellspacing="0" cellpadding="0" border="0">'
+      + '<tr><td height="0" style="height:0;line-height:0;font-size:0;">'
+      + '<img src="https://evil.tld/open?uid=42" width="1" height="1" alt="" style="display:none;border:0" border="0">'
+      + '</td></tr></table><p>Real content</p>',
+      false,
+    ));
+
+    // The host survives only percent-encoded inside the proxy's url= parameter —
+    // no attribute points the renderer at it any more.
+    expect(readerHtml).not.toMatch(/(src|href|background)="(https?:)?\/\/evil\.tld/);
+    expect(readerHtml).toContain(proxyUrl("https://evil.tld/open?uid=42"));
+    expect(readerHtml).toContain("<p>Real content</p>");
   });
 });

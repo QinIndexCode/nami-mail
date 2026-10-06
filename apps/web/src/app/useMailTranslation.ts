@@ -11,6 +11,7 @@ import { findVerificationCodes } from "../verificationCode";
 import { copyVerificationCodeToClipboard } from "./verificationClipboard";
 import {
   MAX_LLM_TRANSLATION_TEXT_LENGTH,
+  rewriteRemoteImagesToProxy,
   sanitizeMailHtml,
   textFromSanitizedMailHtml,
 } from "./app-utils";
@@ -178,7 +179,10 @@ export function useMailTranslation({
       // translating the visible text nodes in place (Immersive-Translate style)
       // instead of replacing the whole body with a plain-text translation.
       if (!isDemo && selected.htmlBody) {
-        const sanitized = sanitizeMailHtml(selected.htmlBody, theme === "dark");
+        // Same proxy rewrite as the reader body (App.tsx): translatedHtml
+        // REPLACES that body in the reader, so skipping it here would reopen the
+        // leak for every translated message.
+        const sanitized = rewriteRemoteImagesToProxy(sanitizeMailHtml(selected.htmlBody, theme === "dark"));
         const template = document.createElement("template");
         template.innerHTML = sanitized;
         const segments = extractMailTextSegments(template.content);
