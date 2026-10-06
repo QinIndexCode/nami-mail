@@ -155,6 +155,19 @@ export default tseslint.config(
   //
   // 存量 39 处（messages 17 / accounts 15 / avatars 5 / filter-rules 2）已全部
   // 迁入领域模块，因此规则现在是 error：任何新的路由内 SQL 都会让 lint 失败。
+  //
+  // 两层并存，缺一不可：
+  // 1) no-restricted-syntax 按**方法名**匹配调用点，拦得住 db.prepare(...)，但拦不住
+  //    deleteAccountRowWithOptimizedCascade(db, id) —— 包一层领域函数就把 SQL 藏进了
+  //    别的文件，路由层看不出自己在执行 SQL。该绕过点曾真实存在于 routes/accounts.ts，
+  //    已随函数迁入 account-store.ts 一并消除。
+  // 2) no-restricted-imports 因此按**导入的模块**收口：路由层拿不到裸 db 句柄与 SQL
+  //    执行入口，就无法自己拼语句。这是结构性约束，不依赖调用点写法，无法被包装函数绕过。
+  //
+  // 黑名单只收"能拿到 DatabaseHandle / SQLite 构造器"的模块：db.js（句柄、迁移、
+  // openDatabase）与 native-sqlite.js（better-sqlite3 加载器）。领域模块
+  // （account-store / message-queries / outbox 等）只导出领域函数、不导出裸句柄，
+  // 路由层继续正常依赖它们 —— 实测 routes/** 的 124 处相对导入中仅 accounts.ts 命中 db.js。
   // ---------------------------------------------------------------------------
   {
     files: ["apps/server/src/routes/**/*.ts"],
@@ -164,6 +177,19 @@ export default tseslint.config(
         {
           selector: "CallExpression[callee.property.name=/^(prepare|transaction|exec|run)$/]",
           message: "路由层不得直接执行 SQL；请把查询搬进领域函数后调用。",
+        },
+      ],
+      "no-restricted-imports": [
+        "error",
+        {
+          // 只用 patterns：它按 glob 匹配，既覆盖当前 routes/*.ts 的 "../db.js"，
+          // 也覆盖日后新增的 routes/<子目录>/*.ts 的 "../../db.js"，不必随目录加深再补条目。
+          patterns: [
+            {
+              group: ["**/db.js", "**/db.ts", "**/native-sqlite.js", "**/native-sqlite.ts"],
+              message: "路由层不得导入裸 DatabaseHandle 或 SQLite 驱动（raw sqlite）；请从领域模块（如 account-store.js）导入数据访问函数。",
+            },
+          ],
         },
       ],
     },

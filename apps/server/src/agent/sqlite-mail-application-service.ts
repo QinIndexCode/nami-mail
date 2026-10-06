@@ -1,7 +1,7 @@
 import type { Citation } from "@nami/agent-contracts";
 import { discardDraft, saveDraft } from "../drafts.js";
 import type { DatabaseHandle } from "../db.js";
-import { deleteAccountRowWithOptimizedCascade } from "../db.js";
+import { deleteAccountRowWithOptimizedCascade } from "../account-store.js";
 import { messagePayloadForRow, type MessageStorageRow } from "../message-storage.js";
 import type { AccountAccessTokenProvider } from "../mail.js";
 import { sendMail } from "../mail.js";

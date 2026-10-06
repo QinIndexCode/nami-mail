@@ -16,6 +16,7 @@ import {
   accountById,
   accountExists,
   accountIdByEmail,
+  deleteAccountRowWithOptimizedCascade,
   insertPasswordAccountRow,
   listAccountRows,
   listFolderRows,
@@ -31,7 +32,6 @@ import {
 } from "../schemas.js";
 import { detectProvider, loginUsername, resolveProvider, type DetectedProvider } from "../providers.js";
 import { testAccountConnection } from "../mail.js";
-import { deleteAccountRowWithOptimizedCascade } from "../db.js";
 import {
   discardOutboundAttachmentsForAccount,
   outboundAttachmentDirectory,

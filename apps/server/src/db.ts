@@ -465,19 +465,6 @@ export function deleteMessagesWithBatchFtsCleanup<T>(
   }
 }
 
-/**
- * Deletes an account row and cleanly handles cascading message deletion.
- * The cascade removes every message of the account, so the batch FTS cleanup
- * (see {@link deleteMessagesWithBatchFtsCleanup}) runs over that exact id set
- * instead of paying the per-row trigger's full scans.
- */
-export function deleteAccountRowWithOptimizedCascade(db: DatabaseHandle, accountId: string): boolean {
-  return deleteMessagesWithBatchFtsCleanup(db, "account_id = ?", [accountId], () => {
-    const result = db.prepare("DELETE FROM accounts WHERE id = ?").run(accountId);
-    return Boolean(result.changes);
-  });
-}
-
 // Schema version understood by this build. Raised whenever migrateDatabase
 // starts reshaping existing tables, so fresh databases can be stamped and an
 // older build can refuse a database a newer build already migrated.
