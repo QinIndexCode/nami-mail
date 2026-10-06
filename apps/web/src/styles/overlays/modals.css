@@ -288,7 +288,7 @@ display:flex
 .update-progress strong
 {
 color:var(--text);
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:10px;
 font-weight:650
 }
@@ -396,7 +396,7 @@ overflow:hidden
 .update-background-percent
 {
 color:var(--text);
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:10px
 }
 .update-background-status>progress

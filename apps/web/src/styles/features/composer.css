@@ -430,7 +430,7 @@ display:inline-flex
 {
 color:var(--text-faint);
 margin-right:auto;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:10px
 }
 .compose-attachment-add
@@ -501,7 +501,7 @@ font-size:12px
 .compose-attachment-item small
 {
 color:var(--text-faint);
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:10px
 }
 .compose-attachment-item.is-success
@@ -908,7 +908,7 @@ display:inline-flex
 }
 .sending-status-row-scheduled
 {
-color:var(--accent,var(--text-soft))
+color:var(--accent)
 }
 .sending-status-row-overdue
 {
@@ -941,7 +941,7 @@ margin-top:1px
 color:var(--text-faint);
 flex:none;
 align-self:center;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:9px
 }
 .sending-status-row-actions
@@ -1058,7 +1058,7 @@ display:grid
 .sending-status-details-fields dt
 {
 color:var(--text-faint);
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:9px;
 line-height:1.45
 }
@@ -1075,7 +1075,7 @@ line-height:1.55
 .sending-status-details-fields dd code
 {
 color:inherit;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:inherit;
 white-space:normal
 }

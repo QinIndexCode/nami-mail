@@ -284,7 +284,7 @@ transition:none
 .provider-choice-domain
 {
 color:var(--text-faint);
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:9px;
 line-height:1.2
 }
@@ -302,7 +302,7 @@ color:var(--text);
 border-radius:0;
 flex:none;
 place-items:center;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:11px;
 font-weight:700;
 display:grid
@@ -336,7 +336,7 @@ line-height:1.2
 .provider-choice-copy small
 {
 color:var(--text-faint);
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:9px;
 line-height:1.2
 }
@@ -806,7 +806,7 @@ display:flex
 .manual-server-title strong
 {
 color:var(--text);
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:10px
 }
 .manual-server-title small
@@ -926,7 +926,7 @@ display:flex
 {
 color:var(--text-faint);
 letter-spacing:0;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:9px
 }
 .setup-guide-title strong
@@ -1005,7 +1005,7 @@ height:18px;
 color:var(--text);
 border-radius:6px;
 place-items:center;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:7px;
 display:grid
 }
@@ -1032,7 +1032,7 @@ display:grid
 .setup-guide-endpoints dt
 {
 color:var(--text-faint);
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:9px;
 font-weight:700
 }
@@ -1043,7 +1043,7 @@ min-width:0;
 color:var(--text-soft);
 word-break:break-word;
 margin:0;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:10px;
 line-height:1.45
 }
@@ -1483,7 +1483,7 @@ padding:2px 6px;
 font-size:9px;
 font-weight:700;
 color:var(--text);
-font-family:DM Mono,monospace
+font-family:var(--font-mono)
 }
 .drawer-step-badge.warn
 {
@@ -1511,7 +1511,7 @@ border:1px solid var(--line);
 padding:1px 4px;
 border-radius:var(--radius-sm);
 font-size:10px;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 color:var(--text)
 }
 .drawer-action-link
@@ -1616,7 +1616,7 @@ to { opacity:0; max-height:0; min-height:0; padding-top:0; padding-bottom:0; bor
 flex:none
 }
 .form-status-message { flex:1 1 0; min-width:0 }
-.form-status-dismiss { border:none; background:transparent; color:inherit; cursor:pointer; padding:3px; border-radius:var(--radius-xs,4px); display:flex; align-items:center; justify-content:center; opacity:.72; flex:none; margin-left:auto; transition:opacity .15s,background .15s }
+.form-status-dismiss { border:none; background:transparent; color:inherit; cursor:pointer; padding:3px; border-radius:var(--radius-xs); display:flex; align-items:center; justify-content:center; opacity:.72; flex:none; margin-left:auto; transition:opacity .15s,background .15s }
 .form-status-dismiss:hover { opacity:1; background:color-mix(in srgb, currentColor 12%, transparent) }
 .form-status.success
 {
@@ -1643,6 +1643,6 @@ color:var(--text-faint);
 letter-spacing:0;
 text-align:center;
 margin:14px 0 0;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:9px
 }

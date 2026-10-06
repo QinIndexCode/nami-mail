@@ -92,6 +92,30 @@ margin:16px 22px 0
 {
 height:56px
 }
+.column-header .message-count
+{
+/* Not `display:none`: this span carries the only message-count aria-label /
+   data-tooltip in the header, and display:none drops it out of the
+   accessibility tree entirely — the count silently disappears for screen
+   reader users at exactly the widths where the header is tightest. The
+   project already has `.visually-hidden`, but it lives in features/ and this
+   rule must win on specificity, so the recipe is restated here. */
+position:absolute;
+width:1px;
+height:1px;
+padding:0;
+margin:-1px;
+overflow:hidden;
+clip:rect(0 0 0 0);
+white-space:nowrap;
+border:0
+}
+.column-header h1,.column-header .eyebrow
+{
+text-overflow:ellipsis;
+white-space:nowrap;
+overflow:hidden
+}
 .mail-shell
 {
 grid-template-columns:minmax(0,1fr) 48px;

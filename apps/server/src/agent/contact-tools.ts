@@ -37,11 +37,8 @@ import {
   deleteContactConfirmationPreview,
   updateContactConfirmationPreview,
 } from "./confirmation-preview.js";
+import { clipped } from "./agent-shared.js";
 import type { DatabaseHandle } from "../db.js";
-
-function clipped(value: string, maximum: number): string {
-  return value.length > maximum ? value.slice(0, maximum) : value;
-}
 
 function contactOutput(value: Contact): ExternalContactOutput {
   return {

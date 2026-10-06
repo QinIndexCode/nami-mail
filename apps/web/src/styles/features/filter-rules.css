@@ -44,7 +44,7 @@ font-size:10px;
 font-weight:550;
 background:color-mix(in srgb, var(--panel-muted) 80%, transparent);
 border:1px solid var(--line);
-border-radius:var(--radius-xs, 4px);
+border-radius:var(--radius-xs);
 padding:1px 6px;
 width:fit-content;
 margin-top:2px
@@ -63,8 +63,8 @@ min-height:30px;
 padding:5px 10px;
 font-size:11px
 }
-.filter-rule-modal { width:min(560px,calc(100vw - 32px)); max-height:min(640px,calc(100vh - 48px)); border-radius:var(--radius-lg,16px); padding:22px 24px; box-shadow:var(--shadow-raised); flex-direction:column; display:flex }
-.auto-reply-rule-modal { width:min(520px,calc(100vw - 32px)); border-radius:var(--radius-lg,16px); padding:22px 24px; box-shadow:var(--shadow-raised); overflow:visible }
+.filter-rule-modal { width:min(560px,calc(100vw - 32px)); max-height:min(640px,calc(100vh - 48px)); border-radius:var(--radius-lg); padding:22px 24px; box-shadow:var(--shadow-raised); flex-direction:column; display:flex }
+.auto-reply-rule-modal { width:min(520px,calc(100vw - 32px)); border-radius:var(--radius-lg); padding:22px 24px; box-shadow:var(--shadow-raised); overflow:visible }
 .filter-rule-modal-head { justify-content:space-between; align-items:center; margin-bottom:14px; padding-bottom:10px; border-bottom:1px solid var(--line); flex:none; display:flex }
 .filter-rule-modal-title { margin:0; font-size:16px; font-weight:650; color:var(--text); letter-spacing:-.01em }
 .filter-rule-close-btn { color:var(--text-faint); border-radius:var(--radius-sm); padding:4px; width:28px; height:28px }

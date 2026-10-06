@@ -38,6 +38,7 @@ import { ensureMessageFtsIndex } from "./message-search.js";
 import { backfillRedactMessageSnippets } from "./sync.js";
 import { createOperationQueue } from "./operation-queue.js";
 import { inboxMessageFilter } from "./message-filters.js";
+import { FLAGGED_PREDICATE_SQL, UNSEEN_PREDICATE_SQL } from "./message-flag-indexes.js";
 import {
   migrateOutboundAttachments,
   outboundAttachmentDirectory,
@@ -490,17 +491,34 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     // Snoozed messages are hidden from the unified inbox, so the sidebar
     // counts must exclude active snoozes too.
     const nowIso = new Date().toISOString();
-    // One pass over messages instead of six sequential COUNT(*) scans: every
-    // badge shares the same table walk and only differs in its predicate.
+    // Only the badges whose predicate is indexable get their own scalar
+    // subquery. Wrapping a predicate in SUM(CASE WHEN ...) hides it from the
+    // planner: it cannot prove such a CASE implies a partial index's WHERE, so
+    // the whole endpoint degraded to one full scan of messages (measured on
+    // 50 000 rows: 816ms, EXPLAIN "SCAN m") even though three of the six
+    // partial indexes match these predicates exactly. Spelled as a top-level
+    // WHERE, the same three badges become index seeks (measured: 0.06-0.17ms
+    // each, "SEARCH m USING COVERING INDEX idx_messages_...").
+    //
+    // The two that stay summed are the ones no index can serve: `messages` and
+    // `unread` both test inbox membership, which reads the effective_mailbox
+    // generated column and a correlated folders lookup. Their SUM arms also keep
+    // this SELECT anchored to `FROM messages m`, which is what makes the whole
+    // statement return exactly one row on an empty mailbox; moving them into
+    // their own scalar subqueries drops that anchor and the endpoint stops
+    // answering at all when there is no mail. Splitting them was also measured
+    // *slower* (773ms vs 528ms on 50 000 rows): the unseen index holds ~55% of
+    // the mailbox and none of the columns the inbox test reads, so it buys a
+    // full walk of that index with a row fetch per entry to save one CASE.
     // SUM returns NULL on an empty table, hence the COALESCE guards.
     const row = context.db.prepare(`
       SELECT
         (SELECT COUNT(*) FROM accounts) AS accounts,
         COALESCE(SUM(CASE WHEN ${inboxMessageFilter} AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?) THEN 1 ELSE 0 END), 0) AS messages,
-        COALESCE(SUM(CASE WHEN ${inboxMessageFilter} AND m.flags_json NOT LIKE '%\\\\Seen%' AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?) THEN 1 ELSE 0 END), 0) AS unread,
-        COALESCE(SUM(CASE WHEN m.flags_json LIKE '%\\\\Flagged%' THEN 1 ELSE 0 END), 0) AS starred,
-        COALESCE(SUM(CASE WHEN m.snoozed_until IS NOT NULL AND m.snoozed_until > ? THEN 1 ELSE 0 END), 0) AS snoozed,
-        COALESCE(SUM(CASE WHEN m.has_attachments = 1 THEN 1 ELSE 0 END), 0) AS attachments
+        COALESCE(SUM(CASE WHEN ${inboxMessageFilter} AND m.${UNSEEN_PREDICATE_SQL} AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?) THEN 1 ELSE 0 END), 0) AS unread,
+        (SELECT COUNT(*) FROM messages m WHERE m.${FLAGGED_PREDICATE_SQL}) AS starred,
+        (SELECT COUNT(*) FROM messages m WHERE m.snoozed_until IS NOT NULL AND m.snoozed_until > ?) AS snoozed,
+        (SELECT COUNT(*) FROM messages m WHERE m.has_attachments = 1) AS attachments
       FROM messages m
     `).get(nowIso, nowIso, nowIso) as { accounts: number; messages: number; unread: number; starred: number; snoozed: number; attachments: number };
     // Sidebar badge counts for the cross-folder views: starred, snoozed and

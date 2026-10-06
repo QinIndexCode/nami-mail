@@ -7,6 +7,8 @@ import {
   providerRequest,
   safeMessage,
   statusError,
+  streamCompletionEvents,
+  streamFailureEvents,
   unsafeToolArgumentsError,
   asRecord,
   type ProviderResponseLease,
@@ -340,15 +342,9 @@ export class OpenAiResponsesProvider implements LlmProvider {
           completedCalls.push({ id: call.id, toolName: call.name, input: parseToolArguments(call.arguments), requestedAt: new Date().toISOString() });
         }
       }
-      if (terminalUsage && Object.keys(terminalUsage).length) yield { type: "usage", usage: terminalUsage };
-      for (const call of completedCalls) yield { type: "tool_call", call };
-      yield { type: "completed", finishReason: completedCalls.length ? "tool-calls" : finishReason };
+      yield* streamCompletionEvents(completedCalls, finishReason, completedCalls.length > 0, terminalUsage);
     } catch (error) {
-      yield {
-        type: "error",
-        error: safeMessage(error, { signal: options.signal, timedOut: lease?.timedOut() }),
-      };
-      yield { type: "completed", finishReason: options.signal?.aborted ? "cancelled" : "content-filter" };
+      yield* streamFailureEvents(error, { signal: options.signal, timedOut: lease?.timedOut() });
     } finally {
       lease?.release();
     }

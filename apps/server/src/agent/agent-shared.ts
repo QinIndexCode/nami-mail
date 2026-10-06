@@ -44,3 +44,7 @@ export function requiredText(value: string, name: string, maximum: number): stri
   }
   return normalized;
 }
+
+export function clipped(value: string, maximum: number): string {
+  return value.length > maximum ? value.slice(0, maximum) : value;
+}

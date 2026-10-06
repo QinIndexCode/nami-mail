@@ -3,7 +3,7 @@
 > 本文件是 Nami Mail 的持续推进计划，供新的 ZCode 会话续接工作。
 > **2026-09-30 交付**：Batch AF–AY（16 轮质量循环全部成果）已随 commit `cf55c0f` 提交并推送至 `origin/backup/backgrounds-baseline`（Mimosa seal sha256:c8d3d32f…，69 findings 全 inconclusive）。
 > **2026-10-01 交付**：Batch AZ–BB（阅读体验/润色/导航修复/正文链接化）+ Batch BC（微软 OAuth 入口诚实化与内置 client ID 机制、服务商接入修正、磁贴选中指示）已随 commit `1d0181f` 提交并推送至 `origin/backup/backgrounds-baseline`（Mimosa 完整扫描因 scanner_enobufs 未出结论，按兼容策略放行）；**同日经项目所有者指令首次合并 main**：`main` fast-forward 至同一提交并推送 `origin/main`。
-> 最后更新：2026-10-01。每项完成一个批次后同步更新本文件与下方「交付记录」。
+> 最后更新：2026-10-06。每项完成一个批次后同步更新本文件与下方「交付记录」。
 > 交付分支固定为 `backup/backgrounds-baseline`；2026-10-01 起经所有者指令解除"绝不 push main"约束——main 与 backup 同步发布，日常交付仍走 backup。
 
 ## 0. 当前基线（2026-08-21）
@@ -473,3 +473,16 @@
   - **磁贴选中指示**：收起态浮出选中的非核心磁贴（`surfacesExtraProvider` 纯函数 + `has-surfaced` 高度档 168px/窄窗 224px + `provider-extra-in` 入场动画 + 勾选标记常驻节点缩放淡入淡出；`prefers-reduced-motion` 降级）。styles.css 棘轮有记录上调 18_440→18_483（下轮瘦身优先收回）；AddAccountModal 1924/1927。
   - **实景验证**：六类服务商 `?demo=1` 全链路（发现 → 凭据 → 提交）逐个走通并截图目检，0 console 错误；微软未配置态、指引配置卡、磁贴三路径（非核心点击/打字自动选/核心收起）均有截图证据。
   - 门禁：lint **0 error/109 warning**；typecheck 五 workspace 全绿；**web 89 文件 885 用例 / server 124 文件 1116 / contracts 33 / agent-core 17 / desktop 220**；scripts 60。
+
+## 交付记录（续）：日历批次与 Batch #129（2026-10-05，v0.4.3 发布后落地，均已合并 main）
+
+- 日历批次（2026-10-05，`95087dc` + `23e51c4`）：**日历功能全栈——ICS 导入导出、邮件邀请横幅、提醒管线与按 UID 去重**。
+  - `95087dc`：共享 ICS 解析/生成库落入 `@nami/agent-contracts`（`calendar-ics.ts` + 单测）；服务端日历域（事件 CRUD、冲突校验、append/replace 导入模式）与 calendar 表持久化；Web 日历模块（`apps/web/src/calendar/`：导入弹窗、邮件邀请横幅、会议链接提取 `meetingLinks.ts`、提醒 hook `useCalendarReminders`）；统一 `useToastQueue`（info/success/error 变体）取代分散 toast；新增四款通知音效（chime/bubble/calm/ping）贯通 Web 音效、桌面 WAV 生成与设置契约；app_settings 表重建以应用新声音 CHECK（SQLite 不能 ALTER CHECK，逐列迁移收拢到 `addSettingsColumn`）。
+  - `23e51c4`：**重复导入不再双重记账**——ICS UID 持久化（新索引列 + 迁移），append 模式按 UID 原地 upsert（计为"已更新"），导出原样回写 UID 保证往返一致；邀请横幅按"邮件 + 附件分片"缓存解析内容避免重复下载；Web 侧下载前预检 10MB 附件上限，解析器强制 5 万行上限防御解压炸弹。
+  - 数据边界：事件标题/描述/地点用主密钥派生密钥 AES-256-GCM 加密落盘，起止时间以 UTC 明文存储服务月视图区间查询；与邮件缓存加密边界一致。
+- Batch #129（2026-10-05 随 `e4783e7` 合并 main，分支 `batch/app-decomposition-and-agent-hardening`）：**App.tsx 拆分 + Agent 加固 + 状态可见性修复 + flaky 根治 + lint 清零**。
+  - **App.tsx 拆分**（`bc4e2f0`）：4355 行单体拆为 8 个域 hook（`useMailTranslation`、`useDesktopUpdateUi`、`useSplashDismiss`、`useBatchSelection`、`useQuickMessageActions`、`useAttachmentExports`、`useDesktopBridgeHandlers`、`useOutboundSubmissions`）与 `AppDialogs`、`MailReader` 表现组件（全部模态/确认/toast 收尾渲染与完整阅读窗格），主文件回落至约 3000 行，为 max-lines 棘轮下一步下调留出空间。
+  - **Agent 加固**：OpenAI 兼容供应商畸形工具 JSON 自愈（`85bc963`——畸形 arguments/缺 arguments 的无参调用从不可重试 PROVIDER_ERROR 降级为对齐 Anthropic/Responses 契约的空对象交校验拒绝，错误回喂模型自愈重试）；`InlineToolCallExtractor` 抽为独立模块（`bdc24f2`，供应商模块回到行数预算）；清理 `AgentMessageRow` 恒真撤回守卫（`1ebe9f2`）与 `SettingsAgentSection` 外部配对死属性链（`49a2b4e`）。
+  - **状态可见性**：账户同步进行时态（`c7cff42` + `7aa50ae`——`AccountWire` 新增运行时 `syncing` 标志（内存同步锁），侧边栏即时脉冲点与说明；同步点改用 `--info` 修复透明不可见）；`--accent` token 正式定义（`c74e235`，四处引用此前静默计算无效值）；空状态文案治理（`295826c` 统一视图非收件箱文件夹 + `ef2ba59` 稍后提醒视图，两语言包同步）；Agent 错误行对齐应用 danger 配方并配对减弱动（`05bd709`）；沙盒统计直接引用 `--info`（`2611e62`）。
+  - **flaky 根治**：server 重测试面向满核并发加宽超时（`0c2f8c5`，加压复现的 4 类失败全过）、web testTimeout 15s/hookTimeout 30s（`671fc7e`，CPU 过载下每轮 5 处超时归零）——仅放宽通过窗口，不弱化断言；ESLint 告警清零（`fa9bb2a`：exhaustive-deps 10 处、类型导入上提 48 处、未用变量清理 71 处）。
+  - 后续（2026-10-06，`098740f`，PR #130）：收件人自动补全双缺陷修复（查询尾部 token + 保留前导分隔符）、CI `update-contributors` 工作流 YAML 修复（杂散行破坏 run 块标量）、http-cache-semantics 4.3.0 lockfile 升级，及本文件 e2e 清单口径修正（`e2e/` 8 个 spec、默认 `test:e2e` 跑 4 个）。

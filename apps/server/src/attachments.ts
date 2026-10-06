@@ -4,6 +4,7 @@ import type { MessageStructureObject } from "imapflow";
 import type { Attachment } from "mailparser";
 import type { DatabaseHandle } from "./db.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
+import { safeLogout } from "./imap-logout.js";
 import {
   moveActionBlockedError,
   messagePayloadForRow,
@@ -188,7 +189,7 @@ export async function downloadMessageAttachment(
         // The download stream has already completed or failed. Cleanup errors
         // must not replace the actual transfer outcome.
       }
-      if (client.usable) void client.logout().catch(() => undefined);
+      void safeLogout(client);
     };
     download.content.once("end", releaseResources);
     download.content.once("error", releaseResources);
@@ -202,7 +203,7 @@ export async function downloadMessageAttachment(
       } catch {
         // Preserve the connection or IMAP error that caused the download to fail.
       }
-      if (client.usable) await client.logout().catch(() => undefined);
+      await safeLogout(client);
     }
   }
 }

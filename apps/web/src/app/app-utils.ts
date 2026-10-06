@@ -216,7 +216,59 @@ export const MAX_LLM_TRANSLATION_TEXT_LENGTH = 50_000;
 
 export function sanitizeMailHtml(html: string, darkMode: boolean): string {
   const clean = DOMPurify.sanitize(html, {
-    FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form"],
+    // Defense in depth, not a fix for a known hole: DOMPurify's defaults already
+    // drop on* handlers and javascript: URIs. The point of USE_PROFILES is to shrink
+    // the surface a future sanitizer bug could reach — the body is parsed and
+    // re-serialized three more times below, and every parse-serialize round trip is
+    // another chance for markup to mutate.
+    //
+    // MathML is NOT re-enabled: it has no place in a mail body at all, and its
+    // text-integration points are exactly how mutation XSS gets in (an
+    // <mtext>/<mglyph> subtree re-parses into different markup on the next pass).
+    // The html profile keeps every layout tag real mail relies on (table/thead/
+    // tbody/tr/td/th, font, center, div, span, p, ul/ol/li, hr, blockquote,
+    // pre/code, h1-h6, a, img) and every legacy presentational attribute
+    // (bgcolor, background, align, valign, width, height, cellpadding, cellspacing,
+    // border, color, face, size, nowrap, style) — the surface/color walk below reads
+    // those attributes, so they must survive.
+    //
+    // The svg profile IS enabled, deliberately. Dropping the SVG *element* also
+    // drops its whole subtree INCLUDING its text: a mail whose visible content is
+    // an inline SVG (a <text> label, a signature chart) renders as a blank block,
+    // which is a worse outcome than the surface it costs. SVG is not a free pass —
+    // DOMPurify's svg set already excludes the dangerous elements (script, use,
+    // animate, set, foreignObject; see svgDisallowed in purify.js), and the three
+    // entries appended to FORBID_TAGS below close the rest. Verified against the
+    // adversarial set in app-utils.test.ts ("adversarial SVG and MathML").
+    //
+    // ALLOWED_TAGS is deliberately absent: USE_PROFILES *overwrites* ALLOWED_TAGS
+    // (purify.js resolves ALLOWED_TAGS first, then replaces it with the profile set),
+    // so passing both would leave a hand-written list silently inert. The html+svg
+    // profiles are themselves curated allow-lists and are what keep mail layout
+    // intact.
+    USE_PROFILES: { html: true, svg: true },
+    // "script", "style", "iframe", "object", "embed" and "form" do the actual
+    // stripping the html profile alone would not (its tag set contains "style"
+    // and "form"); the rest are redundant today and stay as an explicit statement
+    // of intent that survives future DOMPurify changes.
+    //
+    // The three animation elements are the SVG profile's real gap and are NOT
+    // redundant. `<animateColor attributeName="HREF" values="//evil">` rewrites a
+    // link target at render time with no javascript: URI to block: DOMPurify only
+    // strips `attributeName` when its value matches "href" case-sensitively
+    // (purify.js:2213), so an uppercase "HREF" slips past and the animation
+    // survives with its payload. Same trick reaches `to=` on animateTransform.
+    // None of the three renders anything on its own, so dropping them costs a mail
+    // body nothing and closes the vector outright.
+    FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form", "animateColor", "animateMotion", "animateTransform"],
+    // USE_PROFILES *overwrites* ALLOWED_ATTR (purify.js:1353), so the html
+    // profile's table has no "target" — an <a target="_blank"> silently loses it
+    // and the mail's external links fall back to replacing the reader's own tab.
+    // ADD_ATTR is applied AFTER the profile merge (purify.js:1383), so it is not
+    // overwritten and cannot widen the tag surface. target is inert without a
+    // scripting context: it only tells the browser which browsing context to
+    // navigate, so allowing it grants no new capability.
+    ADD_ATTR: ["target"],
   });
 
   const template = document.createElement("template");

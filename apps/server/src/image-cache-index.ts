@@ -73,7 +73,21 @@ export interface CacheEntry {
  */
 let meta: Record<string, CacheEntry> = {};
 
+/**
+ * Whether the in-memory index has changes `_meta.json` does not. Starts false
+ * because `loadMeta` makes the two agree, and `saveMeta` clears it.
+ */
+let metaDirty = false;
+
 let corruptMetaReported = false;
+
+/**
+ * Window over which cache hits coalesce into one index write. Long enough that
+ * a mail full of inline images is one write rather than one per image, short
+ * enough that `runCacheCleanup`'s hourly pass (which saves synchronously and so
+ * also drains anything pending) never sees meaningfully stale recency.
+ */
+const FLUSH_DELAY_MS = 2_000;
 
 export function cacheMeta(): Record<string, CacheEntry> {
   return meta;
@@ -165,6 +179,12 @@ function quarantineCorruptMeta(reason: string): void {
  * code folded it into the same silent reset — so it is quarantined and reported.
  */
 export function loadMeta(): void {
+  // Deferred write-back makes a reload destructive: re-reading the file would
+  // replace `meta` with a version that lacks every mark a cache hit has made
+  // since, so the touches would be silently dropped. A dirty index is therefore
+  // authoritative and must not be re-read; flushing first would also work but
+  // would put back the per-image write this change exists to remove.
+  if (metaDirty) return;
   let raw: string;
   try {
     raw = fs.readFileSync(META_FILE, "utf-8");
@@ -202,6 +222,85 @@ export function saveMeta(): void {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
   fs.writeFileSync(META_TMP_FILE, JSON.stringify(meta), "utf-8");
   fs.renameSync(META_TMP_FILE, META_FILE);
+  metaDirty = false;
+}
+
+// ---------------------------------------------------------------------------
+// Coalesced write-back
+//
+// `proxyImage` used to call saveMeta() on every cache hit, so opening one mail
+// with forty inline images rewrote the whole index forty times: each write is
+// JSON.stringify over every entry plus a rename, on the event loop, while the
+// request is in flight. What a hit actually changes is one number — the entry's
+// lastAccess — and its only consumer is the age rule in `runCacheCleanup`, whose
+// resolution is one pass an hour.
+//
+// So a hit marks the index dirty and returns. `scheduleFlush` collapses a burst
+// of marks into one write, and `flushMeta` performs it. The write itself is
+// unchanged — still the same synchronous write-then-rename, on the same thread —
+// so the atomicity argument above still holds verbatim and concurrent hits
+// cannot interleave: Node runs one statement at a time, so the read of `meta`,
+// the stringify and the rename are indivisible with respect to any other
+// `proxyImage` continuation.
+//
+// The cost of deferring is bounded and known: an unsaved `lastAccess` can only
+// make a cache file look colder than it is, so a crash mid-session evicts
+// slightly too eagerly. It cannot lose an entry or invent one — the insert path
+// still saves synchronously, because a file that is on disk but absent from the
+// index is exactly what the reconciliation pass treats as unclaimed and reclaims.
+// ---------------------------------------------------------------------------
+
+let flushTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Marks the index as needing a write and arms the coalescing timer. Repeated
+ * calls inside one window collapse into a single `flushMeta`, so N cache hits
+ * cost one rewrite instead of N.
+ */
+export function scheduleFlush(): void {
+  metaDirty = true;
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = undefined;
+    flushMeta();
+  }, FLUSH_DELAY_MS);
+  // Never hold the process open for a cache index.
+  if (flushTimer.unref) flushTimer.unref();
+}
+
+/**
+ * Writes the index if it is dirty. Safe to call when it is not: that is the
+ * exit path's normal case, and it must not create an empty `_meta.json` for a
+ * session that never proxied anything.
+ *
+ * Failures propagate exactly as `saveMeta`'s do — a full disk or a locked file
+ * must stay visible rather than becoming a silently dropped cache index.
+ */
+export function flushMeta(): void {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = undefined;
+  }
+  if (!metaDirty) return;
+  saveMeta();
+}
+
+/**
+ * Best-effort flush for process teardown, where a throw is the wrong outcome:
+ * a failed write here has already been reported by the request path that
+ * triggered it, and the only consequence is a colder-than-actual lastAccess.
+ * Registered by `startCacheCleanupTimer` so the pending writes reach disk on
+ * SIGINT/SIGTERM (`index.ts` closes the server), on the desktop's orderly quit
+ * (`server-host.mts` calls the same `close`), and on an abrupt exit.
+ */
+export function installFlushOnExit(): void {
+  process.on("exit", () => {
+    try {
+      flushMeta();
+    } catch {
+      // Nothing can be reported this late; the index is a rebuildable cache.
+    }
+  });
 }
 
 /** A cache file that no live index entry claims. */

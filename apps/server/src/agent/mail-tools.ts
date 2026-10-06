@@ -68,6 +68,7 @@ import type {
   MailMessageView,
   MailSearchQuery,
 } from "./mail-application-service.js";
+import { clipped } from "./agent-shared.js";
 
 const MAX_ACCOUNT_RESULTS = externalMailReadBounds.accountResults;
 const MAX_FOLDER_RESULTS = externalMailReadBounds.folderResults;
@@ -117,10 +118,6 @@ type MoveMessageOutput = z.infer<typeof externalMoveMailOutputSchema>;
 type SetFlagOutput = z.infer<typeof externalSetFlagOutputSchema>;
 type SendMailOutput = z.infer<typeof externalSendMailOutputSchema>;
 type SearchMessagesOutput = z.infer<typeof searchMessagesOutputSchema>;
-
-function clipped(value: string, maximum: number): string {
-  return value.length > maximum ? value.slice(0, maximum) : value;
-}
 
 function scopedAccountIds(context: AgentToolExecutionContext): readonly string[] {
   return [...new Set(context.accountIds.map((accountId) => accountId.trim()).filter(Boolean))];

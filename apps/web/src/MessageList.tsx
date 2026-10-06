@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type RefObject } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { Archive, Layers3, Mail, MailOpen, MousePointerClick, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
 import type { MessageListQuery } from "./mailListState";
@@ -98,11 +98,58 @@ export function clampContextMenuPosition(
   };
 }
 
+/**
+ * Roving-focus target row for the message list, or `null` when the key is not
+ * a list navigation key. Kept apart from the component so the clamping is
+ * unit-testable without a DOM (same split as contextMenuItemIndexForKey).
+ *
+ * Movement clamps at both ends instead of wrapping: a list is not a carousel,
+ * and wrapping would make the bottom of a long list unreachable downwards.
+ * `pageRows` is how many rows a PageUp/PageDown jump covers — the caller reads
+ * it off the virtualizer so the jump follows the measured row heights.
+ */
+export function messageListTargetIndexForKey(
+  key: string,
+  currentIndex: number,
+  count: number,
+  pageRows: number,
+): number | null {
+  if (count <= 0) return null;
+  if (currentIndex < 0) {
+    // Focus is not on a row yet (the user tabbed into the list, or sits on a
+    // row's quick action): the vertical keys enter at the matching end.
+    if (key === "ArrowUp" || key === "End" || key === "PageUp") return count - 1;
+    if (key === "ArrowDown" || key === "Home" || key === "PageDown") return 0;
+    return null;
+  }
+  const page = Math.max(1, pageRows);
+  switch (key) {
+    case "ArrowDown":
+      return Math.min(currentIndex + 1, count - 1);
+    case "ArrowUp":
+      return Math.max(currentIndex - 1, 0);
+    case "Home":
+      return 0;
+    case "End":
+      return count - 1;
+    case "PageDown":
+      return Math.min(currentIndex + page, count - 1);
+    case "PageUp":
+      return Math.max(currentIndex - page, 0);
+    default:
+      return null;
+  }
+}
+
 type MessageListRowProps = {
   message: Message;
   index: number;
   virtualStart: number;
   selected: boolean;
+  /** Roving tabindex: the one row the list keeps in the tab order. Every other
+   *  row is tabIndex={-1}, so Tab enters the list once and the arrow keys move
+   *  between rows. */
+  tabbable: boolean;
   unread: boolean;
   selectionMode: boolean;
   multiSelected: boolean;
@@ -130,7 +177,7 @@ type MessageListRowProps = {
  */
 export const MessageListRow = memo(function MessageListRow(props: MessageListRowProps): React.JSX.Element {
   const { locale, t } = useI18n();
-  const { message, index, virtualStart, selected, unread, selectionMode, multiSelected, recentlyReadInUnread, threadSize, gravatarEnabled, bimiEnabled, accountEmails, buttonRefs, rowVirtualizer, onRowClick, onOpenContextMenu, onQuickToggleStar, onQuickMoveMessage } = props;
+  const { message, index, virtualStart, selected, tabbable, unread, selectionMode, multiSelected, recentlyReadInUnread, threadSize, gravatarEnabled, bimiEnabled, accountEmails, buttonRefs, rowVirtualizer, onRowClick, onOpenContextMenu, onQuickToggleStar, onQuickMoveMessage } = props;
   const buttonRefCallback = useCallback((node: HTMLButtonElement | null) => {
     rowVirtualizer.measureElement(node);
     if (node) buttonRefs.current.set(message.id, node);
@@ -143,8 +190,8 @@ export const MessageListRow = memo(function MessageListRow(props: MessageListRow
   const ownSent = isOwnSentMessage(message, accountEmails);
   const rowPerson = ownSent && message.to[0] ? message.to[0] : message.from;
   return (
-    <div className="message-list-row" style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualStart}px)` }}>
-      <button data-index={index} data-message-id={message.id} ref={buttonRefCallback} className={className} aria-pressed={selectionMode ? multiSelected : undefined} aria-haspopup="menu" onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
+    <div className="message-list-row" role="listitem" style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualStart}px)` }}>
+      <button tabIndex={tabbable ? 0 : -1} data-index={index} data-message-id={message.id} ref={buttonRefCallback} className={className} aria-pressed={selectionMode ? multiSelected : undefined} aria-haspopup="menu" onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
         <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
         {selectionMode && <span className={`selection-checkbox ${multiSelected ? "checked" : ""}`} aria-hidden="true" />}
         <SenderAvatar name={rowPerson.name} address={rowPerson.address} tone={accountTone(rowPerson.address)} gravatarEnabled={gravatarEnabled} bimiEnabled={bimiEnabled} />
@@ -213,6 +260,18 @@ function MessageList(props: MessageListProps): React.JSX.Element {
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   /** The row that opened the menu, so Escape/Tab can hand focus back to it. */
   const contextMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  /**
+   * Roving tabindex: the row that owns the list's single tab stop. Set from
+   * row focus (click, Tab or the arrow keys) so re-entering the list by Tab
+   * lands on the row the user was last on.
+   */
+  const [activeRowId, setActiveRowId] = useState<string | null>(null);
+  /**
+   * Row waiting to be focused. A navigation target outside the virtual window
+   * is not mounted yet, so `focus()` on it would be a no-op — the scroll below
+   * mounts it and the effect after the render completes the handoff.
+   */
+  const pendingFocusRowIdRef = useRef<string | null>(null);
 
   useLayoutEffect(() => {
     const menu = contextMenu;
@@ -277,6 +336,10 @@ function MessageList(props: MessageListProps): React.JSX.Element {
   if (messagesKey !== lastMessagesKeyRef.current) {
     lastMessagesKeyRef.current = messagesKey;
     anchorIndexRef.current = null;
+    // A queued focus names a row of the list that armed it. Once the rows are
+    // swapped underneath it, that id may be gone or may belong to a different
+    // mail, so focusing it would jump the user into an unrelated conversation.
+    pendingFocusRowIdRef.current = null;
   }
 
   // Row clicks resolve against the latest list/selection closures, but the
@@ -314,21 +377,6 @@ function MessageList(props: MessageListProps): React.JSX.Element {
     setContextMenu({ message, x, y });
   }, [messageButtonRefs]);
 
-  // Keyboard users reach the row menu with Shift+F10 or the dedicated
-  // ContextMenu key while a row has focus — otherwise the menu is mouse-only.
-  const handleListKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
-    const row = (event.target as HTMLElement).closest<HTMLElement>("button[data-message-id]");
-    const id = row?.dataset.messageId;
-    if (!row || !id) return;
-    const message = messages.find((item) => item.id === id);
-    if (!message) return;
-    event.preventDefault();
-    const rect = row.getBoundingClientRect();
-    contextMenuTriggerRef.current = messageButtonRefs.current.get(id) ?? null;
-    setContextMenu({ message, x: rect.left + 12, y: Math.max(8, rect.top + 12) });
-  }, [messageButtonRefs, messages]);
-
   // Rows are measured lazily (their height varies with snippet line count and
   // density); estimateSize only seeds the initial layout.
   const settledSnapshotRef = useRef<{
@@ -360,6 +408,15 @@ function MessageList(props: MessageListProps): React.JSX.Element {
     ? (settledSnapshotRef.current.hasRows ? settledSnapshotRef.current.messages : [])
     : messages;
 
+  // The keyboard navigation reads the visible list through a ref instead of
+  // closing over `activeMessages`: that conditional makes a fresh value on
+  // every render, so a useCallback dependency on it would rebuild the handler
+  // per scroll frame (and a useMemo would freeze the settled snapshot a list
+  // switch is still holding). Same "latest value" pattern as
+  // rowActionHandlersRef above.
+  const activeMessagesRef = useRef(activeMessages);
+  activeMessagesRef.current = activeMessages;
+
   // Rows are measured lazily (their height varies with snippet line count and
   // density); estimateSize only seeds the initial layout.
   const rowVirtualizer = useVirtualizer({
@@ -369,6 +426,98 @@ function MessageList(props: MessageListProps): React.JSX.Element {
     getItemKey: (index) => activeMessages[index]?.id ?? index,
     overscan: 8,
   });
+
+  // Keyboard users reach the row menu with Shift+F10 or the dedicated
+  // ContextMenu key while a row has focus — otherwise the menu is mouse-only.
+  // Space is the third door: it is the native "activate this row" key, and the
+  // row menu is where the non-default actions live.
+  const openRowContextMenu = useCallback((message: Message, row: HTMLElement) => {
+    contextMenuTriggerRef.current = messageButtonRefs.current.get(message.id) ?? null;
+    const rect = row.getBoundingClientRect();
+    setContextMenu({ message, x: rect.left + 12, y: Math.max(8, rect.top + 12) });
+  }, [messageButtonRefs]);
+
+  // Roving tabindex: exactly one row stays in the tab order, so Tab enters the
+  // list once and the arrow keys move within it. The stop must be a MOUNTED
+  // row: the list is virtualized, so a stop pointing outside the window would
+  // leave the whole list unreachable by keyboard. An active row that scrolled
+  // out of the window hands the stop to the first row that is on screen.
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const firstMountedRowId = activeMessages[virtualItems[0]?.index ?? 0]?.id ?? null;
+  const tabbableRowId = activeRowId !== null && virtualItems.some((item) => activeMessages[item.index]?.id === activeRowId)
+    ? activeRowId
+    : firstMountedRowId;
+
+  const handleListKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const list = activeMessagesRef.current;
+    const from = event.target as HTMLElement;
+    const row = from.closest<HTMLElement>("button[data-message-id]");
+    const id = row?.dataset.messageId;
+    const message = id ? messages.find((item) => item.id === id) : undefined;
+    // Shift+F10 and the dedicated ContextMenu key are the documented menu
+    // keys. Space and Enter are deliberately NOT bound here: the row is a
+    // native <button>, so the platform already turns both into the same click
+    // the mouse makes, which routes through handleRowClick → onOpenMessage (and
+    // the selection-mode toggle) — one path, no second implementation to keep
+    // in sync. Binding Space to the menu would override that native "activate
+    // this row" meaning and turn a one-key action into two.
+    if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+      if (!row || !message) return;
+      event.preventDefault();
+      openRowContextMenu(message, row);
+      return;
+    }
+    // Navigation resolves the row through its wrapper so the keys still work
+    // when focus sits on one of the row's quick actions (they are siblings of
+    // the row button, not descendants of it).
+    const indexAttribute = row?.dataset.index
+      ?? from.closest<HTMLElement>(".message-list-row")?.querySelector<HTMLElement>("button[data-index]")?.dataset.index;
+    const currentIndex = indexAttribute === undefined ? -1 : Number(indexAttribute);
+    // The page size comes from the mounted window, not from an estimate: rows
+    // have measured, variable heights.
+    const pageRows = rowVirtualizer.getVirtualItems().length;
+    const nextIndex = messageListTargetIndexForKey(event.key, currentIndex, list.length, pageRows);
+    if (nextIndex === null || nextIndex === currentIndex) return;
+    const nextMessage = list[nextIndex];
+    if (!nextMessage) return;
+    event.preventDefault();
+    setActiveRowId(nextMessage.id);
+    // The target row is often outside the mounted window, so it does not exist
+    // yet — `scrollToIndex` (never a scrollTop estimate; rows have variable
+    // heights) brings it into the window, and the effect below focuses it once
+    // it has mounted.
+    pendingFocusRowIdRef.current = nextMessage.id;
+    rowVirtualizer.scrollToIndex(nextIndex, { align: "auto" });
+  }, [messages, openRowContextMenu, rowVirtualizer]);
+
+  // Runs after every render: a pending row that is not mounted yet leaves the
+  // ref set, and the scroll's own render (which mounts the row) retries here.
+  useEffect(() => {
+    const pendingId = pendingFocusRowIdRef.current;
+    if (pendingId === null) return;
+    const node = messageButtonRefs.current.get(pendingId);
+    if (!node) return;
+    pendingFocusRowIdRef.current = null;
+    // The row was just scrolled into the window; preventScroll keeps the focus
+    // from dragging the viewport a second time.
+    node.focus({ preventScroll: true });
+  });
+
+  const handleRowFocus = useCallback((event: ReactFocusEvent<HTMLDivElement>) => {
+    const id = (event.target as HTMLElement).closest<HTMLElement>("button[data-message-id]")?.dataset.messageId;
+    if (!id) return;
+    // Focus landing on a row OTHER than the queued target means the user got
+    // there first — a click, a Tab, a quick action. The queue is a bet that
+    // the row is about to mount; once the user has demonstrably chosen a
+    // different row, honoring it would drag focus away from their choice (and
+    // their next Enter/Space would then act on a mail they never picked). The
+    // effect below does not need a guard for its own `focus()`: it clears the
+    // ref before focusing, so this sees `null` and leaves it alone.
+    if (pendingFocusRowIdRef.current !== null && pendingFocusRowIdRef.current !== id) {
+      pendingFocusRowIdRef.current = null;
+    }
+    setActiveRowId(id);
+  }, []);
 
   const showList = displayHasRows && !fatalError;
   const showError = !loading && Boolean(fatalError);
@@ -387,7 +536,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
 
   return (
     <>
-      <div className="message-list" ref={messageListRef} onKeyDown={handleListKeyDown} onScroll={() => { if (contextMenu) closeContextMenu(false); }} aria-busy={loading || undefined}>
+      <div className="message-list" ref={messageListRef} onKeyDown={handleListKeyDown} onFocus={handleRowFocus} onScroll={() => { if (contextMenu) closeContextMenu(false); }} aria-busy={loading || undefined}>
       {showError && fatalError && <div className="center-state error-state"><X size={24} /><h3>{fatalError.title}</h3><p>{fatalError.message} {fatalError.guidance}</p><button className="secondary-button" onClick={onReconnect}>{t("mail.reconnect")}</button></div>}
       {showFirstAccount && (
         <div className="center-state empty-state"><div className="empty-orb"><Mail size={28} /></div><h3>{t("mail.empty.firstAccountTitle")}</h3><p>{t("mail.empty.firstAccountDescription")}</p><button className="primary-button" onClick={onAddAccount}><Plus size={17} />{t("account.add")}</button></div>
@@ -407,6 +556,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
       {showList && (
         <div
           className="message-list-viewport"
+          role="list"
           data-switching={loading ? "true" : undefined}
           // The key follows the identity of the SETTLED data snapshot, which
           // App bumps in the same commit that swaps the rows in. While a
@@ -417,7 +567,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
           key={displayListKey ?? "list"}
           style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}
         >
-          {rowVirtualizer.getVirtualItems().map((virtualItem) => {
+          {virtualItems.map((virtualItem) => {
             const message = activeMessages[virtualItem.index];
             // The grouping unions the folder copies of one message, so the raw
             // member count reads 2 for a single mail and the badge lies. Count
@@ -430,6 +580,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
               index={virtualItem.index}
               virtualStart={virtualItem.start}
               selected={selectedId === message.id}
+              tabbable={tabbableRowId === message.id}
               unread={!message.seen}
               selectionMode={selectionMode}
               multiSelected={selectionMode && selectedMessageIds.has(message.id)}

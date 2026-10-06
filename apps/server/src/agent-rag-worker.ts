@@ -475,7 +475,10 @@ export class AgentRagWorker {
     let accountIds: string[];
     try {
       accountIds = this.options.lifecycle.listActiveAccounts();
-    } catch {
+    } catch (error) {
+      // Warm-up is best-effort, but a silent skip here would leave every account
+      // cold with no trace of why; the first search still retries lazily.
+      serverLog.warn({ workerId: this.workerId }, "RAG startup warm-up could not list active accounts", error);
       return;
     }
     for (const accountId of accountIds) {

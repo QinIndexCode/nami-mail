@@ -3,6 +3,7 @@ import nodemailer from "nodemailer";
 import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import type { DatabaseHandle } from "./db.js";
 import { friendlyMailError, imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
+import { safeLogout } from "./imap-logout.js";
 import { moveActionBlockedError, protectedMessageColumns } from "./message-storage.js";
 import { indexMessageFts } from "./message-search.js";
 import { redactUrls } from "./message-links.js";
@@ -328,7 +329,7 @@ export async function saveDraft(
     throw error;
   } finally {
     removeAbortListener();
-    if (client.usable) await client.logout().catch(() => undefined);
+    await safeLogout(client);
   }
 
   // From this point a new remote draft is known to exist. A late cancellation
@@ -435,6 +436,6 @@ export async function discardDraft(
     throw error;
   } finally {
     removeAbortListener();
-    if (client.usable) await client.logout().catch(() => undefined);
+    await safeLogout(client);
   }
 }

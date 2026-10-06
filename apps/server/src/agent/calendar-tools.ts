@@ -28,6 +28,7 @@ import {
   deleteCalendarEventConfirmationPreview,
   updateCalendarEventConfirmationPreview,
 } from "./confirmation-preview.js";
+import { clipped } from "./agent-shared.js";
 import type { DatabaseHandle } from "../db.js";
 
 type CalendarListInput = z.infer<typeof externalCalendarListInputSchema>;
@@ -39,10 +40,6 @@ type CalendarListOutput = z.infer<typeof externalCalendarListOutputSchema>;
 type CalendarCreateOutput = z.infer<typeof externalCalendarCreateOutputSchema>;
 type CalendarUpdateOutput = z.infer<typeof externalCalendarUpdateOutputSchema>;
 type CalendarDeleteOutput = z.infer<typeof externalCalendarDeleteOutputSchema>;
-
-function clipped(value: string, maximum: number): string {
-  return value.length > maximum ? value.slice(0, maximum) : value;
-}
 
 function eventOutput(value: CalendarEvent): CalendarEventOutput {
   return {

@@ -14,7 +14,7 @@ import {
   type ProviderTokenUsage,
   type ToolCall,
 } from "@nami/agent-contracts";
-import { asRecord, hasUnsafeToolArguments, linesFrom, unsafeToolArgumentsError } from "./provider-common.js";
+import { asRecord, hasUnsafeToolArguments, linesFrom, streamCompletionEvents, streamFailureEvents, unsafeToolArgumentsError } from "./provider-common.js";
 import { InlineToolCallExtractor } from "./openai-compatible-inline-extractor.js";
 import { isLoopbackHostname } from "../endpoint-guard.js";
 import { detectVendorAdapter } from "./vendor-adapters.js";
@@ -495,15 +495,10 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
         hasInlineToolCalls = true;
         yield { type: "tool_call", call };
       }
-      for (const call of completedToolCalls(calls)) yield { type: "tool_call", call };
-      yield { type: "completed", finishReason: calls.size || hasInlineToolCalls ? "tool-calls" : finishReason };
+      yield* streamCompletionEvents(completedToolCalls(calls), finishReason, calls.size > 0 || hasInlineToolCalls);
       sawCompleted = true;
     } catch (error) {
-      yield {
-        type: "error",
-        error: safeMessage(error, { signal: options.signal, timedOut: responseLease?.timedOut() }),
-      };
-      yield { type: "completed", finishReason: options.signal?.aborted ? "cancelled" : "content-filter" };
+      yield* streamFailureEvents(error, { signal: options.signal, timedOut: responseLease?.timedOut() });
     } finally {
       responseLease?.release();
       if (!sawCompleted && options.signal?.aborted) {

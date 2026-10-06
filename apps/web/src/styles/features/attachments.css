@@ -11,9 +11,9 @@ position:relative
 }
 .attachment-file-icon.kind-image
 {
-background:color-mix(in srgb, var(--accent,var(--info)) 12%, var(--panel-muted));
-border-color:color-mix(in srgb, var(--accent,var(--info)) 42%, var(--line));
-color:color-mix(in srgb, var(--accent,var(--info)) 84%, var(--text))
+background:color-mix(in srgb, var(--accent) 12%, var(--panel-muted));
+border-color:color-mix(in srgb, var(--accent) 42%, var(--line));
+color:color-mix(in srgb, var(--accent) 84%, var(--text))
 }
 .attachment-file-icon.kind-spreadsheet
 {
@@ -77,7 +77,7 @@ right:0;
 bottom:0;
 height:3px;
 pointer-events:none;
-background:linear-gradient(90deg, transparent 30%, var(--accent,var(--text-soft)) 50%, transparent 70%);
+background:linear-gradient(90deg, transparent 30%, var(--accent) 50%, transparent 70%);
 background-size:200% 100%;
 animation:nami-transfer-slide 1.15s linear infinite
 }
@@ -97,7 +97,7 @@ background-position:-200% 0
 .compose-attachment-item.is-uploading::before,.attachment-card.is-downloading::before
 {
 animation:none;
-background:color-mix(in srgb, var(--accent,var(--text-soft)) 42%, transparent)
+background:color-mix(in srgb, var(--accent) 42%, transparent)
 }
 }
 

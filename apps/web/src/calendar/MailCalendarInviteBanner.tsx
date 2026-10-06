@@ -10,11 +10,64 @@ import { formatEventTimeSpan, isIcsAttachment } from "./calendarUtils";
 // between mails re-runs this effect; without the cache each visit re-downloads
 // the whole attachment just to re-parse identical bytes. Cleared by tests via
 // clearIcsParseCache. Attachment content is immutable once stored, so no TTL.
+//
+// Bounded LRU. Without eviction the ceiling was 10MB × however many invites a
+// session happened to open, and a desktop long session never releases it.
+// Recency is the only useful policy here: the cache exists for going back to a
+// mail you just looked at, which is exactly what LRU preserves.
+//
+// Two caps, because either alone is wrong. Bytes bound the damage when the
+// entries are huge; the count bounds the per-entry Map/iterator overhead when
+// they are tiny (a 64MB byte budget alone would admit ~13k one-line invites).
+// 64MB is the binding constraint in practice: it holds 6 worst-case 10MB
+// invites, or tens of thousands of typical 2-10KB ones.
 const icsContentCache = new Map<string, string>();
+let icsContentCacheBytes = 0;
 const maximumBannerIcsBytes = 10_000_000;
+const maximumIcsCacheBytes = 64_000_000;
+const maximumIcsCacheEntries = 512;
+
+/**
+ * Heap cost of a cached string. JS strings are UTF-16, and V8 stores anything
+ * outside Latin-1 as two bytes per code unit, so `length * 2` is the upper
+ * bound of what the entry actually occupies. Measuring the decoded text (rather
+ * than the Blob's byte length) keeps the accounting consistent with what is
+ * retained after the Blob is dropped.
+ */
+function icsContentBytes(text: string): number {
+  return text.length * 2;
+}
+
+function readIcsContent(cacheKey: string): string | undefined {
+  const cached = icsContentCache.get(cacheKey);
+  if (cached === undefined) return undefined;
+  // Map preserves insertion order, so delete+set re-inserts at the newest
+  // position — that is the whole "refresh on hit" operation.
+  icsContentCache.delete(cacheKey);
+  icsContentCache.set(cacheKey, cached);
+  return cached;
+}
+
+function writeIcsContent(cacheKey: string, text: string): void {
+  icsContentCache.set(cacheKey, text);
+  icsContentCacheBytes += icsContentBytes(text);
+  // Evict oldest-first until both caps hold. A single entry can exceed the
+  // byte budget only if maximumBannerIcsBytes > maximumIcsCacheBytes, which the
+  // current constants (10MB < 64MB) rule out; the `size > 0` guard keeps the
+  // loop terminating regardless of how the two are retuned.
+  while (icsContentCache.size > 0
+    && (icsContentCacheBytes > maximumIcsCacheBytes || icsContentCache.size > maximumIcsCacheEntries)) {
+    const oldest = icsContentCache.keys().next();
+    if (oldest.done) break;
+    const evicted = icsContentCache.get(oldest.value);
+    icsContentCache.delete(oldest.value);
+    if (evicted !== undefined) icsContentCacheBytes -= icsContentBytes(evicted);
+  }
+}
 
 export function clearIcsParseCache(): void {
   icsContentCache.clear();
+  icsContentCacheBytes = 0;
 }
 
 export type MailCalendarInviteBannerProps = {
@@ -57,7 +110,7 @@ export default function MailCalendarInviteBanner({
       setFailure("oversized");
       return;
     }
-    const cached = icsContentCache.get(cacheKey);
+    const cached = readIcsContent(cacheKey);
     if (cached !== undefined) {
       setContent(cached);
       setLoading(false);
@@ -78,7 +131,7 @@ export default function MailCalendarInviteBanner({
         }
         const text = await blob.text();
         if (!cancelled) {
-          icsContentCache.set(cacheKey, text);
+          writeIcsContent(cacheKey, text);
           setContent(text);
           setFailure(null);
           setLoading(false);

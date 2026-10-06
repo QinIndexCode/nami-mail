@@ -3,6 +3,7 @@ import type { EventEmitter } from "node:events";
 import { ZipFile } from "yazl";
 import { BackupTransferClosedError, collectMailBackup } from "../backup.js";
 import { contentDispositionFilename } from "../helpers.js";
+import { serverLog } from "../logging.js";
 import type { RuntimeContext } from "../types.js";
 
 /**
@@ -165,6 +166,21 @@ export function createBackupZipWriter(zip: ZipFile, options: BackupZipWriterOpti
 
   const markClosed = (): void => { closed = true; };
 
+  /**
+   * Gives up on the yazl-side ceiling after a yazl upgrade changed the private
+   * entry bookkeeping this reads. The stream-side bound still holds, so the
+   * export stays correct — but it loses the in-flight cap, which is exactly
+   * the regression that would otherwise show up only as mailbox-sized memory.
+   */
+  const stopTrackingYazl = (): void => {
+    if (!tracksYazl) return;
+    tracksYazl = false;
+    serverLog.warn(
+      { limitBytes: limit },
+      "Backup zip writer lost yazl entry tracking; the in-flight byte ceiling is inactive",
+    );
+  };
+
   const checkOpen = (): void => {
     if (!closed && (output.destroyed || isAborted())) markClosed();
     if (closed) throw closedError();
@@ -176,7 +192,7 @@ export function createBackupZipWriter(zip: ZipFile, options: BackupZipWriterOpti
     while (head < records.length) {
       const record = records[head] as { entry: YazlEntry; held: number };
       const state = record.entry?.state;
-      if (typeof state !== "number") { tracksYazl = false; return; }
+      if (typeof state !== "number") { stopTrackingYazl(); return; }
       if (state >= ZIP_ENTRY_FILE_DATA_DONE) {
         inFlight -= record.held;
         // yazl is done with this entry, but the entry list is not, and the pump
@@ -270,7 +286,7 @@ export function createBackupZipWriter(zip: ZipFile, options: BackupZipWriterOpti
       const list = entries();
       // yazl ignores an entry once its own error state is set; then nothing was
       // queued and nothing is in flight for it.
-      if (!list) tracksYazl = false;
+      if (!list) stopTrackingYazl();
       else if (typeof before === "number" && list.length === before + 1) {
         records.push({ entry: list[list.length - 1] as YazlEntry, held: source.length });
         inFlight += source.length;

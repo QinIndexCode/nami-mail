@@ -1,4 +1,4 @@
-import { lazy, Profiler, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Profiler, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { computePosition, flip, offset, shift } from "@floating-ui/dom";
 import {
   Archive,
@@ -879,7 +879,19 @@ await refreshSubmissions(nextAccounts, { silent: true });
     after: dateBounds.after,
     before: dateBounds.before,
   }), [attachmentKindFilter, dateBounds, debouncedQuery, searchScope, selectedAccount, selectedFolder, view]);
-  const filterQuery = useMemo<ListQueryInput>(() => ({ ...serverQuery, search: query }), [query, serverQuery]);
+  // The local filter runs on a deferred copy of the query, NOT the debounced
+  // one. Debouncing here would push the whole list 250ms behind every
+  // keystroke, which is the exact lag the live-query rule above exists to
+  // avoid. Instead the expensive half of a keystroke — filter + sort +
+  // groupMessagesByThread + the threadById rebuild, O(N log N) over the
+  // loaded pages — is re-prioritised: React keeps the search box (and the
+  // toolbar/empty-state copy, which still read the live `query`) painting at
+  // interactive priority and re-renders the list at background priority,
+  // dropping intermediate keystrokes rather than queueing them. The list still
+  // settles on the live query within a frame or two, so typing reads as
+  // immediate while a long list no longer blocks the input.
+  const deferredQuery = useDeferredValue(query);
+  const filterQuery = useMemo<ListQueryInput>(() => ({ ...serverQuery, search: deferredQuery }), [deferredQuery, serverQuery]);
 
   const silentRefresh = useCallback(async () => {
     if (isDemo) return;

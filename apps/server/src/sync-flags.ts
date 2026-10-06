@@ -9,6 +9,7 @@
 import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import type { DatabaseHandle } from "./db.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
+import { safeLogout } from "./imap-logout.js";
 import { moveActionBlockedError } from "./message-storage.js";
 import { messageFlagNames, type MessageFlagsPatch } from "./message-flags.js";
 export type { MessageFlagsPatch };
@@ -94,7 +95,7 @@ export async function updateMessageFlags(
         }
       })();
     } finally {
-      if (client.usable) await client.logout().catch(() => undefined);
+      await safeLogout(client);
     }
   });
 }
@@ -268,7 +269,7 @@ export async function updateMessageFlagsBatch(
       } catch {
         remoteSucceeded = false;
       } finally {
-        if (client?.usable) await client.logout().catch(() => undefined);
+        await safeLogout(client);
       }
       if (!remoteSucceeded) {
         failed += messages.length;

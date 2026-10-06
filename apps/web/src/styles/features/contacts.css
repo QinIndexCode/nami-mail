@@ -105,7 +105,7 @@ display:flex
 }
 .contact-avatar
 {
-background:color-mix(in srgb, var(--accent,var(--text-soft)) 14%, var(--panel-muted));
+background:color-mix(in srgb, var(--accent) 14%, var(--panel-muted));
 width:30px;
 height:30px;
 color:var(--text-soft);

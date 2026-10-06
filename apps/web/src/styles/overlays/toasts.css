@@ -48,7 +48,7 @@ padding:6px 12px;
 font-size:12px;
 font-weight:600;
 line-height:1.2;
-border-radius:var(--radius-sm, 6px);
+border-radius:var(--radius-sm);
 border:1px solid color-mix(in srgb, var(--accent) 38%, transparent);
 background:color-mix(in srgb, var(--accent) 12%, transparent);
 color:var(--accent);

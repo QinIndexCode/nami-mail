@@ -55,8 +55,33 @@ describe("styles.css size ratchet", () => {
   // 2026-10-05 第三次有记录的上调（17_612 → 17_616）：token 普查发现
   // --accent 被四处引用（toast 操作按钮/账户连接选中态/沙盒统计数字）
   // 却从未定义，全部静默失效；现于两主题正式定义（值同 --info）。
+  // 2026-10-06 有记录的一次上调（17_616 → 17_628）：批次 A1「CSS token
+  // 家族修复 + 对比度修复 + 移动端列头修复」。variables.css 两主题正式
+  // 定义 --primary/--primary-strong/--accent-subtle/--focus-ring-text（+2 行）
+  // 与 --font-mono（+1 行，随 font-family 惯例仅 :root 一份）；responsive.css
+  // ≤620px 列头加 .message-count 隐藏与 h1/eyebrow 单行省略（+9 行）。
+  // 2026-10-06 第二次有记录的上调（17_628 → 17_659）：批次 A2「复检修复」。
+  // 实测聚合 17_647 行（+19），阈值取实测 +12 行缓冲。
+  //
+  // **余量政策**：本阈值必须**严格大于**实测值。上一版设成 17_628 恰好等于
+  // 实测值，余量为 0，任何一行 CSS 改动都会立刻变红——那样的棘轮不是护栏，
+  // 是绊线（本轮开头实测正是如此：17_628 = 实测）。因此规则是：
+  //   设阈值 = 实测值 + 12 行；余量用尽时，要么下轮瘦身回收，要么**显式**
+  //   记录一次上调及其原因，不允许静默地把阈值贴到实测值上。
+  // 12 行 ≈ 一条中等规则或两条带注释的 token 声明，够吸收一次正常的
+  // 「改 token 顺便加两行说明」而不误报，又不至于大到失去约束力。
+  //
+  // 本轮 +19 行的来源（全部为有记录的必要改动，无 gold-plating）：
+  //   responsive.css 把 .message-count 的 display:none 换成 visually-hidden
+  //     配方（+15 行，含 6 行说明为何不能直接 display:none / 不能直接复用
+  //     features/composer.css 里的工具类）；
+  //   variables.css 增补 --radius-xs（+1 行）；
+  //   agent.css 记录 --text-faint 那一处 tint 由 14% 降到 10% 的原因
+  //     （+4 行注释）。
+  // 下一轮 CSS 瘦身时应优先收回：先合并 responsive.css 里重复的
+  // visually-hidden 配方，再考虑把 tint 说明挪进设计系统文档。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 17_616;
+  const FROZEN_AGGREGATED_MAX_LINES = 17_659;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {
@@ -78,5 +103,22 @@ describe("styles.css size ratchet", () => {
     const lines = aggregatedCss.split("\n").length;
     expect(lines).toBeLessThanOrEqual(FROZEN_AGGREGATED_MAX_LINES);
     expect(lines).toBeGreaterThan(FROZEN_AGGREGATED_MAX_LINES - STALENESS_WINDOW);
+  });
+
+  /**
+   * The ratchet must keep headroom, not sit on the measurement.
+   *
+   * A baseline set *equal* to the current line count passes today and fails on
+   * the next single line — which is exactly what happened: the previous
+   * threshold was 17_628 against a measured 17_628, so the guard measured
+   * nothing. This asserts the margin exists, and names it, so the next person
+   * to bump the number has to state the headroom they are entitled to.
+   */
+  it("keeps headroom above the measured line count", async () => {
+    const { loadAggregatedCss } = await import("./testUtils/loadStyles.js");
+    const lines = loadAggregatedCss().split("\n").length;
+    const headroom = FROZEN_AGGREGATED_MAX_LINES - lines;
+    expect(headroom, `the aggregated ratchet must exceed the measured ${lines} lines`).toBeGreaterThan(0);
+    expect(headroom, `headroom is ${headroom} lines; the documented buffer is 12`).toBeLessThanOrEqual(12);
   });
 });

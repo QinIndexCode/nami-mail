@@ -13,6 +13,7 @@
 import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import type { DatabaseHandle } from "./db.js";
 import { friendlyMailError, imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
+import { safeLogout } from "./imap-logout.js";
 import {
   MAILBOX_SYNCING_ERROR,
   MAIL_MOVE_IN_FLIGHT_ERROR,
@@ -166,7 +167,7 @@ async function recoverStaleMoveIntent(
     }
     return false;
   } finally {
-    if (ownsClient && client.usable) await client.logout().catch(() => undefined);
+    if (ownsClient) await safeLogout(client);
   }
 }
 
@@ -491,7 +492,7 @@ async function moveMessageCore(
     return { accountId: message.account_id, destination: destination.path, refreshPending: true, uncertain: true };
   } finally {
     unmarkAccountMoving(message.account_id);
-    if (ownedClient?.usable) await ownedClient.logout().catch(() => undefined);
+    await safeLogout(ownedClient);
   }
 }
 
@@ -772,7 +773,7 @@ export async function batchMoveMessages(
   } finally {
     // A caller's cache is theirs to hang up; only one this call opened is closed.
     if (!connections) for (const client of clientsByAccount.values()) {
-      if (client.usable) await client.logout().catch(() => undefined);
+      await safeLogout(client);
     }
   }
   return outcome;

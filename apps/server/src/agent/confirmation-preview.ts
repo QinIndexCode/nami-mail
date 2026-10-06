@@ -1,5 +1,6 @@
 import { safeStringifyJson } from "@nami/agent-contracts";
 import { agentT, type AgentMessageKey } from "./agent-messages.js";
+import { clipped } from "./agent-shared.js";
 import { defaultLocale, type SupportedLocale } from "../localization.js";
 
 /**
@@ -33,10 +34,6 @@ type DraftLikeInput = {
 
 function localeOf(locale: string | undefined): SupportedLocale {
   return locale === "zh-CN" || locale === "en-US" ? locale : defaultLocale;
-}
-
-function clipped(value: string, maximum: number): string {
-  return value.length > maximum ? value.slice(0, maximum) : value;
 }
 
 function recipientPreview(locale: SupportedLocale, recipients: readonly Recipient[]): string {

@@ -3,8 +3,14 @@ import {
   isSafeJsonValue,
   type AgentError,
   type ProviderChatMessage,
+  type ProviderStreamEvent,
+  type ProviderTokenUsage,
+  type ToolCall,
 } from "@nami/agent-contracts";
 import { isLoopbackHostname } from "../endpoint-guard.js";
+
+/** Terminal `completed` reasons every adapter may report (mirrors the stream event union). */
+export type ProviderFinishReason = "stop" | "length" | "tool-calls" | "content-filter" | "cancelled";
 
 /** Shared upper bound for a single SSE line/frame across provider adapters. */
 export const maximumSseLineBytes = 512 * 1024;
@@ -132,6 +138,38 @@ export function linesFrom(buffer: string, final: boolean): { lines: string[]; re
   const split = buffer.split(/\r?\n/);
   if (!final) return { lines: split.slice(0, -1), remaining: split.at(-1) ?? "" };
   return { lines: split, remaining: "" };
+}
+
+/**
+ * Shared terminal sequence of a successful provider stream: an optional usage
+ * event, one `tool_call` per assembled call, then the terminal `completed`
+ * event. `toolCallsRequested` is separate from the emitted calls because an
+ * adapter may drop an unanswerable call (missing id/name) while the model
+ * still chose the `tool-calls` finish reason — the engine keys retry
+ * behaviour off that reason, so it must not be re-derived from what survived.
+ */
+export function* streamCompletionEvents(
+  toolCalls: readonly ToolCall[],
+  finishReason: ProviderFinishReason,
+  toolCallsRequested: boolean,
+  usage?: ProviderTokenUsage,
+): Generator<ProviderStreamEvent> {
+  if (usage && Object.keys(usage).length) yield { type: "usage", usage };
+  for (const call of toolCalls) yield { type: "tool_call", call };
+  yield { type: "completed", finishReason: toolCallsRequested ? "tool-calls" : finishReason };
+}
+
+/**
+ * Shared terminal sequence of a failed provider stream. Adapters report the
+ * mapped error first and always close with a `completed` event, so a consumer
+ * never has to infer stream termination from the absence of further events.
+ */
+export function* streamFailureEvents(
+  error: unknown,
+  options: { signal?: AbortSignal; timedOut?: boolean },
+): Generator<ProviderStreamEvent> {
+  yield { type: "error", error: safeMessage(error, { signal: options.signal, timedOut: options.timedOut }) };
+  yield { type: "completed", finishReason: options.signal?.aborted ? "cancelled" : "content-filter" };
 }
 
 /** Shared request wrapper: builds a URL, enforces timeout/abort, and leases the response. */

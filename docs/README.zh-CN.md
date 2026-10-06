@@ -11,6 +11,8 @@ Nami Mail 当前发布 Windows x64 桌面版。本页按任务整理公开文档
 - [Windows 安装与更新指南](INSTALLING.zh-CN.md)：从可信来源下载、安装、更新、卸载和 SmartScreen 处理。
 - [邮箱接入指南](EMAIL-PROVIDERS.zh-CN.md)：OAuth、应用专用密码、手动 IMAP/SMTP 与连接排障。
 - [邮件正文翻译](TRANSLATION.zh-CN.md)：可选免费翻译和 AI 翻译的配置、主动发送边界和隐私注意事项。
+- [日历与邮件邀请](CALENDAR.zh-CN.md)：邮件邀请横幅、ICS 导入导出（按 UID 去重）与事件提醒。
+- [自动回复](AUTO-REPLY.zh-CN.md)：双模型判定与草稿、范围规则、确认流程与沙盒模拟器。
 - [本机 Mail API 契约](LOCAL-API.zh-CN.md)：桌面界面与本机服务的受保护协议、翻译状态和模型准备接口；不是公开网络 API。
 - [外部 Mail 接口](EXTERNAL-MAIL-INTERFACE.zh-CN.md)：配对、撤销、9 个只读 + 7 个写工具、安全边界和恢复方式。
 - [NamiMail Agent 使用指南](agent/usage.zh-CN.md)：对话管理、邮件范围、来源引用与确认流程。

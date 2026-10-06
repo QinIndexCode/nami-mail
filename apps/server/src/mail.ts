@@ -1,6 +1,7 @@
 import { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
 import { decryptAccountPassword } from "./account-credentials.js";
+import { safeLogout } from "./imap-logout.js";
 import type { ResolvedOutboundAttachment } from "./outbound-attachments.js";
 import { loginUsername, type DetectedProvider, type MailServerConfig } from "./providers.js";
 import type { AccountRecord } from "./types.js";
@@ -136,7 +137,7 @@ export async function testMailboxConnection(
       throw withMailOperationPhase(error, "imap");
     }
   } finally {
-    if (client.usable) await client.logout().catch(() => undefined);
+    await safeLogout(client);
   }
 }
 
@@ -166,7 +167,7 @@ export async function testAccountConnection(
     }
     return { folders: folders.length, smtp: true };
   } finally {
-    if (client.usable) await client.logout().catch(() => undefined);
+    await safeLogout(client);
     transport.close();
   }
 }
@@ -239,7 +240,7 @@ export async function testOAuthAccountConnection(
     }
     return { folders: folders.length, smtp: true };
   } finally {
-    if (client.usable) await client.logout().catch(() => undefined);
+    await safeLogout(client);
     transport.close();
   }
 }
