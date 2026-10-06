@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
+import { triggerBlobDownload } from "./attachmentZip";
 import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
 import type { CalendarEvent, CalendarEventInput } from "./types";
@@ -520,18 +521,9 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
   const handleExportIcs = async () => {
     try {
       setBusy(true);
-      const blob = await fetch(api.exportCalendarIcsUrl()).then((r) => r.blob()).catch(() => null);
-      if (blob) {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `nami-calendar-${localDateKey(new Date())}.ics`;
-        link.click();
-        URL.revokeObjectURL(url);
-        setNotice({ kind: "success", message: t("calendar.exportSuccess") });
-      } else {
-        setNotice({ kind: "error", message: t("calendar.loadError") });
-      }
+      const blob = await api.downloadCalendarIcs();
+      triggerBlobDownload(blob, `nami-calendar-${localDateKey(new Date())}.ics`);
+      setNotice({ kind: "success", message: t("calendar.exportSuccess") });
     } catch (error) {
       setNotice({ kind: "error", message: mailErrorMessage(error, t("calendar.loadError"), t) });
     } finally {

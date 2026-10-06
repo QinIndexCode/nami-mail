@@ -212,6 +212,13 @@ function emlFilenameFromDisposition(disposition: string | null): string {
   }
 }
 
+function calendarIcsPath(range?: { after?: string; before?: string }): string { // shared by exportCalendarIcsUrl + downloadCalendarIcs
+  const q = new URLSearchParams();
+  if (range?.after) q.set("after", range.after);
+  if (range?.before) q.set("before", range.before);
+  return `/api/calendar/export.ics${q.toString() ? `?${q.toString()}` : ""}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Only the JSON path is bounded here; streaming requests (agent messages,
   // translation) manage their own lifetime via an explicit signal and must not
@@ -827,10 +834,10 @@ export const api = {
     request<{ ok: boolean; imported: number; updated: number; replaced: boolean }>("/api/calendar/import", { method: "POST", body: JSON.stringify({ events, mode }) }),
   importCalendarIcs: (ics: string, mode: "append" | "replace" = "append") =>
     request<{ ok: boolean; imported: number; updated: number; replaced: boolean }>("/api/calendar/import-ics", { method: "POST", body: JSON.stringify({ ics, mode }) }),
-  exportCalendarIcsUrl: (range?: { after?: string; before?: string }) => {
-    const q = new URLSearchParams();
-    if (range?.after) q.set("after", range.after);
-    if (range?.before) q.set("before", range.before);
-    return `/api/calendar/export.ics${q.toString() ? `?${q.toString()}` : ""}`;
-  },
+  exportCalendarIcsUrl: (range?: { after?: string; before?: string }) => calendarIcsPath(range),
+  downloadCalendarIcs: (range?: { after?: string; before?: string }, options?: BinaryRequestOptions): Promise<Blob> =>
+    binaryTransfer(calendarIcsPath(range), undefined, async (response) => {
+      if (!response.ok) throw await apiError(response);
+      return response.blob();
+    }, options),
 };

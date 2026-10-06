@@ -202,15 +202,6 @@ export function demoMoveDestination(accounts: readonly Account[], accountId: str
   return "";
 }
 
-export function initials(name: string, address: string): string {
-  const value = name.trim() || address.split("@")[0] || "?";
-  return [...value].slice(0, 2).join("").toUpperCase();
-}
-
-export function accountTone(value: string): number {
-  return [...value].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4;
-}
-
 export function currentSystemTheme(): "light" | "dark" {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
@@ -349,6 +340,138 @@ export function textFromSanitizedMailHtml(html: string): string {
   const template = document.createElement("template");
   template.innerHTML = html;
   return template.content.textContent ?? "";
+}
+
+/** Same-origin path of the server-side external image proxy
+ *  (GET /api/images/proxy, apps/server/src/routes/messages.ts). */
+export const IMAGE_PROXY_PATH = "/api/images/proxy";
+
+/**
+ * The proxied form of one image source, or `null` when the source must be left
+ * exactly as it is.
+ *
+ * Left untouched, in one bucket or another:
+ * - every non-http(s) scheme — `data:` (inline images and BIMI), `cid:`, `blob:`;
+ * - anything already resolving against this app's own origin. That covers the
+ *   inline-attachment endpoint the server rewrites `cid:` to
+ *   (/api/messages/:id/inline/:partId), and an already-proxied body — which is
+ *   what makes this function safe to apply more than once.
+ *
+ * Everything else is a fetch the mail author chose and the reader's network
+ * would perform under its own IP, so the proxy takes it over instead. The URL is
+ * resolved against the document first so a protocol-relative `//host/pixel`
+ * arrives at the proxy as an absolute URL the server can parse at all.
+ */
+function proxiedImageSource(source: string): string | null {
+  const value = source.trim();
+  if (!value) return null;
+  let resolved: URL;
+  try {
+    resolved = new URL(value, document.baseURI);
+  } catch {
+    return null;
+  }
+  if (resolved.protocol !== "http:" && resolved.protocol !== "https:") return null;
+  if (resolved.origin === window.location.origin) return null;
+  return `${IMAGE_PROXY_PATH}?url=${encodeURIComponent(resolved.href)}`;
+}
+
+/** Rewrites every candidate URL in an `img[srcset]`. `srcset` is what the
+ *  browser fetches from whenever it is present, so leaving it alone keeps the
+ *  leak wide open behind a proxied `src`.
+ *
+ *  Candidates follow the HTML srcset parsing algorithm rather than a split on
+ *  commas: a URL is the run of characters up to the next whitespace, and it only
+ *  ends a candidate when it ends in a comma. Splitting naively would tear a
+ *  `data:image/png;base64,AAA=` candidate in half, because that comma belongs to
+ *  the URL. */
+function rewriteImageSrcset(srcset: string): string {
+  const candidates: string[] = [];
+  let rest = srcset;
+  while (rest.trim()) {
+    rest = rest.replace(/^[\t\n\f\r ]+/, "");
+    if (!rest) break;
+    const urlEnd = rest.search(/[\t\n\f\r ]/);
+    let url = urlEnd === -1 ? rest : rest.slice(0, urlEnd);
+    let tail = urlEnd === -1 ? "" : rest.slice(urlEnd);
+    const trailingCommas = url.match(/,+$/)?.[0] ?? "";
+    let descriptor = "";
+    if (trailingCommas) {
+      url = url.slice(0, -trailingCommas.length);
+    } else {
+      const descriptorEnd = tail.search(/,/);
+      descriptor = descriptorEnd === -1 ? tail : tail.slice(0, descriptorEnd);
+      tail = descriptorEnd === -1 ? "" : tail.slice(descriptorEnd + 1);
+    }
+    if (url) candidates.push(`${proxiedImageSource(url) ?? url}${descriptor}`);
+    rest = tail;
+  }
+  // The encoded proxy URL contains neither a comma nor whitespace, so ", " is
+  // always a safe separator here.
+  return candidates.length ? candidates.join(", ") : srcset;
+}
+
+/** `url(...)` inside an inline style attribute. The replacement is always
+ *  double-quoted: encodeURIComponent leaves `'()*!` unescaped, so a bare
+ *  parenthesised URL could otherwise break the CSS it is spliced into. */
+const CSS_URL_FUNCTION = /url\(\s*(["']?)([^"')]*)\1\s*\)/gi;
+
+/**
+ * Routes a mail body's remote images through the server-side image proxy.
+ *
+ * Opening a mail is itself a disclosure: an `<img src="https://tracker/pixel">`
+ * that the renderer fetches directly hands the sender the reader's public IP,
+ * the exact open time, and the read receipt that no further interaction is
+ * needed to confirm. The proxy already exists and already fail-closed on the
+ * server (address allow-list, DNS rebinding caught at resolve time, per-hop
+ * redirect re-checks, byte and wall-clock ceilings), but nothing called it, so
+ * the images went direct.
+ *
+ * Applied AFTER `sanitizeMailHtml`, whose DOMPurify pass must keep its own
+ * configuration untouched. Kept as a separate export so that contract stays
+ * single-purpose and both render paths (the reader body and the translation
+ * pipeline that replaces it) opt in explicitly.
+ *
+ * Runs over every attribute through which a mail body can trigger a remote
+ * fetch, not just `img[src]`: `srcset` alone would otherwise bypass an
+ * src-only rewrite, and a `background` attribute, a `style` url() or an SVG
+ * `image` is the same pixel by another name.
+ */
+export function rewriteRemoteImagesToProxy(html: string): string {
+  if (!html) return html;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+
+  for (const image of template.content.querySelectorAll("img")) {
+    const proxied = proxiedImageSource(image.getAttribute("src") || "");
+    if (proxied) image.setAttribute("src", proxied);
+    const srcset = image.getAttribute("srcset");
+    if (srcset) {
+      const rewritten = rewriteImageSrcset(srcset);
+      if (rewritten !== srcset) image.setAttribute("srcset", rewritten);
+    }
+  }
+  // SVG <image> carries its URL on href/xlink:href rather than src.
+  for (const image of template.content.querySelectorAll("image")) {
+    for (const attribute of ["href", "xlink:href"]) {
+      const proxied = proxiedImageSource(image.getAttribute(attribute) || "");
+      if (proxied) image.setAttribute(attribute, proxied);
+    }
+  }
+  for (const element of template.content.querySelectorAll("[background]")) {
+    const proxied = proxiedImageSource(element.getAttribute("background") || "");
+    if (proxied) element.setAttribute("background", proxied);
+  }
+  for (const element of template.content.querySelectorAll("[style]")) {
+    const style = element.getAttribute("style") || "";
+    const rewritten = style.replace(CSS_URL_FUNCTION, (match, _quote: string, url: string) => {
+      const proxied = proxiedImageSource(url);
+      return proxied ? `url("${proxied}")` : match;
+    });
+    if (rewritten !== style) element.setAttribute("style", rewritten);
+  }
+
+  return template.innerHTML;
 }
 
 /** Quote markers that identify quoted message bodies inside sanitized HTML.
