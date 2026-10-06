@@ -3,10 +3,20 @@
 > 本文件是 Nami Mail 的持续推进计划，供新的 ZCode 会话续接工作。
 > **2026-09-30 交付**：Batch AF–AY（16 轮质量循环全部成果）已随 commit `cf55c0f` 提交并推送至 `origin/backup/backgrounds-baseline`（Mimosa seal sha256:c8d3d32f…，69 findings 全 inconclusive）。
 > **2026-10-01 交付**：Batch AZ–BB（阅读体验/润色/导航修复/正文链接化）+ Batch BC（微软 OAuth 入口诚实化与内置 client ID 机制、服务商接入修正、磁贴选中指示）已随 commit `1d0181f` 提交并推送至 `origin/backup/backgrounds-baseline`（Mimosa 完整扫描因 scanner_enobufs 未出结论，按兼容策略放行）；**同日经项目所有者指令首次合并 main**：`main` fast-forward 至同一提交并推送 `origin/main`。
-> 最后更新：2026-10-06。每项完成一个批次后同步更新本文件与下方「交付记录」。
+> 最后更新：2026-10-07。每项完成一个批次后同步更新本文件与下方「交付记录」。
 > 交付分支固定为 `backup/backgrounds-baseline`；2026-10-01 起经所有者指令解除"绝不 push main"约束——main 与 backup 同步发布，日常交付仍走 backup。
 
+> ## 行数与棘轮数字的唯一权威来源（2026-10-07 声明）
+>
+> **`eslint.config.mjs` 的 `max-lines` 数据表是所有 TS/TSX 巨型文件行数阈值的唯一权威**；CSS 聚合行数的权威是 `apps/web/src/styles-size.test.ts` 的 `FROZEN_AGGREGATED_MAX_LINES`。
+>
+> **本文件不再重复维护这些数字。** 下方 §0 / §0.1 / §0.2 / §3 中出现的行数、`max-lines` 值、聚合行数均为**历史快照**，会随每次重构漂移——它们记录"当时测到了什么"，不记录"现在应该是多少"。需要当前阈值时，直接读上述两个文件，不要以本文为准。
+>
+> 同理，本文中的技术债计数（`!important`、`console.log`、内联样式等）只在对应快照日期成立。
+
 ## 0. 当前基线（2026-08-21）
+
+> **⚠️ 以下快照已过期（2026-10-07 复核）**：本节记录 2026-08-21 的基线，其中的测试数、零 console.log 断言、`!important` 53 处、内联样式 22 处均已被后续批次推翻。保留原文以留存判断脉络，**不要据此规划工作**。当前状态请以 §0.2 之后的交付记录与上面的权威来源声明为准。
 
 - 测试：web 628 / server 766 / desktop 135 / contracts 26，四 workspace typecheck 全绿，e2e 三套（smoke / interactions / update-footer）。全量回归 67+94+1+1 测试文件一次通过；server 端 `agent-service-rag.test.ts` 一条用例在并行负载下偶发 5s 超时（单跑稳定通过，与前端改动无关）。
 - 最近交付：Batch P「功能缺口 1 收线：键盘可达性高优先 4 项 + ComposeModal 同类缺口」（commit `0049ef8`）——附件预览焦点 restore（P1）；`.mail-title h2` 焦点环拆分 `:focus-visible`（P2）；slash/mention 菜单 aria-activedescendant + option id + 滚动跟随（P3）；ComposeModal To 建议成完整 combobox（expanded/controls/activedescendant + 方向键 + Enter 应用，P4a）与模板选择器 menu-button 三件套（expanded/controls/haspopup + option id，P4b）；shift+J/K 隐式扩选——`DialogKeydownSnapshot.keyboardSelectionAnchorId` + `select_range` action + App 锚点 ref（P5，非 shift 路径逐字不变）；多选行 aria-pressed + shift+click 范围选择补回归测试（P6）。本批 +19 条测试（628 = 609 + 19），仓库首个焦点管理断言（AttachmentPreviewModal.focus.test.tsx）与首个 ComposeModal 交互测试（ComposeModal.test.tsx）。
@@ -15,13 +25,15 @@
 
 ## 0.1 现状快照（2026-09-28，架构治理批次后实测，取代 2026-09-06 口径）
 
+> **⚠️ 以下快照已过期（2026-10-07 复核）**：本节的行数与棘轮值已被后续批次推翻，保留原文以留存判断脉络。当前实测：`App.tsx` **3031** 行、`AgentWorkspace.tsx` **2502** 行、`agent-service.ts` **1304** 行、`main.mts` **2110** 行；`max-lines` 棘轮现为 App.tsx≤**4380** / agent-service.ts≤**1315** / main.mts≤**2112** / AgentWorkspace.tsx≤**2516**（以 `eslint.config.mjs` 为准）。`styles.css` 已拆为 `styles/` 下 30 个模块、根文件仅 30 行 `@import` 索引，聚合 17670 行。下方原文中的 4360 / 2445 / 2876 / 2103 / 18416 与 4380 / 2890 / 2120 / 2460 均**不再成立**。
+
 - 单体规模实测：`apps/web/src/App.tsx` **4360 行**（72 useState / 45 useEffect，零单测，仅 e2e 兜底；本批抽取批量作业状态机后 -70）、`AgentWorkspace.tsx` 2445 行、`apps/server/src/agent-service.ts` **2876 行**（MCP 域已抽出）、`agent-rag-worker.ts` 1460 行、`apps/desktop/src/main.mts` 2103 行、`styles.css` **18416 行** + 53 处 `!important`（vitest 棘轮冻结）。
-- **新防线（2026-09-28 批次）**：路由层 SQL 39→0 且 eslint `no-restricted-syntax` error 级锁死；sync 家族 5 节点运行时环消除（`agent/sync-locks.ts`）；max-lines 棘轮覆盖 App.tsx≤4380 / agent-service.ts≤2890 / main.mts≤2120 / AgentWorkspace.tsx≤2460；依赖同步守卫 `scripts/tests/dependency-sync.test.mjs`（根清单与 apps/server 必须逐字段一致——electron-builder 从根清单收集生产依赖，重复声明是有意为之）。
-- 新增深模块：`server/account-store.ts`（账户行访问）、`server/message-queries.ts`（消息读查询）、`server/message-flags.ts`（flag 词汇表）、`server/endpoint-guard.ts`（回环判定，注意与 `config.ts` 的 bind 校验语义不同、不得合并）、`server/agent/mcp-server-manager.ts`（MCP 域）、`server/agent/sync-locks.ts`、`web/batchJobRunner.ts`、`web/FormNotice.tsx`。
+- **新防线（2026-09-28 批次）**：路由层 SQL 39→0 且 eslint `no-restricted-syntax` error 级锁死；sync 家族 5 节点运行时环消除（模块 `sync-locks`，**实际路径是 `apps/server/src/sync-locks.ts`（src 根），不是 `agent/sync-locks.ts`**）；max-lines 棘轮覆盖 App.tsx / agent-service.ts / main.mts / AgentWorkspace.tsx（**具体阈值以 `eslint.config.mjs` 为准，本文不复制**）；依赖同步守卫 `scripts/tests/dependency-sync.test.mjs`（根清单与 apps/server 必须逐字段一致——electron-builder 从根清单收集生产依赖，重复声明是有意为之）。
+- 新增深模块：`server/account-store.ts`（账户行访问）、`server/message-queries.ts`（消息读查询）、`server/message-flags.ts`（flag 词汇表）、`server/endpoint-guard.ts`（回环判定，注意与 `config.ts` 的 bind 校验语义不同、不得合并）、`server/agent/mcp-server-manager.ts`（MCP 域）、`server/sync-locks.ts`、`web/batchJobRunner.ts`、`web/FormNotice.tsx`。
 - 已收口的历史重复：mail wire DTO 单一权威 `packages/agent-contracts/src/mail-dto.ts`（web/types.ts 与 server `publicAccount`/`messageRow` 均消费契约，`Account.authMethod` 是契约化时暴露的既有漂移）；`MessageFlagsPatch`/`messageFlagNames`/SHA-256 helper/前端 Notice ×6/Ollama 端点 ×2 各归其一。
 - 保持不变（反思轮裁定）：`RuntimeContext`（标准 composition-root）、`config.ts` 模块加载期 throw（安全设计）、`account-credentials.ts` icloud/yandex 迁移护栏（刻意自包含）、main.mts 不拆（候选 7）。
-- 组件内联 `style={` 36 处（含子目录口径；原记 22 为顶层口径，有反弹）。
-- `console.log` 8 处：`App.tsx` 4 + `main.tsx` 2 为有意 `[nami-startup]` 埋点（桌面 host 转发进 startup-log，见 `main.tsx:8-11` 注释），`AgentWorkspace.poll.test.tsx` 2 为调试输出——原“零残留”口径过时。
+- 组件内联 `style={` 计数：原记 36 处（含子目录口径；更早记 22 为顶层口径）。**2026-10-07 实测：`style={{` 58 处，分布于 12 个 `.tsx` 文件**（`apps/web/src/**`）。
+- `console.log` 原记 8 处（`App.tsx` 4 + `main.tsx` 2 为有意 `[nami-startup]` 埋点，`AgentWorkspace.poll.test.tsx` 2 为调试输出）。**2026-10-07 实测 6 处**：`App.tsx` 2 + `app/useSplashDismiss.ts` 2 + `main.tsx` 2，均为启动埋点，测试文件内已无残留。
 - help 按钮 `tabIndex={-1}` 已清零（12 处，`AgentProviderSettings.tsx` 8 + `AgentMcpServerPane.tsx` 4，2026-09-06 去掉后恢复可聚焦，web typecheck 全绿）。
 - `SYNC_MESSAGE_LIMIT`：server 默认 2000（`config.ts:68`），README 也是 2000；desktop 源码无 200 硬编码（仅 `spawn-environment.mts` / `local-configuration.mts` 透传变量）——“桌面默认 200”记述过时，待实测桌面 spawn 实际值后定论。
 - e2e：`e2e/` 8 个 spec 文件，默认 `test:e2e` 跑 4 个（smoke / interactions / update-footer / geometry）；`ui-stress.spec.ts` 需种子数据 + 100 分钟超时，是独立压测通道，排除是刻意的；`capture-all-modals` / `capture-connections` / `shots` 是无入口的手动截图工具。
@@ -30,13 +42,18 @@
 
 ## 0.2 现状快照（2026-09-29，质量循环 Round 1-2 后，取代 §0.1 的行数/防线口径；全部未提交）
 
+> **⚠️ 以下快照已过期（2026-10-07 复核）**：本节的 `agent-service.ts` 2718 行已**再次腰斩至 1304 行**，会话读路径与运行引擎域早已抽到 `agent/conversations.ts` / `agent/run-engine.ts`；棘轮余量 15→172 的说法已失效（现为 1315 − 1304 = 11）。原文保留仅为记录当时的推理链。
+
 - 单体规模：`agent-service.ts` **2718 行**（确认生命周期域已抽出 → `agent/confirmation-lifecycle.ts`；棘轮余量 15→172）；`main.mts` 2119/2120（有界重启接线后余 1）；`outbox.ts` 770/780（校验门槛化后按惯例对齐）；App.tsx 4360/AgentWorkspace 2446/styles.css 18416 未动。
 - **防线**：max-lines 棘轮 4→**25**（`eslint.config.mjs` 数据表生成，≥700 行未冻结存量全部按当前值+10 冻结，堵死"搬进未冻结文件"反弹路径）；顺序表征测试 `agent-service-stream-order.test.ts` 3 条为后续 streamMessage 拆分提供防线。
 - 新深模块：`desktop/service-restart-policy.mts`（纯重启策略 + coordinator，utility 进程崩溃有界恢复）、`agent/confirmation-lifecycle.ts`（#108 模式，WeakMap 键身份语义保持）、`db.ts` 的 `deleteMessagesWithBatchFtsCleanup`（FTS 批删通用助手）、`message-storage.ts` 的 `verifyEncryptedPayloads` / `outbox.ts` 的 `verifyOutboundSubmissions`（marker 门槛 + rowid keyset 分页）。
 - 测试：server **870**（103 文件）/ desktop **208** / web 82 文件 778 用例 / contracts 32 / core 17，全绿；lint 0 error / 106 warning（QUAL-6 清理后 122→112→106）。
 - 下一批边界裁定（Round 2 实测修正 ARCH-1 预判）：会话 CRUD 块**不宜单独抽**——与 activeRuns/readConversation/toConversation 深度纠缠，强抽=7 成员回调注入的假抽取；正确边界是与会话读路径、运行引擎域（streamMessage 673 行）同批。契约化收尾（ARCH-2/QUAL-2）已完成（见 Batch AF 末条）。
+  - **⚠️ 依据已变化，需重新评估（2026-10-07）**：这条裁定是在 `agent-service.ts` **2718 行**时写的，依据是"会话 CRUD 与 activeRuns/readConversation/toConversation 深度纠缠"。实测该文件现仅 **1304 行**、会话域主体已落在 `agent/conversations.ts`、运行引擎域已落在 `agent/run-engine.ts`（`streamMessage` 的 673 行已随 `run-engine.ts` 一同搬走），**原依据已不存在**。裁定的结论（"不要单独抽"）是否仍成立，需要按当前代码重新评估——不要把本条当作已确认的结论直接引用。
 
 ## 1. 架构候选（来自 2026-08-20 走查报告，候选 1、2、6 已完成）
+
+> **以下 §1 起的候选证据与批次记录属历史快照，其中已被推翻的结论不再逐条重写**（例如"App.tsx 4138 行""AgentWorkspace.tsx 4429 行"等 2026-08/09 的行数证据、以及"main.mts 不拆（候选 7）"这类后续被 `tray.mts` 抽取部分推翻的判断）。**引用前请以实测与文首权威来源声明为准**；历史判断本身仍有价值，故原文保留。
 
 ### 候选 2：折叠 App shell（Strong，已完成）
 
@@ -91,7 +108,8 @@
 
 ## 3. 样式 / 工程债
 
-- 无 Tailwind，单文件 `styles.css` 实测 **16821 行**（原记录 3700 有误，2026-08-21 探索勘误；2026-09-06 复测 16821）+ 53 处 `!important` + 组件内联 `style={` 36 处（含子目录口径；原记 22 为顶层口径，有反弹）——CSS 是第二个单体；各功能区段落（壳层 / banner / 弹窗皮肤 / status-dot）已内聚，拆分是机械搬迁，另立批次。
+- 无 Tailwind，单文件 `styles.css` 曾实测 **16821 行**（原记录 3700 有误，2026-08-21 探索勘误）。**该项债务已结清（2026-10-03 架构升级）**：CSS 已拆为 `apps/web/src/styles/` 下 30 个模块（`tokens` / `base` / `components` / `overlays` / `features` 五层），根 `styles.css` 仅剩 30 行 `@import` 索引，**聚合 17670 行**，由 `styles-size.test.ts` 的 `FROZEN_AGGREGATED_MAX_LINES = 17682` 棘轮锁定。原"拆分是机械搬迁，另立批次"的建议已执行完毕。
+- 历史计数（口径与实测，供追溯）：`!important` 曾记 53 处（`designTokens.test.ts` 的 `debtBudget.important = 53` 是该债务预算的**上限**，**2026-10-07 实测聚合 CSS 中实际有 50 处**，仍在下降）；组件内联 `style={{` 曾记 36 处（**2026-10-07 实测 58 处，分布于 12 个 `.tsx` 文件**）。
 - lucide-react 停在 1.28（Batch H2 教训：新图标不存在需先验证）；依赖升级是欠账。
 - main 从未合入，全部交付在 backup 分支——流程未收尾。
 - 两个一次性坑：wiki 首次需手动建页；electron-builder 从根 package.json 收集依赖（新增运行时依赖需同步根清单并抽查 asar）。

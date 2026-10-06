@@ -70,9 +70,11 @@ Agent workspace with the reference already attached and the instruction already 
 
 **Delivered (2026-09-10, batches Y/Z/AA)**: calendar colours tokenised with dark-theme coverage; radius
 tokenised (`var(--radius-*)` references 2 → ~179 with no numeric change, plus three literals the first
-pass had missed); the five centred blocks in the reading pane unified on `--measure:672px` (down from
-820px, ~95–100 characters per line to ~72); body line-height 1.85 → 1.7; the orphan
-`.sync-progress-banner` class styled; **contrast baseline** corrected two light-theme tokens to the
+pass had missed); the reading pane centred blocks unified on `--measure` (~~previously recorded as
+672px~~ **re-verified 2026-10-07: the value is actually `--measure:960px`**
+(`styles/tokens/variables.css:56`), and only `.mail-text` uses it today, so the "five centred blocks
+unified" design has been overturned and that figure no longer holds**); body line-height 1.85 → 1.7; the
+orphan `.sync-progress-banner` class styled; **contrast baseline** corrected two light-theme tokens to the
 WCAG 4.5:1 floor (`--text-faint` `#727279`→`#66666c`, `--warning` `#b67816`→`#9a6510`); and the
 **executable baseline** landed (`themeContrast.test.ts`, 8 tests, plus `designTokens.test.ts`,
 10 tests, including a debt ratchet that may only go down and rejects new off-scale values).
@@ -82,10 +84,10 @@ WCAG 4.5:1 floor (`--text-faint` `#727279`→`#66666c`, `--warning` `#b67816`→
 - ~~Hardcoded colours bypass the tokens: the six calendar colours are not tokenised and have no dark-theme override~~ **done** (batch Y).
 - ~~Radius fragmentation: at least 15 distinct values against three tokens~~ **values normalised and tokenised** (batches Y/Z: `var(--radius-*)` references 2 → ~179); the off-scale ones are still held by a ratchet budget until they are merged.
 - ~~Hardcoded shadows: one-off elevation shadows mixed across layers~~ **done** (batch AC): 12 of 25 candidates folded into `--shadow-raised`/`--shadow-sm` and 2 redundant dark overrides deleted; **elevation literals are now 0** (18 state halos + 2 native slider details remain, both documented exemptions).
-- Font-size fragmentation: ~13 values including a fractional `11.5px`, many below 12px.
+- Font-size fragmentation: ~~~13 values including a fractional `11.5px`~~ **re-verified 2026-10-07: no fractional font-size remains under `apps/web/src/styles/**`, so this item no longer holds**; recount the size scale before deciding whether to open a new batch.
 - Spacing drifts off the 4px grid: `7px` / `9px` account for 100+ occurrences.
 - Of 32 `!important` declarations ~6 are redundant; the 42 `outline:none` sites each need confirming against a focus-ring replacement.
-- **Orphan class**: `sync-progress-banner` is used in `App.tsx` but has no rule at all in the stylesheet.
+- ~~**Orphan class**: `sync-progress-banner` is used in `App.tsx` but has no rule at all in the stylesheet.~~ **Re-verified 2026-10-07: rules for that class do exist** (`styles/features/mail.css:786` and `styles/base/responsive.css:642`); this item contradicted the "delivered" section above and is withdrawn.
 - Good foundations already in place: 9 `prefers-reduced-motion` blocks, 56 `:focus-visible` rules, tone colours already themed for dark mode.
 
 **Performance** (top items by value/effort):
