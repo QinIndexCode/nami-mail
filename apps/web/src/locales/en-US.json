@@ -1340,6 +1340,7 @@
     "settings.error.startUpdate": "Could not start update",
     "settings.error.removeAccount": "Could not remove account",
     "settings.error.saveSignature": "Could not save signature",
+    "settings.error.saveDisplayName": "Could not save display name",
     "settings.error.restoreDefaults": "Could not restore default settings",
     "update.error.integrity": "The update file could not pass integrity or signature verification. Check network security software and try again.",
     "update.error.invalidResponse": "The update service returned an invalid response. Restart Nami Mail and try again.",

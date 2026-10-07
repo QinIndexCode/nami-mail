@@ -87,7 +87,7 @@ import { beginSpan, markInterval, recordCommit } from "./perfTelemetry";
 import { providerDisplayName } from "./providerOnboarding";
 import { playNotificationSound, primeNotificationSound } from "./sounds";
 import { saveLocalePreference } from "./localePreference";
-import { getAccountDisplayName, useAccountDisplayNames } from "./accountDisplayNameStore";
+import { getAccountDisplayName, hydrateAccountDisplayNames, useAccountDisplayNames } from "./accountDisplayNameStore";
 import { loadFolderDisplayMode, saveFolderDisplayMode, type FolderDisplayMode } from "./folderDisplayMode";
 import { shouldShowLoading, type MailboxSelection } from "./folderNavigation";
 import { createSettingsLoadCoordinator } from "./settingsLoadCoordinator";
@@ -768,6 +768,7 @@ export default function App() {
           nextMessages,
           pendingLocalStateRef.current,
         );
+        hydrateAccountDisplayNames(counts.accounts);
         setAccounts(counts.accounts);
         setProviders(nextProviders);
         messagesRef.current = nextMessages;
@@ -933,6 +934,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         settled,
         pendingLocalStateRef.current,
       );
+      hydrateAccountDisplayNames(counts.accounts);
       setAccounts(counts.accounts);
       setProviders(nextProviders);
       messagesRef.current = settled;
@@ -2199,6 +2201,9 @@ const emptyMessageList = useMemo(() => (query.trim()
   const updateAccountSignatureInState = useCallback((accountId: string, signature: string) => {
     setAccounts((items) => items.map((account) => account.id === accountId ? { ...account, signature } : account));
   }, []);
+  const updateAccountDisplayNameInState = useCallback((accountId: string, displayName: string | null) => {
+    setAccounts((items) => items.map((account) => account.id === accountId ? { ...account, displayName } : account));
+  }, []);
 
   const toggleTheme = () => {
     const nextTheme = theme === "light" ? "dark" : "light";
@@ -2992,6 +2997,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         cancelScheduledSubmission={cancelScheduledSubmission}
         removeAccountFromView={removeAccountFromView}
         updateAccountSignatureInState={updateAccountSignatureInState}
+        updateAccountDisplayNameInState={updateAccountDisplayNameInState}
         retryAccountSync={retryAccountSync}
         desktopUpdateStatus={desktopUpdateStatus}
         setDesktopUpdateStatus={setDesktopUpdateStatus}

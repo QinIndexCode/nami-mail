@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   smtp_transport TEXT NOT NULL DEFAULT 'tls' CHECK (smtp_transport IN ('tls', 'starttls')),
   smtp_username TEXT,
   signature TEXT NOT NULL DEFAULT '',
+  display_name TEXT,
   username_mode TEXT NOT NULL DEFAULT 'email',
   status TEXT NOT NULL DEFAULT 'connected',
   last_error TEXT,
@@ -584,6 +585,7 @@ function migrateDatabase(db: DatabaseHandle): void {
   addAccountColumn("smtp_transport", "smtp_transport TEXT NOT NULL DEFAULT 'tls' CHECK (smtp_transport IN ('tls', 'starttls'))");
   addAccountColumn("smtp_username", "smtp_username TEXT");
   addAccountColumn("signature", "signature TEXT NOT NULL DEFAULT ''");
+  addAccountColumn("display_name", "display_name TEXT");
   addAccountColumn("last_error_code", "last_error_code TEXT");
   addAccountColumn("last_sync_warning_code", "last_sync_warning_code TEXT");
   addAccountColumn("credential_crypto_version", "credential_crypto_version INTEGER NOT NULL DEFAULT 0");

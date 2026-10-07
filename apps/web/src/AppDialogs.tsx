@@ -82,6 +82,7 @@ export interface AppDialogsProps {
   cancelScheduledSubmission: SubmissionsApi["cancelScheduledSubmission"];
   removeAccountFromView: ComponentProps<typeof AccountsDialog>["onAccountRemoved"];
   updateAccountSignatureInState: ComponentProps<typeof AccountsDialog>["onAccountSignatureChanged"];
+  updateAccountDisplayNameInState: NonNullable<ComponentProps<typeof AccountsDialog>["onAccountDisplayNameChanged"]>;
   retryAccountSync: NonNullable<ComponentProps<typeof AccountsDialog>["onAccountSync"]>;
   desktopUpdateStatus: UpdateUiApi["desktopUpdateStatus"];
   setDesktopUpdateStatus: UpdateUiApi["setDesktopUpdateStatus"];
@@ -146,6 +147,7 @@ export function AppDialogs(props: AppDialogsProps) {
     cancelScheduledSubmission,
     removeAccountFromView,
     updateAccountSignatureInState,
+    updateAccountDisplayNameInState,
     retryAccountSync,
     desktopUpdateStatus,
     setDesktopUpdateStatus,
@@ -181,7 +183,7 @@ export function AppDialogs(props: AppDialogsProps) {
           onSuccess={(count, replaced) => showToast(t(replaced ? "calendar.importSuccessReplace" : "calendar.importSuccessAppend", { count }), "success")}
         /></Suspense>
       )}
-      {state.accountsOpen && <Suspense fallback={null}><AccountsDialog accounts={accounts} demoMode={isDemo} onClose={() => actions.closeAccounts()} onAddAccount={() => { actions.closeAccounts(); actions.openAddAccount(); }} onAccountRemoved={removeAccountFromView} onAccountSignatureChanged={updateAccountSignatureInState} onAccountSync={retryAccountSync} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {state.accountsOpen && <Suspense fallback={null}><AccountsDialog accounts={accounts} demoMode={isDemo} onClose={() => actions.closeAccounts()} onAddAccount={() => { actions.closeAccounts(); actions.openAddAccount(); }} onAccountRemoved={removeAccountFromView} onAccountSignatureChanged={updateAccountSignatureInState} onAccountDisplayNameChanged={updateAccountDisplayNameInState} onAccountSync={retryAccountSync} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.sendingStatusOpen && <Suspense fallback={null}><SendingStatusModal accounts={accounts} submissions={submissions} loading={submissionLoading} loadError={submissionLoadError} onClose={() => actions.closeSendingStatus()} onRefresh={() => refreshSubmissions(accounts)} onSyncAccount={async (accountId) => { await retryAccountSync(accountId); }} onCreateNewMessage={(draft) => { actions.closeSendingStatus(); actions.openCompose(draft); }} onCancelScheduled={cancelScheduledSubmission} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       <Suspense fallback={null}><TranslationTermsDialog open={state.translationTermsOpen} onAccept={acceptTranslationTerms} onDecline={declineTranslationTerms} /></Suspense>
       <Suspense fallback={null}><StartupUpdatePrompt

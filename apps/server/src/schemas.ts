@@ -49,6 +49,10 @@ export const accountSignaturePatchSchema = z.object({
   signature: z.string().max(2000),
 }).strict();
 
+export const accountDisplayNamePatchSchema = z.object({
+  displayName: z.string().trim().max(64).transform((value) => value || null).nullable(),
+}).strict();
+
 export const messageIdHeaderSchema = z.string().trim().regex(/^<[^<>\r\n]{1,998}>$/, "邮件引用标识无效。");
 export const messageReferencesSchema = z.array(messageIdHeaderSchema).max(50)
   .refine((values) => new Set(values).size === values.length, { message: "邮件引用不能重复。" })
