@@ -166,6 +166,48 @@ describe("DatePicker (client)", () => {
     expect(onChange).toHaveBeenCalledWith("2026-08-15");
   });
 
+  it("keeps exactly one tab entry when paging into a month that starts past minDate", () => {
+    // minDate lands mid-September while the selected day is in August, so the
+    // whole rendered August grid is disabled and the nav arrow carries focus
+    // across the boundary. The seed and month navigation have to agree on the
+    // bounds: when they disagreed, September opened on a disabled 1st and only
+    // ArrowRight could walk out of it, leaving ArrowLeft stuck for good.
+    mount("date", "2026-08-31", { minDate: "2026-09-15" });
+    act(() => {
+      document.querySelector<HTMLButtonElement>(".date-picker-trigger")?.click();
+    });
+    const tabbable = () => Array.from(document.querySelectorAll<HTMLButtonElement>(".date-picker-day"))
+      .filter((button) => button.getAttribute("tabindex") === "0");
+
+    act(() => {
+      document.querySelectorAll<HTMLButtonElement>(".date-picker-nav-button")[1]?.click();
+    });
+    expect(tabbable().length).toBe(1);
+    expect(tabbable()[0]?.disabled).toBe(false);
+
+    // Focus must be able to move in either direction from the seeded day.
+    const grid = document.querySelector<HTMLDivElement>(".date-picker-grid");
+    act(() => {
+      grid?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    });
+    expect(document.querySelectorAll('.date-picker-day[tabindex="0"]').length).toBe(1);
+    act(() => {
+      grid?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    });
+    expect(document.querySelectorAll('.date-picker-day[tabindex="0"]').length).toBe(1);
+  });
+
+  it("leaves the grid unenterable when every rendered day is out of range", () => {
+    // Nothing here is a legal day, so there is deliberately no entry point;
+    // what matters is that this is the only state in which that holds.
+    mount("date", "", { minDate: "2027-01-01" });
+    act(() => {
+      document.querySelector<HTMLButtonElement>(".date-picker-trigger")?.click();
+    });
+    expect(document.querySelectorAll('.date-picker-day[tabindex="0"]').length).toBe(0);
+    expect(document.querySelectorAll<HTMLButtonElement>(".date-picker-day:disabled").length).toBe(42);
+  });
+
   it("jumps to today via the today shortcut", async () => {
     mount("date", "2026-08-14");
     act(() => {

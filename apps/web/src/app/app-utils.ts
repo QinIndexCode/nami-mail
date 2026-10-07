@@ -417,6 +417,39 @@ function rewriteImageSrcset(srcset: string): string {
 const CSS_URL_FUNCTION = /url\(\s*(["']?)([^"')]*)\1\s*\)/gi;
 
 /**
+ * A CSS escape inside a `url()` token: a backslash followed by 1-6 hex digits
+ * and an optional trailing space (`\68 ` is `t`), or by a single escaped
+ * character (`\t`).
+ *
+ * Without decoding, `url(\68 ttps://tracker/pixel)` survives the rewrite
+ * untouched and the browser still resolves it to an https request — the CSS
+ * parser unescapes it after the sanitizer and the rewriter have both run.
+ */
+const CSS_ESCAPE = /\\(?:([0-9a-f]{1,6})[ \t\n\f\r]?|(.))/gis;
+
+/** Decodes CSS escapes the way the CSS parser does before it resolves a URL. */
+function decodeCssEscapes(value: string): string {
+  return value.replace(CSS_ESCAPE, (_match, hex: string | undefined, literal: string | undefined) => {
+    if (hex !== undefined) {
+      const code = Number.parseInt(hex, 16);
+      // A NUL or an out-of-range code point stays a replacement character, as
+      // in CSS; U+FFFD is what the parser substitutes.
+      if (!Number.isFinite(code) || code === 0 || code > 0x10ffff) return "\uFFFD";
+      return String.fromCodePoint(code);
+    }
+    return literal ?? "";
+  });
+}
+
+/** `image-set()` / `-webkit-image-set()` take bare quoted strings as URLs, not
+ *  just `url()` tokens, so the `url()` pattern above cannot see them:
+ *  `background-image: image-set("https://tracker/pixel" 1x)` is a plain string
+ *  argument. Only the URL-bearing functions are listed; `cross-fade()` and
+ *  friends compose `url()` for their sources and so are covered already. */
+const CSS_IMAGE_SET_FUNCTION = /(-webkit-)?image-set\(([^)]*)\)/gi;
+const CSS_QUOTED_STRING = /"([^"]*)"|'([^']*)'/g;
+
+/**
  * Every element through which a mail body can name a remote subresource, with
  * the attributes that carry the URL. Each entry was verified by running the
  * real `rewriteRemoteImagesToProxy(sanitizeMailHtml(...))` chain over it: the
@@ -430,14 +463,18 @@ const CSS_URL_FUNCTION = /url\(\s*(["']?)([^"')]*)\1\s*\)/gi;
 const REMOTE_SUBRESOURCE_ELEMENTS: { selector: string; attributes: readonly string[] }[] = [
   // `srcset` is handled separately, because it is a candidate list rather than
   // one URL — and because a browser prefers it over `src` whenever it is
-  // present. A `<picture>` (or `<video>`) whose `<source srcset>` is remote
-  // never requests the sibling `src` at all, which is what lets a `cid:`-looking
-  // src read as "already handled" while the beacon still fires.
+  // present. A `<picture>` whose `<source srcset>` is remote never requests the
+  // sibling `src` at all, which is what lets a `cid:`-looking src read as
+  // "already handled" while the beacon still fires.
+  //
+  // Every entry here must name an attribute the browser resolves under `img-src`.
+  // Media elements are deliberately absent: `media-src 'self'` already refuses
+  // remote audio and video, so they were never a disclosure, and the proxy only
+  // serves `image/*` — rewriting them would turn playable mail into 404s.
   { selector: "img", attributes: ["src"] },
-  { selector: "source", attributes: ["src"] },
-  { selector: "video", attributes: ["src", "poster"] },
-  { selector: "audio", attributes: ["src"] },
-  { selector: "track", attributes: ["src"] },
+  // `<source src>` inside <video>/<audio> is media-src's business; the picture
+  // form below is covered by REMOTE_SRCSET_SELECTOR.
+  { selector: "video", attributes: ["poster"] },
   { selector: 'input[type="image" i]', attributes: ["src"] },
   // SVG <image> carries its URL on href/xlink:href rather than src.
   { selector: "image", attributes: ["href", "xlink:href"] },
@@ -495,10 +532,20 @@ export function rewriteRemoteImagesToProxy(html: string): string {
   }
   for (const element of template.content.querySelectorAll("[style]")) {
     const style = element.getAttribute("style") || "";
-    const rewritten = style.replace(CSS_URL_FUNCTION, (match, _quote: string, url: string) => {
+    // Decode escapes before matching: the CSS parser unescapes them when it
+    // resolves the URL, so `url(\68 ttps://host/pixel)` reaches the network even
+    // though the sanitizer and a naive regex both see an unrecognised token.
+    const decoded = decodeCssEscapes(style);
+    let rewritten = decoded.replace(CSS_URL_FUNCTION, (match, _quote: string, url: string) => {
       const proxied = proxiedImageSource(url);
       return proxied ? `url("${proxied}")` : match;
     });
+    // image-set() carries its URLs as bare strings rather than url() tokens.
+    rewritten = rewritten.replace(CSS_IMAGE_SET_FUNCTION, (match, _webkit: string, args: string) =>
+      args.replace(CSS_QUOTED_STRING, (quoted, dq: string | undefined, sq: string | undefined) => {
+        const proxied = proxiedImageSource(dq ?? sq ?? "");
+        return proxied ? `"${proxied}"` : quoted;
+      }));
     if (rewritten !== style) element.setAttribute("style", rewritten);
   }
 

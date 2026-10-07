@@ -68,6 +68,40 @@ const YEAR_COLUMNS = 4;
  * of the nav arrows), and focusing a key no cell carries would leave the grid
  * with zero `tabIndex=0` cells, unreachable by keyboard.
  */
+/**
+ * Whether `key` falls inside the picker's configured bounds.
+ *
+ * Shared by the focus seed and by month navigation so that a single set of
+ * bounds cannot be enforced in one place and ignored in the other; when the two
+ * disagreed, paging into an all-disabled month produced a grid with no tabbable
+ * cell and arrows that could only recover in one direction.
+ */
+function dayInRange(key: string, minDate: string | undefined, maxDate: string | undefined): boolean {
+  if (minDate && key < minDate) return false;
+  if (maxDate && key > maxDate) return false;
+  return true;
+}
+
+/** The first day of `gridDays` the picker will accept, or "" when it accepts none. */
+function firstSelectableDay(
+  gridDays: Date[],
+  minDate: string | undefined,
+  maxDate: string | undefined,
+): string {
+  const first = gridDays.find((day) => dayInRange(dateKey(day), minDate, maxDate));
+  return first ? dateKey(first) : "";
+}
+
+/**
+ * Where keyboard focus should enter the day grid: the selected day, else today,
+ * else the first day the picker will accept.
+ *
+ * The result is validated against the grid actually being rendered, so a stale
+ * selected or today key can never leave every cell at tabIndex -1 — which would
+ * put no roving-tabindex entry point on the grid at all, stranding a keyboard
+ * user outside it. "" means every visible day is out of range; the grid then
+ * stays intentionally unenterable, because there is no legal day to land on.
+ */
 function dayEntryKey(
   gridDays: Date[],
   selectedKey: string,
@@ -75,14 +109,9 @@ function dayEntryKey(
   minDate: string | undefined,
   maxDate: string | undefined,
 ): string {
-  const selectable = gridDays.filter((day) => {
-    const key = dateKey(day);
-    if (minDate && key < minDate) return false;
-    if (maxDate && key > maxDate) return false;
-    return true;
-  });
-  const preferred = [selectedKey, todayKey].find((key) => key && selectable.some((day) => dateKey(day) === key));
-  return preferred ?? (selectable[0] ? dateKey(selectable[0]) : "");
+  const inRange = (key: string) => dayInRange(key, minDate, maxDate) && gridDays.some((day) => dateKey(day) === key);
+  const preferred = [selectedKey, todayKey].find((key) => key && inRange(key));
+  return preferred ?? firstSelectableDay(gridDays, minDate, maxDate);
 }
 
 /**
@@ -229,12 +258,26 @@ export default function DatePicker({
     if (view === "year") setFocusedYear(year);
   }, [open, view, viewMonthMonth, year]);
 
-  /** Focus key of the same day-of-month in `month`, clamped to its length so a
-   *  31st never lands on a nonexistent February 31st. */
+  /**
+   * Focus key of the same day-of-month in `month`. Clamped twice: to the month's
+   * length, so a 31st never lands on a nonexistent February 31st, and then to the
+   * configured bounds, so paging into a month that starts entirely after `minDate`
+   * lands on its first selectable day rather than a disabled one the arrows would
+   * then have to walk out of.
+   */
   const carryDayIntoMonth = (month: Date): string => {
     const current = gridDays.find((day) => dateKey(day) === focusedKey)?.getDate() ?? 1;
     const lastDay = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
-    return dateKey(new Date(month.getFullYear(), month.getMonth(), Math.min(current, lastDay)));
+    const carried = dateKey(new Date(month.getFullYear(), month.getMonth(), Math.min(current, lastDay)));
+    if (dayInRange(carried, minDate, maxDate)) return carried;
+    const monthPrefix = dateKey(new Date(month.getFullYear(), month.getMonth(), 1)).slice(0, 7);
+    const monthDays = Array.from({ length: lastDay }, (_, index) =>
+      dateKey(new Date(month.getFullYear(), month.getMonth(), index + 1)));
+    const selectable = monthDays.filter((key) => dayInRange(key, minDate, maxDate));
+    if (selectable.length) return selectable[0];
+    // Every day in this month is out of range; keep the key consistent with the
+    // month the grid is rendering rather than stranding it on the old one.
+    return monthPrefix;
   };
 
   const displayValue = useMemo(() => {

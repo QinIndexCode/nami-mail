@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { collapseQuotedMailHtml, rewriteRemoteImagesToProxy, sanitizeMailHtml, splitBodyLinks, splitQuotedMailText } from "./app-utils";
+import { collapseQuotedMailHtml, IMAGE_PROXY_PATH, rewriteRemoteImagesToProxy, sanitizeMailHtml, splitBodyLinks, splitQuotedMailText } from "./app-utils";
 
 /** The exact shape the reader must emit for a remote image. */
 const proxyUrl = (remote: string) => `/api/images/proxy?url=${encodeURIComponent(remote)}`;
@@ -543,19 +543,36 @@ describe("rewriteRemoteImagesToProxy", () => {
     // Each of these was measured leaking through the full chain before the
     // rewrite covered more than img[src]/SVG image: DOMPurify's html profile
     // keeps all of them, so the reader really did request these URLs.
-    const vectors: { name: string; html: string; remote: string; proxied: string }[] = [
+    const vectors: { name: string; html: string; remote: string; proxied: string; descriptor?: string }[] = [
       { name: "video poster", html: '<video poster="https://evil.tld/p.gif"></video>', remote: "https://evil.tld/p.gif", proxied: "poster" },
-      { name: "video src", html: '<video src="https://evil.tld/v.mp4"></video>', remote: "https://evil.tld/v.mp4", proxied: "src" },
-      { name: "audio src", html: '<audio src="https://evil.tld/a.mp3" controls></audio>', remote: "https://evil.tld/a.mp3", proxied: "src" },
-      { name: "track src", html: '<video><track src="https://evil.tld/c.vtt"></video>', remote: "https://evil.tld/c.vtt", proxied: "src" },
-      { name: "source src", html: '<video><source src="https://evil.tld/s.mp4"></video>', remote: "https://evil.tld/s.mp4", proxied: "src" },
       { name: "input type=image src", html: '<input type="image" src="https://evil.tld/r.gif">', remote: "https://evil.tld/r.gif", proxied: "src" },
+      { name: "source srcset", html: '<picture><source srcset="https://evil.tld/q.gif 2x"><img src="cid:x"></picture>', remote: "https://evil.tld/q.gif", descriptor: " 2x", proxied: "srcset" },
     ];
 
     for (const vector of vectors) {
       const clean = rewriteRemoteImagesToProxy(sanitizeMailHtml(vector.html, false));
-      expect(clean, vector.name).not.toMatch(/(src|poster)="https?:\/\/evil\.tld/);
-      expect(clean, vector.name).toContain(`${vector.proxied}="${proxyUrl(vector.remote)}"`);
+      expect(clean, vector.name).not.toMatch(/(src|poster|srcset)="https?:\/\/evil\.tld/);
+      // A srcset candidate is `url descriptor`, and only the url is encoded —
+      // the `2x` stays literal outside the query string.
+      expect(clean, vector.name).toContain(`${vector.proxied}="${proxyUrl(vector.remote)}${"descriptor" in vector ? vector.descriptor : ""}"`);
+    }
+  });
+
+  it("leaves remote audio and video alone so playable mail keeps working", () => {
+    // The proxy only serves image/*, and `media-src 'self'` already blocks
+    // remote media, so rewriting these bought no privacy while guaranteeing a
+    // 404 on every remote recording in a mail. They must pass through intact.
+    const vectors = [
+      '<video src="https://media.tld/clip.mp4"></video>',
+      '<audio src="https://media.tld/voice.mp3" controls></audio>',
+      '<video><track src="https://media.tld/captions.vtt"></video>',
+      '<video><source src="https://media.tld/clip.webm"></video>',
+    ];
+
+    for (const html of vectors) {
+      const clean = rewriteRemoteImagesToProxy(sanitizeMailHtml(html, false));
+      expect(clean, html).toContain("https://media.tld/");
+      expect(clean, html).not.toContain(IMAGE_PROXY_PATH);
     }
   });
 
@@ -593,7 +610,36 @@ describe("rewriteRemoteImagesToProxy", () => {
     expect(clean).not.toMatch(/(background|href)="https:\/\/evil\.tld/);
   });
 
-  it("leaves a non-URL background attribute and a data: url() untouched", () => {
+  it("proxies the CSS shapes a url() regex alone cannot see", () => {
+    // Two vectors that a plain url() pass leaves alone while the browser still
+    // fetches them: a hex escape (`\68 ` is `t`) is unescaped by the CSS parser
+    // after the sanitizer and the rewriter have both run, and image-set() takes
+    // bare quoted strings rather than url() tokens.
+    const vectors = [
+      '<div style="background:url(\\68 ttps://evil.tld/escape.png)">x</div>',
+      '<div style="background-image:image-set(&quot;https://evil.tld/set.png&quot; 1x)">y</div>',
+      '<div style="background-image:image-set(\'https://evil.tld/single.png\' 1x, url(cid:x) 2x)">z</div>',
+      '<div style="background:url(  https://evil.tld/pad.png  )">w</div>',
+    ];
+
+    for (const html of vectors) {
+      const clean = rewriteRemoteImagesToProxy(sanitizeMailHtml(html, false));
+      // Anchored at the value start: a proxied URL legitimately contains the
+      // host, percent-encoded, inside it.
+      expect(clean, html).not.toMatch(/:image-set\([^)]*https?:\/\/evil\.tld/);
+      expect(clean, html).not.toMatch(/url\([^)]*https?:\/\/evil\.tld/);
+    }
+
+    // The escape must be decoded, not merely pattern-matched: read the value
+    // back through the CSSOM and confirm what the parser would actually fetch.
+    const parsed = document.createElement("template");
+    parsed.innerHTML = rewriteRemoteImagesToProxy(sanitizeMailHtml(vectors[0], false));
+    const resolved = parsed.content.querySelector("div")!.style.backgroundImage;
+    expect(resolved).toContain("/api/images/proxy?url=");
+    expect(resolved).not.toContain("evil.tld/");
+  });
+
+  it("keeps a non-URL background attribute and a data: url() untouched", () => {
     // background is overloaded: the overwhelmingly common value is a colour,
     // and a data: url() is inline content, not a third-party fetch.
     const clean = rewriteRemoteImagesToProxy(
