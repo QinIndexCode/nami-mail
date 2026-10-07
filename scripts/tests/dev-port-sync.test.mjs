@@ -25,14 +25,16 @@ test("dev ports stay pinned to the server's canonical PORT default", async () =>
   const serverPort = Number(serverPortMatch[1]);
 
   const viteConfig = await read("apps/web/vite.config.ts");
-  // Both proxy shapes are in use: the bare string shorthand and an object
-  // (which the object form is required for, see the changeOrigin assertion
-  // below). Capture the port out of whichever one is present.
+  // Three proxy shapes are in use: the bare string shorthand, an object with
+  // a literal target (required for the changeOrigin assertion below), and an
+  // object whose target is a template string overridable via NAMI_API_PORT
+  // (the real-chain e2e needs an isolated server). Capture the port out of
+  // whichever one is present — for the template form, its `?? "port"` default.
   const proxyMatch = viteConfig.match(
-    /"\/api":\s*(?:"https?:\/\/(?:127\.0\.0\.1|localhost):(\d+)"|\{\s*target:\s*"https?:\/\/(?:127\.0\.0\.1|localhost):(\d+)")/,
+    /"\/api":\s*(?:"https?:\/\/(?:127\.0\.0\.1|localhost):(\d+)"|\{[^{}]*?target:\s*(?:"https?:\/\/(?:127\.0\.0\.1|localhost):(\d+)"|`https?:\/\/(?:127\.0\.0\.1|localhost):\$\{process\.env\.[A-Z_]+\s*\?\?\s*"(\d+)"\}`))/,
   );
   assert.ok(proxyMatch, "apps/web/vite.config.ts must proxy /api to the local API port.");
-  const proxiedPort = Number(proxyMatch[1] ?? proxyMatch[2]);
+  const proxiedPort = Number(proxyMatch[1] ?? proxyMatch[2] ?? proxyMatch[3]);
   assert.equal(proxiedPort, serverPort, "The vite /api proxy must target the server's PORT default.");
 
   // The local API's token-less Host allowlist only accepts its own loopback
