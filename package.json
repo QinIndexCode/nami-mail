@@ -41,6 +41,8 @@
     "test": "npm --workspace @nami/agent-contracts run test && npm --workspace @nami/agent-core run test && npm --workspace @nami/server run test && npm --workspace @nami/web run test && npm --workspace @nami/desktop run test",
     "test:desktop-security": "npm --workspace @nami/desktop run test",
     "test:e2e": "playwright test e2e/smoke.spec.ts e2e/interactions.spec.ts e2e/update-footer.spec.ts e2e/geometry.spec.ts",
+    "test:e2e:real": "playwright test --config playwright.real.config.ts",
+    "test:e2e:all": "npm run test:e2e && npm run test:e2e:real",
     "lint": "eslint apps packages e2e scripts",
     "lint:fix": "eslint apps packages e2e scripts --fix",
     "test:server": "npm --workspace @nami/server run test",

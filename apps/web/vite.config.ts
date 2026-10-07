@@ -40,7 +40,11 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:3187",
+        // NAMI_API_PORT lets the real-chain e2e run point the browser at an
+        // isolated server (see playwright.real.config.ts) instead of whatever
+        // happens to be on 3187 — which, during development, is the developer's
+        // own mailbox. Tests must never read or mutate real local data.
+        target: `http://127.0.0.1:${process.env.NAMI_API_PORT ?? "3187"}`,
         // The local API's token-less Host allowlist (apps/server/src/app.ts,
         // isTrustedTokenlessHost) only accepts this server's own loopback
         // authorities on the configured port (127.0.0.1:3187). http-proxy

@@ -59,6 +59,10 @@ jobs:
       # The e2e suite drives the web app in demo mode from a Vite dev server.
       - run: npx playwright install chromium
       - run: npm run test:e2e
+      # The demo specs never issue a request, so this one boots a seeded fixture
+      # server to cover renderer -> proxy -> Fastify -> SQLite for real. It needs
+      # the build step above for apps/server/dist.
+      - run: npm run test:e2e:real
       # Desktop smoke reuses the build step above, so only verify the Electron
       # ABI and then launch the bundled app under its own smoke harness.
       - run: npm run verify:electron-sqlite && node scripts/smoke-desktop.mjs
