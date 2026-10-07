@@ -1193,7 +1193,8 @@ export class AgentRagWorker {
       subject: cleaned.normalizedSubject,
       text: cleaned.text,
     });
-    const current = this.pageStore.listMetadata(lease);
+    // Scoped to this message's own pages: the only two uses are the per-chunk revision lookup below and the cleanup pass after it, and reading the whole account instead made a backfill quadratic on a synchronous connection inside the Electron main process.
+    const current = this.pageStore.listMetadataByPrefix(lease, pagePrefix(messageId));
     const byPageId = new Map(current.map((page) => [page.pageId, page]));
     const retained = new Set<string>();
     for (const chunk of chunks) {
@@ -1240,7 +1241,7 @@ export class AgentRagWorker {
       this.upsertIndex({ ...page, payload: nextPayload });
     }
     for (const page of current) {
-      if (!page.pageId.startsWith(pagePrefix(messageId)) || retained.has(page.pageId)) continue;
+      if (retained.has(page.pageId)) continue;
       this.pageStore.tombstone(lease, page.pageId);
       this.removeIndex(lease.accountId, lease.generation, page.pageId);
     }
@@ -1248,8 +1249,7 @@ export class AgentRagWorker {
 
   private tombstoneMessagePages(lease: AccountGenerationLease, messageId: string): void {
     if (!messageId) return;
-    for (const page of this.pageStore.listMetadata(lease)) {
-      if (!page.pageId.startsWith(pagePrefix(messageId))) continue;
+    for (const page of this.pageStore.listMetadataByPrefix(lease, pagePrefix(messageId))) {
       this.pageStore.tombstone(lease, page.pageId);
       this.removeIndex(lease.accountId, lease.generation, page.pageId);
     }

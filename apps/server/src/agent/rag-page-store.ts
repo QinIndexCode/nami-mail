@@ -238,6 +238,40 @@ export class EncryptedRagPageStore {
     `).all(lease.accountId, lease.generation, lease.accountId, lease.generation) as StoredRagPageRow[]).map(metadata);
   }
 
+  /**
+   * Metadata for the active pages whose id starts with `prefix`.
+   *
+   * GLOB, not LIKE, on purpose. LIKE is ASCII-case-insensitive by default, and
+   * that stops SQLite turning the prefix into an index range: on 25 000 pages
+   * the LIKE form degraded into a per-account scan (6.9 ms) while GLOB seeked
+   * the composite primary key — `page_id>? AND page_id<?` — in 0.2 ms. The
+   * partial index `idx_agent_rag_pages_active` carries page_id as its third
+   * column, so the seek is available without any new index.
+   */
+  listMetadataByPrefix(lease: AccountGenerationLease, prefix: string): RagPageMetadata[] {
+    assertAgentStoreReadable(this.db);
+    this.lifecycle.assertCurrent(lease);
+    // GLOB has no escape syntax, so a metacharacter in the prefix would widen
+    // the match — and the callers tombstone everything they get back, which
+    // would delete another message's pages. Page ids are built as
+    // `message:<sha256 hex>:chunk:<n>`, so refuse anything else rather than
+    // silently return too much.
+    if (/[*?[]/.test(prefix)) throw new Error("RAG page id prefix must not contain GLOB metacharacters.");
+    const pattern = `${prefix}*`;
+    return (this.db.prepare(`
+      SELECT page.* FROM agent_rag_pages page
+      JOIN (
+        SELECT page_id, MAX(page_revision) AS page_revision
+        FROM agent_rag_pages
+        WHERE account_id = ? AND account_generation = ? AND page_id GLOB ?
+        GROUP BY page_id
+      ) latest ON latest.page_id = page.page_id AND latest.page_revision = page.page_revision
+      WHERE page.account_id = ? AND page.account_generation = ? AND page.state = 'active'
+        AND page.page_id GLOB ?
+      ORDER BY page.updated_at DESC, page.page_id
+    `).all(lease.accountId, lease.generation, pattern, lease.accountId, lease.generation, pattern) as StoredRagPageRow[]).map(metadata);
+  }
+
   /** Tombstones the active revision; a later page revision can replace it. */
   tombstone(lease: AccountGenerationLease, pageId: string): RagPageMetadata | undefined {
     assertAgentStoreReadable(this.db);
