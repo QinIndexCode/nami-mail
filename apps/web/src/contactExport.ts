@@ -1,4 +1,4 @@
-import { triggerBlobDownload } from "./attachmentZip";
+import { sanitizeDownloadName, triggerBlobDownload } from "./attachmentZip";
 
 /**
  * Client-side generators for vCard (.vcf) and iCalendar (.ics) exports.
@@ -90,15 +90,7 @@ export function calendarEventIcs(event: CalendarEventInput): string {
 
 /** Derives a safe download filename from export text. */
 export function exportDownloadFilename(text: string, fallback: string, extension: string): string {
-  const cleaned = text
-    .replace(/[\r\n\t]/g, " ")
-    .replace(/[\\/:*?"<>|]/g, " ")
-    // eslint-disable-next-line no-control-regex -- strips C0 controls from export names
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .trim()
-    .slice(0, 60)
-    .trim();
-  return `${cleaned || fallback}.${extension}`;
+  return `${sanitizeDownloadName(text, 60) || fallback}.${extension}`;
 }
 
 export function triggerContactVcfExport(from: { name: string; address: string }): string {

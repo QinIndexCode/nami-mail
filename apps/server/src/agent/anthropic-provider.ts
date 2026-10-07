@@ -7,6 +7,8 @@ import {
   providerRequest,
   safeMessage,
   statusError,
+  streamCompletionEvents,
+  streamFailureEvents,
   unsafeToolArgumentsError,
   asRecord,
   type ProviderResponseLease,
@@ -326,15 +328,9 @@ export class AnthropicMessagesProvider implements LlmProvider {
         ...(outputTokens !== undefined ? { outputTokens } : {}),
         ...(inputTokens !== undefined && outputTokens !== undefined ? { totalTokens: inputTokens + outputTokens } : {}),
       };
-      if (Object.keys(usage).length) yield { type: "usage", usage };
-      for (const call of completedCalls) yield { type: "tool_call", call };
-      yield { type: "completed", finishReason: completedCalls.length ? "tool-calls" : finishReason };
+      yield* streamCompletionEvents(completedCalls, finishReason, completedCalls.length > 0, usage);
     } catch (error) {
-      yield {
-        type: "error",
-        error: safeMessage(error, { signal: options.signal, timedOut: lease?.timedOut() }),
-      };
-      yield { type: "completed", finishReason: options.signal?.aborted ? "cancelled" : "content-filter" };
+      yield* streamFailureEvents(error, { signal: options.signal, timedOut: lease?.timedOut() });
     } finally {
       lease?.release();
     }

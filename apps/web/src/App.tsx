@@ -1,4 +1,4 @@
-import { lazy, Profiler, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Profiler, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { computePosition, flip, offset, shift } from "@floating-ui/dom";
 import {
   Archive,
@@ -37,7 +37,7 @@ import {
   Sun, Users, Trash2, WifiOff, X,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
-import { CustomAvatar, SenderAvatar } from "./SenderAvatar";
+import { CustomAvatar, SenderAvatar, accountTone } from "./SenderAvatar";
 import { WindowBar } from "./WindowBar";
 import { api, type BatchJobSnapshot, type MoveTarget } from "./api";
 import { calendarCache, contactsCache, templatesCache } from "./dialogPrefetch";
@@ -87,7 +87,7 @@ import { beginSpan, markInterval, recordCommit } from "./perfTelemetry";
 import { providerDisplayName } from "./providerOnboarding";
 import { playNotificationSound, primeNotificationSound } from "./sounds";
 import { saveLocalePreference } from "./localePreference";
-import { getAccountDisplayName, useAccountDisplayNames } from "./accountDisplayNameStore";
+import { getAccountDisplayName, hydrateAccountDisplayNames, useAccountDisplayNames } from "./accountDisplayNameStore";
 import { loadFolderDisplayMode, saveFolderDisplayMode, type FolderDisplayMode } from "./folderDisplayMode";
 import { shouldShowLoading, type MailboxSelection } from "./folderNavigation";
 import { createSettingsLoadCoordinator } from "./settingsLoadCoordinator";
@@ -114,12 +114,12 @@ import {
 
   moveActionKey,
   demoMoveDestination,
-  accountTone,
   currentSystemTheme,
   resolveTheme,
   backgroundUrl,
   collapseQuotedMailHtml,
   sanitizeMailHtml,
+  rewriteRemoteImagesToProxy,
   splitQuotedMailText,
   textFromSanitizedMailHtml,
   replyBody,
@@ -768,6 +768,7 @@ export default function App() {
           nextMessages,
           pendingLocalStateRef.current,
         );
+        hydrateAccountDisplayNames(counts.accounts);
         setAccounts(counts.accounts);
         setProviders(nextProviders);
         messagesRef.current = nextMessages;
@@ -879,7 +880,19 @@ await refreshSubmissions(nextAccounts, { silent: true });
     after: dateBounds.after,
     before: dateBounds.before,
   }), [attachmentKindFilter, dateBounds, debouncedQuery, searchScope, selectedAccount, selectedFolder, view]);
-  const filterQuery = useMemo<ListQueryInput>(() => ({ ...serverQuery, search: query }), [query, serverQuery]);
+  // The local filter runs on a deferred copy of the query, NOT the debounced
+  // one. Debouncing here would push the whole list 250ms behind every
+  // keystroke, which is the exact lag the live-query rule above exists to
+  // avoid. Instead the expensive half of a keystroke — filter + sort +
+  // groupMessagesByThread + the threadById rebuild, O(N log N) over the
+  // loaded pages — is re-prioritised: React keeps the search box (and the
+  // toolbar/empty-state copy, which still read the live `query`) painting at
+  // interactive priority and re-renders the list at background priority,
+  // dropping intermediate keystrokes rather than queueing them. The list still
+  // settles on the live query within a frame or two, so typing reads as
+  // immediate while a long list no longer blocks the input.
+  const deferredQuery = useDeferredValue(query);
+  const filterQuery = useMemo<ListQueryInput>(() => ({ ...serverQuery, search: deferredQuery }), [deferredQuery, serverQuery]);
 
   const silentRefresh = useCallback(async () => {
     if (isDemo) return;
@@ -933,6 +946,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         settled,
         pendingLocalStateRef.current,
       );
+      hydrateAccountDisplayNames(counts.accounts);
       setAccounts(counts.accounts);
       setProviders(nextProviders);
       messagesRef.current = settled;
@@ -1570,7 +1584,11 @@ const emptyMessageList = useMemo(() => (query.trim()
       : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false }), [query, selectedFolderName, selectedFolder, t, view]);
   const { issues: accountIssues, accountsNeedingAttention, primaryAccountNeedingAttention, primaryAccountIssue, healthAlert, dismissHealthAlert } = useAccountHealth(accounts, t);
   const safeHtml = useMemo(
-    () => selected?.htmlBody ? sanitizeMailHtml(selected.htmlBody, theme === "dark") : "",
+    // Sanitize first, then route remote images through the proxy: the reader
+    // must never reach a mail's own image host directly (that request is the
+    // open-time + read-receipt leak), while `data:`, `cid:` and the server's
+    // inline-attachment URLs stay exactly as they are.
+    () => selected?.htmlBody ? rewriteRemoteImagesToProxy(sanitizeMailHtml(selected.htmlBody, theme === "dark")) : "",
     [selected?.htmlBody, theme],
   );
   // Reply quotes collapse to a one-line toggle (Gmail-style). The fold lives
@@ -2198,6 +2216,9 @@ const emptyMessageList = useMemo(() => (query.trim()
 
   const updateAccountSignatureInState = useCallback((accountId: string, signature: string) => {
     setAccounts((items) => items.map((account) => account.id === accountId ? { ...account, signature } : account));
+  }, []);
+  const updateAccountDisplayNameInState = useCallback((accountId: string, displayName: string | null) => {
+    setAccounts((items) => items.map((account) => account.id === accountId ? { ...account, displayName } : account));
   }, []);
 
   const toggleTheme = () => {
@@ -2992,6 +3013,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         cancelScheduledSubmission={cancelScheduledSubmission}
         removeAccountFromView={removeAccountFromView}
         updateAccountSignatureInState={updateAccountSignatureInState}
+        updateAccountDisplayNameInState={updateAccountDisplayNameInState}
         retryAccountSync={retryAccountSync}
         desktopUpdateStatus={desktopUpdateStatus}
         setDesktopUpdateStatus={setDesktopUpdateStatus}

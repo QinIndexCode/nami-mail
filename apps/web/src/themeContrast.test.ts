@@ -137,6 +137,121 @@ for (const theme of ["light", "dark"] as const) {
 }
 
 /**
+ * Tinted backgrounds — the gap this file used to have.
+ *
+ * Everything above measures a token against a *panel* surface. But the badge /
+ * status-chip / inline-box recipe (`background:color-mix(in srgb, var(--token)
+ * N%, transparent)` under a `color:var(--token)` label) puts the text on a
+ * surface derived from its own colour, and a tint only ever moves that surface
+ * *towards* the text — so the ratio is always ≤ the panel figure the other tests
+ * check. That is why 27 green cases coexisted with badges sitting at 3.6:1.
+ *
+ * Two consequences worth stating, because they invert the obvious "just add more
+ * tint" instinct:
+ *   - Raising N makes the ratio WORSE, not better (measured: --success on
+ *     --panel-muted is 4.80 at 0%, 3.96 at 15%, 3.46 at 25%).
+ *   - Lowering N to clear 4.5:1 would drive N to ~0-2% for --warning, erasing
+ *     the tint that carries the state at all.
+ * So the fix has to be in the foreground token, and this test is what forces
+ * that conclusion rather than letting each badge be nudged one at a time.
+ *
+ * The tint alpha is read from the stylesheet per selector (including
+ * `[data-theme="dark"]` overrides), so editing a rule re-checks it here.
+ */
+type Rgb3 = [number, number, number];
+
+const TINT_BACKGROUND = /background:\s*color-mix\(in srgb,\s*var\((--[\w-]+)\)\s*([\d.]+)%,\s*transparent\)/;
+const LABEL_COLOR = /(?:^|[;{])\s*color:\s*var\((--[\w-]+)\)/;
+
+/**
+ * Splits the stylesheet into selector/body pairs. Most rules in this codebase
+ * are written on a single line (`.foo { … }`), so the selector is matched as
+ * "everything up to the brace" rather than "a whole line" — a line-anchored
+ * pattern silently sees only the ~300 multi-line rules and misses the rest.
+ */
+function cssRules(): Array<{ selector: string; body: string }> {
+  return [...stylesheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+    selector: (match[1] ?? "").trim().replace(/\s+/g, " "),
+    body: match[2] ?? "",
+  }));
+}
+
+/** One self-tinted site: a label colour and the tint it sits on. */
+type TintSite = { token: string; alpha: number };
+type TintSiteEntry = { selector: string; light: TintSite; dark?: TintSite };
+
+/**
+ * Every rule whose label colour matches the token its background is tinted
+ * with, keyed by selector without the dark-theme prefix. A dark override wins
+ * for the dark theme; otherwise the unprefixed rule applies to both.
+ */
+function selfTintSites(): Map<string, TintSiteEntry> {
+  const sites = new Map<string, TintSiteEntry>();
+  for (const rule of cssRules()) {
+    const background = rule.body.match(TINT_BACKGROUND);
+    const label = rule.body.match(LABEL_COLOR);
+    // Only the same-token recipe is a "tint of its own text"; a background
+    // tinted with a *different* token is an ordinary surface, already covered.
+    if (!background || !label || background[1] !== label[1]) continue;
+    const isDark = /^\[data-theme="dark"\]\s*/.test(rule.selector);
+    const selector = rule.selector.replace(/^\[data-theme="dark"\]\s*/, "");
+    const site: TintSite = { token: background[1] as string, alpha: Number(background[2]) / 100 };
+    const entry = sites.get(selector);
+    if (isDark) {
+      if (entry) entry.dark = site;
+      else sites.set(selector, { selector, light: site, dark: site });
+    } else {
+      sites.set(selector, { selector, light: site, ...(entry?.dark ? { dark: entry.dark } : {}) });
+    }
+  }
+  return sites;
+}
+
+/** Resolves a token to concrete sRGB, following `var()` aliases one level. */
+function resolveColor(tokens: Record<string, string>, name: string): Rgb3 | null {
+  const value = tokens[name];
+  if (!value) return null;
+  if (value.startsWith("#")) return parseHex(value, name).rgb as Rgb3;
+  const alias = value.match(/^var\((--[\w-]+)\)$/);
+  return alias ? resolveColor(tokens, alias[1] as string) : null;
+}
+
+for (const theme of ["light", "dark"] as const) {
+  describe(`${theme} theme tinted badges`, () => {
+    const tokens = readTokenBlock(theme);
+    const canvas = token(tokens, "--canvas").rgb;
+    const surfaces: Array<[string, Rgb3]> = [
+      ["--panel-solid", token(tokens, "--panel-solid").rgb as Rgb3],
+      ["--panel", flatten(token(tokens, "--panel"), canvas) as Rgb3],
+      ["--panel-muted", flatten(token(tokens, "--panel-muted"), canvas) as Rgb3],
+    ];
+
+    it("keeps every self-tinted label readable on its own tint", () => {
+      const offenders: string[] = [];
+      let checked = 0;
+      for (const site of selfTintSites().values()) {
+        const { token: name, alpha } = theme === "light" ? site.light : site.dark ?? site.light;
+        const foreground = resolveColor(tokens, name);
+        // A tint of a non-colour token (e.g. --focus-ring: var(--text)) is
+        // covered by the surface tests above via its resolved alias.
+        if (!foreground) continue;
+        checked += 1;
+        for (const [surfaceName, surface] of surfaces) {
+          const tint = foreground.map((channel, index) => channel * alpha + (surface[index] ?? 0) * (1 - alpha)) as Rgb3;
+          const ratio = contrast(foreground, tint);
+          if (ratio < AA_NORMAL) {
+            offenders.push(`${site.selector}: ${name} at ${(alpha * 100).toFixed(0)}% on ${surfaceName} is ${ratio.toFixed(2)}:1`);
+            break;
+          }
+        }
+      }
+      expect(checked, "the self-tint scan must actually find sites").toBeGreaterThan(0);
+      expect(offenders, "a label must clear 4.5:1 on the tint it sits on; darken the token rather than raising the tint").toEqual([]);
+    });
+  });
+}
+
+/**
  * The accent palette (calendar colours, attachment-kind icons).
  *
  * These are the *only* saturated colours in the UI, which makes them the easiest

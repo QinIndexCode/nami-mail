@@ -732,7 +732,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
                   <div className="compose-schedule-popover" role="dialog" aria-label={t("compose.schedule")}>
                     <div className="compose-schedule-field">
                       <CalendarClock size={15} className="compose-schedule-icon" />
-                      <DatePicker mode="datetime" value={sendAtLocal} onChange={(val) => { setSendAtLocal(val); setScheduleOpen(false); }} disabled={busy || discarding} aria-label={t("compose.schedule")} />
+                      <DatePicker mode="datetime" value={sendAtLocal} onChange={(val) => { setSendAtLocal(val); setScheduleOpen(false); }} disabled={busy || discarding} aria-label={t("compose.schedule")} panelHost={composeDialogRef} />
                       {sendAtLocal ? <button className="compose-schedule-clear" type="button" onClick={() => setSendAtLocal("")} disabled={busy || discarding} aria-label={t("compose.schedule.clear")}><X size={15} /></button> : null}
                     </div>
                     <div className="compose-schedule-quick" role="group" aria-label={t("compose.schedule.quickLabel")}>

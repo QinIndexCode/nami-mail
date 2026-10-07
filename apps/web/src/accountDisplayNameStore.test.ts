@@ -4,6 +4,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import {
   getAccountDisplayName,
+  hydrateAccountDisplayNames,
   setAccountDisplayName,
   useAccountDisplayNames,
 } from "./accountDisplayNameStore";
@@ -38,6 +39,7 @@ function installLocalStorageStub(): Storage {
 
 describe("accountDisplayNameStore", () => {
   beforeEach(() => {
+    hydrateAccountDisplayNames([]);
     installLocalStorageStub();
   });
 
@@ -50,6 +52,15 @@ describe("accountDisplayNameStore", () => {
     setAccountDisplayName("Alice@Example.com", "Work Mailbox");
     expect(getAccountDisplayName("alice@example.com")).toBe("Work Mailbox");
     expect(getAccountDisplayName("  ALICE@EXAMPLE.COM ")).toBe("Work Mailbox");
+  });
+
+  it("restores server names with fresh origin storage and honors cleared names", () => {
+    setAccountDisplayName("alice@example.com", "Old browser name");
+    hydrateAccountDisplayNames([{ email: "alice@example.com", displayName: "School" }]);
+    installLocalStorageStub();
+    expect(getAccountDisplayName("alice@example.com")).toBe("School");
+    hydrateAccountDisplayNames([{ email: "alice@example.com", displayName: null }]);
+    expect(getAccountDisplayName("alice@example.com")).toBeNull();
   });
 
   it("trims whitespace and truncates names to 64 characters", () => {

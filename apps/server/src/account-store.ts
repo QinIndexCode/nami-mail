@@ -1,13 +1,19 @@
 /**
  * Row-level access to `accounts` / `folders` for the HTTP layer.
  *
- * This module is a leaf (only type-only imports) so routes can depend on it
- * without inheriting the sync/agent graph. It exists because these queries
- * were duplicated across `routes/accounts.ts` (existence checks twice, the
- * 18-column password-account INSERT twice) and `routes/filter-rules.ts`, with
- * no shared place to fix a column or a collation once.
+ * This module is a leaf (only type-only imports, plus the one FTS-batch helper
+ * below) so routes can depend on it without inheriting the sync/agent graph.
+ * It exists because these queries were duplicated across `routes/accounts.ts`
+ * (existence checks twice, the 18-column password-account INSERT twice) and
+ * `routes/filter-rules.ts`, with no shared place to fix a column or a collation
+ * once.
+ *
+ * It is also where account *deletion* lives, so deleting a mailbox is reachable
+ * from the HTTP layer without importing `db.js` — `no-restricted-imports` in
+ * eslint.config.mjs bars `routes/**` from a raw `DatabaseHandle`, and this
+ * function used to be that rule's one live bypass.
  */
-import type { DatabaseHandle } from "./db.js";
+import { deleteMessagesWithBatchFtsCleanup, type DatabaseHandle } from "./db.js";
 import type { AccountRecord } from "./types.js";
 
 const ACCOUNT_BY_ID_SQL = "SELECT * FROM accounts WHERE id = ?";
@@ -83,6 +89,11 @@ export function updateAccountSignature(db: DatabaseHandle, id: string, signature
   return db.prepare("UPDATE accounts SET signature = ? WHERE id = ?").run(signature, id).changes;
 }
 
+/** Returns the number of updated rows, so the caller can turn 0 into a 404. */
+export function updateAccountDisplayName(db: DatabaseHandle, id: string, displayName: string | null): number {
+  return db.prepare("UPDATE accounts SET display_name = ? WHERE id = ?").run(displayName, id).changes;
+}
+
 export type PasswordAccountInsert = {
   id: string;
   email: string;
@@ -135,4 +146,20 @@ export function insertPasswordAccountRow(db: DatabaseHandle, account: PasswordAc
     account.usernameMode,
     account.createdAt,
   );
+}
+
+/**
+ * Deletes an account row and cleanly handles cascading message deletion.
+ * The cascade removes every message of the account, so the batch FTS cleanup
+ * (see `deleteMessagesWithBatchFtsCleanup`) runs over that exact id set instead
+ * of paying the per-row trigger's full scans.
+ *
+ * Returns whether the primary row was actually removed, so callers can turn a
+ * stale id into a 404 instead of reporting a successful delete.
+ */
+export function deleteAccountRowWithOptimizedCascade(db: DatabaseHandle, accountId: string): boolean {
+  return deleteMessagesWithBatchFtsCleanup(db, "account_id = ?", [accountId], () => {
+    const result = db.prepare("DELETE FROM accounts WHERE id = ?").run(accountId);
+    return Boolean(result.changes);
+  });
 }

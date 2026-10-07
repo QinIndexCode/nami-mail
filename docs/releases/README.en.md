@@ -6,9 +6,9 @@ This directory contains reviewable, reusable GitHub Release bodies. Every releas
 
 - [v0.4.3](v0.4.3.en.md) is the current latest release note, covering settings UI/UX overhaul, link sanitization & token reduction, context budget management, and auto-reply simulator.
 - [v0.4.2](v0.4.2.en.md) is the Windows custom install directory fix and BIMI brand avatar release.
-- [v0.4.1](v0.4.1.en.md) is the mail filter and sync rule optimization release.
-- [v0.4.0](v0.4.0.en.md) is the multi-turn agent execution and confirmation system release.
-- [v0.3.0](v0.3.0.en.md) is the local semantic search and vector retrieval release.
+- [v0.4.1](v0.4.1.en.md) is the UX polish release with BIMI brand avatars and compose attachment improvements (drag-and-drop and clipboard paste).
+- [v0.4.0](v0.4.0.en.md) is the stability-focused release (agent revoke/resend races, the notification-sound fix, conversation-thread completion and quote folding, plus the website and docs site).
+- [v0.3.0](v0.3.0.en.md) is the release introducing the first External Mail v1 local interface (pairing, CLI, and MCP).
 - [v0.2.1](v0.2.1.en.md) corresponds only to an unpublished source tag. It has no downloadable Release or update assets and must not be used as an installation or automatic-update source.
 - [v0.2.0](v0.2.0.en.md) corresponds only to an unpublished source tag. It has no downloadable Release or update assets and must not be used as an installation or automatic-update source.
 - [v0.1.2](v0.1.2.en.md) is the preceding published release note.

@@ -103,22 +103,71 @@ function countBy(values: readonly string[]): Record<string, number> {
   return counts;
 }
 
+/** The radius tiers a `border-radius` value is allowed to reference. */
+const RADIUS_TOKENS = ["--radius-xs", "--radius-sm", "--radius-md", "--radius-lg", "--radius-pill"] as const;
+
 describe("radius policy", () => {
   it("has no radius outside the documented budget", () => {
     const counts = countBy(declarationsOf("border-radius"));
     for (const [value, count] of Object.entries(counts)) {
-      if (value.startsWith("var(--radius-")) continue;
       if (ALLOWED_RADII.has(value)) continue;
+      // A shorthand like `var(--radius-md) var(--radius-md) var(--radius-xs)`
+      // carries no budgetable literal once every corner is a tier, so the
+      // check is per component rather than on the whole value. Anchoring the
+      // skip to `startsWith("var(--radius-")` is what let this family through
+      // unchecked: it hid any shorthand whose *last* corner was a literal.
+      const corners = value.split(/\s+/);
+      const allTiered = corners.every((corner) => /^var\(--radius-[\w-]+(?:,\s*\S+)?\)$/.test(corner));
+      if (allTiered) continue;
       const budget = (debtBudget.offScaleRadius as Record<string, number>)[value];
-      expect(budget, `border-radius:${value} is not one of the four tiers; use --radius-sm/md/lg/pill`).toBeDefined();
+      expect(budget, `border-radius:${value} is not one of the four tiers; use --radius-xs/sm/md/lg/pill`).toBeDefined();
       expect(count, `border-radius:${value} went over its budget`).toBeLessThanOrEqual(budget as number);
     }
   });
 
+  /**
+   * Every referenced radius tier must be defined.
+   *
+   * This is the check whose absence let `var(--radius-xs, 4px)` sit in five
+   * rules for months: the tier did not exist, so all five silently rendered
+   * their fallback, and the blanket `startsWith("var(--radius-")` skip above
+   * made the radius policy blind to the whole family. An undefined token in a
+   * fallback chain is not a style detail — it is a declaration that is doing
+   * nothing while looking like it is working.
+   */
   it("defines every tier it references", () => {
-    for (const token of ["--radius-sm", "--radius-md", "--radius-lg", "--radius-pill"]) {
-      expect(stylesheet).toContain(`${token}:`);
+    const referenced = new Set<string>();
+    for (const value of declarationsOf("border-radius")) {
+      for (const [, token] of value.matchAll(/var\((--radius-[\w-]+)/g)) referenced.add(token as string);
     }
+    expect(referenced.size, "the tier scan must actually find references").toBeGreaterThan(0);
+    for (const token of referenced) {
+      expect(RADIUS_TOKENS as readonly string[], `border-radius references ${token}, which is not a documented tier`).toContain(token);
+      expect(stylesheet, `${token} is referenced by a border-radius but never defined`).toMatch(new RegExp(`${token}:\\s*\\S`));
+    }
+  });
+
+  /**
+   * A tier this codebase has settled on must not be spelled as a literal.
+   *
+   * `--radius-xs` is 4px and `--radius-sm` is 8px; both appear as raw literals
+   * in the historical debt above, which is what the budget exists to drain.
+   * This does not drain it — that would change pixels — but it stops a new
+   * literal from being added when a tier already means exactly that value.
+   */
+  it("prefers a tier over the literal it duplicates", () => {
+    const duplicates: string[] = [];
+    for (const token of RADIUS_TOKENS) {
+      const declared = stylesheet.match(new RegExp(`${token}:\\s*(\\d+)px`))?.[1];
+      if (!declared) continue;
+      const literal = `${declared}px`;
+      // 4px stays allowed: it is the hairline rounding in ALLOWED_RADII, and
+      // --radius-xs was defined *from* those existing 4px call sites.
+      if (literal === "4px") continue;
+      const count = declarationsOf("border-radius").filter((value) => value === literal).length;
+      if (count > 0) duplicates.push(`${literal} appears ${count}× as a literal although ${token} is ${literal}`);
+    }
+    expect(duplicates).toEqual([]);
   });
 });
 
@@ -324,5 +373,32 @@ describe("documented baselines", () => {
     // changes (documented in the design system).
     expect(stylesheet).toMatch(/--measure:\s*960px/);
     expect(stylesheet).toMatch(/\.mail-text,\.mail-html\n\{[^}]*font-size:16px/s);
+  });
+
+  /**
+   * The mono stack is written once, in the token.
+   *
+   * 45 rules used to spell `DM Mono,monospace` out by hand while the token
+   * existed and was used nowhere — a 46th copy of the same fact, free to drift.
+   * The stack itself is load-bearing: DM Mono ships no `@font-face` and no
+   * font file (nothing in the repo declares one), so the *fallback tail* is what
+   * most machines actually render. That is why all of them now go through
+   * `var(--font-mono)` and the token keeps the `ui-monospace` step — it is the
+   * only thing guaranteeing a machine without DM Mono still gets a UI-appropriate
+   * mono rather than whatever `monospace` resolves to.
+   */
+  it("writes the mono stack once, in the token", () => {
+    const literals = [...stylesheet.matchAll(/font-family:\s*([^;}\n]*DM Mono[^;}\n]*)/g)]
+      .map((match) => (match[1] ?? "").trim())
+      // The token's own declaration is the single legitimate occurrence.
+      .filter((value) => !/^var\(--font-mono\)$/.test(value));
+    expect(literals, "use var(--font-mono) instead of re-spelling the DM Mono stack").toEqual([]);
+
+    // And the token itself must keep a real fallback chain, since nothing
+    // loads DM Mono: a bare `DM Mono` would fall back to the browser default.
+    const stack = stylesheet.match(/--font-mono:\s*([^;]+);/)?.[1]?.trim();
+    expect(stack, "--font-mono must be defined").toBeTruthy();
+    expect(stack?.split(",").length ?? 0, "--font-mono needs a fallback tail after DM Mono").toBeGreaterThanOrEqual(2);
+    expect(stack, "--font-mono must end in a generic family").toMatch(/(^|,)\s*(monospace|ui-monospace)\s*$/);
   });
 });

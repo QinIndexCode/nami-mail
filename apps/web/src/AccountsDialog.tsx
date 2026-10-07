@@ -34,6 +34,7 @@ export type AccountsDialogProps = {
   onAccountRemoved: (accountId: string) => void | Promise<void>;
   /** Called after an account signature has been saved, or directly in demo mode. */
   onAccountSignatureChanged: (accountId: string, signature: string) => void | Promise<void>;
+  onAccountDisplayNameChanged?: (accountId: string, displayName: string | null) => void;
   /** Retries a single account and lets the host refresh its health state. */
   onAccountSync?: (accountId: string) => Promise<{ synced: number; folders: number; failedFolders: number; limitReached: boolean }>;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
@@ -46,6 +47,7 @@ export default function AccountsDialog({
   onAddAccount,
   onAccountRemoved,
   onAccountSignatureChanged,
+  onAccountDisplayNameChanged,
   onAccountSync,
   fallbackFocusRef,
 }: AccountsDialogProps) {
@@ -244,12 +246,22 @@ export default function AccountsDialog({
     }
   };
 
-  const saveAccountDisplayName = (account: Account) => {
+  const saveAccountDisplayName = async (account: Account) => {
     if (controlsBusy) return;
     const displayName = (displayNameDrafts[account.id] ?? "").trim().slice(0, 64);
-    setAccountDisplayName(account.email, displayName || null);
-    setDisplayNameDrafts((drafts) => ({ ...drafts, [account.id]: displayName }));
-    setNotice({ kind: "success", message: t("settings.account.displayNameSaved", { email: account.email }) });
+    setBusyAction(`account-display-name-${account.id}`);
+    setNotice(null);
+    try {
+      if (!demoMode) await api.updateAccountDisplayName(account.id, displayName || null);
+      setAccountDisplayName(account.email, displayName || null);
+      onAccountDisplayNameChanged?.(account.id, displayName || null);
+      setDisplayNameDrafts((drafts) => ({ ...drafts, [account.id]: displayName }));
+      setNotice({ kind: "success", message: t("settings.account.displayNameSaved", { email: account.email }) });
+    } catch (error) {
+      setNotice({ kind: "error", message: mailErrorMessage(error, t("settings.error.saveDisplayName"), t) });
+    } finally {
+      setBusyAction(null);
+    }
   };
 
   const copyAccountAddress = async (account: Account) => {

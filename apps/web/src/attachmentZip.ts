@@ -7,30 +7,32 @@ import type { MessageAttachment } from "./types";
  * per-attachment download path.
  */
 
-/** Mangles a filename into a safe zip entry name (no separators or control chars). */
-export function attachmentZipEntryName(filename: string, index: number): string {
-  const cleaned = filename
+/**
+ * Strips path separators, shell-hostile punctuation and control characters from
+ * a user-supplied name, then trims it to `maxLength`. The single place this
+ * chain exists: every download filename (zip entries, zip archive names, export
+ * names) is built from it, so a name that is safe in one export path cannot
+ * regress into an unsafe one in another.
+ */
+export function sanitizeDownloadName(raw: string, maxLength: number): string {
+  return raw
     .replace(/[\r\n\t]/g, " ")
     .replace(/[\\/:*?"<>|]/g, " ")
-    // eslint-disable-next-line no-control-regex -- strips C0 controls from entry names
+    // eslint-disable-next-line no-control-regex -- strips C0 controls from download names
     .replace(/[\u0000-\u001f\u007f]/g, "")
     .trim()
-    .slice(0, 80)
+    .slice(0, maxLength)
     .trim();
-  return `${String(index).padStart(3, "0")}_${cleaned || "attachment"}`;
+}
+
+/** Mangles a filename into a safe zip entry name (no separators or control chars). */
+export function attachmentZipEntryName(filename: string, index: number): string {
+  return `${String(index).padStart(3, "0")}_${sanitizeDownloadName(filename, 80) || "attachment"}`;
 }
 
 /** Derives the download filename from a message subject. */
 export function attachmentsZipFilename(subject: string): string {
-  const cleaned = subject
-    .replace(/[\r\n\t]/g, " ")
-    .replace(/[\\/:*?"<>|]/g, " ")
-    // eslint-disable-next-line no-control-regex -- strips C0 controls from zip names
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .trim()
-    .slice(0, 60)
-    .trim();
-  return `${cleaned || "attachments"}.zip`;
+  return `${sanitizeDownloadName(subject, 60) || "attachments"}.zip`;
 }
 
 /**

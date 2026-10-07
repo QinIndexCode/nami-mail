@@ -28,14 +28,15 @@ Nami Mail is a local-first, multi-account desktop mail client for Windows. It br
 
 > The password field is only for long-lived credentials required by the provider: Gmail and iCloud normally require an app password, QQ and NetEase require a client authorization code, and a self-hosted mailbox can require its mailbox password. Credentials are never sent to a service other than Nami Mail and the selected mail provider; they are used only for a direct provider connection. OAuth refresh tokens are also encrypted and stored locally only.
 
-## What's New in 0.3.0
+## What's New in 0.4.3
 
-- **External Mail v1**: A paired, local CLI and MCP interface for scripts and AI assistants. It exposes sixteen tools through a Windows named-pipe Broker restricted to the current user — nine read-only (accounts, folders, message list/search/summary, single and batch detail, threads, attachment metadata) plus seven bounded writes (draft create/update/delete, move, flag, send, reply); the default level is `read-only`.
-- **NamiMail Agent**: An embedded AI workspace with local retrieval, source citations, and OpenAI-compatible or Ollama provider support. It can read mail and manage drafts within an explicit account scope.
-- **Mail translation**: Optional free translation (Google/MyMemory) and AI-powered translation with streaming output. The first launch shows a terms-and-privacy dialog covering the entire app.
-- **UI improvements**: Skeleton loading states for lists and panels, refined scrollbar styles, quote formatting in Agent conversations, and theme-aware visual polish.
+- **Folder display modes**: switch the sidebar between a multi-account tree mode (every account visible, each folding its own folders) and a focused mode (single-account view with a bottom folder list); the preference is stored locally.
+- **Dual-model auto-reply & dry-run sandbox**: the screening model and the drafting model can be configured independently; a zero-side-effect sandbox visualizes link-cleaning token savings, rule matches, model decisions, and draft previews end to end.
+- **Agent output stability & experience**: the streaming tail-loss defect (queued deltas dropped during conversation switches) is fully fixed; drafted replies stream in with a typewriter effect; context-window budgets, smart pruning of oversized tool results, and automatic multi-turn history compression were added.
+- **External connections & cross-platform IPC**: a clear separation of built-in MCP, locally exposed MCP servers, and the external CLI over a unified IPC transport layer (Windows named pipes / Unix domain sockets).
+- **Settings overhaul & update stability**: the wall-of-text settings UI was rebuilt around inline hover tooltips; update installs no longer hang 30 seconds on a lingering SSE connection, and a pre-flight disk-space check runs before download and install.
 
-See the [release notes](docs/releases/v0.3.0.en.md) and [changelog](CHANGELOG.en.md) for details.
+See the [release notes](docs/releases/v0.4.3.en.md) and [changelog](CHANGELOG.en.md) for details.
 
 ## Get Started
 
@@ -211,6 +212,14 @@ OAuth callbacks return to local `/api/oauth/google/callback` or `/api/oauth/micr
 - Real IMAP draft saving, editing, send replacement, and close confirmation for unsaved content.
 - Attachment metadata and controlled streaming downloads without copying attachment bytes into the local database.
 - Compose, reply, and send over SMTP using the matching account.
+- **Scheduled send**: pick a send time while composing; the mail goes out over SMTP automatically at the scheduled time.
+- **Template library**: manage frequently used subjects and bodies in Settings and insert one into a compose or reply with a single click.
+- **Inline attachment preview**: PDFs and images render in a read-only viewer; DOCX/PPTX/XLSX and common text files get a read-only text preview without exporting the original file.
+- **Calendar**: mail invite banners, ICS import (append/replace modes with UID-based dedupe so re-imports never double-book), event reminders, and ICS export.
+- **BIMI brand marks**: enterprise sender SVG brand marks are resolved, validated, sanitized, and cached locally before display.
+- **Auto-reply**: optional automatic replies with independently configured screening and drafting models; every send goes through a visible user confirmation.
+- **Filter rules**: match incoming mail against combined conditions and run local actions (mark read, star, archive, or move to a folder); provider-side configurations are never modified.
+- **Local backup export**: stream every account's mail into a ZIP archive with one click.
 - **NamiMail Agent**: AI assistant with local retrieval, source citations, and draft management within an explicit account scope.
 - **Mail translation**: free translation (Google/MyMemory) and optional AI-powered translation with streaming output and cancellation.
 - **External Mail v1**: read-only CLI and MCP stdio interface for paired local scripts and AI assistants.

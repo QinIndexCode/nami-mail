@@ -105,10 +105,10 @@ display:flex
 }
 .template-icon
 {
-background:color-mix(in srgb, var(--accent,var(--text-soft)) 16%, var(--panel-muted));
+background:color-mix(in srgb, var(--accent) 16%, var(--panel-muted));
 width:30px;
 height:30px;
-color:color-mix(in srgb, var(--accent,var(--text-soft)) 82%, var(--text-soft));
+color:color-mix(in srgb, var(--accent) 82%, var(--text-soft));
 border-radius:var(--radius-sm);
 flex:none;
 place-items:center;
@@ -132,9 +132,9 @@ display:flex
 }
 .template-builtin-badge
 {
-border:1px solid color-mix(in srgb, var(--accent,var(--text-soft)) 40%, var(--line-strong));
-background:color-mix(in srgb, var(--accent,var(--text-soft)) 12%, transparent);
-color:color-mix(in srgb, var(--accent,var(--text-soft)) 85%, var(--text-soft));
+border:1px solid color-mix(in srgb, var(--accent) 40%, var(--line-strong));
+background:color-mix(in srgb, var(--accent) 12%, transparent);
+color:color-mix(in srgb, var(--accent) 85%, var(--text-soft));
 letter-spacing:.03em;
 border-radius:var(--radius-pill);
 flex:none;

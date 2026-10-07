@@ -87,7 +87,7 @@ transform:translateY(-1px)
 {
 opacity:.45;
 margin-left:auto;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:9px;
 font-weight:400
 }
@@ -229,7 +229,7 @@ text-transform:uppercase;
 justify-content:space-between;
 align-items:center;
 margin:22px 5px 8px 8px;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:10px;
 display:flex
 }
@@ -665,7 +665,7 @@ color:var(--text-faint);
 letter-spacing:0;
 text-transform:uppercase;
 margin:0 8px 6px;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:10px;
 display:block
 }
@@ -730,7 +730,7 @@ overflow:hidden;
 text-overflow:ellipsis
 }
 .sidebar-footer .version {
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:9px;
 color:var(--text-faint);
 flex-shrink:0;
@@ -764,22 +764,22 @@ transform:translateY(-0.5px);
 transform:translateY(0);
 }
 .update-footer-button.update-footer-button--retry {
-color:var(--danger, #ef4444);
-border-color:color-mix(in srgb, var(--danger, #ef4444) 35%, var(--line));
-background:color-mix(in srgb, var(--danger, #ef4444) 10%, var(--panel-muted));
+color:var(--danger);
+border-color:color-mix(in srgb, var(--danger) 35%, var(--line));
+background:color-mix(in srgb, var(--danger) 10%, var(--panel-muted));
 }
 .update-footer-button.update-footer-button--retry:hover:not(:disabled) {
-border-color:var(--danger, #ef4444);
-background:color-mix(in srgb, var(--danger, #ef4444) 18%, var(--panel-muted));
+border-color:var(--danger);
+background:color-mix(in srgb, var(--danger) 18%, var(--panel-muted));
 }
 .update-footer-button.update-footer-button--storage {
-color:var(--warning-text, #d97706);
-border-color:color-mix(in srgb, var(--warning-text, #d97706) 38%, var(--line));
-background:color-mix(in srgb, var(--warning-text, #d97706) 10%, var(--panel-muted));
+color:var(--warning);
+border-color:color-mix(in srgb, var(--warning) 38%, var(--line));
+background:color-mix(in srgb, var(--warning) 10%, var(--panel-muted));
 }
 .update-footer-button.update-footer-button--storage:hover:not(:disabled) {
-border-color:var(--warning-text, #d97706);
-background:color-mix(in srgb, var(--warning-text, #d97706) 18%, var(--panel-muted));
+border-color:var(--warning);
+background:color-mix(in srgb, var(--warning) 18%, var(--panel-muted));
 }
 .update-footer-button.update-footer-button--install {
 color:var(--focus-ring);

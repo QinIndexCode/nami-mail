@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { triggerBlobDownload } from "../attachmentZip";
 import type {
   AgentAccessLevel,
   AppSettings,
@@ -295,16 +296,7 @@ export default function SettingsConnectionsSection({
   };
 
   const handleDownloadConfig = (preset: IdePreset) => {
-    const config = IDE_CONFIGS[preset];
-    const blob = new Blob([config.json], { type: "application/json;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = config.filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    triggerBlobDownload(new Blob([IDE_CONFIGS[preset].json], { type: "application/json;charset=utf-8" }), IDE_CONFIGS[preset].filename);
   };
 
   const handleRevokePairing = async (clientId: string) => {

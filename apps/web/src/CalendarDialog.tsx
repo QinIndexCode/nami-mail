@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
+import { triggerBlobDownload } from "./attachmentZip";
 import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
 import type { CalendarEvent, CalendarEventInput } from "./types";
@@ -25,7 +26,7 @@ import { calendarEventColors } from "./types";
 import DatePicker from "./DatePicker";
 import { demoTranslate } from "./demo";
 import { ManagementDialogShell } from "./ManagementDialogs";
-import { useDialogFocus } from "./hooks/useDialogFocus";
+import { hasOpenDialogPortals, useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { calendarCache } from "./dialogPrefetch";
 import { FormNotice, type Notice } from "./FormNotice";
@@ -230,6 +231,12 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // A date-picker panel portaled from the event editor is the top layer:
+      // it claims Escape with its own window-capture listener, which fires
+      // after this one (this handler registered first). Standing down here —
+      // only while such a panel is actually registered — lets the panel close
+      // alone instead of taking the editor, or the whole dialog, with it.
+      if (editorDialog.current && hasOpenDialogPortals(editorDialog.current)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (pendingDelete || pendingBulkDelete) {
@@ -520,18 +527,9 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
   const handleExportIcs = async () => {
     try {
       setBusy(true);
-      const blob = await fetch(api.exportCalendarIcsUrl()).then((r) => r.blob()).catch(() => null);
-      if (blob) {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `nami-calendar-${localDateKey(new Date())}.ics`;
-        link.click();
-        URL.revokeObjectURL(url);
-        setNotice({ kind: "success", message: t("calendar.exportSuccess") });
-      } else {
-        setNotice({ kind: "error", message: t("calendar.loadError") });
-      }
+      const blob = await api.downloadCalendarIcs();
+      triggerBlobDownload(blob, `nami-calendar-${localDateKey(new Date())}.ics`);
+      setNotice({ kind: "success", message: t("calendar.exportSuccess") });
     } catch (error) {
       setNotice({ kind: "error", message: mailErrorMessage(error, t("calendar.loadError"), t) });
     } finally {
@@ -884,20 +882,20 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
                 <label className="calendar-field">
                   <span>{t("calendar.start")}</span>
                   {draft.allDay
-                    ? <DatePicker mode="date" value={draft.startDate} aria-label={t("calendar.start")} onChange={(value) => setDraft((draftValue) => ({ ...draftValue, startDate: value }))} />
+                    ? <DatePicker mode="date" value={draft.startDate} aria-label={t("calendar.start")} onChange={(value) => setDraft((draftValue) => ({ ...draftValue, startDate: value }))} panelHost={editorDialog} />
                     : <DatePicker mode="datetime" value={`${draft.startDate}T${draft.startTime}`} aria-label={t("calendar.start")} onChange={(value) => {
                         const [date, time = "00:00"] = value.split("T");
                         setDraft((draftValue) => ({ ...draftValue, startDate: date, startTime: time }));
-                      }} />}
+                      }} panelHost={editorDialog} />}
                 </label>
                 <label className="calendar-field">
                   <span>{t("calendar.end")}</span>
                   {draft.allDay
-                    ? <DatePicker mode="date" value={draft.endDate} aria-label={t("calendar.end")} onChange={(value) => setDraft((draftValue) => ({ ...draftValue, endDate: value }))} />
+                    ? <DatePicker mode="date" value={draft.endDate} aria-label={t("calendar.end")} onChange={(value) => setDraft((draftValue) => ({ ...draftValue, endDate: value }))} panelHost={editorDialog} />
                     : <DatePicker mode="datetime" value={`${draft.endDate}T${draft.endTime}`} aria-label={t("calendar.end")} onChange={(value) => {
                         const [date, time = "00:00"] = value.split("T");
                         setDraft((draftValue) => ({ ...draftValue, endDate: date, endTime: time }));
-                      }} />}
+                      }} panelHost={editorDialog} />}
                 </label>
               </div>
               <label className="calendar-field">

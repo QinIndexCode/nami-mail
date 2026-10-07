@@ -421,8 +421,8 @@ export default function AutoReplySandboxDialog({
                 )}
 
                 {result.decision && !result.decision.evaluated && (
-                  <div className="sandbox-stat-item" style={{ marginTop: 2, borderColor: "var(--danger, #ef4444)" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--danger, #ef4444)", marginBottom: 4, fontWeight: 600 }}>
+                  <div className="sandbox-stat-item" style={{ marginTop: 2, borderColor: "var(--danger)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--danger)", marginBottom: 4, fontWeight: 600 }}>
                       <CircleAlert size={13} />
                       <span>{t("settings.agent.sandbox.llmEvaluationFailed")}</span>
                     </div>

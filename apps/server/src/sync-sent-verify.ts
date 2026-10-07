@@ -8,6 +8,7 @@
 import type { ListResponse } from "imapflow";
 import type { DatabaseHandle } from "./db.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
+import { safeLogout } from "./imap-logout.js";
 import { markSubmissionConfirmed, submissionForId } from "./outbox.js";
 import { accountById } from "./account-store.js";
 
@@ -60,7 +61,7 @@ export async function verifySubmissionInSentMailbox(
     }
     return false;
   } finally {
-    if (client.usable) await client.logout().catch(() => undefined);
+    await safeLogout(client);
   }
 }
 

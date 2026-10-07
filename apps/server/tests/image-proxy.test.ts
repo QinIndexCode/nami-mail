@@ -1,3 +1,4 @@
+import dns from "node:dns";
 import fs from "node:fs";
 import http from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -97,6 +98,51 @@ describe("guardedLookup", () => {
       guardedLookup("localhost", { all: true }, (error) => resolve({ error }));
     });
     expect(result.error).toBeTruthy();
+  });
+
+  it("hands out only the public addresses of a name resolving to a mixed set", async () => {
+    // The rebinding defense's load-bearing half: a public-looking name whose
+    // records include a private address must yield the public ones only, not
+    // an all-or-nothing refusal (a CDN with one bad A record stays usable).
+    const lookup = vi.spyOn(dns, "lookup").mockImplementation(((hostname: string, options: dns.LookupAllOptions, callback: (error: NodeJS.ErrnoException | null, addresses: dns.LookupAddress[]) => void) => {
+      void hostname;
+      void options;
+      callback(null, [
+        { address: "93.184.216.34", family: 4 },
+        { address: "10.0.0.7", family: 4 },
+      ]);
+    }) as typeof dns.lookup);
+    try {
+      const result = await new Promise<{ error: NodeJS.ErrnoException | null; addresses?: dns.LookupAddress[] }>((resolve) => {
+        guardedLookup("cdn.example.com", { all: true }, (error, addresses) => resolve({ error, addresses }));
+      });
+      expect(result.error).toBeNull();
+      expect(result.addresses).toEqual([{ address: "93.184.216.34", family: 4 }]);
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
+  it("reports the first public address through the single-address callback form", async () => {
+    // node's connect flow calls the lookup with all:false by default; the
+    // (address, family) callback form is what actually drives the socket.
+    // guardedLookup itself always asks dns.lookup for the all:true array form,
+    // so the stub mimics dns.lookup's own callback shape.
+    const lookup = vi.spyOn(dns, "lookup").mockImplementation(((hostname: string, options: dns.LookupAllOptions, callback: (error: NodeJS.ErrnoException | null, addresses: dns.LookupAddress[]) => void) => {
+      void hostname;
+      void options;
+      callback(null, [{ address: "93.184.216.34", family: 4 }]);
+    }) as typeof dns.lookup);
+    try {
+      const result = await new Promise<{ error: NodeJS.ErrnoException | null; address?: string; family?: number }>((resolve) => {
+        guardedLookup("cdn.example.com", {}, (error, address, family) => resolve({ error, address, family }));
+      });
+      expect(result.error).toBeNull();
+      expect(result.address).toBe("93.184.216.34");
+      expect(result.family).toBe(4);
+    } finally {
+      lookup.mockRestore();
+    }
   });
 });
 
@@ -269,6 +315,70 @@ describe("proxyImage streaming limits", () => {
       expect(fs.statSync(result!.filePath).size).toBe(body.length);
     } finally {
       if (result) try { fs.unlinkSync(result.filePath); } catch { /* ignore */ }
+      await server.close();
+    }
+  });
+
+  it("follows a real 302 chain to the final image", async () => {
+    // fetchRemoteImage's redirect loop is the wiring nextRedirectUrl alone
+    // cannot cover: the per-hop isAllowedUrl re-check, the drained redirect
+    // bodies and the hop carry-over all live there.
+    const body = Buffer.alloc(512, 0x64);
+    const target = await listenFixtureServer((_req, res) => {
+      res.writeHead(200, { "content-type": "image/png", "content-length": String(body.length) });
+      res.end(body);
+    });
+    // Both hostnames resolve to the loopback fixtures through the pinned
+    // lookup; the redirect URL itself carries the real target port.
+    const origin = await listenFixtureServer((_req, res) => {
+      res.writeHead(302, { location: `http://cdn2.example.com:${target.port}/final.png` });
+      res.end();
+    });
+    vi.spyOn(fs, "writeFileSync").mockImplementation((() => undefined) as typeof fs.writeFileSync);
+    vi.spyOn(fs, "renameSync").mockImplementation((() => undefined) as typeof fs.renameSync);
+    try {
+      const result = await proxyImage(`http://cdn.example.com:${origin.port}/a.png`);
+      expect(result).not.toBeNull();
+      expect(result?.contentType).toBe("image/png");
+      expect(fs.statSync(result!.filePath).size).toBe(body.length);
+      try { fs.unlinkSync(result!.filePath); } catch { /* ignore */ }
+    } finally {
+      await origin.close();
+      await target.close();
+    }
+  });
+
+  it("refuses a 302 that escapes into private address space mid-chain", async () => {
+    let requests = 0;
+    const origin = await listenFixtureServer((_req, res) => {
+      requests += 1;
+      res.writeHead(302, { location: "http://127.0.0.1:9/secret.png" });
+      res.end();
+    });
+    try {
+      await expect(proxyImage(`http://cdn.example.com:${origin.port}/a.png`)).resolves.toBeNull();
+      // The refusal happens at the URL policy, before any second socket.
+      expect(requests).toBe(1);
+    } finally {
+      await origin.close();
+    }
+  });
+
+  it("gives up once a redirect chain exceeds the hop ceiling", async () => {
+    let requests = 0;
+    // Self-referential location: every hop is policy-clean, only the ceiling
+    // can end the chain (MAX_REDIRECT_HOPS + 1 requests, then null). The
+    // handler closes over `server`, assigned right after listenFixtureServer
+    // resolves — safe, because the closure only runs on a later request.
+    const server = await listenFixtureServer((_req, res) => {
+      requests += 1;
+      res.writeHead(302, { location: `http://cdn.example.com:${server.port}/loop.png` });
+      res.end();
+    });
+    try {
+      await expect(proxyImage(`http://cdn.example.com:${server.port}/loop.png`)).resolves.toBeNull();
+      expect(requests).toBe(6);
+    } finally {
       await server.close();
     }
   });

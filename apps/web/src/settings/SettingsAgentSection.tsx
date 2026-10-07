@@ -34,6 +34,8 @@ export type SettingsAgentSectionProps = {
   setMemoryDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setAutoReplySandboxOpen: React.Dispatch<React.SetStateAction<boolean>>;
   overlayHostRef?: React.RefObject<HTMLElement | null>;
+  /** The settings dialog element; hosts the auto-reply date panels inside its focus trap. */
+  panelHostRef?: React.RefObject<HTMLElement | null>;
 };
 
 export default function SettingsAgentSection({
@@ -51,6 +53,7 @@ export default function SettingsAgentSection({
   setMemoryDialogOpen,
   setAutoReplySandboxOpen,
   overlayHostRef,
+  panelHostRef,
 }: SettingsAgentSectionProps) {
   const [providers, setProviders] = useState<AgentProviderSummary[]>([]);
   const [defaultProviderId, setDefaultProviderId] = useState<string | null>(null);
@@ -351,6 +354,7 @@ export default function SettingsAgentSection({
                   scope={currentSettings.autoReply.scope}
                   disabled={controlsBusy}
                   overlayHostRef={overlayHostRef}
+                  panelHostRef={panelHostRef}
                   onChange={(scope) => void applyOptimisticSettings(
                     { autoReply: { ...currentSettings.autoReply, scope } },
                     null,

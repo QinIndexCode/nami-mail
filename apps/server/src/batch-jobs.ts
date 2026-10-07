@@ -9,6 +9,7 @@ import {
   resolveMoveDestination,
 } from "./sync-moves.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
+import { safeLogout } from "./imap-logout.js";
 import { accountById } from "./account-store.js";
 import { updateMessageFlagsBatch, type MessageFlagsPatch } from "./sync-flags.js";
 import type { AgentMailStateEvents } from "./agent/mail-state-events.js";
@@ -168,14 +169,14 @@ function createJobMoveConnections(db: DatabaseHandle, masterKey: Buffer, accessT
       const cached = clients.get(accountId);
       if (!cached) return;
       clients.delete(accountId);
-      if (cached.usable) await cached.logout().catch(() => undefined);
+      await safeLogout(cached);
     },
     /** Logs out every connection the job opened. */
     async release(): Promise<void> {
       const open = [...clients.values()];
       clients.clear();
       for (const client of open) {
-        if (client.usable) await client.logout().catch(() => undefined);
+        await safeLogout(client);
       }
     },
   };

@@ -7,6 +7,7 @@ import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import { deleteMessagesWithBatchFtsCleanup, type DatabaseHandle } from "./db.js";
 import { deriveEncryptionKey } from "./crypto.js";
 import { friendlyMailError, imapClientForAccount, mailErrorCode, type AccountAccessTokenProvider } from "./mail.js";
+import { safeLogout } from "./imap-logout.js";
 import {
   protectedMessageColumns,
   type MessageStorageRow,
@@ -1207,7 +1208,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     throw error;
   } finally {
     unmarkAccountSyncing(accountId);
-    if (client?.usable) await client.logout().catch(() => undefined);
+    await safeLogout(client);
     if (pendingRuleTargets.length > 0) {
       const targets = pendingRuleTargets;
       pendingRuleTargets = [];

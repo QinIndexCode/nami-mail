@@ -16,17 +16,35 @@ export const SWITCH_FADE_MS = 240;
 export const MAIL_FADE_STAGGER_MS = 60;
 export const AGENT_FADE_STAGGER_MS = 80;
 
+// `Intl.DateTimeFormat` construction is not free; per-row-per-frame allocation
+// during scrolling is avoidable. Cache one formatter per locale + options pair
+// so repeat renders reuse it instead of rebuilding it every time. The key
+// carries the serialised options because several distinct variants are in play
+// (time-only, day-only, day + year, long form) and they must not share a cache
+// slot. Shared by every render path so the mail list, the reader tooltips and
+// the agent rows all reuse the same instances.
+const dateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+
+export function dateTimeFormatter(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${locale}\u0000${JSON.stringify(options)}`;
+  const cached = dateTimeFormatters.get(key);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat(locale, options);
+  dateTimeFormatters.set(key, formatter);
+  return formatter;
+}
+
 export function formatMessageTime(value: string, locale: string): string {
   const date = new Date(value);
   const now = new Date();
   const sameDay = date.toDateString() === now.toDateString();
-  if (sameDay) return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(date);
+  if (sameDay) return dateTimeFormatter(locale, { hour: "2-digit", minute: "2-digit" }).format(date);
   const sameYear = date.getFullYear() === now.getFullYear();
-  return new Intl.DateTimeFormat(locale, sameYear ? { month: "numeric", day: "numeric" } : { year: "2-digit", month: "numeric", day: "numeric" }).format(date);
+  return dateTimeFormatter(locale, sameYear ? { month: "numeric", day: "numeric" } : { year: "2-digit", month: "numeric", day: "numeric" }).format(date);
 }
 
 export function formatFullDate(value: string, locale: string): string {
-  return new Intl.DateTimeFormat(locale, {
+  return dateTimeFormatter(locale, {
     year: "numeric",
     month: "long",
     day: "numeric",
@@ -184,15 +202,6 @@ export function demoMoveDestination(accounts: readonly Account[], accountId: str
   return "";
 }
 
-export function initials(name: string, address: string): string {
-  const value = name.trim() || address.split("@")[0] || "?";
-  return [...value].slice(0, 2).join("").toUpperCase();
-}
-
-export function accountTone(value: string): number {
-  return [...value].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4;
-}
-
 export function currentSystemTheme(): "light" | "dark" {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
@@ -216,7 +225,59 @@ export const MAX_LLM_TRANSLATION_TEXT_LENGTH = 50_000;
 
 export function sanitizeMailHtml(html: string, darkMode: boolean): string {
   const clean = DOMPurify.sanitize(html, {
-    FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form"],
+    // Defense in depth, not a fix for a known hole: DOMPurify's defaults already
+    // drop on* handlers and javascript: URIs. The point of USE_PROFILES is to shrink
+    // the surface a future sanitizer bug could reach — the body is parsed and
+    // re-serialized three more times below, and every parse-serialize round trip is
+    // another chance for markup to mutate.
+    //
+    // MathML is NOT re-enabled: it has no place in a mail body at all, and its
+    // text-integration points are exactly how mutation XSS gets in (an
+    // <mtext>/<mglyph> subtree re-parses into different markup on the next pass).
+    // The html profile keeps every layout tag real mail relies on (table/thead/
+    // tbody/tr/td/th, font, center, div, span, p, ul/ol/li, hr, blockquote,
+    // pre/code, h1-h6, a, img) and every legacy presentational attribute
+    // (bgcolor, background, align, valign, width, height, cellpadding, cellspacing,
+    // border, color, face, size, nowrap, style) — the surface/color walk below reads
+    // those attributes, so they must survive.
+    //
+    // The svg profile IS enabled, deliberately. Dropping the SVG *element* also
+    // drops its whole subtree INCLUDING its text: a mail whose visible content is
+    // an inline SVG (a <text> label, a signature chart) renders as a blank block,
+    // which is a worse outcome than the surface it costs. SVG is not a free pass —
+    // DOMPurify's svg set already excludes the dangerous elements (script, use,
+    // animate, set, foreignObject; see svgDisallowed in purify.js), and the three
+    // entries appended to FORBID_TAGS below close the rest. Verified against the
+    // adversarial set in app-utils.test.ts ("adversarial SVG and MathML").
+    //
+    // ALLOWED_TAGS is deliberately absent: USE_PROFILES *overwrites* ALLOWED_TAGS
+    // (purify.js resolves ALLOWED_TAGS first, then replaces it with the profile set),
+    // so passing both would leave a hand-written list silently inert. The html+svg
+    // profiles are themselves curated allow-lists and are what keep mail layout
+    // intact.
+    USE_PROFILES: { html: true, svg: true },
+    // "script", "style", "iframe", "object", "embed" and "form" do the actual
+    // stripping the html profile alone would not (its tag set contains "style"
+    // and "form"); the rest are redundant today and stay as an explicit statement
+    // of intent that survives future DOMPurify changes.
+    //
+    // The three animation elements are the SVG profile's real gap and are NOT
+    // redundant. `<animateColor attributeName="HREF" values="//evil">` rewrites a
+    // link target at render time with no javascript: URI to block: DOMPurify only
+    // strips `attributeName` when its value matches "href" case-sensitively
+    // (purify.js:2213), so an uppercase "HREF" slips past and the animation
+    // survives with its payload. Same trick reaches `to=` on animateTransform.
+    // None of the three renders anything on its own, so dropping them costs a mail
+    // body nothing and closes the vector outright.
+    FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form", "animateColor", "animateMotion", "animateTransform"],
+    // USE_PROFILES *overwrites* ALLOWED_ATTR (purify.js:1353), so the html
+    // profile's table has no "target" — an <a target="_blank"> silently loses it
+    // and the mail's external links fall back to replacing the reader's own tab.
+    // ADD_ATTR is applied AFTER the profile merge (purify.js:1383), so it is not
+    // overwritten and cannot widen the tag surface. target is inert without a
+    // scripting context: it only tells the browser which browsing context to
+    // navigate, so allowing it grants no new capability.
+    ADD_ATTR: ["target"],
   });
 
   const template = document.createElement("template");
@@ -279,6 +340,216 @@ export function textFromSanitizedMailHtml(html: string): string {
   const template = document.createElement("template");
   template.innerHTML = html;
   return template.content.textContent ?? "";
+}
+
+/** Same-origin path of the server-side external image proxy
+ *  (GET /api/images/proxy, apps/server/src/routes/messages.ts). */
+export const IMAGE_PROXY_PATH = "/api/images/proxy";
+
+/**
+ * The proxied form of one image source, or `null` when the source must be left
+ * exactly as it is.
+ *
+ * Left untouched, in one bucket or another:
+ * - every non-http(s) scheme — `data:` (inline images and BIMI), `cid:`, `blob:`;
+ * - anything already resolving against this app's own origin. That covers the
+ *   inline-attachment endpoint the server rewrites `cid:` to
+ *   (/api/messages/:id/inline/:partId), and an already-proxied body — which is
+ *   what makes this function safe to apply more than once.
+ *
+ * Everything else is a fetch the mail author chose and the reader's network
+ * would perform under its own IP, so the proxy takes it over instead. The URL is
+ * resolved against the document first so a protocol-relative `//host/pixel`
+ * arrives at the proxy as an absolute URL the server can parse at all.
+ */
+function proxiedImageSource(source: string): string | null {
+  const value = source.trim();
+  if (!value) return null;
+  let resolved: URL;
+  try {
+    resolved = new URL(value, document.baseURI);
+  } catch {
+    return null;
+  }
+  if (resolved.protocol !== "http:" && resolved.protocol !== "https:") return null;
+  if (resolved.origin === window.location.origin) return null;
+  return `${IMAGE_PROXY_PATH}?url=${encodeURIComponent(resolved.href)}`;
+}
+
+/** Rewrites every candidate URL in an `img[srcset]`. `srcset` is what the
+ *  browser fetches from whenever it is present, so leaving it alone keeps the
+ *  leak wide open behind a proxied `src`.
+ *
+ *  Candidates follow the HTML srcset parsing algorithm rather than a split on
+ *  commas: a URL is the run of characters up to the next whitespace, and it only
+ *  ends a candidate when it ends in a comma. Splitting naively would tear a
+ *  `data:image/png;base64,AAA=` candidate in half, because that comma belongs to
+ *  the URL. */
+function rewriteImageSrcset(srcset: string): string {
+  const candidates: string[] = [];
+  let rest = srcset;
+  while (rest.trim()) {
+    rest = rest.replace(/^[\t\n\f\r ]+/, "");
+    if (!rest) break;
+    const urlEnd = rest.search(/[\t\n\f\r ]/);
+    let url = urlEnd === -1 ? rest : rest.slice(0, urlEnd);
+    let tail = urlEnd === -1 ? "" : rest.slice(urlEnd);
+    const trailingCommas = url.match(/,+$/)?.[0] ?? "";
+    let descriptor = "";
+    if (trailingCommas) {
+      url = url.slice(0, -trailingCommas.length);
+    } else {
+      const descriptorEnd = tail.search(/,/);
+      descriptor = descriptorEnd === -1 ? tail : tail.slice(0, descriptorEnd);
+      tail = descriptorEnd === -1 ? "" : tail.slice(descriptorEnd + 1);
+    }
+    if (url) candidates.push(`${proxiedImageSource(url) ?? url}${descriptor}`);
+    rest = tail;
+  }
+  // The encoded proxy URL contains neither a comma nor whitespace, so ", " is
+  // always a safe separator here.
+  return candidates.length ? candidates.join(", ") : srcset;
+}
+
+/** `url(...)` inside an inline style attribute. The replacement is always
+ *  double-quoted: encodeURIComponent leaves `'()*!` unescaped, so a bare
+ *  parenthesised URL could otherwise break the CSS it is spliced into. */
+const CSS_URL_FUNCTION = /url\(\s*(["']?)([^"')]*)\1\s*\)/gi;
+
+/**
+ * A CSS escape inside a `url()` token: a backslash followed by 1-6 hex digits
+ * and an optional trailing space (`\68 ` is `t`), or by a single escaped
+ * character (`\t`).
+ *
+ * Without decoding, `url(\68 ttps://tracker/pixel)` survives the rewrite
+ * untouched and the browser still resolves it to an https request — the CSS
+ * parser unescapes it after the sanitizer and the rewriter have both run.
+ */
+const CSS_ESCAPE = /\\(?:([0-9a-f]{1,6})[ \t\n\f\r]?|(.))/gis;
+
+/** Decodes CSS escapes the way the CSS parser does before it resolves a URL. */
+function decodeCssEscapes(value: string): string {
+  return value.replace(CSS_ESCAPE, (_match, hex: string | undefined, literal: string | undefined) => {
+    if (hex !== undefined) {
+      const code = Number.parseInt(hex, 16);
+      // A NUL or an out-of-range code point stays a replacement character, as
+      // in CSS; U+FFFD is what the parser substitutes.
+      if (!Number.isFinite(code) || code === 0 || code > 0x10ffff) return "\uFFFD";
+      return String.fromCodePoint(code);
+    }
+    return literal ?? "";
+  });
+}
+
+/** `image-set()` / `-webkit-image-set()` take bare quoted strings as URLs, not
+ *  just `url()` tokens, so the `url()` pattern above cannot see them:
+ *  `background-image: image-set("https://tracker/pixel" 1x)` is a plain string
+ *  argument. Only the URL-bearing functions are listed; `cross-fade()` and
+ *  friends compose `url()` for their sources and so are covered already. */
+const CSS_IMAGE_SET_FUNCTION = /(-webkit-)?image-set\(([^)]*)\)/gi;
+const CSS_QUOTED_STRING = /"([^"]*)"|'([^']*)'/g;
+
+/**
+ * Every element through which a mail body can name a remote subresource, with
+ * the attributes that carry the URL. Each entry was verified by running the
+ * real `rewriteRemoteImagesToProxy(sanitizeMailHtml(...))` chain over it: the
+ * ones listed here survive DOMPurify's html profile intact and were still
+ * fetched directly, because an `img[src]`-shaped rewrite never reached them.
+ *
+ * `type=image` is matched with the `i` flag because the HTML parser does not
+ * lowercase attribute *values*: `<input type="IMAGE">` is still an image button
+ * to the browser, so a case-sensitive selector would wave it through.
+ */
+const REMOTE_SUBRESOURCE_ELEMENTS: { selector: string; attributes: readonly string[] }[] = [
+  // `srcset` is handled separately, because it is a candidate list rather than
+  // one URL — and because a browser prefers it over `src` whenever it is
+  // present. A `<picture>` whose `<source srcset>` is remote never requests the
+  // sibling `src` at all, which is what lets a `cid:`-looking src read as
+  // "already handled" while the beacon still fires.
+  //
+  // Every entry here must name an attribute the browser resolves under `img-src`.
+  // Media elements are deliberately absent: `media-src 'self'` already refuses
+  // remote audio and video, so they were never a disclosure, and the proxy only
+  // serves `image/*` — rewriting them would turn playable mail into 404s.
+  { selector: "img", attributes: ["src"] },
+  // `<source src>` inside <video>/<audio> is media-src's business; the picture
+  // form below is covered by REMOTE_SRCSET_SELECTOR.
+  { selector: "video", attributes: ["poster"] },
+  { selector: 'input[type="image" i]', attributes: ["src"] },
+  // SVG <image> carries its URL on href/xlink:href rather than src.
+  { selector: "image", attributes: ["href", "xlink:href"] },
+];
+
+/** Elements whose `srcset` the browser resolves and fetches from. */
+const REMOTE_SRCSET_SELECTOR = 'img, source, input[type="image" i]';
+
+/**
+ * Routes a mail body's remote images through the server-side image proxy.
+ *
+ * Opening a mail is itself a disclosure: an `<img src="https://tracker/pixel">`
+ * that the renderer fetches directly hands the sender the reader's public IP,
+ * the exact open time, and the read receipt that no further interaction is
+ * needed to confirm. The proxy already exists and already fail-closed on the
+ * server (address allow-list, DNS rebinding caught at resolve time, per-hop
+ * redirect re-checks, byte and wall-clock ceilings), but nothing called it, so
+ * the images went direct.
+ *
+ * Applied AFTER `sanitizeMailHtml`, whose DOMPurify pass must keep its own
+ * configuration untouched. Kept as a separate export so that contract stays
+ * single-purpose and both render paths (the reader body and the translation
+ * pipeline that replaces it) opt in explicitly.
+ *
+ * Runs over every attribute through which a mail body can trigger a remote
+ * fetch, not just `img[src]`: `srcset` alone would otherwise bypass an
+ * src-only rewrite, and a `background` attribute, a `style` url() or an SVG
+ * `image` is the same pixel by another name. The element list is
+ * REMOTE_SUBRESOURCE_ELEMENTS above — `video[poster]`, `source[srcset]` and
+ * `input[type=image][src]` are all reachable, all survive the sanitizer, and
+ * all were measured leaking before this list existed.
+ */
+export function rewriteRemoteImagesToProxy(html: string): string {
+  if (!html) return html;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+
+  for (const { selector, attributes } of REMOTE_SUBRESOURCE_ELEMENTS) {
+    for (const element of template.content.querySelectorAll(selector)) {
+      for (const attribute of attributes) {
+        const proxied = proxiedImageSource(element.getAttribute(attribute) || "");
+        if (proxied) element.setAttribute(attribute, proxied);
+      }
+    }
+  }
+  for (const element of template.content.querySelectorAll(REMOTE_SRCSET_SELECTOR)) {
+    const srcset = element.getAttribute("srcset");
+    if (!srcset) continue;
+    const rewritten = rewriteImageSrcset(srcset);
+    if (rewritten !== srcset) element.setAttribute("srcset", rewritten);
+  }
+  for (const element of template.content.querySelectorAll("[background]")) {
+    const proxied = proxiedImageSource(element.getAttribute("background") || "");
+    if (proxied) element.setAttribute("background", proxied);
+  }
+  for (const element of template.content.querySelectorAll("[style]")) {
+    const style = element.getAttribute("style") || "";
+    // Decode escapes before matching: the CSS parser unescapes them when it
+    // resolves the URL, so `url(\68 ttps://host/pixel)` reaches the network even
+    // though the sanitizer and a naive regex both see an unrecognised token.
+    const decoded = decodeCssEscapes(style);
+    let rewritten = decoded.replace(CSS_URL_FUNCTION, (match, _quote: string, url: string) => {
+      const proxied = proxiedImageSource(url);
+      return proxied ? `url("${proxied}")` : match;
+    });
+    // image-set() carries its URLs as bare strings rather than url() tokens.
+    rewritten = rewritten.replace(CSS_IMAGE_SET_FUNCTION, (match, _webkit: string, args: string) =>
+      args.replace(CSS_QUOTED_STRING, (quoted, dq: string | undefined, sq: string | undefined) => {
+        const proxied = proxiedImageSource(dq ?? sq ?? "");
+        return proxied ? `"${proxied}"` : quoted;
+      }));
+    if (rewritten !== style) element.setAttribute("style", rewritten);
+  }
+
+  return template.innerHTML;
 }
 
 /** Quote markers that identify quoted message bodies inside sanitized HTML.

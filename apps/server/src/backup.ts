@@ -1,5 +1,6 @@
 import type { DatabaseHandle } from "./db.js";
 import { friendlyMailError, imapClientForAccount, mailErrorCode, type AccountAccessTokenProvider, type MailErrorCode } from "./mail.js";
+import { safeLogout } from "./imap-logout.js";
 import { moveActionBlockedError, type MessageStorageRow } from "./message-storage.js";
 import type { AccountRecord } from "./types.js";
 
@@ -321,7 +322,7 @@ export async function collectMailBackup(
       } catch {
         // Cleanup errors must not replace the transfer outcome.
       }
-      if (closing.connected && closing.client.usable) void closing.client.logout().catch(() => undefined);
+      if (closing.connected) void safeLogout(closing.client);
     }
   };
 

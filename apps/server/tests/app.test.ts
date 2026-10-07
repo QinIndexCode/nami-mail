@@ -1593,6 +1593,31 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(moved).toEqual({ mailbox: "Archive", uid: 101 });
   });
 
+  it("updates, exposes and clears an account display name", async () => {
+    db.prepare(`
+      INSERT INTO accounts (id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("account-name", "name@example.com", "custom", "Custom", "encrypted",
+      "imap.example.com", 993, 1, "smtp.example.com", 465, 1, new Date().toISOString());
+    for (const [input, expected] of [["  学校邮箱  ", "学校邮箱"], ["   ", null], ["Work", "Work"], [null, null]] as const) {
+      const updated = await app.inject({ method: "PATCH", url: "/api/accounts/account-name/display-name", payload: { displayName: input } });
+      expect(updated.statusCode).toBe(200);
+      const accounts = await app.inject({ method: "GET", url: "/api/accounts" });
+      expect(accounts.json().find((account: { id: string }) => account.id === "account-name"))
+        .toMatchObject({ email: "name@example.com", displayName: expected });
+    }
+  });
+
+  it("rejects invalid account display names and missing accounts", async () => {
+    for (const payload of [{ displayName: "x".repeat(65) }, { displayName: 123 }, { displayName: "ok", unexpected: true }, {}]) {
+      const invalid = await app.inject({ method: "PATCH", url: "/api/accounts/missing/display-name", payload });
+      expect(invalid.statusCode).toBe(400);
+    }
+    const missing = await app.inject({ method: "PATCH", url: "/api/accounts/missing/display-name", payload: { displayName: "Work" } });
+    expect(missing.statusCode).toBe(404);
+  });
+
   it("updates and exposes an account signature", async () => {
     const now = new Date().toISOString();
     db.prepare(`

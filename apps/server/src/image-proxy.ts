@@ -11,10 +11,13 @@ import {
   cacheFilename,
   cacheMeta,
   ensureCacheDir,
+  flushMeta,
+  installFlushOnExit,
   listUnindexedFiles,
   loadMeta,
   safeCachePath,
   saveMeta,
+  scheduleFlush,
 } from "./image-cache-index.js";
 import { serverLog } from "./logging.js";
 
@@ -263,6 +266,10 @@ export function runCacheCleanup(): void {
       if (full) try { fs.unlinkSync(full); } catch { /* missing is fine */ }
     }
     if (keysToRemove.length > 0) saveMeta();
+    // Whatever cache hits marked while the pass ran is written here, so the
+    // hourly reconciliation is also the backstop that keeps deferred touches
+    // from lingering. A no-op when nothing is pending.
+    flushMeta();
     lastCleanupWarnAt = 0; // a clean pass re-arms the throttled warning
   } catch (error) {
     const now = Date.now();
@@ -275,6 +282,11 @@ export function runCacheCleanup(): void {
 
 export function startCacheCleanupTimer(): void {
   runCacheCleanup();
+  // Registered once, here, because this is the one startup path both the CLI
+  // service and the desktop utility process go through. The `exit` handler is
+  // the backstop for the paths that never reach a graceful close; a shutdown
+  // that does close properly writes through `runCacheCleanup`/`flushMeta`.
+  installFlushOnExit();
   if (!cleanupTimer) {
     cleanupTimer = setInterval(runCacheCleanup, CLEANUP_INTERVAL_MS);
     if (cleanupTimer.unref) cleanupTimer.unref();
@@ -460,9 +472,16 @@ export async function proxyImage(url: string): Promise<{ filePath: string; conte
     const full = safeCachePath(existing.file);
     if (full && fs.existsSync(full)) {
       touchEntry(existing);
-      saveMeta();
+      // Deferred, not written: a hit only moves lastAccess, whose only reader
+      // is the hourly age rule. Writing here is what made one mail with many
+      // inline images rewrite the whole index once per image. The mark is
+      // coalesced into a single write and flushed on the way out.
+      scheduleFlush();
       return { filePath: full, contentType: existing.contentType };
     }
+    // The file is gone, so the entry is dropped. Left unsaved exactly as before:
+    // the hourly reconciliation reclaims such an entry anyway, and persisting it
+    // here would be a behaviour change this batch has no reason to make.
     delete cacheMeta()[url];
   }
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase } from "../src/db.js";
+import { updateAccountDisplayName } from "../src/account-store.js";
 
 describe("account transport migration", () => {
   const temporaryDirectories: string[] = [];
@@ -153,6 +154,42 @@ describe("account transport migration", () => {
         .toEqual({ uid_validity: null });
     } finally {
       migrated.close();
+    }
+  });
+
+  it("persists nullable account display names across database reopen", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nami-mail-account-display-name-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "nami-mail.db");
+    const legacy = new Database(databasePath);
+    legacy.exec(`
+      CREATE TABLE accounts (
+        id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        provider TEXT NOT NULL, provider_name TEXT NOT NULL, encrypted_password TEXT NOT NULL,
+        imap_host TEXT NOT NULL, imap_port INTEGER NOT NULL, imap_secure INTEGER NOT NULL,
+        smtp_host TEXT NOT NULL, smtp_port INTEGER NOT NULL, smtp_secure INTEGER NOT NULL,
+        username_mode TEXT NOT NULL DEFAULT 'email', status TEXT NOT NULL DEFAULT 'connected',
+        last_error TEXT, last_synced_at TEXT, created_at TEXT NOT NULL
+      );
+      INSERT INTO accounts (id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure, created_at)
+      VALUES ('account-1', 'one@example.test', 'custom', 'Custom', 'encrypted',
+        'imap.example.test', 993, 1, 'smtp.example.test', 465, 1, '2026-07-19T00:00:00.000Z');
+    `);
+    legacy.close();
+
+    const migrated = openDatabase(databasePath);
+    expect(migrated.prepare("SELECT display_name FROM accounts WHERE id = ?").get("account-1"))
+      .toEqual({ display_name: null });
+    expect(updateAccountDisplayName(migrated, "account-1", "Work")).toBe(1);
+    migrated.close();
+
+    const reopened = openDatabase(databasePath);
+    try {
+      expect(reopened.prepare("SELECT display_name FROM accounts WHERE id = ?").get("account-1"))
+        .toEqual({ display_name: "Work" });
+    } finally {
+      reopened.close();
     }
   });
 });

@@ -15,9 +15,58 @@ const focusableSelector = [
   "[tabindex]:not([tabindex=\"-1\"])",
 ].join(", ");
 
-function focusableElements(dialog: HTMLElement): HTMLElement[] {
-  return Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
+function focusableWithin(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(focusableSelector))
     .filter((element) => element.tabIndex >= 0 && canRestoreFocus(element));
+}
+
+/**
+ * Body-level popups that belong to a dialog's focus trap.
+ *
+ * A popup that has to escape its dialog's overflow — the date picker panel is
+ * clipped by every modal card, and two of those cards are themselves scroll
+ * containers — cannot live inside the dialog subtree. Portalling it to
+ * document.body puts it beyond `dialog.contains(...)`, which is the single
+ * test this trap makes, and that is exactly why a body-portaled panel had its
+ * focus yanked the instant a day button took it. Registering the popup here
+ * gives the trap the scope the popup really has: the dialog plus the popups it
+ * owns.
+ *
+ * Keyed by the dialog element so a nested trap (an editor inside the settings
+ * dialog) only ever claims its own popups, never its ancestor's.
+ */
+const dialogPortals = new WeakMap<HTMLElement, Set<HTMLElement>>();
+
+/** Registers `portal` as part of `dialog`'s focus scope. Returns the unregister. */
+export function registerDialogPortal(dialog: HTMLElement, portal: HTMLElement): () => void {
+  const portals = dialogPortals.get(dialog) ?? new Set<HTMLElement>();
+  portals.add(portal);
+  dialogPortals.set(dialog, portals);
+  return () => {
+    portals.delete(portal);
+    if (!portals.size) dialogPortals.delete(dialog);
+  };
+}
+
+function portalsOf(dialog: HTMLElement): HTMLElement[] {
+  return Array.from(dialogPortals.get(dialog) ?? []);
+}
+
+/** Whether any popup is currently registered against `dialog` (e.g. an open date-picker panel). */
+export function hasOpenDialogPortals(dialog: HTMLElement): boolean {
+  return (dialogPortals.get(dialog)?.size ?? 0) > 0;
+}
+
+/** Dialog controls first, then each registered popup's — the composite Tab order. */
+function focusableElements(dialog: HTMLElement): HTMLElement[] {
+  return [...focusableWithin(dialog), ...portalsOf(dialog).flatMap(focusableWithin)];
+}
+
+/** Whether `target` sits inside the dialog or inside a popup registered against it. */
+export function isWithinDialogFocus(dialog: HTMLElement, target: EventTarget | null): boolean {
+  if (!(target instanceof Node)) return false;
+  if (dialog.contains(target)) return true;
+  return portalsOf(dialog).some((portal) => portal.contains(target));
 }
 
 function canRestoreFocus(element: HTMLElement | null | undefined): element is HTMLElement {
@@ -67,7 +116,7 @@ export function useDialogFocus(
 
       const first = controls[0];
       const last = controls[controls.length - 1];
-      if (!dialog.contains(document.activeElement)) {
+      if (!isWithinDialogFocus(dialog, document.activeElement)) {
         event.preventDefault();
         (event.shiftKey ? last : first).focus();
       } else if (event.shiftKey && document.activeElement === first) {
@@ -87,7 +136,7 @@ export function useDialogFocus(
     // the loop converges.
     let focusLoopGuard = 0;
     const preventFocusEscape = (event: FocusEvent) => {
-      if (suspendedRef.current || dialog.contains(event.target as Node)) return;
+      if (suspendedRef.current || isWithinDialogFocus(dialog, event.target)) return;
       if (focusLoopGuard > 1) return;
       focusLoopGuard += 1;
       try {

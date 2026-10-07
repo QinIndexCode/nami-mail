@@ -75,6 +75,7 @@ describe("MessageListRow", () => {
             index={3}
             virtualStart={336}
             selected={false}
+            tabbable={false}
             unread={!message.seen}
             selectionMode={false}
             multiSelected={false}

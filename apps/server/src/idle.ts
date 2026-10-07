@@ -1,6 +1,7 @@
 import type { ImapFlow } from "imapflow";
 import type { DatabaseHandle } from "./db.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
+import { safeLogout } from "./imap-logout.js";
 import type { AccountRecord } from "./types.js";
 
 /**
@@ -88,9 +89,7 @@ export function createIdleWatcher(options: IdleWatcherOptions): IdleWatcher {
           options.log?.warn?.(`IDLE watcher for ${account.email} failed`, { error });
         } finally {
           if (currentClient === client) currentClient = undefined;
-          if (client?.usable) {
-            await client.logout().catch(() => undefined);
-          }
+          await safeLogout(client);
         }
         if (!closed) {
           const delay = nextDelay(attempt);

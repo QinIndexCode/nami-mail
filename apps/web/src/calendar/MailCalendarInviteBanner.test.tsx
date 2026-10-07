@@ -160,6 +160,59 @@ describe("MailCalendarInviteBanner", () => {
     secondContainer.remove();
   });
 
+  it("evicts the least recently used entry once the entry cap is exceeded", async () => {
+    // The cache is bounded (see the LRU note in the component). The entry cap
+    // is the reachable one in a test: 64MB of real ICS text would have to be
+    // downloaded to trip the byte cap, so filling 512 tiny entries exercises
+    // the same eviction loop.
+    const entryCap = 512;
+    const attachmentsWithIcs: MessageAttachment[] = [
+      { partId: "1", filename: "invite.ics", contentType: "text/calendar", size: 512, related: false, disposition: "attachment" },
+    ];
+    const downloadMock = vi.mocked(api.downloadAttachment);
+
+    const select = async (messageId: string) => {
+      await act(async () => {
+        root.render(
+          <I18nProvider>
+            <MailCalendarInviteBanner
+              messageId={messageId}
+              attachments={attachmentsWithIcs}
+              onImportClick={onImportClick}
+              onViewCalendar={onViewCalendar}
+            />
+          </I18nProvider>,
+        );
+      });
+    };
+
+    // Fill the cache to exactly the cap; every visit is a distinct
+    // "messageId:partId" key, so each one downloads once.
+    for (let index = 0; index < entryCap; index += 1) {
+      await select(`msg-lru-${index}`);
+    }
+    expect(downloadMock).toHaveBeenCalledTimes(entryCap);
+    expect(container.textContent).toContain("Product Strategy Sync");
+
+    // Touch the oldest entry so it is no longer the eviction candidate, then
+    // overflow the cap by one. A pure FIFO would evict "msg-lru-0" here; LRU
+    // must evict "msg-lru-1" instead.
+    await select("msg-lru-0");
+    expect(downloadMock).toHaveBeenCalledTimes(entryCap);
+    await select("msg-lru-overflow");
+    expect(downloadMock).toHaveBeenCalledTimes(entryCap + 1);
+
+    // The refreshed entry survived the overflow...
+    await select("msg-lru-0");
+    expect(downloadMock).toHaveBeenCalledTimes(entryCap + 1);
+    expect(container.textContent).toContain("Product Strategy Sync");
+    // ...while the genuinely least recently used one was dropped and has to be
+    // fetched again. Without eviction this assertion cannot distinguish a
+    // working cache from a leaked one.
+    await select("msg-lru-1");
+    expect(downloadMock).toHaveBeenCalledTimes(entryCap + 2);
+  });
+
   it("rejects oversized attachments before downloading", async () => {
     const oversized: MessageAttachment[] = [
       { partId: "9", filename: "huge.ics", contentType: "text/calendar", size: 10_000_001, related: false, disposition: "attachment" },

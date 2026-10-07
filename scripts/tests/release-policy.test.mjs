@@ -746,6 +746,7 @@ test("pull request validation runs the release gate without write credentials", 
     "npm run smoke:runtime",
     "npx playwright install chromium",
     "npm run test:e2e",
+    "npm run test:e2e:real",
     "npm run verify:electron-sqlite && node scripts/smoke-desktop.mjs",
     "npm audit --omit=dev --audit-level=high",
   ]);

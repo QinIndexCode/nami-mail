@@ -31,6 +31,7 @@ import type { DatabaseHandle } from "./db.js";
 import type { OperationQueue } from "./operation-queue.js";
 import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
+import { safeLogout } from "./imap-logout.js";
 import { moveActionBlockedError } from "./message-storage.js";
 import { messageFlagNames, type MessageFlagsPatch } from "./message-flags.js";
 export type { MessageFlagsPatch };
@@ -279,6 +280,6 @@ export async function pushFlagsRemote(
       }
     }
   } finally {
-    if (client.usable) await client.logout().catch(() => undefined);
+    await safeLogout(client);
   }
 }

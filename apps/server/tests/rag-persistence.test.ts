@@ -198,6 +198,73 @@ describe("Persisted RAG lexical index", () => {
     await restarted.stop();
   });
 
+  it("reads a message's own pages without scanning the rest of the account", async () => {
+    db = openDatabase(":memory:");
+    masterKey = randomBytes(32);
+    insertAccount(db);
+    applyAgentStoreSchema(db);
+    const context = setup(db, masterKey);
+    const store = new EncryptedRagPageStore(db, masterKey, context.lifecycle);
+    const pageIds = (messageId: string) => [0, 1, 2].map((index) => `message:${messageId}:chunk:${index}`);
+    for (let index = 0; index < 12; index += 1) {
+      const messageId = `message-${index}`;
+      for (const pageId of pageIds(messageId)) {
+        store.put({ lease: context.lease, pageId, pageRevision: 1, pageKind: "mail-chunk", payload: { index } });
+      }
+    }
+
+    // Every caller of the prefix read tombstones whatever it gets back, so a
+    // prefix matching too much would delete another message's pages. It has to
+    // agree exactly with filtering the full read in JS.
+    for (const index of [0, 5, 11]) {
+      const messageId = `message-${index}`;
+      const viaJs = store.listMetadata(context.lease)
+        .filter((page) => pageIds(messageId).includes(page.pageId))
+        .map((page) => page.pageId)
+        .sort();
+      const viaPrefix = store.listMetadataByPrefix(context.lease, `message:${messageId}:chunk:`)
+        .map((page) => page.pageId)
+        .sort();
+      expect(viaPrefix, `prefix read for ${messageId}`).toEqual(viaJs);
+      expect(viaPrefix.length).toBe(3);
+    }
+
+    // A prefix that matches nothing must return nothing rather than fall back.
+    expect(store.listMetadataByPrefix(context.lease, "message:absent:chunk:")).toEqual([]);
+  });
+
+  it("excludes tombstoned pages from a prefix read", async () => {
+    db = openDatabase(":memory:");
+    masterKey = randomBytes(32);
+    insertAccount(db);
+    applyAgentStoreSchema(db);
+    const context = setup(db, masterKey);
+    const store = new EncryptedRagPageStore(db, masterKey, context.lifecycle);
+    const prefix = "message:message-1:chunk:";
+    for (const pageId of [`${prefix}0`, `${prefix}1`]) {
+      store.put({ lease: context.lease, pageId, pageRevision: 1, pageKind: "mail-chunk", payload: { pageId } });
+    }
+    store.tombstone(context.lease, `${prefix}1`);
+
+    // Same rule listMetadata applies: only the active revision of a live page.
+    expect(store.listMetadataByPrefix(context.lease, prefix).map((page) => page.pageId)).toEqual([`${prefix}0`]);
+  });
+
+  it("refuses a prefix containing a GLOB metacharacter instead of over-matching", () => {
+    // GLOB has no escape syntax, so `*` or `[` in a prefix would widen the match
+    // and every caller tombstones what it receives.
+    db = openDatabase(":memory:");
+    masterKey = randomBytes(32);
+    insertAccount(db);
+    applyAgentStoreSchema(db);
+    const context = setup(db, masterKey);
+    const store = new EncryptedRagPageStore(db, masterKey, context.lifecycle);
+
+    for (const prefix of ["message:*:chunk:", "message:a:chunk:[0-9]", "message:a?:chunk:"]) {
+      expect(() => store.listMetadataByPrefix(context.lease, prefix), prefix).toThrow(/metacharacter/);
+    }
+  });
+
   it("agrees with the legacy heuristic on which message uniquely matches", async () => {
     db = openDatabase(":memory:");
     masterKey = randomBytes(32);

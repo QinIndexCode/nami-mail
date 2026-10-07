@@ -91,7 +91,7 @@ overflow-y:auto
 {
 color:var(--text-faint);
 padding:6px 8px 4px;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:9px;
 font-weight:700;
 display:block

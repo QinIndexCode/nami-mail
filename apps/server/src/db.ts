@@ -3,6 +3,7 @@ import path from "node:path";
 import type Database from "better-sqlite3";
 import { loadDatabaseConstructor } from "./native-sqlite.js";
 import { MESSAGE_FTS_SCHEMA_SQL } from "./message-search.js";
+import { MESSAGE_FLAG_INDEX_SQL } from "./message-flag-indexes.js";
 import { MESSAGE_LIST_ACCOUNT_INDEX_SQL, MESSAGE_LIST_GLOBAL_INDEX_SQL } from "./message-list-indexes.js";
 
 export type DatabaseHandle = Database.Database;
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   smtp_transport TEXT NOT NULL DEFAULT 'tls' CHECK (smtp_transport IN ('tls', 'starttls')),
   smtp_username TEXT,
   signature TEXT NOT NULL DEFAULT '',
+  display_name TEXT,
   username_mode TEXT NOT NULL DEFAULT 'email',
   status TEXT NOT NULL DEFAULT 'connected',
   last_error TEXT,
@@ -376,7 +378,13 @@ CREATE TABLE IF NOT EXISTS calendar_events (
 
 CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start_at);
 CREATE INDEX IF NOT EXISTS idx_calendar_events_end ON calendar_events(end_at);
-CREATE INDEX IF NOT EXISTS idx_calendar_events_uid ON calendar_events(uid) WHERE uid IS NOT NULL;
+-- The uid partial index is deliberately absent here even though the column is
+-- part of this CREATE TABLE. db.exec(schema) runs before migrateDatabase, and an
+-- unknown column is a hard error there — IF NOT EXISTS only guards the index
+-- name, so a statement naming a column that migrateDatabase has yet to add
+-- fails the whole launch on a pre-uid database with "no such column: uid".
+-- migrateDatabase adds the column first and then builds the index, matching how
+-- idx_messages_has_attachments is handled. tests/db.test.ts audits this.
 
 -- Durable write-operation queue. Every user-initiated message write (move,
 -- flag update) is recorded here before it dispatches to the provider, so a
@@ -456,19 +464,6 @@ export function deleteMessagesWithBatchFtsCleanup<T>(
   } finally {
     db.exec(MESSAGES_FTS_AFTER_DELETE_TRIGGER_SQL);
   }
-}
-
-/**
- * Deletes an account row and cleanly handles cascading message deletion.
- * The cascade removes every message of the account, so the batch FTS cleanup
- * (see {@link deleteMessagesWithBatchFtsCleanup}) runs over that exact id set
- * instead of paying the per-row trigger's full scans.
- */
-export function deleteAccountRowWithOptimizedCascade(db: DatabaseHandle, accountId: string): boolean {
-  return deleteMessagesWithBatchFtsCleanup(db, "account_id = ?", [accountId], () => {
-    const result = db.prepare("DELETE FROM accounts WHERE id = ?").run(accountId);
-    return Boolean(result.changes);
-  });
 }
 
 // Schema version understood by this build. Raised whenever migrateDatabase
@@ -584,6 +579,7 @@ function migrateDatabase(db: DatabaseHandle): void {
   addAccountColumn("smtp_transport", "smtp_transport TEXT NOT NULL DEFAULT 'tls' CHECK (smtp_transport IN ('tls', 'starttls'))");
   addAccountColumn("smtp_username", "smtp_username TEXT");
   addAccountColumn("signature", "signature TEXT NOT NULL DEFAULT ''");
+  addAccountColumn("display_name", "display_name TEXT");
   addAccountColumn("last_error_code", "last_error_code TEXT");
   addAccountColumn("last_sync_warning_code", "last_sync_warning_code TEXT");
   addAccountColumn("credential_crypto_version", "credential_crypto_version INTEGER NOT NULL DEFAULT 0");
@@ -652,6 +648,14 @@ function migrateDatabase(db: DatabaseHandle): void {
   // matter how large the mailbox grows.
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_has_attachments ON messages(has_attachments) WHERE has_attachments = 1");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_account_mailbox_remote_id ON messages(account_id, mailbox, remote_id_lookup)");
+  // The starred and unread views match flags_json with a leading-wildcard LIKE,
+  // which no full index can serve. Their partial indexes hold only the rows that
+  // can match, so both views stay cheap as the mailbox grows. One-time cost when
+  // an existing database first opens on this build: the rows are scanned once
+  // and the two indexes are built (measured 27ms for both on 20 000 rows);
+  // after that it is startup DDL like any other CREATE INDEX IF NOT EXISTS, and
+  // no `messages` rebuild is involved.
+  db.exec(MESSAGE_FLAG_INDEX_SQL);
   // The list's ordering indexes, including the one the keyset cursor seeks in
   // and the global one the cross-account view has no alternative to. Defined
   // in message-list-indexes.ts, which carries why each shape is what it is.

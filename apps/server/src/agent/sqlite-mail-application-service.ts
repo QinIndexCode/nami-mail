@@ -1,7 +1,7 @@
 import type { Citation } from "@nami/agent-contracts";
 import { discardDraft, saveDraft } from "../drafts.js";
 import type { DatabaseHandle } from "../db.js";
-import { deleteAccountRowWithOptimizedCascade } from "../db.js";
+import { deleteAccountRowWithOptimizedCascade } from "../account-store.js";
 import { messagePayloadForRow, type MessageStorageRow } from "../message-storage.js";
 import type { AccountAccessTokenProvider } from "../mail.js";
 import { sendMail } from "../mail.js";
@@ -26,6 +26,12 @@ import { syncAccount } from "../sync.js";
 import { updateMessageFlags } from "../sync-flags.js";
 import { moveMessage, moveMessageToFolder } from "../sync-moves.js";
 import { ftsLikeEscape, MESSAGE_FTS_TABLE } from "../message-search.js";
+import {
+  FLAGGED_PREDICATE_SQL,
+  SEEN_PREDICATE_SQL,
+  UNFLAGGED_PREDICATE_SQL,
+  UNSEEN_PREDICATE_SQL,
+} from "../message-flag-indexes.js";
 import { redactUrls } from "../message-links.js";
 import type { AccountRecord } from "../types.js";
 import type { AgentMailStateEvents } from "./mail-state-events.js";
@@ -311,8 +317,8 @@ export class SqliteMailApplicationService implements MailApplicationService {
       where.push("m.mailbox = ?");
       params.push(query.mailbox!.trim());
     }
-    if (query.unread !== undefined) where.push(query.unread ? "m.flags_json NOT LIKE '%\\Seen%'" : "m.flags_json LIKE '%\\Seen%'");
-    if (query.flagged !== undefined) where.push(query.flagged ? "m.flags_json LIKE '%\\Flagged%'" : "m.flags_json NOT LIKE '%\\Flagged%'");
+    if (query.unread !== undefined) where.push(`m.${query.unread ? UNSEEN_PREDICATE_SQL : SEEN_PREDICATE_SQL}`);
+    if (query.flagged !== undefined) where.push(`m.${query.flagged ? FLAGGED_PREDICATE_SQL : UNFLAGGED_PREDICATE_SQL}`);
     // Stored timestamps use UTC ISO (sync.ts writes toISOString output). The
     // caller may pass an offset-carrying timestamp, so normalize both bounds
     // to the same UTC form before comparing, otherwise text order diverges

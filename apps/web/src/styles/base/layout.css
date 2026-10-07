@@ -424,7 +424,7 @@ border-radius:var(--radius-pill);
 align-items:center;
 gap:6px;
 padding:5px 8px;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:10px;
 display:flex
 }

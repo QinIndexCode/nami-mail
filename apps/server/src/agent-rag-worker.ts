@@ -475,7 +475,10 @@ export class AgentRagWorker {
     let accountIds: string[];
     try {
       accountIds = this.options.lifecycle.listActiveAccounts();
-    } catch {
+    } catch (error) {
+      // Warm-up is best-effort, but a silent skip here would leave every account
+      // cold with no trace of why; the first search still retries lazily.
+      serverLog.warn({ workerId: this.workerId }, "RAG startup warm-up could not list active accounts", error);
       return;
     }
     for (const accountId of accountIds) {
@@ -837,10 +840,12 @@ export class AgentRagWorker {
         .length;
       const tombstonedRows = pageRows.filter((row) => row.state === "deleted").length;
 
-      // Latest active pages must decrypt and parse; their message must still
-      // exist in the mail store.
+      // Latest active pages must decrypt and parse; their message must still exist in
+      // the mail store. Payloads are kept so the check below decrypts each page
+      // once (the LRU cannot hold a large account); a present key means it decrypted.
       let unreadableActivePages = 0;
       const referencedMessageIds = new Set<string>();
+      const activePagePayloads = new Map<string, AgentRagPagePayload | undefined>();
       for (const pageId of activePageIds) {
         const page = this.pageStore.get(lease, pageId);
         if (!page) {
@@ -848,6 +853,7 @@ export class AgentRagWorker {
           continue;
         }
         const payload = parsePayload(page.payload);
+        activePagePayloads.set(pageId, payload);
         if (payload) referencedMessageIds.add(payload.messageId);
       }
       let orphanMessageIds = 0;
@@ -899,21 +905,24 @@ export class AgentRagWorker {
         }
       }
 
-      // Every active page's payload must trace to a message-upserted event.
+      // Every active page's payload must trace to a message-upserted event. The
+      // statement is prepared once per account, and payloads come from the
+      // first pass so no page is decrypted twice.
       let pagesMissingSourceRevision = 0;
+      const hasMessageUpserted = this.options.db.prepare(`
+        SELECT 1 FROM agent_source_events
+        WHERE account_id = ? AND account_generation = ? AND source_revision = ? AND event_type = 'message-upserted'
+        LIMIT 1
+      `);
       for (const pageId of activePageIds) {
-        const page = this.pageStore.get(lease, pageId);
-        if (!page) continue;
-        const payload = parsePayload(page.payload);
+        // Pages that failed to decrypt were never inserted.
+        if (!activePagePayloads.has(pageId)) continue;
+        const payload = activePagePayloads.get(pageId);
         if (!payload || typeof payload.sourceRevision !== "string" || !payload.sourceRevision) {
           pagesMissingSourceRevision += 1;
           continue;
         }
-        const found = this.options.db.prepare(`
-          SELECT 1 FROM agent_source_events
-          WHERE account_id = ? AND account_generation = ? AND source_revision = ? AND event_type = 'message-upserted'
-          LIMIT 1
-        `).get(accountId, generation, payload.sourceRevision);
+        const found = hasMessageUpserted.get(accountId, generation, payload.sourceRevision);
         if (!found) pagesMissingSourceRevision += 1;
       }
 
@@ -1184,7 +1193,8 @@ export class AgentRagWorker {
       subject: cleaned.normalizedSubject,
       text: cleaned.text,
     });
-    const current = this.pageStore.listMetadata(lease);
+    // Scoped to this message's own pages: the only two uses are the per-chunk revision lookup below and the cleanup pass after it, and reading the whole account instead made a backfill quadratic on a synchronous connection inside the Electron main process.
+    const current = this.pageStore.listMetadataByPrefix(lease, pagePrefix(messageId));
     const byPageId = new Map(current.map((page) => [page.pageId, page]));
     const retained = new Set<string>();
     for (const chunk of chunks) {
@@ -1231,7 +1241,7 @@ export class AgentRagWorker {
       this.upsertIndex({ ...page, payload: nextPayload });
     }
     for (const page of current) {
-      if (!page.pageId.startsWith(pagePrefix(messageId)) || retained.has(page.pageId)) continue;
+      if (retained.has(page.pageId)) continue;
       this.pageStore.tombstone(lease, page.pageId);
       this.removeIndex(lease.accountId, lease.generation, page.pageId);
     }
@@ -1239,8 +1249,7 @@ export class AgentRagWorker {
 
   private tombstoneMessagePages(lease: AccountGenerationLease, messageId: string): void {
     if (!messageId) return;
-    for (const page of this.pageStore.listMetadata(lease)) {
-      if (!page.pageId.startsWith(pagePrefix(messageId))) continue;
+    for (const page of this.pageStore.listMetadataByPrefix(lease, pagePrefix(messageId))) {
       this.pageStore.tombstone(lease, page.pageId);
       this.removeIndex(lease.accountId, lease.generation, page.pageId);
     }
@@ -1398,10 +1407,11 @@ export class AgentRagWorker {
         // Advance the cursor on every inspected page so a later warm-up resumes
         // right after it, whether or not this page needed a repair.
         this.remoteIdRepairCursor.set(generationKey, page.pageId);
-        let remoteIdLookup: string | undefined;
-        for (const [prefix, remoteId] of prefixToRemoteId) {
-          if (page.pageId.startsWith(prefix)) { remoteIdLookup = remoteId; break; }
-        }
+        // pageId is `message:<messageId>:chunk:<n>`, so trimming the chunk index
+        // rebuilds the candidate prefix in O(1) instead of scanning every
+        // candidate; message ids are sha256 hex, so the match is unambiguous.
+        const cut = page.pageId.lastIndexOf(":") + 1;
+        const remoteIdLookup = cut ? prefixToRemoteId.get(page.pageId.slice(0, cut)) : undefined;
         if (!remoteIdLookup) continue;
         const decrypted = this.pageStore.get(lease, page.pageId);
         if (!decrypted) continue;

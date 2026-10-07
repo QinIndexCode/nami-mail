@@ -78,6 +78,13 @@ export type AutoReplyScopeEditorProps = {
   disabled?: boolean;
   onChange: (scope: AutoReplyScope) => void;
   overlayHostRef?: React.RefObject<HTMLElement | null>;
+  /**
+   * The settings dialog element, used as the date panel's portal host so the
+   * panel sits inside that dialog's focus trap. Distinct from
+   * `overlayHostRef`, which is the backdrop *around* the dialog and hosts the
+   * nested rule editor (which brings its own trap).
+   */
+  panelHostRef?: React.RefObject<HTMLElement | null>;
 };
 
 /**
@@ -91,6 +98,7 @@ export default function AutoReplyScopeEditor({
   disabled = false,
   onChange,
   overlayHostRef,
+  panelHostRef,
 }: AutoReplyScopeEditorProps) {
   const { t } = useI18n();
   const [draft, setDraft] = useState<AutoReplyScopeRule | null>(null);
@@ -128,6 +136,7 @@ export default function AutoReplyScopeEditor({
       aria-label={key === "startDate" ? t("settings.agent.autoReplyScopeStartDate") : t("settings.agent.autoReplyScopeEndDate")}
       minDate={key === "endDate" ? (scope.startDate ?? undefined) : undefined}
       onChange={(value) => onChange({ ...scope, [key]: value || null })}
+      panelHost={panelHostRef}
     />
   );
 

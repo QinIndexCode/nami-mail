@@ -212,6 +212,26 @@ function emlFilenameFromDisposition(disposition: string | null): string {
   }
 }
 
+function calendarIcsPath(range?: { after?: string; before?: string }): string { // shared by exportCalendarIcsUrl + downloadCalendarIcs
+  const q = new URLSearchParams();
+  if (range?.after) q.set("after", range.after);
+  if (range?.before) q.set("before", range.before);
+  return `/api/calendar/export.ics${q.toString() ? `?${q.toString()}` : ""}`;
+}
+
+/** POST `body` as JSON to `path`. The shape of most write endpoints here. */
+function postJson<T>(path: string, body?: unknown) {
+  return request<T>(path, { method: "POST", body: JSON.stringify(body ?? {}) });
+}
+
+/** PATCH one account field whose endpoint is `/api/accounts/:id/<field>`. */
+function patchAccountField(id: string, field: string, body: unknown) {
+  return request<{ ok: boolean }>(`/api/accounts/${encodeURIComponent(id)}/${field}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Only the JSON path is bounded here; streaming requests (agent messages,
   // translation) manage their own lifetime via an explicit signal and must not
@@ -583,19 +603,9 @@ export const api = {
       body: JSON.stringify({ accountId, attachmentTokens }),
     }),
   testAccount: (email: string, password: string) =>
-    request<{ ok: boolean; provider: string; folders: number; warning?: string }>("/api/accounts/test", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
-    }),
-  discoverAccount: (email: string) => request<AccountDiscoveryResult>("/api/accounts/discover", {
-    method: "POST",
-    body: JSON.stringify({ email }),
-  }),
-  addAccount: (email: string, password: string) =>
-    request<AccountAddResult>("/api/accounts", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
-    }),
+    postJson<{ ok: boolean; provider: string; folders: number; warning?: string }>("/api/accounts/test", { email, password }),
+  discoverAccount: (email: string) => postJson<AccountDiscoveryResult>("/api/accounts/discover", { email }),
+  addAccount: (email: string, password: string) => postJson<AccountAddResult>("/api/accounts", { email, password }),
   addManualAccount: (payload: {
     email: string;
     password: string;
@@ -604,21 +614,12 @@ export const api = {
     imapUsername?: string;
     smtpUsername?: string;
     providerId?: string;
-  }) => request<AccountAddResult>("/api/accounts/manual", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  }),
-  startOAuth: (provider: OAuthProvider) => request<OAuthAttempt>(`/api/oauth/${provider}/start`, {
-    method: "POST",
-    body: "{}",
-  }),
+  }) => postJson<AccountAddResult>("/api/accounts/manual", payload),
+  startOAuth: (provider: OAuthProvider) => postJson<OAuthAttempt>(`/api/oauth/${provider}/start`),
   oauthAttempt: (attemptId: string) => request<OAuthAttemptStatus>(`/api/oauth/attempts/${encodeURIComponent(attemptId)}`),
   removeAccount: (id: string) => request<{ ok: boolean }>(`/api/accounts/${id}`, { method: "DELETE" }),
-  updateAccountSignature: (id: string, signature: string) =>
-    request<{ ok: boolean }>(`/api/accounts/${encodeURIComponent(id)}/signature`, {
-      method: "PATCH",
-      body: JSON.stringify({ signature }),
-    }),
+  updateAccountSignature: (id: string, signature: string) => patchAccountField(id, "signature", { signature }),
+  updateAccountDisplayName: (id: string, displayName: string | null) => patchAccountField(id, "display-name", { displayName }),
   sync: (id: string) =>
     request<{ ok: boolean; synced: number; folders: number; failedFolders: number; limitReached: boolean }>(`/api/accounts/${id}/sync`, {
       method: "POST",
@@ -827,10 +828,10 @@ export const api = {
     request<{ ok: boolean; imported: number; updated: number; replaced: boolean }>("/api/calendar/import", { method: "POST", body: JSON.stringify({ events, mode }) }),
   importCalendarIcs: (ics: string, mode: "append" | "replace" = "append") =>
     request<{ ok: boolean; imported: number; updated: number; replaced: boolean }>("/api/calendar/import-ics", { method: "POST", body: JSON.stringify({ ics, mode }) }),
-  exportCalendarIcsUrl: (range?: { after?: string; before?: string }) => {
-    const q = new URLSearchParams();
-    if (range?.after) q.set("after", range.after);
-    if (range?.before) q.set("before", range.before);
-    return `/api/calendar/export.ics${q.toString() ? `?${q.toString()}` : ""}`;
-  },
+  exportCalendarIcsUrl: (range?: { after?: string; before?: string }) => calendarIcsPath(range),
+  downloadCalendarIcs: (range?: { after?: string; before?: string }, options?: BinaryRequestOptions): Promise<Blob> =>
+    binaryTransfer(calendarIcsPath(range), undefined, async (response) => {
+      if (!response.ok) throw await apiError(response);
+      return response.blob();
+    }, options),
 };

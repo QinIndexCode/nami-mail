@@ -211,7 +211,7 @@ font-size:10px
 color:var(--text-faint);
 white-space:nowrap;
 padding-top:1px;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:8px
 }
 .agent-row-delete
@@ -1053,7 +1053,7 @@ justify-content:flex-end
 }
 .agent-message-meta time
 {
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:8px
 }
 .agent-message-actions
@@ -1155,7 +1155,7 @@ user-select:text!important
 {
 border:1px solid color-mix(in srgb, var(--focus-ring) 24%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 6%, var(--panel-muted));
-border-radius:var(--radius-md) var(--radius-md) 4px;
+border-radius:var(--radius-md) var(--radius-md) var(--radius-xs);
 max-width:min(100%,630px);
 margin-left:auto;
 padding:10px 14px
@@ -1424,7 +1424,7 @@ padding:2px 0 14px
 {
 border:1px solid color-mix(in srgb, var(--focus-ring) 18%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 5%, var(--panel-muted));
-border-radius:var(--radius-md) var(--radius-md) 4px;
+border-radius:var(--radius-md) var(--radius-md) var(--radius-xs);
 max-width:min(100%,630px);
 margin-left:auto;
 padding:10px 14px
@@ -1722,7 +1722,7 @@ color:var(--text)
 }
 .agent-citations-count
 {
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:10px;
 font-weight:700
 }
@@ -1759,7 +1759,7 @@ display:flex
 color:var(--text-faint);
 text-transform:uppercase;
 letter-spacing:.05em;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:9px
 }
 .agent-citations-panel-header button
@@ -2249,7 +2249,7 @@ color:color-mix(in srgb, var(--warning) 80%, var(--text));
 font-variant-numeric:tabular-nums;
 flex:none;
 margin-left:auto;
-font-family:DM Mono,monospace;
+font-family:var(--font-mono);
 font-size:10px;
 font-style:normal
 }
@@ -2391,13 +2391,17 @@ font-weight:700
 }
 .agent-attachment-chip-note.ready
 {
-color:var(--success,#2ea043);
-background:color-mix(in srgb, var(--success,#2ea043) 12%, transparent)
+color:var(--success);
+background:color-mix(in srgb, var(--success) 12%, transparent)
 }
 .agent-attachment-chip-note.failed
 {
 color:var(--text-faint);
-background:color-mix(in srgb, var(--text-faint) 14%, transparent)
+/* 10%, not 14%: --text-faint is the one tier that already sits at 4.56:1 on
+   --panel-muted with no tint at all, so a 14% tint of itself measured 4.38:1.
+   Dropping the tint is the only fix that keeps the text/soft/faint ordering
+   intact — darkening the token would collapse faint into soft. */
+background:color-mix(in srgb, var(--text-faint) 10%, transparent)
 }
 .agent-composer
 {
@@ -2641,7 +2645,7 @@ color:color-mix(in srgb, var(--danger) 82%, var(--text))
 .agent-memory-suggestion {
 border:1px solid var(--line);
 background:color-mix(in srgb, var(--panel-solid) 94%, var(--canvas));
-border-radius:var(--radius-md, 12px);
+border-radius:var(--radius-md);
 box-shadow:0 2px 8px color-mix(in srgb, var(--text) 4%, transparent);
 padding:8px 12px;
 font-size:11px;
@@ -2661,10 +2665,10 @@ overflow:hidden
 .agent-memory-suggestion-body { flex:1; min-width:0 }
 .agent-memory-suggestion-text { color:var(--text-soft); font-size:11px; line-height:1.4; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical }
 .agent-memory-suggestion-actions { display:flex; align-items:center; gap:6px; flex:none }
-.agent-memory-suggestion-save { background:var(--accent); color:var(--on-accent); cursor:pointer; border:none; border-radius:var(--radius-xs,6px); display:inline-flex; align-items:center; gap:4px; padding:4px 10px; font-size:11px; font-weight:500; transition:background .15s,opacity .15s }
+.agent-memory-suggestion-save { background:var(--accent); color:var(--button-text); cursor:pointer; border:none; border-radius:var(--radius-xs); display:inline-flex; align-items:center; gap:4px; padding:4px 10px; font-size:11px; font-weight:500; transition:background .15s,opacity .15s }
 .agent-memory-suggestion-save:hover { opacity:.92 }
 .agent-memory-suggestion-save:active { transform:scale(.98) }
-.agent-memory-suggestion-dismiss { background:transparent; color:var(--text-faint); cursor:pointer; border:1px solid transparent; border-radius:var(--radius-xs,6px); display:inline-flex; align-items:center; gap:4px; padding:4px 8px; font-size:11px; transition:color .15s,background .15s }
+.agent-memory-suggestion-dismiss { background:transparent; color:var(--text-faint); cursor:pointer; border:1px solid transparent; border-radius:var(--radius-xs); display:inline-flex; align-items:center; gap:4px; padding:4px 8px; font-size:11px; transition:color .15s,background .15s }
 .agent-memory-suggestion-dismiss:hover { color:var(--text); background:var(--hover) }
 .agent-composer-bar
 {

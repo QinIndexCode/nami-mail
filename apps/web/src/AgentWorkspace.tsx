@@ -53,6 +53,7 @@ import type {
 } from "./agentTypes";
 import { agentScopeFor, sameAgentScope, scopeTargetForConversation, type AgentScopeTarget } from "./agentContext";
 import { isSupportedFile, processFile, type ProcessedFile } from "./fileProcessor";
+import { triggerBlobDownload } from "./attachmentZip";
 import type { Account, AgentAccessLevel, Message } from "./types";
 import { useI18n } from "./i18n";
 import { useDialogFocus } from "./hooks/useDialogFocus";
@@ -944,15 +945,11 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     try {
       const conversation = await api.agentConversation(id);
       const content = serializeConversationForExport(conversation, format);
-      const url = URL.createObjectURL(new Blob([content], { type: format === "json" ? "application/json;charset=utf-8" : "text/markdown;charset=utf-8" }));
-      const link = document.createElement("a");
       const safeTitle = conversation.title.replace(/[^\p{L}\p{N} _\-()（）]/gu, "").trim().slice(0, 48) || "conversation";
-      link.href = url;
-      link.download = `${safeTitle}-${new Date().toISOString().slice(0, 10)}.${format === "json" ? "json" : "md"}`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      triggerBlobDownload(
+        new Blob([content], { type: format === "json" ? "application/json;charset=utf-8" : "text/markdown;charset=utf-8" }),
+        `${safeTitle}-${new Date().toISOString().slice(0, 10)}.${format === "json" ? "json" : "md"}`,
+      );
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : t("agent.error.exportConversation"));
     }

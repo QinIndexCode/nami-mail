@@ -41,6 +41,7 @@ export type AccountRecord = {
   smtp_transport: "tls" | "starttls";
   smtp_username: string | null;
   signature: string;
+  display_name?: string | null;
   username_mode: "email" | "local";
   status: string;
   last_error: string | null;
@@ -127,6 +128,7 @@ export function publicAccount(row: AccountRecord, syncing: boolean): AccountWire
     lastSyncWarningCode: row.last_sync_warning_code,
     lastSyncedAt: row.last_synced_at,
     signature: row.signature,
+    displayName: row.display_name ?? null,
     createdAt: row.created_at,
   };
 }

@@ -54,6 +54,7 @@ import { applyAgentStoreSchema } from "./agent/schema.js";
 import { AgentSourceEventOutbox } from "./agent/source-events.js";
 import { buildApp } from "./app.js";
 import { startCacheCleanupTimer } from "./image-proxy.js";
+import { flushMeta } from "./image-cache-index.js";
 import { config } from "./config.js";
 import { loadOrCreateMasterKey } from "./crypto.js";
 import { openDatabase, type DatabaseHandle } from "./db.js";
@@ -651,6 +652,17 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
           } finally {
             autoReplyEngine?.close();
             registerAutoReplyEngine(undefined);
+            // Persist the image-cache index before the process goes away. Its
+            // in-memory recency updates are written back lazily, so without
+            // this an orderly quit would drop them; a no-op when nothing is
+            // pending, and it cannot throw past here because the cache index
+            // is rebuildable — `listUnindexedFiles` reclaims whatever it does
+            // not describe on the next start.
+            try {
+              flushMeta();
+            } catch (error) {
+              serverLog.warn({ error }, "Image cache index could not be written back on shutdown");
+            }
             database.close();
             masterKey?.fill(0);
           }

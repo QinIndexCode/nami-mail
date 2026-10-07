@@ -3,17 +3,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { loadAggregatedCss } from "./testUtils/loadStyles";
-import MessageList, { clampContextMenuPosition, type MessageListEmptyState } from "./MessageList";
+import MessageList, { clampContextMenuPosition, messageListTargetIndexForKey, type MessageListEmptyState } from "./MessageList";
 import { I18nProvider, translate } from "./i18n";
 import type { Account, Message } from "./types";
 
 // The real virtualizer measures the scroll container with jsdom's all-zero
 // rects and renders no rows; a deterministic mock keeps the rows mountable.
+// scrollToIndex is the API the keyboard navigation scrolls with (never a
+// scrollTop estimate), so the mock records the call instead of moving a
+// viewport jsdom cannot measure.
+const virtualizerMock = vi.hoisted(() => ({ scrollToIndex: vi.fn() }));
+
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: (options: { count: number }) => ({
     getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, key: index, start: index * 100, size: 100 })),
     getTotalSize: () => options.count * 100,
     measureElement: () => {},
+    scrollToIndex: virtualizerMock.scrollToIndex,
   }),
 }));
 
@@ -122,9 +128,35 @@ function rightClickRow(html: HTMLElement, index: number, x: number, y: number): 
   });
 }
 
+function rows(html: HTMLElement): HTMLButtonElement[] {
+  return Array.from(html.querySelectorAll<HTMLButtonElement>(".message-item"));
+}
+
+/** Focuses a row the way a click or Tab would, so the roving tab stop and the
+ *  event target both point at it before the key is pressed. */
+function focusRow(html: HTMLElement, index: number): HTMLButtonElement {
+  const row = rows(html)[index]!;
+  act(() => { row.focus(); });
+  return row;
+}
+
+function pressKey(target: HTMLElement, key: string, init: KeyboardEventInit = {}): void {
+  act(() => {
+    target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }));
+  });
+}
+
+/** Index of the focused row, or -1 when focus left the list. */
+function focusedRowIndex(html: HTMLElement): number {
+  return rows(html).indexOf(document.activeElement as HTMLButtonElement);
+}
+
 beforeEach(() => {
   window.innerWidth = 1024;
   window.innerHeight = 768;
+  // The vi.mock factory is module-level, so its spy keeps its calls across
+  // tests; clearing here keeps the scrollToIndex assertions per-test.
+  virtualizerMock.scrollToIndex.mockClear();
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 });
 
@@ -487,5 +519,213 @@ describe("list switching", () => {
     const second = container.querySelector(".message-list-viewport");
     expect(second).not.toBe(first);
     expect(second?.getAttribute("data-switching")).toBeNull();
+  });
+});
+
+describe("messageListTargetIndexForKey", () => {
+  it("walks down and up without wrapping past either end", () => {
+    expect(messageListTargetIndexForKey("ArrowDown", 0, 3, 2)).toBe(1);
+    expect(messageListTargetIndexForKey("ArrowUp", 2, 3, 2)).toBe(1);
+    // Clamped at the ends: a list is not a carousel, so the last row's
+    // ArrowDown must not wrap back to the first.
+    expect(messageListTargetIndexForKey("ArrowDown", 2, 3, 2)).toBe(2);
+    expect(messageListTargetIndexForKey("ArrowUp", 0, 3, 2)).toBe(0);
+  });
+
+  it("jumps to either end with Home/End", () => {
+    expect(messageListTargetIndexForKey("Home", 2, 5, 3)).toBe(0);
+    expect(messageListTargetIndexForKey("End", 0, 5, 3)).toBe(4);
+  });
+
+  it("pages by the visible row count and clamps at both ends", () => {
+    expect(messageListTargetIndexForKey("PageDown", 0, 20, 5)).toBe(5);
+    expect(messageListTargetIndexForKey("PageUp", 12, 20, 5)).toBe(7);
+    expect(messageListTargetIndexForKey("PageDown", 18, 20, 5)).toBe(19);
+    expect(messageListTargetIndexForKey("PageUp", 3, 20, 5)).toBe(0);
+  });
+
+  it("enters at the matching end when focus is not on a row yet", () => {
+    expect(messageListTargetIndexForKey("ArrowDown", -1, 4, 2)).toBe(0);
+    expect(messageListTargetIndexForKey("ArrowUp", -1, 4, 2)).toBe(3);
+    expect(messageListTargetIndexForKey("Home", -1, 4, 2)).toBe(0);
+    expect(messageListTargetIndexForKey("End", -1, 4, 2)).toBe(3);
+  });
+
+  it("ignores keys that are not list navigation, and an empty list", () => {
+    expect(messageListTargetIndexForKey("Enter", 0, 3, 2)).toBeNull();
+    expect(messageListTargetIndexForKey("a", 0, 3, 2)).toBeNull();
+    expect(messageListTargetIndexForKey("ArrowDown", 0, 0, 0)).toBeNull();
+  });
+});
+
+describe("message list keyboard navigation", () => {
+  const five = () => Array.from({ length: 5 }, (_, index) => message({ id: `m-${index + 1}` }));
+
+  it("keeps exactly one row in the tab order (roving tabindex)", () => {
+    const html = renderList({ messages: five() });
+    const list = rows(html);
+    expect(list.map((row) => row.tabIndex)).toEqual([0, -1, -1, -1, -1]);
+
+    // The list is a list to assistive tech, and each row a list item.
+    expect(html.querySelector(".message-list-viewport")?.getAttribute("role")).toBe("list");
+    expect(html.querySelectorAll(".message-list-row[role='listitem']")).toHaveLength(5);
+  });
+
+  it("moves focus from the first row to the second on ArrowDown", () => {
+    const html = renderList({ messages: five() });
+    focusRow(html, 0);
+
+    pressKey(rows(html)[0]!, "ArrowDown");
+
+    expect(focusedRowIndex(html)).toBe(1);
+    // The tab stop follows the focus, so Tab re-enters the list where the
+    // arrow keys left it.
+    expect(rows(html).map((row) => row.tabIndex)).toEqual([-1, 0, -1, -1, -1]);
+  });
+
+  it("walks back up with ArrowUp", () => {
+    const html = renderList({ messages: five() });
+    focusRow(html, 2);
+
+    pressKey(rows(html)[2]!, "ArrowUp");
+
+    expect(focusedRowIndex(html)).toBe(1);
+  });
+
+  it("does not run past the last row on ArrowDown", () => {
+    const html = renderList({ messages: five() });
+    focusRow(html, 4);
+
+    pressKey(rows(html)[4]!, "ArrowDown");
+
+    expect(focusedRowIndex(html)).toBe(4);
+    // Clamped, so there is nothing to scroll to either.
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("does not run past the first row on ArrowUp", () => {
+    const html = renderList({ messages: five() });
+    focusRow(html, 0);
+
+    pressKey(rows(html)[0]!, "ArrowUp");
+
+    expect(focusedRowIndex(html)).toBe(0);
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("jumps to the last row with End and back to the first with Home", () => {
+    const html = renderList({ messages: five() });
+    focusRow(html, 0);
+
+    pressKey(rows(html)[0]!, "End");
+    expect(focusedRowIndex(html)).toBe(4);
+
+    pressKey(rows(html)[4]!, "Home");
+    expect(focusedRowIndex(html)).toBe(0);
+  });
+
+  it("scrolls through the virtualizer rather than estimating a scrollTop", () => {
+    // Rows have measured, variable heights, so the navigation must go through
+    // the virtualizer's index API instead of computing a pixel offset.
+    const html = renderList({ messages: five() });
+    focusRow(html, 0);
+
+    pressKey(rows(html)[0]!, "End");
+
+    expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(4, { align: "auto" });
+  });
+
+  it("pages a screen at a time", () => {
+    const html = renderList({ messages: Array.from({ length: 20 }, (_, index) => message({ id: `m-${index + 1}` })) });
+    focusRow(html, 0);
+
+    // The mocked virtualizer mounts every row, so a page is the whole window.
+    pressKey(rows(html)[0]!, "PageDown");
+    expect(focusedRowIndex(html)).toBe(19);
+
+    pressKey(rows(html)[19]!, "PageUp");
+    expect(focusedRowIndex(html)).toBe(0);
+  });
+
+  it("leaves Space to the row's native button activation instead of opening the menu", () => {
+    const html = renderList({ messages: five() });
+    const row = focusRow(html, 0);
+
+    // Dispatched by hand so the event object survives: Space must reach the
+    // browser default (a native button turns it into a click) rather than be
+    // intercepted here.
+    let space: KeyboardEvent | undefined;
+    act(() => {
+      space = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+      row.dispatchEvent(space);
+    });
+
+    // Binding Space to the menu would cost a keystroke and override the native
+    // "activate this row" meaning.
+    expect(html.querySelector<HTMLElement>(".context-menu")).toBeNull();
+    expect(space!.defaultPrevented).toBe(false);
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("still opens the row menu on Shift+F10, and keeps the menu's own arrow keys", () => {
+    const html = renderList({ messages: five() });
+    focusRow(html, 1);
+
+    pressKey(rows(html)[1]!, "F10", { shiftKey: true });
+    const menu = html.querySelector<HTMLElement>(".context-menu")!;
+    expect(menu).not.toBeNull();
+    expect(menu.contains(document.activeElement)).toBe(true);
+
+    // Inside the menu the arrows move between menu items, never between rows.
+    pressKey(document.activeElement as HTMLElement, "ArrowDown");
+    const items = menu.querySelectorAll<HTMLElement>(".context-menu-item");
+    expect(items[1]).toBe(document.activeElement);
+    expect(focusedRowIndex(html)).toBe(-1);
+  });
+
+  it("leaves Enter to the row button, which opens the message through the click path", () => {
+    const onOpenMessage = vi.fn();
+    const html = renderList({ messages: five(), onOpenMessage });
+    const row = focusRow(html, 1);
+
+    pressKey(row, "Enter");
+
+    // jsdom does not synthesize the platform's click-on-Enter for a button, so
+    // the assertion is that navigation did NOT hijack the key: no move, no
+    // scroll, and the row keeps focus for the platform's activation.
+    expect(focusedRowIndex(html)).toBe(1);
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
+    expect(onOpenMessage).not.toHaveBeenCalled();
+
+    // The path Enter actually takes is the click the platform raises.
+    act(() => { (document.activeElement as HTMLButtonElement).click(); });
+    expect(onOpenMessage).toHaveBeenCalledWith(expect.objectContaining({ id: "m-2" }));
+  });
+
+  it("moves between rows from a row's quick action too", () => {
+    // The quick actions are siblings of the row button, not descendants, so
+    // the navigation has to resolve the row through its wrapper.
+    const html = renderList({ messages: five() });
+    const quickAction = html.querySelectorAll<HTMLButtonElement>(".message-list-row")[2]!
+      .querySelector<HTMLButtonElement>(".row-quick-action")!;
+    act(() => { quickAction.focus(); });
+
+    pressKey(quickAction, "ArrowDown");
+
+    expect(focusedRowIndex(html)).toBe(3);
+  });
+
+  it("drops the tab stop onto a mounted row when the active one leaves the window", () => {
+    // The list is virtualized: if the roving tab stop pointed at an unmounted
+    // row, Tab would skip the list entirely.
+    const html = renderList({ messages: five() });
+    focusRow(html, 4);
+    expect(rows(html)[4]!.tabIndex).toBe(0);
+
+    // A different list arrives; the remembered row is gone with the old window.
+    renderIntoRoot({ messages: [message({ id: "other-1" }), message({ id: "other-2" })] });
+
+    const after = rows(container);
+    expect(after.map((row) => row.tabIndex)).toEqual([0, -1]);
   });
 });
