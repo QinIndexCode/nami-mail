@@ -575,6 +575,67 @@ describe("DatePicker (cross-month keyboard navigation)", () => {
     expect(focusedLabel()).toBe("2026年9月14日");
   });
 
+  // Picking a month changes the view *and* carries the focused day, which used to
+  // re-trigger the seeding effect and land the focus on today instead — so Enter
+  // committed a date in the wrong month entirely.
+  it("lands the carried day, not today, after picking a month from the month view", () => {
+    mount("2026-08-14");
+    openPanel();
+    act(() => {
+      document.querySelector<HTMLButtonElement>(".date-picker-nav-title")?.click();
+    });
+    const september = Array.from(document.querySelectorAll<HTMLButtonElement>(".date-picker-month"))
+      .find((button) => button.getAttribute("aria-label") === "2026年9月");
+    act(() => september?.click());
+
+    expect(monthLabel()).toContain("9");
+    expect(tabbable()).toHaveLength(1);
+    // The same day-of-month, in the month the user just picked.
+    expect(tabbable()[0]?.getAttribute("aria-label")).toBe("2026年9月14日");
+  });
+
+  // A month that contains selectable days but no carried day must still be
+  // enterable. Returning a partial key like `2027-02` matched no grid cell, so
+  // the whole month sat at tabIndex -1 and arrows and Enter did nothing at all.
+  it("keeps a month enterable when the carried day is out of range but the month is not", () => {
+    mount("", { minDate: "2027-03-01" });
+    openPanel();
+    // Step forward to February 2027, which is entirely before the bound yet still
+    // shows the first ten days of March as enabled spill-in cells.
+    for (let step = 0; step < 4; step += 1) {
+      act(() => {
+        const navs = Array.from(document.querySelectorAll<HTMLButtonElement>(".date-picker-nav-button"));
+        navs[1]?.click();
+      });
+    }
+    expect(monthLabel()).toContain("2027年2月");
+
+    // Every enabled day must be reachable: the grid needs an entry point.
+    const enabled = Array.from(document.querySelectorAll<HTMLButtonElement>(".date-picker-day"))
+      .filter((button) => !button.disabled);
+    expect(enabled.length).toBeGreaterThan(0);
+    expect(tabbable()).toHaveLength(1);
+    expect(tabbable()[0]?.disabled).toBe(false);
+
+    // And that entry point is where the arrows continue from.
+    press("ArrowRight");
+    expect(tabbable()).toHaveLength(1);
+  });
+
+  it("lands on the last selectable day when paging past maxDate", () => {
+    mount("2026-01-31", { maxDate: "2026-02-15" });
+    openPanel();
+    expect(focusedLabel()).toBe("2026年1月31日");
+    act(() => {
+      const navs = Array.from(document.querySelectorAll<HTMLButtonElement>(".date-picker-nav-button"));
+      navs[1]?.click();
+    });
+    // February has no 31st, and the 28th is past the 15th: the nearest legal
+    // landing is the last day the picker will accept, not the first of the month.
+    expect(focusedLabel()).toBe("2026年2月15日");
+    expect(tabbable()).toHaveLength(1);
+  });
+
   it("carries the day across a nav step without wrapping past a short month", () => {
     // 31 January + 1 month has no 31st; the focus must land on the 28th rather
     // than on nothing at all.

@@ -227,23 +227,30 @@ export default function DatePicker({
   );
   const monthCells = useMemo(() => Array.from({ length: MONTHS_PER_YEAR }, (_, index) => index), []);
 
-  const inRange = (day: Date): boolean => {
-    const key = dateKey(day);
-    if (minDate && key < minDate) return false;
-    if (maxDate && key > maxDate) return false;
-    return true;
-  };
+  /** `dayInRange` over a Date. A thin adapter, not a second bounds rule. */
+  const inRange = (day: Date): boolean => dayInRange(dateKey(day), minDate, maxDate);
 
-  // Day view entry point. Deliberately NOT keyed on the viewed month: arrowing
-  // across a month boundary changes the viewed month *because* the focus moved,
-  // so re-seeding here would snap focus back to the selected day — which is not
-  // even rendered in the new grid, leaving every cell at tabIndex -1 and the
-  // grid with no roving-tabindex entry point at all. The paths that change the
-  // month without moving the focus (the nav arrows, picking a month) carry the
-  // focused day across themselves — see carryDayIntoMonth.
+  // Day view entry point — a *fallback*, not an authority. Deliberately NOT
+  // keyed on the viewed month: arrowing across a month boundary changes the
+  // viewed month *because* the focus moved, so re-seeding here would snap focus
+  // back to the selected day — which is not even rendered in the new grid,
+  // leaving every cell at tabIndex -1 and the grid with no roving-tabindex
+  // entry point at all. The paths that change the month without moving the
+  // focus (the nav arrows, picking a month) carry the focused day across
+  // themselves — see carryDayIntoMonth.
+  //
+  // It therefore yields to a carry that already named a day of the grid on
+  // screen: re-seeding unconditionally replaced it with the selected day, or
+  // today when the selected day was not in the new grid. Picking September from
+  // a picker holding 14 August then left September showing but focus — and the
+  // cell Enter would commit — on today's cell.
   useEffect(() => {
     if (!open || view !== "day") return;
-    setFocusedKey(dayEntryKey(gridDays, selectedKey, todayKey, minDate, maxDate));
+    setFocusedKey((current) => (
+      current && gridDays.some((day) => dateKey(day) === current)
+        ? current
+        : dayEntryKey(gridDays, selectedKey, todayKey, minDate, maxDate)
+    ));
     // gridDays is read through the helper's argument, not closed over, so the
     // month it is derived from cannot become a re-trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -264,20 +271,39 @@ export default function DatePicker({
    * configured bounds, so paging into a month that starts entirely after `minDate`
    * lands on its first selectable day rather than a disabled one the arrows would
    * then have to walk out of.
+   *
+   * The bounds clamp is direction-aware. Paging past `maxDate` means the carried
+   * day is too late, so the last selectable day is the nearest legal landing;
+   * paging before `minDate` means it is too early, so the first one is. Taking
+   * the first unconditionally put a 31 January → February pager (bounded at
+   * 15 February) on 1 February, twenty days of arrow-pressing away from the
+   * 15th the user could actually have picked.
+   *
+   * When the month holds no selectable day at all, this returns "": there is no
+   * legal day to focus, and the grid is deliberately left unenterable. It must
+   * not return a partial key such as `2027-02` — that matches no grid cell, so
+   * every cell kept tabIndex -1 and the arrows and Enter stopped responding even
+   * though the grid showed fourteen enabled days.
    */
   const carryDayIntoMonth = (month: Date): string => {
     const current = gridDays.find((day) => dateKey(day) === focusedKey)?.getDate() ?? 1;
     const lastDay = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
     const carried = dateKey(new Date(month.getFullYear(), month.getMonth(), Math.min(current, lastDay)));
     if (dayInRange(carried, minDate, maxDate)) return carried;
-    const monthPrefix = dateKey(new Date(month.getFullYear(), month.getMonth(), 1)).slice(0, 7);
-    const monthDays = Array.from({ length: lastDay }, (_, index) =>
-      dateKey(new Date(month.getFullYear(), month.getMonth(), index + 1)));
-    const selectable = monthDays.filter((key) => dayInRange(key, minDate, maxDate));
-    if (selectable.length) return selectable[0];
-    // Every day in this month is out of range; keep the key consistent with the
-    // month the grid is rendering rather than stranding it on the old one.
-    return monthPrefix;
+    // The candidates must come from the grid the new month will actually render,
+    // not from the month itself: a 42-cell grid reaches into both neighbours, so
+    // February 2027 under `minDate: 2027-03-01` holds no in-range day of its own
+    // yet still shows ten enabled March days. Judging the month alone left that
+    // grid with nothing focusable and the arrows and Enter dead on it.
+    const selectable = buildGrid(month)
+      .map((day) => dateKey(day))
+      .filter((key) => dayInRange(key, minDate, maxDate));
+    if (!selectable.length) return "";
+    // Past the upper bound the carried day is too late; before the lower bound it
+    // is too early. Only a day that is in range but not the carried day lands here
+    // in neither direction, and the first is as good as any there.
+    if (carried > (maxDate ?? carried)) return selectable[selectable.length - 1]!;
+    return selectable[0]!;
   };
 
   const displayValue = useMemo(() => {
@@ -533,8 +559,12 @@ export default function DatePicker({
       {chunkRows(monthCells, MONTH_COLUMNS).map((row) => (
         <div className="date-picker-grid-row" role="row" key={row[0]}>
           {row.map((index) => {
-            const isCurrent = new Date().getMonth() === index && year === new Date().getFullYear();
+            const isCurrent = todayKey.startsWith(`${year}-`) && new Date(todayKey).getMonth() === index;
             const isFocused = focusedMonth === index;
+            // Selection, not focus: announcing focus as "selected" made every
+            // arrow step read as a selection change while the month actually
+            // being viewed — the one the user is choosing between — never did.
+            const isSelected = viewMonth.getFullYear() === year && viewMonth.getMonth() === index;
             return (
               <button
                 key={index}
@@ -542,7 +572,7 @@ export default function DatePicker({
                 role="gridcell"
                 className={`date-picker-month${isCurrent ? " today" : ""}${isFocused ? " focused" : ""}`}
                 tabIndex={isFocused ? 0 : -1}
-                aria-selected={isFocused}
+                aria-selected={isSelected}
                 aria-label={monthLongFormatter.format(new Date(year, index, 1))}
                 onFocus={() => setFocusedMonth(index)}
                 onClick={() => selectMonth(index)}
@@ -561,8 +591,10 @@ export default function DatePicker({
       {chunkRows(yearCells, YEAR_COLUMNS).map((row) => (
         <div className="date-picker-grid-row" role="row" key={row[0].year}>
           {row.map(({ year: yearValue }) => {
-            const isCurrent = yearValue === new Date().getFullYear();
+            const isCurrent = yearValue === Number(todayKey.slice(0, 4));
             const isFocused = focusedYear === yearValue;
+            // Selection, not focus — see the month view above.
+            const isSelected = yearValue === viewMonth.getFullYear();
             return (
               <button
                 key={yearValue}
@@ -570,7 +602,7 @@ export default function DatePicker({
                 role="gridcell"
                 className={`date-picker-year${isCurrent ? " today" : ""}${isFocused ? " focused" : ""}`}
                 tabIndex={isFocused ? 0 : -1}
-                aria-selected={isFocused}
+                aria-selected={isSelected}
                 onFocus={() => setFocusedYear(yearValue)}
                 onClick={() => selectYear(yearValue)}
               >

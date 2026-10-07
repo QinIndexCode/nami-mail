@@ -511,6 +511,8 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
       .type(result.contentType)
       .header("Content-Disposition", "inline")
       .header("X-Content-Type-Options", "nosniff")
+      // Overridden by the `onSend` hook, which stamps no-store on every /api/
+      // response; kept because it documents the intent if that ever changes.
       .header("Cache-Control", "public, max-age=604800");
     return reply.send(fs.createReadStream(result.filePath));
   });

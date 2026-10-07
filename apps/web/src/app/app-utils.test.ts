@@ -660,6 +660,31 @@ describe("rewriteRemoteImagesToProxy", () => {
     expect(rewriteRemoteImagesToProxy(once)).toBe(once);
   });
 
+  // Every channel, not just img[src]. Each one reaches the rewrite differently —
+  // an attribute, a candidate list, a CSS token, a CSS function argument — so a
+  // fix for one says nothing about the others, and nesting any of them yields a
+  // URL the proxy cannot resolve.
+  it.each([
+    ["img[src]", '<img src="https://evil.tld/p.png">'],
+    ["img[srcset]", '<img srcset="https://evil.tld/p.png 2x" src="https://evil.tld/p.png">'],
+    ["source[srcset]", '<picture><source srcset="https://evil.tld/p.png"><img src="cid:x"></picture>'],
+    ["input[type=image]", '<input type="image" src="https://evil.tld/p.png">'],
+    ["video[poster]", '<video poster="https://evil.tld/p.png"></video>'],
+    ["svg image[href]", '<svg><image href="https://evil.tld/p.png"></image></svg>'],
+    ["[background]", '<table background="https://evil.tld/p.png"><tr><td>x</td></tr></table>'],
+    ["style url()", '<div style="background-image:url(https://evil.tld/p.png)"></div>'],
+    ["style url() with a CSS escape", '<div style="background-image:url(\\68 ttps://evil.tld/p.png)"></div>'],
+    ["style image-set()", '<div style="background-image:image-set(\'https://evil.tld/p.png\' 1x)"></div>'],
+  ])("is idempotent through %s", (_channel, html) => {
+    const once = rewriteRemoteImagesToProxy(html);
+    // Sanity: the first pass really did rewrite something, so a no-op first pass
+    // cannot make this assertion vacuously true.
+    expect(once).toContain(IMAGE_PROXY_PATH);
+    const twice = rewriteRemoteImagesToProxy(once);
+    expect(twice).toBe(once);
+    expect(twice).not.toContain(`${IMAGE_PROXY_PATH}?url=${encodeURIComponent(IMAGE_PROXY_PATH)}`);
+  });
+
   it("never touches an <a href>: a link is the reader's own click to make", () => {
     const clean = rewriteRemoteImagesToProxy(
       '<a href="https://example.com/x">Open</a><img src="https://evil.tld/p.png">',

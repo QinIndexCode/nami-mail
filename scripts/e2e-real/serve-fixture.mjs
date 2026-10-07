@@ -73,6 +73,13 @@ async function addTrackingPixelMessage(dir) {
       attachments: null,
     };
     const nowIso = new Date().toISOString();
+    // The body columns are deliberately EMPTY while the encrypted payload
+    // carries the full text. `messagePayloadForRow` falls back to the plaintext
+    // columns only when `encrypted_payload` is absent, so writing the same HTML
+    // to both made this fixture unable to tell decryption apart from a plain
+    // column read — the spec claimed to cover the crypto path while actually
+    // only proving that some column held the text. Subject and snippet stay
+    // populated because the list DTO reads those directly.
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, remote_id_lookup, subject,
@@ -81,7 +88,7 @@ async function addTrackingPixelMessage(dir) {
         has_attachments, attachments_json, encrypted_payload, payload_version,
         size, snoozed_until, created_at
       ) VALUES (?, ?, 'INBOX', 9001, ?, ?, ?, ?, '[]', NULL, NULL, NULL,
-        ?, ?, ?, ?, ?, 0, NULL, ?, 1, ?, NULL, ?)
+        ?, ?, '', '', ?, 0, NULL, ?, 1, ?, NULL, ?)
     `).run(
       id,
       accountId,
@@ -91,8 +98,6 @@ async function addTrackingPixelMessage(dir) {
       payload.fromAddress,
       nowIso,
       payload.snippet,
-      payload.textBody,
-      payload.htmlBody,
       JSON.stringify(["\\Seen"]),
       encryptMessagePayload(masterKey, id, accountId, payload),
       1024,

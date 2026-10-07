@@ -334,6 +334,12 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   app.addHook("onSend", async (request, reply, payload) => {
     reply.header("Content-Security-Policy", contentSecurityPolicy);
     if (request.url.startsWith("/api/")) {
+      // Note that this runs after every route handler, so it also overrides the
+      // `Cache-Control` that GET /api/images/proxy sets for its cached images —
+      // that header is currently unreachable, and re-reading a message re-fetches
+      // through the proxy even though the bytes are already on disk. `no-store`
+      // is the safer default to win: it keeps decrypted mail bodies out of the
+      // HTTP cache. Revisit only alongside a decision to exempt that one route.
       reply.header("Cache-Control", "no-store");
       reply.header("Pragma", "no-cache");
     }
