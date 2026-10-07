@@ -373,7 +373,10 @@ opacity:.6
 	border-radius:var(--radius-md);
 	padding:11px;
 	animation:.16s cubic-bezier(.2,.8,.2,1) both popup-in;
-	position:fixed
+	position:fixed;
+	/* The floating-ui size() middleware caps maxHeight to the viewport space;
+	   scrolling keeps the nav row reachable when neither flip side fits. */
+	overflow-y:auto
 }
 .date-picker-nav
 {

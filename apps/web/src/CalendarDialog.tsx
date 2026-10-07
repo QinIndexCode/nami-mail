@@ -26,7 +26,7 @@ import { calendarEventColors } from "./types";
 import DatePicker from "./DatePicker";
 import { demoTranslate } from "./demo";
 import { ManagementDialogShell } from "./ManagementDialogs";
-import { useDialogFocus } from "./hooks/useDialogFocus";
+import { hasOpenDialogPortals, useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { calendarCache } from "./dialogPrefetch";
 import { FormNotice, type Notice } from "./FormNotice";
@@ -231,6 +231,12 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // A date-picker panel portaled from the event editor is the top layer:
+      // it claims Escape with its own window-capture listener, which fires
+      // after this one (this handler registered first). Standing down here —
+      // only while such a panel is actually registered — lets the panel close
+      // alone instead of taking the editor, or the whole dialog, with it.
+      if (editorDialog.current && hasOpenDialogPortals(editorDialog.current)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (pendingDelete || pendingBulkDelete) {

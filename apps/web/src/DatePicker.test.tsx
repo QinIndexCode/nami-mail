@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { act, useRef } from "react";
+import { act, useEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import DatePicker from "./DatePicker";
-import { useDialogFocus } from "./hooks/useDialogFocus";
+import { hasOpenDialogPortals, useDialogFocus } from "./hooks/useDialogFocus";
 import { I18nProvider } from "./i18n";
 
 beforeAll(() => {
@@ -278,8 +278,10 @@ describe("DatePicker (panel host)", () => {
     // panel stays fixed against the viewport instead.
     expect(panel?.parentElement).toBe(document.body);
     // Nothing may re-scope it to the dialog box (the dialogs' entry animation
-    // leaves a transform, which would become the containing block).
-    expect(panel?.classList.contains("hosted")).toBe(false);
+    // leaves a transform, which would become the containing block). The
+    // removed .date-picker-panel.hosted rule once did exactly that, so pin
+    // the whole class contract rather than spot-check one removed class.
+    expect(panel?.className).toBe("date-picker-panel");
   });
 
   it("keeps day buttons focusable under the real focus trap", () => {
@@ -676,5 +678,129 @@ describe("DatePicker (cross-month keyboard navigation)", () => {
     expect(focusedLabel()).toBe("2026年8月13日");
     expect(tabbable()).toHaveLength(1);
     expect(tabbable()[0]?.disabled).toBe(false);
+  });
+});
+
+describe("DatePicker (Escape layering)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host?.remove();
+  });
+
+  function mountWith(children: React.ReactElement): void {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => {
+      root.render(children);
+    });
+  }
+
+  function openPanel(): void {
+    act(() => {
+      document.querySelector<HTMLButtonElement>(".date-picker-trigger")?.click();
+    });
+  }
+
+  function pressEscapeOn(selector: string): void {
+    act(() => {
+      document.querySelector<HTMLElement>(selector)
+        ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+  }
+
+  const waitOutTransition = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+
+  it("closes the panel alone while a window-bubble host listens for Escape", async () => {
+    // Mirrors the compose dialog: its Escape handler sits on the window bubble
+    // phase, so the panel must claim the key at window capture — one press
+    // peels exactly one layer, and the host only sees the next press.
+    const hostClosed = vi.fn();
+    function BubbleHost(): React.ReactElement {
+      useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+          if (event.key !== "Escape") return;
+          event.preventDefault();
+          hostClosed();
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+      }, []);
+      return <I18nProvider><DatePicker mode="date" value="2026-08-14" onChange={() => undefined} aria-label="选择日期" /></I18nProvider>;
+    }
+    mountWith(<BubbleHost />);
+    openPanel();
+    // The nav row sits outside the day grid; the claim must cover it too.
+    pressEscapeOn(".date-picker-nav-button");
+    expect(document.querySelector(".date-picker-panel.closing")).not.toBeNull();
+    expect(hostClosed).not.toHaveBeenCalled();
+    await waitOutTransition();
+    expect(document.querySelector(".date-picker-panel")).toBeNull();
+    // With the panel gone the host regains Escape.
+    pressEscapeOn(".date-picker-trigger");
+    expect(hostClosed).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the panel alone under a capture-phase host that consults the portal registry", async () => {
+    // Mirrors CalendarDialog: the host intercepts Escape at window capture and
+    // stops immediate propagation, so it must stand down while one of its
+    // date-picker panels is registered — otherwise the panel never sees the
+    // key and a single press takes the whole editor with it.
+    const hostClosed = vi.fn();
+    function CaptureHost(): React.ReactElement {
+      const dialogRef = useRef<HTMLElement>(null);
+      useEffect(() => {
+        const closeOnEscape = (event: KeyboardEvent) => {
+          if (event.key !== "Escape") return;
+          if (dialogRef.current && hasOpenDialogPortals(dialogRef.current)) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          hostClosed();
+        };
+        window.addEventListener("keydown", closeOnEscape, true);
+        return () => window.removeEventListener("keydown", closeOnEscape, true);
+      }, []);
+      return (
+        <section ref={dialogRef} role="dialog" aria-modal="true" tabIndex={-1}>
+          <I18nProvider>
+            <DatePicker mode="date" value="2026-08-14" onChange={() => undefined} aria-label="选择日期" panelHost={dialogRef} />
+          </I18nProvider>
+        </section>
+      );
+    }
+    mountWith(<CaptureHost />);
+    openPanel();
+    pressEscapeOn(".date-picker-nav-button");
+    expect(document.querySelector(".date-picker-panel.closing")).not.toBeNull();
+    expect(hostClosed).not.toHaveBeenCalled();
+    await waitOutTransition();
+    // The portal is unregistered once the panel is gone: the host owns Escape again.
+    pressEscapeOn(".date-picker-trigger");
+    expect(hostClosed).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a live time dropdown take Escape before the panel does", async () => {
+    // The time selects render their menus inline inside the panel; the claim
+    // stands down while one is open so the menu peels first, then the panel
+    // on the next press.
+    mountWith(
+      <I18nProvider>
+        <DatePicker mode="datetime" value="2026-08-14T14:30" onChange={() => undefined} aria-label="选择日期" />
+      </I18nProvider>,
+    );
+    openPanel();
+    act(() => {
+      document.querySelector<HTMLButtonElement>(".date-picker-select")?.click();
+    });
+    expect(document.querySelector(".themed-select-menu:not(.closing)")).not.toBeNull();
+    pressEscapeOn(".date-picker-select");
+    expect(document.querySelector(".themed-select-menu.closing")).not.toBeNull();
+    expect(document.querySelector(".date-picker-panel.closing")).toBeNull();
+    // The menu is already closing: the next press claims the panel.
+    pressEscapeOn(".date-picker-select");
+    expect(document.querySelector(".date-picker-panel.closing")).not.toBeNull();
   });
 });

@@ -52,6 +52,11 @@ function portalsOf(dialog: HTMLElement): HTMLElement[] {
   return Array.from(dialogPortals.get(dialog) ?? []);
 }
 
+/** Whether any popup is currently registered against `dialog` (e.g. an open date-picker panel). */
+export function hasOpenDialogPortals(dialog: HTMLElement): boolean {
+  return (dialogPortals.get(dialog)?.size ?? 0) > 0;
+}
+
 /** Dialog controls first, then each registered popup's — the composite Tab order. */
 function focusableElements(dialog: HTMLElement): HTMLElement[] {
   return [...focusableWithin(dialog), ...portalsOf(dialog).flatMap(focusableWithin)];

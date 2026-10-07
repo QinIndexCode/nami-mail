@@ -1,7 +1,7 @@
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { autoUpdate, computePosition, flip, offset, shift } from "@floating-ui/dom";
+import { autoUpdate, computePosition, flip, offset, shift, size } from "@floating-ui/dom";
 import { buildGrid, chunkRows, dateKey, pad, parseTime, parseValue, timeValue } from "./datePickerUtils";
 import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import { registerDialogPortal } from "./hooks/useDialogFocus";
@@ -183,7 +183,22 @@ export default function DatePicker({
       void computePosition(trigger, panel, {
         strategy: "fixed",
         placement: "bottom-start",
-        middleware: [offset(6), flip(), shift({ padding: 8 })],
+        middleware: [
+          offset(6),
+          flip(),
+          // Cap the panel at the space the viewport actually offers: shift only
+          // moves the cross axis, so on a short window (the desktop minimum is
+          // 520px and the datetime panel is ~360px tall) neither flip side fits
+          // and the nav row ended up off-viewport, unreachable. size() clamps
+          // the height; the CSS-side overflow-y makes the rest scrollable.
+          size({
+            padding: 8,
+            apply({ availableHeight, elements }) {
+              elements.floating.style.maxHeight = `${Math.max(0, availableHeight)}px`;
+            },
+          }),
+          shift({ padding: 8 }),
+        ],
       }).then(({ x, y }) => {
         panel.style.left = `${x}px`;
         panel.style.top = `${y}px`;
@@ -206,6 +221,29 @@ export default function DatePicker({
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
   }, [open, beginPanelClose]);
+
+  // While open, the panel is the top layer and owns Escape wherever focus
+  // sits — on a nav button, on the trigger, or anywhere in the host dialog.
+  // It must claim the key on window capture: host dialogs intercept Escape
+  // there (CalendarDialog stops immediate propagation), and compose-level
+  // hosts close on the window bubble, so reacting later would close two
+  // layers with one press — the WEB-1 class. Two voluntary stand-downs keep
+  // the layering: a panel already playing its exit transition yields, so the
+  // next Escape may close the host (two presses, two layers), and a live
+  // time dropdown inside the panel yields to its own Escape handler so the
+  // menu peels before the panel does.
+  useEffect(() => {
+    if (!open) return undefined;
+    const claimEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || panelClosing) return;
+      if (panelRef.current?.querySelector(".themed-select-menu:not(.closing)")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      beginPanelClose();
+    };
+    window.addEventListener("keydown", claimEscape, true);
+    return () => window.removeEventListener("keydown", claimEscape, true);
+  }, [open, panelClosing, beginPanelClose]);
 
   const monthFormatter = useMemo(() => new Intl.DateTimeFormat(locale, { month: "short" }), [locale]);
   const monthLongFormatter = useMemo(() => new Intl.DateTimeFormat(locale, { year: "numeric", month: "long" }), [locale]);
@@ -328,8 +366,11 @@ export default function DatePicker({
   };
 
   const pickTime = (nextTime: string) => {
-    const nextDate = dateKey(parsed.date ?? new Date());
-    onChange(`${nextDate}T${nextTime}`);
+    const day = parsed.date ?? new Date();
+    // Same bounds rule as picking a day: the time dropdowns must not mint an
+    // out-of-range datetime behind the picker's back.
+    if (!inRange(day)) return;
+    onChange(`${dateKey(day)}T${nextTime}`);
   };
 
   // The nav arrows move the month without moving the focus, so the day grid
@@ -361,6 +402,9 @@ export default function DatePicker({
 
   const jumpToToday = () => {
     const today = new Date();
+    // emitValue already refuses an out-of-bounds today; navigating the view
+    // there anyway would land on an all-disabled grid with nothing tabbable.
+    if (!inRange(today)) return;
     emitValue(today);
     setViewMonth(new Date(today.getFullYear(), today.getMonth(), 1));
     setView("day");
@@ -377,7 +421,8 @@ export default function DatePicker({
   };
 
   const handleTriggerKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === "Escape") beginPanelClose();
+    // Escape is claimed at window capture while the panel is open (see the
+    // claim listener); when it is closed, beginPanelClose would no-op anyway.
     if (event.key === "ArrowDown" && !open) {
       event.preventDefault();
       setOpen(true);
@@ -400,11 +445,9 @@ export default function DatePicker({
     moveTo: (index: number) => void,
     activate: (index: number) => void,
   ) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      beginPanelClose();
-      return;
-    }
+    // Escape is claimed at window capture while the panel is open (see the
+    // claim listener above), covering this grid, the nav row and the time
+    // selects with one rule.
     if (!(NAVIGATION_KEYS as readonly string[]).includes(event.key)) return;
     if (currentIndex < 0) return;
     if (event.key === "Enter" || event.key === " ") {
