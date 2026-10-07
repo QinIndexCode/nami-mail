@@ -1340,6 +1340,7 @@
     "settings.error.startUpdate": "启动更新失败",
     "settings.error.removeAccount": "移除账户失败",
     "settings.error.saveSignature": "保存签名失败",
+    "settings.error.saveDisplayName": "保存备注名称失败",
     "settings.error.restoreDefaults": "恢复默认设置失败",
     "update.error.integrity": "更新文件完整性或签名验证失败。请检查网络安全软件后重试。",
     "update.error.invalidResponse": "更新服务返回了无法验证的响应。请重启 Nami Mail 后重试。",

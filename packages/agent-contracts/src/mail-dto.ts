@@ -70,6 +70,7 @@ export const accountWireSchema = z.object({
   lastSyncWarningCode: z.string().nullish(),
   lastSyncedAt: z.string().nullable(),
   signature: z.string(),
+  displayName: z.string().nullable().optional(),
   createdAt: z.string(),
 });
 export type AccountWire = z.infer<typeof accountWireSchema>;

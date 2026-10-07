@@ -626,6 +626,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ signature }),
     }),
+  updateAccountDisplayName: (id: string, displayName: string | null) =>
+    request<{ ok: boolean }>(`/api/accounts/${encodeURIComponent(id)}/display-name`, {
+      method: "PATCH",
+      body: JSON.stringify({ displayName }),
+    }),
   sync: (id: string) =>
     request<{ ok: boolean; synced: number; folders: number; failedFolders: number; limitReached: boolean }>(`/api/accounts/${id}/sync`, {
       method: "POST",

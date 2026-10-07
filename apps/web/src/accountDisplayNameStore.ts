@@ -3,6 +3,17 @@ import { useSyncExternalStore } from "react";
 const PREFIX = "nami-mail.account-display-name.";
 const listeners = new Set<() => void>();
 let revision = 0;
+const persistedNames = new Map<string, string | null>();
+
+/** Server metadata is independent of the desktop's changing loopback port. */
+export function hydrateAccountDisplayNames(accounts: { email: string; displayName?: string | null }[]): void {
+  persistedNames.clear();
+  for (const account of accounts) {
+    if (account.displayName !== undefined) persistedNames.set(key(account.email), account.displayName?.trim() || null);
+  }
+  revision += 1;
+  for (const listener of listeners) listener();
+}
 
 function storage(): Storage | null {
   try {
@@ -18,6 +29,7 @@ function key(email: string): string {
 
 /** Read the local display name for an account, if one has been configured. */
 export function getAccountDisplayName(email: string): string | null {
+  if (persistedNames.has(key(email))) return persistedNames.get(key(email)) ?? null;
   try {
     return storage()?.getItem(key(email))?.trim() || null;
   } catch {
@@ -25,8 +37,14 @@ export function getAccountDisplayName(email: string): string | null {
   }
 }
 
-/** Save a local-only account display name, or clear it when name is null. */
+/** Update the renderer cache after saving, or use browser storage in demo mode. */
 export function setAccountDisplayName(email: string, name: string | null): void {
+  if (persistedNames.has(key(email))) {
+    persistedNames.set(key(email), name?.trim().slice(0, 64) || null);
+    revision += 1;
+    for (const listener of listeners) listener();
+    return;
+  }
   try {
     const store = storage();
     if (!store) return;

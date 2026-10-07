@@ -20,11 +20,13 @@ import {
   insertPasswordAccountRow,
   listAccountRows,
   listFolderRows,
+  updateAccountDisplayName,
   updateAccountSignature,
 } from "../account-store.js";
 import { isAccountSyncing } from "../sync-locks.js";
 import {
   accountDiscoverySchema,
+  accountDisplayNamePatchSchema,
   accountSignaturePatchSchema,
   credentialsSchema,
   manualAccountSchema,
@@ -427,6 +429,23 @@ export function registerAccountRoutes(
           .code(400)
           .send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
       const changes = updateAccountSignature(context.db, request.params.id, parsed.data.signature);
+      if (!changes)
+        return reply
+          .code(404)
+          .send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "邮箱不存在。" });
+      return { ok: true };
+    },
+  );
+
+  app.patch<{ Params: { id: string } }>(
+    "/api/accounts/:id/display-name",
+    async (request, reply) => {
+      const parsed = accountDisplayNamePatchSchema.safeParse(request.body);
+      if (!parsed.success)
+        return reply
+          .code(400)
+          .send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
+      const changes = updateAccountDisplayName(context.db, request.params.id, parsed.data.displayName);
       if (!changes)
         return reply
           .code(404)

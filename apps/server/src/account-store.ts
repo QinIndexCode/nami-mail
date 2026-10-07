@@ -89,6 +89,11 @@ export function updateAccountSignature(db: DatabaseHandle, id: string, signature
   return db.prepare("UPDATE accounts SET signature = ? WHERE id = ?").run(signature, id).changes;
 }
 
+/** Returns the number of updated rows, so the caller can turn 0 into a 404. */
+export function updateAccountDisplayName(db: DatabaseHandle, id: string, displayName: string | null): number {
+  return db.prepare("UPDATE accounts SET display_name = ? WHERE id = ?").run(displayName, id).changes;
+}
+
 export type PasswordAccountInsert = {
   id: string;
   email: string;
