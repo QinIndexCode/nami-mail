@@ -119,8 +119,14 @@ export function createOperationQueue(db: DatabaseHandle, hooks: OperationQueueHo
     // withAccountWriteLocks so a timed-out run still releases the account
     // lock: the abandoned executor keeps running in the background, but later
     // operations on the account are no longer stalled behind it forever.
-    const releases = await acquireAccountWriteSlots([row.account_id]);
+    // The acquisition itself sits inside the try: a slot-wait timeout is an
+    // outcome too — it must settle the row as failed (with the timeout as the
+    // recorded error) so resumePending never resurrects an operation the user
+    // was already told failed. `releases` starts empty, so the finally block
+    // only releases slots that were actually acquired.
+    let releases: Array<() => void> = [];
     try {
+      releases = await acquireAccountWriteSlots([row.account_id]);
       const result = await withTimeout(
         withHeldWriteSlots([row.account_id], async () => {
           // Only mark running once the account slot is held: an operation that

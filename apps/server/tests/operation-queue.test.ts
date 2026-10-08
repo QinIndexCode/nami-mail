@@ -211,6 +211,49 @@ describe("operation queue", () => {
     expect(row.status).toBe("failed");
   });
 
+  it("settles a foreground row as failed when its own write-slot wait times out", async () => {
+    vi.useFakeTimers();
+    try {
+      insertAccount(db);
+      const queue = createOperationQueue(db);
+      let runnerCalls = 0;
+      queue.registerRunner("move", async () => { runnerCalls += 1; });
+      // The row's OWN account slot is held elsewhere, so the acquisition
+      // inside runRow is what times out — before the executor could be marked
+      // running.
+      const wedged = await acquireAccountWriteSlots(["account-1"]);
+      insertQueueRow(db, "op-1", "account-1", "move", { messageId: "message-1", target: "trash" }, "pending");
+
+      const resumed = queue.resumePending();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await resumed).toBe(1);
+
+      // The row settled as a real failure: it must never resurrect on the
+      // next restart, and the executor never ran.
+      const row = db.prepare("SELECT status, error_message, error_code, completed_at, attempt_count FROM operation_queue").get() as {
+        status: string;
+        error_message: string;
+        error_code: string | null;
+        completed_at: string | null;
+        attempt_count: number;
+      };
+      expect(row.status).toBe("failed");
+      expect(row.error_message).toMatch(/Timed out waiting for the account account-1 write slot/);
+      expect(row.completed_at).not.toBeNull();
+      expect(row.attempt_count).toBe(0);
+      expect(runnerCalls).toBe(0);
+
+      // Releasing the wedge afterwards does not bring the row back: only
+      // pending/running rows are resumed.
+      for (const release of [...wedged].reverse()) release();
+      const secondPass = await queue.resumePending();
+      expect(secondPass).toBe(0);
+      expect(runnerCalls).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("gives up a background operation that lost the account write slot instead of retrying into the same saturation", async () => {
     vi.useFakeTimers();
     try {
