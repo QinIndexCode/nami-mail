@@ -44,7 +44,12 @@ function renderSettings(demoMode: boolean): string {
 
 describe("settings model provider entry", () => {
   beforeEach(() => {
-    categoryStore.set("nami.settings.category", "agent");
+    // R13: the current key is authoritative (the legacy key migrates into it
+    // on first read), so tests pin the category through the current key on a
+    // cleared store — a legacy-only entry would be overridden by the new key
+    // a previous test's migration left behind.
+    categoryStore.clear();
+    categoryStore.set("nami-mail.settings-category", "agent");
   });
 
   it("exposes the existing model-provider manager from settings", () => {
@@ -73,7 +78,7 @@ describe("settings model provider entry", () => {
   });
 
   it("shows the external connections panel with MCP setup and tools", () => {
-    categoryStore.set("nami.settings.category", "connections");
+    categoryStore.set("nami-mail.settings-category", "connections");
     const markup = renderSettings(false);
 
     expect(markup).toContain(zh("settings.connections.title"));
@@ -94,7 +99,8 @@ describe("settings model provider entry", () => {
 
 describe("settings per-folder sync limit picker", () => {
   beforeEach(() => {
-    categoryStore.set("nami.settings.category", "sync");
+    categoryStore.clear();
+    categoryStore.set("nami-mail.settings-category", "sync");
   });
 
   it("renders the sync cap picker in the sync section with the default selected", () => {

@@ -26,7 +26,24 @@ function loadNotifiedKeys(): Set<string> {
     const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!legacy) return new Set();
     const arr = JSON.parse(legacy);
-    return new Set(Array.isArray(arr) ? arr : []);
+    const keys = new Set(Array.isArray(arr) ? arr : []);
+    // R13: migrate on read. A read-only fallback leaves the legacy entry
+    // authoritative, so a session where every key was already reminded
+    // (no state change, no durable write) would keep the dedup set in the
+    // legacy key — invisible to a later clear and to the durable layer.
+    // Only an EMPTY current value migrates: an intentionally cleared
+    // durable key (the user re-enables reminders after a reset) must not
+    // be overwritten by a legacy set that was never cleaned up.
+    if (current === null && keys.size > 0) {
+      saveNotifiedKeys(keys);
+      try {
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+      } catch {
+        // Removing the legacy key is best-effort; the durable write above
+        // already made the new key authoritative for every future read.
+      }
+    }
+    return keys;
   } catch {
     return new Set();
   }

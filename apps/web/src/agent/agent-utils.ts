@@ -206,18 +206,37 @@ export function revokeFailureMessage(error: unknown, t: Translate): string {
 /** The panel reopens onto the conversation that was open when it closed. */
 export const LAST_ACTIVE_CONVERSATION_KEY = "nami-mail.agent-last-conversation";
 // Pre-durable-layer key (the desktop's ephemeral origin wiped it anyway);
-// read once as a fallback so an existing browser choice survives the rename.
+// read ONCE and MIGRATED (R13), so a later clear reads cleared instead of
+// reviving this stale value.
 const LEGACY_LAST_ACTIVE_CONVERSATION_KEY = "nami.agent.lastConversation";
 
+/**
+ * Reads the reopened conversation, migrating the pre-durable-layer key on
+ * first read: the legacy value is written through the durable layer and the
+ * legacy key removed. A read-only fallback would leave the legacy entry
+ * authoritative, so clearing the panel's conversation (a null save) would
+ * resurrect it on the next read — the resurrection the durable layer
+ * exists to prevent.
+ */
 export function readLastActiveConversationId(): string | null {
   const current = durableGet(LAST_ACTIVE_CONVERSATION_KEY);
   if (current && current.length > 0) return current;
   try {
     const legacy = window.localStorage.getItem(LEGACY_LAST_ACTIVE_CONVERSATION_KEY);
-    return legacy && legacy.length > 0 ? legacy : null;
+    if (legacy && legacy.length > 0) {
+      saveLastActiveConversationId(legacy);
+      try {
+        window.localStorage.removeItem(LEGACY_LAST_ACTIVE_CONVERSATION_KEY);
+      } catch {
+        // Removing the legacy key is best-effort; the durable write above
+        // already made the new key authoritative for every future read.
+      }
+      return legacy;
+    }
   } catch {
     return null;
   }
+  return null;
 }
 
 /** Persists the reopened conversation through the durable preference layer. */
