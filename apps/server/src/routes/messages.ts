@@ -737,8 +737,9 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const existing = messageExists(context.db, request.params.id);
     if (!existing) return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "邮件不存在。" });
     try {
-      setMessageSnoozed(context.db, request.params.id, parsed.data.until);
-      return { ok: true, snoozedUntil: parsed.data.until };
+      // The reply carries the normalized UTC form that was actually stored.
+      const snoozedUntil = setMessageSnoozed(context.db, request.params.id, parsed.data.until);
+      return { ok: true, snoozedUntil };
     } catch (error) {
       const failure = mailFailure(error);
       return reply.code(failure.statusCode).send(withErrorCode(mailFailureBody(failure, error instanceof Error ? error.message : "无法稍后处理这封邮件。"), failure.statusCode));

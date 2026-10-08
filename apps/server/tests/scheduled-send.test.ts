@@ -145,6 +145,71 @@ describe("scheduled send storage", () => {
     });
     expect(deletePendingScheduledSubmission(db, immediate.submission.id)).toBe(false);
   });
+
+  // R05: the due query compares send_at as a STRING against a UTC now, so an
+  // offset form ("09:00+08:00") sorted before "02:00Z" and never fired. The
+  // persisted value is now the same instant in UTC form.
+  it("stores an offset sendAt as the same instant in UTC (R05)", () => {
+    const prepared = prepareSubmission(db, masterKey, {
+      accountId: "account-1",
+      accountEmail: "sender@example.com",
+      sendAt: "2026-01-01T09:00:00+08:00",
+      request: { to: ["recipient@example.com"], subject: "Offset", text: "Body", attachmentTokens: [] },
+    });
+    expect(prepared.submission.sendAt).toBe("2026-01-01T01:00:00.000Z");
+    expect(submissionForId(db, masterKey, prepared.submission.id)?.sendAt).toBe("2026-01-01T01:00:00.000Z");
+  });
+
+  it("treats cross-day and fractional-precision offsets as their exact instants (R05)", () => {
+    // Crosses the day boundary backwards into UTC.
+    const crossDay = prepareSubmission(db, masterKey, {
+      accountId: "account-1",
+      accountEmail: "sender@example.com",
+      sendAt: "2026-01-01T23:30:00-05:00",
+      request: { to: ["recipient@example.com"], subject: "Cross day", text: "Body", attachmentTokens: [] },
+    });
+    expect(crossDay.submission.sendAt).toBe("2026-01-02T04:30:00.000Z");
+
+    // Fractional precision is a spelling difference, not a different instant.
+    const half = prepareSubmission(db, masterKey, {
+      accountId: "account-1",
+      accountEmail: "sender@example.com",
+      sendAt: "2026-01-01T09:00:00.5+08:00",
+      request: { to: ["recipient@example.com"], subject: "Half", text: "Body", attachmentTokens: [] },
+    });
+    const padded = prepareSubmission(db, masterKey, {
+      accountId: "account-1",
+      accountEmail: "sender@example.com",
+      sendAt: "2026-01-01T09:00:00.500+08:00",
+      request: { to: ["recipient@example.com"], subject: "Padded", text: "Body", attachmentTokens: [] },
+    });
+    expect(half.submission.sendAt).toBe("2026-01-01T01:00:00.500Z");
+    expect(padded.submission.sendAt).toBe("2026-01-01T01:00:00.500Z");
+  });
+
+  it("cancels an offset-scheduled task by its effective instant, not its wire spelling (R05)", () => {
+    // The wire spelling carries +08:00 and names the SAME instant as the Z
+    // form (the offset is added to a clock 8h ahead); the cancel decision
+    // compares the normalized UTC instant against now.
+    const offsetSpelling = (instant: Date): string =>
+      new Date(instant.getTime() + 8 * 3_600_000).toISOString().replace("Z", "+08:00");
+    const future = prepareSubmission(db, masterKey, {
+      accountId: "account-1",
+      accountEmail: "sender@example.com",
+      sendAt: offsetSpelling(new Date(Date.now() + 3_600_000)),
+      request: { to: ["recipient@example.com"], subject: "Future offset", text: "Body", attachmentTokens: [] },
+    });
+    expect(future.submission.sendAt).not.toContain("+08:00");
+    expect(deletePendingScheduledSubmission(db, future.submission.id)).toBe(true);
+
+    const past = prepareSubmission(db, masterKey, {
+      accountId: "account-1",
+      accountEmail: "sender@example.com",
+      sendAt: offsetSpelling(new Date(Date.now() - 3_600_000)),
+      request: { to: ["recipient@example.com"], subject: "Past offset", text: "Body", attachmentTokens: [] },
+    });
+    expect(deletePendingScheduledSubmission(db, past.submission.id)).toBe(false);
+  });
 });
 
 describe("scheduled send submission", () => {
@@ -202,6 +267,34 @@ describe("scheduled send submission", () => {
     const after = submissionForId(db, masterKey, dueSubmission.submission.id);
     expect(after?.deliveryStatus).toBe("submitted");
     expect(after?.sendAt).toBe(due);
+  });
+
+  it("fires an offset-scheduled task at the equivalent UTC instant (R05)", async () => {
+    // 09:00+08:00 == 01:00Z: before normalization the stored string sorted
+    // BEFORE the cutoff and the due query returned nothing.
+    schedule("Offset due", "2026-01-01T09:00:00+08:00");
+
+    const outcome = await submitDueScheduledSubmissions(db, masterKey, {
+      outboundAttachmentDirectory: directory,
+      scheduleSentVerification: vi.fn(),
+    }, "2026-01-01T01:00:00.001Z");
+
+    expect(outcome).toEqual({ submitted: 1, failed: 0 });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ subject: "Offset due" }));
+  });
+
+  it("reports outcomes and leaves future sends untouched (restored tail)", async () => {
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    const dueSubmission = schedule("Due now", new Date(Date.now() - 60_000).toISOString());
+    schedule("Future", future);
+    const verification = vi.fn();
+
+    const outcome = await submitDueScheduledSubmissions(db, masterKey, {
+      outboundAttachmentDirectory: directory,
+      scheduleSentVerification: verification,
+    });
+
+    expect(outcome).toEqual({ submitted: 1, failed: 0 });
     expect(verification).toHaveBeenCalledWith(dueSubmission.submission.id);
     // The future send is untouched and stays pending.
     const futureRow = db.prepare("SELECT status FROM outbound_submissions WHERE send_at = ?").get(future) as { status: string } | undefined;

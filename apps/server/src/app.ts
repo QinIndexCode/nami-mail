@@ -45,6 +45,7 @@ import {
 } from "./outbound-attachments.js";
 import {
   migrateOutboundSubmissionStorage,
+  normalizeScheduledTimesMigration,
   recoverInterruptedSubmissions,
 } from "./outbox.js";
 import { providerPresets } from "./providers.js";
@@ -193,6 +194,12 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   backfillRedactMessageSnippets(context.db);
   migrateOutboundAttachments(context.db, outboundAttachmentDirectory(context), context.masterKey);
   migrateOutboundSubmissionStorage(context.db, context.masterKey);
+  // R05: legacy offset-form scheduled times normalize to UTC once; the due
+  // queries and the snoozed view compare stored times as strings.
+  const normalizedTimes = normalizeScheduledTimesMigration(context.db, context.masterKey);
+  if (normalizedTimes.invalid) {
+    app.log.warn({ ...normalizedTimes }, "Found unparseable scheduled times during UTC normalization");
+  }
   notePhase("build:message-migrations");
   const ownedAgentMailApplication = !context.agentService && context.agentLifecycle && context.agentSourceEvents
     ? new SqliteMailApplicationService({

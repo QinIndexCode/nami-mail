@@ -65,6 +65,25 @@ describe("snooze storage", () => {
     // The due message is cleared; the future one stays snoozed.
     expect(listSnoozedMessages(db).map((row) => row.id)).toEqual(["message-2"]);
   });
+
+  // R05: the snoozed view and the due release compare snoozed_until as a
+  // STRING against a UTC now — an offset form sorted wrongly and the message
+  // came back at the wrong time (or never). The stored value is the same
+  // instant in UTC form.
+  it("stores an offset snooze as the same instant in UTC (R05)", () => {
+    const snoozedUntil = setMessageSnoozed(db, "message-1", "2026-01-01T09:00:00+08:00");
+    expect(snoozedUntil).toBe("2026-01-01T01:00:00.000Z");
+
+    // One minute before the instant: string comparison agrees with reality.
+    expect(listSnoozedMessages(db, "2026-01-01T00:59:00.000Z").map((row) => row.id)).toEqual(["message-1"]);
+    // One millisecond past it: released, and only the offset task.
+    const released = releaseDueSnoozedMessages(db, Buffer.alloc(32, 7), "2026-01-01T01:00:00.001Z");
+    expect(released.map((entry) => entry.id)).toEqual(["message-1"]);
+  });
+
+  it("rejects an unparseable snooze time (R05)", () => {
+    expect(() => setMessageSnoozed(db, "message-1", "not-a-date")).toThrow("稍后处理时间无效。");
+  });
 });
 
 describe("snooze API routes", () => {
@@ -129,6 +148,20 @@ describe("snooze API routes", () => {
     expect(removed.statusCode).toBe(200);
     const inbox = await app.inject({ method: "GET", url: "/api/messages" });
     expect(inbox.json().items.map((item: { id: string }) => item.id).sort()).toEqual(["message-1", "message-2"]);
+  });
+
+  it("returns the normalized UTC snooze for an offset request (R05)", async () => {
+    // The request carries +08:00; the reply carries the stored UTC form of
+    // the same instant.
+    const instant = new Date(Date.now() + 3_600_000);
+    const offsetForm = new Date(instant.getTime() + 8 * 3_600_000).toISOString().replace("Z", "+08:00");
+    const set = await app.inject({
+      method: "POST",
+      url: "/api/messages/message-1/snooze",
+      payload: { until: offsetForm },
+    });
+    expect(set.statusCode).toBe(200);
+    expect(set.json().snoozedUntil).toBe(instant.toISOString());
   });
 
   it("rejects past snooze times and missing messages", async () => {
