@@ -763,6 +763,7 @@
     "settings.translation.loadFailed": "Could not read translation service settings. Check the local service, then try again.",
     "settings.translation.saveFailed": "Could not save translation service settings.",
     "mail.error.readDraftAttachments": "Could not read draft attachments",
+    "mail.error.readDraft": "Could not read the full draft; the editor was not opened to protect the original. Please try again.",
     "mail.error.markRead": "Could not update read status: {message}",
     "mail.error.markReadFallback": "Could not update read status",
     "mail.error.move": "Could not move message",

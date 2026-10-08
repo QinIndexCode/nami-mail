@@ -97,6 +97,7 @@ import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import { dialogKeydownDecision, useDialogRouting } from "./dialogRouting";
 import { useBatchSelection } from "./app/useBatchSelection";
 import { useQuickMessageActions } from "./app/useQuickMessageActions";
+import { resolveDraftBody } from "./app/draftBody";
 import { useAttachmentExports } from "./app/useAttachmentExports";
 import { useDesktopBridgeHandlers } from "./app/useDesktopBridgeHandlers";
 import { resolveLocale, useI18n } from "./i18n";
@@ -1664,10 +1665,14 @@ const emptyMessageList = useMemo(() => (query.trim()
       setRecipientDetailsOpen(false);
       // A list row only carries a text preview, and the composer must open on
       // the whole draft — editing a truncated body would silently drop the
-      // rest of what the user wrote.
-      const draft = !isDemo && message.htmlBody === undefined
-        ? await api.message(message.id).catch(() => message)
-        : message;
+      // rest of what the user wrote. A failed full-body fetch refuses to open
+      // the editor on the preview (saving it would overwrite the original).
+      const resolution = await resolveDraftBody(message, { isDemo, fetchMessage: (id) => api.message(id) });
+      if (!resolution.ok) {
+        showToast(mailErrorToastMessage(resolution.error, t("mail.error.readDraft"), t), "error");
+        return;
+      }
+      const draft = resolution.draft;
       let attachments: OutboundAttachment[] = [];
       if (!isDemo) {
         try {
