@@ -117,5 +117,80 @@ describe("context-budget", () => {
         expect(toolMsg.content).toContain("折叠");
       }
     });
+
+    it("keeps every tool result paired with its assistant declaration (R06a)", () => {
+      // The reported reproduction: system, a long user turn, one assistant
+      // declaring three calls, three tool results. The old compression could
+      // splice away the declaration and leave orphaned tool results behind.
+      const messages: ProviderChatMessage[] = [
+        { role: "system", content: "System prompt" },
+        { role: "user", content: "Long question ".repeat(400) },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            { id: "call-a", toolName: "messages.list", input: {}, requestedAt: "2026-10-09T00:00:00.000Z" },
+            { id: "call-b", toolName: "messages.get", input: {}, requestedAt: "2026-10-09T00:00:01.000Z" },
+            { id: "call-c", toolName: "messages.search", input: {}, requestedAt: "2026-10-09T00:00:02.000Z" },
+          ],
+        },
+        { role: "tool", toolCallId: "call-a", content: "output a ".repeat(200) },
+        { role: "tool", toolCallId: "call-b", content: "output b ".repeat(200) },
+        { role: "tool", toolCallId: "call-c", content: "output c ".repeat(200) },
+      ];
+
+      const compressed = compressContextHistory(messages, 150);
+
+      const declaredIds = new Set(
+        compressed
+          .filter((message) => message.role === "assistant")
+          .flatMap((message) => (message.toolCalls ?? []).map((call) => call.id)),
+      );
+      const toolMessages = compressed.filter((message) => message.role === "tool");
+      // Whatever survives compression, no tool result may lose the assistant
+      // declaration that owns it.
+      for (const message of toolMessages) {
+        expect(declaredIds.has(message.toolCallId)).toBe(true);
+      }
+      // The current turn's user message is never deleted.
+      expect(compressed.some((message) => message.role === "user" && message.content.includes("Long question"))).toBe(true);
+    });
+
+    it("collapses older turns as whole units and never mutates the input", () => {
+      const longTurn = (index: number): ProviderChatMessage[] => [
+        { role: "user", content: `Question ${index} `.repeat(200) },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{ id: `call-${index}`, toolName: "messages.list", input: {}, requestedAt: "2026-10-09T00:00:00.000Z" }],
+        },
+        { role: "tool", toolCallId: `call-${index}`, content: `Tool output ${index} `.repeat(200) },
+        { role: "assistant", content: `Answer ${index}` },
+      ];
+      const messages: ProviderChatMessage[] = [
+        { role: "system", content: "System prompt" },
+        ...longTurn(1),
+        ...longTurn(2),
+        ...longTurn(3),
+      ];
+      const snapshot = structuredClone(messages);
+
+      const compressed = compressContextHistory(messages, 200);
+
+      expect(messages).toEqual(snapshot);
+      // Protocol closure: every surviving tool result still has its
+      // declaration.
+      const declaredIds = new Set(
+        compressed
+          .filter((message) => message.role === "assistant")
+          .flatMap((message) => (message.toolCalls ?? []).map((call) => call.id)),
+      );
+      for (const message of compressed.filter((item) => item.role === "tool")) {
+        expect(declaredIds.has(message.toolCallId)).toBe(true);
+      }
+      // The current turn is intact: its user message and its declaration.
+      expect(compressed.some((message) => message.content?.includes("Question 3"))).toBe(true);
+      expect(declaredIds.has("call-3")).toBe(true);
+    });
   });
 });
