@@ -103,4 +103,4 @@ npm.cmd run package:win:github
 
 1. 先写 `xxx.zh-CN.md`，并同步维护 `xxx.en.md`；
 2. 只有在需要统一入口时才建 `xxx.md`，且它只放语言链接；
-3. **即使只有一种语言也要带后缀**（例如 `ARCHITECTURE-ROADMAP.zh-CN.md`），不要为了省一个文件而省略后缀——省略后无法判断该文件的语言，也无法再补另一种语言而不改名。
+3. **即使只有一种语言也要带后缀**（例如 `docs/development/agent-improvement.plan.zh-CN.md`），不要为了省一个文件而省略后缀——省略后无法判断该文件的语言，也无法再补另一种语言而不改名。

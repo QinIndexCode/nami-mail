@@ -1,5 +1,7 @@
 node_modules/
 .mimosa/
+# 开发辅助文档：仅供本机跨会话续接开发，不入库、不发布
+/ARCHITECTURE-ROADMAP.zh-CN.md
 apps/server/.native/
 dist/
 dist-check*/
