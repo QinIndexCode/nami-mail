@@ -9,7 +9,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 // 逐批瘦身时同步下调对应数值。
 // ---------------------------------------------------------------------------
 const monolithRatchets = [
-  ["apps/server/src/agent/run-engine.ts", 1911],
+  ["apps/server/src/agent/run-engine.ts", 1932],
   ["apps/server/src/agent-rag-worker.ts", 1486],
   ["apps/server/src/sync.ts", 1250],
   ["apps/server/src/agent/mail-tools.ts", 1101],

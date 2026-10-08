@@ -82,6 +82,9 @@ function fixture() {
     model: "test-model",
     timeoutMs: 30_000,
     allowCloudMailContent: false,
+    // R06: the built-in tool schemas count against the budget (R06b); a
+    // realistic window keeps these non-budget tests inside it.
+    contextWindowTokens: 131_072,
     makeDefault: true,
   });
   const conversation = service.createConversation({
@@ -369,6 +372,7 @@ describe("slash command expansion", () => {
         model: "default-model",
         timeoutMs: 30_000,
         allowCloudMailContent: false,
+        contextWindowTokens: 131_072,
         makeDefault: true,
       });
       expect(value.service.providerService.list().defaultProviderId).toBe(provider.id);

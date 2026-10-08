@@ -146,6 +146,9 @@ function fixture(options: { desktopConfirmation?: boolean } = {}) {
     model: "test-model",
     timeoutMs: 30_000,
     allowCloudMailContent: false,
+    // R06: the built-in tool schemas count against the budget (R06b); a
+    // realistic window keeps these non-budget tests inside it.
+    contextWindowTokens: 131_072,
     makeDefault: true,
   });
   const conversation = service.createConversation({

@@ -1169,9 +1169,25 @@ export class AgentRunEngine {
       let toolRounds = 0;
       const contextWindow = configuration.contextWindowTokens ?? 8_192;
       const maxOutputTokens = configuration.maxOutputTokens ?? 2_048;
-      const availableBudget = Math.max(1_000, contextWindow - maxOutputTokens);
+      // Hard ceiling for the whole request: messages + tool definitions.
+      // `max(1000, ...)` keeps a nonsensical configuration from producing a
+      // budget smaller than the loop's own floors below.
+      const requestBudget = Math.max(1_000, contextWindow - maxOutputTokens);
       const toolsTokens = estimateMessagesTokens([], visibleTools);
-      const availableForMessages = Math.max(800, availableBudget - toolsTokens);
+      // A tool set that alone exceeds the request can never be sent: refuse
+      // before the first request instead of leaning on the floor and letting
+      // the provider reject an over-window call.
+      if (toolsTokens > requestBudget) {
+        yield this.errorEvent(new AgentServiceError(
+          "CONTEXT_TOO_LARGE",
+          t("error.context_tools_too_large"),
+          400,
+          false,
+        ));
+        yield { type: "completed", reason: "error" };
+        return;
+      }
+      const availableForMessages = Math.max(800, requestBudget - toolsTokens);
       const messagesWarningThreshold = Math.floor(availableForMessages * 0.75);
       // The loop runs until the model stops requesting tools; every iteration
       // either appends a provider turn, reaches the round limit, or returns a
@@ -1180,6 +1196,20 @@ export class AgentRunEngine {
         this.assertRunCurrent(lifecycleTasks, controller.signal);
         if (estimateMessagesTokens(modelMessages) > messagesWarningThreshold) {
           modelMessages = compressContextHistory(modelMessages, Math.floor(availableForMessages * 0.8));
+        }
+        // R06 hard gate: compression is best effort — a current turn that
+        // cannot be compacted away (one huge user message, or tool results
+        // that survive pruning) must end the run here, not reach the
+        // provider knowing it will be rejected.
+        if (estimateMessagesTokens(modelMessages, visibleTools) > requestBudget) {
+          yield this.errorEvent(new AgentServiceError(
+            "CONTEXT_TOO_LARGE",
+            t("error.context_too_large"),
+            400,
+            false,
+          ));
+          yield { type: "completed", reason: "error" };
+          return;
         }
         const chat: ProviderChatRequest = {
           requestId,
@@ -1894,7 +1924,7 @@ export class AgentRunEngine {
   private agentErrorCode(value: string): AgentError["code"] {
     const allowed = new Set<AgentError["code"]>([
       "INVALID_ARGUMENT", "CONFLICT", "NOT_FOUND", "ACCOUNT_UNAVAILABLE", "ACCOUNT_STALE",
-      "PROVIDER_AUTH_FAILED", "PROVIDER_UNAVAILABLE", "RAG_NOT_READY", "CANCELLED", "INTERNAL",
+      "PROVIDER_AUTH_FAILED", "PROVIDER_UNAVAILABLE", "RAG_NOT_READY", "CONTEXT_TOO_LARGE", "CANCELLED", "INTERNAL",
     ]);
     return allowed.has(value as AgentError["code"]) ? value as AgentError["code"] : "INTERNAL";
   }

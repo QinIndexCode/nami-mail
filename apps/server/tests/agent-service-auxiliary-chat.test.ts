@@ -89,6 +89,9 @@ function fixture() {
     apiKey: PROVIDER_SECRET_CANARY,
     timeoutMs: 30_000,
     allowCloudMailContent: true,
+    // R06: the built-in tool schemas count against the budget (R06b); a
+    // realistic window keeps these non-budget tests inside it.
+    contextWindowTokens: 131_072,
     makeDefault: true,
   });
   const conversation = service.createConversation({

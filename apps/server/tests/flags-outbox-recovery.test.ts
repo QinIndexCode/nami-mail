@@ -21,7 +21,6 @@ import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { clearOrphanedPendingFlagsMarkers, clearPendingFlagsMarkers, commitLocalFlags } from "../src/flags-outbox.js";
 import { createOperationQueue } from "../src/operation-queue.js";
 import type { OperationQueue } from "../src/operation-queue.js";
-import { acquireAccountWriteSlots } from "../src/sync-locks.js";
 
 function insertAccount(db: DatabaseHandle, id: string): void {
   const now = new Date().toISOString();

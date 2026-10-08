@@ -166,6 +166,9 @@ function fixture(options: { desktopConfirmation?: boolean; externalConfirmation?
     model: "test-model",
     timeoutMs: 30_000,
     allowCloudMailContent: false,
+    // R06: the built-in tool schemas count against the budget (R06b); a
+    // realistic window keeps these non-budget tests inside it.
+    contextWindowTokens: 131_072,
     makeDefault: true,
   });
   const conversation = service.createConversation({
@@ -1543,6 +1546,9 @@ describe("AgentService chat mode", () => {
         apiKey: SERVICE_TEST_KEY,
         timeoutMs: 30_000,
         allowCloudMailContent: false,
+        // R06: with MCP tools mounted the tool schemas count against the
+        // budget; a realistic window keeps this case inside it.
+        contextWindowTokens: 131_072,
         makeDefault: false,
       });
       value.service.createMcpServer({
@@ -1600,6 +1606,9 @@ describe("AgentService chat mode", () => {
         apiKey: SERVICE_TEST_KEY,
         timeoutMs: 30_000,
         allowCloudMailContent: true,
+        // R06: with MCP tools mounted the tool schemas count against the
+        // budget; a realistic window keeps this case inside it.
+        contextWindowTokens: 131_072,
         makeDefault: false,
       });
       value.service.createMcpServer({
