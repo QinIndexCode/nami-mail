@@ -173,9 +173,37 @@ export function commitLocalFlags(
   };
 }
 
-/** Clears the per-message push markers after the push has settled for good. */
+/**
+ * Clears the per-message push markers after the push has settled for good.
+ *
+ * The clear is per message and conditional: a message whose flag delta was
+ * committed twice in quick succession (seen=true then seen=false) is named by
+ * TWO `flags-push` rows. When the older row settles, the newer row may still
+ * be pending — clearing unconditionally would drop the newer push's
+ * protection and let the next sync overwrite the user's newest local choice
+ * with stale remote state. Same-account `flags-push` rows run serially
+ * (per-account FIFO chains), so at settlement time any newer push for the
+ * same message is exactly a `pending` row: only when NO pending row names the
+ * message is its marker cleared. A push's own row is `running` (never
+ * `pending`) while it settles, so self-references do not block the clear.
+ */
 export function clearPendingFlagsMarkers(db: DatabaseHandle, messageIds: readonly string[]): void {
-  const update = db.prepare("UPDATE messages SET pending_flags_push = 0 WHERE id = ? AND pending_flags_push = 1");
+  const update = db.prepare(`
+    UPDATE messages SET pending_flags_push = 0
+    WHERE id = ? AND pending_flags_push = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM operation_queue
+        WHERE operation_queue.kind = 'flags-push'
+          AND operation_queue.status = 'pending'
+          AND json_valid(operation_queue.payload_json)
+          AND EXISTS (
+            SELECT 1
+            FROM json_each(operation_queue.payload_json, '$.entries') AS entry
+            WHERE json_extract(entry.value, '$.id') = messages.id
+          )
+      )
+  `);
   for (const id of messageIds) update.run(id);
 }
 

@@ -18,7 +18,7 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 
 import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import { clearOrphanedPendingFlagsMarkers, commitLocalFlags } from "../src/flags-outbox.js";
+import { clearOrphanedPendingFlagsMarkers, clearPendingFlagsMarkers, commitLocalFlags } from "../src/flags-outbox.js";
 import type { OperationQueue } from "../src/operation-queue.js";
 
 function insertAccount(db: DatabaseHandle, id: string): void {
@@ -233,6 +233,72 @@ describe("startup reconciliation", () => {
 
     expect(markerOf(db, "orphan")).toBe(0);
     expect(markerOf(db, "queued")).toBe(1);
+  });
+});
+
+/**
+ * R03: the same message committed twice in quick succession (seen=true then
+ * seen=false) is named by TWO flags-push rows. The older row's settlement
+ * must not drop the newer row's protection marker, or the next sync can
+ * overwrite the user's newest local choice with stale remote state.
+ */
+describe("settling a flags push keeps newer pushes protected", () => {
+  let db: DatabaseHandle;
+
+  beforeEach(() => {
+    db = openDatabase(":memory:");
+    insertAccount(db, "account-1");
+    insertMessage(db, "message-1", "account-1", 1, 1);
+  });
+
+  afterEach(() => {
+    if (db) db.close();
+  });
+
+  it("keeps the marker when the older push settles while a newer push is still pending", () => {
+    insertFlagsPushRow(db, "push-old", "account-1", ["message-1"], "running");
+    insertFlagsPushRow(db, "push-new", "account-1", ["message-1"], "pending");
+
+    clearPendingFlagsMarkers(db, ["message-1"]);
+
+    expect(markerOf(db, "message-1")).toBe(1);
+  });
+
+  it("keeps the marker when the older push failed permanently while a newer push is pending", () => {
+    insertFlagsPushRow(db, "push-old", "account-1", ["message-1"], "failed");
+    insertFlagsPushRow(db, "push-new", "account-1", ["message-1"], "pending");
+
+    clearPendingFlagsMarkers(db, ["message-1"]);
+
+    expect(markerOf(db, "message-1")).toBe(1);
+  });
+
+  it("clears the marker once the last push that names the message has settled", () => {
+    // The settling row itself is 'running' (never 'pending'), so a lone push
+    // clears its own messages.
+    insertFlagsPushRow(db, "push-old", "account-1", ["message-1"], "running");
+    clearPendingFlagsMarkers(db, ["message-1"]);
+    expect(markerOf(db, "message-1")).toBe(0);
+
+    // Same after a permanent failure: the row is 'failed', nothing newer
+    // names the message.
+    insertMessage(db, "message-2", "account-1", 2, 1);
+    insertFlagsPushRow(db, "push-failed", "account-1", ["message-2"], "failed");
+    clearPendingFlagsMarkers(db, ["message-2"]);
+    expect(markerOf(db, "message-2")).toBe(0);
+  });
+
+  it("clears the marker when the newer push finally settles as well", () => {
+    insertFlagsPushRow(db, "push-old", "account-1", ["message-1"], "failed");
+    insertFlagsPushRow(db, "push-new", "account-1", ["message-1"], "pending");
+    clearPendingFlagsMarkers(db, ["message-1"]);
+    expect(markerOf(db, "message-1")).toBe(1);
+
+    // The newer push settles: nothing pending names the message anymore.
+    db.prepare("UPDATE operation_queue SET status = 'completed', completed_at = ? WHERE id = 'push-new'")
+      .run(new Date().toISOString());
+    clearPendingFlagsMarkers(db, ["message-1"]);
+    expect(markerOf(db, "message-1")).toBe(0);
   });
 });
 
