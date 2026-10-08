@@ -164,6 +164,15 @@ type ConversationRename = {
   title: string;
 };
 
+/** Persisted when the user pins a different model to an existing conversation.
+ *  The server record is the single authoritative source for the choice; the
+ *  renderer keeps no cross-session copy (a stale local override used to win
+ *  over this record on every conversation open). */
+type ConversationProviderChange = {
+  type: "conversation-provider";
+  providerId: string;
+};
+
 type ConversationTurn = {
   type: "conversation-turn";
   message: AgentMessage;
@@ -588,6 +597,20 @@ export class AgentRunEngine {
     return { id: view.id, title: view.title, preview: view.preview, updatedAt: view.updatedAt };
   }
 
+  setConversationProvider(id: string, providerId: string): AgentConversationSummary {
+    const state = this.readConversation(id);
+    const normalized = providerId.trim();
+    if (!normalized || normalized.length > 128) throw new AgentServiceError("INVALID_ARGUMENT", "模型无效。", 400);
+    const providers = this.providerService.list();
+    if (!providers.items.some((provider) => provider.id === normalized)) {
+      throw new AgentServiceError("NOT_FOUND", "指定的模型不存在。", 404);
+    }
+    this.conversations.append(id, state.leases, "metadata", { type: "conversation-provider", providerId: normalized } satisfies ConversationProviderChange);
+    const view = this.getConversation(id);
+    this.updateSummaryEntry(id, { updatedAt: view.updatedAt });
+    return { id: view.id, title: view.title, preview: view.preview, updatedAt: view.updatedAt };
+  }
+
   deleteConversation(id: string): void {
     const state = this.readConversation(id);
     this.conversations.markDeleted(id, state.leases);
@@ -724,6 +747,9 @@ export class AgentRunEngine {
         };
       } else if (value.type === "conversation-rename" && metadata && typeof value.title === "string") {
         metadata.title = requiredText(value.title, "会话名称", maximumConversationTitleLength);
+      } else if (value.type === "conversation-provider" && metadata && typeof value.providerId === "string" && value.providerId) {
+        // The last provider change wins; the change log replays in order.
+        metadata.providerId = value.providerId;
       }
     }
     if (!metadata) throw new AgentServiceError("INTERNAL", "会话元数据无法读取。", 500);

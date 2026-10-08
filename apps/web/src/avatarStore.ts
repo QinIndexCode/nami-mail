@@ -1,46 +1,31 @@
 import { useSyncExternalStore } from "react";
+import { durableGet, durableSet } from "./durablePreferences";
 
 /**
  * Local-only avatar pictures, keyed by lowercase email address. Avatars are a
  * browser-local preference (the local service never sees them): stored as
- * small JPEG data URLs in localStorage so the address book API payload and the
- * encrypted service store stay untouched. Reads degrade gracefully when
- * storage is unavailable (private mode, test environments).
+ * small JPEG data URLs via the durable preference layer — localStorage for
+ * the session, mirrored to a main-process userData file on the desktop,
+ * because the desktop origin's ephemeral port wipes per-origin storage on
+ * every launch. Reads and writes degrade gracefully when storage is
+ * unavailable (private mode, quota exceeded, test environments).
  */
 const PREFIX = "nami-mail.avatar.";
 
 const listeners = new Set<() => void>();
 
-function storage(): Storage | null {
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
-
 export function getAvatar(email: string): string | null {
-  try {
-    return storage()?.getItem(PREFIX + email.trim().toLowerCase()) ?? null;
-  } catch {
-    return null;
-  }
+  return durableGet(PREFIX + email.trim().toLowerCase());
 }
 
-/** Persist (or clear, when dataUrl is null) the avatar for an email. */
+/**
+ * Persist (or clear, when dataUrl is null) the avatar for an email. The
+ * durable layer absorbs every storage failure, so this never throws and the
+ * subscriber notification always follows the write attempt.
+ */
 export function setAvatar(email: string, dataUrl: string | null): void {
-  try {
-    const store = storage();
-    if (!store) return;
-    const key = PREFIX + email.trim().toLowerCase();
-    if (dataUrl) {
-      store.setItem(key, dataUrl);
-    } else {
-      store.removeItem(key);
-    }
-  } finally {
-    for (const listener of listeners) listener();
-  }
+  durableSet(PREFIX + email.trim().toLowerCase(), dataUrl);
+  for (const listener of listeners) listener();
 }
 
 export function subscribeAvatars(listener: () => void): () => void {

@@ -263,7 +263,10 @@ export function registerAgentRoutes(app: FastifyInstance, deps: AgentRouteDeps):
     const parsed = agentConversationPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
     try {
-      return agentService.renameConversation(request.params.id, parsed.data.title);
+      // The schema's refine guarantees exactly one of the two fields, so when
+      // providerId is absent the title assertion below cannot be undefined.
+      if (parsed.data.providerId !== undefined) return agentService.setConversationProvider(request.params.id, parsed.data.providerId);
+      return agentService.renameConversation(request.params.id, parsed.data.title!);
     } catch (error) {
       return agentFailure(reply, error);
     }

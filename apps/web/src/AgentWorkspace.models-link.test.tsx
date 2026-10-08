@@ -84,6 +84,7 @@ vi.mock("./api", () => ({
     cancelAgentRun: vi.fn(async () => ({ ok: true })),
     createAgentConversation: vi.fn(async () => h.conversation),
     renameAgentConversation: vi.fn(async () => h.bootstrap.conversations[0]!),
+    setAgentConversationProvider: vi.fn(async () => h.bootstrap.conversations[0]!),
     deleteAgentConversation: vi.fn(async () => ({ ok: true })),
     revokeAgentMessage: vi.fn(async () => ({ ok: true, conversation: h.bootstrap.conversations[0]! })),
     uploadOutboundAttachment: vi.fn(async () => ({ ok: true })),
@@ -259,5 +260,78 @@ describe("agent workspace model settings deep link", () => {
     // No provider left at all: the "configure model" affordance is back.
     expect(Array.from(container.querySelectorAll("button")).some((button) =>
       button.textContent?.includes(translate("zh-CN", "agent.providers.configure")))).toBe(true);
+  });
+
+  it("pins a model choice server-side and keeps no localStorage copy", async () => {
+    await render({ providerListVersion: 0 });
+    // Offer a second provider so the picker has an alternative to pin.
+    mockApi.agentProviders.mockResolvedValueOnce({ items: [h.local, h.cloud], defaultProviderId: h.local.id });
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <AgentWorkspace
+            accounts={[]}
+            messages={[]}
+            onClose={() => undefined}
+            onOpenMessage={() => undefined}
+            demoMode={false}
+            preloadedBootstrap={h.bootstrap}
+            agentAccessLevel="send-confirmed"
+            onAgentAccessLevelChange={() => undefined}
+            onOpenModelSettings={openModelSettings}
+            providerListVersion={1}
+          />
+        </I18nProvider>,
+      );
+    });
+    await flush();
+
+    click(container.querySelector<HTMLButtonElement>(".agent-composer-model")!);
+    const option = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-model-option"))
+      .find((button) => button.textContent?.includes(h.cloud.label));
+    expect(option).toBeDefined();
+    click(option!);
+
+    // The pin is persisted server-side against the active conversation…
+    expect(mockApi.setAgentConversationProvider).toHaveBeenCalledTimes(1);
+    expect(mockApi.setAgentConversationProvider).toHaveBeenCalledWith("conv-1", h.cloud.id);
+    // …and the renderer keeps no cross-session copy (the drift class this
+    // replaces: a stale localStorage override won over the server record).
+    expect(window.localStorage.getItem("nami-agent-conversation-providers")).toBeNull();
+  });
+
+  it("keeps the session selection when the server-side pin is rejected", async () => {
+    await render({ providerListVersion: 0 });
+    mockApi.agentProviders.mockResolvedValueOnce({ items: [h.local, h.cloud], defaultProviderId: h.local.id });
+    mockApi.setAgentConversationProvider.mockRejectedValueOnce(new Error("provider unavailable"));
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <AgentWorkspace
+            accounts={[]}
+            messages={[]}
+            onClose={() => undefined}
+            onOpenMessage={() => undefined}
+            demoMode={false}
+            preloadedBootstrap={h.bootstrap}
+            agentAccessLevel="send-confirmed"
+            onAgentAccessLevelChange={() => undefined}
+            onOpenModelSettings={openModelSettings}
+            providerListVersion={1}
+          />
+        </I18nProvider>,
+      );
+    });
+    await flush();
+
+    click(container.querySelector<HTMLButtonElement>(".agent-composer-model")!);
+    const option = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-model-option"))
+      .find((button) => button.textContent?.includes(h.cloud.label));
+    click(option!);
+    await flush();
+
+    // Fire-and-forget: the failed pin costs the cross-session choice only.
+    expect(mockApi.setAgentConversationProvider).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain(h.cloud.label);
   });
 });

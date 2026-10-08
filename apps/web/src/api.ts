@@ -733,6 +733,8 @@ export const api = {
     request<AgentConversation>("/api/agent/conversations", { method: "POST", body: JSON.stringify(input) }),
   renameAgentConversation: (id: string, title: string) =>
     request<AgentConversationSummary>(`/api/agent/conversations/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  setAgentConversationProvider: (id: string, providerId: string) =>
+    request<AgentConversationSummary>(`/api/agent/conversations/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ providerId }) }),
   deleteAgentConversation: (id: string) =>
     request<{ ok: true }>(`/api/agent/conversations/${encodeURIComponent(id)}`, { method: "DELETE" }),
   revokeAgentMessage: (id: string, messageId: string, revoked: boolean) =>

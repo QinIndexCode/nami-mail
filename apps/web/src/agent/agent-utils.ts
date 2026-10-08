@@ -55,13 +55,6 @@ export function currentTime(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Conversation provider persistence
-// ---------------------------------------------------------------------------
-
-/** Keeps per-conversation model choices across restarts. */
-export const CONVERSATION_PROVIDERS_KEY = "nami-agent-conversation-providers";
-
-// ---------------------------------------------------------------------------
 // Date / formatting
 // ---------------------------------------------------------------------------
 
@@ -130,6 +123,23 @@ export function configuredProviderId(
     ?? providers.filter((provider) => provider.configured)[0]?.id
     ?? providers[0]?.id
     ?? "";
+}
+
+/**
+ * The provider a conversation should open on: the one recorded on the
+ * conversation (the server keeps this authoritative — every model pin is
+ * persisted server-side), falling back to the default when the record is
+ * missing, unconfigured, or no longer exists.
+ */
+export function resolveConversationProvider(
+  conversationProviderId: string | null | undefined,
+  providers: readonly { id: string; configured: boolean }[],
+  defaultProviderId: string | null,
+): string {
+  const recorded = conversationProviderId && providers.some((provider) => provider.id === conversationProviderId && provider.configured)
+    ? conversationProviderId
+    : null;
+  return recorded ?? configuredProviderId(providers, defaultProviderId);
 }
 
 // ---------------------------------------------------------------------------

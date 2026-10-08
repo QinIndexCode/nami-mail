@@ -329,10 +329,40 @@ if (contextBridge && ipcRenderer) {
     ipcRenderer.send("nami:update-network-online");
   });
 
+  // Durable renderer preferences (main writes them into a userData file; see
+  // renderer-local-store.mts). The renderer origin is an ephemeral port, so
+  // localStorage is wiped on every launch — this store survives restarts. The
+  // initial read is a one-shot synchronous handshake so the app's first frame
+  // can resolve preferences (locale) before any async settings arrive.
+  let localStoreEntries: Record<string, string> = {};
+  try {
+    const read = ipcRenderer.sendSync("nami:local-store-read") as unknown;
+    if (read && typeof read === "object" && !Array.isArray(read)) {
+      localStoreEntries = read as Record<string, string>;
+    }
+  } catch {
+    localStoreEntries = {};
+  }
+
   contextBridge.exposeInMainWorld("namiDesktop", {
     notify: (payload: NativeNotification) => ipcRenderer.invoke("nami:notify", payload),
     testNativeNotification: (payload: NativeNotification) => ipcRenderer.invoke("nami:test-native-notification", payload),
     copyVerificationCode: (code: string) => ipcRenderer.invoke("nami:copy-verification-code", code),
+    getLocalEntry: (key: string) => {
+      if (typeof key !== "string" || !Object.prototype.hasOwnProperty.call(localStoreEntries, key)) return null;
+      return localStoreEntries[key] ?? null;
+    },
+    setLocalEntry: (key: string, value: string | null) => {
+      if (typeof key !== "string" || (value !== null && typeof value !== "string")) return Promise.resolve({ saved: false });
+      return ipcRenderer.invoke("nami:local-store-set", key, value).then((result: unknown) => {
+        const saved = Boolean(result && typeof result === "object" && (result as { saved?: unknown }).saved);
+        if (saved) {
+          if (value === null) delete localStoreEntries[key];
+          else localStoreEntries[key] = value;
+        }
+        return { saved };
+      }).catch(() => ({ saved: false }));
+    },
     showItemInFolder: (path: string) => ipcRenderer.invoke("nami:show-item-in-folder", path),
     setLaunchAtStartup: (enabled: boolean) => {
       if (typeof enabled !== "boolean") return;

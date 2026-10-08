@@ -82,6 +82,7 @@ import {
 import { forkServerProcess, type ServerProcessHandle } from "./server-process.mjs";
 import { startLocalServiceAndRestoreDesktop, type ServiceStartupPlan } from "./local-service-startup.mjs";
 import { createServiceRestartCoordinator, serviceGiveUpDialogOptions } from "./service-restart-policy.mjs";
+import { registerRendererLocalStoreIpc } from "./renderer-local-store-ipc.mjs";
 
 type ExternalConfirmationRuntimeOptions = Readonly<{
   request: (input: {
@@ -1926,6 +1927,8 @@ if (desktopCliArguments !== undefined) {
     if (!isCurrentRenderer(event)) return false;
     return mainWindow?.isMaximized() ?? false;
   });
+  // Durable renderer preferences; see renderer-local-store-ipc.mts.
+  registerRendererLocalStoreIpc(ipcMain, isCurrentRenderer, () => app.getPath("userData"));
   ipcMain.on("nami:update-network-online", (event) => {
     if (!isCurrentRenderer(event)) return;
     checkForUpdatesAfterExternalTrigger();

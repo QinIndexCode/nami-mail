@@ -42,4 +42,63 @@ describe("locale preference storage", () => {
     expect(readLocalePreference(blockedStorage)).toBeNull();
     expect(() => saveLocalePreference("en-US", blockedStorage)).not.toThrow();
   });
+
+  it("falls back to the desktop durable mirror when browser storage is empty", () => {
+    // Desktop first frame: the ephemeral origin's localStorage is always
+    // empty; the preload's durable snapshot keeps the locale from flashing.
+    const durableEntries = new Map<string, string>([[localePreferenceStorageKey, "en-US"]]);
+    vi.stubGlobal("window", {
+      localStorage: { getItem: () => null, setItem: () => undefined, removeItem: () => undefined },
+      namiDesktop: {
+        getLocalEntry: (key: string) => durableEntries.get(key) ?? null,
+        setLocalEntry: (key: string, value: string | null) => {
+          if (value === null) durableEntries.delete(key);
+          else durableEntries.set(key, value);
+          return Promise.resolve({ saved: true });
+        },
+      },
+    });
+    try {
+      expect(readLocalePreference()).toBe("en-US");
+      // An explicit storage surface (stub or null) is addressed exactly.
+      expect(readLocalePreference(null)).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("mirrors saves into the desktop durable store and skips redundant writes", () => {
+    const entries = new Map<string, string>();
+    let durableWrites = 0;
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => entries.get(key) ?? null,
+        setItem: (key: string, value: string) => { entries.set(key, value); },
+        removeItem: (key: string) => { entries.delete(key); },
+      },
+      namiDesktop: {
+        getLocalEntry: (key: string) => entries.get(key) ?? null,
+        setLocalEntry: (key: string, value: string | null) => {
+          durableWrites += 1;
+          if (value === null) entries.delete(key);
+          else entries.set(key, value);
+          return Promise.resolve({ saved: true });
+        },
+      },
+    });
+    try {
+      saveLocalePreference("en-US");
+      expect(entries.get(localePreferenceStorageKey)).toBe("en-US");
+      expect(durableWrites).toBe(1);
+      // applySettings replays on every settings snapshot; an unchanged locale
+      // must not rewrite the durable store.
+      saveLocalePreference("en-US");
+      expect(durableWrites).toBe(1);
+      saveLocalePreference("zh-CN");
+      expect(durableWrites).toBe(2);
+      expect(readLocalePreference()).toBe("zh-CN");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

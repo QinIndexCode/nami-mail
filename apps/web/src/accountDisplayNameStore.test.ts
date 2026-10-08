@@ -11,36 +11,9 @@ import {
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-function installLocalStorageStub(): Storage {
-  const map = new Map<string, string>();
-  const stub = {
-    getItem: (key: string) => map.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      map.set(key, value);
-    },
-    removeItem: (key: string) => {
-      map.delete(key);
-    },
-    clear: () => {
-      map.clear();
-    },
-    key: (index: number) => [...map.keys()][index] ?? null,
-    get length() {
-      return map.size;
-    },
-  } as unknown as Storage;
-  Object.defineProperty(window, "localStorage", {
-    value: stub,
-    configurable: true,
-    writable: true,
-  });
-  return stub;
-}
-
 describe("accountDisplayNameStore", () => {
   beforeEach(() => {
     hydrateAccountDisplayNames([]);
-    installLocalStorageStub();
   });
 
   afterEach(() => {
@@ -54,13 +27,23 @@ describe("accountDisplayNameStore", () => {
     expect(getAccountDisplayName("  ALICE@EXAMPLE.COM ")).toBe("Work Mailbox");
   });
 
-  it("restores server names with fresh origin storage and honors cleared names", () => {
-    setAccountDisplayName("alice@example.com", "Old browser name");
+  it("keeps server hydration authoritative and honors cleared names", () => {
+    setAccountDisplayName("alice@example.com", "Session name");
     hydrateAccountDisplayNames([{ email: "alice@example.com", displayName: "School" }]);
-    installLocalStorageStub();
     expect(getAccountDisplayName("alice@example.com")).toBe("School");
     hydrateAccountDisplayNames([{ email: "alice@example.com", displayName: null }]);
     expect(getAccountDisplayName("alice@example.com")).toBeNull();
+  });
+
+  it("never consults localStorage (the stale-override path is removed)", () => {
+    Object.defineProperty(window, "localStorage", {
+      get() {
+        throw new Error("SecurityError: localStorage must not be read");
+      },
+      configurable: true,
+    });
+    setAccountDisplayName("noread@example.com", "In-memory");
+    expect(getAccountDisplayName("noread@example.com")).toBe("In-memory");
   });
 
   it("trims whitespace and truncates names to 64 characters", () => {
@@ -112,18 +95,10 @@ describe("accountDisplayNameStore", () => {
     container.remove();
   });
 
-  it("degrades gracefully to null when localStorage throws", () => {
-    Object.defineProperty(window, "localStorage", {
-      get() {
-        throw new Error("SecurityError: localStorage is disabled");
-      },
-      configurable: true,
-    });
-
-    expect(() => {
-      setAccountDisplayName("denied@example.com", "Name");
-    }).not.toThrow();
-
-    expect(getAccountDisplayName("denied@example.com")).toBeNull();
+  it("keeps demo-mode names for the session without any storage", () => {
+    // Demo accounts are never hydrated from the server; the name still edits
+    // in memory (session scope) instead of falling back to localStorage.
+    setAccountDisplayName("demo@example.test", "Demo Name");
+    expect(getAccountDisplayName("demo@example.test")).toBe("Demo Name");
   });
 });

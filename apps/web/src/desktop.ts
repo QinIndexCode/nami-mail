@@ -340,6 +340,15 @@ export type DesktopBridge = {
   testNativeNotification?: (payload: NativeNotification) => Promise<{ shown: boolean; soundPlayed?: boolean }>;
   copyVerificationCode: (code: string) => Promise<{ copied: boolean }>;
   showItemInFolder?: (path: string) => Promise<void>;
+  /**
+   * Desktop only: durable renderer preferences. The desktop origin is an
+   * ephemeral port, so localStorage cannot survive a relaunch; the main
+   * process mirrors these entries into a userData JSON file. Keys are
+   * "nami-mail.<feature>[.<detail>]" names; getLocalEntry resolves from the
+   * preload's startup snapshot (synchronous, available before first render).
+   */
+  getLocalEntry?: (key: string) => string | null;
+  setLocalEntry?: (key: string, value: string | null) => Promise<{ saved: boolean }>;
   quit?: () => void;
   /** Desktop only: registers/unregisters Nami Mail as a login item. */
   setLaunchAtStartup?: (enabled: boolean) => void;
