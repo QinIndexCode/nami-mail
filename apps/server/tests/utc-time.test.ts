@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import {
-  normalizeScheduledTimesMigration,
-  prepareSubmission,
-  submissionForId,
-  submissionRequestForId,
-} from "../src/outbox.js";
+import { prepareSubmission, submissionForId, submissionRequestForId } from "../src/outbox.js";
+import { normalizeScheduledTimesMigration } from "../src/scheduled-times-migration.js";
 import { toUtcIsoTimestamp } from "../src/utc-time.js";
 
 const now = new Date().toISOString();

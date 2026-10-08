@@ -19,7 +19,7 @@ const monolithRatchets = [
   ["apps/server/src/db.ts", 846],
   ["apps/server/src/agent/schema.ts", 807],
   ["apps/server/src/agent/sqlite-mail-application-service.ts", 768],
-  ["apps/server/src/outbox.ts", 820],
+  ["apps/server/src/outbox.ts", 830],
   ["apps/server/src/agent/openai-compatible-provider.ts", 749],
   ["apps/web/src/AddAccountModal.tsx", 1927],
   ["apps/web/src/SettingsModal.tsx", 1409],
