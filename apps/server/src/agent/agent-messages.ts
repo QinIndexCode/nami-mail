@@ -21,6 +21,10 @@ export const agentMessageCatalog = {
     "zh-CN": "当前云端模型未获邮件内容授权，本次不会发送任何邮件上下文。",
     "en-US": "The cloud model is not authorized to access mail content; no mail context will be sent.",
   },
+  "status.tool_not_authorized": {
+    "zh-CN": "该工具未获本轮授权，已拒绝执行。",
+    "en-US": "This tool is not authorized for the current turn; execution was denied.",
+  },
   "status.tool_call_limit": {
     "zh-CN": "邮件助理连续请求了过多操作，已停止本次处理。",
     "en-US": "The mail assistant requested too many operations in a row; processing has been stopped.",

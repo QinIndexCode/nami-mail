@@ -1135,6 +1135,13 @@ export class AgentRunEngine {
       const visibleTools = agentAccessLevel === "read-only"
         ? availableTools.filter((tool) => tool.executionMode === "read")
         : availableTools;
+      // The visibility filters above are the turn's execution authorization
+      // boundary, not just prompt shaping: the model can still emit a call for
+      // a hidden tool (inline tags, hallucination), and the runtime's account
+      // scope checks do not know about this turn's cloud-consent or chat-mode
+      // restrictions. Every call below is checked against this set before any
+      // confirmation is prepared or data is read.
+      const allowedToolNames = new Set(visibleTools.map((tool) => tool.name));
       // References ride along as user-chosen context across turns. Resolve
       // once per run so the current turn and every earlier turn with references
       // share the same fresh excerpts; a message deleted mid-conversation
@@ -1288,6 +1295,50 @@ export class AgentRunEngine {
         }];
         for (const call of toolCalls) {
           this.assertRunCurrent(lifecycleTasks, controller.signal);
+          if (!allowedToolNames.has(call.toolName)) {
+            // Outside this turn's authorized tool set: refuse before any
+            // confirmation is prepared, any account data is read, or the tool
+            // runs. Mirrors the runtime's denied-invocation handling below,
+            // and the audit line reuses the tool.invoke channel without
+            // recording call inputs.
+            const error = createAgentError({
+              code: "PERMISSION_DENIED",
+              message: t("status.tool_not_authorized"),
+              retryable: false,
+            });
+            await this.audit.append({
+              id: `audit-${randomUUID()}`,
+              requestId,
+              occurredAt: now(),
+              callerId: caller.callerId,
+              callerKind: caller.kind,
+              entryPoint: caller.entryPoint,
+              operation: "tool.invoke",
+              toolName: call.toolName,
+              toolCallId: call.id,
+              accountIds: [...state.metadata.scope.accountIds],
+              outcome: "denied",
+              errorCode: error.code,
+              parametersSummary: "Tool call rejected: outside the turn's authorized tool set.",
+            });
+            const deniedActivity: AgentToolActivity = {
+              id: `tool-${randomUUID()}`,
+              toolName: call.toolName,
+              title: "Processing mail action",
+              state: "failed",
+              summary: error.message,
+              error: stableUserFacingError(error),
+            };
+            toolActivities = [...toolActivities.filter((activity) => activity.id !== deniedActivity.id), deniedActivity];
+            yield { type: "tool", activity: deniedActivity };
+            syncInFlight();
+            modelMessages = [...modelMessages, {
+              role: "tool",
+              toolCallId: call.id,
+              content: toolResultMessage(false, modelToolError(error)),
+            }];
+            continue;
+          }
           const descriptor = this.tools.get(call.toolName)?.descriptor;
           const activityId = `tool-${randomUUID()}`;
           const searchDetail = call.toolName === "web.search" ? searchQueryDetail(call.input) : undefined;

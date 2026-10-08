@@ -854,14 +854,16 @@ describe("AgentService model tool loop", () => {
         .map((message) => JSON.parse(message.content));
       expect(toolResults).toEqual([
         expect.objectContaining({ ok: false, error: expect.objectContaining({ code: "SCOPE_DENIED" }) }),
-        expect.objectContaining({ ok: false, error: expect.objectContaining({ code: "TOOL_NOT_FOUND" }) }),
+        // An unknown tool name is outside the turn's authorized set, so the
+        // run-engine's turn-scoped gate denies it before the registry lookup.
+        expect.objectContaining({ ok: false, error: expect.objectContaining({ code: "PERMISSION_DENIED" }) }),
       ]);
       expect(events).toContainEqual({ type: "completed", reason: "stop" });
       const saved = value.service.getConversation(value.conversation.id);
       const failed = saved.messages.at(-1)?.toolActivities.filter((item) => item.state === "failed") ?? [];
       expect(failed).toEqual(expect.arrayContaining([
         expect.objectContaining({ toolName: "folders.list", error: expect.objectContaining({ code: "SCOPE_DENIED" }) }),
-        expect.objectContaining({ toolName: "mail.unknown", error: expect.objectContaining({ code: "TOOL_NOT_FOUND" }) }),
+        expect.objectContaining({ toolName: "mail.unknown", error: expect.objectContaining({ code: "PERMISSION_DENIED" }) }),
       ]));
     } finally {
       await closeFixture(value);
@@ -924,6 +926,179 @@ describe("AgentService model tool loop", () => {
 
       expect(cloudRequests).toHaveLength(1);
       expect(JSON.stringify(cloudRequests[0]!.messages)).not.toContain("LOCAL_MAIL_DERIVED_ASSISTANT_CANARY");
+    } finally {
+      await closeFixture(value);
+    }
+  });
+
+  it("denies a hidden mail tool emitted by a cloud provider without mail-content consent", async () => {
+    const value = fixture();
+    try {
+      const cloudProvider = value.service.createProvider({
+        label: "Cloud test provider",
+        kind: "openai-compatible",
+        endpoint: "https://api.example.test/v1",
+        model: "cloud-model",
+        apiKey: SERVICE_TEST_KEY,
+        timeoutMs: 30_000,
+        allowCloudMailContent: false,
+      });
+      // If the gate were missing, this canary would flow through the executed
+      // tool result into the next provider request.
+      value.mail.listMessages.mockResolvedValue({
+        items: [{
+          id: "message-1",
+          accountId: "account-1",
+          mailbox: "INBOX",
+          threadId: "thread-1",
+          subject: "PRIVATE_MAIL_CANARY",
+          from: { name: "Sender", address: "sender@example.test" },
+          sentAt: timestamp,
+          snippet: "PRIVATE_MAIL_CANARY",
+          flags: [],
+          hasAttachments: false,
+        }],
+      });
+      const internals = internalRuntime(value.service);
+      const cloudRequests: ProviderChatRequest[] = [];
+      let cloudTurns = 0;
+      vi.spyOn(internals.rag, "search").mockResolvedValue([]);
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
+        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
+        const { chat } = request;
+        if (chat.providerId !== cloudProvider.id) return;
+        cloudTurns += 1;
+        cloudRequests.push(chat);
+        if (cloudTurns === 1) {
+          // messages.list is hidden from this provider's tool list: the cloud
+          // consent filter removed it, yet the model emits a call anyway.
+          yield {
+            type: "tool_call",
+            call: {
+              id: "tool-call-hidden-mail",
+              toolName: "messages.list",
+              input: { limit: 1 },
+              requestedAt: timestamp,
+            },
+          };
+          yield { type: "completed", reason: "stop" };
+          return;
+        }
+        yield { type: "text_delta", delta: "Answered without mail context." };
+        yield { type: "completed", reason: "stop" };
+      });
+
+      const events = await streamWithAgent(value.service, value.conversation, cloudProvider.id, "What can I do next?");
+
+      // Execution count is zero: no mail data was read for the hidden call.
+      expect(value.mail.listMessages).not.toHaveBeenCalled();
+      expect(events).not.toContainEqual(expect.objectContaining({ type: "error" }));
+      // The loop continues with a denial result, and no mail-derived content
+      // reaches the next provider request.
+      expect(cloudRequests).toHaveLength(2);
+      const toolResults = cloudRequests[1]!.messages
+        .filter((message) => message.role === "tool")
+        .map((message) => JSON.parse(message.content));
+      expect(toolResults).toEqual([
+        expect.objectContaining({ ok: false, error: expect.objectContaining({ code: "PERMISSION_DENIED" }) }),
+      ]);
+      expect(JSON.stringify(cloudRequests[1]!.messages)).not.toContain("PRIVATE_MAIL_CANARY");
+      const saved = value.service.getConversation(value.conversation.id);
+      const failed = saved.messages.at(-1)?.toolActivities.filter((item) => item.state === "failed") ?? [];
+      expect(failed).toEqual([
+        expect.objectContaining({ toolName: "messages.list", error: expect.objectContaining({ code: "PERMISSION_DENIED" }) }),
+      ]);
+    } finally {
+      await closeFixture(value);
+    }
+  });
+
+  it("denies any tool call in chat mode", async () => {
+    const value = fixture();
+    try {
+      const internals = internalRuntime(value.service);
+      let chatTurns = 0;
+      vi.spyOn(internals.rag, "search").mockResolvedValue([]);
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
+        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
+        chatTurns += 1;
+        if (chatTurns > 1) {
+          yield { type: "text_delta", delta: "Chat continues without tools." };
+          yield { type: "completed", reason: "stop" };
+          return;
+        }
+        yield {
+          type: "tool_call",
+          call: {
+            id: "tool-call-chat",
+            toolName: "folders.list",
+            input: {},
+            requestedAt: timestamp,
+          },
+        };
+        yield { type: "completed", reason: "stop" };
+      });
+
+      const events: unknown[] = [];
+      for await (const event of value.service.streamMessage(value.conversation.id, {
+        content: "Hello",
+        providerId: value.provider.id,
+        mode: "chat",
+        scope: value.conversation.scope,
+        context: {},
+      })) events.push(event);
+
+      expect(value.mail.listFolders).not.toHaveBeenCalled();
+      expect(events).not.toContainEqual(expect.objectContaining({ type: "error" }));
+      const saved = value.service.getConversation(value.conversation.id);
+      const failed = saved.messages.at(-1)?.toolActivities.filter((item) => item.state === "failed") ?? [];
+      expect(failed).toEqual([
+        expect.objectContaining({ toolName: "folders.list", error: expect.objectContaining({ code: "PERMISSION_DENIED" }) }),
+      ]);
+    } finally {
+      await closeFixture(value);
+    }
+  });
+
+  it("denies a write tool hidden by the read-only access level", async () => {
+    const value = fixture();
+    try {
+      updateAppSettings(value.db, { agentAccessLevel: "read-only" });
+      const internals = internalRuntime(value.service);
+      let readonlyTurns = 0;
+      vi.spyOn(internals.rag, "search").mockResolvedValue([]);
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
+        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
+        readonlyTurns += 1;
+        if (readonlyTurns > 1) {
+          yield { type: "text_delta", delta: "Read-only answer without the write tool." };
+          yield { type: "completed", reason: "stop" };
+          return;
+        }
+        yield {
+          type: "tool_call",
+          call: {
+            id: "tool-call-readonly-write",
+            toolName: "mail.draft.create",
+            input: { accountId: "account-1", subject: "S", body: "B" },
+            requestedAt: timestamp,
+          },
+        };
+        yield { type: "completed", reason: "stop" };
+      });
+
+      const events = await streamWithAgent(value.service, value.conversation, value.provider.id);
+
+      // The write tool was hidden from the model, and the call is denied
+      // before any confirmation flow could start.
+      expect(value.mail.createDraft).not.toHaveBeenCalled();
+      expect(events).not.toContainEqual(expect.objectContaining({ type: "confirmation" }));
+      expect(events).not.toContainEqual(expect.objectContaining({ type: "error" }));
+      const saved = value.service.getConversation(value.conversation.id);
+      const failed = saved.messages.at(-1)?.toolActivities.filter((item) => item.state === "failed") ?? [];
+      expect(failed).toEqual([
+        expect.objectContaining({ toolName: "mail.draft.create", error: expect.objectContaining({ code: "PERMISSION_DENIED" }) }),
+      ]);
     } finally {
       await closeFixture(value);
     }
