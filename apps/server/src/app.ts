@@ -273,6 +273,20 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
         if (Array.isArray(entries)) clearPendingFlagsMarkers(context.db, entries.map((entry) => entry.id));
       }
     },
+    onOperationSettled: (kind, payload, rowId) => {
+      // The marker clear follows the durable settlement of a row, never the
+      // executor: an executor abandoned by a write-slot timeout keeps running
+      // and would otherwise clear a newer push's protection after its own
+      // row had already settled. The clear re-checks pending AND running
+      // rows for each message (excluding the settling row itself), so a
+      // newer push in either state stays protected.
+      if (kind === "flags-push") {
+        const { entries } = payload as { entries?: FlagsPushEntry[] };
+        if (Array.isArray(entries)) {
+          clearPendingFlagsMarkers(context.db, entries.map((entry) => entry.id), rowId);
+        }
+      }
+    },
   });
   operationQueue.registerRunner("move", async (payload) => {
     const { messageId, target } = payload as { messageId: string; target: MessageMoveTarget };
@@ -293,9 +307,11 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     return { updated: 0, failed: 0, changedIds: [] };
   });
   operationQueue.registerRunner("flags-push", async (payload) => {
+    // The marker clear lives in the onOperationSettled hook, not here: a
+    // late executor completion (after a write-slot timeout already settled
+    // this row) must not clear a newer push's protection.
     const push = payload as { accountId: string; entries: FlagsPushEntry[] };
     await pushFlagsRemote({ db: context.db, masterKey: context.masterKey, accessTokenProvider: context.oauthService }, push);
-    clearPendingFlagsMarkers(context.db, push.entries.map((entry) => entry.id));
   });
   // Repair `pending_flags_push` markers that no queued push is behind before
   // the resumed queue starts: a marker only syncs ever clears again is a

@@ -36,6 +36,18 @@ export type OperationQueueHooks = {
    * on. The payload is the operation's own JSON payload; handlers clear any
    * per-message markers they set at enqueue time. */
   onBackgroundPermanentFailure?(kind: OperationKind, payload: unknown): void;
+  /**
+   * Called after a row's terminal status is durably persisted (completed or
+   * failed), with the row's own payload and id. Owners settle their per-row
+   * bookkeeping here rather than inside the executor: an executor can
+   * complete LATE — after a write-slot timeout already rejected the wrapper
+   * and settled the row (the abandoned call keeps running) — and a late call
+   * must not clear bookkeeping a newer row still depends on. This hook sees
+   * only real settlements, so its handlers can re-check what is still
+   * pending or running before acting. The row id lets them exclude the
+   * settling row itself.
+   */
+  onOperationSettled?(kind: OperationKind, payload: unknown, rowId: string): void;
 };
 
 export type OperationQueue = {
@@ -155,6 +167,29 @@ export function createOperationQueue(db: DatabaseHandle, hooks: OperationQueueHo
     }
   }
 
+  /**
+   * Fires {@link OperationQueueHooks.onOperationSettled} for a row that has
+   * truly reached its terminal state — never for an intermediate attempt the
+   * retry loop is about to re-queue, and never from inside the executor (an
+   * executor abandoned by a write-slot timeout can complete late and must
+   * not re-notify). The row id lets handlers exclude a settling row from
+   * their own bookkeeping checks.
+   */
+  function notifySettled(kind: OperationKind, row: OperationQueueRow): void {
+    if (!hooks.onOperationSettled) return;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(row.payload_json);
+    } catch {
+      return;
+    }
+    try {
+      hooks.onOperationSettled(kind, payload, row.id);
+    } catch (error) {
+      serverLog.warn({ kind }, "Operation settled hook threw", error);
+    }
+  }
+
   /** Background FIFO driver: bounded retries with exponential backoff. The
    * row is flipped back to 'pending' between attempts so a restart mid-retry
    * still resumes it. After the final attempt the row stays failed and the
@@ -163,6 +198,9 @@ export function createOperationQueue(db: DatabaseHandle, hooks: OperationQueueHo
     for (let attempt = 1; attempt <= BACKGROUND_MAX_ATTEMPTS; attempt += 1) {
       try {
         await runRow(row);
+        // The row is terminal for good: this is the only settlement the
+        // owner's hook sees from a background run.
+        notifySettled(row.kind, row);
         return;
       } catch (error) {
         // A write-slot timeout says nothing about this operation: it never
@@ -190,6 +228,9 @@ export function createOperationQueue(db: DatabaseHandle, hooks: OperationQueueHo
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
+    // Retries exhausted (or a slot timeout ended them): the row's failed
+    // status IS its terminal state, so both hooks fire exactly once.
+    notifySettled(row.kind, row);
     const payload = JSON.parse(row.payload_json) as unknown;
     try {
       hooks.onBackgroundPermanentFailure?.(row.kind, payload);
@@ -231,7 +272,13 @@ export function createOperationQueue(db: DatabaseHandle, hooks: OperationQueueHo
       // shutdown during the wait is recovered by resumePending on startup.
       insertPending.run(id, accountIds[0] ?? "", kind, JSON.stringify(payload), now, now);
       const row = db.prepare("SELECT * FROM operation_queue WHERE id = ?").get(id) as OperationQueueRow;
-      return runRow<T>(row);
+      try {
+        return await runRow<T>(row);
+      } finally {
+        // Foreground rows settle exactly once, whatever the outcome: the
+        // notification follows the durable status, never the executor.
+        notifySettled(row.kind, row);
+      }
     },
 
     enqueueBackground(accountIds: readonly string[], kind: OperationKind, payload: unknown): void {
