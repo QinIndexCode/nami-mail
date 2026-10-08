@@ -1,3 +1,5 @@
+import { durableGet } from "../durablePreferences";
+
 // The settings modal shows one category panel at a time; the sidebar switches
 // categories instead of scrolling a single long page. The category list, the
 // sidebar grouping and the persistence key live here so tests can assert the
@@ -37,7 +39,10 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   { key: "intelligence", items: ["models", "mcp", "agent", "connections", "translation"] },
 ];
 
-export const SETTINGS_CATEGORY_STORAGE_KEY = "nami.settings.category";
+export const SETTINGS_CATEGORY_STORAGE_KEY = "nami-mail.settings-category";
+// Pre-durable-layer key (the desktop's ephemeral origin wiped it anyway);
+// read once as a fallback so an existing browser choice survives the rename.
+export const LEGACY_SETTINGS_CATEGORY_STORAGE_KEY = "nami.settings.category";
 
 /** The desktop category has no panel outside the desktop shell. */
 export function isDesktopSettingsRuntime(): boolean {
@@ -54,7 +59,9 @@ export function resolveSettingsCategory(stored: string | null, isDesktopRuntime:
 /** Reads the persisted category; missing, invalid or unavailable storage falls back to the first item. */
 export function readStoredSettingsCategory(isDesktopRuntime: boolean): SettingsCategoryId {
   try {
-    return resolveSettingsCategory(window.localStorage.getItem(SETTINGS_CATEGORY_STORAGE_KEY), isDesktopRuntime);
+    const stored = durableGet(SETTINGS_CATEGORY_STORAGE_KEY)
+      ?? window.localStorage.getItem(LEGACY_SETTINGS_CATEGORY_STORAGE_KEY);
+    return resolveSettingsCategory(stored, isDesktopRuntime);
   } catch {
     return "language";
   }

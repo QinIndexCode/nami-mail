@@ -83,8 +83,8 @@ import {
   revokeFailureMessage,
   readRevokedIds,
   writeRevokedIds,
-  LAST_ACTIVE_CONVERSATION_KEY,
   readLastActiveConversationId,
+  saveLastActiveConversationId,
   lastMessageIsUnanswered,
   applyRevokedMarks,
   purgeStaleErrors,
@@ -1059,11 +1059,8 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   // that conversation to see the completed reply).
   useEffect(() => {
     if (!active?.id) return;
-    try {
-      window.localStorage.setItem(LAST_ACTIVE_CONVERSATION_KEY, active.id);
-    } catch {
-      // Storage unavailable — the fallback to the newest conversation applies.
-    }
+    // Durable layer: survives the desktop's ephemeral-origin storage wipe.
+    saveLastActiveConversationId(active.id);
   }, [active?.id]);
   // A scope target that points at a deleted account must not leave the
   // composer silently scoped to nothing; fall back to the first account, or to
@@ -1194,11 +1191,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     activeIdRef.current = null;
     // Closing the panel from the welcome screen must reopen onto the welcome
     // screen, not the previously active conversation.
-    try {
-      window.localStorage.removeItem(LAST_ACTIVE_CONVERSATION_KEY);
-    } catch {
-      // Storage unavailable — the next reopen falls back to the newest conversation.
-    }
+    saveLastActiveConversationId(null);
     // A conversation fetch that is still in flight (selection token) must not
     // land back on screen after the user chose "new conversation": bump the
     // token so any such late fetch recognises itself as stale.

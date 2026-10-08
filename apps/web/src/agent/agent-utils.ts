@@ -3,6 +3,7 @@
  * Zero functional changes — all code is moved verbatim.
  */
 import { ApiError } from "../api";
+import { durableGet, durableSet } from "../durablePreferences";
 import { dateTimeFormatter } from "../app/app-utils";
 import type {
   AgentCitation,
@@ -203,15 +204,25 @@ export function revokeFailureMessage(error: unknown, t: Translate): string {
 // ---------------------------------------------------------------------------
 
 /** The panel reopens onto the conversation that was open when it closed. */
-export const LAST_ACTIVE_CONVERSATION_KEY = "nami.agent.lastConversation";
+export const LAST_ACTIVE_CONVERSATION_KEY = "nami-mail.agent-last-conversation";
+// Pre-durable-layer key (the desktop's ephemeral origin wiped it anyway);
+// read once as a fallback so an existing browser choice survives the rename.
+const LEGACY_LAST_ACTIVE_CONVERSATION_KEY = "nami.agent.lastConversation";
 
 export function readLastActiveConversationId(): string | null {
+  const current = durableGet(LAST_ACTIVE_CONVERSATION_KEY);
+  if (current && current.length > 0) return current;
   try {
-    const raw = window.localStorage.getItem(LAST_ACTIVE_CONVERSATION_KEY);
-    return raw && raw.length > 0 ? raw : null;
+    const legacy = window.localStorage.getItem(LEGACY_LAST_ACTIVE_CONVERSATION_KEY);
+    return legacy && legacy.length > 0 ? legacy : null;
   } catch {
     return null;
   }
+}
+
+/** Persists the reopened conversation through the durable preference layer. */
+export function saveLastActiveConversationId(conversationId: string | null): void {
+  durableSet(LAST_ACTIVE_CONVERSATION_KEY, conversationId);
 }
 
 // ---------------------------------------------------------------------------

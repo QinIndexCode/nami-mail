@@ -40,6 +40,7 @@ import {
 import { presentUpdateSnapshot } from "./updatePresentation";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
+import { durableSet } from "./durablePreferences";
 import { defaultAppSettings, type Account, type AgentAccessLevel, type AppSettings, type AppSettingsPatch, type BackgroundPreset, type NotificationSound } from "./types";
 import { FormNotice, type Notice } from "./FormNotice";
 import { errorMessage, backgroundContentTypeForFile, revokeDemoObjectUrl, expandedThemedSelectOwnsEscape, maxBackgroundUploadBytes, type PendingSettingsConfirmation } from "./settings/settings-utils";
@@ -195,7 +196,9 @@ export default function SettingsModal({
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(SETTINGS_CATEGORY_STORAGE_KEY, activeCategory);
+      // Durable layer: on the desktop the ephemeral origin wipes localStorage,
+      // so the last category is mirrored into the main-process store.
+      durableSet(SETTINGS_CATEGORY_STORAGE_KEY, activeCategory);
     } catch {
       // Storage may be unavailable (private mode); the choice simply does not persist.
     }

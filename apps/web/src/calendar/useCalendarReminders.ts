@@ -1,21 +1,31 @@
 import { useEffect, useRef } from "react";
 import { calendarCache } from "../dialogPrefetch";
+import { durableGet, durableSet } from "../durablePreferences";
 import { desktopBridge } from "../desktop";
 import type { CalendarEvent } from "../types";
 import type { ToastAction, ToastKind, ToastOptions } from "../notifications/useToastQueue";
 import { formatEventTimeSpan } from "./calendarUtils";
 import { detectMeetingLink } from "./meetingLinks";
 
-const STORAGE_KEY = "nami:reminded_calendar_events";
+const STORAGE_KEY = "nami-mail.calendar-reminded-events";
+// Pre-durable-layer key (the desktop's ephemeral origin wiped it anyway);
+// read once as a fallback so reminders already shown in a browser session
+// survive the rename.
+const LEGACY_STORAGE_KEY = "nami:reminded_calendar_events";
 const MAX_STORED_KEYS = 200;
 const REMINDER_ADVANCE_MS = 15 * 60 * 1000; // 15 minutes before start
 const STALE_WINDOW_MS = 30 * 60 * 1000; // Ignore reminders older than 30 minutes
 
 function loadNotifiedKeys(): Set<string> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw);
+    const current = durableGet(STORAGE_KEY);
+    if (current) {
+      const arr = JSON.parse(current);
+      return new Set(Array.isArray(arr) ? arr : []);
+    }
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!legacy) return new Set();
+    const arr = JSON.parse(legacy);
     return new Set(Array.isArray(arr) ? arr : []);
   } catch {
     return new Set();
@@ -24,8 +34,9 @@ function loadNotifiedKeys(): Set<string> {
 
 function saveNotifiedKeys(set: Set<string>): void {
   try {
-    const arr = Array.from(set).slice(-MAX_STORED_KEYS);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
+    // Durable layer: on the desktop the ephemeral origin wipes localStorage,
+    // so without the mirror a restart inside the reminder window re-alerted.
+    durableSet(STORAGE_KEY, JSON.stringify(Array.from(set).slice(-MAX_STORED_KEYS)));
   } catch {
     // Ignore storage quota or access errors
   }

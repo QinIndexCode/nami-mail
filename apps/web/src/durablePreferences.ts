@@ -9,24 +9,19 @@ import { desktopBridge } from "./desktop";
  * userData (the local mail service never sees them). In a browser the bridge
  * is absent and localStorage alone is used — a single stable origin.
  *
- * Read order: the synchronous session override map first, then localStorage,
- * then the desktop store's startup snapshot. The override map exists because
- * both persistent surfaces can lag or fail on the desktop: a clear right
- * after boot must not resurrect the snapshot value (the durable IPC write is
- * asynchronous and the localStorage entry may not exist), and a quota-blocked
- * localStorage write must not lose the session choice. An override entry of
- * null is a tombstone — distinct from "never overridden" — so clearing a
- * preference sticks for the whole session even when every persistent surface
- * still holds the old value.
- *
- * Writes update the override map first, then both persistent surfaces;
- * failures degrade gracefully — losing a preference must never surface as an
- * application error or an unhandled rejection.
+ * Read order: a pending session override first, then localStorage, then the
+ * desktop store's startup snapshot. The override covers the asynchronous
+ * window of a write (a clear right after boot must not resurrect the
+ * snapshot value while the durable IPC write is still in flight) and the
+ * failure case where neither surface can hold the value. Once the durable
+ * write settles successfully the surfaces agree and the override is dropped,
+ * so later external localStorage changes stay readable; a failed write keeps
+ * the override to preserve the session choice.
  */
-const sessionOverrides = new Map<string, string | null>();
+const pendingOverrides = new Map<string, string | null>();
 
 export function durableGet(key: string): string | null {
-  const overridden = sessionOverrides.get(key);
+  const overridden = pendingOverrides.get(key);
   if (overridden !== undefined) return overridden;
   try {
     const value = window.localStorage.getItem(key);
@@ -44,22 +39,30 @@ export function durableGet(key: string): string | null {
 }
 
 export function durableSet(key: string, value: string | null): void {
-  // The synchronous override governs every read in this session, regardless
-  // of what the persistent surfaces end up holding.
-  sessionOverrides.set(key, value);
   try {
     if (value === null) window.localStorage.removeItem(key);
     else window.localStorage.setItem(key, value);
   } catch {
-    // Session storage may fail (quota, private mode); the override and the
-    // durable write below still govern.
+    // Session storage may fail (quota, private mode); the durable write below
+    // still runs.
   }
   const bridge = desktopBridge();
-  if (!bridge?.setLocalEntry) return;
+  if (!bridge?.setLocalEntry) return; // Browser mode: the synchronous write is the whole story.
+  // Desktop: the durable write is asynchronous, which leaves a window where
+  // both readable surfaces may disagree with the just-made choice — and a
+  // cleared entry would fall back to the stale startup snapshot. A session
+  // override closes that window until the write settles; a failed write keeps
+  // it so the session choice is preserved.
+  pendingOverrides.set(key, value);
   try {
-    // Fire-and-forget, but the rejection IS handled: a failed durable write
-    // must never surface as an unhandled rejection or an application error.
-    void Promise.resolve(bridge.setLocalEntry(key, value)).catch(() => undefined);
+    // Fire-and-forget with the rejection handled: a failed durable write must
+    // never surface as an unhandled rejection or an application error.
+    void Promise.resolve(bridge.setLocalEntry(key, value))
+      .then((result) => {
+        // The surfaces now agree with the session value.
+        if (result?.saved) pendingOverrides.delete(key);
+      })
+      .catch(() => undefined);
   } catch {
     // A synchronous bridge failure leaves the override in effect for this session.
   }
