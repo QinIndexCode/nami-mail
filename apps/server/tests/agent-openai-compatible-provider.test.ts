@@ -318,6 +318,67 @@ it("OpenAI compatible provider extracts JSON-style inline tool calls split acros
   assert.deepEqual(events.at(-1), { type: "completed", finishReason: "tool-calls" });
 });
 
+// R01 recheck: native tool_calls must honor the same allowToolCalls gate as
+// inline extraction — a chat/auxiliary request (tools=[], allowToolCalls
+// false) must never surface a tool_call event, even when a non-compliant
+// endpoint emits one anyway. The execution-layer gate in the run engine
+// stays the independent second door.
+it("OpenAI compatible provider drops native tool calls when allowToolCalls is false", async () => {
+  const provider = new OpenAiCompatibleProvider({
+    id: "native-gated",
+    kind: "openai-compatible",
+    endpoint: "https://api.example.test/v1",
+    fetchImpl: async () => sseResponse([
+      'data: {"choices":[{"delta":{"content":"Found "}}]}',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"messages.search","arguments":"{\\"query\\":\\"invoice\\"}"}}]}}]}',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+      "data: [DONE]",
+    ]),
+  });
+
+  const events = [];
+  for await (const event of provider.streamChat({
+    requestId: "123e4567-e89b-12d3-a456-426614174005",
+    providerId: "native-gated",
+    model: "test-model",
+    messages: [{ role: "user", content: "Find an invoice" }],
+    tools: [],
+    allowToolCalls: false,
+    responseFormat: "text",
+  })) events.push(event);
+
+  assert.deepEqual(events.filter((event) => event.type === "tool_call"), []);
+  assert.deepEqual(events.filter((event) => event.type === "text_delta").map((event) => event.type === "text_delta" ? event.delta : ""), ["Found "]);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
+});
+
+it("OpenAI compatible provider drops inline tool calls when allowToolCalls is false", async () => {
+  const provider = new OpenAiCompatibleProvider({
+    id: "inline-gated",
+    kind: "openai-compatible",
+    endpoint: "https://api.example.test/v1",
+    fetchImpl: async () => sseResponse([
+      'data: {"choices":[{"delta":{"content":"Looking for it. <tool_call><function=messages.search><parameter={\\"query\\":\\"invoice\\"}</parameter></function></tool_call>"}}]}',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+      "data: [DONE]",
+    ]),
+  });
+
+  const events = [];
+  for await (const event of provider.streamChat({
+    requestId: "123e4567-e89b-12d3-a456-426614174006",
+    providerId: "inline-gated",
+    model: "test-model",
+    messages: [{ role: "user", content: "Find an invoice" }],
+    tools: [],
+    allowToolCalls: false,
+    responseFormat: "text",
+  })) events.push(event);
+
+  assert.deepEqual(events.filter((event) => event.type === "tool_call"), []);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
+});
+
 it("OpenAI compatible provider embeds inputs through the /embeddings endpoint", async () => {
   const requests: Array<{ url: string; body: string }> = [];
   const provider = new OpenAiCompatibleProvider({

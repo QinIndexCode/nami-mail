@@ -430,7 +430,13 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
       // Inline tool-call extraction only runs when the request actually allows
       // tool calls: a chat/auxiliary request must never surface a tool_call
       // event, even when the model emits inline tags into its text output.
-      const inlineExtractor = request.allowToolCalls ? new InlineToolCallExtractor() : undefined;
+      // R01: the NATIVE tool_calls deltas honor the same gate — a
+      // non-compliant endpoint can emit tool_calls for a request that sent no
+      // tools, and the run engine's execution-layer authorization stays the
+      // independent second door, but the provider never reports what the
+      // request did not ask for.
+      const acceptToolCalls = request.allowToolCalls === true;
+      const inlineExtractor = acceptToolCalls ? new InlineToolCallExtractor() : undefined;
       let hasInlineToolCalls = false;
       try {
         while (true) {
@@ -475,9 +481,9 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
                 yield { type: "reasoning_delta", delta: reasoning };
               }
             }
-            appendToolDelta(calls, delta?.tool_calls);
+            if (acceptToolCalls) appendToolDelta(calls, delta?.tool_calls);
             if (typeof choice?.finish_reason === "string") {
-              finishReason = choice.finish_reason === "tool_calls" ? "tool-calls"
+              finishReason = choice.finish_reason === "tool_calls" ? (acceptToolCalls ? "tool-calls" : "stop")
                 : choice.finish_reason === "length" ? "length"
                   : choice.finish_reason === "cancelled" ? "cancelled"
                     : choice.finish_reason === "content_filter" ? "content-filter" : "stop";
