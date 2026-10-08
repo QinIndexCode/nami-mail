@@ -437,4 +437,93 @@ describe("MCP tool result size bounds", () => {
       expect(value.structuredContent).toEqual({ sum: 5 });
     }
   });
+
+  it("forwards additionalProperties input to external MCP tools (R08)", () => {
+    const tools = createMcpAgentTools({
+      client: stubClient(async () => ({ content: [], isError: false })),
+      serverId: "mcp-server-abc",
+      serverLabel: "Stub server",
+      tools: [{
+        name: "flexible",
+        annotations: { readOnlyHint: true },
+        inputSchema: {
+          type: "object",
+          properties: { known: { type: "string" } },
+          required: ["known"],
+          additionalProperties: true,
+        },
+      }],
+    });
+    const parsed = tools[0]!.inputSchema.parse({ known: "x", extra: { nested: "required-value" } }) as Record<string, unknown>;
+    // z.object's default strip used to delete the extra key the external
+    // tool required.
+    expect(parsed).toEqual({ known: "x", extra: { nested: "required-value" } });
+  });
+
+  it("keeps nested additionalProperties of external MCP tools (R08)", () => {
+    const tools = createMcpAgentTools({
+      client: stubClient(async () => ({ content: [], isError: false })),
+      serverId: "mcp-server-abc",
+      serverLabel: "Stub server",
+      tools: [{
+        name: "nested",
+        annotations: { readOnlyHint: true },
+        inputSchema: {
+          type: "object",
+          properties: {
+            options: {
+              type: "object",
+              properties: { inner: { type: "string" } },
+              additionalProperties: true,
+            },
+          },
+          required: ["options"],
+        },
+      }],
+    });
+    const parsed = tools[0]!.inputSchema.parse({
+      options: { inner: "kept", extra: "forwarded" },
+    }) as { options: Record<string, unknown> };
+    expect(parsed.options).toEqual({ inner: "kept", extra: "forwarded" });
+  });
+
+  it("still rejects unknown keys when additionalProperties is false", () => {
+    const tools = createMcpAgentTools({
+      client: stubClient(async () => ({ content: [], isError: false })),
+      serverId: "mcp-server-abc",
+      serverLabel: "Stub server",
+      tools: [{
+        name: "strict",
+        annotations: { readOnlyHint: true },
+        inputSchema: {
+          type: "object",
+          properties: { known: { type: "string" } },
+          required: ["known"],
+          additionalProperties: false,
+        },
+      }],
+    });
+    expect(() => tools[0]!.inputSchema.parse({ known: "x", extra: "denied" })).toThrow();
+  });
+
+  it("validates typed additionalProperties through the catchall", () => {
+    const tools = createMcpAgentTools({
+      client: stubClient(async () => ({ content: [], isError: false })),
+      serverId: "mcp-server-abc",
+      serverLabel: "Stub server",
+      tools: [{
+        name: "typed",
+        annotations: { readOnlyHint: true },
+        inputSchema: {
+          type: "object",
+          properties: { known: { type: "string" } },
+          required: ["known"],
+          additionalProperties: { type: "number" },
+        },
+      }],
+    });
+    const parsed = tools[0]!.inputSchema.parse({ known: "x", extra: 5 }) as Record<string, unknown>;
+    expect(parsed.extra).toBe(5);
+    expect(() => tools[0]!.inputSchema.parse({ known: "x", extra: "not-a-number" })).toThrow();
+  });
 });
