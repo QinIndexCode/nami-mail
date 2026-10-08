@@ -265,21 +265,15 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   // before they dispatch, so a shutdown while an operation is queued or in
   // flight never loses it: pending/running rows are re-enqueued here.
   const operationQueue = createOperationQueue(context.db, {
-    onBackgroundPermanentFailure: (kind, payload) => {
-      // A flags push that exhausted its retries keeps the local (user) state
-      // but must stop blocking sync reconciliation for those rows.
-      if (kind === "flags-push") {
-        const { entries } = payload as { entries?: FlagsPushEntry[] };
-        if (Array.isArray(entries)) clearPendingFlagsMarkers(context.db, entries.map((entry) => entry.id));
-      }
-    },
     onOperationSettled: (kind, payload, rowId) => {
       // The marker clear follows the durable settlement of a row, never the
       // executor: an executor abandoned by a write-slot timeout keeps running
       // and would otherwise clear a newer push's protection after its own
       // row had already settled. The clear re-checks pending AND running
       // rows for each message (excluding the settling row itself), so a
-      // newer push in either state stays protected.
+      // newer push in either state stays protected. This covers success,
+      // exhausted retries, and foreground failures — the former
+      // permanent-failure hook's job is a subset.
       if (kind === "flags-push") {
         const { entries } = payload as { entries?: FlagsPushEntry[] };
         if (Array.isArray(entries)) {
