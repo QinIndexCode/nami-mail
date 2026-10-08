@@ -127,4 +127,66 @@ describe("durablePreferences session overrides (R12)", () => {
     expect(durableGet("k6")).toBeNull();
     expect(storage.has("k6")).toBe(false);
   });
+
+  it("a successful write re-syncs localStorage, so a quota-failed earlier write cannot resurrect the stale value", async () => {
+    // The recheck's repro: localStorage already held an old value and its
+    // write FAILED (quota). The replacement is chosen, the durable write
+    // succeeds — but the session override was dropped on success alone, and
+    // the read order then served the OLD localStorage value back forever.
+    const storage = new Map<string, string>([["k7", "old-avatar"]]);
+    installLocalStorage(storage, { failing: true });
+    const bridge = installDelayedBridge({ snapshot: {} });
+
+    durableSet("k7", "new-avatar");
+    expect(durableGet("k7")).toBe("new-avatar");
+
+    // The durable write succeeds (the bridge is healthy) while the
+    // localStorage write keeps failing for this session.
+    bridge.release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(bridge.entries.get("k7")).toBe("new-avatar");
+
+    // The user-visible value stays the session choice across the settlement:
+    // the override is only dropped when a readable surface holds it, and here
+    // the permanently quota-blocked localStorage keeps the override alive
+    // instead of letting the stale entry win the read order.
+    expect(durableGet("k7")).toBe("new-avatar");
+  });
+
+  it("a successful clear re-syncs a transiently-quota-blocked surface so the stale value cannot revive", async () => {
+    // Same window, but the surface recovers before the durable write settles
+    // (a quota that clears, e.g. the user deleted other data). The settlement
+    // re-asserts the session value and only then drops the override, so the
+    // stale localStorage entry never becomes the authoritative read again.
+    const storage = new Map<string, string>([["k8", "old-avatar"]]);
+    let failWrites = true;
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          if (failWrites) throw new Error("QuotaExceededError");
+          storage.set(key, value);
+        },
+        removeItem: (key: string) => {
+          if (failWrites) throw new Error("QuotaExceededError");
+          storage.delete(key);
+        },
+      },
+    });
+    const bridge = installDelayedBridge({ snapshot: { "k8": "old-avatar" } });
+
+    durableSet("k8", null);
+    expect(durableGet("k8")).toBeNull();
+
+    // The quota clears while the durable write is still in flight.
+    failWrites = false;
+    bridge.release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // After the durable clear settles, neither surface may serve the old
+    // value again — not the snapshot, not the stale localStorage entry.
+    expect(durableGet("k8")).toBeNull();
+    expect(storage.has("k8")).toBe(false);
+    expect(bridge.entries.has("k8")).toBe(false);
+  });
 });
