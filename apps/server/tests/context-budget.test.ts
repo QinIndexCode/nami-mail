@@ -192,5 +192,27 @@ describe("context-budget", () => {
       expect(compressed.some((message) => message.content?.includes("Question 3"))).toBe(true);
       expect(declaredIds.has("call-3")).toBe(true);
     });
+
+    it("counts the tool's parametersSchema against the budget (R06b)", () => {
+      const bigSchema = { type: "object", description: "模式描述".repeat(1000) };
+      const baseTools = [{
+        name: "messages.list",
+        title: "List messages",
+        description: "List mail",
+        category: "messages",
+        executionMode: "read",
+        requiredScopes: [],
+        accountAccess: "required",
+        confirmationPolicy: "never",
+        availableToExternal: false,
+      }] as unknown as Parameters<typeof estimateMessagesTokens>[1];
+      const withSchema = baseTools!.map((tool) => ({ ...tool, parametersSchema: bigSchema }));
+
+      const without = estimateMessagesTokens([], baseTools);
+      const with_ = estimateMessagesTokens([], withSchema);
+      // A 3000-CJK-character schema adds well over a thousand estimated
+      // tokens; the old code read a non-existent field and counted nothing.
+      expect(with_ - without).toBeGreaterThan(1000);
+    });
   });
 });

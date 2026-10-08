@@ -85,8 +85,12 @@ export function estimateMessagesTokens(
       total += estimateTokens(tool.name);
       total += estimateTokens(tool.title);
       total += estimateTokens(tool.description);
-      if (tool.parameters) {
-        total += estimateTokens(tool.parameters);
+      // The contract field is parametersSchema (R06b): a large tool schema
+      // must count against the context budget or the request can silently
+      // exceed the model's window.
+      const schema = tool.parametersSchema;
+      if (schema) {
+        total += estimateTokens(schema);
       }
     }
   }
