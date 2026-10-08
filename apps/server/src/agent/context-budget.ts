@@ -260,12 +260,16 @@ export function compressContextHistory(
 
   // Phase 2: collapse the oldest whole turns into one summary user message.
   // Each collapse consumes entire turns, so no assistant declaration can be
-  // separated from its results.
+  // separated from its results. The collapse stays bounded at ~4 messages —
+  // the previous single-shot behavior — so the amount of retained history
+  // does not shrink just because the partition is coarser.
   if (turns.length > 1) {
     let summarizedTurns = 0;
     let summarizedMessages = 0;
     const snippets: string[] = [];
     while (turns.length > 1 && !fits()) {
+      const nextTurn = turns[0]!;
+      if (summarizedMessages > 0 && summarizedMessages + nextTurn.length > 4) break;
       const oldest = turns.shift()!;
       summarizedTurns += 1;
       summarizedMessages += oldest.length;

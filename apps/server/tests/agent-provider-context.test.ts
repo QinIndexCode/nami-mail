@@ -76,6 +76,10 @@ function fixture() {
     timeoutMs: 30_000,
     allowCloudMailContent: false,
     makeDefault: true,
+    // A realistic window: tool parameter schemas now count against the
+    // context budget (R06b), and the built-in tool set alone would otherwise
+    // shrink the message budget below this test's 14-message history slice.
+    contextWindowTokens: 131_072,
   });
   const conversation = service.createConversation({
     providerId: provider.id,
