@@ -129,7 +129,7 @@ import {
   AGENT_FADE_STAGGER_MS,
   localizeMessageLinks,
 } from "./app/app-utils";
-import { useMessageBody } from "./app/useMessageBody";
+import { ensureFullMessage, mergeMessageDetail, useMessageBody } from "./app/useMessageBody";
 import { useMailTranslation } from "./app/useMailTranslation";
 import { useSplashDismiss } from "./app/useSplashDismiss";
 import { useOutboundSubmissions } from "./app/useOutboundSubmissions";
@@ -1447,7 +1447,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         ?? null);
   // The list carries no body, so the open message is loaded on demand and
   // merged back into the row the reader resolves here.
-  useMessageBody(isDemo, selected, setMessages, setThreadExtras);
+  const { phase: selectedBodyPhase, reload: reloadSelectedBody } = useMessageBody(isDemo, selected, setMessages, setThreadExtras);
   const threadExtrasForSelected = threadExtras && selected
     && (threadExtras.anchorId === selected.id || threadExtras.members.some((member) => member.id === selected.id))
     ? threadExtras.members
@@ -1841,49 +1841,67 @@ const emptyMessageList = useMemo(() => (query.trim()
     };
   }, [searchOpen]);
 
-  const openReply = useCallback(() => {
+  // R10: reply/reply-all/forward quote the FULL message, not the list row's
+  // 4000-character preview. The pinned id resolves through the shared seam —
+  // concurrent clicks on the same message share one request — and a failure
+  // keeps the mail open and says so instead of silently quoting a truncated
+  // body.
+  const resolveBodyForCompose = useCallback(async (source: Message): Promise<Message | null> => {
+    const resolved = await ensureFullMessage(isDemo, source, (detail) => mergeMessageDetail(detail, setMessages, setThreadExtras));
+    if (!resolved) showToast(t("mail.body.loadFailed"), "error");
+    return resolved;
+    // isDemo is a module-level constant, not a reactive value.
+  }, [setMessages, setThreadExtras, showToast, t]);
+
+  const openReply = useCallback(async () => {
     if (!selected) return;
-    const reply = buildReplyDraft(selected, [...accounts.map((account) => account.email), selected.accountEmail]);
+    const source = await resolveBodyForCompose(selected);
+    if (!source) return;
+    const reply = buildReplyDraft(source, [...accounts.map((account) => account.email), source.accountEmail]);
     actions.openCompose({
-      accountId: selected.accountId,
+      accountId: source.accountId,
       to: reply.to.join(", "),
       cc: reply.cc.join(", "),
       subject: reply.subject,
       inReplyTo: reply.inReplyTo,
       references: reply.references,
-      text: replyBody(selected, accounts, locale, t, safeHtml),
+      text: replyBody(source, accounts, locale, t, safeHtml),
     });
-  }, [accounts, actions, locale, safeHtml, selected, t]);
+  }, [accounts, actions, locale, resolveBodyForCompose, safeHtml, selected, t]);
 
-  const openReplyAll = useCallback(() => {
+  const openReplyAll = useCallback(async () => {
     if (!selected) return;
-    const reply = buildReplyDraft(selected, [...accounts.map((account) => account.email), selected.accountEmail], true);
+    const source = await resolveBodyForCompose(selected);
+    if (!source) return;
+    const reply = buildReplyDraft(source, [...accounts.map((account) => account.email), source.accountEmail], true);
     actions.openCompose({
-      accountId: selected.accountId,
+      accountId: source.accountId,
       to: reply.to.join(", "),
       cc: reply.cc.join(", "),
       subject: reply.subject,
       inReplyTo: reply.inReplyTo,
       references: reply.references,
-      text: replyBody(selected, accounts, locale, t, safeHtml),
+      text: replyBody(source, accounts, locale, t, safeHtml),
     });
-  }, [accounts, actions, locale, safeHtml, selected, t]);
+  }, [accounts, actions, locale, resolveBodyForCompose, safeHtml, selected, t]);
 
-  const openForward = useCallback(() => {
+  const openForward = useCallback(async () => {
     if (!selected) return;
+    const source = await resolveBodyForCompose(selected);
+    if (!source) return;
     const forward = buildForwardDraft(
-      selected,
-      selected.textBody || textFromSanitizedMailHtml(safeHtml) || selected.snippet,
+      source,
+      source.textBody || textFromSanitizedMailHtml(safeHtml) || source.snippet,
     );
-    const signature = accounts.find((account) => account.id === selected.accountId)?.signature ?? "";
+    const signature = accounts.find((account) => account.id === source.accountId)?.signature ?? "";
     actions.openCompose({
-      accountId: selected.accountId,
+      accountId: source.accountId,
       to: forward.to.join(", "),
       cc: forward.cc.join(", "),
       subject: forward.subject,
       text: signature.trim() ? `${forward.text}\n\n${signature.trim()}` : forward.text,
     });
-  }, [accounts, actions, safeHtml, selected]);
+  }, [accounts, actions, resolveBodyForCompose, safeHtml, selected]);
 
   const moveSelectedMessage = async (target: MoveTarget) => {
     if (!selected || selectedRemoteActionsBlocked || (target === "archive" && selectedIsArchived)) return;
@@ -2909,6 +2927,8 @@ const emptyMessageList = useMemo(() => (query.trim()
           openAgentWorkspace={openAgentWorkspace}
           openCalendarImport={openCalendarImport}
           exportSelectedEml={exportSelectedEml}
+          selectedBodyPhase={selectedBodyPhase}
+          onRetryBody={reloadSelectedBody}
           printSelectedMessage={printSelectedMessage}
           exportContactVcf={exportContactVcf}
           exportCalendarIcs={exportCalendarIcs}

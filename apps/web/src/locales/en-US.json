@@ -2220,6 +2220,7 @@
     "autoReply.notice.cancel": "Cancel",
     "autoReply.notice.resolveFailed": "Your decision couldn't be sent. Try again.",
     "mail.action.queued": "Action queued; it will run after the current operation finishes.",
+    "mail.body.loadFailed": "The message body failed to load. Check your connection and retry.",
     "settings.agent.autoReplyTools": "Auto-reply & memory",
     "settings.agent.autoReplyToolsPending": "Pending",
     "settings.agent.autoReplyToolsDeclined": "Unanswered",

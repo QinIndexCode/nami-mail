@@ -2220,6 +2220,7 @@
     "autoReply.notice.cancel": "取消",
     "autoReply.notice.resolveFailed": "无法提交你的决定，请重试。",
     "mail.action.queued": "操作已加入队列，将在前面的操作完成后自动执行。",
+    "mail.body.loadFailed": "邮件正文加载失败，请检查连接后重试。",
     "settings.agent.autoReplyTools": "自动回复与记忆",
     "settings.agent.autoReplyToolsPending": "待确认",
     "settings.agent.autoReplyToolsDeclined": "未回复",
