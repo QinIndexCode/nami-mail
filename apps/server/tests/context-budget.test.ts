@@ -150,7 +150,7 @@ describe("context-budget", () => {
       // Whatever survives compression, no tool result may lose the assistant
       // declaration that owns it.
       for (const message of toolMessages) {
-        expect(declaredIds.has(message.toolCallId)).toBe(true);
+        expect(typeof message.toolCallId === "string" && declaredIds.has(message.toolCallId)).toBe(true);
       }
       // The current turn's user message is never deleted.
       expect(compressed.some((message) => message.role === "user" && message.content.includes("Long question"))).toBe(true);
@@ -186,7 +186,7 @@ describe("context-budget", () => {
           .flatMap((message) => (message.toolCalls ?? []).map((call) => call.id)),
       );
       for (const message of compressed.filter((item) => item.role === "tool")) {
-        expect(declaredIds.has(message.toolCallId)).toBe(true);
+        expect(typeof message.toolCallId === "string" && declaredIds.has(message.toolCallId)).toBe(true);
       }
       // The current turn is intact: its user message and its declaration.
       expect(compressed.some((message) => message.content?.includes("Question 3"))).toBe(true);
