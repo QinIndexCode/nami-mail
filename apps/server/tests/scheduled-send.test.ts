@@ -9,6 +9,7 @@ import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import {
   cleanupExpiredOutboundAttachments,
   createOutboundAttachment,
+  releaseSubmissionOutboundAttachments,
 } from "../src/outbound-attachments.js";
 import {
   deletePendingScheduledSubmission,
@@ -16,7 +17,7 @@ import {
   prepareSubmission,
   submissionForId,
 } from "../src/outbox.js";
-import { submitDueScheduledSubmissions } from "../src/scheduled-send.js";
+import { restoreScheduledSubmissionAttachments, submitDueScheduledSubmissions } from "../src/scheduled-send.js";
 import type { AccountRecord } from "../src/types.js";
 
 const { close, createTransport, send } = vi.hoisted(() => ({
@@ -61,8 +62,13 @@ function accountRow(key: Buffer): AccountRecord {
   return account;
 }
 
-function insertAccount(db: DatabaseHandle, key: Buffer): void {
+function insertAccount(db: DatabaseHandle, key: Buffer, id = "account-1", email = "sender@example.com"): void {
   const account = accountRow(key);
+  account.id = id;
+  account.email = email;
+  account.imap_username = email;
+  account.smtp_username = email;
+  account.encrypted_password = encryptAccountPassword(account, "app-password", key);
   db.prepare(`
     INSERT INTO accounts (
       id, email, provider, provider_name, encrypted_password, auth_method,
@@ -401,7 +407,7 @@ describe("scheduled send API routes", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("rejects missing attachment tokens without leaving a pending scheduled task", async () => {
+  it("rejects missing attachment tokens without leaving any scheduled task", async () => {
     const sendAt = new Date(Date.now() + 3_600_000).toISOString();
     const rejected = await app.inject({
       method: "POST",
@@ -416,9 +422,197 @@ describe("scheduled send API routes", () => {
       },
     });
     expect(rejected.statusCode).toBe(404);
+    // Resolution now runs before the durable create, so a rejected upload
+    // leaves no task row at all — stronger than a failed-row audit trail.
     const rows = routeDb.prepare("SELECT status, error_code FROM outbound_submissions").all() as Array<{ status: string; error_code: string }>;
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.status).toBe("failed");
-    expect(rows[0]!.error_code).toBe("attachment_unavailable");
+    expect(rows).toHaveLength(0);
+  });
+
+  it("rejects a cross-account attachment token without leaving any scheduled task", async () => {
+    // A real second account owns the upload; the sender must not borrow it.
+    insertAccount(routeDb, masterKey, "account-2", "sender2@example.com");
+    const foreign = createOutboundAttachment(routeDb, attachmentDirectory, masterKey, {
+      accountId: "account-2",
+      filename: "foreign.txt",
+      contentType: "text/plain",
+      content: Buffer.from("FOREIGN_CANARY"),
+    });
+    const sendAt = new Date(Date.now() + 3_600_000).toISOString();
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/messages/send",
+      payload: {
+        accountId: "account-1",
+        to: ["recipient@example.com"],
+        subject: "Cross account attachment",
+        text: "Body",
+        sendAt,
+        attachmentTokens: [foreign.token],
+      },
+    });
+    expect(rejected.statusCode).toBe(404);
+    expect(routeDb.prepare("SELECT id FROM outbound_submissions").all()).toHaveLength(0);
+    // The foreign upload itself is untouched.
+    expect(foreign.token).toBeTruthy();
+  });
+
+  it("reports the real terminal status for an idempotent retry whose attachments were already released", async () => {
+    const upload = createOutboundAttachment(routeDb, attachmentDirectory, masterKey, {
+      accountId: "account-1",
+      filename: "report.txt",
+      contentType: "text/plain",
+      content: Buffer.from("RELEASED_ATTACHMENT_CANARY"),
+    });
+    const sendAt = new Date(Date.now() + 72 * 3_600_000).toISOString();
+    const payload = {
+      accountId: "account-1",
+      idempotencyKey: "idem-released-1",
+      to: ["recipient@example.com"],
+      subject: "Retry after release",
+      text: "Body",
+      sendAt,
+      attachmentTokens: [upload.token],
+    };
+    const first = await app.inject({ method: "POST", url: "/api/messages/send", payload });
+    expect(first.statusCode).toBe(202);
+
+    // The due pass submits the task between the two requests and then
+    // releases the terminal submission's uploads, exactly as reality does.
+    const submissionId = first.json().submission.id as string;
+    markSubmissionSubmitted(routeDb, masterKey, submissionId, "<released@nami.local>");
+    releaseSubmissionOutboundAttachments(routeDb, attachmentDirectory, "account-1", submissionId);
+
+    const retry = await app.inject({ method: "POST", url: "/api/messages/send", payload });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json().deliveryStatus).toBe("submitted");
+    // The committed terminal status must survive the retry untouched.
+    expect(submissionForId(routeDb, masterKey, submissionId)?.deliveryStatus).toBe("submitted");
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("scheduled send attachment restore", () => {
+  let db: DatabaseHandle;
+  let directory: string;
+  const masterKey = Buffer.alloc(32, 7);
+
+  beforeEach(() => {
+    db = openDatabase(":memory:");
+    vi.clearAllMocks();
+    insertAccount(db, masterKey);
+    directory = mkdtempSync(path.join(tmpdir(), "nami-scheduled-restore-"));
+    createTransport.mockReturnValue({ sendMail: send, close });
+    send.mockResolvedValue({ messageId: "<sent@nami.local>" });
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("rebuilds lost attachment links for a legacy parked task before cleanup", async () => {
+    const upload = createOutboundAttachment(db, directory, masterKey, {
+      accountId: "account-1",
+      filename: "legacy.txt",
+      contentType: "text/plain",
+      content: Buffer.from("LEGACY_ATTACHMENT_CANARY"),
+    });
+    const sendAt = new Date(Date.now() + 72 * 3_600_000).toISOString();
+    // A task parked before the route started linking at park time: the
+    // durable request carries the token, but no link row exists yet.
+    const legacy = prepareSubmission(db, masterKey, {
+      accountId: "account-1",
+      accountEmail: "sender@example.com",
+      sendAt,
+      request: {
+        to: ["recipient@example.com"],
+        subject: "Legacy",
+        text: "Body",
+        attachmentTokens: [upload.token],
+      },
+    });
+    expect(db.prepare("SELECT 1 FROM outbound_attachment_submissions").all()).toHaveLength(0);
+
+    expect(restoreScheduledSubmissionAttachments(db, masterKey)).toEqual({ restored: 1, failed: 0 });
+
+    // The 25h stale cleanup must now keep the upload.
+    expect(cleanupExpiredOutboundAttachments(db, directory, new Date(Date.now() + 25 * 3_600_000))).toBe(0);
+
+    // When due, the original bytes reach SMTP.
+    const due = await submitDueScheduledSubmissions(db, masterKey, {
+      outboundAttachmentDirectory: directory,
+      scheduleSentVerification: vi.fn(),
+    }, new Date(Date.now() + 73 * 3_600_000).toISOString());
+    expect(due).toEqual({ submitted: 1, failed: 0 });
+    const smtpPayload = send.mock.calls[0]?.[0] as { attachments?: Array<{ content?: unknown }> };
+    expect(Buffer.from(smtpPayload.attachments?.[0]?.content as Uint8Array).toString("utf8")).toBe("LEGACY_ATTACHMENT_CANARY");
+    expect(submissionForId(db, masterKey, legacy.submission.id)?.deliveryStatus).toBe("submitted");
+  });
+
+  it("explicitly fails a legacy parked task whose upload is already gone", () => {
+    const sendAt = new Date(Date.now() + 72 * 3_600_000).toISOString();
+    const legacy = prepareSubmission(db, masterKey, {
+      accountId: "account-1",
+      accountEmail: "sender@example.com",
+      sendAt,
+      request: {
+        to: ["recipient@example.com"],
+        subject: "Lost upload",
+        text: "Body",
+        attachmentTokens: ["out_00000000-0000-4000-8000-000000000000"],
+      },
+    });
+
+    expect(restoreScheduledSubmissionAttachments(db, masterKey)).toEqual({ restored: 0, failed: 1 });
+    expect(submissionForId(db, masterKey, legacy.submission.id)?.deliveryStatus).toBe("failed");
+    const row = db.prepare("SELECT error_code FROM outbound_submissions WHERE id = ?").get(legacy.submission.id) as { error_code: string };
+    expect(row.error_code).toBe("attachment_unavailable");
+    // No silent send without the attachment.
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("leaves tasks without attachments untouched", () => {
+    const sendAt = new Date(Date.now() + 72 * 3_600_000).toISOString();
+    const plain = prepareSubmission(db, masterKey, {
+      accountId: "account-1",
+      accountEmail: "sender@example.com",
+      sendAt,
+      request: { to: ["recipient@example.com"], subject: "Plain", text: "Body", attachmentTokens: [] },
+    });
+    expect(restoreScheduledSubmissionAttachments(db, masterKey)).toEqual({ restored: 0, failed: 0 });
+    expect(submissionForId(db, masterKey, plain.submission.id)?.deliveryStatus).toBe("pending");
+  });
+
+  it("fails a due task whose attachment disappeared after startup with a diagnosable code", async () => {
+    const upload = createOutboundAttachment(db, directory, masterKey, {
+      accountId: "account-1",
+      filename: "vanishing.txt",
+      contentType: "text/plain",
+      content: Buffer.from("VANISHING_CANARY"),
+    });
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const task = prepareSubmission(db, masterKey, {
+      accountId: "account-1",
+      accountEmail: "sender@example.com",
+      sendAt: past,
+      request: {
+        to: ["recipient@example.com"],
+        subject: "Vanishing upload",
+        text: "Body",
+        attachmentTokens: [upload.token],
+      },
+    });
+    // The upload disappears between startup and the due pass.
+    expect(cleanupExpiredOutboundAttachments(db, directory, new Date(Date.now() + 25 * 3_600_000))).toBe(1);
+
+    const outcome = await submitDueScheduledSubmissions(db, masterKey, {
+      outboundAttachmentDirectory: directory,
+      scheduleSentVerification: vi.fn(),
+    });
+    expect(outcome).toEqual({ submitted: 0, failed: 1 });
+    const row = db.prepare("SELECT status, error_code FROM outbound_submissions WHERE id = ?").get(task.submission.id) as { status: string; error_code: string };
+    expect(row.status).toBe("failed");
+    expect(row.error_code).toBe("attachment_unavailable");
+    expect(send).not.toHaveBeenCalled();
   });
 });

@@ -64,7 +64,7 @@ import { serverLog, setServerLogger } from "./logging.js";
 import { OAuthService } from "./oauth.js";
 import { cleanupExpiredOutboundAttachments, outboundAttachmentDirectory } from "./outbound-attachments.js";
 import { getAppSettings, getSyncMessageLimit, updateAppSettings, type AppSettings, type AppSettingsPatch } from "./settings.js";
-import { submitDueScheduledSubmissions } from "./scheduled-send.js";
+import { restoreScheduledSubmissionAttachments, submitDueScheduledSubmissions } from "./scheduled-send.js";
 import { releaseDueSnoozedMessages } from "./snooze.js";
 import { syncAccount, type NewInboxMessage } from "./sync.js";
 import { scheduleSentSubmissionVerification } from "./sync-sent-verify.js";
@@ -446,6 +446,17 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     registerAutoReplyEngine(autoReplyEngine);
     noteStartupPhase("server:auto-reply-engine");
     const outboundDirectory = outboundAttachmentDirectory({});
+    try {
+      // Scheduled tasks parked before park-time linking existed may have
+      // lost their attachment link rows; rebuild them before the stale
+      // cleanup can take the still-referenced uploads.
+      const restored = restoreScheduledSubmissionAttachments(database, runtimeMasterKey);
+      if (restored.restored || restored.failed) {
+        serverLog.info({ ...restored }, "Nami Mail restored scheduled send attachments");
+      }
+    } catch (error) {
+      serverLog.warn({}, "Nami Mail could not restore scheduled send attachments", error);
+    }
     try {
       cleanupExpiredOutboundAttachments(database, outboundDirectory);
     } catch (error) {
