@@ -115,6 +115,30 @@ export function serviceGiveUpDialogOptions(): ServiceGiveUpDialogOptions {
   };
 }
 
+/**
+ * The lifecycle inputs that must suppress a queued or in-flight restart
+ * (R11): quitting, a started quit/close sequence, an app-requested service
+ * exit — and an update drain. `prepareLocalServerForUpdateInstall` drains
+ * the service and closes it BEFORE it sets isQuitting, so the drain window
+ * is shutdown-equivalent: a restart timer firing there would fork a service
+ * the installer is about to take down. main.mts feeds its live flags through
+ * this one predicate, so the coordinator and the recovery-path guards share
+ * a single definition instead of drifting.
+ */
+export type ServiceLifecycleState = {
+  isQuitting: boolean;
+  /** A quit/close sequence has started (shutdownPromise present). */
+  shutdownStarted: boolean;
+  /** The service exit was requested by the app itself. */
+  serverProcessExpectedExit: boolean;
+  /** An update install is draining the service. */
+  updateDraining: boolean;
+};
+
+export function isServiceLifecycleShuttingDown(state: ServiceLifecycleState): boolean {
+  return state.isQuitting || state.shutdownStarted || state.serverProcessExpectedExit || state.updateDraining;
+}
+
 export type ServiceRestartCoordinatorDeps = {
   /** Bounded runtime-log appender; every decision and attempt is logged. */
   log: (event: string, detail?: Record<string, unknown>) => void;

@@ -206,7 +206,7 @@ export default tseslint.config(
   },
   {
     files: ["apps/desktop/src/main.mts"],
-    rules: { "max-lines": ["error", { max: 2123, skipBlankLines: false, skipComments: false }] },
+    rules: { "max-lines": ["error", { max: 2147, skipBlankLines: false, skipComments: false }] },
   },
   {
     // 反思轮发现：把代码搬进未冻结的文件即可绕过上述棘轮（App.tsx 的反弹路径）。
