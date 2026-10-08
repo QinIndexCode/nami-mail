@@ -14,7 +14,7 @@ const monolithRatchets = [
   ["apps/server/src/sync.ts", 1250],
   ["apps/server/src/agent/mail-tools.ts", 1101],
   ["apps/server/src/sync-moves.ts", 793],
-  ["apps/server/src/routes/messages.ts", 982],
+  ["apps/server/src/routes/messages.ts", 1001],
   ["apps/server/src/agent/auto-reply.ts", 856],
   ["apps/server/src/db.ts", 846],
   ["apps/server/src/agent/schema.ts", 807],

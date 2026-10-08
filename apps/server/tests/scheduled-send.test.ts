@@ -1,10 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { encryptAccountPassword } from "../src/account-credentials.js";
 import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import {
+  cleanupExpiredOutboundAttachments,
+  createOutboundAttachment,
+} from "../src/outbound-attachments.js";
+import {
   deletePendingScheduledSubmission,
+  markSubmissionSubmitted,
   prepareSubmission,
   submissionForId,
 } from "../src/outbox.js";
@@ -252,19 +260,23 @@ describe("scheduled send submission", () => {
 describe("scheduled send API routes", () => {
   let app: FastifyInstance;
   let routeDb: DatabaseHandle;
+  let attachmentDirectory: string;
+  const masterKey = Buffer.alloc(32, 7);
 
   beforeEach(async () => {
     vi.clearAllMocks();
     createTransport.mockReturnValue({ sendMail: send, close });
     send.mockResolvedValue({ messageId: "<sent@nami.local>" });
     routeDb = openDatabase(":memory:");
-    app = await buildApp({ db: routeDb, masterKey: Buffer.alloc(32, 7) });
-    insertAccount(routeDb, Buffer.alloc(32, 7));
+    attachmentDirectory = mkdtempSync(path.join(tmpdir(), "nami-scheduled-send-"));
+    app = await buildApp({ db: routeDb, masterKey, outboundAttachmentDirectory: attachmentDirectory });
+    insertAccount(routeDb, masterKey);
   });
 
   afterEach(async () => {
     await app.close();
     routeDb.close();
+    rmSync(attachmentDirectory, { recursive: true, force: true });
   });
 
   it("schedules a send and cancels it before it is due", async () => {
@@ -311,5 +323,102 @@ describe("scheduled send API routes", () => {
 
     const missing = await app.inject({ method: "POST", url: "/api/messages/send/missing/cancel" });
     expect(missing.statusCode).toBe(404);
+  });
+
+  it("links scheduled attachments at parking time so the TTL cleanup cannot take them", async () => {
+    const upload = createOutboundAttachment(routeDb, attachmentDirectory, masterKey, {
+      accountId: "account-1",
+      filename: "report.txt",
+      contentType: "text/plain",
+      content: Buffer.from("SCHEDULED_ATTACHMENT_CANARY"),
+    });
+    const sendAt = new Date(Date.now() + 72 * 3_600_000).toISOString();
+    const scheduled = await app.inject({
+      method: "POST",
+      url: "/api/messages/send",
+      payload: {
+        accountId: "account-1",
+        to: ["recipient@example.com"],
+        subject: "With attachment",
+        text: "Body",
+        sendAt,
+        attachmentTokens: [upload.token],
+      },
+    });
+    expect(scheduled.statusCode).toBe(202);
+
+    // The upload is linked to the parked submission immediately, so the stale
+    // cleanup past the 24h TTL must not remove it.
+    const links = routeDb.prepare(
+      "SELECT submission_id FROM outbound_attachment_submissions WHERE attachment_token = ?",
+    ).all(upload.token) as Array<{ submission_id: string }>;
+    expect(links).toHaveLength(1);
+    expect(links[0]!.submission_id).toBe(scheduled.json().submission.id);
+    const removed = cleanupExpiredOutboundAttachments(
+      routeDb,
+      attachmentDirectory,
+      new Date(Date.now() + 25 * 3_600_000),
+    );
+    expect(removed).toBe(0);
+
+    // When due, the scheduler submits through SMTP with the original bytes.
+    const verification = vi.fn();
+    const outcome = await submitDueScheduledSubmissions(routeDb, masterKey, {
+      outboundAttachmentDirectory: attachmentDirectory,
+      scheduleSentVerification: verification,
+    }, new Date(Date.now() + 73 * 3_600_000).toISOString());
+    expect(outcome).toEqual({ submitted: 1, failed: 0 });
+    expect(send).toHaveBeenCalledTimes(1);
+    const smtpPayload = send.mock.calls[0]?.[0] as { attachments?: Array<{ content?: unknown }> };
+    const attachmentContent = Buffer.from(smtpPayload.attachments?.[0]?.content as Uint8Array).toString("utf8");
+    expect(attachmentContent).toBe("SCHEDULED_ATTACHMENT_CANARY");
+    expect(submissionForId(routeDb, masterKey, scheduled.json().submission.id)?.deliveryStatus).toBe("submitted");
+    expect(verification).toHaveBeenCalledWith(scheduled.json().submission.id);
+  });
+
+  it("reports the persisted real status for an idempotent scheduled retry", async () => {
+    const sendAt = new Date(Date.now() + 3_600_000).toISOString();
+    const payload = {
+      accountId: "account-1",
+      idempotencyKey: "idem-scheduled-1",
+      to: ["recipient@example.com"],
+      subject: "Retry me",
+      text: "Body",
+      sendAt,
+    };
+    const first = await app.inject({ method: "POST", url: "/api/messages/send", payload });
+    expect(first.statusCode).toBe(202);
+    expect(first.json().deliveryStatus).toBe("pending");
+
+    // The scheduler submits the task between the two requests.
+    markSubmissionSubmitted(routeDb, masterKey, first.json().submission.id, "<retried@nami.local>");
+
+    const retry = await app.inject({ method: "POST", url: "/api/messages/send", payload });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json().deliveryStatus).toBe("submitted");
+    expect(retry.json().scheduled).toBeUndefined();
+    // No duplicate SMTP send for the retry.
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing attachment tokens without leaving a pending scheduled task", async () => {
+    const sendAt = new Date(Date.now() + 3_600_000).toISOString();
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/messages/send",
+      payload: {
+        accountId: "account-1",
+        to: ["recipient@example.com"],
+        subject: "Missing attachment",
+        text: "Body",
+        sendAt,
+        attachmentTokens: ["out_00000000-0000-4000-8000-000000000000"],
+      },
+    });
+    expect(rejected.statusCode).toBe(404);
+    const rows = routeDb.prepare("SELECT status, error_code FROM outbound_submissions").all() as Array<{ status: string; error_code: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("failed");
+    expect(rows[0]!.error_code).toBe("attachment_unavailable");
   });
 });

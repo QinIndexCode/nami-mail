@@ -766,6 +766,39 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
         // A future send time parks the durable submission in `pending`; the
         // background scheduler submits it when due. The interactive route
         // never touches SMTP for a scheduled send.
+        //
+        // Resolve and link the uploads NOW, before parking the task: this
+        // branch used to return before the interactive route's resolve/link
+        // block, so a send scheduled beyond the 24h upload TTL lost its
+        // attachments to stale cleanup and failed at send time. Resolution
+        // validates existence, account ownership, count/size and readability;
+        // a failure falls through to the shared catch below, which marks the
+        // parked submission failed instead of leaving an unsendable pending
+        // task. A crash between create and link self-heals the same way: the
+        // TTL cleanup removes the still-unlinked uploads and the due pass
+        // marks the task failed rather than sending without them.
+        const directory = outboundAttachmentDirectory(context);
+        resolveOutboundAttachments(context.db, directory, context.masterKey, account.id, attachmentTokens);
+        linkOutboundAttachmentsToSubmission(context.db, account.id, prepared.submission.id, attachmentTokens);
+        // An idempotent retry reports the persisted real status: the
+        // scheduler may have already submitted the original task, or a
+        // previous attempt may have failed. Only a still-pending task is
+        // (re-)reported as scheduled.
+        if (!prepared.created && prepared.submission.deliveryStatus !== "pending") {
+          const status = prepared.submission.deliveryStatus;
+          if (status === "submitted" || status === "unknown_delivery") {
+            scheduleSentVerification(prepared.submission.id);
+          }
+          const inFlight = status === "submitting" || status === "unknown_delivery";
+          return reply.code(inFlight ? 202 : 200).send({
+            ok: true,
+            messageId: prepared.submission.messageId,
+            deliveryStatus: status,
+            submission: prepared.submission,
+            ...(status === "submitted" ? { message: submittedVerificationMessage } : {}),
+            ...(status === "unknown_delivery" ? { message: unknownDeliveryVerificationMessage } : {}),
+          });
+        }
         return reply.code(202).send({
           ok: true,
           messageId: prepared.submission.messageId,
