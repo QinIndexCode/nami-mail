@@ -105,4 +105,4 @@ When adding or editing documentation:
 
 1. Write `xxx.zh-CN.md` first and maintain `xxx.en.md` alongside it.
 2. Only create `xxx.md` when a single entry point is needed, and keep it to language links.
-3. **Keep the suffix even when only one language exists** (for example `ARCHITECTURE-ROADMAP.zh-CN.md`). Dropping it means the file's language cannot be told from its name, and a second language cannot be added later without renaming.
+3. **Keep the suffix even when only one language exists** (for example `docs/development/agent-improvement.plan.zh-CN.md`). Dropping it means the file's language cannot be told from its name, and a second language cannot be added later without renaming.
