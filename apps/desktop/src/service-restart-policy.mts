@@ -177,11 +177,24 @@ export function createServiceRestartCoordinator(deps: ServiceRestartCoordinatorD
   };
 
   const runAttempt = (): void => {
+    // The timer may fire after the user quit or an update began: a queued
+    // restart must never race the shutdown/installation sequence. The same
+    // gate re-arms after the attempt settles, in both outcomes.
+    if (deps.isShuttingDown()) {
+      deps.log("service-restart-suppressed", { phase: "before-attempt" });
+      return;
+    }
     attemptInFlight = true;
     deps.restart()
       .then(() => {
         attemptInFlight = false;
         state = recordServiceRecovery(state, now());
+        if (deps.isShuttingDown()) {
+          // The service came back up into a shutdown that started mid-attempt:
+          // recovery is recorded, but the lifecycle owns what happens next.
+          deps.log("service-restart-suppressed", { phase: "after-recovery" });
+          return;
+        }
         deps.log("local-service-restarted", {});
       })
       .catch((error: unknown) => {
@@ -189,6 +202,13 @@ export function createServiceRestartCoordinator(deps: ServiceRestartCoordinatorD
         deps.log("service-restart-attempt-failed", {
           message: error instanceof Error ? error.message : String(error),
         });
+        // A failure observed while shutting down belongs to the teardown
+        // sequence — deciding a next attempt here could fork a service the
+        // app is actively tearing down.
+        if (deps.isShuttingDown()) {
+          deps.log("service-restart-suppressed", { phase: "after-failure" });
+          return;
+        }
         handleFailure();
       });
   };
