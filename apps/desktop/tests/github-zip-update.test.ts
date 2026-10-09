@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { WriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -264,6 +265,104 @@ test("rejects an update manifest body that exceeds the size cap", async () => {
     }),
     (error: unknown) => error instanceof GitHubZipUpdateError && error.code === "UPDATE_MANIFEST_TOO_LARGE",
   );
+});
+
+test("keeps per-drain error listeners bounded under sustained backpressure", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-github-update-backpressure-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const bytes = Buffer.alloc(4 * 1024 * 1024, 0x4e);
+  const update = {
+    source,
+    version,
+    tag: `v${version}`,
+    archiveName: assetNames.archiveName,
+    archiveUrl: "https://example.invalid/fixture.zip",
+    archiveSize: bytes.byteLength,
+    archiveSha512: createHash("sha512").update(bytes).digest("base64"),
+    installerName: assetNames.installerName,
+  };
+  const warnings: Error[] = [];
+  let peakErrorListeners = 0;
+  const originalEmit = WriteStream.prototype.emit;
+  t.mock.method(WriteStream.prototype, "emit", function (this: WriteStream, ...args: Parameters<WriteStream["emit"]>) {
+    if (args[0] === "drain") peakErrorListeners = Math.max(peakErrorListeners, this.listenerCount("error"));
+    return originalEmit.apply(this, args);
+  });
+  const capture = (warning: Error) => {
+    if (warning.name === "MaxListenersExceededWarning") warnings.push(warning);
+  };
+  process.on("warning", capture);
+  t.after(() => process.removeListener("warning", capture));
+  let position = 0;
+  await downloadGitHubZipUpdate({
+    cacheDirectory: directory,
+    update,
+    fetchImpl: async () => new Response(new ReadableStream({
+      pull(controller) {
+        if (position >= bytes.byteLength) {
+          controller.close();
+          return;
+        }
+        const end = Math.min(position + 128 * 1024, bytes.byteLength);
+        controller.enqueue(bytes.subarray(position, end));
+        position = end;
+      },
+    }), { headers: { "content-length": String(bytes.byteLength) } }),
+  });
+  assert.equal(await hasVerifiedCachedUpdate(directory, update), true);
+  assert.ok(peakErrorListeners <= 4, "Error listeners must stay bounded rather than increasing on every drain.");
+  assert.equal(warnings.length, 0, "Every drain must detach its paired error handler.");
+});
+
+test("rejects the download and clears the temporary file when a backpressured write fails", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-github-update-write-fail-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const bytes = Buffer.alloc(1024 * 1024, 0x4e);
+  const update = {
+    source,
+    version,
+    tag: `v${version}`,
+    archiveName: assetNames.archiveName,
+    archiveUrl: "https://example.invalid/fixture.zip",
+    archiveSize: bytes.byteLength,
+    archiveSha512: createHash("sha512").update(bytes).digest("base64"),
+    installerName: assetNames.installerName,
+  };
+  const originalWrite = WriteStream.prototype.write;
+  let writes = 0;
+  t.mock.method(WriteStream.prototype, "write", function (this: WriteStream, ...args: Parameters<WriteStream["write"]>) {
+    writes += 1;
+    if (writes === 2) {
+      // A disk failure surfaces as a stream error after backpressure: the
+      // waiting chunk must reject, the stream is destroyed, and the caller
+      // still removes the partial file.
+      process.nextTick(() => this.destroy(Object.assign(new Error("simulated disk failure"), { code: "EIO" })));
+      return false;
+    }
+    return originalWrite.apply(this, args);
+  });
+  let position = 0;
+  await assert.rejects(
+    downloadGitHubZipUpdate({
+      cacheDirectory: directory,
+      update,
+      fetchImpl: async () => new Response(new ReadableStream({
+        pull(controller) {
+          if (position >= bytes.byteLength) {
+            controller.close();
+            return;
+          }
+          const end = Math.min(position + 128 * 1024, bytes.byteLength);
+          controller.enqueue(bytes.subarray(position, end));
+          position = end;
+        },
+      }), { headers: { "content-length": String(bytes.byteLength) } }),
+    }),
+    /simulated disk failure/,
+  );
+  assert.ok(writes >= 2);
+  const archiveDirectory = path.join(directory, version);
+  assert.equal(await fs.readdir(archiveDirectory).then((entries) => entries.some((entry) => entry.endsWith(".part"))), false);
 });
 
 test("rejects an oversized GitHub release metadata body", async () => {

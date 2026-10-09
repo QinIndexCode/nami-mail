@@ -431,9 +431,26 @@ export async function hasVerifiedCachedUpdate(cacheDirectory: string, update: Gi
 
 async function writeChunk(stream: ReturnType<typeof createWriteStream>, chunk: Uint8Array): Promise<void> {
   if (stream.write(chunk)) return;
+  // The two listeners are a pair: whichever event fires removes both. Only
+  // drain used to remove itself, so every backpressure wait left its error
+  // listener behind and sustained downloads accumulated them until
+  // MaxListenersExceededWarning. The rejection path (a failed disk write)
+  // keeps propagating the original error unchanged.
   await new Promise<void>((resolve, reject) => {
-    stream.once("drain", resolve);
-    stream.once("error", reject);
+    const cleanup = (): void => {
+      stream.removeListener("drain", onDrain);
+      stream.removeListener("error", onError);
+    };
+    const onDrain = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error): void => {
+      cleanup();
+      reject(error);
+    };
+    stream.once("drain", onDrain);
+    stream.once("error", onError);
   });
 }
 
