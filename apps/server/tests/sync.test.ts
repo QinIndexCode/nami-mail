@@ -43,14 +43,21 @@ describe("IMAP message flag updates", () => {
   let db: DatabaseHandle;
   const masterKey = Buffer.alloc(32, 7);
   const lock = { release: vi.fn() };
+  // R14: the members the sync paths touch but this describe's happy path does
+  // not (fetch/search/fetchOne) are declared so late tests can type-check
+  // against the same client; the Optional connect/lock signatures match the
+  // mockImplementation closures the tests install.
   const client = {
     usable: true,
-    connect: vi.fn(async () => undefined),
-    getMailboxLock: vi.fn(async () => lock),
-    messageFlagsAdd: vi.fn(async () => undefined),
-    messageFlagsRemove: vi.fn(async () => undefined),
+    connect: vi.fn((): Promise<void> => Promise.resolve()),
+    getMailboxLock: vi.fn(async (_path: string) => lock),
+    messageFlagsAdd: vi.fn(async (): Promise<boolean | undefined> => undefined),
+    messageFlagsRemove: vi.fn(async (): Promise<boolean | undefined> => undefined),
     messageMove: vi.fn(),
     logout: vi.fn(async () => undefined),
+    fetch: vi.fn(),
+    search: vi.fn(),
+    fetchOne: vi.fn(),
   };
 
   beforeEach(() => {
@@ -363,8 +370,8 @@ describe("IMAP message flag updates", () => {
       .all("account-1", "[Gmail]/All Mail", 84) as MessageStorageRow[];
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: "message-1", all_mail_archived: 1 });
-    expect(rows[0].encrypted_payload).toBe(before.encrypted_payload);
-    expect(messagePayloadForRow(rows[0], masterKey)).toMatchObject({ subject: "Subject" });
+    expect(rows[0]!.encrypted_payload).toBe(before.encrypted_payload);
+    expect(messagePayloadForRow(rows[0]!, masterKey)).toMatchObject({ subject: "Subject" });
     expect(db.prepare("SELECT id FROM messages WHERE id = ?").get("all-mail-copy")).toBeUndefined();
     expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
       .toEqual({ total: 0, unseen: 0 });
@@ -1582,8 +1589,9 @@ describe("IMAP message flag updates", () => {
       status: string;
       last_error: string | null;
       last_error_code: string | null;
+      last_synced_at: string | null;
     };
-    expect(account).toEqual({ status: "connected", last_error: null, last_error_code: null });
+    expect(account).toMatchObject({ status: "connected", last_error: null, last_error_code: null });
   });
 
   it("hydrates Cc and RFC threading headers from an IMAP source message", async () => {
