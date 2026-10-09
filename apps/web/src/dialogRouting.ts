@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import type { ComposeDraft } from "./mailUi";
 import { isDesktopSettingsRuntime, resolveSettingsCategory, type SettingsCategoryId } from "./settings/settings-categories";
 import type { Message, MessageAttachment } from "./types";
+import { readDemoPresentation } from "./demoPresentation";
 
 // A key typed into an input/textarea/select (or a themed select-control
 // descendant, or a contentEditable) belongs to the field, not to the app —
@@ -345,6 +346,10 @@ export function useDialogRouting(appOwnedModals: AppOwnedModals = noAppOwnedModa
   });
   const [translationTermsOpen, setTranslationTermsOpen] = useState(() => {
     if (translationTermsAccepted) return false;
+    // The public preview uses sample mail with network access disabled by its
+    // build's CSP. Defer the startup gate without recording any acceptance;
+    // explicitly requesting translation still uses the normal consent flow.
+    if (typeof window !== "undefined" && readDemoPresentation(window.location.search)) return false;
     // Skip terms dialog in desktop smoke test mode
     if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("desktopSmoke") === "1") return false;
     return true;

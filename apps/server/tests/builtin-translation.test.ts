@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { BuiltinTranslationService } from "../src/builtin-translation.js";
 import { MAX_TRANSLATION_TEXT_LENGTH, TranslationServiceError } from "../src/translation.js";
 
+// R14: RequestInfo is a DOM lib name absent from this tsconfig.
+type FetchInput = Parameters<typeof fetch>[0];
+
 function googleResponse(segments: [string, string][], detectedLanguage?: string): Response {
   const data = [segments, null, detectedLanguage ?? null];
   return new Response(JSON.stringify(data), {
@@ -31,7 +34,7 @@ function abortingFetch(): typeof fetch {
   }));
 }
 
-function inputUrl(input: URL | RequestInfo): string {
+function inputUrl(input: URL | FetchInput): string {
   if (input instanceof URL) return input.toString();
   if (typeof input === "string") return input;
   return input.url;

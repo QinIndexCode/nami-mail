@@ -54,6 +54,8 @@ function fakeMailApplication() {
     listAccounts, listFolders, listMessages, getMessage, getThread, listAttachments,
     syncAccount, createDraft, updateDraft, deleteDraft, updateMessageFlags,
     moveMessage, prepareSubmission, submitPreparedMail,
+    searchMessages: vi.fn(async () => ({ items: [], total: 0, truncated: false, searchedFrom: null, newestLocalAt: null })),
+    deleteAccount: vi.fn(async () => undefined),
   };
   return { service };
 }
@@ -82,6 +84,9 @@ function fixture() {
     model: "test-model",
     timeoutMs: 30_000,
     allowCloudMailContent: false,
+    // R06: the built-in tool schemas count against the budget (R06b); a
+    // realistic window keeps these non-budget tests inside it.
+    contextWindowTokens: 131_072,
     makeDefault: true,
   });
   const conversation = service.createConversation({
@@ -369,9 +374,10 @@ describe("slash command expansion", () => {
         model: "default-model",
         timeoutMs: 30_000,
         allowCloudMailContent: false,
+        contextWindowTokens: 131_072,
         makeDefault: true,
       });
-      expect(value.service.providerService.list().defaultProviderId).toBe(provider.id);
+      expect(value.service.providerList().defaultProviderId).toBe(provider.id);
 
       // Simulate an app restart: same database and master key, fresh service.
       await value.service.close();
@@ -388,13 +394,13 @@ describe("slash command expansion", () => {
         memoryStore: memory,
       });
       try {
-        const listing = restarted.providerService.list();
+        const listing = restarted.providerList();
         expect(listing.defaultProviderId).toBe(provider.id);
         expect(listing.items.map((item) => item.id)).toContain(provider.id);
 
         // Removing the default clears the persisted default.
-        restarted.providerService.remove(provider.id);
-        expect(restarted.providerService.list().defaultProviderId).toBeNull();
+        restarted.deleteProvider(provider.id);
+        expect(restarted.providerList().defaultProviderId).toBeNull();
       } finally {
         await restarted.close();
       }

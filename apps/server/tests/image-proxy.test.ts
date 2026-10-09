@@ -114,7 +114,7 @@ describe("guardedLookup", () => {
     }) as typeof dns.lookup);
     try {
       const result = await new Promise<{ error: NodeJS.ErrnoException | null; addresses?: dns.LookupAddress[] }>((resolve) => {
-        guardedLookup("cdn.example.com", { all: true }, (error, addresses) => resolve({ error, addresses }));
+        guardedLookup("cdn.example.com", { all: true }, (error, addresses) => resolve({ error, addresses: addresses as dns.LookupAddress[] | undefined }));
       });
       expect(result.error).toBeNull();
       expect(result.addresses).toEqual([{ address: "93.184.216.34", family: 4 }]);
@@ -135,7 +135,7 @@ describe("guardedLookup", () => {
     }) as typeof dns.lookup);
     try {
       const result = await new Promise<{ error: NodeJS.ErrnoException | null; address?: string; family?: number }>((resolve) => {
-        guardedLookup("cdn.example.com", {}, (error, address, family) => resolve({ error, address, family }));
+        guardedLookup("cdn.example.com", {}, (error, address, family) => resolve({ error, address: address as string | undefined, family: family as number | undefined }));
       });
       expect(result.error).toBeNull();
       expect(result.address).toBe("93.184.216.34");
@@ -488,7 +488,7 @@ describe("runCacheCleanup", () => {
     // Everything survives except the age-expired third, which is what a small
     // entry set with the same ratio produces: the quota is far above the
     // surviving bytes, so the size sweep evicts nothing.
-    const survivors = Object.keys(JSON.parse(written[0]));
+    const survivors = Object.keys(JSON.parse(written[0]!));
     expect(survivors).toHaveLength(50_000 - Math.ceil(50_000 / 3));
     expect(survivors).not.toContain("entry-0");
     expect(survivors).toContain("entry-1");

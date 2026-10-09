@@ -21,6 +21,10 @@ export const agentMessageCatalog = {
     "zh-CN": "当前云端模型未获邮件内容授权，本次不会发送任何邮件上下文。",
     "en-US": "The cloud model is not authorized to access mail content; no mail context will be sent.",
   },
+  "status.tool_not_authorized": {
+    "zh-CN": "该工具未获本轮授权，已拒绝执行。",
+    "en-US": "This tool is not authorized for the current turn; execution was denied.",
+  },
   "status.tool_call_limit": {
     "zh-CN": "邮件助理连续请求了过多操作，已停止本次处理。",
     "en-US": "The mail assistant requested too many operations in a row; processing has been stopped.",
@@ -507,6 +511,14 @@ export const agentMessageCatalog = {
   "error.scope_unreadable": {
     "zh-CN": "会话范围无法读取。",
     "en-US": "Conversation scope could not be read.",
+  },
+  "error.context_tools_too_large": {
+    "zh-CN": "当前模型的可用工具定义超出其上下文窗口，无法开始生成。请更换上下文窗口更大的模型，或在模型设置中调大上下文窗口。",
+    "en-US": "The available tool definitions exceed this model's context window, so generation cannot start. Choose a model with a larger context window, or raise the configured window.",
+  },
+  "error.context_too_large": {
+    "zh-CN": "对话内容超出该模型的上下文窗口，已停止生成。请新建对话，或在模型设置中调大上下文窗口。",
+    "en-US": "The conversation exceeds this model's context window and generation has stopped. Start a new conversation, or raise the configured context window.",
   },
 
   "hint.add_provider": {

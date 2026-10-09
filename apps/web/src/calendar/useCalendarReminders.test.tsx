@@ -144,4 +144,55 @@ describe("useCalendarReminders", () => {
     expect(mockNotify).not.toHaveBeenCalled();
     expect(showToast).not.toHaveBeenCalled();
   });
+
+  // R13: the pre-durable reminder key is migrated on first read, not merely
+  // fallen back to. The browser is the durable surface here (no bridge), so
+  // migration is visible as the legacy key disappearing and the new key
+  // carrying the set; an already-reminded event then stays quiet.
+  it("migrates the legacy reminder key on read so an already-reminded event stays quiet", async () => {
+    const now = Date.now();
+    const startAt = new Date(now + 10 * 60 * 1000).toISOString();
+    const endAt = new Date(now + 40 * 60 * 1000).toISOString();
+    const event: CalendarEvent = {
+      id: "evt-legacy",
+      title: "旧键已提醒的会",
+      description: "",
+      location: "",
+      startAt,
+      endAt,
+      allDay: false,
+      color: "blue",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    // The legacy key records this event+startAt as already reminded.
+    const store = new Map<string, string>([["nami:reminded_calendar_events", JSON.stringify([`reminded:evt-legacy:${startAt}`])]]);
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v); },
+      removeItem: (k: string) => { store.delete(k); },
+      clear: () => { store.clear(); },
+    });
+    mockGet.mockResolvedValue([event]);
+
+    await act(async () => {
+      root.render(
+        <ReminderTester
+          demoMode={false}
+          locale="zh-CN"
+          onOpenCalendar={onOpenCalendar}
+          showToast={showToast}
+          notificationsEnabled={true}
+        />,
+      );
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    // Already reminded: silent, and the set now lives in the durable key
+    // while the legacy key is gone.
+    expect(mockNotify).not.toHaveBeenCalled();
+    expect(store.has("nami:reminded_calendar_events")).toBe(false);
+    const migrated = store.get("nami-mail.calendar-reminded-events");
+    expect(migrated).toBe(JSON.stringify([`reminded:evt-legacy:${startAt}`]));
+  });
 });

@@ -4,6 +4,7 @@ import {
   createServiceRestartCoordinator,
   evaluateServiceRestart,
   initialServiceRestartState,
+  isServiceLifecycleShuttingDown,
   nextServiceRestartDelayMs,
   recordServiceRecovery,
   recordServiceRestartAttempt,
@@ -20,11 +21,27 @@ function createCoordinatorHarness() {
   const pendingRuns: Array<() => void> = [];
   const events: Array<{ event: string; detail?: Record<string, unknown> }> = [];
   const restartQueue: Array<() => Promise<void>> = [];
-  const flags = { shuttingDown: false, serviceRunning: true, giveUpCalls: 0, now: 0 };
+  const flags = {
+    shuttingDown: false,
+    serviceRunning: true,
+    giveUpCalls: 0,
+    now: 0,
+    // R11: the four lifecycle inputs main.mts feeds through the shared
+    // predicate — the drain flag must suppress restarts like a quit does.
+    isQuitting: false,
+    shutdownStarted: false,
+    serverProcessExpectedExit: false,
+    updateDraining: false,
+  };
   let restartCalls = 0;
   const coordinator = createServiceRestartCoordinator({
     log: (event, detail) => events.push({ event, detail }),
-    isShuttingDown: () => flags.shuttingDown,
+    isShuttingDown: () => flags.shuttingDown || isServiceLifecycleShuttingDown({
+      isQuitting: flags.isQuitting,
+      shutdownStarted: flags.shutdownStarted,
+      serverProcessExpectedExit: flags.serverProcessExpectedExit,
+      updateDraining: flags.updateDraining,
+    }),
     isServiceRunning: () => flags.serviceRunning,
     restart: () => {
       restartCalls += 1;
@@ -269,4 +286,123 @@ test("wiring: still resets the budget when the service stayed up past the stable
   assert.deepEqual(harness.scheduledDelays, [1_000, 1_000, 5_000]);
   assert.equal(harness.flags.giveUpCalls, 0);
   assert.equal(harness.restartCalls, 2);
+});
+
+test("suppresses a queued restart once shutdown has started (R11)", async () => {
+  const harness = createCoordinatorHarness();
+  // Crash outside shutdown: the decision schedules an attempt.
+  harness.coordinator.onServiceProcessExit(1);
+  assert.equal(harness.scheduledDelays.length, 1);
+
+  // The user quits (or an update begins) before the backoff timer fires.
+  harness.flags.shuttingDown = true;
+  await harness.drainSchedule();
+
+  assert.equal(harness.restartCalls, 0);
+  assert.equal(harness.flags.giveUpCalls, 0);
+  assert.deepEqual(harness.scheduledDelays, [1_000]);
+});
+
+// R11 recheck: prepareLocalServerForUpdateInstall drains the service BEFORE
+// it sets isQuitting, and the close await inside leaves a window where a
+// queued restart's timer fires. The drain flag must suppress through the
+// SAME predicate the other lifecycle inputs use.
+test("the lifecycle predicate treats an update drain as a shutdown", () => {
+  const base = { isQuitting: false, shutdownStarted: false, serverProcessExpectedExit: false, updateDraining: false };
+  assert.equal(isServiceLifecycleShuttingDown(base), false);
+  for (const key of Object.keys(base) as Array<keyof typeof base>) {
+    assert.equal(isServiceLifecycleShuttingDown({ ...base, [key]: true }), true, key);
+  }
+});
+
+test("suppresses a queued restart once the update drain begins (R11 recheck)", async () => {
+  const harness = createCoordinatorHarness();
+  // Crash outside shutdown: the decision schedules an attempt.
+  harness.coordinator.onServiceProcessExit(1);
+  assert.equal(harness.scheduledDelays.length, 1);
+
+  // The user accepts an update: the drain opens while isQuitting is still
+  // false, and the drain's close await takes longer than the backoff.
+  harness.flags.updateDraining = true;
+  await harness.drainSchedule();
+
+  assert.equal(harness.restartCalls, 0);
+  assert.equal(harness.flags.giveUpCalls, 0);
+});
+
+test("suppresses a restart that resolves into an active update drain (R11 recheck)", async () => {
+  const harness = createCoordinatorHarness();
+  harness.coordinator.onServiceProcessExit(1);
+  harness.restartQueue.push(async () => {
+    // The update drain opens while the restart is still bringing the
+    // service up.
+    harness.flags.updateDraining = true;
+  });
+  await harness.drainSchedule();
+
+  assert.equal(harness.restartCalls, 1);
+  // The recovery is recorded but the drain owns what happens next — no
+  // "restarted" log, no new decision.
+  assert.deepEqual(harness.events.map((entry) => entry.event), [
+    "server-process-exited",
+    "service-restart-scheduled",
+    "service-restart-suppressed",
+  ]);
+  assert.equal(harness.events.at(-1)?.detail?.phase, "after-recovery");
+});
+
+test("suppresses an already-queued follow-up attempt once shutdown has started (R11)", async () => {
+  const harness = createCoordinatorHarness();
+  harness.coordinator.onServiceProcessExit(1);
+  harness.restartQueue.push(startupFailure);
+  await harness.drainSchedule();
+  assert.equal(harness.restartCalls, 1);
+  assert.equal(harness.scheduledDelays.length, 2);
+
+  // Shutdown starts while the NEXT queued attempt is pending: the before-
+  // attempt gate suppresses it entirely — restart is never called, nothing
+  // is rescheduled, and no give-up prompt fires during teardown.
+  harness.flags.shuttingDown = true;
+  await harness.drainSchedule();
+
+  assert.equal(harness.restartCalls, 1);
+  assert.equal(harness.scheduledDelays.length, 2);
+  assert.equal(harness.flags.giveUpCalls, 0);
+});
+
+test("suppresses the next decision when an in-flight attempt fails during shutdown (R11)", async () => {
+  const harness = createCoordinatorHarness();
+  // The attempt is already in flight when shutdown starts: its rejection
+  // settles into a shutdown that is tearing the service down, so it must
+  // neither re-decide nor prompt.
+  let failAttempt!: () => void;
+  harness.restartQueue.push(() => new Promise<void>((_resolve, reject) => { failAttempt = reject; }));
+  harness.coordinator.onServiceProcessExit(1);
+  await harness.drainSchedule();
+  assert.equal(harness.restartCalls, 1);
+
+  harness.flags.shuttingDown = true;
+  failAttempt();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.scheduledDelays.length, 1);
+  assert.equal(harness.flags.giveUpCalls, 0);
+});
+
+test("records recovery during shutdown but schedules nothing further (R11)", async () => {
+  const harness = createCoordinatorHarness();
+  let finishAttempt!: () => void;
+  harness.restartQueue.push(() => new Promise<void>((resolve) => { finishAttempt = resolve; }));
+  harness.coordinator.onServiceProcessExit(1);
+  await harness.drainSchedule();
+  assert.equal(harness.restartCalls, 1);
+
+  // Shutdown starts while the restart attempt is still in flight; the
+  // recovery then lands into that shutdown.
+  harness.flags.shuttingDown = true;
+  finishAttempt();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.scheduledDelays.length, 1);
+  assert.ok(harness.events.some((event) => event.event === "service-restart-suppressed"));
 });

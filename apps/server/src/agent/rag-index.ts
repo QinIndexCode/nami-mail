@@ -110,10 +110,13 @@ export function bm25TermScore(
 }
 
 function pageTermTotal(rows: readonly PostingRow[]): number {
-  // Every term row of a revision carries the same term_count; sum once per revision.
-  const byRevision = new Map<number, number>();
-  for (const row of rows) byRevision.set(row.page_revision, row.term_count);
-  return [...byRevision.values()].reduce((sum, value) => sum + value, 0);
+  // Every term row of a page revision carries the same term_count: sum once
+  // per (page, revision). Deduplicating by revision alone would collapse
+  // distinct pages that happen to share a revision number and under-count
+  // batch removals (R07).
+  const byPageRevision = new Map<string, number>();
+  for (const row of rows) byPageRevision.set(`${row.page_id}\u0000${row.page_revision}`, row.term_count);
+  return [...byPageRevision.values()].reduce((sum, value) => sum + value, 0);
 }
 
 /**
@@ -267,10 +270,19 @@ export class SqliteRagIndex {
   /** Rebuilds the stats row from the postings table (drift convergence). */
   reconcileStats(accountId: string, accountGeneration: number): void {
     assertAgentStoreReadable(this.db);
+    // A page revision stores one row PER TERM, and every row carries the
+    // revision's whole term_count — summing term_count over all rows counts a
+    // multi-term page N times (R07). Aggregate one length per (page,
+    // revision) first, then sum.
     const row = this.db.prepare(`
-      SELECT COUNT(DISTINCT page_id) AS doc_count, COALESCE(SUM(term_count), 0) AS term_total
-      FROM agent_rag_index
-      WHERE account_id = ? AND account_generation = ?
+      SELECT COUNT(DISTINCT page_id) AS doc_count,
+             COALESCE(SUM(page_term_count), 0) AS term_total
+      FROM (
+        SELECT page_id, page_revision, MAX(term_count) AS page_term_count
+        FROM agent_rag_index
+        WHERE account_id = ? AND account_generation = ?
+        GROUP BY page_id, page_revision
+      )
     `).get(accountId, accountGeneration) as { doc_count: number; term_total: number };
     this.db.prepare(`
       INSERT INTO agent_rag_index_stats (account_id, account_generation, doc_count, term_total)

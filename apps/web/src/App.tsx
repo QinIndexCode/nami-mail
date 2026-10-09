@@ -49,6 +49,7 @@ import { useToastQueue } from "./notifications/useToastQueue";
 import { desktopBridge, type DesktopAutoReplyNotice } from "./desktop";
 import { useDesktopUpdateUi } from "./app/useDesktopUpdateUi";
 import { demoDataSnapshot, ensureDemoLoaded } from "./demo-loader";
+import { announceDemoReady, readDemoPresentation } from "./demoPresentation";
 import { mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
 import { AccountHealthBanner, accountShowsFreshness, accountStatusDotClass, useAccountHealth } from "./accountHealth";
 import { useRealtimeSync, type SyncProgressPayload } from "./realtimeSync";
@@ -97,6 +98,7 @@ import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import { dialogKeydownDecision, useDialogRouting } from "./dialogRouting";
 import { useBatchSelection } from "./app/useBatchSelection";
 import { useQuickMessageActions } from "./app/useQuickMessageActions";
+import { resolveDraftBody } from "./app/draftBody";
 import { useAttachmentExports } from "./app/useAttachmentExports";
 import { useDesktopBridgeHandlers } from "./app/useDesktopBridgeHandlers";
 import { resolveLocale, useI18n } from "./i18n";
@@ -128,13 +130,14 @@ import {
   AGENT_FADE_STAGGER_MS,
   localizeMessageLinks,
 } from "./app/app-utils";
-import { useMessageBody } from "./app/useMessageBody";
+import { ensureFullMessage, mergeMessageDetail, useMessageBody } from "./app/useMessageBody";
 import { useMailTranslation } from "./app/useMailTranslation";
 import { useSplashDismiss } from "./app/useSplashDismiss";
 import { useOutboundSubmissions } from "./app/useOutboundSubmissions";
 import { sortSubmissions } from "./sendingStatus";
 
 const AgentWorkspace = lazy(() => import("./AgentWorkspace"));
+const DemoSourceDialog = lazy(() => import("./DemoSourceDialog"));
 
 type MailView = MessageListQuery["messageView"];
 
@@ -151,6 +154,7 @@ const SIDEBAR_LOADING_SPINNER_DELAY_MS = 250;
 const AGENT_SWITCH_TOTAL_MS = SWITCH_FADE_MS + AGENT_FADE_STAGGER_MS;
 
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
+const demoPresentation = readDemoPresentation(window.location.search);
 // Only the desktop smoke uses this: it runs the renderer in demo mode, which
 // never reads the service's settings, so this is how it asks for a wallpaper
 // preset to exercise that rendering path.
@@ -187,6 +191,7 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => ({
     ...defaultAppSettings,
     locale,
+    ...(demoPresentation ? { theme: demoPresentation.theme } : {}),
     // Demo mode never loads persisted settings (loadSettings returns early), so
     // it ships the same plain surface a real install starts with — the presets
     // are a user choice, and a decorated sample frame misrepresents a new
@@ -212,7 +217,9 @@ export default function App() {
   // useDialogRouting; the update prompt, reader-domain, and agent-workspace
   // routing stay here. The two modals App renders itself go in as arguments so
   // they land in the hook's MODAL_KEYS registry instead of beside it.
-  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(demoPresentation?.view === "agent");
+  const [demoSource, setDemoSource] = useState<Message | null>(null);
+  const closeDemoSource = useCallback(() => setDemoSource(null), []);
   const [pendingBatchDelete, setPendingBatchDelete] = useState(false);
   const { state, actions, translationTermsPendingRef } = useDialogRouting({ batchDeleteOpen: pendingBatchDelete, agentOpen });
   const [view, setView] = useState<MailView>("inbox");
@@ -269,22 +276,20 @@ export default function App() {
   const folderListRef = useRef<HTMLDivElement>(null);
   const [folderListMaxHeight, setFolderListMaxHeight] = useState<number | null>(null);
   useEffect(() => {
-    const sidebar = sidebarRef.current;
+    const content = sidebarRef.current?.querySelector<HTMLElement>(".sidebar-content");
     const folderList = folderListRef.current;
-    const footer = sidebar?.querySelector<HTMLElement>(".sidebar-footer");
-    if (!sidebar || !folderList || !footer) return;
+    if (!content || !folderList) return;
     const measure = () => {
-      const sidebarRect = sidebar.getBoundingClientRect();
-      const folderTop = folderList.getBoundingClientRect().top - sidebarRect.top;
-      const paddingBottom = Number.parseFloat(getComputedStyle(sidebar).paddingBottom) || 0;
-      const available = Math.floor(sidebar.clientHeight - folderTop - footer.offsetHeight - paddingBottom);
+      const folderTop = folderList.getBoundingClientRect().top - content.getBoundingClientRect().top + content.scrollTop;
+      const available = Math.floor(content.clientHeight - folderTop);
       setFolderListMaxHeight(Math.max(60, available));
     };
     measure();
     // Layout of any sibling (nav-section collapse, account rows folding,
     // more button appearing) moves the folder list top, so watch them all.
     const observer = new ResizeObserver(measure);
-    for (const child of sidebar.children) observer.observe(child);
+    observer.observe(content);
+    for (const child of content.children) observer.observe(child);
     window.addEventListener("resize", measure);
     return () => {
       observer.disconnect();
@@ -483,6 +488,7 @@ export default function App() {
   };
 
   const openAgentWorkspace = useCallback(() => {
+    if (demoPresentation) return;
     clearAgentSwitchTimers();
     if (agentPhaseRef.current === "mail-leaving" || agentPhaseRef.current === "agent-entering") return;
     agentReturnScrollTopRef.current = messageListRef.current?.scrollTop ?? null;
@@ -503,6 +509,7 @@ export default function App() {
   }, []);
 
   const closeAgentWorkspace = useCallback(() => {
+    if (demoPresentation) return;
     clearAgentSwitchTimers();
     if (agentPhaseRef.current === "agent-leaving" || agentPhaseRef.current === "mail-entering") return;
     agentPhaseRef.current = "agent-leaving";
@@ -1012,6 +1019,9 @@ await refreshSubmissions(nextAccounts, { silent: true });
   // so this never competes with the splash-period data load; the dynamic
   // imports resolve into the same module instances React.lazy uses.
   useEffect(() => {
+    // The public previews cannot open most of these surfaces. Keep their
+    // modules on demand instead of parsing every dialog in both demo frames.
+    if (demoPresentation) return;
   const warm = () => {
     void import("./AgentWorkspace");
     void import("./SettingsModal");
@@ -1439,20 +1449,19 @@ await refreshSubmissions(nextAccounts, { silent: true });
   const threadStripMembersRef = useRef<ReadonlyMap<string, Message>>(new Map());
   const [threadRefreshTick, setThreadRefreshTick] = useState(0);
   const selected = filteredMessages.find((message) => message.id === selectedId)
-    ?? (isDemo
-      ? null
-      : threadExtras?.members.find((message) => message.id === selectedId)
-        ?? (selectedId ? threadStripMembersRef.current.get(selectedId) : undefined)
-        ?? null);
+    ?? threadExtras?.members.find((message) => message.id === selectedId)
+    ?? (selectedId ? threadStripMembersRef.current.get(selectedId) : undefined)
+    ?? null;
   // The list carries no body, so the open message is loaded on demand and
   // merged back into the row the reader resolves here.
-  useMessageBody(isDemo, selected, setMessages, setThreadExtras);
+  const { phase: selectedBodyPhase, reload: reloadSelectedBody } = useMessageBody(isDemo, selected, setMessages, setThreadExtras);
   const threadExtrasForSelected = threadExtras && selected
     && (threadExtras.anchorId === selected.id || threadExtras.members.some((member) => member.id === selected.id))
     ? threadExtras.members
     : [];
+  // An opened source remains its own thread anchor outside the visible list.
   const selectedThread = selected
-    ? collapseDuplicateMembers(sortThreadByTimeline(mergeThreadMembers(threadById.get(selected.id) ?? [], threadExtrasForSelected)), selected.id)
+    ? collapseDuplicateMembers(sortThreadByTimeline(mergeThreadMembers(threadById.get(selected.id) ?? [selected], threadExtrasForSelected)), selected.id)
     : null;
   useEffect(() => {
     if (!selectedThread) return;
@@ -1664,10 +1673,14 @@ const emptyMessageList = useMemo(() => (query.trim()
       setRecipientDetailsOpen(false);
       // A list row only carries a text preview, and the composer must open on
       // the whole draft — editing a truncated body would silently drop the
-      // rest of what the user wrote.
-      const draft = !isDemo && message.htmlBody === undefined
-        ? await api.message(message.id).catch(() => message)
-        : message;
+      // rest of what the user wrote. A failed full-body fetch refuses to open
+      // the editor on the preview (saving it would overwrite the original).
+      const resolution = await resolveDraftBody(message, { isDemo, fetchMessage: (id) => api.message(id) });
+      if (!resolution.ok) {
+        showToast(mailErrorToastMessage(resolution.error, t("mail.error.readDraft"), t), "error");
+        return;
+      }
+      const draft = resolution.draft;
       let attachments: OutboundAttachment[] = [];
       if (!isDemo) {
         try {
@@ -1728,11 +1741,34 @@ const emptyMessageList = useMemo(() => (query.trim()
   const openMessageRef = useRef(openMessage);
   openMessageRef.current = openMessage;
   const handleAgentOpenMessage = useCallback((messageId: string) => {
+    if (demoPresentation?.view === "agent") {
+      void ensureDemoLoaded().then((demo) => {
+        const source = demo.createDemoSourceMessages(locale).find((item) => item.id === messageId);
+        if (source) setDemoSource(source);
+        else showToast(t("mail.error.openNew"), "error");
+      });
+      return;
+    }
     closeAgentWorkspace();
     const known = messagesRef.current.find((item) => item.id === messageId);
-    if (known) { void openMessageRef.current(known); return; }
+    if (known) {
+      if (isDemo) threadStripMembersRef.current = new Map([[known.id, known]]);
+      void openMessageRef.current(known);
+      return;
+    }
+    if (isDemo) {
+      void ensureDemoLoaded().then((demo) => {
+        const source = demo.createDemoSourceMessages(locale).find((item) => item.id === messageId);
+        if (!source) { showToast(t("mail.error.openNew"), "error"); return; }
+        // Use the existing out-of-list reader fallback for archived sources.
+        threadStripMembersRef.current = new Map([[source.id, source]]);
+        setMessages((items) => items.some((item) => item.id === source.id) ? items : [...items, source]);
+        void openMessageRef.current(source);
+      });
+      return;
+    }
     void api.message(messageId).then((fetched) => openMessageRef.current(fetched)).catch((error: unknown) => showToast(mailErrorToastMessage(error, t("mail.error.openNew"), t), "error"));
-  }, [closeAgentWorkspace, showToast, t]);
+  }, [closeAgentWorkspace, locale, showToast, t]);
 
   const closeReader = useCallback((restoreFocus = false) => {
     const messageId = lastOpenedMessageIdRef.current;
@@ -1836,49 +1872,67 @@ const emptyMessageList = useMemo(() => (query.trim()
     };
   }, [searchOpen]);
 
-  const openReply = useCallback(() => {
+  // R10: reply/reply-all/forward quote the FULL message, not the list row's
+  // 4000-character preview. The pinned id resolves through the shared seam —
+  // concurrent clicks on the same message share one request — and a failure
+  // keeps the mail open and says so instead of silently quoting a truncated
+  // body.
+  const resolveBodyForCompose = useCallback(async (source: Message): Promise<Message | null> => {
+    const resolved = await ensureFullMessage(isDemo, source, (detail) => mergeMessageDetail(detail, setMessages, setThreadExtras));
+    if (!resolved) showToast(t("mail.body.loadFailed"), "error");
+    return resolved;
+    // isDemo is a module-level constant, not a reactive value.
+  }, [setMessages, setThreadExtras, showToast, t]);
+
+  const openReply = useCallback(async () => {
     if (!selected) return;
-    const reply = buildReplyDraft(selected, [...accounts.map((account) => account.email), selected.accountEmail]);
+    const source = await resolveBodyForCompose(selected);
+    if (!source) return;
+    const reply = buildReplyDraft(source, [...accounts.map((account) => account.email), source.accountEmail]);
     actions.openCompose({
-      accountId: selected.accountId,
+      accountId: source.accountId,
       to: reply.to.join(", "),
       cc: reply.cc.join(", "),
       subject: reply.subject,
       inReplyTo: reply.inReplyTo,
       references: reply.references,
-      text: replyBody(selected, accounts, locale, t, safeHtml),
+      text: replyBody(source, accounts, locale, t, safeHtml),
     });
-  }, [accounts, actions, locale, safeHtml, selected, t]);
+  }, [accounts, actions, locale, resolveBodyForCompose, safeHtml, selected, t]);
 
-  const openReplyAll = useCallback(() => {
+  const openReplyAll = useCallback(async () => {
     if (!selected) return;
-    const reply = buildReplyDraft(selected, [...accounts.map((account) => account.email), selected.accountEmail], true);
+    const source = await resolveBodyForCompose(selected);
+    if (!source) return;
+    const reply = buildReplyDraft(source, [...accounts.map((account) => account.email), source.accountEmail], true);
     actions.openCompose({
-      accountId: selected.accountId,
+      accountId: source.accountId,
       to: reply.to.join(", "),
       cc: reply.cc.join(", "),
       subject: reply.subject,
       inReplyTo: reply.inReplyTo,
       references: reply.references,
-      text: replyBody(selected, accounts, locale, t, safeHtml),
+      text: replyBody(source, accounts, locale, t, safeHtml),
     });
-  }, [accounts, actions, locale, safeHtml, selected, t]);
+  }, [accounts, actions, locale, resolveBodyForCompose, safeHtml, selected, t]);
 
-  const openForward = useCallback(() => {
+  const openForward = useCallback(async () => {
     if (!selected) return;
+    const source = await resolveBodyForCompose(selected);
+    if (!source) return;
     const forward = buildForwardDraft(
-      selected,
-      selected.textBody || textFromSanitizedMailHtml(safeHtml) || selected.snippet,
+      source,
+      source.textBody || textFromSanitizedMailHtml(safeHtml) || source.snippet,
     );
-    const signature = accounts.find((account) => account.id === selected.accountId)?.signature ?? "";
+    const signature = accounts.find((account) => account.id === source.accountId)?.signature ?? "";
     actions.openCompose({
-      accountId: selected.accountId,
+      accountId: source.accountId,
       to: forward.to.join(", "),
       cc: forward.cc.join(", "),
       subject: forward.subject,
       text: signature.trim() ? `${forward.text}\n\n${signature.trim()}` : forward.text,
     });
-  }, [accounts, actions, safeHtml, selected]);
+  }, [accounts, actions, resolveBodyForCompose, safeHtml, selected]);
 
   const moveSelectedMessage = async (target: MoveTarget) => {
     if (!selected || selectedRemoteActionsBlocked || (target === "archive" && selectedIsArchived)) return;
@@ -2355,7 +2409,7 @@ const emptyMessageList = useMemo(() => (query.trim()
   // Demo mode surfaces a realistic auto-reply confirmation so the product
   // preview shows the pending-draft review card without a live agent.
   useEffect(() => {
-    if (!isDemo) return;
+    if (!isDemo || demoPresentation) return;
     void (async () => {
       const demo = await ensureDemoLoaded();
       const now = Date.now();
@@ -2550,6 +2604,10 @@ const emptyMessageList = useMemo(() => (query.trim()
     actions.closeMobileSidebar();
   };
 
+  useEffect(() => {
+    if (demoPresentation?.view === "mail" && !loading && accounts.length) return announceDemoReady(demoPresentation);
+  }, [loading, accounts.length]);
+
   return (
     <div className={`workspace-canvas${activeBackgroundUrl ? " background-active" : ""}`}>
       {activeBackgroundUrl && (
@@ -2574,8 +2632,8 @@ const emptyMessageList = useMemo(() => (query.trim()
         >
           <div className="brand-row">
             <div className="brand-mark" aria-hidden="true">
-              <img className="brand-mark-image brand-mark-light" src="/brand/mark-light.png" alt="" />
-              <img className="brand-mark-image brand-mark-dark" src="/brand/mark-dark.png" alt="" />
+              <img className="brand-mark-image brand-mark-light" src={`${import.meta.env.BASE_URL}brand/mark-light.png`} alt="" />
+              <img className="brand-mark-image brand-mark-dark" src={`${import.meta.env.BASE_URL}brand/mark-dark.png`} alt="" />
             </div>
             <div><strong>Nami Mail</strong><span>{t("app.localMailSpace")}</span></div>
             <IconButton label={t("navigation.closeMenu")} className="mobile-only" onClick={() => actions.closeMobileSidebar()}><X size={18} /></IconButton>
@@ -2583,6 +2641,7 @@ const emptyMessageList = useMemo(() => (query.trim()
 
           <button className="compose-button" type="button" onClick={() => { actions.closeMobileSidebar(); if (accounts.length) actions.openCompose(); else actions.openAddAccount(); }}><PenLine size={18} />{t("mail.compose")}</button>
 
+          <div className="sidebar-content">
           <nav className={`nav-section${selectedAccount === "all" && !accountsExpanded ? "" : " collapsed"}`} aria-label={t("navigation.mailViews")}>
             {/* Loading indicator: the spinner and the count share ONE fixed
                 18px end slot on the ACTIVE entry — the count fades out while
@@ -2701,6 +2760,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                 )}
           </div>
 
+          </div>
           <div className="sidebar-footer">
             {desktopUpdateStatus && desktopUpdateStatus.phase === "available" && desktopUpdateStatus.suppression === "none" && !updateBadgeHidden && desktopUpdateStatus.targetVersion && (
               <div className="sidebar-footer-update-row">
@@ -2774,7 +2834,7 @@ const emptyMessageList = useMemo(() => (query.trim()
                 </div>
               )}
             </div>
-            <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={selectionMode ? t("mail.selection.done") : t("mail.selection.select")} className={selectionMode ? "selection-toggle active" : "selection-toggle"} onClick={toggleSelectionMode} disabled={!accounts.length}><SquareCheckBig size={17} /></IconButton><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? actions.openCompose() : actions.openAddAccount()}><PenLine size={17} /></IconButton>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton><button ref={agentLaunchButtonRef} className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button></div>
+            <div className="header-actions"><span className="message-count" aria-label={messageCountDescription} data-tooltip={messageCountDescription}>{currentMessageTotal}</span><IconButton label={selectionMode ? t("mail.selection.done") : t("mail.selection.select")} className={selectionMode ? "selection-toggle active" : "selection-toggle"} onClick={toggleSelectionMode} disabled={!accounts.length}><SquareCheckBig size={17} /></IconButton><IconButton label={t("mail.compose")} className="mobile-only mobile-compose-action" onClick={() => accounts.length ? actions.openCompose() : actions.openAddAccount()}><PenLine size={17} /></IconButton>{isDesktop && <IconButton label={theme === "light" ? t("app.switchDark") : t("app.switchLight")} onClick={toggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</IconButton>}<IconButton label={t("mail.sync.action")} onClick={() => void sync()} disabled={syncing || !accounts.length}><RefreshCw className={syncing ? "spin" : ""} size={17} /></IconButton>{!demoPresentation && <button ref={agentLaunchButtonRef} className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button>}</div>
           </header>
 
           {healthAlert && healthAlert.until > Date.now() && (
@@ -2901,9 +2961,11 @@ const emptyMessageList = useMemo(() => (query.trim()
           toggleSelectedSeen={toggleSelectedSeen}
           toggleSelectedStar={toggleSelectedStar}
           moveSelectedMessage={moveSelectedMessage}
-          openAgentWorkspace={openAgentWorkspace}
+          openAgentWorkspace={demoPresentation ? undefined : openAgentWorkspace}
           openCalendarImport={openCalendarImport}
           exportSelectedEml={exportSelectedEml}
+          selectedBodyPhase={selectedBodyPhase}
+          onRetryBody={reloadSelectedBody}
           printSelectedMessage={printSelectedMessage}
           exportContactVcf={exportContactVcf}
           exportCalendarIcs={exportCalendarIcs}
@@ -2958,11 +3020,12 @@ const emptyMessageList = useMemo(() => (query.trim()
           openAttachmentPreview={openAttachmentPreview}
         />
         </div>
-        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} overlayOpen={state.settingsOpen} providerListVersion={agentProviderListVersion} onOpenModelSettings={() => actions.openSettingsTo("models")} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
+        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} overlayOpen={state.settingsOpen || Boolean(demoSource)} providerListVersion={agentProviderListVersion} onOpenModelSettings={() => actions.openSettingsTo("models")} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
           closeAgentWorkspace();
           // Refresh so the translation panel picks up provider changes made in the workspace.
           if (!isDemo) void api.agentBootstrap().then((value) => { const capped: AgentBootstrap = { ...value, conversations: value.conversations.slice(0, 50) }; setPreloadedAgentBootstrap(capped); setAgentProviderSnapshot(capped); }).catch(() => undefined);
         }} onOpenMessage={handleAgentOpenMessage} /></Suspense>}
+        {demoSource && <Suspense fallback={null}><DemoSourceDialog message={demoSource} onClose={closeDemoSource} /></Suspense>}
         <aside className="icon-rail" aria-label={t("navigation.management")}>
           <IconButton label={t("settings.title")} onClick={() => { actions.closeMobileSidebar(); actions.openSettings(); }}><Settings size={18} /></IconButton>
           <IconButton label={t("sending.title")} className={submissionAttentionCount ? "attention" : ""} onClick={() => { actions.closeMobileSidebar(); actions.openSendingStatus(); void refreshSubmissions(accounts, { silent: true }); }}><ListChecks size={18} />{submissionOutstandingCount > 0 && <span className="rail-badge" aria-hidden="true">{submissionOutstandingCount}</span>}</IconButton>

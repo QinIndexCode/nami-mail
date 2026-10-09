@@ -228,18 +228,19 @@ describe("database schema versioning", () => {
     const migratedColumns = new Map<string, Set<string>>();
     for (const match of source.matchAll(/ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+"?(\w+)"?/g)) {
       const [, table, column] = match;
-      const known = migratedColumns.get(table) ?? new Set<string>();
-      known.add(column);
-      migratedColumns.set(table, known);
+      // Both groups are guaranteed by the regex itself (\w+ cannot be empty).
+      const known = migratedColumns.get(table!) ?? new Set<string>();
+      known.add(column!);
+      migratedColumns.set(table!, known);
     }
     expect(migratedColumns.size).toBeGreaterThan(0);
 
     const indexStatements = [...schemaSql.matchAll(
       /CREATE INDEX IF NOT EXISTS\s+(\w+)\s+ON\s+(\w+)\s*\(([^)]+)\)/g,
     )].map((match) => ({
-      name: match[1],
-      table: match[2],
-      columns: match[3].split(",").map((part) => part.trim().split(/\s+/)[0]),
+      name: match[1]!,
+      table: match[2]!,
+      columns: match[3]!.split(",").map((part) => part.trim().split(/\s+/)[0]!),
     }));
     expect(indexStatements.length).toBeGreaterThan(0);
 

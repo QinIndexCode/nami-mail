@@ -161,7 +161,7 @@ cursor:pointer;
 text-align:left;
 background:0 0;
 border:0;
-border-radius:6px;
+border-radius:var(--radius-sm);
 grid-template-columns:minmax(0,1fr) auto;
 align-items:start;
 gap:8px;
@@ -223,7 +223,7 @@ cursor:pointer;
 opacity:0;
 background:0 0;
 border:0;
-border-radius:6px;
+border-radius:var(--radius-sm);
 place-items:center;
 padding:0;
 display:grid;
@@ -289,7 +289,7 @@ background:var(--panel-solid);
 min-height:26px;
 color:var(--text-soft);
 cursor:pointer;
-border-radius:6px;
+border-radius:var(--radius-sm);
 align-items:center;
 gap:5px;
 padding:4px 8px;
@@ -324,7 +324,7 @@ color:var(--text-faint);
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:6px;
+border-radius:var(--radius-sm);
 place-items:center;
 padding:0;
 display:grid;
@@ -351,7 +351,7 @@ transform:translateY(0) scale(1)
 border:1.5px solid var(--line-strong);
 background:var(--panel);
 color:#0000;
-border-radius:6px;
+border-radius:var(--radius-sm);
 place-items:center;
 width:17px;
 height:17px;
@@ -510,7 +510,7 @@ background:var(--panel-muted);
 width:min(330px,55vw);
 min-height:34px;
 color:var(--text);
-border-radius:6px;
+border-radius:var(--radius-sm);
 outline:none;
 padding:6px 8px;
 font-size:15px;
@@ -644,7 +644,7 @@ display:none
 border:1px solid var(--line);
 min-width:0;
 color:var(--text-soft);
-border-radius:6px;
+border-radius:var(--radius-sm);
 align-items:center;
 gap:5px;
 padding:5px 8px;
@@ -1438,7 +1438,7 @@ display:flex
 .agent-skeleton-line
 {
 height:11px;
-border-radius:6px;
+border-radius:var(--radius-sm);
 background:var(--text-faint);
 animation:1.4s ease-in-out infinite agent-skeleton-sweep
 }
@@ -1708,7 +1708,7 @@ background:var(--panel-solid);
 color:var(--text-soft);
 cursor:pointer;
 box-shadow:var(--shadow-sm);
-border-radius:16px;
+border-radius:var(--radius-lg);
 align-items:center;
 gap:5px;
 padding:5px 8px 5px 8px;
@@ -1734,7 +1734,7 @@ background:var(--panel-solid);
 width:280px;
 max-height:0;
 box-shadow:var(--shadow-sm);
-border-radius:10px;
+border-radius:var(--radius-md);
 transition:max-height .3s,opacity .2s;
 position:absolute;
 top:34px;
@@ -2593,7 +2593,7 @@ background:var(--hover)
 {
 background:color-mix(in srgb, var(--accent) 14%, transparent);
 color:var(--accent);
-border-radius:6px;
+border-radius:var(--radius-sm);
 width:26px;
 height:26px;
 flex:none;

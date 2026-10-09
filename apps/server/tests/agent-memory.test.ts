@@ -108,7 +108,9 @@ describe("Agent memory store", () => {
     try {
       expect(() => store.create({ summary: "" })).toThrow();
       expect(() => store.create({ summary: "  " })).toThrow();
-      expect(() => store.create({ kind: "unsupported-kind", summary: "x" })).toThrow();
+      // The kind is deliberately invalid at runtime; the cast documents that
+      // the store's own validation (not the compiler) is what rejects it.
+      expect(() => store.create({ kind: "unsupported-kind" as "note", summary: "x" })).toThrow();
       expect(() => store.create({ summary: "x".repeat(501) })).toThrow();
     } finally {
       db.close();

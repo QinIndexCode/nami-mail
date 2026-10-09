@@ -4,6 +4,10 @@ type DialogFocusOptions = {
   restoreFocusRef?: RefObject<HTMLElement | null>;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
   suspended?: boolean;
+  /** An embedded panel should not take focus before the visitor enters it. */
+  deferInitialFocus?: boolean;
+  /** Embedded overlays can focus controls without scrolling their host page. */
+  preventScroll?: boolean;
 };
 
 const focusableSelector = [
@@ -80,7 +84,7 @@ function canRestoreFocus(element: HTMLElement | null | undefined): element is HT
 export function useDialogFocus(
   active: boolean,
   dialogRef: RefObject<HTMLElement | null>,
-  { restoreFocusRef, fallbackFocusRef, suspended = false }: DialogFocusOptions = {},
+  { restoreFocusRef, fallbackFocusRef, suspended = false, deferInitialFocus = false, preventScroll = false }: DialogFocusOptions = {},
 ): void {
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const suspendedRef = useRef(suspended);
@@ -101,16 +105,16 @@ export function useDialogFocus(
       const initialControl = preferred && preferred.tabIndex >= 0 && canRestoreFocus(preferred)
         ? preferred
         : focusableElements(dialog)[0];
-      (initialControl ?? dialog).focus();
+      (initialControl ?? dialog).focus({ preventScroll });
     };
-    const focusAnimationFrame = window.requestAnimationFrame(focusInitialControl);
+    const focusAnimationFrame = deferInitialFocus ? null : window.requestAnimationFrame(focusInitialControl);
 
     const keepFocusInDialog = (event: KeyboardEvent) => {
       if (event.key !== "Tab" || suspendedRef.current) return;
       const controls = focusableElements(dialog);
       if (!controls.length) {
         event.preventDefault();
-        dialog.focus();
+        dialog.focus({ preventScroll });
         return;
       }
 
@@ -118,13 +122,13 @@ export function useDialogFocus(
       const last = controls[controls.length - 1];
       if (!isWithinDialogFocus(dialog, document.activeElement)) {
         event.preventDefault();
-        (event.shiftKey ? last : first).focus();
+        (event.shiftKey ? last : first).focus({ preventScroll });
       } else if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
-        last.focus();
+        last.focus({ preventScroll });
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault();
-        first.focus();
+        first.focus({ preventScroll });
       }
     };
 
@@ -149,7 +153,7 @@ export function useDialogFocus(
     document.addEventListener("keydown", keepFocusInDialog, true);
     document.addEventListener("focusin", preventFocusEscape, true);
     return () => {
-      window.cancelAnimationFrame(focusAnimationFrame);
+      if (focusAnimationFrame !== null) window.cancelAnimationFrame(focusAnimationFrame);
       document.removeEventListener("keydown", keepFocusInDialog, true);
       document.removeEventListener("focusin", preventFocusEscape, true);
       // The cleanup reads the latest refs on purpose: focus returns to the
@@ -161,8 +165,8 @@ export function useDialogFocus(
       const restoreTarget = [restoreFocusRef?.current, previousFocusRef.current, fallbackFocusRef?.current]
         .find(canRestoreFocus);
       if (restoreTarget) {
-        window.setTimeout(() => restoreTarget.focus(), 0);
+        window.setTimeout(() => restoreTarget.focus({ preventScroll }), 0);
       }
     };
-  }, [active, dialogRef, fallbackFocusRef, restoreFocusRef]);
+  }, [active, deferInitialFocus, dialogRef, fallbackFocusRef, preventScroll, restoreFocusRef]);
 }

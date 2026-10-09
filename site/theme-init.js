@@ -12,11 +12,14 @@
   "use strict";
 
   var root = document.documentElement;
+  root.dataset.scripted = "true";
 
   try {
     var storedTheme = localStorage.getItem("nami-site-theme");
     if (storedTheme === "dark" || storedTheme === "light") {
       root.dataset.theme = storedTheme;
+    } else if (root.dataset.defaultTheme === "dark" || root.dataset.defaultTheme === "light") {
+      root.dataset.theme = root.dataset.defaultTheme;
     } else {
       root.dataset.theme =
         window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";

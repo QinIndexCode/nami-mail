@@ -47,6 +47,7 @@ import {
   migrateOutboundSubmissionStorage,
   recoverInterruptedSubmissions,
 } from "./outbox.js";
+import { normalizeScheduledTimesMigration } from "./scheduled-times-migration.js";
 import { providerPresets } from "./providers.js";
 import { TranslationConfigurationStore } from "./translation-configuration.js";
 import { buildTranslationService } from "./routes/translation.js";
@@ -193,6 +194,13 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   backfillRedactMessageSnippets(context.db);
   migrateOutboundAttachments(context.db, outboundAttachmentDirectory(context), context.masterKey);
   migrateOutboundSubmissionStorage(context.db, context.masterKey);
+  // R05: legacy offset-form scheduled times normalize to UTC once; the due
+  // queries and the snoozed view compare stored times as strings.
+  const normalizedTimes = normalizeScheduledTimesMigration(context.db, context.masterKey);
+  if (normalizedTimes.invalid) {
+    // serverLog: this runs before the fastify instance exists.
+    serverLog.warn({ ...normalizedTimes }, "Found unparseable scheduled times during UTC normalization");
+  }
   notePhase("build:message-migrations");
   const ownedAgentMailApplication = !context.agentService && context.agentLifecycle && context.agentSourceEvents
     ? new SqliteMailApplicationService({
@@ -265,12 +273,20 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   // before they dispatch, so a shutdown while an operation is queued or in
   // flight never loses it: pending/running rows are re-enqueued here.
   const operationQueue = createOperationQueue(context.db, {
-    onBackgroundPermanentFailure: (kind, payload) => {
-      // A flags push that exhausted its retries keeps the local (user) state
-      // but must stop blocking sync reconciliation for those rows.
+    onOperationSettled: (kind, payload, rowId) => {
+      // The marker clear follows the durable settlement of a row, never the
+      // executor: an executor abandoned by a write-slot timeout keeps running
+      // and would otherwise clear a newer push's protection after its own
+      // row had already settled. The clear re-checks pending AND running
+      // rows for each message (excluding the settling row itself), so a
+      // newer push in either state stays protected. This covers success,
+      // exhausted retries, and foreground failures — the former
+      // permanent-failure hook's job is a subset.
       if (kind === "flags-push") {
         const { entries } = payload as { entries?: FlagsPushEntry[] };
-        if (Array.isArray(entries)) clearPendingFlagsMarkers(context.db, entries.map((entry) => entry.id));
+        if (Array.isArray(entries)) {
+          clearPendingFlagsMarkers(context.db, entries.map((entry) => entry.id), rowId);
+        }
       }
     },
   });
@@ -293,9 +309,11 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     return { updated: 0, failed: 0, changedIds: [] };
   });
   operationQueue.registerRunner("flags-push", async (payload) => {
+    // The marker clear lives in the onOperationSettled hook, not here: a
+    // late executor completion (after a write-slot timeout already settled
+    // this row) must not clear a newer push's protection.
     const push = payload as { accountId: string; entries: FlagsPushEntry[] };
     await pushFlagsRemote({ db: context.db, masterKey: context.masterKey, accessTokenProvider: context.oauthService }, push);
-    clearPendingFlagsMarkers(context.db, push.entries.map((entry) => entry.id));
   });
   // Repair `pending_flags_push` markers that no queued push is behind before
   // the resumed queue starts: a marker only syncs ever clears again is a

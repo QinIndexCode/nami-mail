@@ -1,6 +1,7 @@
 import type { DatabaseHandle } from "./db.js";
 import { messagePayloadForRow, type MessageStorageRow } from "./message-storage.js";
 import type { NewInboxMessage } from "./sync.js";
+import { toUtcIsoTimestamp } from "./utc-time.js";
 
 export function snoozedUntilValue(db: DatabaseHandle, messageId: string): string | null {
   const row = db.prepare("SELECT snoozed_until FROM messages WHERE id = ?").get(messageId) as
@@ -9,10 +10,18 @@ export function snoozedUntilValue(db: DatabaseHandle, messageId: string): string
   return row ? row.snoozed_until : null;
 }
 
-/** Marks a message as snoozed until the given ISO time. */
-export function setMessageSnoozed(db: DatabaseHandle, messageId: string, untilIso: string): void {
-  const result = db.prepare("UPDATE messages SET snoozed_until = ? WHERE id = ?").run(untilIso, messageId);
+/**
+ * Marks a message as snoozed until the given ISO time. R05: the stored value
+ * is the UTC ("Z") form of the same instant — the snoozed view and the due
+ * release compare snoozed_until as a STRING, and an offset form sorts
+ * wrongly. Returns the normalized value for the API reply.
+ */
+export function setMessageSnoozed(db: DatabaseHandle, messageId: string, untilIso: string): string {
+  const normalized = toUtcIsoTimestamp(untilIso);
+  if (!normalized) throw new Error("稍后处理时间无效。");
+  const result = db.prepare("UPDATE messages SET snoozed_until = ? WHERE id = ?").run(normalized, messageId);
   if (result.changes !== 1) throw new Error("邮件不存在。");
+  return normalized;
 }
 
 /** Cancels the snooze so the message is visible again immediately. */

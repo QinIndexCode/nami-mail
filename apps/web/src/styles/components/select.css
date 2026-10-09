@@ -106,7 +106,7 @@ font:inherit;
 text-align:left;
 background:0 0;
 border:1px solid #0000;
-border-radius:6px;
+border-radius:var(--radius-sm);
 justify-content:space-between;
 align-items:center;
 gap:8px;

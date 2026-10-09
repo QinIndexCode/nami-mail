@@ -173,10 +173,53 @@ export function commitLocalFlags(
   };
 }
 
-/** Clears the per-message push markers after the push has settled for good. */
-export function clearPendingFlagsMarkers(db: DatabaseHandle, messageIds: readonly string[]): void {
-  const update = db.prepare("UPDATE messages SET pending_flags_push = 0 WHERE id = ? AND pending_flags_push = 1");
-  for (const id of messageIds) update.run(id);
+/**
+ * Clears the per-message push markers after the push has settled for good.
+ *
+ * The clear is per message and conditional: a message whose flag delta was
+ * committed twice in quick succession (seen=true then seen=false) is named by
+ * TWO `flags-push` rows. When the older row settles, the newer row may still
+ * be pending — clearing unconditionally would drop the newer push's
+ * protection and let the next sync overwrite the user's newest local choice
+ * with stale remote state. Same-account `flags-push` rows run serially
+ * (per-account FIFO chains), so at settlement time any newer push for the
+ * same message is a `pending` row (queued or between retries) or a `running`
+ * one (executing right now): only when NO other pending-or-running row names
+ * the message is its marker cleared.
+ *
+ * `settledRowId` names the queue row whose settlement triggered this clear
+ * (from the `onOperationSettled` hook). Its own row is still `running` at
+ * that instant, so excluding it is what lets a lone push clear its own
+ * messages. Omit it (startup reconciliation, tests) to check every row.
+ *
+ * Callers settle this from the queue's durable-settle hook
+ * (`onOperationSettled`), never from inside the executor: an executor can
+ * complete late — after a write-slot timeout already settled its row — and a
+ * late clear would otherwise drop a newer push's protection.
+ */
+export function clearPendingFlagsMarkers(
+  db: DatabaseHandle,
+  messageIds: readonly string[],
+  settledRowId?: string,
+): void {
+  const update = db.prepare(`
+    UPDATE messages SET pending_flags_push = 0
+    WHERE id = ? AND pending_flags_push = 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM operation_queue
+        WHERE operation_queue.kind = 'flags-push'
+          AND operation_queue.id != ?
+          AND operation_queue.status IN ('pending', 'running')
+          AND json_valid(operation_queue.payload_json)
+          AND EXISTS (
+            SELECT 1
+            FROM json_each(operation_queue.payload_json, '$.entries') AS entry
+            WHERE json_extract(entry.value, '$.id') = messages.id
+          )
+      )
+  `);
+  for (const id of messageIds) update.run(id, settledRowId ?? "");
 }
 
 /**

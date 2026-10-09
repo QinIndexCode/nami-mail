@@ -167,7 +167,7 @@ describe("collectMailBackup", () => {
     expect(report.exported).toBe(1);
     expect(report.failed.map((failure) => failure.messageId)).toEqual(["message-1"]);
     expect(report.failed[0]).toMatchObject({ code: "connection_refused" });
-    expect(report.failed[0].reason).toContain("connection refused");
+    expect(report.failed[0]!.reason).toContain("connection refused");
     expect(db.prepare("SELECT status, last_error, last_error_code FROM accounts WHERE id = ?").get("account-1")).toMatchObject({
       status: "error",
       last_error_code: "connection_refused",
@@ -187,7 +187,7 @@ describe("collectMailBackup", () => {
 
     expect(report.exported).toBe(1);
     expect(report.failed).toHaveLength(1);
-    expect(report.failed[0].messageId).toBe("message-1");
+    expect(report.failed[0]!.messageId).toBe("message-1");
     expect(client.fetch).not.toHaveBeenCalledWith(expect.arrayContaining([11]), expect.anything(), expect.anything());
   });
 
@@ -206,8 +206,8 @@ describe("collectMailBackup", () => {
 
     expect(report).toMatchObject({ exported: 101, failed: [] });
     expect(client.fetch).toHaveBeenCalledTimes(2);
-    expect(client.fetch.mock.calls[0][0]).toHaveLength(100);
-    expect(client.fetch.mock.calls[1][0]).toEqual([101]);
+    expect(client.fetch.mock.calls[0]![0]).toHaveLength(100);
+    expect(client.fetch.mock.calls[1]![0]).toEqual([101]);
   });
 
   it("serves a streaming zip over /api/backup without flattening the server", async () => {

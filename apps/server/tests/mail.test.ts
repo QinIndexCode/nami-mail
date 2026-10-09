@@ -4,7 +4,7 @@ import { createImapClient, friendlyMailError, mailErrorCode } from "../src/mail.
 describe("IMAP client error isolation", () => {
   it("absorbs a late error event instead of terminating the server", () => {
     const client = createImapClient("hello@example.com", "not-used", {
-      imap: { host: "127.0.0.1", port: 1993, secure: true },
+      imap: { host: "127.0.0.1", port: 1993, secure: true, transport: "tls" },
       usernameMode: "email",
     });
 

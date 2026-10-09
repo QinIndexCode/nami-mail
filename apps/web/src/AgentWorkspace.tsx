@@ -57,8 +57,9 @@ import { triggerBlobDownload } from "./attachmentZip";
 import type { Account, AgentAccessLevel, Message } from "./types";
 import { useI18n } from "./i18n";
 import { useDialogFocus } from "./hooks/useDialogFocus";
+import { announceDemoReady, readDemoPresentation } from "./demoPresentation";
 import { useDismissTransition } from "./hooks/useDismissTransition";
-import { configuredProviderId } from "./agent/agent-utils";
+import { configuredProviderId, resolveConversationProvider } from "./agent/agent-utils";
 import { AgentMessageRow } from "./agent/AgentMessageRow";
 
 import { AgentConfirmationCard } from "./agent/AgentConfirmationCard";
@@ -71,7 +72,6 @@ import {
   scrubberBarBlur,
   newLocalId,
   currentTime,
-  CONVERSATION_PROVIDERS_KEY,
   shortDate,
   REVOKE_NOTICE_SECONDS,
   type MailReference,
@@ -84,8 +84,8 @@ import {
   revokeFailureMessage,
   readRevokedIds,
   writeRevokedIds,
-  LAST_ACTIVE_CONVERSATION_KEY,
   readLastActiveConversationId,
+  saveLastActiveConversationId,
   lastMessageIsUnanswered,
   applyRevokedMarks,
   purgeStaleErrors,
@@ -139,6 +139,7 @@ type AgentWorkspaceProps = {
 
 export default function AgentWorkspace({ accounts, currentMessage, onClose, onOpenMessage, restoreFocusRef, demoMode = false, overlayOpen = false, providerListVersion = 0, onOpenModelSettings, preloadedBootstrap, agentAccessLevel = "send-confirmed", onAgentAccessLevelChange, onMailStateChanged }: AgentWorkspaceProps) {
   const { locale, t } = useI18n();
+  const demoPresentation = useMemo(() => demoMode ? readDemoPresentation(window.location.search) : null, [demoMode]);
   const [bootstrap, setBootstrap] = useState<AgentBootstrap | null>(null);
   const [conversations, setConversations] = useState<AgentBootstrap["conversations"]>([]);
   const [active, setActive] = useState<AgentConversation | null>(null);
@@ -236,33 +237,6 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const [scopePickerOpen, setScopePickerOpen] = useState(false);
   /** Anchors the scope picker popover so an outside click closes it. */
   const scopePickerRef = useRef<HTMLDivElement>(null);
-  /** Per-conversation model overrides chosen in this session (conversationId → providerId). */
-  const [conversationProviders, setConversationProviders] = useState<Record<string, string>>(() => {
-    try {
-      const raw = window.localStorage.getItem(CONVERSATION_PROVIDERS_KEY);
-      if (!raw) return {};
-      const parsed: unknown = JSON.parse(raw);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, string> : {};
-    } catch {
-      return {};
-    }
-  });
-  const conversationProvidersRef = useRef(conversationProviders);
-  conversationProvidersRef.current = conversationProviders;
-  // Persist per-conversation model choices so they survive restarts. A bare
-  // { } entry is removed again to keep storage tidy.
-  useEffect(() => {
-    try {
-      const entries = Object.entries(conversationProviders).filter(([, providerId]) => typeof providerId === "string" && providerId.length > 0);
-      if (entries.length === 0) {
-        window.localStorage.removeItem(CONVERSATION_PROVIDERS_KEY);
-      } else {
-        window.localStorage.setItem(CONVERSATION_PROVIDERS_KEY, JSON.stringify(Object.fromEntries(entries)));
-      }
-    } catch {
-      // Storage may be unavailable (private mode); the choice simply stays in memory.
-    }
-  }, [conversationProviders]);
   const [renaming, setRenaming] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [mobileConversationsOpen, setMobileConversationsOpen] = useState(false);
@@ -351,9 +325,14 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   useDialogFocus(true, workspaceRef, {
     restoreFocusRef,
     suspended: overlayOpen || Boolean(pendingAccessLevel) || Boolean(deleteConfirm),
+    deferInitialFocus: window.parent !== window && Boolean(readDemoPresentation(window.location.search)),
   });
   useDialogFocus(Boolean(pendingAccessLevel), accessConfirmRef, { restoreFocusRef: workspaceRef });
   useDialogFocus(Boolean(deleteConfirm), deleteConfirmRef, { restoreFocusRef: workspaceRef });
+
+  useEffect(() => {
+    if (demoPresentation?.view === "agent" && !loading && active) return announceDemoReady(demoPresentation);
+  }, [demoPresentation, loading, active]);
 
   useEffect(() => {
     if (!deleteConfirm) return undefined;
@@ -575,8 +554,10 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
         defaultProviderId: "demo-ollama",
         conversations: [],
       });
-      const demoConversation = createDemoConversation(locale);
+      const sitePreview = Boolean(readDemoPresentation(window.location.search));
+      const demoConversation = createDemoConversation(locale, sitePreview);
       setActive(demoConversation);
+      if (sitePreview) setScopeTarget(scopeTargetForConversation(demoConversation.scope, accounts));
       setConversations([{ id: demoConversation.id, title: demoConversation.title, preview: demoConversation.preview, updatedAt: demoConversation.updatedAt }]);
       setProviderId("demo-ollama");
       setLoading(false);
@@ -605,14 +586,9 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
           const conversation = await api.agentConversation(initialTarget);
           setActive(applyRevokedMarks(purgeStaleErrors(conversation)));
           // Resolve the conversation's model exactly like switching to it: the
-          // user's per-conversation choice (persisted across restarts) wins,
-          // then the provider recorded on the conversation, then the default.
-          const localProvider = conversationProvidersRef.current[initialTarget];
-          setProviderId(localProvider && value.providers.some((provider) => provider.id === localProvider && provider.configured)
-            ? localProvider
-            : conversation.providerId && value.providers.some((provider) => provider.id === conversation.providerId && provider.configured)
-              ? conversation.providerId
-              : configuredProviderId(value.providers, value.defaultProviderId));
+          // provider recorded on the conversation (kept authoritative by the
+          // server-side model pin) wins, then the default.
+          setProviderId(resolveConversationProvider(conversation.providerId, value.providers, value.defaultProviderId));
           if (!enteringFromMessageRef.current) {
             setScopeTarget(scopeTargetForConversation(conversation.scope, accounts));
           }
@@ -1092,11 +1068,8 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   // that conversation to see the completed reply).
   useEffect(() => {
     if (!active?.id) return;
-    try {
-      window.localStorage.setItem(LAST_ACTIVE_CONVERSATION_KEY, active.id);
-    } catch {
-      // Storage unavailable — the fallback to the newest conversation applies.
-    }
+    // Durable layer: survives the desktop's ephemeral-origin storage wipe.
+    saveLastActiveConversationId(active.id);
   }, [active?.id]);
   // A scope target that points at a deleted account must not leave the
   // composer silently scoped to nothing; fall back to the first account, or to
@@ -1187,14 +1160,10 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
           }
           : current);
       }
-      // Resolve the conversation's model: a model chosen in this session wins,
-      // then the one recorded on the conversation, then the default provider.
-      const localProvider = conversationProviders[id];
-      setProviderId(localProvider && providers.some((provider) => provider.id === localProvider && provider.configured)
-        ? localProvider
-        : conversation.providerId && providers.some((provider) => provider.id === conversation.providerId && provider.configured)
-          ? conversation.providerId
-          : configuredProviderId(providers, bootstrap?.defaultProviderId ?? null));
+      // Resolve the conversation's model: the provider recorded on the
+      // conversation (kept authoritative by the server-side model pin) wins,
+      // then the default provider.
+      setProviderId(resolveConversationProvider(conversation.providerId, providers, bootstrap?.defaultProviderId ?? null));
       setScopeTarget(scopeTargetForConversation(conversation.scope, accounts));
       setRenaming(false);
       setModelPickerOpen(false);
@@ -1208,7 +1177,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
       restoreLiveRunIndicators(id);
       setLoadError(error instanceof Error ? error.message : t("agent.error.loadConversation"));
     }
-  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, clearLiveRunIndicators, conversationProviders, conversations, currentMessage, drainPendingFlush, getSession, providers, replayBackgroundSession, restoreLiveRunIndicators, syncBackgroundRuns, t, takeBackgroundError]);
+  }, [accounts, active?.id, activeIdRef, bootstrap?.defaultProviderId, clearLiveRunIndicators, conversations, currentMessage, drainPendingFlush, getSession, providers, replayBackgroundSession, restoreLiveRunIndicators, syncBackgroundRuns, t, takeBackgroundError]);
 
   const createConversation = useCallback(async () => {
     // Starting a new conversation does not cancel the current one — a live run
@@ -1231,11 +1200,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     activeIdRef.current = null;
     // Closing the panel from the welcome screen must reopen onto the welcome
     // screen, not the previously active conversation.
-    try {
-      window.localStorage.removeItem(LAST_ACTIVE_CONVERSATION_KEY);
-    } catch {
-      // Storage unavailable — the next reopen falls back to the newest conversation.
-    }
+    saveLastActiveConversationId(null);
     // A conversation fetch that is still in flight (selection token) must not
     // land back on screen after the user chose "new conversation": bump the
     // token so any such late fetch recognises itself as stale.
@@ -1937,7 +1902,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             <button className="agent-mobile-conversations-button" type="button" aria-label={mobileConversationsOpen ? t("agent.conversation.closeList") : t("agent.conversation.openList")} aria-expanded={mobileConversationsOpen} data-tooltip={mobileConversationsOpen ? t("agent.conversation.closeList") : t("agent.conversation.openList")} onClick={() => setMobileConversationsOpen((open) => !open)}><PanelLeftClose size={17} /></button>
             {!hasConfiguredProvider ? <button className="agent-configure-provider-action" type="button" onClick={() => onOpenModelSettings?.()}><Wrench size={15} />{t("agent.providers.configure")}</button> : null}
             {hasConfiguredProvider && <button className="icon-button" type="button" onClick={() => onOpenModelSettings?.()} aria-label={t("agent.provider.settings")} data-tooltip={t("agent.provider.settings")} data-tooltip-placement="bottom"><Wrench size={17} /></button>}
-            <button className="icon-button" type="button" onClick={onClose} aria-label={t("agent.workspace.close")} data-tooltip={t("agent.workspace.close")} data-tooltip-placement="bottom"><ArrowLeft size={20} strokeWidth={2.4} /></button>
+            {!demoPresentation && <button className="icon-button" type="button" onClick={onClose} aria-label={t("agent.workspace.close")} data-tooltip={t("agent.workspace.close")} data-tooltip-placement="bottom"><ArrowLeft size={20} strokeWidth={2.4} /></button>}
           </div>
         </header>
 
@@ -2348,10 +2313,14 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
                           return (
                             <button key={provider.id} type="button" role="menuitemradio" aria-checked={isCurrent} className={`agent-popover-option agent-model-option${isCurrent ? " active" : ""}`} onClick={() => {
                               setProviderId(provider.id);
-                              // Pin the chosen model to the active conversation so switching
-                              // back restores it; conversations without an explicit choice
-                              // keep using the default provider.
-                              if (!isCurrent && active) setConversationProviders((prev) => ({ ...prev, [active.id]: provider.id }));
+                              // Pin the chosen model to the active conversation by
+                              // persisting it server-side, so it stays authoritative
+                              // across restarts and devices and switching back restores
+                              // it. Fire-and-forget: a failed write only costs the
+                              // cross-session pin, never the current selection.
+                              if (!isCurrent && active && !demoMode) {
+                                void api.setAgentConversationProvider(active.id, provider.id).catch(() => undefined);
+                              }
                               setModelPickerOpen(false);
                             }}>
                               <span className="agent-model-option-name" title={provider.model}>{provider.label}</span>

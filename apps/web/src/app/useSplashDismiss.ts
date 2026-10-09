@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { readDemoPresentation } from "../demoPresentation";
 
 /**
  * Splash-screen lifecycle: the splash dismisses once the 2s brand animation
@@ -33,16 +34,19 @@ export function useSplashDismiss(): SplashDismiss {
   }, []);
 
   useEffect(() => {
+    // The website already has a branded loading placeholder. Start its client
+    // as soon as sample data is ready, keeping the install's startup unchanged.
+    const animationDelay = readDemoPresentation(window.location.search) ? 0 : 2000;
     const timer = setTimeout(() => {
       splashAnimationDoneRef.current = true;
-      console.log("[nami-startup] renderer-splash-animation-done(2s)");
+      console.log(animationDelay === 0 ? "[nami-startup] renderer-splash-animation-done(site-preview)" : "[nami-startup] renderer-splash-animation-done(2s)");
       // If data or agent is still loading, show the loading bar
       if (!splashDataDoneRef.current || !splashAgentDoneRef.current) {
         const loader = document.querySelector(".nami-splash-loader");
         if (loader) loader.classList.add("visible");
       }
       dismissSplash();
-    }, 2000);
+    }, animationDelay);
     return () => clearTimeout(timer);
   }, [dismissSplash]);
 

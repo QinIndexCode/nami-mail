@@ -427,7 +427,16 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
       const decoder = new TextDecoder();
       let buffer = "";
       let finishReason: ProviderFinishReason = "stop";
-      const inlineExtractor = new InlineToolCallExtractor();
+      // Inline tool-call extraction only runs when the request actually allows
+      // tool calls: a chat/auxiliary request must never surface a tool_call
+      // event, even when the model emits inline tags into its text output.
+      // R01: the NATIVE tool_calls deltas honor the same gate — a
+      // non-compliant endpoint can emit tool_calls for a request that sent no
+      // tools, and the run engine's execution-layer authorization stays the
+      // independent second door, but the provider never reports what the
+      // request did not ask for.
+      const acceptToolCalls = request.allowToolCalls === true;
+      const inlineExtractor = acceptToolCalls ? new InlineToolCallExtractor() : undefined;
       let hasInlineToolCalls = false;
       try {
         while (true) {
@@ -459,7 +468,7 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
             const choice = Array.isArray(event.choices) ? asRecord(event.choices[0]) : undefined;
             const delta = asRecord(choice?.delta);
             if (typeof delta?.content === "string" && delta.content) {
-              const safeText = inlineExtractor.push(delta.content);
+              const safeText = inlineExtractor ? inlineExtractor.push(delta.content) : delta.content;
               if (safeText) yield { type: "text_delta", delta: safeText };
             }
             // Vendor adapter extracts reasoning content — MiMo/DeepSeek/Qwen/GLM/Kimi
@@ -472,9 +481,9 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
                 yield { type: "reasoning_delta", delta: reasoning };
               }
             }
-            appendToolDelta(calls, delta?.tool_calls);
+            if (acceptToolCalls) appendToolDelta(calls, delta?.tool_calls);
             if (typeof choice?.finish_reason === "string") {
-              finishReason = choice.finish_reason === "tool_calls" ? "tool-calls"
+              finishReason = choice.finish_reason === "tool_calls" ? (acceptToolCalls ? "tool-calls" : "stop")
                 : choice.finish_reason === "length" ? "length"
                   : choice.finish_reason === "cancelled" ? "cancelled"
                     : choice.finish_reason === "content_filter" ? "content-filter" : "stop";
@@ -487,10 +496,10 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
         reader.releaseLock();
       }
       // Flush any remaining buffered text (safe tail or incomplete tags).
-      const remainingText = inlineExtractor.flush();
+      const remainingText = inlineExtractor?.flush();
       if (remainingText) yield { type: "text_delta", delta: remainingText };
       // Extract any inline tool calls that were detected in the text stream.
-      const inlineCalls = inlineExtractor.extractToolCalls();
+      const inlineCalls = inlineExtractor?.extractToolCalls() ?? [];
       for (const call of inlineCalls) {
         hasInlineToolCalls = true;
         yield { type: "tool_call", call };

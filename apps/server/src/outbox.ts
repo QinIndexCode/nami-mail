@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { domainToASCII } from "node:url";
+import { toUtcIsoTimestamp } from "./utc-time.js";
 import {
   outboundSubmissionStatuses as OUTBOUND_SUBMISSION_STATUSES,
   type OutboundSubmission,
@@ -373,6 +374,13 @@ function verifyOutboundSubmissions(db: DatabaseHandle, masterKey: Buffer): numbe
   return verified;
 }
 
+/** Normalizes a request-carried time to UTC; the schema already validated the shape. */
+function requireUtcTimestamp(value: string): string {
+  const normalized = toUtcIsoTimestamp(value);
+  if (!normalized) throw new Error("定时发送时间无效。");
+  return normalized;
+}
+
 /** Encrypts legacy send requests and diagnostic details before API startup. */
 export function migrateOutboundSubmissionStorage(
   db: DatabaseHandle,
@@ -429,7 +437,23 @@ export function createIdempotencyKey(): string {
 export function prepareSubmission(
   db: DatabaseHandle,
   masterKey: Buffer,
-  input: { accountId: string; accountEmail: string; idempotencyKey?: string; request: OutboundSubmissionRequest; sendAt?: string },
+  input: {
+    accountId: string;
+    accountEmail: string;
+    idempotencyKey?: string;
+    request: OutboundSubmissionRequest;
+    sendAt?: string;
+    /**
+     * Runs inside the create transaction right after the submission row is
+     * inserted. The scheduled send route uses it to link outbound
+     * attachments in the same transaction, so a crash between the two can
+     * no longer leave a pending task whose uploads were never linked (the
+     * 24h TTL cleanup would take them and the due pass would fail). The
+     * callback throws to roll the insert back when a token is invalid, so
+     * the caller can reject the request without leaving a task at all.
+     */
+    linkAttachmentsInCreate?: (submissionId: string) => void;
+  },
 ): { submission: OutboundSubmission; idempotencyKey: string; created: boolean } {
   const idempotencyKey = input.idempotencyKey || createIdempotencyKey();
   const fingerprint = requestFingerprint(masterKey, input.accountId, input.request);
@@ -468,7 +492,11 @@ export function prepareSubmission(
     confirmed_at: null,
     created_at: now,
     updated_at: now,
-    send_at: input.sendAt ?? null,
+    // R05: the due query compares send_at as a STRING against a UTC now —
+    // an offset form ("09:00+08:00") sorts before "02:00Z" and never fires.
+    // Only the effective UTC instant is persisted; the wire spelling of the
+    // request does not survive.
+    send_at: input.sendAt === undefined ? null : requireUtcTimestamp(input.sendAt),
   };
   row.request_json = encryptedRequest(row, masterKey, input.request);
   row.encrypted_details = encryptedDetails(row, masterKey, {
@@ -479,19 +507,25 @@ export function prepareSubmission(
   });
 
   try {
-    db.prepare(`
-      INSERT INTO outbound_submissions (
-        id, account_id, idempotency_key, request_fingerprint, rfc_message_id,
-        request_json, status, error_code, error_message, provider_message_id,
-        post_submit_warning, encrypted_details, crypto_version,
-        submitted_at, confirmed_at, created_at, updated_at, send_at
-      ) VALUES (
-        @id, @account_id, @idempotency_key, @request_fingerprint, @rfc_message_id,
-        @request_json, @status, @error_code, @error_message, @provider_message_id,
-        @post_submit_warning, @encrypted_details, @crypto_version,
-        @submitted_at, @confirmed_at, @created_at, @updated_at, @send_at
-      )
-    `).run(row);
+    const create = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO outbound_submissions (
+          id, account_id, idempotency_key, request_fingerprint, rfc_message_id,
+          request_json, status, error_code, error_message, provider_message_id,
+          post_submit_warning, encrypted_details, crypto_version,
+          submitted_at, confirmed_at, created_at, updated_at, send_at
+        ) VALUES (
+          @id, @account_id, @idempotency_key, @request_fingerprint, @rfc_message_id,
+          @request_json, @status, @error_code, @error_message, @provider_message_id,
+          @post_submit_warning, @encrypted_details, @crypto_version,
+          @submitted_at, @confirmed_at, @created_at, @updated_at, @send_at
+        )
+      `).run(row);
+      // Attachment links commit with the task itself; a throw here rolls the
+      // insert back so an invalid token never leaves an executable task.
+      input.linkAttachmentsInCreate?.(id);
+    });
+    create();
     return { submission: publicSubmission(row, masterKey), idempotencyKey, created: true };
   } catch (error) {
     // A duplicate POST can race in two Fastify handlers. Re-read the durable
@@ -508,6 +542,22 @@ export function prepareSubmission(
 
 export function submissionForId(db: DatabaseHandle, masterKey: Buffer, id: string): OutboundSubmission | undefined {
   const row = submissionById(db, id);
+  return row ? publicSubmission(row, masterKey) : undefined;
+}
+
+/**
+ * The persisted submission for an idempotency key, for callers that must
+ * decide before any side effect whether a retry already reached a terminal
+ * state. A scheduled send whose uploads were released after submission would
+ * otherwise fail token resolution and overwrite its committed status.
+ */
+export function submissionForIdempotencyKey(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+  accountId: string,
+  idempotencyKey: string,
+): OutboundSubmission | undefined {
+  const row = submissionByKey(db, accountId, idempotencyKey);
   return row ? publicSubmission(row, masterKey) : undefined;
 }
 

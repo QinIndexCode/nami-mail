@@ -10,7 +10,7 @@ min-height:48px;
 color:var(--text);
 box-shadow:var(--shadow-raised);
 overflow-wrap:anywhere;
-border-radius:10px;
+border-radius:var(--radius-md);
 align-items:center;
 gap:10px;
 padding:8px 10px 8px 14px;

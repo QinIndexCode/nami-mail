@@ -11,11 +11,12 @@ vi.mock("../src/drafts.js", async (importOriginal) => {
 
 import type { MailApplicationContext, MailListQuery } from "../src/agent/mail-application-service.js";
 import { SqliteMailApplicationService } from "../src/agent/sqlite-mail-application-service.js";
+import type { CallerContext } from "@nami/agent-contracts";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 
 const timestamp = "2026-07-27T12:00:00.000Z";
 
-function caller() {
+function caller(): CallerContext {
   return {
     callerId: "test-user",
     kind: "test" as const,
@@ -95,7 +96,8 @@ describe("SqliteMailApplicationService message scope", () => {
     const masterKey = randomBytes(32);
     try {
       insertAccount(db);
-      const service = new SqliteMailApplicationService({ db, masterKey, syncMessageLimit: 20 });
+      // Scope tests never touch attachments; the required directory is inert here.
+      const service = new SqliteMailApplicationService({ db, masterKey, syncMessageLimit: 20, outboundAttachmentDirectory: "outbound-attachments-scope-test" });
       const input = {
         accountId: "account-1",
         to: [{ address: "recipient@example.test" }],
@@ -165,7 +167,7 @@ describe("SqliteMailApplicationService message scope", () => {
         subject: "Other message",
         text: "OTHER_MESSAGE",
       });
-      const service = new SqliteMailApplicationService({ db, masterKey, syncMessageLimit: 20 });
+      const service = new SqliteMailApplicationService({ db, masterKey, syncMessageLimit: 20, outboundAttachmentDirectory: "outbound-attachments-scope-test" });
 
       const currentMessage = context(["message-1"]);
       const currentMessageList = await service.listMessages(currentMessage, listQuery());

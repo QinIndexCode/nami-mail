@@ -1,4 +1,4 @@
-import type { ProviderInfo } from "./types";
+import type { ProviderInfo } from "./types.js";
 
 // Kept in lockstep with the server preset catalog; the Chinese copy fields are
 // kept here word-for-word and doubles as the lazy fallback source for

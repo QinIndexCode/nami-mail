@@ -41,6 +41,7 @@ import MailCalendarInviteBanner from "./calendar/MailCalendarInviteBanner";
 import { ErrorBoundary } from "./ErrorBoundary";
 import TranslationPanel from "./TranslationPanel";
 import { formatFullDate } from "./app/app-utils";
+import type { MessageBodyPhase } from "./app/useMessageBody";
 import type { splitQuotedMailText } from "./app/app-utils";
 import type { useAttachmentExports } from "./app/useAttachmentExports";
 import type { useMailTranslation } from "./app/useMailTranslation";
@@ -87,12 +88,15 @@ export interface MailReaderProps {
   toggleSelectedSeen: () => void | Promise<void>;
   toggleSelectedStar: () => void | Promise<void>;
   moveSelectedMessage: (target: MoveTarget) => Promise<void>;
-  openAgentWorkspace: () => void;
+  openAgentWorkspace?: () => void;
   openCalendarImport: AttachmentExportsApi["openCalendarImport"];
   exportSelectedEml: AttachmentExportsApi["exportSelectedEml"];
   printSelectedMessage: AttachmentExportsApi["printSelectedMessage"];
   exportContactVcf: AttachmentExportsApi["exportContactVcf"];
   exportCalendarIcs: AttachmentExportsApi["exportCalendarIcs"];
+  /** R10: the open message's body-load phase; "error" shows a retry notice. */
+  selectedBodyPhase?: MessageBodyPhase;
+  onRetryBody?: () => void;
   // Snooze popover (state owned by useQuickMessageActions in App).
   snoozeOpen: boolean;
   setSnoozeOpen: (open: boolean) => void;
@@ -188,6 +192,8 @@ export function MailReader(props: MailReaderProps) {
     printSelectedMessage,
     exportContactVcf,
     exportCalendarIcs,
+    selectedBodyPhase,
+    onRetryBody,
     snoozeOpen,
     setSnoozeOpen,
     snoozeMounted,
@@ -307,7 +313,7 @@ export function MailReader(props: MailReaderProps) {
                   </div>
                 )}
               </div>
-              <button className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button>
+              {openAgentWorkspace && <button className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button>}
             </div>
           </header>
           {selectedThread && selectedThread.length > 1 && (
@@ -364,6 +370,15 @@ export function MailReader(props: MailReaderProps) {
                 />
               )}
               <MailCalendarInviteBanner messageId={selected.id} attachments={selected.attachments} onImportClick={openCalendarImport} onViewCalendar={() => actions.openCalendar()} demoMode={isDemo} />
+              {selectedBodyPhase === "error" && (
+                <section className="move-location-notice" role="alert">
+                  <CircleAlert size={18} />
+                  <div>
+                    <strong>{t("mail.body.loadFailed")}</strong>
+                    {onRetryBody && <button className="secondary-button" type="button" onClick={onRetryBody}>{t("common.retry")}</button>}
+                  </div>
+                </section>
+              )}
               <div className="mail-content">{selected.htmlBody
                 ? <div className="mail-html" ref={mailHtmlRef} dangerouslySetInnerHTML={{ __html: readerHtml }} />
                 : <div className="mail-text"><MailTextBody body={readerTextParts.quote ? readerTextParts.body : readerTextSource} suffix={readerTextParts.quote ? <button type="button" className="mail-quote-toggle" onClick={() => setQuotedExpanded(true)}>{t("mail.reader.showQuoted")}</button> : null} /></div>}

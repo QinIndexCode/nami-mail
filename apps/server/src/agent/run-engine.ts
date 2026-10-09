@@ -164,6 +164,15 @@ type ConversationRename = {
   title: string;
 };
 
+/** Persisted when the user pins a different model to an existing conversation.
+ *  The server record is the single authoritative source for the choice; the
+ *  renderer keeps no cross-session copy (a stale local override used to win
+ *  over this record on every conversation open). */
+type ConversationProviderChange = {
+  type: "conversation-provider";
+  providerId: string;
+};
+
 type ConversationTurn = {
   type: "conversation-turn";
   message: AgentMessage;
@@ -588,6 +597,20 @@ export class AgentRunEngine {
     return { id: view.id, title: view.title, preview: view.preview, updatedAt: view.updatedAt };
   }
 
+  setConversationProvider(id: string, providerId: string): AgentConversationSummary {
+    const state = this.readConversation(id);
+    const normalized = providerId.trim();
+    if (!normalized || normalized.length > 128) throw new AgentServiceError("INVALID_ARGUMENT", "模型无效。", 400);
+    const providers = this.providerService.list();
+    if (!providers.items.some((provider) => provider.id === normalized)) {
+      throw new AgentServiceError("NOT_FOUND", "指定的模型不存在。", 404);
+    }
+    this.conversations.append(id, state.leases, "metadata", { type: "conversation-provider", providerId: normalized } satisfies ConversationProviderChange);
+    const view = this.getConversation(id);
+    this.updateSummaryEntry(id, { updatedAt: view.updatedAt });
+    return { id: view.id, title: view.title, preview: view.preview, updatedAt: view.updatedAt };
+  }
+
   deleteConversation(id: string): void {
     const state = this.readConversation(id);
     this.conversations.markDeleted(id, state.leases);
@@ -724,6 +747,9 @@ export class AgentRunEngine {
         };
       } else if (value.type === "conversation-rename" && metadata && typeof value.title === "string") {
         metadata.title = requiredText(value.title, "会话名称", maximumConversationTitleLength);
+      } else if (value.type === "conversation-provider" && metadata && typeof value.providerId === "string" && value.providerId) {
+        // The last provider change wins; the change log replays in order.
+        metadata.providerId = value.providerId;
       }
     }
     if (!metadata) throw new AgentServiceError("INTERNAL", "会话元数据无法读取。", 500);
@@ -1109,6 +1135,13 @@ export class AgentRunEngine {
       const visibleTools = agentAccessLevel === "read-only"
         ? availableTools.filter((tool) => tool.executionMode === "read")
         : availableTools;
+      // The visibility filters above are the turn's execution authorization
+      // boundary, not just prompt shaping: the model can still emit a call for
+      // a hidden tool (inline tags, hallucination), and the runtime's account
+      // scope checks do not know about this turn's cloud-consent or chat-mode
+      // restrictions. Every call below is checked against this set before any
+      // confirmation is prepared or data is read.
+      const allowedToolNames = new Set(visibleTools.map((tool) => tool.name));
       // References ride along as user-chosen context across turns. Resolve
       // once per run so the current turn and every earlier turn with references
       // share the same fresh excerpts; a message deleted mid-conversation
@@ -1136,9 +1169,25 @@ export class AgentRunEngine {
       let toolRounds = 0;
       const contextWindow = configuration.contextWindowTokens ?? 8_192;
       const maxOutputTokens = configuration.maxOutputTokens ?? 2_048;
-      const availableBudget = Math.max(1_000, contextWindow - maxOutputTokens);
+      // Hard ceiling for the whole request: messages + tool definitions.
+      // `max(1000, ...)` keeps a nonsensical configuration from producing a
+      // budget smaller than the loop's own floors below.
+      const requestBudget = Math.max(1_000, contextWindow - maxOutputTokens);
       const toolsTokens = estimateMessagesTokens([], visibleTools);
-      const availableForMessages = Math.max(800, availableBudget - toolsTokens);
+      // A tool set that alone exceeds the request can never be sent: refuse
+      // before the first request instead of leaning on the floor and letting
+      // the provider reject an over-window call.
+      if (toolsTokens > requestBudget) {
+        yield this.errorEvent(new AgentServiceError(
+          "CONTEXT_TOO_LARGE",
+          t("error.context_tools_too_large"),
+          400,
+          false,
+        ));
+        yield { type: "completed", reason: "error" };
+        return;
+      }
+      const availableForMessages = Math.max(800, requestBudget - toolsTokens);
       const messagesWarningThreshold = Math.floor(availableForMessages * 0.75);
       // The loop runs until the model stops requesting tools; every iteration
       // either appends a provider turn, reaches the round limit, or returns a
@@ -1147,6 +1196,20 @@ export class AgentRunEngine {
         this.assertRunCurrent(lifecycleTasks, controller.signal);
         if (estimateMessagesTokens(modelMessages) > messagesWarningThreshold) {
           modelMessages = compressContextHistory(modelMessages, Math.floor(availableForMessages * 0.8));
+        }
+        // R06 hard gate: compression is best effort — a current turn that
+        // cannot be compacted away (one huge user message, or tool results
+        // that survive pruning) must end the run here, not reach the
+        // provider knowing it will be rejected.
+        if (estimateMessagesTokens(modelMessages, visibleTools) > requestBudget) {
+          yield this.errorEvent(new AgentServiceError(
+            "CONTEXT_TOO_LARGE",
+            t("error.context_too_large"),
+            400,
+            false,
+          ));
+          yield { type: "completed", reason: "error" };
+          return;
         }
         const chat: ProviderChatRequest = {
           requestId,
@@ -1262,6 +1325,50 @@ export class AgentRunEngine {
         }];
         for (const call of toolCalls) {
           this.assertRunCurrent(lifecycleTasks, controller.signal);
+          if (!allowedToolNames.has(call.toolName)) {
+            // Outside this turn's authorized tool set: refuse before any
+            // confirmation is prepared, any account data is read, or the tool
+            // runs. Mirrors the runtime's denied-invocation handling below,
+            // and the audit line reuses the tool.invoke channel without
+            // recording call inputs.
+            const error = createAgentError({
+              code: "PERMISSION_DENIED",
+              message: t("status.tool_not_authorized"),
+              retryable: false,
+            });
+            await this.audit.append({
+              id: `audit-${randomUUID()}`,
+              requestId,
+              occurredAt: now(),
+              callerId: caller.callerId,
+              callerKind: caller.kind,
+              entryPoint: caller.entryPoint,
+              operation: "tool.invoke",
+              toolName: call.toolName,
+              toolCallId: call.id,
+              accountIds: [...state.metadata.scope.accountIds],
+              outcome: "denied",
+              errorCode: error.code,
+              parametersSummary: "Tool call rejected: outside the turn's authorized tool set.",
+            });
+            const deniedActivity: AgentToolActivity = {
+              id: `tool-${randomUUID()}`,
+              toolName: call.toolName,
+              title: "Processing mail action",
+              state: "failed",
+              summary: error.message,
+              error: stableUserFacingError(error),
+            };
+            toolActivities = [...toolActivities.filter((activity) => activity.id !== deniedActivity.id), deniedActivity];
+            yield { type: "tool", activity: deniedActivity };
+            syncInFlight();
+            modelMessages = [...modelMessages, {
+              role: "tool",
+              toolCallId: call.id,
+              content: toolResultMessage(false, modelToolError(error)),
+            }];
+            continue;
+          }
           const descriptor = this.tools.get(call.toolName)?.descriptor;
           const activityId = `tool-${randomUUID()}`;
           const searchDetail = call.toolName === "web.search" ? searchQueryDetail(call.input) : undefined;
@@ -1817,7 +1924,7 @@ export class AgentRunEngine {
   private agentErrorCode(value: string): AgentError["code"] {
     const allowed = new Set<AgentError["code"]>([
       "INVALID_ARGUMENT", "CONFLICT", "NOT_FOUND", "ACCOUNT_UNAVAILABLE", "ACCOUNT_STALE",
-      "PROVIDER_AUTH_FAILED", "PROVIDER_UNAVAILABLE", "RAG_NOT_READY", "CANCELLED", "INTERNAL",
+      "PROVIDER_AUTH_FAILED", "PROVIDER_UNAVAILABLE", "RAG_NOT_READY", "CONTEXT_TOO_LARGE", "CANCELLED", "INTERNAL",
     ]);
     return allowed.has(value as AgentError["code"]) ? value as AgentError["code"] : "INTERNAL";
   }

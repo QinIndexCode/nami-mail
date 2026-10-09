@@ -8,6 +8,17 @@ on:
     paths:
       - "site/**"
       - "docs/**"
+      - "apps/web/**"
+      - "packages/agent-contracts/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.base.json"
+      - "scripts/docs-groups.mjs"
+      - "build/icon.svg"
+      - "build/brand/**"
+      - "scripts/build-brand-assets.mjs"
+      - "scripts/brand-svg.mjs"
+      - "scripts/build-site.mjs"
       - "scripts/build-docs-site.mjs"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
@@ -41,8 +52,8 @@ jobs:
       # build has no use for.
       - name: Install the build dependencies
         run: npm ci --ignore-scripts
-      - name: Build the site from docs/
-        run: node scripts/build-docs-site.mjs
+      - name: Build the site and interactive demo
+        run: node scripts/build-site.mjs
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact

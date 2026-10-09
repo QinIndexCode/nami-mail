@@ -131,7 +131,11 @@ export function jsonSchemaToZod(schema: unknown): z.ZodType {
     }
     const object = z.object(shape);
     if (additionalProperties === false) return object.strict();
-    if (additionalProperties === true || additionalProperties === undefined) return object;
+    // JSON Schema semantics for additionalProperties true/absent: unknown
+    // keys are allowed and must reach the tool. z.object's default strips
+    // them, which silently deleted inputs external MCP servers required
+    // (R08); passthrough keeps and forwards them unvalidated.
+    if (additionalProperties === true || additionalProperties === undefined) return object.passthrough();
     return object.catchall(jsonSchemaToZod(additionalProperties));
   }
   const variants = (["anyOf", "oneOf"] as const).find((key) => Array.isArray(s[key]) && s[key]!.length > 0);

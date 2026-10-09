@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createToolRegistry } from "@nami/agent-core";
+import { createToolRegistry, type AgentToolExecutionContext } from "@nami/agent-core";
 import { autoReplyDecisionReasons } from "@nami/agent-contracts";
 import { EncryptedAutoReplyDecisionStore } from "../src/agent/auto-reply-decisions.js";
 import { EncryptedAgentMemoryStore } from "../src/agent/memory.js";
@@ -16,15 +16,17 @@ function fixture() {
   const masterKey = randomBytes(32);
   const store = new EncryptedAgentMemoryStore(db, masterKey, () => timestamp);
   const registry = createToolRegistry(createMemoryTools(store));
-  const context = {
+  // R14: the explicit contract type keeps the literal fields from widening
+  // (scopes to string[], mode to string) and the fixture drift-proof.
+  const context: AgentToolExecutionContext = {
     requestId: "req-1",
     caller: {
       callerId: "test",
-      kind: "test" as const,
-      entryPoint: "test" as const,
-      accessLevel: "full-access" as const,
+      kind: "test",
+      entryPoint: "test",
+      accessLevel: "full-access",
       scopes: ["manage:memory"],
-      accountScope: { mode: "none" as const },
+      accountScope: { mode: "none" },
       interactive: true,
       canRequestConfirmation: false,
     },

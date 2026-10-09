@@ -374,7 +374,7 @@ describe("durable outbound submissions", () => {
       .map((filePath) => fs.readFileSync(filePath)));
     const disk = bytes.toString("utf8");
     for (const canary of Object.values(canaries)) expect(disk).not.toContain(canary);
-  }, migrationTestTimeoutMs);
+  });
 
   it("skips the verification sweep on routine startups once the migration marker exists", () => {
     const prepared = prepareSubmission(db, masterKey, {

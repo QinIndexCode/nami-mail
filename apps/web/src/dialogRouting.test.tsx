@@ -350,6 +350,33 @@ describe("useDialogRouting · terms-gate initialization", () => {
     }
   });
 
+  it("defers the public sample preview gate without accepting terms or persisting consent", async () => {
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", { configurable: true, value: { search: "?demo=1&preview=site" } });
+    try {
+      await mount();
+      expect(latest!.state.translationTermsOpen).toBe(false);
+      expect(latest!.state.translationTermsAccepted).toBe(false);
+      expect(localStorage.getItem("nami-mail:translation-terms-accepted")).toBeNull();
+      expect(document.cookie).not.toContain("nami-mail-translation-terms=1");
+      await act(async () => { latest!.actions.setTranslationTermsOpen(true); });
+      expect(latest!.state.translationTermsOpen).toBe(true);
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
+    }
+  });
+
+  it("keeps the real client terms gate when the preview flag appears without demo mode", async () => {
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", { configurable: true, value: { search: "?preview=site" } });
+    try {
+      await mount();
+      expect(latest!.state.translationTermsOpen).toBe(true);
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
+    }
+  });
+
   it("setTranslationTermsAccepted flips the accepted gate", async () => {
     await mount();
     await act(async () => {

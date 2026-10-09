@@ -81,7 +81,8 @@ import {
 } from "./server-bridge.mjs";
 import { forkServerProcess, type ServerProcessHandle } from "./server-process.mjs";
 import { startLocalServiceAndRestoreDesktop, type ServiceStartupPlan } from "./local-service-startup.mjs";
-import { createServiceRestartCoordinator, serviceGiveUpDialogOptions } from "./service-restart-policy.mjs";
+import { createServiceRestartCoordinator, isServiceLifecycleShuttingDown, serviceGiveUpDialogOptions } from "./service-restart-policy.mjs";
+import { registerRendererLocalStoreIpc } from "./renderer-local-store-ipc.mjs";
 
 type ExternalConfirmationRuntimeOptions = Readonly<{
   request: (input: {
@@ -1389,7 +1390,16 @@ function forwardServerProcessOutput(stream: "stdout" | "stderr", chunk: string):
 // startup sequence below, so a step boot gains is not silently missed here.
 const serviceRestartCoordinator = createServiceRestartCoordinator({
   log: (event, detail) => desktopDiagnostics.appendRuntimeLog(event, detail),
-  isShuttingDown: () => isQuitting || shutdownPromise !== undefined || serverProcessExpectedExit,
+  // R11: the update drain (prepareLocalServerForUpdateInstall) is a
+  // shutdown-equivalent window — it drains and closes the service BEFORE
+  // isQuitting flips, so a queued restart timer firing there would fork a
+  // service the installer is about to take down.
+  isShuttingDown: () => isServiceLifecycleShuttingDown({
+    isQuitting,
+    shutdownStarted: shutdownPromise !== undefined,
+    serverProcessExpectedExit,
+    updateDraining: desktopAgentBrokerRecoveryGate === "draining",
+  }),
   isServiceRunning: () => localServer !== undefined,
   restart: restartLocalServiceAfterCrash,
   // A falsy first argument is Electron's "no parent" form, so a destroyed main
@@ -1398,11 +1408,26 @@ const serviceRestartCoordinator = createServiceRestartCoordinator({
 });
 async function restartLocalServiceAfterCrash(): Promise<void> {
   const dataDirectory = path.join(app.getPath("userData"), "data");
+  // R11: the start inside can take seconds (fork, handshake, key load). If
+  // the user quits or an update drain begins mid-start, the lifecycle owns
+  // the teardown — the recovery must not restore broker or window handles
+  // on top of it. These guards run when the startup sequence invokes the
+  // closures, i.e. after the start await, right before each handle is taken.
+  const lifecycleExited = (): boolean => isServiceLifecycleShuttingDown({
+    isQuitting,
+    shutdownStarted: shutdownPromise !== undefined,
+    serverProcessExpectedExit,
+    updateDraining: desktopAgentBrokerRecoveryGate === "draining",
+  });
   await startLocalServiceAndRestoreDesktop({
     ...localServiceStartupEffects(dataDirectory),
-    restoreWindow: mainWindow && !mainWindow.isDestroyed() ? loadMainWindowApp : undefined,
-    restoreBroker: () => closeDesktopAgentBroker().then(startDesktopAgentBroker)
-      .catch((error) => { desktopDiagnostics.appendRuntimeLog("agent-broker-restore-failed", serializeRuntimeError(error)); }),
+    restoreWindow: mainWindow && !mainWindow.isDestroyed()
+      ? () => (lifecycleExited() ? Promise.resolve() : loadMainWindowApp())
+      : undefined,
+    restoreBroker: () => lifecycleExited()
+      ? Promise.resolve()
+      : closeDesktopAgentBroker().then(startDesktopAgentBroker)
+        .catch((error) => { desktopDiagnostics.appendRuntimeLog("agent-broker-restore-failed", serializeRuntimeError(error)); }),
     // A packaged install has no console, so a window that stays dead after the
     // service came back must say so instead of failing into the void. The app
     // keeps running: the service is healthy and the tray is still there.
@@ -1926,6 +1951,8 @@ if (desktopCliArguments !== undefined) {
     if (!isCurrentRenderer(event)) return false;
     return mainWindow?.isMaximized() ?? false;
   });
+  // Durable renderer preferences; see renderer-local-store-ipc.mts.
+  registerRendererLocalStoreIpc(ipcMain, isCurrentRenderer, () => app.getPath("userData"));
   ipcMain.on("nami:update-network-online", (event) => {
     if (!isCurrentRenderer(event)) return;
     checkForUpdatesAfterExternalTrigger();

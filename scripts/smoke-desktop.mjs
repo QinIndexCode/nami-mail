@@ -416,15 +416,10 @@ try {
   assert.equal(renderer.desktopWindowControls, true, "The frameless window bar must carry its own controls (or the macOS traffic-light slot).");
   assert.equal(renderer.desktopWallpaper?.present, true, "The desktop workspace must render the configured wallpaper layer.");
   assert.equal(renderer.desktopWallpaper?.coversWorkspace, true, "The wallpaper layer must cover the full desktop workspace.");
-  // The wallpaper opacity follows the backgroundIntensity default (80) with a
-  // light-theme multiplier applied in App.tsx; resolve the expectation from
-  // the observed theme so the assertion holds on dark- and light-themed
-  // runners alike.
+  // App.tsx forces dark in desktopSmoke mode, independent of the host theme.
+  // Assert the intensity directly instead of identifying themes by a colour.
   const wallpaperIntensity = 80;
-  const wallpaperDarkExpected = wallpaperIntensity / 100;
-  const wallpaperLightExpected = Math.min(1, (wallpaperIntensity * 1.22) / 100);
-  const wallpaperIsDark = renderer.desktopDeepDiagnostic?.variables?.panelSolid === "#171719";
-  const wallpaperExpectedOpacity = wallpaperIsDark ? wallpaperDarkExpected : wallpaperLightExpected;
+  const wallpaperExpectedOpacity = wallpaperIntensity / 100;
   assert.ok(Math.abs((renderer.desktopWallpaper?.opacity ?? 0) - wallpaperExpectedOpacity) < 0.02, "The default wallpaper must reach its configured visible opacity.");
   assert.ok(renderer.desktopWallpaper?.sidebarPanelOpacity < 0.8, "The sidebar must remain translucent so wallpaper is visible across the desktop workspace.");
   assert.ok(renderer.desktopWallpaper?.messagePanelOpacity < 0.8, "The message list must remain translucent so wallpaper is visible across the desktop workspace.");

@@ -1,9 +1,13 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "rootDir": ".",
+    // Tests may reach one directory up for cross-workspace data-parity
+    // contracts (demo-providers imports the web catalog to assert it mirrors
+    // the server preset list). noEmit makes the wider rootDir safe: this
+    // config never emits, it only type-checks.
+    "rootDir": "..",
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "include": ["src/**/*.ts", "tests/**/*.ts", "../web/src/demoProviderCatalog.ts"],
   "exclude": ["dist", "node_modules"]
 }

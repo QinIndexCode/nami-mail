@@ -1,698 +1,222 @@
 <!doctype html>
-<html
-  lang="zh-CN"
-  data-lang="zh"
-  data-theme="light"
-  data-bilingual="true"
-  data-title-zh="Nami Mail · 本地优先的桌面邮件客户端"
-  data-title-en="Nami Mail · Local-first desktop mail client"
->
+<html lang="zh-CN" data-lang="zh" data-theme="dark" data-default-theme="dark" data-bilingual="true"
+  data-title-zh="Nami Mail · Windows 多账户邮件客户端"
+  data-title-en="Nami Mail · A local-first mail app for Windows"
+  data-description-zh="Nami Mail 是一款本地优先的 Windows 邮件客户端。集中管理多个邮箱，在本机检索邮件，并可选配 AI 助手整理邮件、拟写回复。"
+  data-description-en="A local-first Windows mail app. Bring your accounts into one inbox, search your mail locally, and optionally use an AI assistant to find messages and draft replies.">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Nami Mail · 本地优先的桌面邮件客户端</title>
-    <meta
-      name="description"
-      content="Nami Mail 是一款本地优先的多账户桌面邮件客户端：邮件、凭据与密钥只保存在本机，内置本地检索与可确认的 Agent 工作区，并提供命令行与 MCP 接口。"
-    />
+    <title>Nami Mail · Windows 多账户邮件客户端</title>
+    <meta name="description" content="Nami Mail 是一款本地优先的 Windows 邮件客户端。集中管理多个邮箱，在本机检索邮件，并可选配 AI 助手整理邮件、拟写回复。" />
+    <meta name="robots" content="index,follow" />
     <link rel="canonical" href="https://qinindexcode.github.io/nami-mail/" />
-    <link rel="icon" href="./assets/brand/icon.svg" />
+    <link rel="icon" type="image/svg+xml" sizes="any" href="./assets/brand/icon.svg" />
     <link rel="stylesheet" href="./base.css" />
     <link rel="stylesheet" href="./styles.css" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ececef" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#050506" />
-    <script src="./theme-init.js"></script>
+    <meta name="theme-color" content="#0c0d10" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Nami Mail" />
-    <meta property="og:title" content="Nami Mail — 本地优先的桌面邮件客户端" />
-    <meta
-      property="og:description"
-      content="邮件、凭据与密钥只保存在本机；内置本地检索与可确认的 Agent 工作区。"
-    />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:locale:alternate" content="en_US" />
+    <meta property="og:title" content="Nami Mail · Windows 多账户邮件客户端" />
+    <meta property="og:description" content="多个邮箱，一个收件箱。邮件保存在本机，AI 助手由你选择和配置。" />
     <meta property="og:url" content="https://qinindexcode.github.io/nami-mail/" />
-    <meta property="og:image" content="https://qinindexcode.github.io/nami-mail/assets/nami-mail-inbox-en.png" />
+    <meta property="og:image" content="https://qinindexcode.github.io/nami-mail/assets/nami-mail-inbox-zh.png" />
+    <meta property="og:image:width" content="1440" />
+    <meta property="og:image:height" content="900" />
+    <meta property="og:image:alt" content="Nami Mail 多账户收件箱界面" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Nami Mail · Windows 多账户邮件客户端" />
+    <meta name="twitter:description" content="多个邮箱，一个收件箱。邮件保存在本机，AI 助手由你选择和配置。" />
+    <meta name="twitter:image" content="https://qinindexcode.github.io/nami-mail/assets/nami-mail-inbox-zh.png" />
+    <meta name="twitter:image:alt" content="Nami Mail 多账户收件箱界面" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Nami Mail",
+        "applicationCategory": "CommunicationApplication",
+        "operatingSystem": "Windows",
+        "description": "本地优先的 Windows 多账户邮件客户端，支持本地检索和可选的邮件 AI 助手。",
+        "url": "https://qinindexcode.github.io/nami-mail/",
+        "downloadUrl": "https://github.com/QinIndexCode/nami-mail/releases",
+        "image": "https://qinindexcode.github.io/nami-mail/assets/nami-mail-inbox-zh.png"
+      }
+    </script>
+    <script src="./theme-init.js"></script>
   </head>
   <body>
+    <a class="skip-link" href="#main"><span data-lang="zh">跳到正文</span><span data-lang="en">Skip to content</span></a>
     <header class="site-header">
       <div class="wrap">
-        <a class="brand" href="./">
+        <a class="brand" href="./" aria-label="Nami Mail">
           <img class="mark mark-light" src="./assets/brand/mark-light.png" alt="" width="26" height="26" />
           <img class="mark mark-dark" src="./assets/brand/mark-dark.png" alt="" width="26" height="26" />
           <span>Nami Mail</span>
         </a>
-        <nav class="site-nav" aria-label="Main">
-          <a href="#features" data-lang="zh">功能</a>
-          <a href="#features" data-lang="en">Features</a>
-          <a href="#retrieval" data-lang="zh">检索</a>
-          <a href="#retrieval" data-lang="en">Retrieval</a>
-          <a href="#agent" data-lang="zh">Agent</a>
-          <a href="#agent" data-lang="en">Agent</a>
-          <a href="#cli" data-lang="zh">命令行</a>
-          <a href="#cli" data-lang="en">CLI</a>
-          <a href="#docs" data-lang="zh">文档</a>
-          <a href="#docs" data-lang="en">Docs</a>
-          <a href="#contributors" data-lang="zh">贡献者</a>
-          <a href="#contributors" data-lang="en">Contributors</a>
-          <a href="https://github.com/QinIndexCode/nami-mail" data-nav="secondary" rel="noopener">GitHub</a>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="./" data-nav="home" aria-current="page"><span data-lang="zh">首页</span><span data-lang="en">Home</span></a>
+          <a href="#features" data-nav="features"><span data-lang="zh">功能</span><span data-lang="en">Features</span></a>
+          <a href="#agent" data-nav="agent"><span data-lang="zh">邮件助理</span><span data-lang="en">Assistant</span></a>
+          <a href="#privacy" data-nav="privacy"><span data-lang="zh">本地与隐私</span><span data-lang="en">Privacy</span></a>
+          <a href="./docs/" data-nav="docs"><span data-lang="zh">文档</span><span data-lang="en">Docs</span></a>
+          <a href="https://github.com/QinIndexCode/nami-mail" data-nav="github" rel="noopener">GitHub <span aria-hidden="true">↗</span></a>
         </nav>
         <div class="header-actions">
-          <button class="lang-button" type="button" id="lang-toggle">
-            <span data-lang="zh" aria-hidden="true">EN</span>
-            <span data-lang="en" aria-hidden="true">中文</span>
-            <span class="sr-only" data-lang="zh">Switch to English</span>
-            <span class="sr-only" data-lang="en">切换到中文</span>
-          </button>
+          <button class="lang-button" type="button" id="lang-toggle" aria-label="Switch language"><span data-lang="zh">EN</span><span data-lang="en">中文</span></button>
           <button class="icon-button" type="button" id="theme-toggle" aria-label="Switch theme">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-              <path d="M12 3v2M12 19v2M5 12H3M21 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4" stroke-linecap="round" />
-              <circle cx="12" cy="12" r="4" />
-            </svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M5.6 18.4 7 17m10-10 1.4-1.4" stroke-linecap="round"/><circle cx="12" cy="12" r="4"/></svg>
           </button>
+          <a class="button header-download" href="#download"><span data-lang="zh">下载</span><span data-lang="en">Download</span><span aria-hidden="true">↓</span></a>
+          <details class="mobile-navigation">
+            <summary><span data-lang="zh">菜单</span><span data-lang="en">Menu</span></summary>
+            <nav aria-label="移动导航">
+              <a href="./" data-nav="home" aria-current="page"><span data-lang="zh">首页</span><span data-lang="en">Home</span></a>
+              <a href="#features" data-nav="features"><span data-lang="zh">功能</span><span data-lang="en">Features</span></a>
+              <a href="#agent" data-nav="agent"><span data-lang="zh">邮件助理</span><span data-lang="en">Assistant</span></a>
+              <a href="#privacy" data-nav="privacy"><span data-lang="zh">本地与隐私</span><span data-lang="en">Privacy</span></a>
+              <a href="./docs/" data-nav="docs"><span data-lang="zh">文档</span><span data-lang="en">Docs</span></a>
+              <a href="https://github.com/QinIndexCode/nami-mail" data-nav="github" rel="noopener">GitHub <span aria-hidden="true">↗</span></a>
+              <a href="#download"><span data-lang="zh">下载 Windows 版</span><span data-lang="en">Download for Windows</span></a>
+            </nav>
+          </details>
         </div>
       </div>
     </header>
 
-    <main>
-      <section class="hero">
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
         <div class="wrap">
-          <p class="eyebrow">
-            <span class="dot" aria-hidden="true"></span>
-            <span data-lang="zh">Windows x64 · 本地优先</span>
-            <span data-lang="en">Windows x64 · Local-first</span>
-          </p>
-          <!-- The line breaks are part of the composition: CJK has no word
-               spaces, so a balanced wrap would split 「留在」 across lines. -->
-          <h1 class="display" data-lang="zh"><span>你的邮件，</span><span>留在你的机器上</span></h1>
-          <h1 class="display" data-lang="en"><span>Your mail stays</span><span>on your machine</span></h1>
-          <p class="lede" data-lang="zh">
-            Nami Mail 是一款直接连接邮箱服务商的多账户桌面客户端。邮件、账户凭据与加密密钥只保存在本机；检索与 Agent
-            工作区也在本地完成，写操作执行前必须由你确认。
-          </p>
-          <p class="lede" data-lang="en">
-            A multi-account desktop client that connects straight to your mail provider. Messages, credentials and
-            encryption keys stay on your computer; retrieval and the Agent workspace run locally too, and every write
-            waits for your confirmation.
-          </p>
-          <div class="hero-actions">
-            <a class="button" href="https://github.com/QinIndexCode/nami-mail/releases/latest" rel="noopener">
-              <span data-lang="zh">下载 Windows 版</span>
-              <span data-lang="en">Download for Windows</span>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                <path d="M12 4v12m0 0 4.5-4.5M12 16l-4.5-4.5M5 20h14" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </a>
-            <a class="button secondary" href="#docs">
-              <span data-lang="zh">阅读文档</span>
-              <span data-lang="en">Read the docs</span>
-            </a>
+          <a class="release-link" href="https://github.com/QinIndexCode/nami-mail/releases" rel="noopener"><span class="status-dot" aria-hidden="true"></span><span data-lang="zh">开源 · Windows x64</span><span data-lang="en">Open source · Windows x64</span><span aria-hidden="true">→</span></a>
+          <h1 class="display" id="hero-title"><span data-lang="zh">多个邮箱，<br />一个收件箱。</span><span data-lang="en">All your mail.<br />One place to work.</span></h1>
+          <div class="hero-bottom">
+            <p class="lede"><span data-lang="zh">在一个窗口里收邮件、找邮件、写回复。<br />邮件数据保存在你的电脑上。</span><span data-lang="en">Read, find, and reply without switching inboxes.<br />Your mail is stored on your computer.</span></p>
+            <div class="hero-actions">
+              <a class="button" href="https://github.com/QinIndexCode/nami-mail/releases/latest" rel="noopener"><span data-lang="zh">下载 Windows 版</span><span data-lang="en">Download for Windows</span><span aria-hidden="true">↓</span></a>
+              <a class="text-link" href="./docs/INSTALLING.zh-CN.html" data-lang="zh">安装指南 <span aria-hidden="true">↗</span></a>
+              <a class="text-link" href="./docs/INSTALLING.en.html" data-lang="en">Installation guide <span aria-hidden="true">↗</span></a>
+            </div>
           </div>
-          <ul class="hero-chips">
-            <li class="chip">Windows x64</li>
-            <li class="chip">IMAP · SMTP · OAuth</li>
-            <li class="chip" data-lang="zh">本地检索 · BM25</li>
-            <li class="chip" data-lang="en">Local retrieval · BM25</li>
-            <li class="chip">CLI · MCP</li>
-            <li class="chip">
-              <span data-lang="zh">最新版本 <span id="version-zh">0.4.2</span></span>
-              <span data-lang="en">v<span id="version-en">0.4.2</span></span>
-            </li>
-          </ul>
-          <p class="hero-note" data-lang="zh">
-            安装程序未签名，SmartScreen 可能提示“未知发布者”。请不要绕过系统安全警告，只从本项目的 Release 页面获取安装包。
-          </p>
-          <p class="hero-note" data-lang="en">
-            The installer is not signed, so SmartScreen may report an unknown publisher. Do not bypass Windows security
-            warnings, and take the installer from this project's release page only.
-          </p>
-        </div>
-        <div class="hero-surface">
-          <figure>
-            <img
-              data-lang="zh"
-              src="./assets/nami-mail-inbox-zh.png"
-              width="1440"
-              height="900"
-              alt="Nami Mail 收件箱：左侧账户与文件夹，中间邮件列表，右侧阅读区"
-            />
-            <img
-              data-lang="en"
-              src="./assets/nami-mail-inbox-en.png"
-              width="1440"
-              height="900"
-              alt="Nami Mail inbox: accounts and folders on the left, the message list in the middle, the reading pane on the right"
-            />
-            <figcaption data-lang="zh">Nami Mail 0.4.2 · 收件箱</figcaption>
-            <figcaption data-lang="en">Nami Mail 0.4.2 · inbox</figcaption>
+          <figure class="hero-surface">
+            <div class="demo-toolbar"><span><i class="status-dot" aria-hidden="true"></i><span data-lang="zh">试试收件箱</span><span data-lang="en">Try the inbox</span></span><div><button type="button" class="demo-tour-toggle" data-demo-tour-toggle="mail" hidden></button><button type="button" class="demo-closeup-toggle" data-demo-closeup="mail" aria-pressed="true" hidden></button><button type="button" class="demo-reset" data-demo-reset="mail" hidden><span data-lang="zh">重置</span><span data-lang="en">Reset</span></button><a class="demo-open" data-demo-open="mail" href="./demo/?demo=1&amp;preview=site" target="_blank" rel="noopener"><span data-lang="zh">单独打开 ↗</span><span data-lang="en">Open demo ↗</span></a></div></div>
+            <div class="demo-stage" data-state="waiting">
+              <div class="demo-placeholder" role="status">
+                <div class="nami-splash-content"><img class="nami-splash-logo" src="./assets/brand/splash-logo.png" alt="" width="64" height="64" /><span class="nami-splash-divider" aria-hidden="true"></span><span class="nami-splash-wordmark">Nami Mail</span></div>
+                <div class="nami-splash-loader" aria-hidden="true"></div>
+                <span class="demo-loading-label sr-only" data-loading-label></span>
+                <button class="demo-retry button" type="button" data-demo-retry="mail" hidden><span data-lang="zh">重试</span><span data-lang="en">Retry</span></button>
+              </div>
+              <iframe class="demo-frame" data-demo="mail" title="Nami Mail 收件箱演示" loading="lazy" sandbox="allow-scripts allow-same-origin" hidden></iframe>
+              <div class="demo-tour-pointer" aria-hidden="true"><span class="demo-tour-cursor"><img src="./assets/demo-cursor.png" alt="" width="23" height="24" draggable="false" /></span></div><div class="demo-tour-progress" aria-hidden="true"></div>
+            </div>
+            <div class="demo-tour-caption" hidden><span class="demo-tour-step" aria-hidden="true"></span><span class="demo-tour-label" role="status"></span></div>
+            <noscript><img data-lang="zh" src="./assets/nami-mail-inbox-zh.png" width="1440" height="900" alt="Nami Mail 多账户收件箱" /><img data-lang="en" src="./assets/nami-mail-inbox-en.png" width="1440" height="900" alt="Nami Mail multi-account inbox" /></noscript>
+            <figcaption><span data-lang="zh">使用示例邮件，可搜索、阅读和标星。演示不连接真实邮箱。</span><span data-lang="en">Search, read, and star sample messages. The demo does not connect to real accounts.</span></figcaption>
           </figure>
         </div>
       </section>
 
-      <section class="trust" aria-label="Highlights">
+      <section class="provider-strip" aria-label="Supported mail providers">
         <div class="wrap">
-          <div class="trust-item">
-            <span class="fact-label" data-lang="zh">加密</span>
-            <span class="fact-label" data-lang="en">Encryption</span>
-            <strong data-lang="zh">逐账户数据密钥</strong>
-            <strong data-lang="en">Per-account data keys</strong>
-            <span data-lang="zh">主密钥由 Windows DPAPI 保护，邮件与草稿加密落盘</span>
-            <span data-lang="en">A DPAPI-protected master key, with mail and drafts stored encrypted</span>
-          </div>
-          <div class="trust-item">
-            <span class="fact-label" data-lang="zh">协议</span>
-            <span class="fact-label" data-lang="en">Protocol</span>
-            <strong data-lang="zh">直连服务商</strong>
-            <strong data-lang="en">Straight to your provider</strong>
-            <span data-lang="zh">IMAP / SMTP / OAuth，不经过我们的服务器</span>
-            <span data-lang="en">IMAP, SMTP and OAuth — no server of ours in between</span>
-          </div>
-          <div class="trust-item">
-            <span class="fact-label" data-lang="zh">写入</span>
-            <span class="fact-label" data-lang="en">Writes</span>
-            <strong data-lang="zh">逐次确认并留痕</strong>
-            <strong data-lang="en">Confirmed and audited</strong>
-            <span data-lang="zh">发送、删除、移动都要你点过确认，并留下审计记录</span>
-            <span data-lang="en">Sending, deleting and moving each wait for your confirmation and leave an audit record</span>
-          </div>
-          <div class="trust-item">
-            <span class="fact-label" data-lang="zh">运行</span>
-            <span class="fact-label" data-lang="en">Runtime</span>
-            <strong data-lang="zh">在你自己的机器上</strong>
-            <strong data-lang="en">On your own machine</strong>
-            <span data-lang="zh">索引与页面都在本地，已同步的邮件可离线阅读</span>
-            <span data-lang="en">Index and pages are local, so synced mail reads offline</span>
+          <p><span data-lang="zh">连接你已经在用的邮箱</span><span data-lang="en">Works with the accounts you already use</span></p>
+          <ul><li>Gmail</li><li>iCloud</li><li>Outlook</li><li>QQ 邮箱</li><li>163 邮箱</li><li>IMAP / SMTP</li></ul>
+          <a class="text-link" href="./docs/EMAIL-PROVIDERS.zh-CN.html" data-lang="zh">查看接入方式 →</a><a class="text-link" href="./docs/EMAIL-PROVIDERS.en.html" data-lang="en">Account setup →</a>
+        </div>
+      </section>
+
+      <section id="features" class="section">
+        <div class="wrap">
+          <header class="section-head">
+            <p class="section-label">01 / <span data-lang="zh">日常邮件</span><span data-lang="en">Everyday mail</span></p>
+            <h2><span data-lang="zh">日常邮件，<br />集中处理。</span><span data-lang="en">Everyday mail,<br />all in one place.</span></h2>
+            <p><span data-lang="zh">工作邮箱和个人邮箱放在一起查看，也可以按账户分别处理。</span><span data-lang="en">See work and personal mail together, or focus on a single account.</span></p>
+          </header>
+          <div class="feature-grid">
+            <article class="feature feature-main">
+              <span class="feature-icon" aria-hidden="true">↳</span>
+              <h3><span data-lang="zh">少切换几个窗口</span><span data-lang="en">Fewer inboxes to switch between</span></h3>
+              <p><span data-lang="zh">统一收件箱保留账户来源。未读、标星、归档和稍后处理，各有自己的入口。</span><span data-lang="en">Every message keeps its account identity. Unread, starred, archived, and snoozed mail each have a place.</span></p>
+              <div class="inbox-illustration" aria-hidden="true"><div><b>收件箱 / Inbox</b><span>All accounts</span></div><div><i class="mail-dot"></i><b>Mira Studio</b><span>Design review</span></div><div><i></i><b>林澈</b><span>周末，在安静的地方见</span></div><div><i></i><b>Noah</b><span>Re: launch checklist</span></div></div>
+            </article>
+            <article class="feature"><span class="feature-icon" aria-hidden="true">⌕</span><h3><span data-lang="zh">查找邮件与附件</span><span data-lang="en">Find mail and attachments</span></h3><p><span data-lang="zh">按关键词、时间和附件类型筛选；需要更多上下文时，可以让助理检索本地邮件。</span><span data-lang="en">Filter by keywords, date, and attachment type. Ask the assistant to search your local mail when you need more context.</span></p><div class="mini-tags"><span>PDF</span><span data-lang="zh">最近一个月</span><span data-lang="en">Last month</span><span data-lang="zh">带附件</span><span data-lang="en">Attachments</span></div></article>
+            <article class="feature"><span class="feature-icon" aria-hidden="true">↗</span><h3><span data-lang="zh">写完，再决定何时发送</span><span data-lang="en">Write now. Choose when to send.</span></h3><p><span data-lang="zh">保存草稿，插入常用模板，设置账户签名；也可以安排定时发送。</span><span data-lang="en">Save a draft, insert a template, add your account signature, or schedule a message for later.</span></p><div class="mini-tags"><span data-lang="zh">草稿</span><span data-lang="en">Drafts</span><span data-lang="zh">模板</span><span data-lang="en">Templates</span><span data-lang="zh">定时发送</span><span data-lang="en">Schedule</span></div></article>
           </div>
         </div>
       </section>
 
-      <section id="features">
+      <section id="agent" class="section product-section">
         <div class="wrap">
-          <header class="section-head">
-            <p class="section-label" data-lang="zh">01 · 能力</p>
-            <p class="section-label" data-lang="en">01 · Capabilities</p>
-            <h2 data-lang="zh">功能</h2>
-            <h2 data-lang="en">What it does</h2>
-            <p data-lang="zh">下面每一条都是当前版本已经实现、并随安装包一起发布的能力，末尾一行是它依赖的具体机制。</p>
-            <p data-lang="en">
-              Everything here ships in the current release. The line under each entry names the mechanism it rests on.
-            </p>
-          </header>
-          <ul class="feature-list">
-            <li class="feature">
-              <p class="fact-label" data-lang="zh">加密</p>
-              <p class="fact-label" data-lang="en">Encryption</p>
-              <h3 data-lang="zh">本地优先与加密</h3>
-              <h3 data-lang="en">Local-first and encrypted</h3>
-              <p data-lang="zh">
-                每个账户使用独立的数据密钥，主密钥由 Windows DPAPI 保护，邮件、草稿与设置都以加密形式落盘；删除账户会先推进代际并丢弃旧密钥。
-              </p>
-              <p data-lang="en">
-                Each account has its own data key wrapped by a DPAPI-protected master key; mail, drafts and settings are
-                stored encrypted. Deleting an account advances its generation and discards the old key first.
-              </p>
-              <p class="feature-fact">AES-256-GCM · WINDOWS DPAPI</p>
-            </li>
-
-            <li class="feature">
-              <p class="fact-label" data-lang="zh">多账户</p>
-              <p class="fact-label" data-lang="en">Accounts</p>
-              <h3 data-lang="zh">多账户，直连服务商</h3>
-              <h3 data-lang="en">Multi-account, direct to your provider</h3>
-              <p data-lang="zh">
-                Gmail、自建 IMAP/SMTP 与 OAuth 授权流程，客户端直接与服务商通信。前台刷新与按文件夹懒加载让大邮箱也能快速打开。
-              </p>
-              <p data-lang="en">
-                Gmail, self-hosted IMAP/SMTP and OAuth — the client talks to your provider directly. Foreground refresh
-                with lazy per-folder loading keeps large mailboxes quick to open.
-              </p>
-              <p class="feature-fact">IMAP · SMTP · OAUTH 2.0</p>
-            </li>
-
-            <li class="feature">
-              <p class="fact-label" data-lang="zh">检索</p>
-              <p class="fact-label" data-lang="en">Retrieval</p>
-              <h3 data-lang="zh">本地邮件检索（RAG）</h3>
-              <h3 data-lang="en">Local mail retrieval (RAG)</h3>
-              <p data-lang="zh">
-                邮件被切成可引用的加密页面并建立 BM25 倒排索引，重启无需全量重建；关键词一个都匹配不到时，用你配置的模型把问题扩展成同义词再查同一份本地索引。
-              </p>
-              <p data-lang="en">
-                Messages become citable encrypted pages with a BM25 index that survives restarts. When keywords match
-                nothing, the model you configured expands the question into synonyms and re-queries the same local index.
-              </p>
-              <p class="feature-fact" data-lang="zh">BM25 倒排索引 · 条件式查询扩展</p>
-              <p class="feature-fact" data-lang="en">BM25 INVERTED INDEX · CONDITIONAL EXPANSION</p>
-            </li>
-
-            <li class="feature">
-              <p class="fact-label" data-lang="zh">Agent</p>
-              <p class="fact-label" data-lang="en">Agent</p>
-              <h3 data-lang="zh">可确认的 Agent 工作区</h3>
-              <h3 data-lang="en">An Agent workspace you can confirm</h3>
-              <p data-lang="zh">
-                助手只能在授权范围内调用工具：读取不需要确认，写入在执行前弹出一次性确认并留下审计记录；回答里的引用可以点回原邮件。
-              </p>
-              <p data-lang="en">
-                The assistant only uses tools inside the scope you grant: reads need no confirmation, writes open a
-                one-time confirmation and leave an audit record, and citations link back to the original message.
-              </p>
-              <p class="feature-fact" data-lang="zh">工具范围授权 · 一次性确认 · 审计记录</p>
-              <p class="feature-fact" data-lang="en">TOOL SCOPES · ONE-TIME CONFIRMATION · AUDIT TRAIL</p>
-            </li>
-
-            <li class="feature">
-              <p class="fact-label" data-lang="zh">接口</p>
-              <p class="fact-label" data-lang="en">Interfaces</p>
-              <h3 data-lang="zh">CLI 与 MCP 接口</h3>
-              <h3 data-lang="en">CLI and MCP interface</h3>
-              <p data-lang="zh">
-                安装包自带 <code>namimail</code> 命令，也可作为本机 MCP 服务器接入你的客户端。外部调用经已配对的命名管道访问正在运行的应用，暴露 16 个邮件域工具。
-              </p>
-              <p data-lang="en">
-                The installer ships a <code>namimail</code> command and can serve as a local MCP server. External callers
-                reach the running app over a paired named pipe, with 16 mail-domain tools.
-              </p>
-              <p class="feature-fact" data-lang="zh">16 个工具（9 只读 / 7 写）· 命名管道</p>
-              <p class="feature-fact" data-lang="en">16 TOOLS (9 READ / 7 WRITE) · NAMED PIPE</p>
-            </li>
-
-            <li class="feature">
-              <p class="fact-label" data-lang="zh">撰写</p>
-              <p class="fact-label" data-lang="en">Composing</p>
-              <h3 data-lang="zh">写邮件与阅读</h3>
-              <h3 data-lang="en">Writing and reading</h3>
-              <p data-lang="zh">
-                模板库、附件内联预览（PDF 与图片直接渲染，Office 与文本文件提取只读文本）、定时发送、批量标记与移动、日历、中英界面，以及可选的机器翻译。
-              </p>
-              <p data-lang="en">
-                Template library, inline attachment preview (PDFs and images render; Office and text files get read-only
-                text extraction), scheduled send, bulk flag and move actions, calendar, a bilingual interface, and
-                optional machine translation.
-              </p>
-              <p class="feature-fact" data-lang="zh">模板库 · 附件只读预览 · 定时发送</p>
-              <p class="feature-fact" data-lang="en">TEMPLATES · READ-ONLY PREVIEW · SCHEDULED SEND</p>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <section id="retrieval">
-        <div class="wrap">
-          <header class="section-head">
-            <p class="section-label" data-lang="zh">02 · 检索</p>
-            <p class="section-label" data-lang="en">02 · Retrieval</p>
-            <h2 data-lang="zh">检索怎么工作</h2>
-            <h2 data-lang="en">How retrieval works</h2>
-            <p data-lang="zh">
-              关键约束是隐私：索引和页面都在本机，<strong>只有你的问题文本</strong>可能发给模型，邮件正文不会。
-            </p>
-            <p data-lang="en">
-              The binding constraint is privacy: the index and the pages are local, and <strong>only your
-              question</strong> can reach the model — never mail content.
-            </p>
-          </header>
-          <ol class="steps">
-            <li class="step">
-              <h3 data-lang="zh">本地索引</h3>
-              <h3 data-lang="en">Local index</h3>
-              <p data-lang="zh">
-                同步下来的邮件被切成带引用的加密页面，并在本机建立 BM25 倒排索引（只存派生词项，不存正文副本），重启后可直接复用。
-              </p>
-              <p data-lang="en">
-                Synced mail becomes citable encrypted pages plus a local BM25 inverted index — derived tokens only, no
-                second copy of the text — reusable after a restart.
-              </p>
-            </li>
-            <li class="step">
-              <h3 data-lang="zh">先查词法</h3>
-              <h3 data-lang="en">Keyword first</h3>
-              <p data-lang="zh">
-                你的问题先直接查这份索引，命中就返回结果并给出来源引用。绝大多数提问在这一步就结束了，不产生任何模型调用。
-              </p>
-              <p data-lang="en">
-                The question is searched against that index directly; hits are returned with citations pointing back to
-                the original message. Most questions end here, with no model call at all.
-              </p>
-            </li>
-            <li class="step">
-              <h3 data-lang="zh">仅在无结果时扩展</h3>
-              <h3 data-lang="en">Expand only when empty</h3>
-              <p data-lang="zh">
-                只有当关键词一个都匹配不到（例如「报销」而邮件里写的是「费用申请」）时，才把<strong>问题本身</strong>发给模型换取同义与跨语言检索词，再用这些词重查同一份索引；失败或超时都只是退回关键词检索。
-              </p>
-              <p data-lang="en">
-                Only when nothing matches — 「报销」 where the mail says 「费用申请」 — is the <strong>question itself</strong>
-                sent out for synonyms and cross-language terms, which re-query the same index. A failure or a timeout
-                simply falls back to keyword-only search.
-              </p>
-            </li>
-          </ol>
-        </div>
-      </section>
-
-      <section id="agent">
-        <div class="wrap">
-          <header class="section-head">
-            <p class="section-label" data-lang="zh">03 · Agent</p>
-            <p class="section-label" data-lang="en">03 · Agent</p>
-            <h2 data-lang="zh">Agent 工作区</h2>
-            <h2 data-lang="en">The Agent workspace</h2>
-            <p data-lang="zh">真实截图，不是效果图。</p>
-            <p data-lang="en">A real screenshot, not a mockup.</p>
-          </header>
-          <div class="split split-top">
-            <div class="shot">
-              <figure>
-                <img
-                  data-lang="zh"
-                  src="./assets/nami-mail-agent-zh.png"
-                  width="1440"
-                  height="900"
-                  alt="Nami Mail 的 Agent 工作区：对话、工具调用与来源引用"
-                />
-                <img
-                  data-lang="en"
-                  src="./assets/nami-mail-agent-en.png"
-                  width="1440"
-                  height="900"
-                  alt="The Nami Mail Agent workspace: conversation, tool activity and citations"
-                />
-              </figure>
-            </div>
-            <div class="panel">
-              <ul class="checklist" data-lang="zh">
-                <li><span class="fact-label">范围</span><span>授权范围先于查询：先确定账户与消息范围，再检索。</span></li>
-                <li><span class="fact-label">确认</span><span>写入必须确认：确认卡显示将要执行的确切操作。</span></li>
-                <li><span class="fact-label">引用</span><span>来源可回溯：回答中的引用可展开并跳回原邮件。</span></li>
-                <li><span class="fact-label">停止</span><span>停止即刻生效：中断不会留下半截持久化回复。</span></li>
-              </ul>
-              <ul class="checklist" data-lang="en">
-                <li><span class="fact-label">Scope</span><span>Authorisation before query: accounts and messages are resolved first.</span></li>
-                <li><span class="fact-label">Writes</span><span>Writes need confirmation: the card names the operation that will run.</span></li>
-                <li><span class="fact-label">Sources</span><span>Citations go back: open the cited message from the answer.</span></li>
-                <li><span class="fact-label">Stop</span><span>Stop means stop: an interrupted turn leaves no half-persisted reply.</span></li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="cli">
-        <div class="wrap">
-          <header class="section-head">
-            <p class="section-label" data-lang="zh">04 · 接口</p>
-            <p class="section-label" data-lang="en">04 · Interfaces</p>
-            <h2 data-lang="zh">命令行与 MCP</h2>
-            <h2 data-lang="en">Command line and MCP</h2>
-            <p data-lang="zh">
-              安装包自带 <code>namimail</code> 命令，同一份能力也能作为本机 MCP 服务器暴露给你已有的客户端。下面是文档里的原样用法。
-            </p>
-            <p data-lang="en">
-              The installer ships the <code>namimail</code> command, and the same surface can serve as a local MCP server
-              for a client you already use. These are the documented invocations, verbatim.
-            </p>
-          </header>
-          <div class="code-cards">
-            <div class="code-card">
-              <div class="code-card-bar">
-                <span class="code-card-title" data-lang="zh">终端 · 配对与只读查询</span>
-                <span class="code-card-title" data-lang="en">Terminal · pairing and read-only queries</span>
+          <header class="section-head split-heading"><div><p class="section-label">02 / <span data-lang="zh">邮件助理</span><span data-lang="en">Mail assistant</span></p><h2><span data-lang="zh">从邮件里找答案，<br />再写下一封。</span><span data-lang="en">Find the context.<br />Draft the next reply.</span></h2></div><p><span data-lang="zh">助理可以检索邮件、整理信息和拟写回复。模型、邮件范围和操作权限由你设置。</span><span data-lang="en">Search messages, put information together, and draft replies. You choose the model, mail scope, and permissions.</span></p></header>
+          <figure class="product-surface">
+            <div class="demo-toolbar"><span><i class="status-dot" aria-hidden="true"></i><span data-lang="zh">试试邮件助理</span><span data-lang="en">Try the assistant</span></span><div><button type="button" class="demo-tour-toggle" data-demo-tour-toggle="agent" hidden></button><button type="button" class="demo-closeup-toggle" data-demo-closeup="agent" aria-pressed="true" hidden></button><button type="button" class="demo-reset" data-demo-reset="agent" hidden><span data-lang="zh">重置</span><span data-lang="en">Reset</span></button><a class="demo-open" data-demo-open="agent" href="./demo/?demo=1&amp;preview=site&amp;view=agent" target="_blank" rel="noopener"><span data-lang="zh">单独打开 ↗</span><span data-lang="en">Open demo ↗</span></a></div></div>
+            <div class="demo-stage" data-state="waiting">
+              <div class="demo-placeholder" role="status">
+                <div class="nami-splash-content"><img class="nami-splash-logo" src="./assets/brand/splash-logo.png" alt="" width="64" height="64" /><span class="nami-splash-divider" aria-hidden="true"></span><span class="nami-splash-wordmark">Nami Mail</span></div>
+                <div class="nami-splash-loader" aria-hidden="true"></div>
+                <span class="demo-loading-label sr-only" data-loading-label></span>
+                <button class="demo-retry button" type="button" data-demo-retry="agent" hidden><span data-lang="zh">重试</span><span data-lang="en">Retry</span></button>
               </div>
-              <pre><code><span class="prompt">$ </span>namimail pair
-<span class="prompt">$ </span>namimail messages search --query "invoice" --folder INBOX --output json
-<span class="prompt">$ </span>namimail messages list --folder INBOX --since 2026-07-01T00:00:00Z --limit 20
-<span class="prompt">$ </span>namimail service start</code></pre>
+              <iframe class="demo-frame demo-frame-agent" data-demo="agent" title="Nami Mail 邮件助理演示" loading="lazy" sandbox="allow-scripts allow-same-origin" hidden></iframe>
+              <div class="demo-tour-pointer" aria-hidden="true"><span class="demo-tour-cursor"><img src="./assets/demo-cursor.png" alt="" width="23" height="24" draggable="false" /></span></div><div class="demo-tour-progress" aria-hidden="true"></div>
             </div>
-            <div class="code-card">
-              <div class="code-card-bar">
-                <span class="code-card-title">mcp.json</span>
-              </div>
-              <pre><code>{
-  "mcpServers": {
-    "namimail": {
-      "command": "cmd.exe",
-      "args": ["/d", "/s", "/c", "namimail mcp start"]
-    }
-  }
-}</code></pre>
-            </div>
-          </div>
-          <ul class="fact-rows">
-            <li>
-              <span class="fact-label" data-lang="zh">工具</span>
-              <span class="fact-label" data-lang="en">Tools</span>
-              <span data-lang="zh">16 个邮件域工具：9 个只读，7 个写。写操作按确认档位开放，和界面里一样。</span>
-              <span data-lang="en">16 mail-domain tools: nine read-only, seven bounded writes, opened by the same confirmation levels as the interface.</span>
-            </li>
-            <li>
-              <span class="fact-label" data-lang="zh">接入</span>
-              <span class="fact-label" data-lang="en">Transport</span>
-              <span data-lang="zh">已配对的命名管道，只允许当前用户访问；外部进程无法直接打开数据库。</span>
-              <span data-lang="en">A paired named pipe restricted to the current user; an external process never opens the database directly.</span>
-            </li>
-            <li>
-              <span class="fact-label" data-lang="zh">参考</span>
-              <span class="fact-label" data-lang="en">Reference</span>
-              <span data-lang="zh">
-                <a href="./docs/cli/README.zh-CN.html">CLI 命令与输出包络</a>、<a href="./docs/mcp/README.zh-CN.html">MCP 配置与权限档</a>。
-              </span>
-              <span data-lang="en">
-                <a href="./docs/cli/README.en.html">Commands and output envelopes</a>,
-                <a href="./docs/mcp/README.en.html">MCP configuration and access levels</a>.
-              </span>
-            </li>
-          </ul>
+            <div class="demo-tour-caption" hidden><span class="demo-tour-step" aria-hidden="true"></span><span class="demo-tour-label" role="status"></span></div>
+            <noscript><img data-lang="zh" src="./assets/nami-mail-agent-zh.png" width="1440" height="900" alt="Nami Mail 邮件助理界面" /><img data-lang="en" src="./assets/nami-mail-agent-en.png" width="1440" height="900" alt="Nami Mail assistant workspace" /></noscript>
+            <figcaption><span data-lang="zh">使用示例邮件与预设答复，可查看答复与来源。</span><span data-lang="en">Sample messages and a preset answer. View the reply and follow its sources.</span></figcaption>
+          </figure>
+          <div class="detail-grid"><div><h3><span data-lang="zh">回答带来源</span><span data-lang="en">Check the sources</span></h3><p><span data-lang="zh">检索结果可以引用原邮件，点击引用即可回到正文。</span><span data-lang="en">Follow a source reference back to the original message.</span></p></div><div><h3><span data-lang="zh">接入你选择的模型</span><span data-lang="en">Use your preferred model</span></h3><p><span data-lang="zh">支持 OpenAI 兼容接口、Claude、Gemini 和本地 Ollama。</span><span data-lang="en">Connect an OpenAI-compatible service, Claude, Gemini, or local Ollama.</span></p></div><div><h3><span data-lang="zh">权限可以收紧</span><span data-lang="en">Set the limits</span></h3><p><span data-lang="zh">选择只读或发送确认模式；云模型访问邮件内容需要单独授权。</span><span data-lang="en">Choose read-only or send-confirmed access. Cloud access to mail content requires separate authorization.</span></p></div></div>
         </div>
       </section>
 
-      <section id="download" class="band">
-        <div class="wrap">
-          <div class="split">
-            <div>
-              <p class="section-label" data-lang="zh">05 · 下载</p>
-              <p class="section-label" data-lang="en">05 · Download</p>
-              <h2 data-lang="zh">下载</h2>
-              <h2 data-lang="en">Download</h2>
-              <p class="lede" data-lang="zh">
-                当前版本 <strong id="version-download-zh">0.4.2</strong>，只从 Release 页面获取安装程序。就地升级会保留本地数据，不需要重新登录。
-              </p>
-              <p class="lede" data-lang="en">
-                Current version <strong id="version-download-en">0.4.2</strong>. Take the installer from the release page
-                only; in-place upgrades keep your local data and need no re-login.
-              </p>
-              <div class="docs-actions">
-                <a class="button primary-inverse" href="https://github.com/QinIndexCode/nami-mail/releases/latest" rel="noopener">
-                  <span data-lang="zh">前往最新 Release</span>
-                  <span data-lang="en">Open the latest release</span>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                    <path d="M8 5h11v11M19 5 6 18" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                </a>
-              </div>
-              <ul class="chips">
-                <li class="chip">Windows x64</li>
-                <li class="chip" data-lang="zh">就地升级保留本地数据</li>
-                <li class="chip" data-lang="en">In-place upgrade keeps local data</li>
-                <li class="chip">Ed25519</li>
-              </ul>
-            </div>
-            <div>
-              <h3 class="band-subhead" data-lang="zh">下载前请知悉</h3>
-              <h3 class="band-subhead" data-lang="en">Before you download</h3>
-              <ul class="band-list" data-lang="zh">
-                <li>仅支持 Windows x64。</li>
-                <li>
-                  安装程序<strong>未进行 Authenticode 签名</strong>，SmartScreen 可能提示"未知发布者"。请不要绕过系统安全警告，只从本项目的 Release 页面获取安装包。
-                </li>
-                <li>
-                  自动更新通过 Ed25519 清单签名校验，但 <strong>0.3.0 → 0.4.0 的公网升级验收仍待完成</strong>。
-                </li>
-                <li>本地检索不摄取附件正文；中文按单字切分，问法与邮件写法差异很大时依赖查询扩展，命中可能包含噪声。</li>
-              </ul>
-              <ul class="band-list" data-lang="en">
-                <li>Windows x64 only.</li>
-                <li>
-                  The installer is <strong>not Authenticode signed</strong>, so SmartScreen may warn about an unknown
-                  publisher. Do not bypass Windows security warnings, and take the installer from this project's release
-                  page only.
-                </li>
-                <li>
-                  Auto-updates are verified with an Ed25519 manifest signature, but <strong>public-network upgrade
-                  acceptance from 0.3.0 to 0.4.0 is still pending</strong>.
-                </li>
-                <li>
-                  Retrieval does not ingest attachment bodies, and Chinese is indexed per character — questions worded
-                  very differently from the mail rely on query expansion and hits may include noise.
-                </li>
-              </ul>
-            </div>
+      <section id="privacy" class="section">
+        <div class="wrap privacy-grid">
+          <div class="section-head"><p class="section-label">03 / <span data-lang="zh">本地优先</span><span data-lang="en">Local first</span></p><h2><span data-lang="zh">邮箱连服务商，<br />数据留在电脑上。</span><span data-lang="en">Your provider.<br />Your computer.</span></h2><p><span data-lang="zh">Nami Mail 直接连接邮箱服务商。邮件缓存、账户凭据和密钥保存在本机。</span><span data-lang="en">Nami Mail connects directly to your mail provider. Cached mail, credentials, and keys are stored locally.</span></p><a class="text-link" href="./docs/PRIVACY.zh-CN.html" data-lang="zh">阅读隐私与数据说明 ↗</a><a class="text-link" href="./docs/PRIVACY.en.html" data-lang="en">Read the privacy and data guide ↗</a></div>
+          <div class="privacy-facts">
+            <div><span class="fact-number">01</span><div><h3><span data-lang="zh">本地保存与检索</span><span data-lang="en">Local storage and search</span></h3><p><span data-lang="zh">已同步的邮件保存在本机。附件在打开或下载时按需读取，邮件检索在本机运行。</span><span data-lang="en">Synced mail is stored locally. Attachments are fetched when opened or downloaded. Mail search runs on your computer.</span></p></div></div>
+            <div><span class="fact-number">02</span><div><h3><span data-lang="zh">AI 和翻译是可选项</span><span data-lang="en">AI and translation are optional</span></h3><p><span data-lang="zh">使用云模型或翻译服务时，相关内容会发送到你配置的服务。可以先查看数据范围，再决定是否启用。</span><span data-lang="en">Cloud models and translation services receive the content needed for that task. Review the data scope before enabling them.</span></p></div></div>
+            <div><span class="fact-number">03</span><div><h3><span data-lang="zh">源代码可以查阅</span><span data-lang="en">The source is open</span></h3><p><span data-lang="zh">代码、构建流程和数据说明都在公开仓库中。</span><span data-lang="en">Inspect the code, build process, and data documentation in the public repository.</span></p></div></div>
           </div>
         </div>
       </section>
 
-      <section id="docs">
+      <section id="retrieval" class="section compact-section">
+        <div class="wrap split-heading"><div><p class="section-label">04 / <span data-lang="zh">检索</span><span data-lang="en">Search</span></p><h2><span data-lang="zh">记不清主题，<br />也可以从内容找。</span><span data-lang="en">Start with what<br />you remember.</span></h2></div><div><p><span data-lang="zh">关键词搜索用于快速筛选，助理检索用于查找相关邮件。找到结果后，再回到原邮件核对。</span><span data-lang="en">Use keywords to narrow the list, or ask the assistant to find related mail. Open the original messages to verify the result.</span></p><a class="text-link" href="./docs/rag/architecture.zh-CN.html" data-lang="zh">了解邮件检索 ↗</a><a class="text-link" href="./docs/rag/architecture.en.html" data-lang="en">How mail retrieval works ↗</a></div></div>
+      </section>
+
+      <section id="cli" class="section">
+        <div class="wrap integration-grid">
+          <div class="section-head"><p class="section-label">05 / CLI &amp; MCP</p><h2><span data-lang="zh">也能接入<br />你的工作流程。</span><span data-lang="en">Fits into your<br />existing workflow.</span></h2><p><span data-lang="zh">通过本机配对，让脚本或兼容 MCP 的工具读取邮件。可访问的账户和工具由权限设置控制。</span><span data-lang="en">Pair a local script or MCP client to read mail. Permissions determine which accounts and tools it can access.</span></p><a class="text-link" href="./docs/cli/README.zh-CN.html" data-lang="zh">查看 CLI 文档 ↗</a><a class="text-link" href="./docs/cli/README.en.html" data-lang="en">Read the CLI guide ↗</a></div>
+          <div class="terminal"><div class="terminal-header"><span class="surface-dots"><i></i><i></i><i></i></span><span>namimail / PowerShell</span></div><pre><code>namimail --help</code></pre><p><span data-lang="zh">从命令帮助开始。配对步骤、账户范围与可用工具见接口文档。</span><span data-lang="en">Start with command help. See the interface guide for pairing, account scope, and available tools.</span></p><a href="./docs/mcp/README.zh-CN.html" data-lang="zh">MCP 接入说明 →</a><a href="./docs/mcp/README.en.html" data-lang="en">MCP setup →</a></div>
+        </div>
+      </section>
+
+      <section id="docs" class="section">
         <div class="wrap">
-          <header class="section-head">
-            <p class="section-label" data-lang="zh">06 · 文档</p>
-            <p class="section-label" data-lang="en">06 · Documentation</p>
-            <h2 data-lang="zh">文档</h2>
-            <h2 data-lang="en">Documentation</h2>
-            <p data-lang="zh">
-              安装、账户、隐私、检索、Agent、MCP 与 CLI 的完整说明，与代码同仓库维护，随站点一起构建。
-            </p>
-            <p data-lang="en">
-              Everything from installation and accounts to retrieval, the Agent, MCP and the CLI — maintained in the same
-              repository and built together with this site.
-            </p>
-          </header>
+          <header class="section-head split-heading"><div><p class="section-label">06 / <span data-lang="zh">使用文档</span><span data-lang="en">Documentation</span></p><h2><span data-lang="zh">从接入第一个邮箱开始。</span><span data-lang="en">Start with your first account.</span></h2></div><a class="text-link" href="./docs/"><span data-lang="zh">全部文档 →</span><span data-lang="en">All documentation →</span></a></header>
           <div class="docs-grid">
-            <a class="doc-link" href="./docs/INSTALLING.zh-CN.html" data-lang="zh">
-              <strong>安装与升级</strong><span>从 Release 安装、就地升级、卸载与本地数据位置。</span>
-            </a>
-            <a class="doc-link" href="./docs/INSTALLING.en.html" data-lang="en">
-              <strong>Install and upgrade</strong><span>Install from a release, upgrade in place, uninstall, and where local data lives.</span>
-            </a>
-            <a class="doc-link" href="./docs/PRIVACY.zh-CN.html" data-lang="zh">
-              <strong>隐私说明</strong><span>哪些数据留在本机，哪些会发往你配置的服务。</span>
-            </a>
-            <a class="doc-link" href="./docs/PRIVACY.en.html" data-lang="en">
-              <strong>Privacy</strong><span>What stays on your machine and what goes to the services you configure.</span>
-            </a>
-            <a class="doc-link" href="./docs/agent/usage.zh-CN.html" data-lang="zh">
-              <strong>Agent 工作区</strong><span>授权范围、工具确认、来源引用与审计记录。</span>
-            </a>
-            <a class="doc-link" href="./docs/agent/usage.en.html" data-lang="en">
-              <strong>The Agent workspace</strong><span>Scopes, tool confirmations, citations and the audit trail.</span>
-            </a>
-            <a class="doc-link" href="./docs/rag/retrieval.zh-CN.html" data-lang="zh">
-              <strong>本地检索</strong><span>BM25 索引、页面切分与查询扩展的取舍。</span>
-            </a>
-            <a class="doc-link" href="./docs/rag/retrieval.en.html" data-lang="en">
-              <strong>Local retrieval</strong><span>The BM25 index, page chunking and query expansion in practice.</span>
-            </a>
-            <a class="doc-link" href="./docs/cli/README.zh-CN.html" data-lang="zh">
-              <strong>CLI 参考</strong><span><code>namimail</code> 的命令、参数、输出与退出码。</span>
-            </a>
-            <a class="doc-link" href="./docs/cli/README.en.html" data-lang="en">
-              <strong>CLI reference</strong><span>Every <code>namimail</code> command, argument, output and exit code.</span>
-            </a>
-            <a class="doc-link" href="./docs/mcp/README.zh-CN.html" data-lang="zh">
-              <strong>MCP 接入</strong><span>配对、权限档，以及外露的 16 个邮件域工具。</span>
-            </a>
-            <a class="doc-link" href="./docs/mcp/README.en.html" data-lang="en">
-              <strong>MCP setup</strong><span>Pairing, access levels and the sixteen mail-domain tools.</span>
-            </a>
+            <a class="doc-link" href="./docs/INSTALLING.zh-CN.html" data-lang="zh"><span>01</span><h3>安装与更新</h3><p>下载、安装、数据保留与版本更新。</p><span aria-hidden="true">↗</span></a><a class="doc-link" href="./docs/INSTALLING.en.html" data-lang="en"><span>01</span><h3>Install and update</h3><p>Downloads, installation, data retention, and updates.</p><span aria-hidden="true">↗</span></a>
+            <a class="doc-link" href="./docs/EMAIL-PROVIDERS.zh-CN.html" data-lang="zh"><span>02</span><h3>接入邮箱</h3><p>授权码、OAuth 与各服务商的配置方式。</p><span aria-hidden="true">↗</span></a><a class="doc-link" href="./docs/EMAIL-PROVIDERS.en.html" data-lang="en"><span>02</span><h3>Connect an account</h3><p>App passwords, OAuth, and provider setup.</p><span aria-hidden="true">↗</span></a>
+            <a class="doc-link" href="./docs/agent/usage.zh-CN.html" data-lang="zh"><span>03</span><h3>使用邮件助理</h3><p>配置模型、选择邮件范围、查看来源。</p><span aria-hidden="true">↗</span></a><a class="doc-link" href="./docs/agent/usage.en.html" data-lang="en"><span>03</span><h3>Use the assistant</h3><p>Models, mail scope, and source references.</p><span aria-hidden="true">↗</span></a>
           </div>
-          <div class="docs-actions">
-            <a class="button" href="./docs/">
-              <span data-lang="zh">浏览全部文档</span>
-              <span data-lang="en">Browse all documentation</span>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                <path d="M5 12h13m0 0-5-5m5 5-5 5" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </a>
-            <a class="button secondary" href="https://github.com/QinIndexCode/nami-mail/tree/main/docs" rel="noopener">
-              <span data-lang="zh">在 GitHub 上查看源文件</span>
-              <span data-lang="en">View the source on GitHub</span>
-            </a>
-          </div>
-          <p class="footnote" data-lang="zh">
-            文档在部署时由仓库的 <code>docs/</code> 目录预渲染成静态页面（不依赖运行时脚本或 CDN），同一份内容也镜像到
-            <a href="https://github.com/QinIndexCode/nami-mail/wiki" rel="noopener">GitHub Wiki</a>。
-          </p>
-          <p class="footnote" data-lang="en">
-            The pages are pre-rendered at deploy time from the repository's <code>docs/</code> directory — no runtime
-            scripting and no CDN. The same content is mirrored to the
-            <a href="https://github.com/QinIndexCode/nami-mail/wiki" rel="noopener">GitHub Wiki</a>.
-          </p>
         </div>
       </section>
-      <section id="contributors">
-        <div class="wrap">
-          <header class="section-head">
-            <p class="section-label" data-lang="zh">07 · 贡献者</p>
-            <p class="section-label" data-lang="en">07 · Contributors</p>
-            <h2 data-lang="zh">感谢贡献者</h2>
-            <h2 data-lang="en">Contributors</h2>
-            <p data-lang="zh">以下贡献者参与了本项目的开发，不包含机器人账户。</p>
-            <p data-lang="en">The following contributors have helped build this project, excluding bots.</p>
-          </header>
-          <ul class="contributors-list">
-            <li class="contributor-card">
-              <a href="https://github.com/QinIndexCode" rel="noopener" target="_blank">
-                <img
-                  class="contributor-avatar"
-                  src="https://avatars.githubusercontent.com/u/177287013?v=4"
-                  alt="QinIndexCode"
-                  width="64"
-                  height="64"
-                  loading="lazy"
-                />
-                <span class="contributor-name">QinIndexCode</span>
-                <span class="contributor-commits" data-lang="zh">189 次提交</span>
-                <span class="contributor-commits" data-lang="en">189 commits</span>
-              </a>
-            </li>
-            <li class="contributor-card">
-              <a href="https://github.com/JIE-jiee" rel="noopener" target="_blank">
-                <img
-                  class="contributor-avatar"
-                  src="https://avatars.githubusercontent.com/u/130622560?v=4"
-                  alt="JIE-jiee"
-                  width="64"
-                  height="64"
-                  loading="lazy"
-                />
-                <span class="contributor-name">JIE-jiee</span>
-                <span class="contributor-commits" data-lang="zh">1 次提交</span>
-                <span class="contributor-commits" data-lang="en">1 commit</span>
-              </a>
-            </li>
-          </ul>
-          <p class="footnote" data-lang="zh">
-            想参与贡献？请查看
-            <a href="https://github.com/QinIndexCode/nami-mail/blob/main/CONTRIBUTING.md" rel="noopener">贡献指南</a>。
-          </p>
-          <p class="footnote" data-lang="en">
-            Want to contribute? See the
-            <a href="https://github.com/QinIndexCode/nami-mail/blob/main/CONTRIBUTING.md" rel="noopener">contributing guide</a>.
-          </p>
-        </div>
+
+      <section id="download" class="section download-section">
+        <div class="wrap"><div><p class="section-label">NAMI MAIL / WINDOWS</p><h2><span data-lang="zh">把第一个邮箱接进来。</span><span data-lang="en">Bring your first inbox in.</span></h2><p><span data-lang="zh">从 GitHub Releases 下载 Windows x64 安装程序。</span><span data-lang="en">Download the Windows x64 installer from GitHub Releases.</span></p></div><a class="button" href="https://github.com/QinIndexCode/nami-mail/releases/latest" rel="noopener"><span data-lang="zh">下载 Windows 版</span><span data-lang="en">Download for Windows</span><span aria-hidden="true">↓</span></a></div>
       </section>
+
+      <section class="section faq-section">
+        <div class="wrap"><h2><span data-lang="zh">开始前，可能想问的几件事。</span><span data-lang="en">A few things before you start.</span></h2><div class="faq-list">
+          <details><summary><span data-lang="zh">支持哪些系统？</span><span data-lang="en">Which platforms are supported?</span></summary><p><span data-lang="zh">目前提供 Windows x64 安装程序，下载与安装步骤见安装指南。</span><span data-lang="en">The installer supports Windows x64. See the installation guide for download and setup steps.</span></p></details>
+          <details><summary><span data-lang="zh">必须配置 AI 才能用吗？</span><span data-lang="en">Do I need to configure an AI model?</span></summary><p><span data-lang="zh">不需要。收发、阅读、草稿和邮件筛选可以独立使用。需要助理时，再配置本地或云端模型。</span><span data-lang="en">No. Sending, reading, drafts, and filters work independently. Configure a local or cloud model when you want the assistant.</span></p></details>
+          <details><summary><span data-lang="zh">邮件会发送到 Nami Mail 的服务器吗？</span><span data-lang="en">Does mail pass through a Nami Mail server?</span></summary><p><span data-lang="zh">客户端直接连接邮箱服务商，本地保存邮件数据。主动使用云模型、翻译或外部工具时，相关内容可能发送到对应服务，具体范围见隐私说明。</span><span data-lang="en">The client connects directly to your provider and stores mail locally. Cloud models, translation, and external tools may receive task-related content when you use them; see the privacy guide for the scope.</span></p></details>
+        </div></div>
+      </section>
+
+      <section id="contributors" class="contributors-section"><div class="wrap"><div><p class="section-label"><span data-lang="zh">开源项目</span><span data-lang="en">Open source</span></p><h2><span data-lang="zh">感谢一起做这个项目的人。</span><span data-lang="en">Thanks to the people building it.</span></h2><a class="text-link" href="./docs/_root/CONTRIBUTING.zh-CN.html" data-lang="zh">参与贡献 →</a><a class="text-link" href="./docs/_root/CONTRIBUTING.en.html" data-lang="en">Contribute →</a></div><ul class="contributors-list"><li><a href="https://github.com/QinIndexCode" rel="noopener"><img src="https://avatars.githubusercontent.com/u/177287013?v=4" width="40" height="40" alt="" loading="lazy" decoding="async" />QinIndexCode</a></li><li><a href="https://github.com/JIE-jiee" rel="noopener"><img src="https://avatars.githubusercontent.com/u/130622560?v=4" width="40" height="40" alt="" loading="lazy" decoding="async" />JIE-jiee</a></li></ul></div></section>
     </main>
 
-    <footer class="site-footer">
-      <div class="wrap">
-        <div class="footer-grid">
-          <div class="footer-brand">
-            <img class="mark mark-light" src="./assets/brand/mark-light.png" alt="" width="22" height="22" />
-            <img class="mark mark-dark" src="./assets/brand/mark-dark.png" alt="" width="22" height="22" />
-            <span>Nami Mail</span>
-          </div>
-          <nav class="footer-nav" aria-label="Footer">
-            <a href="https://github.com/QinIndexCode/nami-mail/releases" rel="noopener" data-lang="zh">版本发布</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/releases" rel="noopener" data-lang="en">Releases</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/blob/main/CHANGELOG.zh-CN.md" rel="noopener" data-lang="zh">变更日志</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/blob/main/CHANGELOG.en.md" rel="noopener" data-lang="en">Changelog</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/wiki" rel="noopener" data-lang="zh">Wiki</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/wiki" rel="noopener" data-lang="en">Wiki</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/blob/main/PRIVACY.zh-CN.md" rel="noopener" data-lang="zh">隐私</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/blob/main/PRIVACY.en.md" rel="noopener" data-lang="en">Privacy</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/blob/main/SECURITY.md" rel="noopener" data-lang="zh">安全</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/blob/main/SECURITY.md" rel="noopener" data-lang="en">Security</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/blob/main/SUPPORT.md" rel="noopener" data-lang="zh">支持</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/blob/main/SUPPORT.md" rel="noopener" data-lang="en">Support</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/blob/main/LICENSE" rel="noopener" data-lang="zh">许可</a>
-            <a href="https://github.com/QinIndexCode/nami-mail/blob/main/LICENSE" rel="noopener" data-lang="en">License</a>
-          </nav>
-        </div>
-        <div class="footer-legal">
-          <span>© <span id="year">2026</span> Nami Mail</span>
-          <span data-lang="zh">本站为静态页面，不使用 Cookie 或分析脚本；版本号通过公开的 GitHub API 读取，失败时显示页面内置的版本。</span>
-          <span data-lang="en">Static page: no cookies, no analytics. The version is read from the public GitHub API and falls back to the value in the markup.</span>
-        </div>
-      </div>
-    </footer>
-
+    <footer class="site-footer"><div class="wrap"><div class="footer-grid"><a class="brand" href="./"><img class="mark mark-light" src="./assets/brand/mark-light.png" alt="" width="26" height="26"/><img class="mark mark-dark" src="./assets/brand/mark-dark.png" alt="" width="26" height="26"/><span>Nami Mail</span></a><nav class="footer-nav" aria-label="Footer"><a href="./docs/"><span data-lang="zh">文档</span><span data-lang="en">Docs</span></a><a href="./docs/PRIVACY.zh-CN.html" data-lang="zh">隐私</a><a href="./docs/PRIVACY.en.html" data-lang="en">Privacy</a><a href="./docs/_root/SECURITY.zh-CN.html" data-lang="zh">安全</a><a href="./docs/_root/SECURITY.en.html" data-lang="en">Security</a><a href="./docs/_root/SUPPORT.zh-CN.html" data-lang="zh">支持</a><a href="./docs/_root/SUPPORT.en.html" data-lang="en">Support</a><a href="https://github.com/QinIndexCode/nami-mail" rel="noopener">GitHub ↗</a></nav></div><div class="footer-legal"><span>© <span id="year">2026</span> Nami Mail</span><span data-lang="zh">MIT 许可 · 本站不使用分析脚本</span><span data-lang="en">MIT license · No analytics</span></div></div></footer>
     <script src="./site.js" defer></script>
   </body>
 </html>

@@ -79,9 +79,10 @@ describe("Persisted RAG lexical index", () => {
       });
     }
     const first = new AgentRagWorker({ db, masterKey, lifecycle: context.lifecycle, sourceEvents: context.outbox });
+    // drainOnce resolves void; a fixed number of passes is the drain-to-empty
+    // contract here (each pass processes up to 25 events).
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      const processed = await first.drainOnce(25);
-      if (processed < 25) break;
+      await first.drainOnce(25);
     }
     await first.stop();
     const indexedRows = db.prepare("SELECT COUNT(DISTINCT page_id) AS n FROM agent_rag_index").get() as { n: number };
@@ -297,7 +298,7 @@ describe("Persisted RAG lexical index", () => {
 
   it("keeps scorePage as a deterministic baseline for payloads", () => {
     const payload = {
-      version: 1,
+      version: 1 as const,
       kind: "mail-chunk" as const,
       messageId: "message-1",
       sourceRevision: "revision-1",

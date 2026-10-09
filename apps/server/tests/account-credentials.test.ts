@@ -29,7 +29,6 @@ import type { AccountRecord } from "../src/types.js";
 
 const temporaryDirectories: string[] = [];
 const databases: DatabaseHandle[] = [];
-const migrationTestTimeoutMs = 30_000;
 
 function testDatabase(): DatabaseHandle {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nami-account-credentials-"));
@@ -65,9 +64,11 @@ function account(
     smtp_transport: "tls",
     smtp_username: email,
     username_mode: "email",
+    signature: "",
     status: "connected",
     last_error: null,
     last_error_code: null,
+    last_sync_warning_code: null,
     last_synced_at: null,
     created_at: "2026-07-21T00:00:00.000Z",
   };
@@ -154,7 +155,7 @@ describe("account-bound credential storage", () => {
     db.prepare("UPDATE accounts SET encrypted_password = ?, credential_crypto_version = 0 WHERE id = ?")
       .run(encryptSecret("password-secret", masterKey), passwordAccount.id);
     expect(() => migrateAccountCredentialStorage(db, masterKey)).toThrow(AccountCredentialIntegrityError);
-  }, migrationTestTimeoutMs);
+  });
 
   it("rewraps only known legacy iCloud and Yandex username defaults", () => {
     const db = testDatabase();

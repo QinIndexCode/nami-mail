@@ -18,7 +18,8 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 
 import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import { clearOrphanedPendingFlagsMarkers, commitLocalFlags } from "../src/flags-outbox.js";
+import { clearOrphanedPendingFlagsMarkers, clearPendingFlagsMarkers, commitLocalFlags } from "../src/flags-outbox.js";
+import { createOperationQueue } from "../src/operation-queue.js";
 import type { OperationQueue } from "../src/operation-queue.js";
 
 function insertAccount(db: DatabaseHandle, id: string): void {
@@ -233,6 +234,205 @@ describe("startup reconciliation", () => {
 
     expect(markerOf(db, "orphan")).toBe(0);
     expect(markerOf(db, "queued")).toBe(1);
+  });
+});
+
+/**
+ * R03: the same message committed twice in quick succession (seen=true then
+ * seen=false) is named by TWO flags-push rows. The older row's settlement
+ * must not drop the newer row's protection marker, or the next sync can
+ * overwrite the user's newest local choice with stale remote state.
+ */
+describe("settling a flags push keeps newer pushes protected", () => {
+  let db: DatabaseHandle;
+
+  beforeEach(() => {
+    db = openDatabase(":memory:");
+    insertAccount(db, "account-1");
+    insertMessage(db, "message-1", "account-1", 1, 1);
+  });
+
+  afterEach(() => {
+    if (db) db.close();
+  });
+
+  it("keeps the marker when the older push settles while a newer push is still pending", () => {
+    insertFlagsPushRow(db, "push-old", "account-1", ["message-1"], "running");
+    insertFlagsPushRow(db, "push-new", "account-1", ["message-1"], "pending");
+
+    clearPendingFlagsMarkers(db, ["message-1"]);
+
+    expect(markerOf(db, "message-1")).toBe(1);
+  });
+
+  it("keeps the marker when the older push failed permanently while a newer push is pending", () => {
+    insertFlagsPushRow(db, "push-old", "account-1", ["message-1"], "failed");
+    insertFlagsPushRow(db, "push-new", "account-1", ["message-1"], "pending");
+
+    clearPendingFlagsMarkers(db, ["message-1"]);
+
+    expect(markerOf(db, "message-1")).toBe(1);
+  });
+
+  it("clears the marker once the last push that names the message has settled", () => {
+    // The durable-settle hook fires AFTER markSettled, so the settling row
+    // is already terminal ('completed'/'failed') when the clear runs: it
+    // cannot be the row that blocks itself. A lone push therefore clears
+    // its own messages.
+    insertFlagsPushRow(db, "push-old", "account-1", ["message-1"], "completed");
+    clearPendingFlagsMarkers(db, ["message-1"], "push-old");
+    expect(markerOf(db, "message-1")).toBe(0);
+
+    // Same after a permanent failure: the row is 'failed', nothing newer
+    // names the message.
+    insertMessage(db, "message-2", "account-1", 2, 1);
+    insertFlagsPushRow(db, "push-failed", "account-1", ["message-2"], "failed");
+    clearPendingFlagsMarkers(db, ["message-2"], "push-failed");
+    expect(markerOf(db, "message-2")).toBe(0);
+  });
+
+  it("clears the marker when the newer push finally settles as well", () => {
+    insertFlagsPushRow(db, "push-old", "account-1", ["message-1"], "failed");
+    insertFlagsPushRow(db, "push-new", "account-1", ["message-1"], "pending");
+    clearPendingFlagsMarkers(db, ["message-1"]);
+    expect(markerOf(db, "message-1")).toBe(1);
+
+    // The newer push settles: nothing pending names the message anymore.
+    db.prepare("UPDATE operation_queue SET status = 'completed', completed_at = ? WHERE id = 'push-new'")
+      .run(new Date().toISOString());
+    clearPendingFlagsMarkers(db, ["message-1"]);
+    expect(markerOf(db, "message-1")).toBe(0);
+  });
+
+  it("keeps the marker while a newer push is RUNNING, not only pending", () => {
+    // R03 recheck: a late first attempt completes while the newer push is
+    // mid-retry. Between attempts the queue row is flipped back to 'pending',
+    // but while the executor is in flight the row reads 'running' — the
+    // protection check must cover both.
+    insertFlagsPushRow(db, "push-old", "account-1", ["message-1"], "running");
+    insertFlagsPushRow(db, "push-new", "account-1", ["message-1"], "running");
+
+    clearPendingFlagsMarkers(db, ["message-1"]);
+
+    expect(markerOf(db, "message-1")).toBe(1);
+  });
+});
+
+/**
+ * R03 recheck: the queue settles a row durably and only THEN notifies the
+ * owner. A late executor completion that arrives after its row has already
+ * settled (the sync-locks timeout rejects the wrapper while the underlying
+ * IMAP STORE keeps running) must not clear the marker: the row is already
+ * terminal, so nothing pending/running names the message except the newer
+ * push — which must keep its protection.
+ */
+describe("late executor completion after the row settled", () => {
+  let db: DatabaseHandle;
+
+  beforeEach(() => {
+    db = openDatabase(":memory:");
+    insertAccount(db, "account-1");
+    insertMessage(db, "message-1", "account-1", 1, 1);
+  });
+
+  afterEach(() => {
+    if (db) db.close();
+  });
+
+  it("does not clear a newer push's marker when the late completion re-clears", () => {
+    // A's row is terminal (failed by the write-slot timeout); the executor's
+    // late IMAP STORE still completes and calls the clear again. B is running.
+    insertFlagsPushRow(db, "push-a", "account-1", ["message-1"], "failed");
+    insertFlagsPushRow(db, "push-b", "account-1", ["message-1"], "running");
+
+    clearPendingFlagsMarkers(db, ["message-1"]);
+
+    expect(markerOf(db, "message-1")).toBe(1);
+  });
+
+  it("clears once nothing pending or running names the message", () => {
+    insertFlagsPushRow(db, "push-a", "account-1", ["message-1"], "failed");
+    insertFlagsPushRow(db, "push-b", "account-1", ["message-1"], "completed");
+
+    clearPendingFlagsMarkers(db, ["message-1"]);
+
+    expect(markerOf(db, "message-1")).toBe(0);
+  });
+});
+
+/**
+ * R03 recheck, queue-assembly repro: a first attempt times out waiting for
+ * the account write slot (its row settles failed), a retry of the same push
+ * is running, and the ABANDONED executor from the first attempt finally
+ * completes its IMAP STORE late. The late completion used to clear the
+ * marker from inside the runner, dropping the in-flight retry's protection
+ * while the task was still running. With settlement moved to the queue's
+ * durable-settle hook and both pending/running rows checked, the marker
+ * survives until the newest push settles for good.
+ */
+describe("late executor completion cannot clear a running push's protection", () => {
+  it("keeps the marker through a timeout, a retry, and the late completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const db = openDatabase(":memory:");
+      try {
+        insertAccount(db, "account-1");
+        insertMessage(db, "message-1", "account-1", 1, 1);
+
+        const queue = createOperationQueue(db, {
+          onOperationSettled: (kind, payload, rowId) => {
+            if (kind !== "flags-push") return;
+            const { entries } = payload as { entries?: Array<{ id: string }> };
+            if (Array.isArray(entries)) clearPendingFlagsMarkers(db, entries.map((entry) => entry.id), rowId);
+          },
+        });
+        let attempts = 0;
+        // The first attempt hangs: withTimeout abandons it after
+        // OPERATION_RUN_TIMEOUT_MS while the underlying call keeps running,
+        // and it completes LATE — after the row settled failed.
+        let releaseLateCompletion = (): void => undefined;
+        const lateCompletion = new Promise<void>((resolve) => { releaseLateCompletion = resolve; });
+        queue.registerRunner("flags-push", async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            await lateCompletion;
+            return undefined;
+          }
+          return undefined;
+        });
+        queue.enqueueBackground(["account-1"], "flags-push", {
+          accountId: "account-1",
+          entries: [{ id: "message-1", mailbox: "INBOX", uid: 1, add: ["\\Seen"], remove: [] }],
+        });
+        // Just past OPERATION_RUN_TIMEOUT_MS (5 min): the first attempt is
+        // abandoned, its row settles failed — and the settlement hook must
+        // NOT release the marker, because the retry (1s backoff) still owns
+        // the message. This is exactly where the old in-runner clear lost
+        // the protection.
+        await vi.advanceTimersByTimeAsync(5 * 60 * 1_000 + 10);
+        expect(markerOf(db, "message-1")).toBe(1);
+
+        // The abandoned first attempt completes NOW — after its row settled.
+        releaseLateCompletion();
+        await lateCompletion;
+        await vi.advanceTimersByTimeAsync(0);
+        // The late completion still must not clear anything.
+        expect(markerOf(db, "message-1")).toBe(1);
+
+        // The retry runs and settles completed: the real terminal
+        // settlement is what finally releases the marker.
+        await vi.advanceTimersByTimeAsync(60_000);
+        const row = db.prepare("SELECT status FROM operation_queue").get() as { status: string };
+        expect(row.status).toBe("completed");
+        expect(markerOf(db, "message-1")).toBe(0);
+        // And the executor ran exactly twice (first abandoned, one retry).
+        expect(attempts).toBe(2);
+      } finally {
+        db.close();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

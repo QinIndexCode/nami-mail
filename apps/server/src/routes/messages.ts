@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import fs from "node:fs";
 import type { Readable } from "node:stream";
 import { z } from "zod";
@@ -62,7 +62,9 @@ import {
   setSubmissionPostSubmitWarning,
   startSubmission,
   submissionForId,
+  submissionForIdempotencyKey,
   submissionRequestForId,
+  type OutboundSubmission,
 } from "../outbox.js";
 import { clearMessageSnooze, setMessageSnoozed } from "../snooze.js";
 import { syncAccount } from "../sync.js";
@@ -265,6 +267,29 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
         },
       },
     );
+  }
+
+  /**
+   * Shapes the reply for a request that duplicated an already-progressed
+   * submission: the durable status is the truth. Shared by the pre-attachment
+   * idempotent fast path and the post-create re-check so the two can never
+   * drift in what they report.
+   */
+  function replyPersistedSubmission(reply: FastifyReply, submission: OutboundSubmission) {
+    const status = submission.deliveryStatus;
+    if (status === "submitted" || status === "unknown_delivery") {
+      scheduleSentVerification(submission.id);
+    }
+    const inFlight = status === "submitting" || status === "unknown_delivery";
+    return reply.code(inFlight ? 202 : 200).send({
+      ok: true,
+      messageId: submission.messageId,
+      deliveryStatus: status,
+      submission,
+      ...(submission.postSubmitWarning ? { draftDiscardWarning: submission.postSubmitWarning } : {}),
+      ...(status === "submitted" ? { message: submittedVerificationMessage } : {}),
+      ...(status === "unknown_delivery" ? { message: unknownDeliveryVerificationMessage } : {}),
+    });
   }
 
   // Paging is keyset: `cursor` names a position in the list's total order and
@@ -712,8 +737,9 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const existing = messageExists(context.db, request.params.id);
     if (!existing) return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "邮件不存在。" });
     try {
-      setMessageSnoozed(context.db, request.params.id, parsed.data.until);
-      return { ok: true, snoozedUntil: parsed.data.until };
+      // The reply carries the normalized UTC form that was actually stored.
+      const snoozedUntil = setMessageSnoozed(context.db, request.params.id, parsed.data.until);
+      return { ok: true, snoozedUntil };
     } catch (error) {
       const failure = mailFailure(error);
       return reply.code(failure.statusCode).send(withErrorCode(mailFailureBody(failure, error instanceof Error ? error.message : "无法稍后处理这封邮件。"), failure.statusCode));
@@ -753,12 +779,44 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     };
     let submissionId: string | undefined;
     try {
+      // A duplicate of a submission that already progressed past `pending`
+      // reports the durable real status BEFORE any attachment work. The
+      // scheduler may have submitted the original and released its uploads;
+      // resolving them here would fail the retry and overwrite a committed
+      // terminal status with a spurious failure.
+      if (idempotencyKey) {
+        const existing = submissionForIdempotencyKey(context.db, context.masterKey, account.id, idempotencyKey);
+        if (existing) {
+          const progressed = sendAt
+            ? existing.deliveryStatus !== "pending"
+            : ["submitting", "submitted", "confirmed", "unknown_delivery"].includes(existing.deliveryStatus);
+          if (progressed) return replyPersistedSubmission(reply, existing);
+        }
+      }
+      // A scheduled send resolves its uploads before the durable create: a
+      // rejected or unreadable token must not leave an executable task
+      // behind. The peek above already answered duplicates, so this can
+      // never overwrite a committed terminal status.
+      if (sendAt && attachmentTokens.length) {
+        resolveOutboundAttachments(context.db, outboundAttachmentDirectory(context), context.masterKey, account.id, attachmentTokens);
+      }
       const prepared = prepareSubmission(context.db, context.masterKey, {
         accountId: account.id,
         accountEmail: account.email,
         idempotencyKey,
         request: submissionRequest,
         sendAt,
+        // A new scheduled task links its uploads in the same transaction as
+        // the row itself, so a crash can no longer leave a pending task
+        // whose attachments were never linked (the 24h TTL cleanup would
+        // take them and the due pass would fail).
+        ...(sendAt && attachmentTokens.length
+          ? {
+            linkAttachmentsInCreate: (newSubmissionId: string) => {
+              linkOutboundAttachmentsToSubmission(context.db, account.id, newSubmissionId, attachmentTokens);
+            },
+          }
+          : {}),
       });
       submissionId = prepared.submission.id;
 
@@ -766,6 +824,12 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
         // A future send time parks the durable submission in `pending`; the
         // background scheduler submits it when due. The interactive route
         // never touches SMTP for a scheduled send.
+        if (!prepared.created) {
+          // A retry of a still-pending task re-links idempotently: links
+          // lost by tasks parked before park-time linking existed are
+          // rebuilt here (the startup restore pass is the other half).
+          linkOutboundAttachmentsToSubmission(context.db, account.id, prepared.submission.id, attachmentTokens);
+        }
         return reply.code(202).send({
           ok: true,
           messageId: prepared.submission.messageId,
@@ -777,21 +841,7 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
       }
 
       if (!prepared.created && ["submitting", "submitted", "confirmed", "unknown_delivery"].includes(prepared.submission.deliveryStatus)) {
-        if (prepared.submission.deliveryStatus === "submitted" || prepared.submission.deliveryStatus === "unknown_delivery") {
-          scheduleSentVerification(prepared.submission.id);
-        }
-        const pending = prepared.submission.deliveryStatus === "submitting" || prepared.submission.deliveryStatus === "unknown_delivery";
-        return reply.code(pending ? 202 : 200).send({
-          ok: true,
-          messageId: prepared.submission.messageId,
-          deliveryStatus: prepared.submission.deliveryStatus,
-          submission: prepared.submission,
-          ...(prepared.submission.postSubmitWarning ? { draftDiscardWarning: prepared.submission.postSubmitWarning } : {}),
-          ...(prepared.submission.deliveryStatus === "submitted" ? { message: submittedVerificationMessage } : {}),
-          ...(prepared.submission.deliveryStatus === "unknown_delivery" ? {
-            message: unknownDeliveryVerificationMessage,
-          } : {}),
-        });
+        return replyPersistedSubmission(reply, prepared.submission);
       }
 
       const directory = outboundAttachmentDirectory(context);

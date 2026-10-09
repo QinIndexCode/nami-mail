@@ -881,6 +881,10 @@ export class AgentService {
     return this.engine.renameConversation(id, title);
   }
 
+  setConversationProvider(id: string, providerId: string): AgentConversationSummary {
+    return this.engine.setConversationProvider(id, providerId);
+  }
+
   deleteConversation(id: string): void {
     this.engine.deleteConversation(id);
   }

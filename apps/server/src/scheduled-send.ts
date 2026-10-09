@@ -8,6 +8,7 @@ import { messagePayloadById } from "./message-storage.js";
 import {
   discardDraftOutboundAttachments,
   linkOutboundAttachmentsToSubmission,
+  OutboundAttachmentError,
   releaseSubmissionOutboundAttachments,
   resolveOutboundAttachments,
 } from "./outbound-attachments.js";
@@ -132,7 +133,12 @@ export async function submitDueScheduledSubmissions(
       submitted += 1;
     } catch (error) {
       try {
-        if (deliveryFailureStatus(error) === "failed") {
+        if (error instanceof OutboundAttachmentError) {
+          // An attachment that vanished before the send is a definitive,
+          // diagnosable failure — never an ambiguous unknown-delivery state,
+          // and never a reason to send without the file.
+          markSubmissionFailed(db, masterKey, row.id, "attachment_unavailable", errorMessage(error));
+        } else if (deliveryFailureStatus(error) === "failed") {
           markSubmissionFailed(db, masterKey, row.id, "scheduled_send_failed", errorMessage(error));
         } else {
           markSubmissionUnknownDelivery(db, masterKey, row.id, "scheduled_send_unknown", errorMessage(error));
@@ -166,4 +172,52 @@ export async function submitDueScheduledSubmissions(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Startup pass for scheduled sends parked before the route started linking
+ * uploads at park time. Their durable requests carry the attachment tokens,
+ * but no link row exists, so the 24h TTL cleanup would remove the uploads and
+ * the due pass would fail long after the user expected the mail. Runs before
+ * `cleanupExpiredOutboundAttachments`: tokens whose rows still exist and
+ * belong to the task's account are re-linked idempotently; a task whose
+ * upload is definitively gone is marked failed now with the same
+ * `attachment_unavailable` code the send route reports — honesty over a
+ * pending task that can only ever fail later.
+ *
+ * The due pass remains the final gate: it re-validates and reads the actual
+ * bytes, so an upload that disappears after startup still fails at send time.
+ */
+export function restoreScheduledSubmissionAttachments(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+): { restored: number; failed: number } {
+  const pending = db.prepare(`
+    SELECT id, account_id FROM outbound_submissions
+    WHERE status = 'pending' AND send_at IS NOT NULL
+  `).all() as Array<{ id: string; account_id: string }>;
+  let restored = 0;
+  let failed = 0;
+  for (const row of pending) {
+    const request = submissionRequestForId(db, masterKey, row.id);
+    if (!request?.attachmentTokens.length) continue;
+    try {
+      linkOutboundAttachmentsToSubmission(db, row.account_id, row.id, request.attachmentTokens);
+      restored += 1;
+    } catch (error) {
+      try {
+        markSubmissionFailed(
+          db,
+          masterKey,
+          row.id,
+          "attachment_unavailable",
+          error instanceof Error ? error.message : "附件已不存在，无法发送。",
+        );
+        failed += 1;
+      } catch {
+        // The status may have been claimed elsewhere; keep moving.
+      }
+    }
+  }
+  return { restored, failed };
 }

@@ -237,8 +237,16 @@ export const agentConversationCreateSchema = z.object({
 }).strict();
 
 export const agentConversationPatchSchema = z.object({
-  title: z.string().trim().min(1).max(120),
-}).strict();
+  title: z.string().trim().min(1).max(120).optional(),
+  // Persisting a per-conversation model choice makes the server record the
+  // single authoritative source; the renderer keeps no cross-session copy.
+  providerId: z.string().trim().min(1).max(128).optional(),
+}).strict().refine(
+  (value) => (value.title !== undefined) !== (value.providerId !== undefined),
+  // Exactly one field per PATCH: a body carrying both would otherwise apply
+  // one silently and drop the other.
+  { message: "需要且仅能提供 title 或 providerId 之一。" },
+);
 
 export const agentMessageSchema = z.object({
   content: z.string().trim().min(1).max(16_000),

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "vitest";
-import { maxJsonDepth } from "@nami/agent-contracts";
+import { maxJsonDepth, type ProviderChatRequest } from "@nami/agent-contracts";
 import { OpenAiResponsesProvider } from "../src/agent/openai-responses-provider.js";
 
 // Assembled at runtime so secret scanners do not flag the synthetic test key.
@@ -8,7 +8,11 @@ const TEST_API_KEY = ["sk", "openai", "test"].join("-");
 
 type CapturedRequest = { url: string; method: string; headers: Headers; body: string | null };
 
-function captureRequest(requests: CapturedRequest[], input: RequestInfo | URL, init?: RequestInit): void {
+// R14: RequestInfo is a DOM lib name absent from this tsconfig — the fetch
+// parameter type is the same union without depending on lib dom.
+type FetchInput = Parameters<typeof fetch>[0];
+
+function captureRequest(requests: CapturedRequest[], input: FetchInput | URL, init?: RequestInit): void {
   requests.push({
     url: String(input),
     method: init?.method ?? "GET",
@@ -33,13 +37,13 @@ const searchTool = {
   description: "Search indexed mail.",
   category: "messages" as const,
   executionMode: "read" as const,
-  requiredScopes: ["mail.read"] as const,
+  requiredScopes: ["read:messages" as const],
   accountAccess: "required" as const,
   confirmationPolicy: "never" as const,
   availableToExternal: true,
 };
 
-function chatRequest(overrides: Record<string, unknown> = {}) {
+function chatRequest(overrides: Partial<ProviderChatRequest> = {}): ProviderChatRequest {
   return {
     requestId: "123e4567-e89b-12d3-a456-426614174300",
     providerId: "responses-test",

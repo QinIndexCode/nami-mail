@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 // 收窄到纯数据模块：demo.ts 会经 i18n.tsx 引入 Vite 专有的 import.meta.glob 与 React，
 // 脱离 Vite 管道（tsx / 编译后直跑）即失败。这里只需要比对目录数据本身。
-import { demoProviderCatalog as demoProviders } from "../../web/src/demoProviderCatalog.ts";
+import { demoProviderCatalog as demoProviders } from "../../web/src/demoProviderCatalog.js";
 import { providerPresets } from "../src/providers.js";
 
 function comparableProvider(provider: typeof providerPresets[number] | typeof demoProviders[number]) {

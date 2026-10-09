@@ -14,8 +14,65 @@ import type {
   AgentConversation,
   AgentToolActivity,
 } from "../agentTypes";
+import type { Message } from "../types";
 
-export function createDemoConversation(locale: string): AgentConversation {
+/** Archived sample mail behind the transcript's source links. */
+export function createDemoSourceMessages(locale: string): Message[] {
+  const english = locale.toLowerCase().startsWith("en");
+  const tr = (zh: string, en: string) => english ? en : zh;
+  const sources = [
+    {
+      id: "demo-mail-1",
+      subject: tr("季度回顾会议时间调整", "Quarterly review time changed"),
+      from: { name: tr("星辰科技", "Xingchen Tech"), address: "meeting@xingchen.example" },
+      minutes: 120,
+      body: tr(
+        "季度回顾会议调整至周二 16:00，届时请提前准备供应商报价对比表。\n\n采购团队上午有评审会，因此将讨论时间从 14:00 调整至 16:00。请同时带上上半年采购量统计表。",
+        "The quarterly review moved to Tuesday 16:00; please bring the supplier quote comparison table.\n\nProcurement has an audit in the morning, so the discussion moves from 14:00 to 16:00. Please also bring the first-half purchase volume summary.",
+      ),
+    },
+    {
+      id: "demo-mail-invoice",
+      subject: tr("6 月供应商发票", "June supplier invoice"),
+      from: { name: tr("财务部", "Finance"), address: "finance@nami.example" },
+      minutes: 300,
+      body: tr("附上 6 月供应商发票，请在月底前完成确认。", "Attached is the June supplier invoice; please confirm it before month end."),
+    },
+    {
+      id: "demo-mail-2",
+      subject: tr("6 月供应商报价沟通", "June supplier quote discussion"),
+      from: { name: tr("星辰科技", "Xingchen Tech"), address: "purchase@xingchen.example" },
+      minutes: 3000,
+      body: tr("供应商报价 12.8 万，待月度会议确认。", "Supplier quote 128,000, pending confirmation at the monthly meeting."),
+    },
+  ];
+  return sources.map((source, index) => ({
+    id: source.id,
+    accountId: "work",
+    accountEmail: "studio@gmail.com",
+    providerName: "Gmail",
+    mailbox: "[Gmail]/All Mail",
+    uid: 901 + index,
+    subject: source.subject,
+    from: source.from,
+    to: [{ name: "Studio", address: "studio@gmail.com" }],
+    cc: [],
+    sentAt: new Date(Date.now() - source.minutes * 60_000).toISOString(),
+    snippet: source.body.split("\n")[0],
+    textBody: source.body,
+    htmlBody: "",
+    flags: ["\\Seen"],
+    seen: true,
+    flagged: false,
+    hasAttachments: source.id === "demo-mail-invoice",
+    attachments: source.id === "demo-mail-invoice"
+      ? [{ partId: "2", filename: "june-invoice.pdf", contentType: "application/pdf", size: 24124, related: false, disposition: "attachment" }]
+      : [],
+    size: 24124,
+  }));
+}
+
+export function createDemoConversation(locale: string, preview = false): AgentConversation {
   // Only two interface languages exist; anything else falls back to Chinese,
   // matching the fallback the i18n layer uses.
   const english = locale.toLowerCase().startsWith("en");
@@ -29,23 +86,27 @@ export function createDemoConversation(locale: string): AgentConversation {
     state,
     ...extra,
   });
-  const citation = (id: string, subject: string, sender: string, sentAt: string, excerpt: string, messageId = "demo-mail-1"): AgentCitation => ({
-    id,
-    messageId,
-    accountId: "account-1",
-    subject,
-    sender,
-    sentAt,
-    excerpt,
-    confidence: 0.97,
-  });
+  const sources = createDemoSourceMessages(locale);
+  const citation = (id: string, messageId: string): AgentCitation => {
+    const source = sources.find((message) => message.id === messageId)!;
+    return {
+      id,
+      messageId: source.id,
+      accountId: source.accountId,
+      subject: source.subject,
+      sender: `${source.from.name} <${source.from.address}>`,
+      sentAt: source.sentAt,
+      excerpt: source.snippet,
+      confidence: 0.97,
+    };
+  };
 
-  return {
+  const conversation: AgentConversation = {
     id: "demo-conversation-1",
     title: tr("季度回顾会议准备", "Quarterly review preparation"),
     preview: tr("明天上午还有什么安排吗？", "Anything on for tomorrow morning?"),
     updatedAt: minutesAgo(1),
-    scope: { mode: "all_accounts", accountIds: ["account-1"], messageIds: [] },
+    scope: { mode: "all_accounts", accountIds: ["personal", "work"], messageIds: [] },
     providerId: "demo-ollama",
     messages: [
       {
@@ -78,23 +139,8 @@ export function createDemoConversation(locale: string): AgentConversation {
         createdAt: minutesAgo(56),
         state: "complete",
         citations: [
-          citation(
-            "demo-cite-1",
-            tr("季度回顾会议时间调整", "Quarterly review time changed"),
-            tr("星辰科技 <meeting@xingchen.example>", "Xingchen Tech <meeting@xingchen.example>"),
-            minutesAgo(120),
-            tr(
-              "季度回顾会议调整至周二 16:00，届时请提前准备供应商报价对比表。",
-              "The quarterly review moved to Tuesday 16:00; please bring the supplier quote comparison table.",
-            ),
-          ),
-          citation(
-            "demo-cite-2",
-            tr("6 月供应商发票", "June supplier invoice"),
-            tr("财务部 <finance@nami.example>", "Finance <finance@nami.example>"),
-            minutesAgo(300),
-            tr("附上 6 月供应商发票，请在月底前完成确认。", "Attached is the June supplier invoice; please confirm it before month end."),
-          ),
+          citation("demo-cite-1", "demo-mail-1"),
+          citation("demo-cite-2", "demo-mail-invoice"),
         ],
         toolActivities: [
           tool("demo-tool-1", "accounts.list", "accounts.list", "completed"),
@@ -135,14 +181,7 @@ export function createDemoConversation(locale: string): AgentConversation {
         createdAt: minutesAgo(38),
         state: "complete",
         citations: [
-          citation(
-            "demo-cite-3",
-            tr("6 月供应商报价沟通", "June supplier quote discussion"),
-            tr("星辰科技 <purchase@xingchen.example>", "Xingchen Tech <purchase@xingchen.example>"),
-            minutesAgo(3000),
-            tr("供应商报价 12.8 万，待月度会议确认。", "Supplier quote 128,000, pending confirmation at the monthly meeting."),
-            "demo-mail-2",
-          ),
+          citation("demo-cite-3", "demo-mail-2"),
         ],
         toolActivities: [
           tool("demo-tool-4", "rag.search", "rag.search", "completed", { summary: tr("匹配到 3 条历史记录", "Matched 3 history records") }),
@@ -179,7 +218,7 @@ export function createDemoConversation(locale: string): AgentConversation {
           title: tr("创建邮件草稿", "Create mail draft"),
           summary: tr("助手请求创建一封新草稿", "The assistant wants to create a new draft"),
           fields: [
-            { label: tr("账户", "Account"), value: "hello@nami.example" },
+            { label: tr("账户", "Account"), value: "studio@gmail.com" },
             { label: tr("收件人", "To"), value: "meeting@xingchen.example" },
             { label: tr("主题", "Subject"), value: tr("确认参加季度回顾会议", "Confirming attendance at the quarterly review") },
             {
@@ -342,5 +381,13 @@ export function createDemoConversation(locale: string): AgentConversation {
         toolActivities: [],
       },
     ],
+  };
+  if (!preview) return conversation;
+
+  const messages = conversation.messages.slice(1, 5);
+  return {
+    ...conversation,
+    preview: messages[3]?.content ?? "",
+    messages,
   };
 }

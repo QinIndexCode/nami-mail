@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AutoReplyEngine, type AutoReplyEvaluationResult, type AutoReplyPendingSummary, type AutoReplyUiEvent } from "../src/agent/auto-reply.js";
+import { AutoReplyEngine, type AutoReplyEvaluationInput, type AutoReplyEvaluationResult, type AutoReplyPendingSummary, type AutoReplyUiEvent } from "../src/agent/auto-reply.js";
 import { EncryptedAgentAuditStore } from "../src/agent/audit.js";
 import { ImmutableGuiConfirmationStore } from "../src/agent/confirmations.js";
 import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
@@ -115,7 +115,24 @@ describe("Agent auto-reply engine", () => {
     masterKey = undefined;
   });
 
-  function makeEngine(dailyLimitPerAccount = 30, evaluate: (input: never) => Promise<AutoReplyEvaluationResult> = async () => ({
+  // R14: a complete AutoReplyConfig — updateAppSettings stores the whole
+  // object, and a partial literal would silently drop the fields the engine
+  // reads (mode, template, scope, ...).
+  function autoReplyConfig(dailyLimitPerAccount = 30) {
+    return {
+      enabled: true,
+      accountIds: ["account-1"],
+      mode: "llm" as const,
+      decisionProviderId: null,
+      draftProviderId: null,
+      template: { text: "", skipConfirmation: false },
+      scope: { contactsOnly: false, threadOnce: true, rules: [] },
+      requireConfirmation: true,
+      dailyLimitPerAccount,
+    };
+  }
+
+  function makeEngine(dailyLimitPerAccount = 30, evaluate: (input: AutoReplyEvaluationInput) => Promise<AutoReplyEvaluationResult> = async () => ({
     replyValue: "high" as const,
     sensitive: false,
     replyText: "收到，谢谢！",
@@ -140,7 +157,7 @@ describe("Agent auto-reply engine", () => {
       prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1" })),
       submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1" })),
     } as unknown as MailApplicationService;
-    updateAppSettings(db, { autoReply: { enabled: true, accountIds: ["account-1"], dailyLimitPerAccount } });
+    updateAppSettings(db, { autoReply: autoReplyConfig(dailyLimitPerAccount) });
     const engine = new AutoReplyEngine({
       db,
       masterKey,
@@ -176,7 +193,7 @@ describe("Agent auto-reply engine", () => {
       prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1" })),
       submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1" })),
     } as unknown as MailApplicationService;
-    updateAppSettings(db, { autoReply: { enabled: true, accountIds: ["account-1"], dailyLimitPerAccount: 30 } });
+    updateAppSettings(db, { autoReply: autoReplyConfig(30) });
     const engine = new AutoReplyEngine({
       db,
       masterKey,
@@ -419,7 +436,7 @@ describe("Agent auto-reply engine", () => {
 
   // ── Web surface mode (no desktop confirmation authority) ────────────────
 
-  function makeWebEngine(dailyLimitPerAccount = 30, evaluate: (input: never) => Promise<AutoReplyEvaluationResult> = async () => ({
+  function makeWebEngine(dailyLimitPerAccount = 30, evaluate: (input: AutoReplyEvaluationInput) => Promise<AutoReplyEvaluationResult> = async () => ({
     replyValue: "high" as const,
     sensitive: false,
     replyText: "收到，谢谢！",
@@ -444,7 +461,7 @@ describe("Agent auto-reply engine", () => {
       prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1" })),
       submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1" })),
     } as unknown as MailApplicationService;
-    updateAppSettings(db, { autoReply: { enabled: true, accountIds: ["account-1"], dailyLimitPerAccount } });
+    updateAppSettings(db, { autoReply: autoReplyConfig(dailyLimitPerAccount) });
     const engine = new AutoReplyEngine({
       db,
       masterKey,
@@ -522,7 +539,7 @@ describe("Agent auto-reply engine", () => {
       prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1" })),
       submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1" })),
     } as unknown as MailApplicationService;
-    updateAppSettings(db, { autoReply: { enabled: true, accountIds: ["account-1"], dailyLimitPerAccount: 30 } });
+    updateAppSettings(db, { autoReply: autoReplyConfig(30) });
     const engine = new AutoReplyEngine({
       db,
       masterKey,

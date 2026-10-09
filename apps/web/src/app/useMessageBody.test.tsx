@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useMessageBody } from "./useMessageBody";
+import { ensureFullMessage, useMessageBody } from "./useMessageBody";
 import type { Message, MessageDetail } from "../types";
 import type { ThreadSnapshot } from "../threads";
 import type * as apiModule from "../api";
@@ -25,6 +25,8 @@ let root: Root;
 let messages: Message[];
 let threadExtras: ThreadSnapshot | null;
 let renders = 0;
+let phases: string[] = [];
+let lastReload: () => void = () => undefined;
 
 function detailFixture(overrides: Partial<MessageDetail> = {}): MessageDetail {
   return {
@@ -63,7 +65,9 @@ function listRowFixture(overrides: Partial<Message> = {}): Message {
 
 function Harness({ isDemo, openMessage }: { isDemo: boolean; openMessage: Message | null }) {
   renders += 1;
-  useMessageBody(isDemo, openMessage, (update) => { messages = update(messages); }, (update) => { threadExtras = update(threadExtras); });
+  const { phase, reload } = useMessageBody(isDemo, openMessage, (update) => { messages = update(messages); }, (update) => { threadExtras = update(threadExtras); });
+  phases.push(phase);
+  lastReload = reload;
   return null;
 }
 
@@ -78,6 +82,7 @@ beforeEach(() => {
   messages = [listRowFixture()];
   threadExtras = { anchorId: "message-1", members: [listRowFixture()] };
   renders = 0;
+  phases = [];
   vi.clearAllMocks();
 });
 
@@ -128,6 +133,117 @@ describe("useMessageBody", () => {
 
     expect(messages[0]).toMatchObject({ textBody: "preview" });
     expect(messages[0].htmlBody).toBeUndefined();
+    expect(phases.at(-1)).toBe("error");
+  });
+
+  // R10: the reader must be able to show loading/error and retry, and the
+  // merge must never let an older detail response overwrite flags the user
+  // just changed while the request was in flight.
+  it("reports loading and then loaded phases", async () => {
+    let resolveDetail: (detail: MessageDetail) => void = () => undefined;
+    message.mockReturnValue(new Promise<MessageDetail>((resolve) => { resolveDetail = resolve; }));
+
+    await render({ isDemo: false, openMessage: listRowFixture() });
+    expect(phases.at(-1)).toBe("loading");
+
+    await act(async () => { resolveDetail(detailFixture()); await Promise.resolve(); });
+    expect(phases.at(-1)).toBe("loaded");
+    expect(messages[0]).toMatchObject({ textBody: "full body" });
+  });
+
+  it("an empty-body success still counts as loaded", async () => {
+    message.mockResolvedValue(detailFixture({ textBody: "", htmlBody: "" }));
+
+    await render({ isDemo: false, openMessage: listRowFixture() });
+
+    expect(phases.at(-1)).toBe("loaded");
+  });
+
+  it("reload retries after a failure and recovers", async () => {
+    let attempts = 0;
+    message.mockImplementation(() => {
+      attempts += 1;
+      return attempts === 1 ? Promise.reject(new Error("offline")) : Promise.resolve(detailFixture());
+    });
+
+    await render({ isDemo: false, openMessage: listRowFixture() });
+    expect(phases.at(-1)).toBe("error");
+
+    await act(async () => {
+      lastReload();
+      await Promise.resolve();
+    });
+
+    expect(attempts).toBe(2);
+    expect(phases.at(-1)).toBe("loaded");
+    expect(messages[0]).toMatchObject({ textBody: "full body" });
+  });
+
+  it("a late detail response preserves flags the user changed while it was in flight", async () => {
+    let resolveDetail: (detail: MessageDetail) => void = () => undefined;
+    message.mockReturnValue(new Promise<MessageDetail>((resolve) => { resolveDetail = resolve; }));
+
+    await render({ isDemo: false, openMessage: listRowFixture({ seen: false, flagged: true, flags: ["\\Flagged"] }) });
+
+    // The user toggles seen and un-flags while the detail is loading — the
+    // optimistic local state is newer than the wire row, array included.
+    await act(async () => {
+      messages = messages.map((item) => (item.id === "message-1" ? { ...item, seen: true, flagged: false, flags: [] } : item));
+    });
+
+    await act(async () => { resolveDetail(detailFixture({ seen: false, flagged: true, flags: ["\\Flagged"] })); await Promise.resolve(); });
+
+    // The body arrives, the flag state stays local-newer as one consistent
+    // triple (booleans + array), exactly like the flag-override merge.
+    expect(messages[0]).toMatchObject({ textBody: "full body", seen: true, flagged: false, flags: [] });
+    expect(threadExtras?.members[0]).toMatchObject({ textBody: "full body", seen: true, flagged: false, flags: [] });
+  });
+});
+
+/**
+ * R10 action assembly: reply/reply-all/forward resolve the FULL message for
+ * the pinned id through this seam before building compose content, instead
+ * of quoting the 4000-character list preview.
+ */
+describe("ensureFullMessage", () => {
+  it("resolves a row that already carries a body without a request", async () => {
+    const merge = vi.fn();
+    const result = await ensureFullMessage(false, detailFixture(), merge);
+    expect(result?.textBody).toBe("full body");
+    expect(message).not.toHaveBeenCalled();
+    expect(merge).not.toHaveBeenCalled();
+  });
+
+  it("fetches, merges, and returns the full detail for a body-less row", async () => {
+    message.mockResolvedValue(detailFixture({ textBody: "full body with trailing canary END-CANARY" }));
+    const merge = vi.fn();
+
+    const result = await ensureFullMessage(false, listRowFixture(), merge);
+
+    expect(result?.textBody).toContain("END-CANARY");
+    expect(merge).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns null on failure without merging, so the caller keeps the current mail", async () => {
+    message.mockRejectedValue(new Error("offline"));
+    const merge = vi.fn();
+
+    const result = await ensureFullMessage(false, listRowFixture(), merge);
+
+    expect(result).toBeNull();
+    expect(merge).not.toHaveBeenCalled();
+  });
+
+  it("never merges a detail into another message's row (switch-safe)", async () => {
+    message.mockResolvedValue(detailFixture({ id: "message-old", textBody: "old body" }));
+    const merge = vi.fn();
+
+    await ensureFullMessage(false, listRowFixture({ id: "message-old" }), merge);
+    const mergedDetail = merge.mock.calls[0]![0] as MessageDetail;
+
+    // The merge names the detail's own id; the caller's by-id merge can
+    // therefore never touch the row that is open now.
+    expect(mergedDetail.id).toBe("message-old");
   });
 });
 

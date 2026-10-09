@@ -188,4 +188,68 @@ describe("SqliteRagIndex persistence", () => {
     });
     db.close();
   });
+
+  it("counts a multi-term page's length once when reconciling (R07)", () => {
+    const db = openDatabase(":memory:");
+    applyAgentStoreSchema(db);
+    const index = new SqliteRagIndex(db);
+    // Two term rows, each carrying the page's whole term_count.
+    index.replacePage({
+      accountId: "account-1",
+      accountGeneration: 0,
+      pageId: "page-1",
+      pageRevision: 1,
+      messageId: "message-1",
+      terms: [term("alpha"), term("beta")],
+      termCount: 5,
+    });
+    expect(index.statsFor("account-1", 0)?.termTotal).toBe(5);
+
+    // Reconcile must converge to the same per-page semantics, not sum
+    // term_count over both term rows (which would double the length).
+    index.reconcileStats("account-1", 0);
+    expect(index.statsFor("account-1", 0)).toEqual({
+      accountId: "account-1",
+      accountGeneration: 0,
+      docCount: 1,
+      termTotal: 5,
+    });
+    db.close();
+  });
+
+  it("sums distinct pages sharing a revision number on batch removal (R07)", () => {
+    const db = openDatabase(":memory:");
+    applyAgentStoreSchema(db);
+    const index = new SqliteRagIndex(db);
+    index.replacePage({
+      accountId: "account-1",
+      accountGeneration: 0,
+      pageId: "page-1",
+      pageRevision: 1,
+      messageId: "message-1",
+      terms: [term("alpha"), term("beta")],
+      termCount: 5,
+    });
+    index.replacePage({
+      accountId: "account-1",
+      accountGeneration: 0,
+      pageId: "page-2",
+      pageRevision: 1,
+      messageId: "message-2",
+      terms: [term("alpha"), term("gamma")],
+      termCount: 7,
+    });
+    expect(index.statsFor("account-1", 0)?.termTotal).toBe(12);
+
+    // Both pages share page_revision=1: the batch removal must subtract each
+    // page's own length, not collapse them by revision.
+    index.removePages("account-1", 0, ["page-1", "page-2"]);
+    expect(index.statsFor("account-1", 0)).toEqual({
+      accountId: "account-1",
+      accountGeneration: 0,
+      docCount: 0,
+      termTotal: 0,
+    });
+    db.close();
+  });
 });

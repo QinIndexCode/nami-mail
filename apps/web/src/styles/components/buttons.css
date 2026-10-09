@@ -9,7 +9,7 @@ min-height:36px;
 padding:8px 13px;
 font-size:11px;
 font-weight:650;
-transition:transform .16s,opacity .16s;
+transition:background .16s,border-color .16s,color .16s,opacity .16s,box-shadow .16s;
 display:inline-flex
 }
 .primary-button
@@ -23,9 +23,15 @@ color:var(--button-text)
 width:100%;
 padding:11px 14px
 }
-.primary-button:hover:not(:disabled),.secondary-button:hover:not(:disabled)
+.primary-button:hover:not(:disabled)
 {
-transform:translateY(-1px)
+background:color-mix(in srgb, var(--button) 90%, var(--text));
+}
+.secondary-button:hover:not(:disabled)
+{
+border-color:var(--line-strong);
+background:var(--hover);
+color:var(--text)
 }
 .primary-button:disabled,.secondary-button:disabled
 {

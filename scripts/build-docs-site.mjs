@@ -88,7 +88,9 @@ const ROOT_DOCS = ["README", "SUPPORT", "SECURITY", "CONTRIBUTING", "CODE_OF_CON
 const SITE_ASSETS = [
   ["apps/web/public/brand/mark-light.png", "brand/mark-light.png"],
   ["apps/web/public/brand/mark-dark.png", "brand/mark-dark.png"],
+  ["apps/web/public/splash-logo.png", "brand/splash-logo.png"],
   ["build/icon.svg", "brand/icon.svg"],
+  ["docs/nami-mail-wordmark.svg", "nami-mail-wordmark.svg"],
   ["docs/nami-mail-inbox-zh.png", "nami-mail-inbox-zh.png"],
   ["docs/nami-mail-inbox-en.png", "nami-mail-inbox-en.png"],
   ["docs/nami-mail-agent-zh.png", "nami-mail-agent-zh.png"],
@@ -563,8 +565,8 @@ function themeToggle(lang) {
   return `<button class="icon-button" type="button" id="theme-toggle" aria-label="${
     lang === "zh" ? "切换主题" : "Switch theme"
   }">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-              <path d="M12 3v2M12 19v2M5 12H3M21 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4" stroke-linecap="round" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M5.6 18.4 7 17m10-10 1.4-1.4" stroke-linecap="round" />
               <circle cx="12" cy="12" r="4" />
             </svg>
           </button>`;
@@ -580,43 +582,71 @@ function pageHead({ title, description, canonical, alternates, prefix, bilingual
   const localeTags = locale
     ? `    <meta property="og:locale" content="${locale}" />\n    <meta property="og:locale:alternate" content="${alternateLocale}" />\n`
     : "";
+  const englishShare = locale === "en_US";
+  const shareImage = `${SITE_ORIGIN}assets/nami-mail-inbox-${englishShare ? "en" : "zh"}.png`;
+  const shareImageAlt = englishShare
+    ? "Nami Mail for Windows inbox with multiple accounts, folder navigation and reading pane"
+    : "Nami Mail Windows 收件箱：多账户邮件、文件夹导航与阅读窗格";
   return `    <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(title)}</title>
     <meta name="description" content="${escapeHtml(description)}" />
     <link rel="canonical" href="${canonical}" />
 ${alternateLinks}
-    <link rel="icon" href="${prefix}assets/brand/icon.svg" />
+    <link rel="icon" type="image/svg+xml" sizes="any" href="${prefix}assets/brand/icon.svg" />
 ${styleLinks}
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ececef" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#050506" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f5f8" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0c0d10" />
     <script src="${prefix}theme-init.js"></script>
     <meta property="og:type" content="${bilingual ? "website" : "article"}" />
     <meta property="og:site_name" content="Nami Mail" />
 ${localeTags}    <meta property="og:title" content="${escapeHtml(title)}" />
     <meta property="og:description" content="${escapeHtml(description)}" />
-    <meta property="og:url" content="${canonical}" />`;
+    <meta property="og:url" content="${canonical}" />
+    <meta property="og:image" content="${shareImage}" />
+    <meta property="og:image:width" content="1440" />
+    <meta property="og:image:height" content="900" />
+    <meta property="og:image:alt" content="${shareImageAlt}" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="${escapeHtml(title)}" />
+    <meta name="twitter:description" content="${escapeHtml(description)}" />
+    <meta name="twitter:image" content="${shareImage}" />
+    <meta name="twitter:image:alt" content="${shareImageAlt}" />`;
 }
 
 /** Open Graph locales for a page that carries exactly one language. */
 const OG_LOCALE = { zh: "zh_CN", en: "en_US" };
 
 function siteHeader({ prefix, lang, languageControl, current }) {
+  const bilingual = (zh, en) => `<span data-lang="zh">${zh}</span><span data-lang="en">${en}</span>`;
+  const links = [
+    ["home", prefix, "首页", "Home"],
+    ["features", `${prefix}#features`, "功能", "Features"],
+    ["agent", `${prefix}#agent`, "邮件助理", "Assistant"],
+    ["privacy", `${prefix}#privacy`, "本地与隐私", "Privacy"],
+    ["docs", `${prefix}docs/`, "文档", "Docs"],
+    ["github", REPO_URL, "GitHub", "GitHub"],
+  ].map(([id, href, zh, en]) => `<a href="${href}" data-nav="${id}"${current === id ? ' aria-current="page"' : ""}${id === "github" ? ' rel="noopener"' : ""}>${bilingual(zh, en)}${id === "github" ? ' <span aria-hidden="true">↗</span>' : ""}</a>`).join("\n          ");
   return `    <header class="site-header">
       <div class="wrap">
-        <a class="brand" href="${prefix}">
+        <a class="brand" href="${prefix}" aria-label="Nami Mail">
           ${brandMark(prefix)}
           <span>Nami Mail</span>
         </a>
         <nav class="site-nav" aria-label="${lang === "zh" ? "主导航" : "Main"}">
-          <a href="${prefix}docs/"${current === "docs" ? ' class="is-current"' : ""}>${lang === "zh" ? "文档" : "Docs"}</a>
-          <a href="${prefix}#features"${current === "site" ? ' class="is-current"' : ""}>${lang === "zh" ? "功能" : "Features"}</a>
-          <a href="https://github.com/QinIndexCode/nami-mail/releases/latest" data-nav="secondary" rel="noopener">${lang === "zh" ? "下载" : "Download"}</a>
-          <a href="${REPO_URL}" data-nav="secondary" rel="noopener">GitHub</a>
+          ${links}
         </nav>
         <div class="header-actions">
           ${languageControl}
           ${themeToggle(lang)}
+          <a class="button header-download" href="${prefix}#download">${bilingual("下载", "Download")}<span aria-hidden="true">↓</span></a>
+          <details class="mobile-navigation">
+            <summary>${bilingual("菜单", "Menu")}</summary>
+            <nav aria-label="${lang === "zh" ? "移动导航" : "Mobile"}">
+              ${links}
+              <a href="${prefix}#download">${bilingual("下载 Windows 版", "Download for Windows")}</a>
+            </nav>
+          </details>
         </div>
       </div>
     </header>`;
@@ -735,7 +765,7 @@ export function renderTopicPage(page, topics) {
   alternates.push({ hreflang: "x-default", href: `${SITE_ORIGIN}docs/index.html` });
 
   return `<!doctype html>
-<html lang="${LANG_TAG[page.lang]}" data-lang="${page.lang}" data-theme="light">
+<html lang="${LANG_TAG[page.lang]}" data-lang="${page.lang}" data-theme="dark" data-default-theme="dark">
   <head>
 ${pageHead({
   title: documentTitle(page.title),
@@ -828,13 +858,14 @@ ${groups}
         </div>`;
   }).join("\n");
 
-  const title = "文档 · Documentation · Nami Mail";
+  const title = "文档 · Nami Mail";
   const description =
-    "Nami Mail 文档：安装、账户、隐私、检索、Agent 工作区、MCP 与 CLI 参考。Built at deploy time from the repository docs directory.";
+    "Nami Mail 文档：安装、邮箱配置、隐私和日常使用说明，以及邮件助理、CLI 与 MCP 的参考文档。";
+  const descriptionEn = "Nami Mail documentation: installation, account setup, privacy, and everyday mail, plus reference docs for the assistant, CLI, and MCP.";
   const languages = Object.fromEntries(LANGS.map((lang) => [lang, topics.filter((t) => t.files[lang]).length]));
 
   return `<!doctype html>
-<html lang="zh-CN" data-lang="zh" data-theme="light" data-bilingual="true">
+<html lang="zh-CN" data-lang="zh" data-theme="dark" data-default-theme="dark" data-bilingual="true" data-title-zh="文档 · Nami Mail" data-title-en="Documentation · Nami Mail" data-description-zh="${escapeHtml(description)}" data-description-en="${descriptionEn}">
   <head>
 ${pageHead({
   title,
@@ -858,11 +889,10 @@ ${siteHeader({ prefix: "../", lang: "zh", current: "docs", languageControl: LANG
         <h1 data-lang="zh">文档</h1>
         <h1 data-lang="en">Documentation</h1>
         <p class="lede" data-lang="zh">
-          由仓库的 <code>docs/</code> 目录在部署时生成，与应用共用同一套设计规范。下面是全部主题；进入任意一页后，左侧是同一棵树的导航。
+          安装、邮箱配置和日常使用说明，以及邮件助理、CLI 与 MCP 的参考文档。
         </p>
         <p class="lede" data-lang="en">
-          Generated from the repository's <code>docs/</code> directory at deploy time, using the same design system as
-          the app. Every topic is listed below; inside a page the sidebar carries the same tree.
+          Guides for installation, account setup, and everyday mail. Reference docs for the assistant, CLI, and MCP.
         </p>
       </header>
 ${renderQuickLinks(topics, "zh")}
@@ -899,6 +929,28 @@ export function buildManifest(topics, generated = new Date().toISOString().slice
         })),
     })).filter((group) => group.items.length > 0),
   };
+}
+
+/** A sitemap of the landing page, docs overview and indexable published docs. */
+export function buildSitemap(topics) {
+  const paths = [
+    SITE_ORIGIN,
+    `${SITE_ORIGIN}docs/`,
+    ...topics.flatMap((topic) =>
+      LANGS.flatMap((lang) => {
+        const sitePath = topic.files[lang]?.sitePath;
+        // Development planning pages are published for repository navigation,
+        // but are not intended as search landing pages.
+        if (!sitePath || sitePath.startsWith("development/")) return [];
+        const encodedPath = sitePath.split("/").map((part) => encodeURIComponent(part)).join("/");
+        return [`${SITE_ORIGIN}docs/${encodedPath}`];
+      }),
+    ),
+  ];
+  const urls = [...new Set(paths)].sort();
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls
+    .map((url) => `  <url><loc>${escapeHtml(url)}</loc></url>`)
+    .join("\n")}\n</urlset>\n`;
 }
 
 function syncSiteAssets() {
@@ -988,6 +1040,7 @@ export function buildDocsSite({ report = [] } = {}) {
     writeFileSync(destination, renderTopicPage(page, topics), "utf8");
   }
   writeFileSync(join(siteDocs, "index.html"), renderOverviewPage(topics), "utf8");
+  writeFileSync(join(siteRoot, "sitemap.xml"), buildSitemap(topics), "utf8");
   writeFileSync(
     join(siteDocs, "docs-manifest.json"),
     JSON.stringify(buildManifest(topics), null, 2) + "\n",

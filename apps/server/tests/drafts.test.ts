@@ -20,12 +20,16 @@ describe("IMAP draft saving", () => {
   const client = {
     usable: true,
     connect: vi.fn(async () => undefined),
-    append: vi.fn(async () => ({ destination: "Drafts", uid: 55 })),
+    // R14: the member signatures cover every mockResolvedValue /
+    // mockImplementation the tests install (uid optional models the
+    // non-UIDPLUS append; search answers both the existence boolean and the
+    // UID-list form).
+    append: vi.fn(async (..._args: unknown[]): Promise<{ destination: string; uid?: number } | false> => ({ destination: "Drafts", uid: 55 })),
     getMailboxLock: vi.fn(async () => lock),
-    search: vi.fn(async () => false),
-    fetchOne: vi.fn(async () => false),
+    search: vi.fn(async (..._args: unknown[]): Promise<boolean | number[]> => false),
+    fetchOne: vi.fn(async (..._args: unknown[]): Promise<false | { envelope: { messageId: string } }> => false),
     messageDelete: vi.fn(async () => true),
-    close: vi.fn(() => undefined),
+    close: vi.fn((): void => undefined),
     logout: vi.fn(async () => undefined),
   };
   const account: AccountRecord = {
@@ -34,16 +38,26 @@ describe("IMAP draft saving", () => {
     provider: "custom",
     provider_name: "Demo",
     encrypted_password: "encrypted",
+    auth_method: "password",
+    provider_subject: null,
+    tenant_id: null,
+    granted_scopes: null,
     imap_host: "imap.example.com",
     imap_port: 993,
     imap_secure: 1,
+    imap_transport: "tls",
+    imap_username: "demo@example.com",
     smtp_host: "smtp.example.com",
     smtp_port: 465,
     smtp_secure: 1,
+    smtp_transport: "tls",
+    smtp_username: "demo@example.com",
+    signature: "",
     username_mode: "email",
     status: "connected",
     last_error: null,
     last_error_code: null,
+    last_sync_warning_code: null,
     last_synced_at: null,
     created_at: new Date().toISOString(),
   };
@@ -172,7 +186,8 @@ describe("IMAP draft saving", () => {
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
     let searchedMessageId = "";
     client.append.mockResolvedValueOnce({ destination: "Drafts" });
-    client.search.mockImplementationOnce(async (query: { header?: Record<string, string> }) => {
+    client.search.mockImplementationOnce(async (...args: unknown[]) => {
+      const query = args[0] as { header?: Record<string, string> };
       searchedMessageId = query.header?.["Message-ID"] ?? "";
       return [56];
     });
@@ -230,7 +245,7 @@ describe("IMAP draft saving", () => {
     let startAppend: (() => void) | undefined;
     let rejectAppend: ((reason?: unknown) => void) | undefined;
     const appendStarted = new Promise<void>((resolve) => { startAppend = resolve; });
-    client.append.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+    client.append.mockImplementationOnce(() => new Promise<never>((_resolve, reject) => {
       rejectAppend = reject;
       startAppend?.();
     }));

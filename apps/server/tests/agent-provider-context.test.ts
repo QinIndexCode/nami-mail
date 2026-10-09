@@ -49,6 +49,8 @@ function fakeMailApplication(): MailApplicationService {
     deleteDraft: vi.fn(async () => undefined),
     updateMessageFlags: vi.fn(async () => undefined),
     moveMessage: vi.fn(async () => undefined),
+    searchMessages: vi.fn(async () => ({ items: [], total: 0, truncated: false, searchedFrom: null, newestLocalAt: null })),
+    deleteAccount: vi.fn(async () => undefined),
     prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1", idempotencyKey: "key-1", accountId: "account-1", status: "pending" as const })),
     submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1", idempotencyKey: "key-1", accountId: "account-1", status: "pending" as const })),
   };
@@ -76,6 +78,10 @@ function fixture() {
     timeoutMs: 30_000,
     allowCloudMailContent: false,
     makeDefault: true,
+    // A realistic window: tool parameter schemas now count against the
+    // context budget (R06b), and the built-in tool set alone would otherwise
+    // shrink the message budget below this test's 14-message history slice.
+    contextWindowTokens: 131_072,
   });
   const conversation = service.createConversation({
     providerId: provider.id,
@@ -143,4 +149,121 @@ it("keeps the provider conversation user-led even after a long history", async (
   } finally {
     await closeFixture(value);
   }
+});
+
+/**
+ * R06 hard budget: after compression the engine must validate the FULL
+ * request (messages + tool schemas + output reserve) against the window
+ * and refuse to send an over-limit request, instead of leaning on the
+ * minimum-budget floor. Two shapes must never reach the provider: a tool
+ * schema alone larger than the whole window, and a current turn that
+ * cannot be compressed away.
+ */
+function smallWindowFixture() {
+    const db = openDatabase(":memory:");
+    const masterKey = randomBytes(32);
+    insertAccount(db);
+    applyAgentStoreSchema(db, timestamp);
+    const lifecycle = new AccountLifecycleStore(db, masterKey);
+    const sourceEvents = new AgentSourceEventOutbox(db, masterKey, lifecycle);
+    const service = new AgentService({
+      db,
+      masterKey,
+      lifecycle,
+      sourceEvents,
+      mailApplication: fakeMailApplication(),
+    });
+    // A window so small that the built-in tool schemas alone blow past it.
+    const provider = service.createProvider({
+      label: "Tiny window provider",
+      kind: "ollama",
+      endpoint: "http://127.0.0.1:11434/v1",
+      model: "test-model",
+      timeoutMs: 30_000,
+      allowCloudMailContent: false,
+      makeDefault: true,
+      contextWindowTokens: 1_000,
+      maxOutputTokens: 256,
+    });
+    const conversation = service.createConversation({
+      providerId: provider.id,
+      scope: { mode: "selected_account", accountIds: ["account-1"], messageIds: [] },
+    });
+    return { db, masterKey, service, provider, conversation };
+}
+
+it("refuses to send when the tool schemas alone exceed the window", async () => {
+    const value = smallWindowFixture();
+    try {
+      const internals = internalRuntime(value.service);
+      vi.spyOn(internals.rag, "search").mockResolvedValue([]);
+      let providerRequests = 0;
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
+        if (request.requestId.startsWith("title-")) {
+          yield { type: "completed", reason: "stop" };
+          return;
+        }
+        providerRequests += 1;
+        yield { type: "text_delta", delta: "ok" };
+        yield { type: "completed", reason: "stop" };
+      });
+
+      const errors: Array<{ code?: string; message?: string }> = [];
+      for await (const event of value.service.streamMessage(value.conversation.id, {
+        content: "列出邮件",
+        providerId: value.provider.id,
+        mode: "agent",
+        scope: value.conversation.scope,
+        context: {},
+      })) {
+        if (event.type === "error") {
+          const error = (event as unknown as { error: { code?: string; message?: string } }).error;
+          errors.push(error);
+        }
+      }
+
+      // The provider was never called for the agent turn: the budget gate
+      // ends the run before any request is built.
+      assert.equal(providerRequests, 0);
+      assert.equal(errors.length, 1);
+      assert.equal(errors[0]!.code, "CONTEXT_TOO_LARGE");
+    } finally {
+      await closeFixture(value);
+    }
+});
+
+it("still completes a normal run on the same small window in chat mode (no tools)", async () => {
+    // The gate must only fire when the request is genuinely over budget:
+    // chat mode carries no tool schemas and a short message fits.
+    const value = smallWindowFixture();
+    try {
+      const internals = internalRuntime(value.service);
+      vi.spyOn(internals.rag, "search").mockResolvedValue([]);
+      let providerRequests = 0;
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
+        if (request.requestId.startsWith("title-")) {
+          yield { type: "completed", reason: "stop" };
+          return;
+        }
+        providerRequests += 1;
+        yield { type: "text_delta", delta: "ok" };
+        yield { type: "completed", reason: "stop" };
+      });
+
+      let completed = false;
+      for await (const event of value.service.streamMessage(value.conversation.id, {
+        content: "你好",
+        providerId: value.provider.id,
+        mode: "chat",
+        scope: value.conversation.scope,
+        context: {},
+      })) {
+        if (event.type === "completed" && event.reason === "stop") completed = true;
+      }
+
+      assert.equal(providerRequests, 1);
+      assert.equal(completed, true);
+    } finally {
+      await closeFixture(value);
+    }
 });

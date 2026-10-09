@@ -83,8 +83,14 @@ export type AppSettings = {
   updatedAt: string;
 };
 
-export type AppSettingsPatch = Partial<Omit<AppSettings, "customBackgroundFilename" | "updatedAt" | "autoReplyInvalid">> & {
+export type AppSettingsPatch = Partial<Omit<AppSettings, "customBackgroundFilename" | "updatedAt" | "autoReplyInvalid" | "autoReply">> & {
   customBackgroundFilename?: string | null;
+  /**
+   * A partial auto-reply patch: updateAppSettings merges it over the current
+   * config field by field (the shallow `Partial` above cannot express that),
+   * which is what the UI sends — one toggle at a time.
+   */
+  autoReply?: Partial<AutoReplyConfig>;
 };
 
 const defaults: Omit<AppSettings, "updatedAt"> = {

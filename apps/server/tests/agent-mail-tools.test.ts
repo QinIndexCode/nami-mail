@@ -1,18 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { externalReadMailContracts } from "@nami/agent-contracts";
+import { externalReadMailContracts, type CallerContext } from "@nami/agent-contracts";
 import { createToolRegistry, type AgentToolExecutionContext } from "@nami/agent-core";
-import type { MailApplicationService } from "../src/agent/mail-application-service.js";
+import type { MailApplicationService, MailMessageView } from "../src/agent/mail-application-service.js";
 import { createMailTools } from "../src/agent/mail-tools.js";
 
 const timestamp = "2026-07-27T12:00:00.000Z";
 
-function caller() {
+function caller(): CallerContext {
   return {
     callerId: "test-user",
     kind: "test" as const,
     entryPoint: "test" as const,
     accessLevel: "full-access" as const,
-    scopes: ["read:accounts", "read:folders", "read:messages", "read:attachments", "write:drafts"] as const,
+    scopes: ["read:accounts", "read:folders", "read:messages", "read:attachments", "write:drafts"],
     accountScope: { mode: "selected" as const, accountIds: ["account-1"] },
     interactive: true,
     canRequestConfirmation: true,
@@ -67,49 +67,52 @@ function mailDetail(id: string, accountId = "account-1", subject = "Private subj
 }
 
 function fakeMailApplication() {
-  const listAccounts = vi.fn(async () => []);
-  const listFolders = vi.fn(async () => []);
-  const listMessages = vi.fn(async () => ({ items: [] }));
-  const searchMessages = vi.fn(async () => ({
+  // R14: every mock is typed with its MailApplicationService method signature,
+  // so mockResolvedValue in the tests accepts the REAL result shapes instead
+  // of the narrowed type of whatever the default implementation returns.
+  const listAccounts = vi.fn<MailApplicationService["listAccounts"]>(async () => []);
+  const listFolders = vi.fn<MailApplicationService["listFolders"]>(async () => []);
+  const listMessages = vi.fn<MailApplicationService["listMessages"]>(async () => ({ items: [] }));
+  const searchMessages = vi.fn<MailApplicationService["searchMessages"]>(async () => ({
     items: [],
     total: 0,
     truncated: false,
     searchedFrom: null,
     newestLocalAt: null,
   }));
-  const getMessage = vi.fn(async () => undefined);
-  const getThread = vi.fn(async () => []);
-  const listAttachments = vi.fn(async () => []);
-  const syncAccount = vi.fn(async () => ({ synced: 0, failedFolders: 0 }));
-  const createDraft = vi.fn(async () => ({
+  const getMessage = vi.fn<MailApplicationService["getMessage"]>(async () => undefined);
+  const getThread = vi.fn<MailApplicationService["getThread"]>(async () => []);
+  const listAttachments = vi.fn<MailApplicationService["listAttachments"]>(async () => []);
+  const syncAccount = vi.fn<MailApplicationService["syncAccount"]>(async () => ({ synced: 0, failedFolders: 0 }));
+  const createDraft = vi.fn<MailApplicationService["createDraft"]>(async () => ({
     id: "<draft-1@example.test>",
     accountId: "account-1",
     subject: "Draft subject",
     recipients: [{ name: "Recipient", address: "recipient@example.test" }],
     updatedAt: timestamp,
   }));
-  const updateDraft = vi.fn(async () => ({
+  const updateDraft = vi.fn<MailApplicationService["updateDraft"]>(async () => ({
     id: "<draft-1@example.test>",
     accountId: "account-1",
     subject: "Draft subject",
     recipients: [{ name: "Recipient", address: "recipient@example.test" }],
     updatedAt: timestamp,
   }));
-  const deleteDraft = vi.fn(async () => undefined);
-  const deleteAccount = vi.fn(async () => undefined);
-  const updateMessageFlags = vi.fn(async () => undefined);
-  const moveMessage = vi.fn(async () => undefined);
-  const prepareSubmission = vi.fn(async () => ({
+  const deleteDraft = vi.fn<MailApplicationService["deleteDraft"]>(async () => undefined);
+  const deleteAccount = vi.fn<MailApplicationService["deleteAccount"]>(async () => undefined);
+  const updateMessageFlags = vi.fn<MailApplicationService["updateMessageFlags"]>(async () => undefined);
+  const moveMessage = vi.fn<MailApplicationService["moveMessage"]>(async () => undefined);
+  const prepareSubmission = vi.fn<MailApplicationService["prepareSubmission"]>(async () => ({
     submissionId: "submission-1",
     idempotencyKey: "key-1",
     accountId: "account-1",
-    status: "pending" as const,
+    status: "pending",
   }));
-  const submitPreparedMail = vi.fn(async () => ({
+  const submitPreparedMail = vi.fn<MailApplicationService["submitPreparedMail"]>(async () => ({
     submissionId: "submission-1",
     idempotencyKey: "key-1",
     accountId: "account-1",
-    status: "pending" as const,
+    status: "pending",
   }));
 
   const service: MailApplicationService = {
@@ -319,6 +322,9 @@ describe("Agent mail tools", () => {
   it("returns message metadata only from lists and forwards only the context account scope", async () => {
     const fake = fakeMailApplication();
     fake.listMessages.mockResolvedValue({
+      // The body keys are deliberately present on this fixture: the point of
+      // the test is that the tool output drops them even if the facade leaked
+      // them, so the cast past MailMessageView is the scenario, not a shortcut.
       items: [{
         id: "message-1",
         accountId: "account-1",
@@ -332,7 +338,7 @@ describe("Agent mail tools", () => {
         hasAttachments: false,
         textBody: "PRIVATE_LIST_BODY",
         htmlBody: "<p>PRIVATE_LIST_HTML</p>",
-      }],
+      } as MailMessageView],
       nextCursor: "1",
     });
     const registry = createToolRegistry(createMailTools(fake.service));

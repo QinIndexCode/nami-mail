@@ -56,7 +56,7 @@ afterEach(() => {
 
 describe("web.search tool", () => {
   it("registers with a search descriptor and the web:search scope", () => {
-    const [tool] = createSearchTools();
+    const tool = createSearchTools()[0]!;
     expect(tool.descriptor.name).toBe("web.search");
     expect(tool.descriptor.category).toBe("search");
     expect(tool.descriptor.executionMode).toBe("read");
@@ -69,7 +69,7 @@ describe("web.search tool", () => {
   it("fetches DuckDuckGo Lite and parses titled results with real URLs", async () => {
     fetchMock = vi.fn(async () => ({ ok: true, status: 200, text: async () => htmlSample }));
     vi.stubGlobal("fetch", fetchMock);
-    const [tool] = createSearchTools();
+    const tool = createSearchTools()[0]!;
     const outcome = await tool.execute(context(), { query: "nami mail", maxResults: 5 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]![0])).toContain("lite.duckduckgo.com/lite/");
@@ -91,7 +91,7 @@ describe("web.search tool", () => {
   it("caps results at maxResults", async () => {
     fetchMock = vi.fn(async () => ({ ok: true, status: 200, text: async () => htmlSample }));
     vi.stubGlobal("fetch", fetchMock);
-    const [tool] = createSearchTools();
+    const tool = createSearchTools()[0]!;
     const outcome = await tool.execute(context(), { query: "anything", maxResults: 1 });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
@@ -101,7 +101,7 @@ describe("web.search tool", () => {
   it("returns an empty result set with a note when no links are parsed", async () => {
     fetchMock = vi.fn(async () => ({ ok: true, status: 200, text: async () => "<html><body>no results here</body></html>" }));
     vi.stubGlobal("fetch", fetchMock);
-    const [tool] = createSearchTools();
+    const tool = createSearchTools()[0]!;
     const outcome = await tool.execute(context(), { query: "unlikely", maxResults: 5 });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
@@ -112,7 +112,7 @@ describe("web.search tool", () => {
   it("maps a refused response and network errors to a retryable failure", async () => {
     fetchMock = vi.fn(async () => ({ ok: false, status: 403, text: async () => "blocked" }));
     vi.stubGlobal("fetch", fetchMock);
-    const [tool] = createSearchTools();
+    const tool = createSearchTools()[0]!;
     const outcome = await tool.execute(context(), { query: "test" });
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
@@ -133,7 +133,7 @@ describe("web.search tool", () => {
     vi.stubGlobal("fetch", fetchMock);
     const controller = new AbortController();
     controller.abort();
-    const [tool] = createSearchTools();
+    const tool = createSearchTools()[0]!;
     const outcome = await tool.execute(context({ signal: controller.signal }), { query: "test" });
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
@@ -142,7 +142,7 @@ describe("web.search tool", () => {
   });
 
   it("rejects empty queries through the input schema", () => {
-    const [tool] = createSearchTools();
+    const tool = createSearchTools()[0]!;
     const parsed = tool.inputSchema.safeParse({ query: "   " });
     expect(parsed.success).toBe(false);
   });

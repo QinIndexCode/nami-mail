@@ -1,6 +1,7 @@
 import type { Account, Message, OutboundSubmission, ProviderInfo, Stats } from "./types";
 import { translate } from "./i18n";
 import { demoProviderCatalog } from "./demoProviderCatalog";
+export { createDemoSourceMessages } from "./agent/agent-demo-data";
 
 export const demoProviders: ProviderInfo[] = demoProviderCatalog;
 

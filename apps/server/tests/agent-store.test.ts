@@ -151,10 +151,12 @@ describe("Agent store encryption and lifecycle", () => {
     const lifecycle = new AccountLifecycleStore(db, masterKey);
     const lease = lifecycle.acquireLease("account-1");
     const conversations = new EncryptedConversationStore(db, lifecycle);
-    conversations.create([lease], { title: "Private" }, "conversation-1");
-    expect(conversations.listActive()).toMatchObject([{ conversationId: "conversation-1" }]);
-    conversations.markDeleted("conversation-1", [lease]);
-    expect(() => conversations.get("conversation-1", [lease])).toThrow("Conversation is unavailable");
+    // R14: the store types ids as the UUID shape it persists.
+    const conversationId = "c0ffee00-0000-4000-8000-000000000001";
+    conversations.create([lease], { title: "Private" }, conversationId);
+    expect(conversations.listActive()).toMatchObject([{ conversationId }]);
+    conversations.markDeleted(conversationId, [lease]);
+    expect(() => conversations.get(conversationId, [lease])).toThrow("Conversation is unavailable");
     expect(conversations.listActive()).toEqual([]);
     db.close();
   });

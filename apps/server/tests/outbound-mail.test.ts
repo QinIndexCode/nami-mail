@@ -36,9 +36,11 @@ function outboundAccount(key: Buffer): AccountRecord {
     smtp_transport: "tls",
     smtp_username: "sender@example.com",
     username_mode: "email",
+    signature: "",
     status: "connected",
     last_error: null,
     last_error_code: null,
+    last_sync_warning_code: null,
     last_synced_at: null,
     created_at: new Date().toISOString(),
   };

@@ -115,6 +115,30 @@ export function serviceGiveUpDialogOptions(): ServiceGiveUpDialogOptions {
   };
 }
 
+/**
+ * The lifecycle inputs that must suppress a queued or in-flight restart
+ * (R11): quitting, a started quit/close sequence, an app-requested service
+ * exit — and an update drain. `prepareLocalServerForUpdateInstall` drains
+ * the service and closes it BEFORE it sets isQuitting, so the drain window
+ * is shutdown-equivalent: a restart timer firing there would fork a service
+ * the installer is about to take down. main.mts feeds its live flags through
+ * this one predicate, so the coordinator and the recovery-path guards share
+ * a single definition instead of drifting.
+ */
+export type ServiceLifecycleState = {
+  isQuitting: boolean;
+  /** A quit/close sequence has started (shutdownPromise present). */
+  shutdownStarted: boolean;
+  /** The service exit was requested by the app itself. */
+  serverProcessExpectedExit: boolean;
+  /** An update install is draining the service. */
+  updateDraining: boolean;
+};
+
+export function isServiceLifecycleShuttingDown(state: ServiceLifecycleState): boolean {
+  return state.isQuitting || state.shutdownStarted || state.serverProcessExpectedExit || state.updateDraining;
+}
+
 export type ServiceRestartCoordinatorDeps = {
   /** Bounded runtime-log appender; every decision and attempt is logged. */
   log: (event: string, detail?: Record<string, unknown>) => void;
@@ -177,11 +201,24 @@ export function createServiceRestartCoordinator(deps: ServiceRestartCoordinatorD
   };
 
   const runAttempt = (): void => {
+    // The timer may fire after the user quit or an update began: a queued
+    // restart must never race the shutdown/installation sequence. The same
+    // gate re-arms after the attempt settles, in both outcomes.
+    if (deps.isShuttingDown()) {
+      deps.log("service-restart-suppressed", { phase: "before-attempt" });
+      return;
+    }
     attemptInFlight = true;
     deps.restart()
       .then(() => {
         attemptInFlight = false;
         state = recordServiceRecovery(state, now());
+        if (deps.isShuttingDown()) {
+          // The service came back up into a shutdown that started mid-attempt:
+          // recovery is recorded, but the lifecycle owns what happens next.
+          deps.log("service-restart-suppressed", { phase: "after-recovery" });
+          return;
+        }
         deps.log("local-service-restarted", {});
       })
       .catch((error: unknown) => {
@@ -189,6 +226,13 @@ export function createServiceRestartCoordinator(deps: ServiceRestartCoordinatorD
         deps.log("service-restart-attempt-failed", {
           message: error instanceof Error ? error.message : String(error),
         });
+        // A failure observed while shutting down belongs to the teardown
+        // sequence — deciding a next attempt here could fork a service the
+        // app is actively tearing down.
+        if (deps.isShuttingDown()) {
+          deps.log("service-restart-suppressed", { phase: "after-failure" });
+          return;
+        }
         handleFailure();
       });
   };

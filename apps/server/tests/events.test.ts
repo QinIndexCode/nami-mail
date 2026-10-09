@@ -28,7 +28,9 @@ describe("server event bus", () => {
     const bus = new ServerEventBus();
     const listener = vi.fn();
     const unsubscribe = bus.subscribe(listener);
-    const event = { type: "mail.received", payload: { accountId: "account-1", count: 1, messages: [] } } as const;
+    // R14: typed against ServerEvent — `as const` froze the payload arrays
+    // readonly, which the mutable ServerEvent payload does not accept.
+    const event: ServerEvent = { type: "mail.received", payload: { accountId: "account-1", count: 1, messages: [] } };
     bus.emit(event);
     expect(listener).toHaveBeenCalledWith(event, JSON.stringify(event));
     unsubscribe();

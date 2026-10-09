@@ -6,9 +6,17 @@ padding:20px 13px 14px;
 display:flex;
 position:relative
 }
-.sidebar>:not(.account-list,.folder-list)
+.sidebar>:not(.sidebar-content)
 {
 flex-shrink:0
+}
+/* Scroll navigation as one region; never squeeze accounts below their row height. */
+.sidebar-content
+{
+flex:1;
+min-height:0;
+overscroll-behavior:contain;
+overflow:hidden auto
 }
 .brand-row
 {
@@ -70,18 +78,18 @@ color:var(--button-text);
 cursor:pointer;
 box-shadow:var(--shadow-sm);
 border:0;
-border-radius:var(--radius-md);
+border-radius:var(--radius-sm);
 align-items:center;
 gap:8px;
 padding:11px 12px;
 font-size:13px;
 font-weight:650;
-transition:transform .18s,opacity .18s;
+transition:background .18s,border-color .18s,color .18s,opacity .18s,box-shadow .18s;
 display:flex
 }
 .compose-button:hover
 {
-transform:translateY(-1px)
+background:color-mix(in srgb, var(--button) 90%, var(--text))
 }
 .compose-button span
 {
@@ -134,7 +142,7 @@ color:var(--text)
 }
 .nav-section button.active,.folder-list button.active,.account-tree-folders button.active
 {
-background:var(--selected-strong);
+background:var(--selected);
 color:var(--text);
 box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--text-soft) 40%, var(--line-strong));
 font-weight:600
@@ -160,9 +168,7 @@ white-space:nowrap;
 font-size:12px;
 overflow:hidden
 }
-/* The folder tree icon lives inside a span (not a bare grid child like the
-   view icons), so it inherits the text line box and rode the baseline —
-   visibly higher than the label. Flex-centering pins it to the row. */
+/* Center the folder icon's span instead of inheriting its text baseline. */
 .folder-list .folder-nav-icon
 {
 align-items:center;
@@ -178,10 +184,7 @@ text-align:right;
 font-size:10px;
 font-style:normal
 }
-/* Loading ring and the entry's count share ONE fixed-width end slot: the
-   count fades out while the spinner fades in (cross-fade), so the two can
-   never overlap, the label is never squeezed into a re-ellipsis, and the
-   slot width — hence the whole row — never changes during a load. */
+/* Crossfade count/spinner in one fixed slot so labels never shift during loads. */
 .sidebar-end
 {
 position:relative;
@@ -214,8 +217,7 @@ pointer-events:none
 opacity:1;
 transform:scale(1)
 }
-/* Folders with unread mail call their count out; folders with only read mail
-   fall back to their total so every populated folder shows a number. */
+/* Emphasize unread counts; otherwise show the folder's total. */
 .folder-list em.folder-unseen
 {
 color:var(--text);
@@ -254,7 +256,7 @@ cursor:pointer;
 text-align:left;
 background:0 0;
 border:0;
-border-radius:10px;
+border-radius:var(--radius-sm);
 align-items:center;
 gap:8px;
 margin-top:2px;
@@ -270,7 +272,7 @@ color:var(--text)
 }
 .account-list>button.active,.account-list .account-tree-main.active
 {
-background:var(--selected-strong);
+background:var(--selected);
 color:var(--text);
 box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--text-soft) 40%, var(--line-strong));
 font-weight:600
@@ -294,9 +296,7 @@ padding-top:0;
 padding-bottom:0;
 transition:min-height .32s,max-height .32s,margin .32s,padding .32s,opacity .32s,visibility 0s linear .32s
 }
-/* Tree mode: each account row carries its own folder list inline. The row
-   reuses the classic account button styles through .account-tree-main; the
-   disclosure chevron floats over the row's reserved right padding. */
+/* Tree rows reuse account styles and reserve right padding for disclosure. */
 .accounts-heading-actions
 {
 align-items:center;
@@ -307,12 +307,8 @@ display:flex
 {
 width:100%
 }
-/* The disclosure chevron anchors to the ROW wrapper, not the whole tree
-   item: anchoring to the item would re-center it over the folder list as
-   soon as the folders expand, moving the collapse control out from under
-   the cursor. The row also carries the focused-mode fold (max-height to a
-   cap above the tallest row) so switching modes animates rows in and out
-   instead of popping them. */
+/* Anchor disclosure to the row so folder expansion never moves its button.
+   The row's max-height also animates focused-mode folding. */
 .account-tree-row
 {
 width:100%;
@@ -351,8 +347,7 @@ top:50%;
 translate:0 -50%;
 transition:background .16s,color .16s,opacity .22s ease
 }
-/* Focused mode owns the bottom folder list, so the per-account disclosure
-   fades out instead of vanishing mid row. */
+/* Focused mode uses the bottom folder list and fades out inline disclosure. */
 .account-list[data-folder-mode="focused"] .account-tree-toggle
 {
 opacity:0;
@@ -381,9 +376,7 @@ transition:transform .24s
 {
 transform:rotate(90deg)
 }
-/* Inline folder lists stay mounted and animate through the grid-rows
-   0fr→1fr trick, so expanding, collapsing, and the mode switch all
-   transition to the real content height instead of mounting/unmounting. */
+/* Keep folders mounted; 0fr→1fr animates to their actual content height. */
 .account-tree-folders
 {
 display:grid;
@@ -412,9 +405,7 @@ padding-left:4px;
 display:flex;
 flex-direction:column
 }
-/* The mode toggle shows the mode it switches TO: the tree glyph while in
-   focused mode, the focused glyph while in tree mode. Both stay mounted and
-   crossfade through scale+rotate so the swap never pops. */
+/* Both glyphs stay mounted; crossfade to show the mode the button switches to. */
 .folder-mode-icon
 {
 width:16px;
@@ -579,7 +570,7 @@ color:var(--text-faint);
 text-overflow:ellipsis;
 white-space:nowrap;
 margin-top:2px;
-font-size:10px;
+font-size:11px;
 overflow:hidden
 }
 .status-dot
@@ -607,8 +598,7 @@ box-shadow:0 0 0 3px color-mix(in srgb, var(--warning) 16%, transparent)
 }
 .status-dot.syncing
 {
-/* --info, not an accent token: the token set has no --accent, and an
-   undefined var turns the background transparent (invisible dot). */
+/* --info is defined in both themes, unlike the obsolete --accent token. */
 background:var(--info);
 box-shadow:0 0 0 3px color-mix(in srgb, var(--info) 16%, transparent);
 animation:status-dot-syncing 1.2s ease-in-out infinite
@@ -689,6 +679,16 @@ to { opacity:1; transform:translateY(0); }
 }
 @media (prefers-reduced-motion:reduce) {
 .sidebar-footer-update-row { animation:none; }
+}
+/* Compact short windows, including embedded demos; overflow stays scrollable. */
+@media (height<=740px) {
+.sidebar { padding:12px 12px 10px; }
+.brand-row { padding-bottom:8px; }
+.compose-button { padding-block:8px; }
+.nav-section { gap:0; margin-top:8px; }
+.nav-section button { padding-block:6px; }
+.accounts-heading { margin:8px 4px 2px 8px; }
+.sidebar-footer { padding-block:6px 4px; }
 }
 .sidebar-footer-info {
 display:flex;

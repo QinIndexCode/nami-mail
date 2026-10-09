@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createToolRegistry } from "@nami/agent-core";
+import { createToolRegistry, type AgentToolExecutionContext } from "@nami/agent-core";
 import { createSettingsTools } from "../src/agent/settings-tools.js";
 import { getAppSettings } from "../src/settings.js";
 import { openDatabase } from "../src/db.js";
@@ -11,15 +11,15 @@ function fixture(hasCustomBackground = false) {
     hasCustomBackground: () => hasCustomBackground,
     onChanged: (updated) => changes.push({ theme: updated.theme }),
   }));
-  const context = {
+  const context: AgentToolExecutionContext = {
     requestId: "req-1",
     caller: {
       callerId: "test",
-      kind: "test" as const,
-      entryPoint: "test" as const,
-      accessLevel: "full-access" as const,
+      kind: "test",
+      entryPoint: "test",
+      accessLevel: "full-access",
       scopes: ["manage:settings"],
-      accountScope: { mode: "none" as const },
+      accountScope: { mode: "none" },
       interactive: true,
       canRequestConfirmation: false,
     },
@@ -46,9 +46,12 @@ describe("settings tool", () => {
     const result = await registry.get("settings.update")!.execute(context, { theme: "dark", listDensity: "compact" });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.updated).toBe(true);
-      expect(result.value.settings.theme).toBe("dark");
-      expect(result.value.settings.listDensity).toBe("compact");
+      // registry.get returns the generic AgentTool<unknown, unknown>; the
+      // value's shape is the tool's own outputSchema contract, asserted here.
+      const value = result.value as { updated: boolean; settings: { theme: string; listDensity: string } };
+      expect(value.updated).toBe(true);
+      expect(value.settings.theme).toBe("dark");
+      expect(value.settings.listDensity).toBe("compact");
     }
     expect(getAppSettings(db).theme).toBe("dark");
     expect(getAppSettings(db).listDensity).toBe("compact");
@@ -61,7 +64,10 @@ describe("settings tool", () => {
     expect(getAppSettings(db).avatarGravatarEnabled).toBe(false);
     const result = await registry.get("settings.update")!.execute(context, { avatarGravatarEnabled: true });
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.settings.avatarGravatarEnabled).toBe(true);
+    if (result.ok) {
+      const value = result.value as { settings: { avatarGravatarEnabled: boolean } };
+      expect(value.settings.avatarGravatarEnabled).toBe(true);
+    }
     expect(getAppSettings(db).avatarGravatarEnabled).toBe(true);
   });
 
