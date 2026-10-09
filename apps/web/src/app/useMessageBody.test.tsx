@@ -183,19 +183,20 @@ describe("useMessageBody", () => {
     let resolveDetail: (detail: MessageDetail) => void = () => undefined;
     message.mockReturnValue(new Promise<MessageDetail>((resolve) => { resolveDetail = resolve; }));
 
-    await render({ isDemo: false, openMessage: listRowFixture({ seen: false, flagged: true }) });
+    await render({ isDemo: false, openMessage: listRowFixture({ seen: false, flagged: true, flags: ["\\Flagged"] }) });
 
     // The user toggles seen and un-flags while the detail is loading — the
-    // optimistic local state is newer than the wire row.
+    // optimistic local state is newer than the wire row, array included.
     await act(async () => {
-      messages = messages.map((item) => (item.id === "message-1" ? { ...item, seen: true, flagged: false } : item));
+      messages = messages.map((item) => (item.id === "message-1" ? { ...item, seen: true, flagged: false, flags: [] } : item));
     });
 
-    await act(async () => { resolveDetail(detailFixture({ seen: false, flagged: true })); await Promise.resolve(); });
+    await act(async () => { resolveDetail(detailFixture({ seen: false, flagged: true, flags: ["\\Flagged"] })); await Promise.resolve(); });
 
-    // The body arrives, the flags stay local-newer.
-    expect(messages[0]).toMatchObject({ textBody: "full body", seen: true, flagged: false });
-    expect(threadExtras?.members[0]).toMatchObject({ textBody: "full body", seen: true, flagged: false });
+    // The body arrives, the flag state stays local-newer as one consistent
+    // triple (booleans + array), exactly like the flag-override merge.
+    expect(messages[0]).toMatchObject({ textBody: "full body", seen: true, flagged: false, flags: [] });
+    expect(threadExtras?.members[0]).toMatchObject({ textBody: "full body", seen: true, flagged: false, flags: [] });
   });
 });
 

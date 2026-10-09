@@ -25,6 +25,11 @@ export function mergeMessageDetail(
     ...detail,
     seen: row.seen,
     flagged: row.flagged,
+    // The flags ARRAY rides with the booleans: the existing local-pending
+    // rule (mailListState's flag-override merge) keeps seen/flagged/flags
+    // as one consistent triple, so a detail response can never half-apply
+    // a toggle (flagged=true with a \Flagged-less array, or the reverse).
+    flags: row.flags,
     snoozedUntil: row.snoozedUntil ?? detail.snoozedUntil,
   });
   setMessages((items) => items.map((item) => (item.id === detail.id ? withLocalFlags(item) : item)));
