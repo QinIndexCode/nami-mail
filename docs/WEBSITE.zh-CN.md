@@ -46,3 +46,5 @@ npx playwright test --config playwright.site.config.ts
 ## 发布
 
 GitHub Pages workflow 在相关页面、文档、Web 客户端、contracts 或构建配置进入 `main` 后构建并发布 `site/`；也可手动触发 workflow。`site/demo/` 是构建产物，不提交到仓库。客户端源码、文档页和 sitemap 在同一次发布中生成。
+
+PR 校验会在 Ubuntu 上执行与 Pages 相同的 `npm ci --ignore-scripts` 和 `node scripts/build-site.mjs`；必需的 `validate` 检查也要求这项 Linux 构建通过。脚本测试会检查锁文件是否包含 Rolldown、Lightning CSS、esbuild 和各工作区 TypeScript 声明的全部平台原生包。修补锁文件时，应按现有工具版本在没有 `node_modules` 的干净暂存目录中解析原生依赖，并在提交前核对依赖版本。

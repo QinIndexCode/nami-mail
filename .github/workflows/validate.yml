@@ -16,13 +16,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  site:
+    name: site (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.21.0
+          cache: npm
+      # Match Pages' install policy: native prebuilds are still installed, but
+      # Electron downloads and other install scripts are unnecessary here.
+      - run: npm ci --ignore-scripts
+      - run: node scripts/build-site.mjs
+
   validate:
     name: validate
+    needs: site
+    # A failed dependency must fail the required check instead of skipping it.
+    if: ${{ always() }}
     runs-on: windows-latest
     timeout-minutes: 35
     permissions:
       contents: read
     steps:
+      - name: Require the Linux site build to pass
+        if: ${{ needs.site.result != 'success' }}
+        run: exit 1
       # v4.2.2; pin the action implementation for untrusted pull-request code.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:

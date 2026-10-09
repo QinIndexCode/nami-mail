@@ -42,3 +42,5 @@ Tour checks cover real search and reading, source dialogs, a single completed ru
 ## Publishing
 
 The GitHub Pages workflow builds and publishes `site/` when related site, docs, web client, contracts, or build configuration changes reach `main`; it can also be started manually. `site/demo/` is a build artifact and is not committed. Client code, documentation pages, and the sitemap are generated together for each deployment.
+
+Pull requests run the same `npm ci --ignore-scripts` install and `node scripts/build-site.mjs` build on Ubuntu. The required `validate` check also requires this Linux build to pass. Script tests verify that the lockfile includes every platform binding declared by Rolldown, Lightning CSS, esbuild, and workspace TypeScript packages. When repairing a lockfile, resolve bindings for the existing tool versions in a clean staging directory without `node_modules`, and review dependency versions before committing the repair.
