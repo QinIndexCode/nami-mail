@@ -88,7 +88,7 @@ export interface MailReaderProps {
   toggleSelectedSeen: () => void | Promise<void>;
   toggleSelectedStar: () => void | Promise<void>;
   moveSelectedMessage: (target: MoveTarget) => Promise<void>;
-  openAgentWorkspace: () => void;
+  openAgentWorkspace?: () => void;
   openCalendarImport: AttachmentExportsApi["openCalendarImport"];
   exportSelectedEml: AttachmentExportsApi["exportSelectedEml"];
   printSelectedMessage: AttachmentExportsApi["printSelectedMessage"];
@@ -313,7 +313,7 @@ export function MailReader(props: MailReaderProps) {
                   </div>
                 )}
               </div>
-              <button className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button>
+              {openAgentWorkspace && <button className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button>}
             </div>
           </header>
           {selectedThread && selectedThread.length > 1 && (

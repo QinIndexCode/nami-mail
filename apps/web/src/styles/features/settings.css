@@ -523,7 +523,7 @@ background:var(--canvas);
 width:100%;
 color:var(--text-faint);
 isolation:isolate;
-border-radius:6px;
+border-radius:var(--radius-sm);
 place-items:center;
 display:grid;
 position:relative;
@@ -780,7 +780,7 @@ opacity:.45
 margin-top:13px
 }
 .setting-row>.settings-row-actions { align-items:center; gap:8px; flex:none; display:flex }
-.setting-row>.settings-row-actions>.secondary-button { white-space:nowrap; min-height:28px; padding:4px 8px; font-size:11px; font-weight:550; border-radius:6px }
+.setting-row>.settings-row-actions>.secondary-button { white-space:nowrap; min-height:28px; padding:4px 8px; font-size:11px; font-weight:550; border-radius:var(--radius-sm) }
 .settings-secret-input { align-items:center; gap:4px; display:flex }
 .settings-secret-input>.icon-button { flex:none }
 .settings-model-modal { width:min(540px,calc(100vw - 32px)); border-radius:var(--radius-lg); padding:22px 24px; border:1px solid var(--line-strong); box-shadow:var(--shadow-raised) }

@@ -19,6 +19,7 @@ release-artifacts/
 artifacts/
 output/
 site/docs/
+/site/demo/
 *.tsbuildinfo
 *.db-wal
 *.db-shm

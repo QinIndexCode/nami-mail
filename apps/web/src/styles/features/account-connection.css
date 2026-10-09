@@ -1003,7 +1003,7 @@ border:1px solid var(--line-strong);
 width:18px;
 height:18px;
 color:var(--text);
-border-radius:6px;
+border-radius:var(--radius-sm);
 place-items:center;
 font-family:var(--font-mono);
 font-size:7px;

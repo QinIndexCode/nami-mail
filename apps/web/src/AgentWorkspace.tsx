@@ -57,6 +57,7 @@ import { triggerBlobDownload } from "./attachmentZip";
 import type { Account, AgentAccessLevel, Message } from "./types";
 import { useI18n } from "./i18n";
 import { useDialogFocus } from "./hooks/useDialogFocus";
+import { announceDemoReady, readDemoPresentation } from "./demoPresentation";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { configuredProviderId, resolveConversationProvider } from "./agent/agent-utils";
 import { AgentMessageRow } from "./agent/AgentMessageRow";
@@ -138,6 +139,7 @@ type AgentWorkspaceProps = {
 
 export default function AgentWorkspace({ accounts, currentMessage, onClose, onOpenMessage, restoreFocusRef, demoMode = false, overlayOpen = false, providerListVersion = 0, onOpenModelSettings, preloadedBootstrap, agentAccessLevel = "send-confirmed", onAgentAccessLevelChange, onMailStateChanged }: AgentWorkspaceProps) {
   const { locale, t } = useI18n();
+  const demoPresentation = useMemo(() => demoMode ? readDemoPresentation(window.location.search) : null, [demoMode]);
   const [bootstrap, setBootstrap] = useState<AgentBootstrap | null>(null);
   const [conversations, setConversations] = useState<AgentBootstrap["conversations"]>([]);
   const [active, setActive] = useState<AgentConversation | null>(null);
@@ -323,9 +325,14 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   useDialogFocus(true, workspaceRef, {
     restoreFocusRef,
     suspended: overlayOpen || Boolean(pendingAccessLevel) || Boolean(deleteConfirm),
+    deferInitialFocus: window.parent !== window && Boolean(readDemoPresentation(window.location.search)),
   });
   useDialogFocus(Boolean(pendingAccessLevel), accessConfirmRef, { restoreFocusRef: workspaceRef });
   useDialogFocus(Boolean(deleteConfirm), deleteConfirmRef, { restoreFocusRef: workspaceRef });
+
+  useEffect(() => {
+    if (demoPresentation?.view === "agent" && !loading && active) return announceDemoReady(demoPresentation);
+  }, [demoPresentation, loading, active]);
 
   useEffect(() => {
     if (!deleteConfirm) return undefined;
@@ -547,8 +554,10 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
         defaultProviderId: "demo-ollama",
         conversations: [],
       });
-      const demoConversation = createDemoConversation(locale);
+      const sitePreview = Boolean(readDemoPresentation(window.location.search));
+      const demoConversation = createDemoConversation(locale, sitePreview);
       setActive(demoConversation);
+      if (sitePreview) setScopeTarget(scopeTargetForConversation(demoConversation.scope, accounts));
       setConversations([{ id: demoConversation.id, title: demoConversation.title, preview: demoConversation.preview, updatedAt: demoConversation.updatedAt }]);
       setProviderId("demo-ollama");
       setLoading(false);
@@ -1893,7 +1902,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             <button className="agent-mobile-conversations-button" type="button" aria-label={mobileConversationsOpen ? t("agent.conversation.closeList") : t("agent.conversation.openList")} aria-expanded={mobileConversationsOpen} data-tooltip={mobileConversationsOpen ? t("agent.conversation.closeList") : t("agent.conversation.openList")} onClick={() => setMobileConversationsOpen((open) => !open)}><PanelLeftClose size={17} /></button>
             {!hasConfiguredProvider ? <button className="agent-configure-provider-action" type="button" onClick={() => onOpenModelSettings?.()}><Wrench size={15} />{t("agent.providers.configure")}</button> : null}
             {hasConfiguredProvider && <button className="icon-button" type="button" onClick={() => onOpenModelSettings?.()} aria-label={t("agent.provider.settings")} data-tooltip={t("agent.provider.settings")} data-tooltip-placement="bottom"><Wrench size={17} /></button>}
-            <button className="icon-button" type="button" onClick={onClose} aria-label={t("agent.workspace.close")} data-tooltip={t("agent.workspace.close")} data-tooltip-placement="bottom"><ArrowLeft size={20} strokeWidth={2.4} /></button>
+            {!demoPresentation && <button className="icon-button" type="button" onClick={onClose} aria-label={t("agent.workspace.close")} data-tooltip={t("agent.workspace.close")} data-tooltip-placement="bottom"><ArrowLeft size={20} strokeWidth={2.4} /></button>}
           </div>
         </header>
 

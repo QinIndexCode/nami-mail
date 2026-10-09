@@ -9,6 +9,18 @@ converged while the whole drifted. Read this before changing styles.
 - Themes: `:root` (light) and `:root[data-theme=dark]`, with semantic tokens defined in pairs
 - How to verify a visual change: `npm run test:e2e` (three specs), `npm run smoke:desktop`, and the tests that assert against the stylesheet
 
+The current visual direction uses neutral panels, thin borders, and restrained selection states.
+Interface headings and controls use the system sans-serif stack in `--font-ui`; mail bodies keep
+Georgia at 16px, with 1.75 leading for plain text, 1.7 for HTML, and the provider-authored layout. The light canvas
+is `#f4f5f8`, the dark canvas is `#0c0d10`, and secondary text must still pass the 4.5:1 contrast check.
+The development web app and desktop app share the frontend. The website's interactive preview
+builds that same frontend and uses sample data.
+
+The sidebar keeps its brand, compose button, and footer fixed. Navigation, accounts, and folders
+share the scrollable `.sidebar-content` region. Windows up to 740px tall use tighter spacing while
+account rows retain a minimum height of 48px. Scrolling handles any remaining overflow. Folder
+height is measured against this region's available space, independently of its scroll position.
+
 ## 1. Prose measure
 
 | token | value | used for |
@@ -40,9 +52,10 @@ price of matching Gmail; on narrower windows the column width takes over and cap
 
 | token | value | used for |
 |---|---|---|
-| `--radius-sm` | `8px` | most controls: buttons, inputs, list rows, tags, inner card blocks |
-| `--radius-md` | `12px` | panel level: popovers, menus, dialogs, larger cards |
-| `--radius-lg` | `20px` | large panels / outer surfaces (currently unreferenced, kept as the third tier) |
+| `--radius-xs` | `4px` | inner controls, nested states, and small tags |
+| `--radius-sm` | `6px` | most controls: buttons, inputs, list rows, tags, inner card blocks |
+| `--radius-md` | `10px` | panel level: popovers, menus, dialogs, larger cards |
+| `--radius-lg` | `16px` | large panels and the development web app's outer frame |
 | `--radius-pill` | `999px` | pills: status badges, switches, avatars, dots |
 
 **Never write a literal value.** The only exception is a deliberate asymmetric radius (for example

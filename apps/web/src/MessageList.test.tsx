@@ -333,19 +333,21 @@ describe("row quick actions reveal", () => {
       .toBeGreaterThan(stylesheet.indexOf(":root[data-density=compact] .message-item\n{"));
   });
 
-  it("styles the quick actions with the app-wide IconButton language (10px radius, border feedback, .16s transitions)", () => {
-    // The reader uses 32px buttons with border-radius:10px, a transparent
+  it("styles the quick actions with the shared IconButton radius, border feedback and .16s transitions", () => {
+    // The reader uses 32px buttons with the small radius token, a transparent
     // 1px border that lights up on hover, and .16s transitions; the row
     // buttons must follow the same language instead of the old 50% circle.
     expect(stylesheet).toContain(".row-quick-action\n{\nwidth:30px;\nheight:30px;");
-    expect(stylesheet).toContain("border-radius:10px;");
+    const iconBlock = [...stylesheet.matchAll(/^\.icon-button\s*\{[^}]*\}/gm)]
+      .map((match) => match[0]).find((block) => block.includes("border-radius:")) ?? "";
+    expect(iconBlock).toContain("border-radius:var(--radius-sm);");
     expect(stylesheet).toContain("border:1px solid #0000;");
     expect(stylesheet).toContain(".row-quick-action:hover\n{\nborder-color:var(--line);");
     expect(stylesheet).toContain("transition:background .16s,color .16s,border-color .16s");
     // Scope the "no circle" check to the base .row-quick-action block (other
     // unrelated components legitimately use 50% radii elsewhere).
     const baseBlock = stylesheet.match(/\.row-quick-action\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(baseBlock).toContain("border-radius:10px;");
+    expect(baseBlock).toContain("border-radius:var(--radius-sm);");
     expect(baseBlock).not.toContain("50%");
   });
 
@@ -411,9 +413,10 @@ describe("mail reader title wrapping", () => {
     //
     // The title block fills the reader pane now, so the h2 must not re-impose a
     // second column width of its own — it only has to break inside long words.
-    expect(stylesheet).toContain(
-      ".mail-title h2\n{\nletter-spacing:0;\nfont-variant-numeric:lining-nums;\nmax-width:100%;\nmargin:0;\nfont-family:Georgia,Songti SC,serif;\nfont-size:32px;\nfont-weight:400;\nline-height:1.24;\noverflow-wrap:anywhere\n}",
-    );
+    const title = stylesheet.match(/\.mail-title h2\s*\{[^}]*\}/)?.[0] ?? "";
+    for (const declaration of ["max-width:100%", "margin:0", "font-family:var(--font-ui)", "font-size:32px", "line-height:1.24", "overflow-wrap:anywhere"]) {
+      expect(title).toContain(declaration);
+    }
   });
 
   it("lets the reading column fill the pane and measures only plain-text prose", () => {

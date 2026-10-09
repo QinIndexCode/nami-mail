@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useState, type PropsWithChildren } from "react";
 import zhCN from "./locales/zh-CN.json";
 import { initialLocaleFromPreference, type LocalePreferenceStorage } from "./localePreference";
+import { readDemoPresentation } from "./demoPresentation";
 
 export type LocaleMetadata = {
   locale: string;
@@ -258,7 +259,7 @@ type I18nContextValue = {
 const I18nContext = createContext<I18nContextValue | null>(null);
 
 export function I18nProvider({ children }: PropsWithChildren) {
-  const [locale, setActiveLocale] = useState(initialLocale);
+  const [locale, setActiveLocale] = useState(() => readDemoPresentation(typeof window === "undefined" ? "" : window.location.search)?.locale ?? initialLocale());
   const resolvedLocale = resolveLocale(locale);
 
   useLayoutEffect(() => {

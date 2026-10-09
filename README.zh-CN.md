@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/nami-mail-wordmark.png" alt="Nami Mail" width="480" />
+  <img src="docs/nami-mail-wordmark.svg" alt="Nami Mail" width="480" />
 </p>
 
 Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端。它把 Gmail、iCloud、QQ、163、Outlook/Hotmail、Yahoo、AOL、Fastmail、Yandex 以及其他支持 IMAP/SMTP 的邮箱集中到由你本机运行的统一收件箱中。常见邮箱可使用应用专用密码/授权码；已配置的 Google 与 Microsoft 账户可使用 OAuth 2.0 登录。

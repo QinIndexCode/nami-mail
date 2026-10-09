@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/nami-mail-wordmark.png" alt="Nami Mail" width="480" />
+  <img src="docs/nami-mail-wordmark.svg" alt="Nami Mail" width="480" />
 </p>
 
 <p align="center">

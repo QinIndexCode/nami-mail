@@ -213,7 +213,7 @@ export function resolveTheme(preference: AppSettings["theme"], systemTheme: "lig
 export function backgroundUrl(settings: AppSettings): string | null {
   if (settings.backgroundPreset === "custom") return settings.customBackgroundUrl;
   if (settings.backgroundPreset === "none") return null;
-  return `/backgrounds/${settings.backgroundPreset}.svg`;
+  return `${import.meta.env.BASE_URL}backgrounds/${settings.backgroundPreset}.svg`;
 }
 
 export type AttachmentDownloadState = {

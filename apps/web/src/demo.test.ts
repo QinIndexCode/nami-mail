@@ -1,10 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { createDemoAccounts, createDemoSubmissions, demoMessageTranslation, demoMessages, demoStats } from "./demo";
+import { createDemoAccounts, createDemoSourceMessages, createDemoSubmissions, demoMessageTranslation, demoMessages, demoStats } from "./demo";
+import { createDemoConversation } from "./agent/agent-demo-data";
 import { findVerificationCodes } from "./verificationCode";
 import { applyMessageMove, isArchivedMessage, isInboxMessage } from "./mailListState";
 
 describe("demo mailbox data", () => {
   const demoAccounts = createDemoAccounts("zh-CN");
+  it.each(["zh-CN", "en-US"])("resolves every %s agent citation to matching local sample mail", (locale) => {
+    const sources = createDemoSourceMessages(locale);
+    const citations = createDemoConversation(locale).messages.flatMap((message) => message.citations);
+    expect(citations.length).toBeGreaterThan(0);
+    for (const citation of citations) {
+      const source = sources.find((message) => message.id === citation.messageId);
+      expect(source).toBeDefined();
+      expect(source?.subject).toBe(citation.subject);
+      expect(source?.accountId).toBe(citation.accountId);
+      expect(source?.textBody).toContain(citation.excerpt);
+      expect(demoAccounts.some((account) => account.id === source?.accountId)).toBe(true);
+    }
+  });
   it("keeps every displayed folder badge and unified stat aligned with the five demo messages", () => {
     const inboxMessages = demoMessages.filter((message) => isInboxMessage(message, demoAccounts));
 

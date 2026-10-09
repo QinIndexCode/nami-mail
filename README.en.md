@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/nami-mail-wordmark.png" alt="Nami Mail" width="480" />
+  <img src="docs/nami-mail-wordmark.svg" alt="Nami Mail" width="480" />
 </p>
 
 Nami Mail is a local-first, multi-account desktop mail client for Windows. It brings Gmail, iCloud, QQ, 163, Outlook/Hotmail, Yahoo, AOL, Fastmail, Yandex, and other IMAP/SMTP-capable accounts into one inbox that runs on your own machine. Common providers use app passwords or client authorization codes; configured Google and Microsoft accounts can use OAuth 2.0 sign-in.

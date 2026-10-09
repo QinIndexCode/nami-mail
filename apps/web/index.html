@@ -4,18 +4,22 @@
     <meta charset="UTF-8" />
     <script src="/locale-boot.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f4f4f5" />
+    <meta name="theme-color" content="#f4f5f8" />
+    <meta name="robots" content="noindex,nofollow" />
     <meta name="color-scheme" content="light dark" />
-    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" type="image/svg+xml" sizes="any" href="/favicon.svg" />
     <title>Nami Mail</title>
     <style>
       #nami-splash {
         position: fixed; inset: 0; z-index: 99999;
         display: flex; align-items: center; justify-content: center;
-        background: #ececef;
+        background: #f4f5f8;
         transition: opacity .5s ease, visibility .5s ease;
       }
-      @media (prefers-color-scheme: dark) { #nami-splash { background: #1a1a1e; } }
+      @media (prefers-color-scheme: dark) { #nami-splash { background: #0c0d10; } }
+      html[data-theme="dark"] #nami-splash { background: #0c0d10; }
+      html[data-theme="light"] #nami-splash { background: #f4f5f8; }
       #nami-splash.done { opacity: 0; visibility: hidden; pointer-events: none; }
       /* The desktop shell's native splash already shows the final splash
          state (see apps/desktop/src/main.mts nativeSplashUrl); render the web
@@ -44,6 +48,8 @@
         .nami-splash-wordmark { color: #e8e8ec; }
         .nami-splash-divider { background: rgba(200,200,210,.2); }
       }
+      html[data-theme="dark"] .nami-splash-wordmark { color: #e8e8ec; }
+      html[data-theme="light"] .nami-splash-wordmark { color: #2b2b30; }
       @keyframes nami-logo-fade { 0% { opacity: 0; transform: scale(1.6); } 100% { opacity: 1; transform: scale(1); } }
       @keyframes nami-divider-expand { 0% { max-width: 0; margin-left: 0; opacity: 0; } 100% { max-width: 1px; margin-left: 14px; opacity: 1; } }
       @keyframes nami-text-expand { 0% { max-width: 0; margin-left: 0; opacity: 0; } 100% { max-width: 200px; margin-left: 14px; opacity: 1; } }
@@ -62,6 +68,13 @@
       @media (prefers-color-scheme: dark) {
         .nami-splash-loader { background: rgba(200,200,210,.12); }
         .nami-splash-loader::after { background: #7a9aff; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #nami-splash { transition: none; }
+        .nami-splash-logo { opacity: 1; transform: none; animation: none; }
+        .nami-splash-divider { max-width: 1px; margin-left: 14px; opacity: 1; animation: none; }
+        .nami-splash-wordmark { max-width: 200px; margin-left: 14px; opacity: 1; animation: none; }
+        .nami-splash-loader::after { left: 0; width: 100%; animation: none; }
       }
     </style>
   </head>

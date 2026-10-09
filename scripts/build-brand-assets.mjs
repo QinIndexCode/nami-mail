@@ -4,12 +4,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
+import { renderBrandSvgs } from "./brand-svg.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const brandSourceDirectory = path.join(projectRoot, "build", "brand");
 const webBrandDirectory = path.join(projectRoot, "apps", "web", "public", "brand");
 const lightThemeSource = path.join(brandSourceDirectory, "black-theme-source.png");
 const darkThemeSource = path.join(brandSourceDirectory, "white-theme-clean-source.png");
+const wordmarkSource = path.join(brandSourceDirectory, "wordmark-reference.png");
 const iconSizes = [16, 20, 24, 32, 40, 48, 64, 128, 256];
 const checkOnly = process.argv.includes("--check");
 
@@ -19,7 +21,12 @@ function sha256(contents) {
 
 async function persistOutput(filePath, contents) {
   const next = Buffer.isBuffer(contents) ? contents : Buffer.from(contents);
-  const current = await fs.readFile(filePath).catch(() => undefined);
+  const rawCurrent = await fs.readFile(filePath).catch(() => undefined);
+  // Windows Git checkouts may use CRLF. Normalize generated SVG text only;
+  // application PNG, ICO and BMP assets still require byte-for-byte equality.
+  const current = rawCurrent && typeof contents === "string"
+    ? Buffer.from(rawCurrent.toString("utf8").replaceAll("\r\n", "\n"))
+    : rawCurrent;
   if (checkOnly) {
     assert.ok(current, `Missing generated brand asset: ${path.relative(projectRoot, filePath)}`);
     assert.ok(current.equals(next), `Generated brand asset is stale: ${path.relative(projectRoot, filePath)}`);
@@ -332,9 +339,10 @@ function inspectIco(ico) {
   });
 }
 
-const [lightSourceBuffer, darkSourceBuffer] = await Promise.all([
+const [lightSourceBuffer, darkSourceBuffer, wordmarkSourceBuffer] = await Promise.all([
   fs.readFile(lightThemeSource),
   fs.readFile(darkThemeSource),
+  fs.readFile(wordmarkSource),
 ]);
 const [lightThemeMark, darkThemeMark] = await Promise.all([
   extractTransparentMark(lightThemeSource, { r: 18, g: 18, b: 20 }, { invert: true, gain: 1.5, offset: -18 }),
@@ -359,6 +367,7 @@ const iconFrames = await Promise.all(iconSizes.map(async (size) => ({
 })));
 const ico = encodeIco(iconFrames);
 const icoEntries = inspectIco(ico);
+const { iconSvg, wordmarkSvg } = await renderBrandSvgs(darkThemeMark, wordmarkSourceBuffer);
 // The tray badge icon must composite from the very frame the ICO carries at
 // the tray size, so the swapped-in image matches the app icon pixel for pixel
 // apart from the dot.
@@ -385,6 +394,9 @@ for (const [name, image, expectedSize] of [
 }
 
 const outputs = [
+  [path.join(projectRoot, "build", "icon.svg"), iconSvg],
+  [path.join(projectRoot, "apps", "web", "public", "favicon.svg"), iconSvg],
+  [path.join(projectRoot, "docs", "nami-mail-wordmark.svg"), wordmarkSvg],
   [path.join(projectRoot, "build", "icon.png"), fullSizeIcon],
   [path.join(projectRoot, "build", "icon.ico"), ico],
   [path.join(projectRoot, "build", "tray-badge-icon.png"), trayBadgeIcon],
@@ -406,6 +418,7 @@ console.log(JSON.stringify({
   source: {
     lightTheme: { path: path.relative(projectRoot, lightThemeSource), sha256: sha256(lightSourceBuffer) },
     darkTheme: { path: path.relative(projectRoot, darkThemeSource), sha256: sha256(darkSourceBuffer) },
+    wordmark: { path: path.relative(projectRoot, wordmarkSource), sha256: sha256(wordmarkSourceBuffer) },
   },
   icoFrames: icoEntries,
   outputs: outputs.map(([filePath, contents]) => ({

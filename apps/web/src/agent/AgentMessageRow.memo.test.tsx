@@ -173,7 +173,8 @@ describe("App hands the agent transcript a stable open-referenced-message handle
     // openMessage's own identity is re-created by every mailbox refresh
     // (silentRefresh replaces the accounts array it closes over), so listing it
     // would re-create this handler on every refresh and defeat AgentMessageRow.
-    expect(deps.split(",").map((dep) => dep.trim())).toEqual(["closeAgentWorkspace", "showToast", "t"]);
+    // Locale changes rebuild sample source copy; mailbox refreshes still do not.
+    expect(deps.split(",").map((dep) => dep.trim())).toEqual(["closeAgentWorkspace", "locale", "showToast", "t"]);
     expect(source).toMatch(/const openMessageRef = useRef\(openMessage\);\r?\n {2}openMessageRef\.current = openMessage;/);
     expect(block![0]).toContain("openMessageRef.current(");
   });

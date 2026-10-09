@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://qinindexcode.github.io/nami-mail/sitemap.xml

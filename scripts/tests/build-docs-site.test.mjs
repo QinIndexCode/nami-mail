@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildManifest,
+  buildSitemap,
   collectDocs,
   documentTitle,
   extractTitle,
@@ -244,6 +245,27 @@ test("buildManifest lists only groups that have topics", () => {
   });
 });
 
+test("sitemap includes the landing page, docs overview and published pages but omits development plans", () => {
+  withFixture(({ docs, root, write }) => {
+    write("docs/development/plan.zh-CN.md", "# 开发计划\n");
+    write("docs/development/plan.en.md", "# Development plan\n");
+    write("docs/agent/release & 计划.zh-CN.md", "# 发布与计划\n");
+    const topics = collectDocs({ docsDirectory: docs, repoDirectory: root });
+    const sitemap = buildSitemap(topics);
+    const locations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]);
+
+    assert.match(sitemap, /https:\/\/qinindexcode\.github\.io\/nami-mail\//);
+    assert.match(sitemap, /https:\/\/qinindexcode\.github\.io\/nami-mail\/docs\//);
+    assert.match(sitemap, /https:\/\/qinindexcode\.github\.io\/nami-mail\/docs\/usage\.zh-CN\.html/);
+    assert.match(sitemap, /https:\/\/qinindexcode\.github\.io\/nami-mail\/docs\/_root\/CHANGELOG\.en\.html/);
+    assert.match(sitemap, /https:\/\/qinindexcode\.github\.io\/nami-mail\/docs\/agent\/release%20%26%20%E8%AE%A1%E5%88%92\.zh-CN\.html/);
+    assert.doesNotMatch(sitemap, /\/docs\/development\//);
+    assert.doesNotMatch(sitemap, /<lastmod>/);
+    assert.equal(locations.length, 9);
+    assert.equal(new Set(locations).size, locations.length);
+  });
+});
+
 /** Render every fixture topic the way the build does. */
 function renderedFixturePages(root, docs) {
   const topics = collectDocs({ docsDirectory: docs, repoDirectory: root });
@@ -338,13 +360,19 @@ test("the landing page only links at documents and assets that exist", () => {
   // Every local stylesheet, script and image the landing page loads. Links into
   // the documentation are covered by the check above, and `site/docs/` does not
   // exist until the build runs — so they must not be looked for on disk here.
-  const links = [...html.matchAll(/(?:href|src)="\.\/([^"#]*)"/g)].map((match) => match[1]);
+  const links = [...html.matchAll(/(?:href|src)="\.\/([^"#]*)"/g)].map((match) => match[1].replaceAll("&amp;", "&"));
+  const paths = links.map((link) => link.split("?")[0]);
   assert.deepEqual(
-    links.filter((link) => link.endsWith("/")),
-    ["docs/"],
-    "the only directory the landing page links to must be the generated documentation root",
+    [...new Set(paths.filter((link) => link.endsWith("/")))].sort(),
+    ["demo/", "docs/"],
+    "directory links must resolve to a generated documentation or sample preview entry",
   );
-  const assets = links.filter((link) => link !== "" && !link.endsWith("/") && !link.startsWith("docs/"));
+  for (const link of links.filter((link) => link.startsWith("demo/"))) {
+    const params = new URL(link, "https://qinindexcode.github.io/nami-mail/").searchParams;
+    assert.equal(params.get("demo"), "1", "public preview links must use sample data");
+    assert.equal(params.get("preview"), "site", "public preview links must opt into the website presentation");
+  }
+  const assets = paths.filter((link) => link !== "" && !link.endsWith("/") && !link.startsWith("docs/"));
   assert.ok(assets.length > 0, "expected the landing page to load local assets");
   for (const asset of assets) {
     assert.ok(existsSync(join(repoRoot, "site", asset)), `landing page references a missing asset: ${asset}`);
