@@ -308,11 +308,53 @@ export class DesktopUpdater {
     });
   }
 
+  /**
+   * A remote failure after a ready snapshot must not demote an archive that
+   * still verifies to an error: `installDownloadedUpdate` only opens on
+   * "ready", so an offline reminder expiry would lock an installable package
+   * behind "reconnect to re-check". Returns false when the cache no longer
+   * passes the same verification the install path uses — an invalid cache
+   * falls back to the error branch exactly as before.
+   */
+  private async restoreReadyAfterFailedCheck(prior: DesktopUpdateSnapshot): Promise<boolean> {
+    if (prior.phase !== "ready" || !this.update) return false;
+    if (!await hasVerifiedCachedUpdate(this.cacheDirectory, this.update)) return false;
+    const policy = resolveUpdatePromptPolicy(this.preferences.get(), this.update.version, this.now());
+    this.transition("ready", "downloadReady", {
+      targetVersion: prior.targetVersion ?? this.update.version,
+      // The failed remote attempt is not a successful check: keep the
+      // truthful checkedAt from the snapshot taken before it started.
+      checkedAt: prior.checkedAt,
+      percent: 100,
+      suppression: policy.suppression,
+      remindAt: policy.remindAt,
+    });
+    return true;
+  }
+
   async checkForUpdates(): Promise<DesktopUpdateSnapshot> {
     if (!this.enabled) return this.getSnapshot();
     if (this.snapshot.phase === "downloading" || (this.snapshot.phase === "ready" && this.snapshot.suppression === "none")) return this.getSnapshot();
     if (this.checkPromise) return this.checkPromise;
     this.clearScheduledCheck();
+
+    const priorSnapshot = this.getSnapshot();
+    // Snooze expiry is resolved locally: re-parse the reminder preference and
+    // re-verify the already-downloaded archive instead of pushing an
+    // installable package through a remote check that can fail offline. No
+    // check is recorded (checkedAt stays as it was) and no verification is
+    // relaxed — an archive that no longer verifies falls through to the
+    // remote path below, which still applies the error state on failure.
+    if (priorSnapshot.phase === "ready" && priorSnapshot.suppression === "snoozed" && this.update) {
+      const policy = resolveUpdatePromptPolicy(this.preferences.get(), this.update.version, this.now());
+      if (policy.suppression !== "snoozed" && await hasVerifiedCachedUpdate(this.cacheDirectory, this.update)) {
+        return this.transition("ready", "downloadReady", {
+          percent: 100,
+          suppression: policy.suppression,
+          remindAt: policy.remindAt,
+        });
+      }
+    }
 
     this.checkPromise = (async () => {
       try {
@@ -365,7 +407,9 @@ export class DesktopUpdater {
         }
         this.schedulePeriodicCheck();
       } catch (error) {
-        this.transition("error", classifyUpdateError(error), { percent: null, suppression: "none", remindAt: null });
+        if (!await this.restoreReadyAfterFailedCheck(priorSnapshot)) {
+          this.transition("error", classifyUpdateError(error), { percent: null, suppression: "none", remindAt: null });
+        }
         this.scheduleRetry();
       } finally {
         this.checkPromise = undefined;
@@ -414,8 +458,14 @@ export class DesktopUpdater {
   async skipAvailableUpdate(): Promise<DesktopUpdateSnapshot> {
     if (!this.enabled || !this.update || !["available", "ready"].includes(this.snapshot.phase)) return this.getSnapshot();
     const update = this.update;
+    // The preference commit is the operation the caller sees: if it cannot be
+    // persisted the error propagates and memory keeps the old preference
+    // (UpdatePreferencesStore only commits after the atomic rename). Once it
+    // is committed, a leftover archive is the cache's problem — the next
+    // check removes the archive again for a skipped policy — so a cleanup
+    // failure must not deny that the preference is now "skipped".
     await this.preferences.save(skipUpdateVersion(this.preferences.get(), update.version));
-    await removeCachedGitHubZipUpdate(this.cacheDirectory, update);
+    await removeCachedGitHubZipUpdate(this.cacheDirectory, update).catch(() => undefined);
     this.publishAvailableUpdate(update, false);
     this.schedulePeriodicCheck();
     return this.getSnapshot();

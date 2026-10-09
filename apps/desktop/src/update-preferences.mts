@@ -126,16 +126,21 @@ export class UpdatePreferencesStore {
   }
 
   async save(next: StoredUpdatePreferences): Promise<StoredUpdatePreferences> {
-    this.preferences = normalizeUpdatePreferences(next);
+    // The candidate is only committed once the atomic rename has landed:
+    // a failed mkdir/writeFile/rename must leave memory on the previous
+    // preference, so the caller's error and this store's view agree — and a
+    // restart (which re-reads disk) cannot disagree with the running process.
+    const candidate = normalizeUpdatePreferences(next);
     const directory = path.dirname(this.filePath);
     const temporaryPath = `${this.filePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
     await fs.mkdir(directory, { recursive: true });
     try {
-      await fs.writeFile(temporaryPath, `${JSON.stringify(this.preferences)}\n`, { encoding: "utf8", mode: 0o600 });
+      await fs.writeFile(temporaryPath, `${JSON.stringify(candidate)}\n`, { encoding: "utf8", mode: 0o600 });
       await fs.rename(temporaryPath, this.filePath);
     } finally {
       await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
     }
+    this.preferences = candidate;
     return this.get();
   }
 }
