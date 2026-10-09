@@ -54,7 +54,7 @@ User-facing release notes live in [docs/releases](docs/releases/README.en.md) (ç
         <img src="https://avatars.githubusercontent.com/u/177287013?v=4" width="64" height="64" style="border-radius:50%" alt="QinIndexCode" /><br />
         <sub><b>QinIndexCode</b></sub>
       </a><br />
-      <sub>286 commits</sub>
+      <sub>321 commits</sub>
     </td>
     <td align="center">
       <a href="https://github.com/JIE-jiee">
