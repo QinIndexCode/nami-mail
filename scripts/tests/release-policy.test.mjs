@@ -730,6 +730,7 @@ test("pull request validation runs the release gate without write credentials", 
     assert.doesNotMatch(JSON.stringify(step), /\$\{\{\s*secrets\./i, "Pull-request validation must not interpolate repository secrets.");
   }
   assert.deepEqual(commands, [
+    "exit 1",
     "npm ci",
     "npm run verify:node-sqlite",
     "npm run verify:electron-sqlite",
