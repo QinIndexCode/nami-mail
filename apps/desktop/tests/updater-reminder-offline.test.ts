@@ -121,7 +121,8 @@ async function fixture(t: test.TestContext) {
     return { ready, snoozed };
   }
 
-  return { updater, profile, state, snapshots, advance, downloadAndSnooze, advanceClock: (ms: number) => { currentTime += ms; } };
+  const archivePath = path.join(profile, "updates", baseVersion, githubZipUpdateAssetNames(baseVersion).archiveName);
+  return { updater, profile, state, snapshots, advance, archivePath, downloadAndSnooze, advanceClock: (ms: number) => { currentTime += ms; } };
 }
 
 test("an expired snooze stays installable offline and records no fresh check", async (t) => {
@@ -192,6 +193,75 @@ test("a higher release discovered during the snooze window is handled normally",
   assert.equal(discovered.phase, "available");
   assert.equal(discovered.targetVersion, "1.2.4");
   assert.equal(discovered.suppression, "none");
+});
+
+test("network retries never postpone the reminder deadline of a snoozed update", async (t) => {
+  const f = await fixture(t);
+  await f.downloadAndSnooze(60);
+  // Wake at minute 15 with GitHub unreachable. Failed retries must yield the
+  // wakeup to the reminder deadline instead of running past it.
+  f.advanceClock(15 * 60_000);
+  f.state.offline = true;
+  await f.updater.checkAfterExternalTrigger();
+  for (const minutes of [1, 2, 4, 8, 16]) {
+    f.advanceClock(minutes * 60_000);
+    // A failed retry on a ready+snoozed snapshot restores ready (not error),
+    // so the terminal broadcast to wait for is either one.
+    await f.advance(minutes * 60_000, ["ready", "error"]);
+  }
+  const checksBeforeDeadline = f.state.apiCalls;
+  f.advanceClock(14 * 60_000);
+  await f.advance(14 * 60_000, "ready");
+  // The reminder fires exactly at remindAt through the local path: no new
+  // network check is recorded and installation is open again.
+  assert.equal(f.updater.getSnapshot().suppression, "none");
+  assert.equal(f.state.apiCalls, checksBeforeDeadline);
+  const install = await f.updater.installDownloadedUpdate();
+  assert.equal(install.accepted, true);
+});
+
+test("concurrent expiry checks merge and a skip made from the ready UI wins", async (t) => {
+  const f = await fixture(t);
+  await f.downloadAndSnooze(5);
+  // Move wall time past expiry without dispatching the automatic timer.
+  f.advanceClock(5 * 60_000);
+  const originalOpen = fs.open.bind(fs);
+  let releaseHash!: () => void;
+  let hashReached!: () => void;
+  const hashWait = new Promise<void>((resolve) => { releaseHash = resolve; });
+  const reached = new Promise<void>((resolve) => { hashReached = resolve; });
+  let archiveOpens = 0;
+  t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+    const verification = String(args[0]) === f.archivePath ? ++archiveOpens : 0;
+    const handle = await originalOpen(...args);
+    if (verification === 2) {
+      const originalClose = handle.close.bind(handle);
+      t.mock.method(handle, "close", async () => {
+        hashReached();
+        await hashWait;
+        return originalClose();
+      });
+    }
+    return handle;
+  });
+  // A timer wakeup and a resume/manual check enter before either finishes
+  // hashing; they must join the same verification, and the skip the user
+  // commits once ready+none is showing must survive the late completion.
+  const firstCheck = f.updater.checkForUpdates();
+  const secondCheck = f.updater.checkAfterExternalTrigger();
+  await firstCheck;
+  if (archiveOpens > 1) await reached;
+  assert.equal(f.updater.getSnapshot().phase, "ready");
+  assert.equal(f.updater.getSnapshot().suppression, "none");
+  const skipped = await f.updater.skipAvailableUpdate();
+  releaseHash();
+  assert.equal(skipped.suppression, "skipped");
+  await secondCheck;
+  assert.equal(archiveOpens, 1);
+  const completed = f.updater.getSnapshot();
+  assert.equal(completed.suppression, "skipped");
+  const stored = JSON.parse(await fs.readFile(path.join(f.profile, "update-preferences.json"), "utf8"));
+  assert.equal(stored.skippedVersion, baseVersion);
 });
 
 test("a skip whose preference write fails stays retryable and unchanged in memory", async (t) => {
