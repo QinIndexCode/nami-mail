@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { it, vi } from "vitest";
-import { maxJsonDepth } from "@nami/agent-contracts";
+import { maxJsonDepth, type ProviderChatRequest } from "@nami/agent-contracts";
 import { OpenAiCompatibleProvider } from "../src/agent/openai-compatible-provider.js";
 
 function sseResponse(lines: string[]): Response {
@@ -68,7 +68,7 @@ it("OpenAI compatible provider streams text, usage, and a validated tool call", 
       description: "Search indexed mail.",
       category: "messages",
       executionMode: "read",
-      requiredScopes: ["mail.read"],
+      requiredScopes: ["read:messages"],
       accountAccess: "required",
       confirmationPolicy: "never",
       availableToExternal: true,
@@ -253,7 +253,7 @@ it("OpenAI compatible provider extracts XML-style inline tool calls split across
       description: "Search indexed mail.",
       category: "messages",
       executionMode: "read",
-      requiredScopes: ["mail.read"],
+      requiredScopes: ["read:messages"],
       accountAccess: "required",
       confirmationPolicy: "never",
       availableToExternal: true,
@@ -298,7 +298,7 @@ it("OpenAI compatible provider extracts JSON-style inline tool calls split acros
       description: "Search indexed mail.",
       category: "messages",
       executionMode: "read",
-      requiredScopes: ["mail.read"],
+      requiredScopes: ["read:messages"],
       accountAccess: "required",
       confirmationPolicy: "never",
       availableToExternal: true,
@@ -517,7 +517,7 @@ function deepJson(levels: number): unknown {
   return JSON.parse(`${'{"nested":'.repeat(levels)}"leaf"${"}".repeat(levels)}`);
 }
 
-function historyWithToolInput(input: unknown): Record<string, unknown> {
+function historyWithToolInput(input: unknown): ProviderChatRequest {
   return {
     requestId: "123e4567-e89b-12d3-a456-426614174040",
     providerId: "local-ollama",
@@ -645,7 +645,7 @@ it("OpenAI compatible provider skips tool calls without an id instead of failing
   assert.deepEqual(events.at(-1), { type: "completed", finishReason: "tool-calls" });
 });
 
-function bareToolStreamRequest(): Record<string, unknown> {
+function bareToolStreamRequest(): ProviderChatRequest {
   return {
     requestId: "123e4567-e89b-12d3-a456-426614174050",
     providerId: "local-ollama",
@@ -657,7 +657,7 @@ function bareToolStreamRequest(): Record<string, unknown> {
       description: "List mail folders.",
       category: "folders",
       executionMode: "read",
-      requiredScopes: ["mail.read"],
+      requiredScopes: ["read:messages"],
       accountAccess: "required",
       confirmationPolicy: "never",
       availableToExternal: true,
