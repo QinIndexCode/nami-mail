@@ -83,8 +83,10 @@ function modelError(code: string, retryable: boolean) {
  * request, so these stubs answer the tail with nothing rather than letting it
  * land in the counts.
  */
-function isAuxiliaryChatRequest(request: { requestId: string }): boolean {
-  return request.requestId.startsWith("title-");
+function isAuxiliaryChatRequest(request: unknown): boolean {
+  // R14: the runtime seam passes unknown through; the id is the only field
+  // the stubs observe.
+  return (request as { requestId: string }).requestId.startsWith("title-");
 }
 
 describe("AgentService model request retry", () => {
@@ -93,7 +95,7 @@ describe("AgentService model request retry", () => {
     const internals = internalRuntime(service);
     vi.spyOn(internals.rag, "search").mockResolvedValue([]);
     let calls = 0;
-    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
+    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: unknown) {
       if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
       calls += 1;
       if (calls === 1) {
@@ -119,7 +121,7 @@ describe("AgentService model request retry", () => {
     const { service, provider, conversation } = fixture([5, 5]);
     const internals = internalRuntime(service);
     vi.spyOn(internals.rag, "search").mockResolvedValue([]);
-    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
+    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: unknown) {
       if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
       yield modelError("PROVIDER_TIMEOUT", true);
       yield { type: "completed", reason: "error" };
@@ -143,7 +145,7 @@ describe("AgentService model request retry", () => {
     const internals = internalRuntime(service);
     vi.spyOn(internals.rag, "search").mockResolvedValue([]);
     let calls = 0;
-    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
+    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: unknown) {
       if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
       calls += 1;
       yield { type: "text_delta", delta: "Partial answer" };
@@ -167,7 +169,7 @@ describe("AgentService model request retry", () => {
     const { service, provider, conversation } = fixture([5, 5]);
     const internals = internalRuntime(service);
     vi.spyOn(internals.rag, "search").mockResolvedValue([]);
-    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
+    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: unknown) {
       if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
       yield modelError("PROVIDER_AUTH_FAILED", false);
       yield { type: "completed", reason: "error" };
@@ -191,7 +193,7 @@ describe("AgentService model request retry", () => {
     const { service, provider, conversation } = fixture([5, 5, 5, 5, 5]);
     const internals = internalRuntime(service);
     vi.spyOn(internals.rag, "search").mockResolvedValue([]);
-    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
+    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: unknown) {
       if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
       yield modelError("TOOL_INPUT_INVALID", false);
       yield { type: "completed", reason: "error" };
@@ -214,7 +216,7 @@ describe("AgentService model request retry", () => {
     const { service, provider, conversation } = fixture([5, 5]);
     const internals = internalRuntime(service);
     vi.spyOn(internals.rag, "search").mockResolvedValue([]);
-    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
+    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: unknown) {
       if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
       yield modelError("PROVIDER_ERROR", true);
       yield { type: "completed", reason: "error" };
@@ -239,7 +241,7 @@ describe("AgentService model request retry", () => {
     const { service, provider, conversation } = fixture([50_000]);
     const internals = internalRuntime(service);
     vi.spyOn(internals.rag, "search").mockResolvedValue([]);
-    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
+    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: unknown) {
       if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
       yield modelError("PROVIDER_ERROR", true);
       yield { type: "completed", reason: "error" };

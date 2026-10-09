@@ -55,7 +55,7 @@ function fakeMailApplication() {
       hasAttachments: false,
     }],
   }));
-  const getMessage = vi.fn(async () => undefined);
+  const getMessage = vi.fn<MailApplicationService["getMessage"]>(async () => undefined);
   const searchMessages = vi.fn(async (_context: MailApplicationContext, _query: MailSearchQuery) => ({
     items: [],
     total: 0,
@@ -107,6 +107,7 @@ function fakeMailApplication() {
     createDraft,
     updateDraft,
     deleteDraft,
+    deleteAccount: vi.fn(async () => undefined),
     updateMessageFlags,
     moveMessage,
     prepareSubmission,
@@ -147,7 +148,7 @@ function fixture(options: { desktopConfirmation?: boolean; externalConfirmation?
   const desktop = options.desktopConfirmation ? desktopConfirmation() : undefined;
   const external = options.externalConfirmation
     ? {
-        request: vi.fn(async () => "approve" as const),
+        request: vi.fn(async (): Promise<"approve" | "reject"> => "approve"),
       }
     : undefined;
   const service = new AgentService({
