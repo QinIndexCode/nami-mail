@@ -252,8 +252,8 @@ describe("server runtime shutdown", () => {
     expect(syncFinished).toHaveBeenCalledTimes(1);
     expect(fastify.close).toHaveBeenCalledTimes(1);
     expect(database.close).toHaveBeenCalledTimes(1);
-    expect(fastify.close.mock.invocationCallOrder[0]).toBeLessThan(syncFinished.mock.invocationCallOrder[0]);
-    expect(syncFinished.mock.invocationCallOrder[0]).toBeLessThan(database.close.mock.invocationCallOrder[0]);
+    expect(fastify.close.mock.invocationCallOrder[0]!).toBeLessThan(syncFinished.mock.invocationCallOrder[0]!);
+    expect(syncFinished.mock.invocationCallOrder[0]!).toBeLessThan(database.close.mock.invocationCallOrder[0]!);
 
     await vi.advanceTimersByTimeAsync(300_000);
     expect(mocks.syncAccount).toHaveBeenCalledTimes(1);

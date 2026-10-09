@@ -48,7 +48,7 @@ function agentLayerCodes(): string[] {
 function listTypeScriptFiles(directory: string): string[] {
   return fs.readdirSync(directory, { withFileTypes: true, recursive: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-    .map((entry) => path.join((entry as { parentPath?: string; path?: string }).parentPath ?? (entry as { path: string }).path, entry.name));
+    .map((entry) => path.join(entry.parentPath, entry.name));
 }
 
 /** `code: "..."` and not `error.code === "..."` — the colon is what separates them. */

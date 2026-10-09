@@ -49,6 +49,8 @@ function fakeMailApplication(): MailApplicationService {
     deleteDraft: vi.fn(async () => undefined),
     updateMessageFlags: vi.fn(async () => undefined),
     moveMessage: vi.fn(async () => undefined),
+    searchMessages: vi.fn(async () => ({ items: [], total: 0, truncated: false, searchedFrom: null, newestLocalAt: null })),
+    deleteAccount: vi.fn(async () => undefined),
     prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1", idempotencyKey: "key-1", accountId: "account-1", status: "pending" as const })),
     submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1", idempotencyKey: "key-1", accountId: "account-1", status: "pending" as const })),
   };

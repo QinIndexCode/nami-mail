@@ -18,6 +18,11 @@ function insertAccount(db: DatabaseHandle, id: string): void {
   `).run(id, `${id}@example.test`, "2026-07-27T10:00:00.000Z");
 }
 
+// R14: the conversation store's API types ids as the UUID shape it persists;
+// the fixed literals keep the tests deterministic while satisfying it.
+const CONVERSATION_ID = "c0ffee00-0000-4000-8000-000000000001";
+const STREAM_CONVERSATION_ID = "c0ffee00-0000-4000-8000-000000000002";
+
 const desktopCaller = {
   callerId: "desktop-user",
   kind: "desktop-ui" as const,
@@ -40,15 +45,15 @@ describe("encrypted conversations, audit, and GUI confirmations", () => {
     const leaseOne = lifecycle.acquireLease("account-1");
     const leaseTwo = lifecycle.acquireLease("account-2");
     const conversations = new EncryptedConversationStore(db, lifecycle, () => "2026-07-27T10:00:02.000Z");
-    conversations.create([leaseOne, leaseTwo], { title: "Private project mail" }, "conversation-1");
-    conversations.append("conversation-1", [leaseOne, leaseTwo], "turn", { content: "MAIL-DERIVED-CANARY" }, "turn-1");
+    conversations.create([leaseOne, leaseTwo], { title: "Private project mail" }, CONVERSATION_ID);
+    conversations.append(CONVERSATION_ID, [leaseOne, leaseTwo], "turn", { content: "MAIL-DERIVED-CANARY" }, "turn-1");
 
     const stored = db.prepare("SELECT encrypted_payload FROM agent_conversation_records").all() as Array<{ encrypted_payload: string }>;
     expect(stored).toHaveLength(4);
     expect(stored.every((row) => !row.encrypted_payload.includes("MAIL-DERIVED-CANARY"))).toBe(true);
-    expect(conversations.get("conversation-1", [leaseOne, leaseTwo]).records).toHaveLength(2);
+    expect(conversations.get(CONVERSATION_ID, [leaseOne, leaseTwo]).records).toHaveLength(2);
     lifecycle.beginDeletion("account-1");
-    expect(() => conversations.get("conversation-1", [leaseOne, leaseTwo])).toThrow();
+    expect(() => conversations.get(CONVERSATION_ID, [leaseOne, leaseTwo])).toThrow();
     db.close();
   });
 
@@ -182,7 +187,7 @@ describe("encrypted conversations, audit, and GUI confirmations", () => {
     const leaseOne = lifecycle.acquireLease("account-1");
     const leaseTwo = lifecycle.acquireLease("account-2");
     const conversations = new EncryptedConversationStore(db, lifecycle, () => "2026-07-27T10:00:02.000Z");
-    conversations.create([leaseOne, leaseTwo], { title: "Streaming" }, "conversation-streaming");
+    conversations.create([leaseOne, leaseTwo], { title: "Streaming" }, STREAM_CONVERSATION_ID);
     const turn = (content: string, state: "streaming" | "complete") => ({
       type: "conversation-turn",
       message: {
@@ -199,20 +204,20 @@ describe("encrypted conversations, audit, and GUI confirmations", () => {
 
     // Two throttled streaming snapshots under the same message id: the draft
     // row is replaced in place, never duplicated.
-    conversations.upsertStreaming("conversation-streaming", [leaseOne, leaseTwo], turn("Partial one. ", "streaming"), "message-x");
-    conversations.upsertStreaming("conversation-streaming", [leaseOne, leaseTwo], turn("Partial one. Partial two. ", "streaming"), "message-x");
+    conversations.upsertStreaming(STREAM_CONVERSATION_ID, [leaseOne, leaseTwo], turn("Partial one. ", "streaming"), "message-x");
+    conversations.upsertStreaming(STREAM_CONVERSATION_ID, [leaseOne, leaseTwo], turn("Partial one. Partial two. ", "streaming"), "message-x");
     expect(db.prepare("SELECT COUNT(*) AS count FROM agent_conversation_streaming").get()).toEqual({ count: 1 });
-    const draft = conversations.readStreaming("conversation-streaming", [leaseOne, leaseTwo]) as { message: { content: string; state: string } };
+    const draft = conversations.readStreaming(STREAM_CONVERSATION_ID, [leaseOne, leaseTwo]) as { message: { content: string; state: string } };
     expect(draft.message.content).toBe("Partial one. Partial two. ");
     expect(draft.message.state).toBe("streaming");
 
-    conversations.clearStreaming("conversation-streaming", [leaseOne, leaseTwo]);
-    expect(conversations.readStreaming("conversation-streaming", [leaseOne, leaseTwo])).toBeNull();
+    conversations.clearStreaming(STREAM_CONVERSATION_ID, [leaseOne, leaseTwo]);
+    expect(conversations.readStreaming(STREAM_CONVERSATION_ID, [leaseOne, leaseTwo])).toBeNull();
 
     // The finished turn is appended to the immutable log; the draft is gone, so
     // the durable history holds exactly metadata + one turn row.
-    conversations.append("conversation-streaming", [leaseOne, leaseTwo], "turn", turn("Partial one. Partial two. Final.", "complete"), "message-x");
-    const stored = conversations.get("conversation-streaming", [leaseOne, leaseTwo]);
+    conversations.append(STREAM_CONVERSATION_ID, [leaseOne, leaseTwo], "turn", turn("Partial one. Partial two. Final.", "complete"), "message-x");
+    const stored = conversations.get(STREAM_CONVERSATION_ID, [leaseOne, leaseTwo]);
     expect(stored.records).toHaveLength(2);
     const persisted = stored.records.filter((record) => record.kind === "turn").map((record) => record.value) as Array<{ message: { content: string; state: string } }>;
     expect(persisted).toEqual([expect.objectContaining({

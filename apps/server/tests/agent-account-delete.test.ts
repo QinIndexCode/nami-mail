@@ -1,13 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
+import type { CallerContext } from "@nami/agent-contracts";
 import type { MailApplicationContext } from "../src/agent/mail-application-service.js";
 import { SqliteMailApplicationService } from "../src/agent/sqlite-mail-application-service.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 
 const timestamp = "2026-07-27T12:00:00.000Z";
 
-function caller() {
+function caller(): CallerContext {
   return {
     callerId: "test-user",
     kind: "test" as const,

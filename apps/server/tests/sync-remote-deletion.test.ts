@@ -125,11 +125,14 @@ describe("remote deletion reconciliation", () => {
   function eventSink(): AgentMailEventSink & {
     readonly messageDeletedWithinTransaction: ReturnType<typeof vi.fn>;
   } {
+    // R14: vitest's generic Mock does not structurally match a specific sink
+    // method; the mock objects are correct at runtime, so the assembled sink
+    // goes through one documented assertion.
     return {
       acquireLease: vi.fn(() => ({ accountId: "account-1", generation: 1 })),
       messageUpsertedWithinTransaction: vi.fn(),
       messageDeletedWithinTransaction: vi.fn(),
-    };
+    } as unknown as AgentMailEventSink & { readonly messageDeletedWithinTransaction: ReturnType<typeof vi.fn> };
   }
 
   it("deletes an absent cached UID and emits its Agent tombstone in the same reconciliation path", async () => {

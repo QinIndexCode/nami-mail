@@ -40,7 +40,7 @@ describe("snooze storage", () => {
     const future = new Date(Date.now() + 60_000).toISOString();
     setMessageSnoozed(db, "message-1", future);
     expect(listSnoozedMessages(db)).toHaveLength(1);
-    expect(listSnoozedMessages(db)[0].snoozed_until).toBe(future);
+    expect(listSnoozedMessages(db)[0]!.snoozed_until).toBe(future);
 
     clearMessageSnooze(db, "message-1");
     expect(listSnoozedMessages(db)).toHaveLength(0);

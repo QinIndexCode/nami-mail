@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import type { CallerContext } from "@nami/agent-contracts";
 import type { MailApplicationContext, MailListQuery } from "../src/agent/mail-application-service.js";
 import { SqliteMailApplicationService } from "../src/agent/sqlite-mail-application-service.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
@@ -8,7 +9,7 @@ import { protectedMessageColumns, type MessagePayload } from "../src/message-sto
 
 const timestamp = "2026-07-27T12:00:00.000Z";
 
-function caller() {
+function caller(): CallerContext {
   return {
     callerId: "test-user",
     kind: "test" as const,
@@ -59,6 +60,8 @@ function insertEncryptedMessage(
     fromAddress: message.fromAddress,
     to: [{ name: "Recipient", address: "recipient@example.test" }],
     cc: [],
+    inReplyTo: null,
+    references: [],
     snippet: `${message.subject} preview`,
     textBody: `${message.subject} body`,
     htmlBody: "",
@@ -101,7 +104,8 @@ function setup() {
   const db = openDatabase(":memory:");
   const masterKey = randomBytes(32);
   insertAccount(db);
-  const service = new SqliteMailApplicationService({ db, masterKey, syncMessageLimit: 20 });
+  // Sender-filter tests never touch attachments; the required directory is inert here.
+  const service = new SqliteMailApplicationService({ db, masterKey, syncMessageLimit: 20, outboundAttachmentDirectory: "outbound-attachments-sender-filter-test" });
   return { db, masterKey, service };
 }
 

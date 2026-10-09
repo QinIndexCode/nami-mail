@@ -118,7 +118,7 @@ describe("move destination and account lookups", () => {
     // two compiles. The counts below are the `?` inside the `IN` list — the
     // statement also binds `account_id`, hence one more each.
     expect(compiled).toHaveLength(2);
-    expect(compiled.map((sql) => (sql.match(/special_use IN \(([^)]*)\)/)?.[1].match(/\?/g) ?? []).length).sort()).toEqual([1, 2]);
+    expect(compiled.map((sql) => (sql.match(/special_use IN \(([^)]*)\)/)?.[1]?.match(/\?/g)?.length ?? 0)).sort()).toEqual([1, 2]);
     // The `?` count must match the bindings that are handed to it. A cache
     // keyed on anything but the width — the target name, a single shared
     // bucket — hands `trash` a two-placeholder statement and the driver throws

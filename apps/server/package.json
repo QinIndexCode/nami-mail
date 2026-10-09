@@ -12,8 +12,8 @@
     "pretest": "node ../../scripts/build-locale-catalog.mjs --check",
     "test": "node ../../scripts/run-server-tests.mjs",
     "pretypecheck": "node ../../scripts/build-locale-catalog.mjs --check",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "typecheck:tests": "tsc -p tsconfig.test.json"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",

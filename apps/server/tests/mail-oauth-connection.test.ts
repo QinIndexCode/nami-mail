@@ -32,9 +32,11 @@ const account: AccountRecord = {
   smtp_transport: "starttls",
   smtp_username: "member@contoso.example",
   username_mode: "email",
+  signature: "",
   status: "connecting",
   last_error: null,
   last_error_code: null,
+  last_sync_warning_code: null,
   last_synced_at: null,
   created_at: "2026-07-19T00:00:00.000Z",
 };

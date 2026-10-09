@@ -5,6 +5,7 @@ import type {
   externalCalendarDeleteOutputSchema,
   externalCalendarListOutputSchema,
   externalCalendarUpdateOutputSchema,
+  CallerContext,
 } from "@nami/agent-contracts";
 import { createToolRegistry, type AgentToolExecutionContext } from "@nami/agent-core";
 import { createCalendarTools } from "../src/agent/calendar-tools.js";
@@ -17,7 +18,7 @@ import { openDatabase, type DatabaseHandle } from "../src/db.js";
 
 const timestamp = "2026-07-27T12:00:00.000Z";
 
-function caller() {
+function caller(): CallerContext {
   return {
     callerId: "test-user",
     kind: "test" as const,

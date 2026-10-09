@@ -263,7 +263,7 @@ describe("the zip writer hands each written entry's memory back to yazl", () => 
     const entries = centralDirectory(archive);
     expect(entries.map((entry) => entry.name)).toEqual([...sources.keys()]);
     for (const entry of entries) {
-      expect(readEntry(archive, entry).equals(sources.get(entry.name))).toBe(true);
+      expect(readEntry(archive, entry).equals(sources.get(entry.name)!)).toBe(true);
     }
     // Every entry that was written had its pump replaced, so none of them still
     // holds its compressed payload.

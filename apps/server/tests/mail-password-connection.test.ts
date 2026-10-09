@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { providerPresets } from "../src/providers.js";
+import { providerPresets, type DetectedProvider } from "../src/providers.js";
 
 const { ImapFlow, createTransport } = vi.hoisted(() => ({
   ImapFlow: vi.fn(),
@@ -11,8 +11,17 @@ vi.mock("nodemailer", () => ({ default: { createTransport } }));
 
 import { testAccountConnection } from "../src/mail.js";
 
-const qqProvider = providerPresets.find((preset) => preset.id === "qq");
-if (!qqProvider) throw new Error("qq provider preset missing");
+const preset = providerPresets.find((item) => item.id === "qq");
+if (!preset) throw new Error("qq provider preset missing");
+// R14: the transport verifier takes the DETECTED shape — the preset plus the
+// discovery metadata a real resolution would have attached.
+const qqProvider: DetectedProvider = {
+  ...preset,
+  domain: "qq.com",
+  isCustom: false,
+  source: "preset",
+  confidence: "high",
+};
 
 const password = "sixteen-char-code";
 

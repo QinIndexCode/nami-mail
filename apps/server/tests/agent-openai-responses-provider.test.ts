@@ -37,7 +37,7 @@ const searchTool = {
   description: "Search indexed mail.",
   category: "messages" as const,
   executionMode: "read" as const,
-  requiredScopes: ["read:messages"] as const,
+  requiredScopes: ["read:messages" as const],
   accountAccess: "required" as const,
   confirmationPolicy: "never" as const,
   availableToExternal: true,

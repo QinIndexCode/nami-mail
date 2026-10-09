@@ -47,7 +47,9 @@ describe("versioned data envelopes", () => {
     expect(decryptBufferEnvelope(encrypted, key, "attachment:one")).toEqual(plaintext);
 
     const tampered = Buffer.from(encrypted);
-    tampered[tampered.length - 1] ^= 0xff;
+    // noUncheckedIndexedAccess: the read needs the assertion, the write follows it.
+    const lastByteIndex = tampered.length - 1;
+    tampered[lastByteIndex] = tampered[lastByteIndex]! ^ 0xff;
     expect(() => decryptBufferEnvelope(tampered, key, "attachment:one")).toThrow();
     expect(() => decryptBufferEnvelope(encrypted, randomBytes(32), "attachment:one")).toThrow();
   });
