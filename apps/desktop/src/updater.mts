@@ -223,11 +223,19 @@ export class DesktopUpdater {
   private scheduleRetry(): void {
     if (this.automaticCheckTimer || !this.enabled || this.disposed) return;
     this.consecutiveCheckFailures += 1;
-    this.scheduleCheck(updateRetryDelay(this.consecutiveCheckFailures, {
+    const retryDelayMs = updateRetryDelay(this.consecutiveCheckFailures, {
       baseDelayMs: this.options.retryBaseDelayMs ?? defaultUpdateRetryBaseDelayMs,
       maximumDelayMs: this.options.retryMaxDelayMs ?? defaultUpdateRetryMaxDelayMs,
       random: this.options.random,
-    }));
+    });
+    // An active reminder outranks the backoff: waking only at the end of a
+    // growing retry sequence would leave an installable snoozed update
+    // hidden past the time the user chose. The earlier of the two deadlines
+    // wins; expiry takes the local verification path above.
+    const reminderRemainingMs = this.snapshot.suppression === "snoozed" && this.snapshot.remindAt
+      ? Math.max(1_000, Date.parse(this.snapshot.remindAt) - this.now())
+      : Number.POSITIVE_INFINITY;
+    this.scheduleCheck(Math.min(retryDelayMs, reminderRemainingMs));
   }
 
   async start(): Promise<DesktopUpdateSnapshot> {
@@ -308,14 +316,68 @@ export class DesktopUpdater {
     });
   }
 
+  /**
+   * A remote failure after a ready snapshot must not demote an archive that
+   * still verifies to an error: `installDownloadedUpdate` only opens on
+   * "ready", so an offline reminder expiry would lock an installable package
+   * behind "reconnect to re-check". Returns false when the cache no longer
+   * passes the same verification the install path uses — an invalid cache
+   * falls back to the error branch exactly as before.
+   */
+  private async restoreReadyAfterFailedCheck(prior: DesktopUpdateSnapshot): Promise<boolean> {
+    if (prior.phase !== "ready" || !this.update) return false;
+    if (!await hasVerifiedCachedUpdate(this.cacheDirectory, this.update)) return false;
+    // The policy is re-read after the verification await: if the user
+    // committed a skip while it ran, their choice owns the snapshot — do not
+    // overwrite it with a restored ready state.
+    const policy = resolveUpdatePromptPolicy(this.preferences.get(), this.update.version, this.now());
+    if (policy.suppression === "skipped") return true;
+    this.transition("ready", "downloadReady", {
+      targetVersion: prior.targetVersion ?? this.update.version,
+      // The failed remote attempt is not a successful check: keep the
+      // truthful checkedAt from the snapshot taken before it started.
+      checkedAt: prior.checkedAt,
+      percent: 100,
+      suppression: policy.suppression,
+      remindAt: policy.remindAt,
+    });
+    return true;
+  }
+
   async checkForUpdates(): Promise<DesktopUpdateSnapshot> {
     if (!this.enabled) return this.getSnapshot();
     if (this.snapshot.phase === "downloading" || (this.snapshot.phase === "ready" && this.snapshot.suppression === "none")) return this.getSnapshot();
     if (this.checkPromise) return this.checkPromise;
     this.clearScheduledCheck();
 
+    // The snooze-expiry verification runs inside the shared checkPromise so
+    // a timer wakeup and a resume/manual check cannot hash the same archive
+    // concurrently: the second caller joins the first, and any user action
+    // committed while it runs keeps ownership of the published state.
     this.checkPromise = (async () => {
+      const priorSnapshot = this.getSnapshot();
       try {
+        // Snooze expiry is resolved locally: re-parse the reminder preference and
+        // re-verify the already-downloaded archive instead of pushing an
+        // installable package through a remote check that can fail offline. No
+        // check is recorded (checkedAt stays as it was) and no verification is
+        // relaxed — an archive that no longer verifies falls through to the
+        // remote path below, which still applies the error state on failure.
+        if (priorSnapshot.phase === "ready" && priorSnapshot.suppression === "snoozed" && this.update) {
+          const policy = resolveUpdatePromptPolicy(this.preferences.get(), this.update.version, this.now());
+          if (policy.suppression !== "snoozed" && await hasVerifiedCachedUpdate(this.cacheDirectory, this.update)) {
+            // The preference is re-read after the await: a skip or a new snooze
+            // the user committed while the archive was hashing must not be
+            // overwritten by the policy captured before it.
+            const current = resolveUpdatePromptPolicy(this.preferences.get(), this.update.version, this.now());
+            if (current.suppression === "skipped") return this.getSnapshot();
+            return this.transition("ready", "downloadReady", {
+              percent: 100,
+              suppression: current.suppression,
+              remindAt: current.remindAt,
+            });
+          }
+        }
         const installFailure = await this.installResults.readFailure();
         if (installFailure?.stage === "cleanup") {
           const cleanupResult = await this.publishInstallResult(installFailure);
@@ -365,7 +427,9 @@ export class DesktopUpdater {
         }
         this.schedulePeriodicCheck();
       } catch (error) {
-        this.transition("error", classifyUpdateError(error), { percent: null, suppression: "none", remindAt: null });
+        if (!await this.restoreReadyAfterFailedCheck(priorSnapshot)) {
+          this.transition("error", classifyUpdateError(error), { percent: null, suppression: "none", remindAt: null });
+        }
         this.scheduleRetry();
       } finally {
         this.checkPromise = undefined;
@@ -414,8 +478,14 @@ export class DesktopUpdater {
   async skipAvailableUpdate(): Promise<DesktopUpdateSnapshot> {
     if (!this.enabled || !this.update || !["available", "ready"].includes(this.snapshot.phase)) return this.getSnapshot();
     const update = this.update;
+    // The preference commit is the operation the caller sees: if it cannot be
+    // persisted the error propagates and memory keeps the old preference
+    // (UpdatePreferencesStore only commits after the atomic rename). Once it
+    // is committed, a leftover archive is the cache's problem — the next
+    // check removes the archive again for a skipped policy — so a cleanup
+    // failure must not deny that the preference is now "skipped".
     await this.preferences.save(skipUpdateVersion(this.preferences.get(), update.version));
-    await removeCachedGitHubZipUpdate(this.cacheDirectory, update);
+    await removeCachedGitHubZipUpdate(this.cacheDirectory, update).catch(() => undefined);
     this.publishAvailableUpdate(update, false);
     this.schedulePeriodicCheck();
     return this.getSnapshot();

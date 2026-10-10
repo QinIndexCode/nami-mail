@@ -53,6 +53,73 @@ test("normalizes damaged preference data without carrying arbitrary values forwa
   });
 });
 
+test("a mkdir failure leaves memory and disk on the previous preference", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-update-preferences-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  // A plain file where the parent directory should be makes the very first
+  // write step (mkdir -p) fail without touching permissions.
+  const blocker = path.join(directory, "blocker.json");
+  await fs.writeFile(blocker, "not a directory");
+  const store = new UpdatePreferencesStore(path.join(blocker, "update-preferences.json"));
+  await store.load();
+  await assert.rejects(store.save(skipUpdateVersion(store.get(), "1.2.3")));
+  assert.equal(store.get().skippedVersion, null);
+  assert.equal(await fs.readFile(blocker, "utf8"), "not a directory");
+});
+
+test("a writeFile failure leaves memory and disk on the previous preference", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-update-preferences-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "update-preferences.json");
+  const store = new UpdatePreferencesStore(filePath);
+  await store.load();
+  const persisted = await store.save(snoozeUpdateVersion(store.get(), "1.2.3", 30, Date.UTC(2026, 6, 22, 8, 0, 0)));
+  const baselineBytes = await fs.readFile(filePath, "utf8");
+  t.mock.method(fs, "writeFile", async () => {
+    throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+  });
+  await assert.rejects(store.save(skipUpdateVersion(store.get(), "1.2.4")), /disk full/);
+  // Memory still reflects the last committed preference, and the file on
+  // disk is byte-identical to it — the caller's error and both views agree.
+  assert.deepEqual(store.get(), persisted);
+  assert.equal(await fs.readFile(filePath, "utf8"), baselineBytes);
+});
+
+test("a rename failure leaves memory and disk on the previous preference", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-update-preferences-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "update-preferences.json");
+  const store = new UpdatePreferencesStore(filePath);
+  await store.load();
+  const persisted = await store.save(skipUpdateVersion(store.get(), "1.2.3"));
+  const baselineBytes = await fs.readFile(filePath, "utf8");
+  t.mock.method(fs, "rename", async () => {
+    throw Object.assign(new Error("rename failed"), { code: "EPERM" });
+  });
+  await assert.rejects(store.save(skipUpdateVersion(persisted, "1.2.4")), /rename failed/);
+  assert.deepEqual(store.get(), persisted);
+  assert.equal(await fs.readFile(filePath, "utf8"), baselineBytes);
+  // The half-written temporary file must still be cleaned up.
+  assert.equal((await fs.readdir(directory)).some((entry) => entry.endsWith(".tmp")), false);
+});
+
+test("a failed save followed by a successful one is what a restarted process loads", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-update-preferences-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "update-preferences.json");
+  const store = new UpdatePreferencesStore(filePath);
+  await store.load();
+  const failing = t.mock.method(fs, "rename", async () => {
+    throw Object.assign(new Error("rename failed"), { code: "EPERM" });
+  });
+  await assert.rejects(store.save(skipUpdateVersion(store.get(), "1.2.3")));
+  failing.mock.restore();
+  const committed = await store.save(skipUpdateVersion(store.get(), "1.2.4"));
+  assert.equal(committed.skippedVersion, "1.2.4");
+  const restarted = new UpdatePreferencesStore(filePath);
+  assert.deepEqual(await restarted.load(), committed);
+});
+
 test("persists update prompt choices atomically under the desktop profile", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-update-preferences-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));

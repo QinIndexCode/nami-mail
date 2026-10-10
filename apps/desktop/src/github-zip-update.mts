@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { finished } from "node:stream/promises";
+import { pipeline } from "node:stream/promises";
+import { Transform } from "node:stream";
 import type { UpdateManifestSignatureInput } from "./update-trust.mjs";
 
 const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -429,13 +430,7 @@ export async function hasVerifiedCachedUpdate(cacheDirectory: string, update: Gi
   }
 }
 
-async function writeChunk(stream: ReturnType<typeof createWriteStream>, chunk: Uint8Array): Promise<void> {
-  if (stream.write(chunk)) return;
-  await new Promise<void>((resolve, reject) => {
-    stream.once("drain", resolve);
-    stream.once("error", reject);
-  });
-}
+
 
 export async function downloadGitHubZipUpdate(options: {
   cacheDirectory: string;
@@ -490,29 +485,31 @@ export async function downloadGitHubZipUpdate(options: {
 
     const hash = createHash("sha512");
     let transferred = 0;
-    const stream = createWriteStream(temporaryPath, { flags: "wx", mode: 0o600 });
-    try {
-      for await (const chunk of response.body) {
-        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    // `pipeline` owns the whole write lifecycle: a write() that returns true
+    // only buffered the chunk, so an async disk failure (EIO, ENOSPC, a late
+    // open error) can surface while the downloader waits for network data —
+    // an unhandled 'error' event that crashed the process and left the .part
+    // behind. Pipeline listens on the write stream from creation, destroys
+    // the network stream on any failure, and rejects with the original error.
+    // The meter keeps the published size cap, the streamed digest, and the
+    // progress reporting exactly where the old loop had them.
+    const meter = new Transform({
+      transform(bytes: Buffer, _encoding, callback) {
         transferred += bytes.byteLength;
         if (transferred > options.update.archiveSize) {
-          throw new GitHubZipUpdateError("UPDATE_DOWNLOAD_FAILED", "GitHub ZIP update exceeds the published size.");
+          callback(new GitHubZipUpdateError("UPDATE_DOWNLOAD_FAILED", "GitHub ZIP update exceeds the published size."));
+          return;
         }
         hash.update(bytes);
-        await writeChunk(stream, bytes);
         options.onProgress?.({
           transferred,
           total: options.update.archiveSize,
           percent: Math.max(0, Math.min(100, Math.round((transferred / options.update.archiveSize) * 100))),
         });
-      }
-      stream.end();
-      await finished(stream);
-    } catch (error) {
-      stream.destroy();
-      await finished(stream).catch(() => undefined);
-      throw error;
-    }
+        callback(null, bytes);
+      },
+    });
+    await pipeline(response.body, meter, createWriteStream(temporaryPath, { flags: "wx", mode: 0o600 }));
     if (transferred !== options.update.archiveSize || hash.digest("base64") !== options.update.archiveSha512) {
       throw new GitHubZipUpdateError("UPDATE_DOWNLOAD_FAILED", "Downloaded ZIP update failed its published integrity check.");
     }
