@@ -365,6 +365,93 @@ test("rejects the download and clears the temporary file when a backpressured wr
   assert.equal(await fs.readdir(archiveDirectory).then((entries) => entries.some((entry) => entry.endsWith(".part"))), false);
 });
 
+function streamedUpdate(bytes: Buffer) {
+  return {
+    source,
+    version,
+    tag: `v${version}`,
+    archiveName: assetNames.archiveName,
+    archiveUrl: "https://example.invalid/fixture.zip",
+    archiveSize: bytes.byteLength,
+    archiveSha512: createHash("sha512").update(bytes).digest("base64"),
+    installerName: assetNames.installerName,
+  };
+}
+
+function chunkedArchiveResponse(bytes: Buffer): Response {
+  let position = 0;
+  return new Response(new ReadableStream({
+    pull(controller) {
+      if (position >= bytes.byteLength) {
+        controller.close();
+        return;
+      }
+      const end = Math.min(position + 128 * 1024, bytes.byteLength);
+      controller.enqueue(bytes.subarray(position, end));
+      position = end;
+    },
+  }), { headers: { "content-length": String(bytes.byteLength) } });
+}
+
+async function assertDownloadRejectedAndPartRemoved(
+  directory: string,
+  update: ReturnType<typeof streamedUpdate>,
+  expected: RegExp,
+): Promise<void> {
+  await assert.rejects(
+    downloadGitHubZipUpdate({ cacheDirectory: directory, update, fetchImpl: async () => chunkedArchiveResponse(Buffer.alloc(update.archiveSize, 0x4e)) }),
+    expected,
+  );
+  const archiveDirectory = path.join(directory, version);
+  assert.equal(await fs.readdir(archiveDirectory).then((entries) => entries.some((entry) => entry.endsWith(".part"))), false);
+}
+
+test("rejects the download when opening the output file fails", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-github-update-open-fail-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  // Node 25 performs the open inside WriteStream's _construct phase; failing
+  // there surfaces as an async stream error before any write. The hook is an
+  // internal (untyped) method, hence the shape assertion.
+  t.mock.method(
+    WriteStream.prototype as unknown as { _construct: (callback: (error?: Error | null) => void) => void },
+    "_construct",
+    function (this: WriteStream, callback: (error?: Error | null) => void) {
+      process.nextTick(() => callback(Object.assign(new Error("simulated open failure"), { code: "EACCES" })));
+    },
+  );
+  await assertDownloadRejectedAndPartRemoved(directory, streamedUpdate(Buffer.alloc(1024 * 1024, 0x4e)), /simulated open failure/);
+});
+
+test("rejects the download when a plain write fails asynchronously", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-github-update-async-write-fail-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const originalWrite = WriteStream.prototype.write;
+  let injected = false;
+  t.mock.method(WriteStream.prototype, "write", function (this: WriteStream, ...args: Parameters<WriteStream["write"]>) {
+    const accepted = originalWrite.apply(this, args);
+    if (!injected) {
+      injected = true;
+      // write() returning true only buffered the chunk: the disk failure
+      // arrives while the downloader is still reading network data.
+      process.nextTick(() => this.destroy(Object.assign(new Error("simulated disk failure without backpressure"), { code: "EIO" })));
+    }
+    return accepted;
+  });
+  await assertDownloadRejectedAndPartRemoved(directory, streamedUpdate(Buffer.alloc(1024 * 1024, 0x4e)), /simulated disk failure without backpressure/);
+});
+
+test("rejects the download when the final atomic rename fails", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-github-update-rename-fail-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  // The completion stage: integrity already passed and only the .part-to-ZIP
+  // rename failed. The error must still reject the download and remove the
+  // temporary file so no installable package is left behind.
+  t.mock.method(fs, "rename", async () => {
+    throw Object.assign(new Error("simulated rename failure"), { code: "EPERM" });
+  });
+  await assertDownloadRejectedAndPartRemoved(directory, streamedUpdate(Buffer.alloc(1024 * 1024, 0x4e)), /simulated rename failure/);
+});
+
 test("rejects an oversized GitHub release metadata body", async () => {
   const oversizedRelease = new Response(JSON.stringify({
     tag_name: `v${version}`,
