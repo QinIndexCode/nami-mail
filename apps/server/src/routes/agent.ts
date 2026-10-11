@@ -299,7 +299,10 @@ export function registerAgentRoutes(app: FastifyInstance, deps: AgentRouteDeps):
     }
   });
 
-  app.post<{ Params: { id: string } }>("/api/agent/conversations/:id/messages", async (request, reply) => {
+  app.post<{ Params: { id: string } }>(
+    "/api/agent/conversations/:id/messages",
+    { bodyLimit: 25 * 1024 * 1024 },
+    async (request, reply) => {
     if (!agentService) return reply.code(503).send({ ok: false, code: ROUTE_ERROR_CODES.agent_unavailable, message: "Agent 服务当前不可用。" });
     const parsed = agentMessageSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });

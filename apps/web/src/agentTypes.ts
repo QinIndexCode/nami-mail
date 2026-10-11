@@ -7,8 +7,8 @@ export type AgentStreamEvent = AgentUiStreamEvent;
 
 // The provider summary shape is single-sourced in @nami/agent-contracts (the
 // server's provider service serializes against the same schema).
-import type { AgentProviderKind, AgentProviderSummary } from "@nami/agent-contracts";
-export type { AgentProviderKind, AgentProviderSummary };
+import type { AgentProviderKind, AgentProviderSummary, ModelInputModalities } from "@nami/agent-contracts";
+export type { AgentProviderKind, AgentProviderSummary, ModelInputModalities };
 
 /** Non-secret provider details returned by the local Agent service. */
 export type AgentProviderList = {
@@ -31,6 +31,7 @@ export type AgentProviderInput = {
   makeDefault?: boolean;
   contextWindowTokens?: number;
   maxOutputTokens?: number;
+  modalities?: ModelInputModalities;
 };
 
 export type AutoReplySimulateInput = {
@@ -143,6 +144,10 @@ export type AgentMessageAttachment = {
   path?: string;
   /** Outbound attachment token (out_...) when this file can be used as a mail attachment. */
   token?: string;
+  accountId?: string;
+  text?: string;
+  dataUrl?: string;
+  mimeType?: string;
 };
 
 /** A mail the user explicitly introduced as context via /@ (cap 8, deduped by id). */

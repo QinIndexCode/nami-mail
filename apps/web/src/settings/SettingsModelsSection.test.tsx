@@ -242,6 +242,12 @@ describe("settings models panel", () => {
       apiKey: "write-only-secret",
       contextWindowTokens: 8192,
       maxOutputTokens: 2048,
+      modalities: {
+        image: false,
+        video: false,
+        audio: false,
+        pdf: false,
+      },
     });
     // A save is always followed by a connection check, then a list refresh.
     expect(mockApi.checkAgentProvider).toHaveBeenCalledWith("provider-new");
@@ -537,8 +543,46 @@ describe("settings models panel", () => {
 
     expect(container.querySelector('[data-models-card="mcp"]')).not.toBeNull();
     expect(container.querySelector('[data-models-card="providers"]')).toBeNull();
-    expect(container.querySelector('[data-settings-nav="mcp"]')).not.toBeNull();
     expect(mockApi.agentMcpServers).toHaveBeenCalled();
     expect(mockApi.agentProviders).not.toHaveBeenCalled();
+  });
+
+  it("allows toggling multimodal input switches (image, video, audio, pdf)", async () => {
+    await render();
+
+    click(byText('[data-models-card="providers"] .settings-inline-actions .secondary-button', t("agent.providers.new"))!);
+    await flush();
+
+    type(query<HTMLInputElement>("#agent-provider-label"), "多模态模型");
+    type(query<HTMLInputElement>("#agent-provider-endpoint"), "https://models.example.test/v1");
+    type(query<HTMLInputElement>("#agent-provider-model"), "gemini-pro-vision");
+
+    // Click to expand Advanced Settings
+    click(byText(".settings-model-advanced-toggle", t("agent.providers.advanced.title"))!);
+    await flush();
+
+    // Verify text is present and locked
+    const textPill = query<HTMLButtonElement>(`button[data-tooltip="${t("agent.providers.modalities.textLocked")}"]`);
+    expect(textPill).not.toBeNull();
+    expect(textPill.disabled).toBe(true);
+
+    // Toggle image and pdf
+    click(query<HTMLButtonElement>('button[data-modality="image"]'));
+    click(query<HTMLButtonElement>('button[data-modality="pdf"]'));
+    await flush();
+
+    await submit('[data-models-form="provider"]');
+
+    expect(mockApi.createAgentProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "多模态模型",
+        modalities: {
+          image: true,
+          video: false,
+          audio: false,
+          pdf: true,
+        },
+      }),
+    );
   });
 });

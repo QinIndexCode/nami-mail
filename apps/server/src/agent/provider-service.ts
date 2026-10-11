@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { isLoopbackHostname } from "../endpoint-guard.js";
 import {
+  modelInputModalitiesSchema,
   providerHealthSchema,
   type AgentProviderKind,
   type AgentProviderSummary,
   type LlmProvider,
+  type ModelInputModalities,
   type ProviderHealth,
 } from "@nami/agent-contracts";
 import type { DatabaseHandle } from "../db.js";
@@ -18,10 +20,17 @@ import { AgentServiceError, now, requiredText } from "./agent-shared.js";
 export const providerConfigurationVersion = 1;
 const defaultProviderRecordId = "agent-provider-default";
 
+export const defaultModalities: ModelInputModalities = {
+  image: false,
+  video: false,
+  audio: false,
+  pdf: false,
+};
+
 // The provider summary shape is single-sourced in @nami/agent-contracts
 // (the web consumes the same type); these re-exports keep the historical
 // local names for the rest of the server.
-export type { AgentProviderKind, AgentProviderSummary };
+export type { AgentProviderKind, AgentProviderSummary, ModelInputModalities };
 
 export type AgentProviderInput = {
   label: string;
@@ -36,6 +45,7 @@ export type AgentProviderInput = {
   makeDefault?: boolean;
   contextWindowTokens?: number;
   maxOutputTokens?: number;
+  modalities?: ModelInputModalities;
 };
 
 export type AgentProviderList = {
@@ -55,6 +65,7 @@ export type ProviderConfiguration = {
   timeoutMs: number;
   allowCloudMailContent: boolean;
   streaming: true;
+  modalities?: ModelInputModalities;
   contextWindowTokens?: number;
   maxOutputTokens?: number;
   health?: ProviderHealth;
@@ -113,6 +124,7 @@ export function providerSummary(configuration: ProviderConfiguration): AgentProv
   const cloud = normalizeEndpoint(configuration.endpoint).cloud;
   const apiKeyConfigured = Boolean(configuration.apiKey);
   const configured = Boolean(configuration.model && configuration.endpoint && (!cloud || apiKeyConfigured));
+  const modalities = configuration.modalities ?? defaultModalities;
   return {
     id: configuration.id,
     label: configuration.label,
@@ -126,9 +138,8 @@ export function providerSummary(configuration: ProviderConfiguration): AgentProv
     cloud,
     cloudContentConsent: cloud && configuration.allowCloudMailContent,
     streaming: configuration.streaming,
-    // Mirrors the adapter-level vision capability (anthropic/gemini/openai-responses
-    // accept image inputs; openai-compatible kind and ollama do not by default).
-    vision: configuration.kind === "anthropic" || configuration.kind === "gemini" || configuration.kind === "openai-responses",
+    vision: Boolean(modalities.image),
+    modalities,
     contextWindowTokens: configuration.contextWindowTokens ?? 8_192,
     maxOutputTokens: configuration.maxOutputTokens ?? 2_048,
     ...(configuration.health ? { health: configuration.health } : {}),
@@ -161,6 +172,9 @@ function parseProviderConfiguration(value: unknown, id: string): ProviderConfigu
   ) throw new AgentServiceError("INTERNAL", "模型配置格式无效。", 500);
   const health = input.health === undefined ? undefined : providerHealthSchema.safeParse(input.health);
   if (health && !health.success) throw new AgentServiceError("INTERNAL", "模型连接状态格式无效。", 500);
+  const modalitiesResult = input.modalities !== undefined ? modelInputModalitiesSchema.safeParse(input.modalities) : undefined;
+  if (modalitiesResult && !modalitiesResult.success) throw new AgentServiceError("INTERNAL", "模型配置格式无效。", 500);
+  const modalities = modalitiesResult ? modalitiesResult.data : { ...defaultModalities };
   const endpoint = normalizeEndpoint(input.endpoint).endpoint;
   return {
     version: providerConfigurationVersion,
@@ -174,6 +188,7 @@ function parseProviderConfiguration(value: unknown, id: string): ProviderConfigu
     timeoutMs: validateTimeout(input.timeoutMs),
     allowCloudMailContent: input.allowCloudMailContent,
     streaming: true,
+    modalities,
     ...(input.contextWindowTokens !== undefined ? { contextWindowTokens: validateContextWindow(input.contextWindowTokens) } : {}),
     ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: validateMaxOutput(input.maxOutputTokens) } : {}),
     ...(health?.success ? { health: health.data } : {}),
@@ -302,6 +317,7 @@ class AgentProviderStore {
       timeoutMs: validateTimeout(input.timeoutMs),
       allowCloudMailContent: endpoint.cloud && input.kind !== "ollama" && input.allowCloudMailContent,
       streaming: true,
+      modalities: input.modalities ?? existing?.modalities ?? { ...defaultModalities },
       ...(input.contextWindowTokens !== undefined
         ? { contextWindowTokens: validateContextWindow(input.contextWindowTokens) }
         : existing?.contextWindowTokens !== undefined
