@@ -1771,7 +1771,7 @@ export class AgentRunEngine {
         if (message.id === userMessage.id) {
           // User-chosen references lead the turn: the model must treat them as
           // user-introduced context, not as retrieval the agent did itself.
-          const baseContent = composeProviderChatMessageContent(userMessage.content, userAttachments);
+          const baseContent = composeProviderChatMessageContent(message.content, userAttachments);
           if (referenceBlock) {
             const content = typeof baseContent === "string"
               ? `${referenceBlock}\n\n${baseContent}`

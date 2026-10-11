@@ -44,10 +44,10 @@ export function composeProviderChatMessageContent(
   if (!attachments || attachments.length === 0) return content;
   const multimodal = attachments.filter((att) => typeof att.dataUrl === "string" && att.dataUrl.length > 0);
   if (multimodal.length === 0) {
-    return composeAttachmentContent(content, attachments);
+    return content.includes("[file: ") ? content : composeAttachmentContent(content, attachments);
   }
   const parts: ProviderContentPart[] = [];
-  const textContent = composeAttachmentContent(content, attachments);
+  const textContent = content.includes("[file: ") ? content : composeAttachmentContent(content, attachments);
   if (textContent.trim().length > 0) {
     parts.push({ type: "text", text: textContent });
   }

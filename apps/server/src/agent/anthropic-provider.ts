@@ -85,11 +85,12 @@ function anthropicMessages(request: ProviderChatRequest): { system?: string; mes
             } else if (part.type === "image_url") {
               const match = part.imageUrl.url.match(/^data:([^;]+);base64,(.+)$/);
               if (match) {
+                const mediaType = match[1].startsWith("image/") ? match[1] : "image/jpeg";
                 contentBlocks.push({
                   type: "image",
                   source: {
                     type: "base64",
-                    media_type: match[1],
+                    media_type: mediaType,
                     data: match[2],
                   },
                 });

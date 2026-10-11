@@ -83,8 +83,8 @@ function filePathOf(file: File): string | undefined {
   return (file as File & { path?: string }).path;
 }
 
-export async function fileToDataUrl(file: File): Promise<string> {
-  const mime = file.type || "application/octet-stream";
+export async function fileToDataUrl(file: File, fallbackMime?: string): Promise<string> {
+  const mime = (file.type && file.type !== "application/octet-stream") ? file.type : (fallbackMime || file.type || "application/octet-stream");
   if (typeof Buffer !== "undefined") {
     try {
       const buffer = await file.arrayBuffer();
@@ -234,7 +234,7 @@ export async function processFile(file: File): Promise<ProcessedFile> {
   if (imageExtensions.has(ext) || videoExtensions.has(ext) || audioExtensions.has(ext) || ext === "pdf") {
     mimeType = file.type || mimeByExt[ext] || "application/octet-stream";
     try {
-      dataUrl = await fileToDataUrl(file);
+      dataUrl = await fileToDataUrl(file, mimeType);
     } catch {
       // In non-browser environments or upon read failure, proceed without dataUrl.
     }

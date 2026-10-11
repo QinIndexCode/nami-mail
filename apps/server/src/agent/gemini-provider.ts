@@ -106,9 +106,10 @@ function geminiContents(request: ProviderChatRequest): { system?: string; conten
           } else if (part.type === "image_url") {
             const match = part.imageUrl.url.match(/^data:([^;]+);base64,(.+)$/);
             if (match) {
+              const mimeType = match[1].startsWith("image/") ? match[1] : "image/jpeg";
               parts.push({
                 inlineData: {
-                  mimeType: match[1],
+                  mimeType,
                   data: match[2],
                 },
               });
