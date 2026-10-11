@@ -181,7 +181,7 @@ describe("Agent service auxiliary provider calls ride the runtime seam", () => {
     const userContents: string[] = [];
     vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request) {
       if (request.requestId.startsWith("title-")) {
-        userContents.push(request.chat.messages[1]?.content ?? "");
+        userContents.push(String(request.chat.messages[1]?.content ?? ""));
         yield { type: "text_delta", delta: "Truncated" };
         yield { type: "completed", reason: "stop" };
         return;

@@ -14,6 +14,15 @@ export const providerKinds = [
 
 export const providerKindSchema = z.enum(providerKinds);
 
+export const modelInputModalitiesSchema = z.object({
+  image: z.boolean(),
+  video: z.boolean(),
+  audio: z.boolean(),
+  pdf: z.boolean(),
+}).strict();
+
+export type ModelInputModalities = z.infer<typeof modelInputModalitiesSchema>;
+
 export const providerCapabilitiesSchema = z.object({
   chatCompletion: z.boolean(),
   responses: z.boolean(),
@@ -25,6 +34,7 @@ export const providerCapabilitiesSchema = z.object({
   // contract carries this flag so a host can gate image attachments on the
   // selected model's actual capability instead of guessing by kind.
   vision: z.boolean(),
+  modalities: modelInputModalitiesSchema.optional(),
   contextWindow: z.number().int().positive(),
   maxOutputTokens: z.number().int().positive().optional(),
 }).strict();
@@ -38,10 +48,37 @@ export const providerDescriptorSchema = z.object({
   capabilities: providerCapabilitiesSchema,
 }).strict();
 
+export const providerContentPartSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("text"),
+    text: z.string().max(2_000_000),
+  }).strict(),
+  z.object({
+    type: z.literal("image_url"),
+    imageUrl: z.object({
+      url: z.string().max(15_000_000),
+      detail: z.enum(["auto", "low", "high"]).optional(),
+    }).strict(),
+  }).strict(),
+  z.object({
+    type: z.literal("document"),
+    document: z.object({
+      url: z.string().max(15_000_000),
+      mimeType: z.string().max(128),
+      name: z.string().max(256).optional(),
+    }).strict(),
+  }).strict(),
+]);
+
+export const providerChatMessageContentSchema = z.union([
+  z.string().max(2_000_000),
+  z.array(providerContentPartSchema).max(64),
+]);
+
 export const providerChatRoleSchema = z.enum(["system", "user", "assistant", "tool"]);
 export const providerChatMessageSchema = z.object({
   role: providerChatRoleSchema,
-  content: z.string().max(2_000_000),
+  content: providerChatMessageContentSchema,
   name: z.string().trim().min(1).max(128).optional(),
   toolCallId: z.string().trim().min(1).max(128).optional(),
   // Assistant tool calls are retained between model turns so a provider can
@@ -129,6 +166,7 @@ export const agentProviderSummarySchema = z.object({
   streaming: z.boolean(),
   /** Whether the configured model accepts image inputs; gates image attachments. */
   vision: z.boolean(),
+  modalities: modelInputModalitiesSchema.optional(),
   contextWindowTokens: z.number().int().positive().optional(),
   maxOutputTokens: z.number().int().positive().optional(),
   health: providerHealthSchema.optional(),
@@ -149,6 +187,8 @@ export const embeddingResponseSchema = z.object({
 export type ProviderKind = z.infer<typeof providerKindSchema>;
 export type ProviderCapabilities = z.infer<typeof providerCapabilitiesSchema>;
 export type ProviderDescriptor = z.infer<typeof providerDescriptorSchema>;
+export type ProviderContentPart = z.infer<typeof providerContentPartSchema>;
+export type ProviderChatMessageContent = z.infer<typeof providerChatMessageContentSchema>;
 export type ProviderChatMessage = z.infer<typeof providerChatMessageSchema>;
 export type ProviderTokenUsage = z.infer<typeof providerTokenUsageSchema>;
 export type ProviderChatRequest = z.infer<typeof providerChatRequestSchema>;

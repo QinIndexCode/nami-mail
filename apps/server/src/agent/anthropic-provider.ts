@@ -61,7 +61,8 @@ function anthropicMessages(request: ProviderChatRequest): { system?: string; mes
   const rest: ProviderChatMessage[] = [];
   for (const message of request.messages) {
     if (message.role === "system") {
-      if (message.content.trim()) systemParts.push(message.content);
+      const text = typeof message.content === "string" ? message.content : "";
+      if (text.trim()) systemParts.push(text);
     } else {
       rest.push(message);
     }
@@ -71,20 +72,72 @@ function anthropicMessages(request: ProviderChatRequest): { system?: string; mes
   for (const message of rest) {
     if (message.role === "user" || message.role === "tool") {
       if (message.toolCallId) {
-        converted.push({ role: "user", content: [{ type: "tool_result", tool_use_id: message.toolCallId, content: message.content || " " }] });
+        const rawText = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+        converted.push({ role: "user", content: [{ type: "tool_result", tool_use_id: message.toolCallId, content: rawText || " " }] });
       } else {
-        converted.push({ role: "user", content: [{ type: "text", text: message.content || " " }] });
+        const contentBlocks: unknown[] = [];
+        if (typeof message.content === "string") {
+          contentBlocks.push({ type: "text", text: message.content || " " });
+        } else if (Array.isArray(message.content)) {
+          for (const part of message.content) {
+            if (part.type === "text") {
+              contentBlocks.push({ type: "text", text: part.text });
+            } else if (part.type === "image_url") {
+              const match = part.imageUrl.url.match(/^data:([^;]+);base64,(.+)$/);
+              if (match && match[1] && match[2]) {
+                const mediaType = match[1].startsWith("image/") ? match[1] : "image/jpeg";
+                contentBlocks.push({
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: mediaType,
+                    data: match[2],
+                  },
+                });
+              }
+            } else if (part.type === "document") {
+              const match = part.document.url.match(/^data:([^;]+);base64,(.+)$/);
+              if (match && match[1] && match[2]) {
+                const mime = part.document.mimeType || match[1] || "application/octet-stream";
+                if (mime.startsWith("image/")) {
+                  contentBlocks.push({
+                    type: "image",
+                    source: {
+                      type: "base64",
+                      media_type: mime,
+                      data: match[2],
+                    },
+                  });
+                } else {
+                  contentBlocks.push({
+                    type: "document",
+                    source: {
+                      type: "base64",
+                      media_type: mime,
+                      data: match[2],
+                    },
+                  });
+                }
+              }
+            }
+          }
+        }
+        if (!contentBlocks.length) contentBlocks.push({ type: "text", text: " " });
+        converted.push({ role: "user", content: contentBlocks });
       }
     } else if (message.role === "assistant") {
       const content: unknown[] = [];
-      if (message.content) content.push({ type: "text", text: message.content });
+      if (message.content) {
+        const text = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+        content.push({ type: "text", text });
+      }
       for (const call of message.toolCalls ?? []) {
         content.push({ type: "tool_use", id: call.id, name: call.toolName, input: call.input });
       }
       if (!content.length) content.push({ type: "text", text: " " });
       converted.push({ role: "assistant", content });
     } else {
-      converted.push({ role: "user", content: [{ type: "text", text: message.content || " " }] });
+      converted.push({ role: "user", content: [{ type: "text", text: typeof message.content === "string" ? message.content || " " : " " }] });
     }
   }
 

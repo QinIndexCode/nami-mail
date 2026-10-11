@@ -6,9 +6,17 @@ import type {
   AgentProviderKind,
   AgentProviderList,
   AgentProviderSummary,
+  ModelInputModalities,
 } from "../agentTypes";
 import type { Translate } from "../i18n";
 import { OLLAMA_DEFAULT_ENDPOINT } from "../agent/agent-utils";
+
+export const defaultModalities: ModelInputModalities = {
+  image: false,
+  video: false,
+  audio: false,
+  pdf: false,
+};
 
 /**
  * Pure form/validation/feedback logic for the settings "models" panel. It holds
@@ -75,6 +83,7 @@ export type ProviderForm = {
   makeDefault: boolean;
   contextWindowTokens: string;
   maxOutputTokens: string;
+  modalities: ModelInputModalities;
 };
 
 export function providerFormFor(provider: AgentProviderSummary | null, defaultProviderId: string | null): ProviderForm {
@@ -91,6 +100,7 @@ export function providerFormFor(provider: AgentProviderSummary | null, defaultPr
       makeDefault: defaultProviderId === null,
       contextWindowTokens: "8192",
       maxOutputTokens: "2048",
+      modalities: { ...defaultModalities },
     };
   }
   return {
@@ -105,6 +115,12 @@ export function providerFormFor(provider: AgentProviderSummary | null, defaultPr
     makeDefault: provider.id === defaultProviderId,
     contextWindowTokens: String(provider.contextWindowTokens ?? 8192),
     maxOutputTokens: String(provider.maxOutputTokens ?? 2048),
+    modalities: {
+      image: provider.modalities?.image ?? false,
+      video: provider.modalities?.video ?? false,
+      audio: provider.modalities?.audio ?? false,
+      pdf: provider.modalities?.pdf ?? false,
+    },
   };
 }
 
@@ -164,6 +180,7 @@ export function providerInputFor(form: ProviderForm): AgentProviderInput {
     model: form.model.trim(),
     timeoutMs: Number(form.timeoutMs),
     allowCloudMailContent: providerFormIsLocal(form) ? false : form.allowCloudMailContent,
+    modalities: { ...form.modalities },
     ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
     ...(form.clearApiKey ? { clearApiKey: true } : {}),
     ...(form.makeDefault ? { makeDefault: true } : {}),

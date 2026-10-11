@@ -71,7 +71,10 @@ function responsesInput(request: ProviderChatRequest): unknown[] {
       });
     } else if (message.role === "assistant") {
       const content: unknown[] = [];
-      if (message.content) content.push({ type: "output_text", text: message.content });
+      if (message.content) {
+        const text = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+        content.push({ type: "output_text", text });
+      }
       for (const call of message.toolCalls ?? []) {
         content.push({
           type: "function_call",
@@ -83,7 +86,22 @@ function responsesInput(request: ProviderChatRequest): unknown[] {
       if (!content.length) content.push({ type: "output_text", text: " " });
       items.push({ role: "assistant", content });
     } else {
-      items.push({ role: "user", content: [{ type: "input_text", text: message.content || " " }] });
+      const content: unknown[] = [];
+      if (typeof message.content === "string") {
+        content.push({ type: "input_text", text: message.content || " " });
+      } else if (Array.isArray(message.content)) {
+        for (const part of message.content) {
+          if (part.type === "text") {
+            content.push({ type: "input_text", text: part.text });
+          } else if (part.type === "image_url") {
+            content.push({ type: "input_image", image_url: part.imageUrl.url });
+          } else if (part.type === "document") {
+            content.push({ type: "input_image", image_url: part.document.url });
+          }
+        }
+      }
+      if (!content.length) content.push({ type: "input_text", text: " " });
+      items.push({ role: "user", content });
     }
   }
   return items;
@@ -197,7 +215,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
     try {
       const instructions = request.messages
         .filter((message) => message.role === "system")
-        .map((message) => message.content)
+        .map((message) => (typeof message.content === "string" ? message.content : ""))
         .filter((content) => content.trim())
         .join("\n");
       const body: Record<string, unknown> = {

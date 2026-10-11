@@ -734,7 +734,7 @@ describe("AgentService model tool loop", () => {
       expect(providerRequests).toHaveLength(2);
       const toolMessage = providerRequests[1]!.messages.find((message) => message.role === "tool" && message.toolCallId === "tool-call-1");
       expect(toolMessage).toBeDefined();
-      expect(JSON.parse(toolMessage!.content)).toMatchObject({
+      expect(JSON.parse(toolMessage!.content as string)).toMatchObject({
         ok: true,
         data: { messages: [{ id: "message-1", subject: "Project status" }] },
       });
@@ -855,7 +855,7 @@ describe("AgentService model tool loop", () => {
       expect(providerRequests).toHaveLength(2);
       const toolResults = providerRequests[1]!.messages
         .filter((message) => message.role === "tool")
-        .map((message) => JSON.parse(message.content));
+        .map((message) => JSON.parse(message.content as string));
       expect(toolResults).toEqual([
         expect.objectContaining({ ok: false, error: expect.objectContaining({ code: "SCOPE_DENIED" }) }),
         // An unknown tool name is outside the turn's authorized set, so the
@@ -1002,7 +1002,7 @@ describe("AgentService model tool loop", () => {
       expect(cloudRequests).toHaveLength(2);
       const toolResults = cloudRequests[1]!.messages
         .filter((message) => message.role === "tool")
-        .map((message) => JSON.parse(message.content));
+        .map((message) => JSON.parse(message.content as string));
       expect(toolResults).toEqual([
         expect.objectContaining({ ok: false, error: expect.objectContaining({ code: "PERMISSION_DENIED" }) }),
       ]);
@@ -1161,7 +1161,7 @@ describe("AgentService model tool loop", () => {
       expect(providerRequests).toHaveLength(2);
       const toolMessage = providerRequests[1]!.messages.find((message) => message.role === "tool" && message.toolCallId === "tool-call-huge");
       expect(toolMessage).toBeDefined();
-      const parsed = JSON.parse(toolMessage!.content) as { ok: boolean; data?: { truncated?: boolean; message?: string } };
+      const parsed = JSON.parse(toolMessage!.content as string) as { ok: boolean; data?: { truncated?: boolean; message?: string } };
       expect(parsed.ok).toBe(true);
       expect(parsed.data?.truncated).toBe(true);
       expect(parsed.data?.message).toContain("safety limit");
@@ -1588,7 +1588,7 @@ describe("AgentService chat mode", () => {
       expect(toolNames.some((name) => name.startsWith("accounts."))).toBe(false);
       expect(toolNames.some((name) => name.startsWith("messages."))).toBe(false);
       // No mail excerpts are ever sent to the unauthorized cloud provider.
-      expect(chat!.messages.some((message) => message.content.includes("[UNTRUSTED MAIL"))).toBe(false);
+      expect(chat!.messages.some((message) => typeof message.content === "string" && message.content.includes("[UNTRUSTED MAIL"))).toBe(false);
     } finally {
       await closeFixture(value);
     }

@@ -52,7 +52,7 @@ import type {
   AgentProviderSummary,
 } from "./agentTypes";
 import { agentScopeFor, sameAgentScope, scopeTargetForConversation, type AgentScopeTarget } from "./agentContext";
-import { isSupportedFile, processFile, type ProcessedFile } from "./fileProcessor";
+import { buildAcceptFilter, isSupportedFile, processFile, AttachmentFileIconBadge, formatMessageAttachments, type ProcessedFile } from "./fileProcessor";
 import { triggerBlobDownload } from "./attachmentZip";
 import type { Account, AgentAccessLevel, Message } from "./types";
 import { useI18n } from "./i18n";
@@ -1017,7 +1017,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     const files = event.target.files;
     if (!files || files.length === 0) return;
     for (const file of Array.from(files)) {
-      if (!isSupportedFile(file)) {
+      if (!isSupportedFile(file, selectedProvider?.modalities)) {
         setProcessingFileName(null);
         continue;
       }
@@ -1051,7 +1051,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     }
     setProcessingFileName(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
-  }, [demoMode, scope.accountIds]);
+  }, [demoMode, scope.accountIds, selectedProvider?.modalities]);
 
   const removeAttachedFile = useCallback((index: number) => {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
@@ -1409,14 +1409,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
         return;
       }
     }
-    const attachments = files.map((f) => ({
-      name: f.name,
-      type: f.type,
-      ...(f.path ? { path: f.path } : {}),
-      ...(f.mailToken ? { token: f.mailToken } : {}),
-      ...(f.mailToken && f.mailAccountId ? { accountId: f.mailAccountId } : {}),
-      ...(f.text ? { text: f.text } : {}),
-    }));
+    const attachments = formatMessageAttachments(files);
     const userMessage: AgentMessage = { id: newLocalId("user"), role: "user", content: userText, createdAt: currentTime(), state: "complete", citations: [], toolActivities: [], ...(attachments.length > 0 ? { attachments } : {}), ...(truncatedQuote ? { quote: truncatedQuote } : {}), ...(mailReferences.length > 0 ? { references: mailReferences.map((reference) => ({ id: reference.id, subject: reference.subject })) } : {}) };
     const assistantMessage: AgentMessage = { id: newLocalId("assistant"), role: "assistant", content: "", createdAt: currentTime(), state: "streaming", citations: [], toolActivities: [] };
     setComposer("");
@@ -2037,7 +2030,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             <div className="agent-attachment-chips">
               {attachedFiles.map((file, index) => (
                 <span key={`${file.name}-${index}`} className={`agent-attachment-chip ${processingFileName === file.name ? "processing" : ""}`}>
-                  <FileText size={13} />
+                  <AttachmentFileIconBadge type={file.type} />
                   <span>{file.name}</span>
                   {file.mailUploadState === "uploading" && <LoaderCircle size={11} className="spin" aria-label={t("agent.attachment.uploading")} />}
                   {file.mailUploadState === "ready" && <em className="agent-attachment-chip-note ready">{t("agent.attachment.ready")}</em>}
@@ -2100,7 +2093,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
           </div>
           <div className={`agent-composer${streaming ? " streaming" : ""}`}>
             <button className={`agent-scroll-to-bottom ${showScrollToBottom && !pendingConfirmation ? "visible" : ""}`} type="button" onClick={scrollToBottom} aria-label={t("agent.composer.scrollToBottom")}><ChevronDown size={17} /></button>
-            <input ref={fileInputRef} type="file" multiple onChange={(e) => void handleFileSelect(e)} accept=".txt,.md,.markdown,.csv,.tsv,.json,.xml,.html,.htm,.py,.js,.ts,.tsx,.jsx,.css,.scss,.less,.yaml,.yml,.log,.rtf,.ini,.cfg,.conf,.sh,.bash,.zsh,.sql,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.vue,.svelte,.pdf,.docx,.pptx" style={{ display: "none" }} />
+            <input ref={fileInputRef} type="file" multiple onChange={(e) => void handleFileSelect(e)} accept={buildAcceptFilter(selectedProvider?.modalities)} style={{ display: "none" }} />
             <label className="visually-hidden" htmlFor="agent-composer">{t("agent.composer.label")}</label>
             <textarea id="agent-composer" ref={composerRef} value={composer} onChange={(event) => { setComposer(event.target.value); setSlashDismissed(false); setMentionDismissed(false); setMentionLimitReached(false); }} onKeyDown={(event) => {
               const composing = (event.nativeEvent as KeyboardEvent).isComposing;
