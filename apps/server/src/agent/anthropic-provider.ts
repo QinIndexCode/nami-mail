@@ -84,7 +84,7 @@ function anthropicMessages(request: ProviderChatRequest): { system?: string; mes
               contentBlocks.push({ type: "text", text: part.text });
             } else if (part.type === "image_url") {
               const match = part.imageUrl.url.match(/^data:([^;]+);base64,(.+)$/);
-              if (match) {
+              if (match && match[1] && match[2]) {
                 const mediaType = match[1].startsWith("image/") ? match[1] : "image/jpeg";
                 contentBlocks.push({
                   type: "image",
@@ -97,7 +97,7 @@ function anthropicMessages(request: ProviderChatRequest): { system?: string; mes
               }
             } else if (part.type === "document") {
               const match = part.document.url.match(/^data:([^;]+);base64,(.+)$/);
-              if (match && match[2]) {
+              if (match && match[1] && match[2]) {
                 const mime = part.document.mimeType || match[1] || "application/octet-stream";
                 if (mime.startsWith("image/")) {
                   contentBlocks.push({

@@ -105,7 +105,7 @@ function geminiContents(request: ProviderChatRequest): { system?: string; conten
             parts.push({ text: part.text });
           } else if (part.type === "image_url") {
             const match = part.imageUrl.url.match(/^data:([^;]+);base64,(.+)$/);
-            if (match) {
+            if (match && match[1] && match[2]) {
               const mimeType = match[1].startsWith("image/") ? match[1] : "image/jpeg";
               parts.push({
                 inlineData: {
@@ -116,7 +116,7 @@ function geminiContents(request: ProviderChatRequest): { system?: string; conten
             }
           } else if (part.type === "document") {
             const match = part.document.url.match(/^data:([^;]+);base64,(.+)$/);
-            if (match) {
+            if (match && match[1] && match[2]) {
               parts.push({
                 inlineData: {
                   mimeType: part.document.mimeType || match[1],
