@@ -54,7 +54,7 @@ jobs:
         uses: peter-evans/create-pull-request@5e914681df9dc83aa4e4905692ca88beb2f9e91f
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "chore: update contributor list [skip ci]"
+          commit-message: "chore: update contributor list"
           branch: chore/update-contributors
           delete-branch: true
           title: "chore: update contributor list"
