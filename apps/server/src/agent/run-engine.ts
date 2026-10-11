@@ -35,6 +35,17 @@ import {
   type ToolCall,
 } from "@nami/agent-contracts";
 import type { AgentRuntime, ToolRegistry } from "@nami/agent-core";
+import {
+  type AgentMessageAttachmentInput,
+  composeAttachmentContent,
+  composeProviderChatMessageContent,
+} from "./attachment-content.js";
+export {
+  type AgentMessageAttachmentInput,
+  AGENT_ATTACHMENT_TEXT_LIMIT,
+  composeAttachmentContent,
+  composeProviderChatMessageContent,
+} from "./attachment-content.js";
 import { providerSummary, type AgentProviderService, type ProviderConfiguration } from "./provider-service.js";
 import { AgentServiceError, now, requiredText, uniqueStrings } from "./agent-shared.js";
 import type { DatabaseHandle } from "../db.js";
@@ -103,17 +114,6 @@ export type ActiveRun = {
   inFlight: AgentMessage | null;
 };
 
-export type AgentMessageAttachmentInput = {
-  name: string;
-  type: string;
-  /** Outbound attachment token when the file was uploaded as a mail attachment. */
-  token?: string;
-  /** Account the uploaded attachment is bound to (sender account). */
-  accountId?: string;
-  /** Extracted file text sent to the model. Not shown in the transcript; the
-   *  client renders file chips from `name`/`type` instead. */
-  text?: string;
-};
 
 /** A mail message the user explicitly pulled into the conversation as context.
  *  Unlike the scope (the retrieval boundary), references are user-chosen
@@ -202,24 +202,6 @@ function shortPreview(value: string): string {
 
 type AgentCompletionReason = Extract<AgentUiStreamEvent, { type: "completed" }>["reason"];
 type AgentMessageError = NonNullable<AgentMessage["error"]>;
-
-// The web client truncates extracted file text at this length (fileProcessor.ts).
-export const AGENT_ATTACHMENT_TEXT_LIMIT = 32_000;
-
-/** Renders attachment text in the same `[file: …]` framing the client used to
- *  inline, so model-facing content is unchanged while the transcript keeps
- *  only the user's clean text. */
-export function composeAttachmentContent(content: string, attachments: readonly AgentMessageAttachmentInput[] | undefined): string {
-  if (!attachments || attachments.length === 0) return content;
-  const blocks = attachments
-    .filter((attachment) => typeof attachment.text === "string" && attachment.text.length > 0)
-    .map((attachment) => {
-      const marker = attachment.text!.length >= AGENT_ATTACHMENT_TEXT_LIMIT ? " (truncated)" : "";
-      return `[file: ${attachment.name}${marker}]\n${attachment.text}\n[/file]`;
-    });
-  if (blocks.length === 0) return content;
-  return `${blocks.join("\n\n")}\n\n${content}`;
-}
 
 const maximumMessageLength = 16_000;
 
@@ -839,8 +821,8 @@ export class AgentRunEngine {
     // Attachment `text` is model-facing only; the transcript renders chips from
     // name/type. Stripping it keeps the conversation payload small and the
     // client-side parse cheap.
-    const withoutAttachmentText = (message: AgentMessage): AgentMessage => message.attachments && message.attachments.some((attachment) => attachment.text)
-      ? { ...message, attachments: message.attachments.map(({ text: _text, ...attachment }) => attachment) }
+    const withoutAttachmentText = (message: AgentMessage): AgentMessage => message.attachments && message.attachments.some((attachment) => attachment.text || attachment.dataUrl)
+      ? { ...message, attachments: message.attachments.map(({ text: _text, dataUrl: _dataUrl, ...attachment }) => attachment) }
       : message;
     return {
       id: state.descriptor.conversationId,
@@ -1786,18 +1768,30 @@ export class AgentRunEngine {
       .slice(-14)
       .map((message) => {
         const referenceBlock = this.referenceBlockFor(message, resolvedReferences);
-        // The current turn's content was already composed (providerContent).
         if (message.id === userMessage.id) {
           // User-chosen references lead the turn: the model must treat them as
           // user-introduced context, not as retrieval the agent did itself.
-          const content = referenceBlock ? `${referenceBlock}\n\n${message.content}` : message.content;
-          return { role: message.role, content } satisfies ProviderChatMessage;
+          const baseContent = composeProviderChatMessageContent(message.content, userAttachments);
+          if (referenceBlock) {
+            const content = typeof baseContent === "string"
+              ? `${referenceBlock}\n\n${baseContent}`
+              : [{ type: "text" as const, text: referenceBlock }, ...baseContent];
+            return { role: message.role, content } satisfies ProviderChatMessage;
+          }
+          return { role: message.role, content: baseContent } satisfies ProviderChatMessage;
         }
         if (message.role === "user" && (message.quote || referenceBlock)) {
           const preamble = [referenceBlock, message.quote ? `"${message.quote}"` : ""].filter(Boolean).join("\n\n");
-          return { role: "user", content: `${preamble}\n\nUser follow-up question: ${composeAttachmentContent(message.content, message.attachments)}` } satisfies ProviderChatMessage;
+          const baseContent = composeProviderChatMessageContent(message.content, message.attachments);
+          const content = typeof baseContent === "string"
+            ? `${preamble}\n\nUser follow-up question: ${baseContent}`
+            : [{ type: "text" as const, text: `${preamble}\n\nUser follow-up question:` }, ...baseContent];
+          return { role: "user", content } satisfies ProviderChatMessage;
         }
-        return { role: message.role, content: composeAttachmentContent(message.content, message.attachments) } satisfies ProviderChatMessage;
+        if (message.role === "user") {
+          return { role: "user", content: composeProviderChatMessageContent(message.content, message.attachments) } satisfies ProviderChatMessage;
+        }
+        return { role: message.role, content: message.content } satisfies ProviderChatMessage;
       });
     // Native providers (Anthropic, Gemini) reject a conversation whose first
     // message is an assistant turn. A full history can slice to an odd length,

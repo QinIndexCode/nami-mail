@@ -58,7 +58,8 @@ function geminiContents(request: ProviderChatRequest): { system?: string; conten
   const rest: ProviderChatMessage[] = [];
   for (const message of request.messages) {
     if (message.role === "system") {
-      if (message.content.trim()) systemParts.push(message.content);
+      const text = typeof message.content === "string" ? message.content : "";
+      if (text.trim()) systemParts.push(text);
     } else {
       rest.push(message);
     }
@@ -78,20 +79,56 @@ function geminiContents(request: ProviderChatRequest): { system?: string; conten
   for (const message of rest) {
     if ((message.role === "user" || message.role === "tool") && message.toolCallId) {
       const name = toolNameById.get(message.toolCallId) ?? message.toolCallId;
+      const rawText = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
       converted.push({
         role: "user",
-        parts: [{ functionResponse: { name, response: toolOutput(message.content) } }],
+        parts: [{ functionResponse: { name, response: toolOutput(rawText) } }],
       });
     } else if (message.role === "assistant") {
       const parts: unknown[] = [];
-      if (message.content) parts.push({ text: message.content });
+      if (message.content) {
+        const text = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+        parts.push({ text });
+      }
       for (const call of message.toolCalls ?? []) {
         parts.push({ functionCall: { name: call.toolName, args: call.input } });
       }
       if (!parts.length) parts.push({ text: " " });
       converted.push({ role: "model", parts });
     } else {
-      converted.push({ role: "user", parts: [{ text: message.content || " " }] });
+      const parts: unknown[] = [];
+      if (typeof message.content === "string") {
+        parts.push({ text: message.content || " " });
+      } else if (Array.isArray(message.content)) {
+        for (const part of message.content) {
+          if (part.type === "text") {
+            parts.push({ text: part.text });
+          } else if (part.type === "image_url") {
+            const match = part.imageUrl.url.match(/^data:([^;]+);base64,(.+)$/);
+            if (match && match[1] && match[2]) {
+              const mimeType = match[1].startsWith("image/") ? match[1] : "image/jpeg";
+              parts.push({
+                inlineData: {
+                  mimeType,
+                  data: match[2],
+                },
+              });
+            }
+          } else if (part.type === "document") {
+            const match = part.document.url.match(/^data:([^;]+);base64,(.+)$/);
+            if (match && match[1] && match[2]) {
+              parts.push({
+                inlineData: {
+                  mimeType: part.document.mimeType || match[1],
+                  data: match[2],
+                },
+              });
+            }
+          }
+        }
+      }
+      if (!parts.length) parts.push({ text: " " });
+      converted.push({ role: "user", parts });
     }
   }
 

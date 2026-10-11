@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
   agentMemoryKindSchema,
   appSettingsPatchSchema,
+  modelInputModalitiesSchema,
 } from "@nami/agent-contracts";
 import { ATTACHMENT_KINDS, type AttachmentKind } from "./attachment-kind.js";
 import { supportedLocale } from "./localization.js";
@@ -211,6 +212,7 @@ export const agentProviderSchema = z.object({
   makeDefault: z.boolean().optional(),
   contextWindowTokens: z.number().int().min(1_000).max(2_000_000).optional(),
   maxOutputTokens: z.number().int().min(256).max(64_000).optional(),
+  modalities: modelInputModalitiesSchema.optional(),
 }).strict();
 
 export const agentMcpServerSchema = z.object({
@@ -279,6 +281,8 @@ export const agentMessageSchema = z.object({
     // the transcript stays clean; capped a little above the client truncation
     // so a truncated file still signals its marker via length.
     text: z.string().max(64_000).optional(),
+    dataUrl: z.string().max(15_000_000).optional(),
+    mimeType: z.string().trim().max(128).optional(),
   }).strict()).max(10).optional(),
   references: z.array(z.object({
     id: z.string().trim().min(1).max(128),

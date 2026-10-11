@@ -54,7 +54,17 @@ export function estimateMessagesTokens(
     total += 4;
 
     if (message.content) {
-      total += estimateTokens(message.content);
+      if (typeof message.content === "string") {
+        total += estimateTokens(message.content);
+      } else if (Array.isArray(message.content)) {
+        for (const part of message.content) {
+          if (part.type === "text") {
+            total += estimateTokens(part.text);
+          } else {
+            total += 1000;
+          }
+        }
+      }
     }
 
     if (message.reasoningContent) {
@@ -243,7 +253,7 @@ export function compressContextHistory(
   if (turns.length === 0) return [...messages];
 
   const pruneToolResultContent = (message: ProviderChatMessage): void => {
-    if (message.role === "tool" && message.content && estimateTokens(message.content) > 150) {
+    if (message.role === "tool" && typeof message.content === "string" && estimateTokens(message.content) > 150) {
       message.content = "[此前工具调用已完成，详细输出已折叠以节约上下文预算]";
     }
   };
@@ -274,7 +284,10 @@ export function compressContextHistory(
       summarizedTurns += 1;
       summarizedMessages += oldest.length;
       for (const message of oldest) {
-        const preview = (message.content || "").replace(/\s+/g, " ").slice(0, 80);
+        const textContent = typeof message.content === "string"
+          ? message.content
+          : (Array.isArray(message.content) ? (message.content.find((p) => p.type === "text") as { text: string } | undefined)?.text || "" : "");
+        const preview = (textContent || "").replace(/\s+/g, " ").slice(0, 80);
         snippets.push(`${message.role === "user" ? "用户" : message.role === "assistant" ? "助手" : "工具"}: ${preview}`);
       }
     }

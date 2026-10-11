@@ -153,7 +153,7 @@ describe("context-budget", () => {
         expect(typeof message.toolCallId === "string" && declaredIds.has(message.toolCallId)).toBe(true);
       }
       // The current turn's user message is never deleted.
-      expect(compressed.some((message) => message.role === "user" && message.content.includes("Long question"))).toBe(true);
+      expect(compressed.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("Long question"))).toBe(true);
     });
 
     it("collapses older turns as whole units and never mutates the input", () => {
@@ -189,7 +189,7 @@ describe("context-budget", () => {
         expect(typeof message.toolCallId === "string" && declaredIds.has(message.toolCallId)).toBe(true);
       }
       // The current turn is intact: its user message and its declaration.
-      expect(compressed.some((message) => message.content?.includes("Question 3"))).toBe(true);
+      expect(compressed.some((message) => typeof message.content === "string" && message.content.includes("Question 3"))).toBe(true);
       expect(declaredIds.has("call-3")).toBe(true);
     });
 

@@ -157,19 +157,50 @@ function toolDefinitions(tools: readonly AgentToolDescriptor[]): unknown[] {
   }));
 }
 
+function formatOpenAiContent(content: ProviderChatRequest["messages"][number]["content"]): unknown {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (part.type === "text") {
+        return { type: "text", text: part.text };
+      }
+      if (part.type === "image_url") {
+        return {
+          type: "image_url",
+          image_url: {
+            url: part.imageUrl.url,
+            ...(part.imageUrl.detail ? { detail: part.imageUrl.detail } : {}),
+          },
+        };
+      }
+      if (part.type === "document") {
+        return {
+          type: "image_url",
+          image_url: {
+            url: part.document.url,
+          },
+        };
+      }
+      return part;
+    });
+  }
+  return content;
+}
+
 function providerMessages(request: ProviderChatRequest): unknown[] {
   return request.messages.map((message) => {
+    const content = formatOpenAiContent(message.content);
     if (message.role === "tool") {
       return {
         role: "tool",
-        content: message.content,
+        content,
         ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
       };
     }
     if (message.role === "assistant" && message.toolCalls?.length) {
       return {
         role: "assistant",
-        content: message.content,
+        content,
         // MiMo thinking mode: reasoning_content must be retained across turns
         // for accurate multi-turn tool calling (per model documentation).
         ...(message.reasoningContent ? { reasoning_content: message.reasoningContent } : {}),
@@ -186,13 +217,13 @@ function providerMessages(request: ProviderChatRequest): unknown[] {
     if (message.role === "assistant" && message.reasoningContent) {
       return {
         role: "assistant",
-        content: message.content,
+        content,
         ...(message.reasoningContent ? { reasoning_content: message.reasoningContent } : {}),
       };
     }
     return {
       role: message.role,
-      content: message.content,
+      content,
       ...(message.name ? { name: message.name } : {}),
     };
   });
