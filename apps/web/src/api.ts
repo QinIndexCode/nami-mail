@@ -307,13 +307,17 @@ async function consumeAgentStream(response: Response, onEvent: (event: AgentStre
   let payloadLines: string[] = [];
   const flush = () => {
     if (!payloadLines.length) return;
-    const payload = payloadLines.join("\n");
+    const payload = payloadLines.join("\n").trim();
     payloadLines = [];
+    if (!payload || payload === "[DONE]") return;
     let parsed: unknown;
     try {
       parsed = JSON.parse(payload);
     } catch {
       throw new ApiError("The Agent returned an unrecognized streaming event.", "agent_stream_invalid");
+    }
+    if (typeof parsed === "object" && parsed !== null && ("ping" in parsed || (parsed as { type?: string }).type === "ping")) {
+      return;
     }
     const event = parseAgentEvent(parsed);
     if (!event) throw new ApiError("The Agent returned an unrecognized streaming event.", "agent_stream_invalid");

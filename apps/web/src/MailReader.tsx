@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, type Dispatch, type ReactNode, type 
 import {
   Archive,
   ArrowLeft,
+  Bot,
   CalendarArrowDown,
   CalendarPlus,
   ChevronDown,
@@ -10,6 +11,7 @@ import {
   Copy,
   Download,
   Eye,
+  FileText,
   Forward,
   Inbox,
   Languages,
@@ -50,6 +52,7 @@ import type { MoveTarget } from "./api";
 import type { DialogRoutingActions, DialogRoutingState } from "./dialogRouting";
 import type { Translate, useI18n } from "./i18n";
 import type { Account, AppSettings, Message } from "./types";
+import { resolveReaderAiIntent, type ReaderAiLaunchIntent } from "./readerAiActions";
 
 // The attachment preview modal is only reachable from the reader, so its lazy
 // boundary lives here instead of App.
@@ -88,7 +91,7 @@ export interface MailReaderProps {
   toggleSelectedSeen: () => void | Promise<void>;
   toggleSelectedStar: () => void | Promise<void>;
   moveSelectedMessage: (target: MoveTarget) => Promise<void>;
-  openAgentWorkspace?: () => void;
+  openAgentWorkspace?: (intent?: ReaderAiLaunchIntent) => void;
   openCalendarImport: AttachmentExportsApi["openCalendarImport"];
   exportSelectedEml: AttachmentExportsApi["exportSelectedEml"];
   printSelectedMessage: AttachmentExportsApi["printSelectedMessage"];
@@ -295,6 +298,30 @@ export function MailReader(props: MailReaderProps) {
                   <div className={`reader-more-menu${readerMoreClosing ? " closing" : ""}`} role="menu" aria-label={t("mail.action.more")}>
                     <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openReplyAll(); }}><ReplyAll size={16} />{t("mail.action.replyAll")}</button>
                     <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); openForward(); }}><Forward size={16} />{t("mail.action.forward")}</button>
+                    {openAgentWorkspace && (
+                      <>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setReaderMoreOpen(false);
+                            openAgentWorkspace(resolveReaderAiIntent("summary"));
+                          }}
+                        >
+                          <FileText size={16} />{t("mail.action.aiSummary")}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setReaderMoreOpen(false);
+                            openAgentWorkspace(resolveReaderAiIntent("draft"));
+                          }}
+                        >
+                          <Bot size={16} />{t("mail.action.aiDraft")}
+                        </button>
+                      </>
+                    )}
                     <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked || selectedIsArchived} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />{t("mail.action.archive")}</button>
                     <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void exportSelectedEml(); }}><Download size={16} />{t("mail.action.exportEml")}</button>
                     <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportContactVcf(); }}><UserRound size={16} />{t("mail.action.saveVcf")}</button>
@@ -313,7 +340,18 @@ export function MailReader(props: MailReaderProps) {
                   </div>
                 )}
               </div>
-              {openAgentWorkspace && <button className="agent-launch-button" type="button" onClick={() => openAgentWorkspace()} aria-label={t("agent.open")} data-tooltip={t("agent.open")}><span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span><span>{t("agent.launch")}</span></button>}
+              {openAgentWorkspace && (
+                <button
+                  className="agent-launch-button"
+                  type="button"
+                  onClick={() => openAgentWorkspace()}
+                  aria-label={t("agent.open")}
+                  data-tooltip={t("agent.open")}
+                >
+                  <span className="agent-launch-mark" aria-hidden="true"><AgentMark size={19} /></span>
+                  <span>{t("agent.launch")}</span>
+                </button>
+              )}
             </div>
           </header>
           {selectedThread && selectedThread.length > 1 && (
@@ -340,7 +378,7 @@ export function MailReader(props: MailReaderProps) {
           {selectedMoveLocationUnverified && <section className="move-location-notice" role="status"><CircleAlert size={18} /><div><strong>{t("mail.moveLocationUnverified.title")}</strong><p>{t("mail.moveLocationUnverified.description")}</p></div></section>}
           <div className="reader-split">
             <article className="mail-reader">
-              <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people">{(() => { const headerPerson = selectedSentRecipient ?? selected.from; return <><SenderAvatar name={headerPerson.name} address={headerPerson.address} tone={accountTone(headerPerson.address)} size="large" gravatarEnabled={settings.avatarGravatarEnabled} bimiEnabled={settings.avatarBimiEnabled} /><div className="mail-people-copy"><strong>{headerPerson.name || headerPerson.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={headerPerson.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{selectedSentRecipient ? t("mail.reader.toRecipient", { recipient: headerPerson.name || headerPerson.address }) : t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div></>; })()}<time>{formatFullDate(selected.sentAt, locale)}</time></div></header>
+              <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people">{(() => { const headerPerson = selectedSentRecipient ?? selected.from; return <><SenderAvatar name={headerPerson.name} address={headerPerson.address} tone={accountTone(headerPerson.address)} size="large" gravatarEnabled={settings.avatarGravatarEnabled} bimiEnabled={settings.avatarBimiEnabled} /><div className="mail-people-copy"><strong>{headerPerson.name || headerPerson.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={headerPerson.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{selectedSentRecipient ? t("mail.reader.toRecipient", { recipient: headerPerson.name || headerPerson.address }) : t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div></>; })()}<time>{formatFullDate(selected.sentAt, locale)}</time></div>{openAgentWorkspace && (<div className="mail-summary-bar" style={{ marginTop: 14, display: "flex", alignItems: "center" }}><button type="button" className="secondary-button mail-summary-pill" style={{ minHeight: 28, padding: "3px 10px", borderRadius: "var(--radius-pill)", fontSize: 11, fontWeight: 550, gap: 6 }} onClick={() => openAgentWorkspace(resolveReaderAiIntent("summary"))} aria-label={t("mail.action.aiSummaryAria")} data-tooltip={t("mail.action.aiSummaryAria")}><FileText size={13} aria-hidden="true" /><span>{t("mail.action.aiSummary")}</span></button></div>)}</header>
               {verificationCodes.length > 0 && (
                 <section className="verification-code-list" aria-label={t("mail.verification.detected") }>
                   {verificationCodes.map((candidate, index) => {

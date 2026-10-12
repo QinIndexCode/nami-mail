@@ -101,11 +101,14 @@ import {
 import { useMountedVisible } from "./hooks/useMountedVisible";
 import { createDemoConversation } from "./agent/agent-demo-data";
 import { keepAheadTranscript, useAgentSession } from "./agent/useAgentSession";
+import { useInitialPrompt } from "./agent/useInitialPrompt";
 
 type AgentWorkspaceProps = {
   accounts: Account[];
   messages: Message[];
   currentMessage?: Message;
+  initialPrompt?: string;
+  initialAutoSend?: boolean;
   onClose: () => void;
   onOpenMessage: (messageId: string) => void;
   restoreFocusRef?: RefObject<HTMLElement | null>;
@@ -137,7 +140,7 @@ type AgentWorkspaceProps = {
  * native buttons, so Enter/Space activate them without extra wiring.
  */
 
-export default function AgentWorkspace({ accounts, currentMessage, onClose, onOpenMessage, restoreFocusRef, demoMode = false, overlayOpen = false, providerListVersion = 0, onOpenModelSettings, preloadedBootstrap, agentAccessLevel = "send-confirmed", onAgentAccessLevelChange, onMailStateChanged }: AgentWorkspaceProps) {
+export default function AgentWorkspace({ accounts, currentMessage, initialPrompt, initialAutoSend = false, onClose, onOpenMessage, restoreFocusRef, demoMode = false, overlayOpen = false, providerListVersion = 0, onOpenModelSettings, preloadedBootstrap, agentAccessLevel = "send-confirmed", onAgentAccessLevelChange, onMailStateChanged }: AgentWorkspaceProps) {
   const { locale, t } = useI18n();
   const demoPresentation = useMemo(() => demoMode ? readDemoPresentation(window.location.search) : null, [demoMode]);
   const [bootstrap, setBootstrap] = useState<AgentBootstrap | null>(null);
@@ -146,7 +149,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState("");
-  const [composer, setComposer] = useState("");
+  const [composer, setComposer] = useState(() => initialPrompt ?? "");
   const [slashIndex, setSlashIndex] = useState(0);
   /** Set when the user dismisses the slash menu (Esc) or completes a command. */
   const [slashDismissed, setSlashDismissed] = useState(false);
@@ -1463,6 +1466,16 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
     await runStream({ conversation, assistantMessage, streamPayload });
   }, [active, attachedFiles, bootstrap?.enabled, composer, demoMode, loadingConversationId, mailReferences, mode, onOpenModelSettings, prepareInterruptToSend, quoteContext, runStream, scope, selectedProvider, t]);
 
+  useInitialPrompt({
+    initialPrompt,
+    autoSend: initialAutoSend,
+    loading,
+    ready: Boolean(bootstrap?.enabled && selectedProvider),
+    onSend: sendMessage,
+    setComposer,
+    composerRef,
+  });
+
   // Slash command menu: while the composer holds a bare "/token" the matching
   // commands are offered. Parameterless commands send immediately; commands
   // with parameters are completed into the composer for editing. Expansion
@@ -2066,7 +2079,7 @@ export default function AgentWorkspace({ accounts, currentMessage, onClose, onOp
             <div className="agent-reference-chips">
               {mailReferences.map((reference) => (
                 <span key={reference.id} className="agent-reference-chip">
-                  <button type="button" className="agent-reference-chip-open" onClick={() => onOpenMessage(reference.id)} title={reference.subject} data-tooltip={t("agent.reference.open")}><Mail size={12} /><span>{reference.subject || t("agent.reference.noSubject")}</span><span className="agent-reference-chip-account">{reference.accountEmail}</span></button>
+                  <button type="button" className="agent-reference-chip-open" onClick={() => onOpenMessage(reference.id)} title={reference.subject || t("agent.reference.noSubject")} data-tooltip={reference.subject ? `${t("agent.reference.open")}: ${reference.subject}` : t("agent.reference.open")}><Mail size={12} /><span>{reference.subject || t("agent.reference.noSubject")}</span><span className="agent-reference-chip-account">{reference.accountEmail}</span></button>
                   <button type="button" className="agent-reference-chip-remove" onClick={() => removeMailReference(reference.id)} aria-label={t("agent.reference.dismiss")} data-tooltip={t("agent.reference.dismiss")}><X size={11} /></button>
                 </span>
               ))}

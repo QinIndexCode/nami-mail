@@ -237,14 +237,12 @@ display:flex
 }
 .account-list
 {
-overscroll-behavior:contain;
 flex-direction:column;
 flex:0 auto;
 min-height:0;
 padding:1px 0;
 display:flex;
-position:relative;
-overflow:hidden auto
+position:relative
 }
 .account-list>button,.account-list .account-tree-main
 {

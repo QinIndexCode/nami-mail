@@ -237,3 +237,60 @@ test("external Mail contracts publish detached result schemas", () => {
   assert.equal(attachments?.type, "object");
   assert.equal(attachments?.additionalProperties, false);
 });
+
+test("external messages.search input schema tolerantly accepts LLM parameter variations", () => {
+  const search = getExternalReadMailContract("messages.search");
+  assert.ok(search);
+
+  // Bare string query input
+  const fromString = search.inputSchema.safeParse("发票");
+  assert.equal(fromString.success, true);
+  if (fromString.success) assert.equal(fromString.data.query, "发票");
+
+  // Keyword alias mapping
+  const fromKeyword = search.inputSchema.safeParse({ keyword: "发票" });
+  assert.equal(fromKeyword.success, true);
+  if (fromKeyword.success) assert.equal(fromKeyword.data.query, "发票");
+
+  // Subject / sender fallback when query is absent
+  const fromSender = search.inputSchema.safeParse({ sender: "boss@example.com" });
+  assert.equal(fromSender.success, true);
+  if (fromSender.success) assert.equal(fromSender.data.query, "boss@example.com");
+
+  // String limit and integer cursor normalization
+  const fromLimits = search.inputSchema.safeParse({ query: "发票", limit: "15", cursor: 10 });
+  assert.equal(fromLimits.success, true);
+  if (fromLimits.success) {
+    assert.equal(fromLimits.data.limit, 15);
+    assert.equal(fromLimits.data.cursor, "10");
+  }
+
+  // Pure date normalization for after/before
+  const fromDate = search.inputSchema.safeParse({ query: "发票", after: "2026-10-01" });
+  assert.equal(fromDate.success, true);
+  if (fromDate.success) assert.equal(fromDate.data.after, "2026-10-01T00:00:00.000Z");
+
+  // Datetime without offset normalization
+  const fromNoOffset = search.inputSchema.safeParse({ query: "发票", after: "2026-10-01T12:00:00" });
+  assert.equal(fromNoOffset.success, true);
+  if (fromNoOffset.success) assert.equal(fromNoOffset.data.after, "2026-10-01T12:00:00Z");
+
+  // Email as accountId and snake_case alias
+  const fromSnakeCase = search.inputSchema.safeParse({ query: "合同", account_id: "user@example.com" });
+  assert.equal(fromSnakeCase.success, true);
+  if (fromSnakeCase.success) assert.equal(fromSnakeCase.data.accountId, "user@example.com");
+
+  // Extraneous keys are safely tolerated rather than failing the turn
+  const withExtra = search.inputSchema.safeParse({ query: "发票", unread: true, from: "alice@example.com" });
+  assert.equal(withExtra.success, true);
+  if (withExtra.success) assert.equal(withExtra.data.query, "发票");
+
+  // Inverted range bounds must still be rejected
+  const inverted = search.inputSchema.safeParse({
+    query: "发票",
+    after: "2026-10-05T00:00:00Z",
+    before: "2026-10-01T00:00:00Z",
+  });
+  assert.equal(inverted.success, false);
+});
+

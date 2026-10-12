@@ -474,4 +474,45 @@ describe("agent stream seam validation", () => {
       code: "agent_stream_invalid",
     });
   });
+
+  it("safely ignores empty data frames, [DONE] markers, and ping events in SSE stream", async () => {
+    const body = [
+      "data: ",
+      "",
+      ": ping comment",
+      "",
+      "data: " + JSON.stringify({ type: "ping" }),
+      "",
+      "data: " + JSON.stringify({ type: "text_delta", delta: "Hello" }),
+      "",
+      "data: " + JSON.stringify({
+        type: "tool",
+        activity: {
+          id: "tool-1",
+          toolName: "messages.list",
+          title: "List mail messages",
+          state: "failed",
+          summary: "Input invalid",
+          error: {
+            code: "TOOL_INPUT_INVALID",
+            message: "Parameter invalid",
+            suggestion: "Check parameters",
+            retryable: false,
+          },
+        },
+      }),
+      "",
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    const fetchMock = vi.fn().mockResolvedValue(new Response(body, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const received: string[] = [];
+    await api.streamAgentMessage("conversation-1", request, (event) => received.push(event.type));
+    expect(received).toEqual(["text_delta", "tool"]);
+  });
 });

@@ -48,6 +48,172 @@ export const externalFoldersListInputSchema = z.object({
 }).strict();
 
 /**
+ * Normalizes input datetime strings to offset-bearing ISO strings accepted by
+ * Zod's datetime({ offset: true }) validator. LLMs frequently produce pure
+ * dates (2026-10-01), local timestamps (2026-10-01T00:00:00), or space-separated
+ * timestamps (2026-10-01 00:00:00). This helper accepts those and converts them
+ * to canonical ISO timestamps, while keeping explicit offset timestamps verbatim.
+ */
+function normalizeDatetimeString(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return `${trimmed}T00:00:00.000Z`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(trimmed)) {
+    return `${trimmed.replace(" ", "T")}Z`;
+  }
+  const parsed = Date.parse(trimmed);
+  if (Number.isFinite(parsed)) {
+    if (/T.*(Z|[+-]\d{2}(:\d{2})?)$/i.test(trimmed)) {
+      return trimmed;
+    }
+    return new Date(parsed).toISOString();
+  }
+  return trimmed;
+}
+
+const isoDatetimeFieldSchema = z.preprocess(
+  normalizeDatetimeString,
+  z.string().datetime({ offset: true }),
+);
+
+const searchLimitFieldSchema = z.preprocess(
+  (value) => typeof value === "string" && /^\d+$/.test(value.trim()) ? Number.parseInt(value.trim(), 10) : value,
+  z.number().int().min(1).max(externalMailReadBounds.searchResults),
+);
+
+const listLimitFieldSchema = z.preprocess(
+  (value) => typeof value === "string" && /^\d+$/.test(value.trim()) ? Number.parseInt(value.trim(), 10) : value,
+  z.number().int().min(1).max(externalMailReadBounds.messageResults),
+);
+
+const cursorFieldSchema = z.preprocess(
+  (value) => typeof value === "number" && Number.isSafeInteger(value) ? String(value) : value,
+  z.string().trim().min(1).max(externalMailReadBounds.cursorCharacters),
+);
+
+const booleanFieldSchema = z.preprocess(
+  (value) => typeof value === "string" ? (value.trim().toLowerCase() === "true" ? true : value.trim().toLowerCase() === "false" ? false : value) : value,
+  z.boolean(),
+);
+
+function preprocessSearchInput(raw: unknown): unknown {
+  if (typeof raw === "string") {
+    return { query: raw.trim() };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const obj = { ...(raw as Record<string, unknown>) };
+  if (obj.query === undefined) {
+    const alias =
+      obj.keyword ??
+      obj.q ??
+      obj.text ??
+      obj.searchTerm ??
+      obj.search_term ??
+      obj.search ??
+      obj.content ??
+      obj.sender ??
+      obj.from;
+    if (alias !== undefined) {
+      obj.query = typeof alias === "string" ? alias.trim() : alias;
+    }
+  }
+  delete obj.keyword;
+  delete obj.q;
+  delete obj.text;
+  delete obj.searchTerm;
+  delete obj.search_term;
+  delete obj.search;
+  delete obj.content;
+  delete obj.sender;
+  delete obj.from;
+  delete obj.unread;
+  delete obj.flagged;
+  if (obj.account_id !== undefined && obj.accountId === undefined) {
+    obj.accountId = obj.account_id;
+  }
+  delete obj.account_id;
+  if (obj.has_attachments !== undefined && obj.hasAttachments === undefined) {
+    obj.hasAttachments = obj.has_attachments;
+  }
+  delete obj.has_attachments;
+  return obj;
+}
+
+function preprocessListInput(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const obj = { ...(raw as Record<string, unknown>) };
+  if (obj.mailbox === undefined && obj.folder !== undefined) {
+    obj.mailbox = obj.folder;
+  }
+  delete obj.folder;
+  return obj;
+}
+
+function preprocessMessageGetInput(raw: unknown): unknown {
+  if (typeof raw === "string") {
+    return { messageId: raw.trim() };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const obj = { ...(raw as Record<string, unknown>) };
+  if (obj.messageId === undefined) {
+    if (obj.message_id !== undefined) obj.messageId = obj.message_id;
+    else if (obj.id !== undefined) obj.messageId = obj.id;
+  }
+  delete obj.message_id;
+  delete obj.id;
+  return obj;
+}
+
+function preprocessMessagesBatchGetInput(raw: unknown): unknown {
+  if (typeof raw === "string") {
+    return { messageIds: [raw.trim()] };
+  }
+  if (Array.isArray(raw)) {
+    return { messageIds: raw };
+  }
+  if (!raw || typeof raw !== "object") {
+    return raw;
+  }
+  const obj = { ...(raw as Record<string, unknown>) };
+  if (obj.messageIds === undefined) {
+    const candidate = obj.message_ids ?? obj.ids ?? obj.messageId ?? obj.id;
+    if (Array.isArray(candidate)) obj.messageIds = candidate;
+    else if (typeof candidate === "string") obj.messageIds = [candidate.trim()];
+  }
+  delete obj.message_ids;
+  delete obj.ids;
+  delete obj.messageId;
+  delete obj.id;
+  return obj;
+}
+
+function preprocessThreadGetInput(raw: unknown): unknown {
+  if (typeof raw === "string") {
+    return { threadId: raw.trim() };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const obj = { ...(raw as Record<string, unknown>) };
+  if (obj.threadId === undefined) {
+    if (obj.thread_id !== undefined) obj.threadId = obj.thread_id;
+    else if (obj.id !== undefined) obj.threadId = obj.id;
+  }
+  delete obj.thread_id;
+  delete obj.id;
+  return obj;
+}
+
+/**
  * Compare actual instants, not text order: an offset-bearing timestamp such as
  * 2026-07-01T10:00:00+08:00 sorts after 2026-07-01T03:00:00Z lexically while
  * both denote times on the same day. Date.parse normalizes the offset.
@@ -67,49 +233,67 @@ function validateOrderedRange(
   }
 }
 
-export const externalMessagesListInputSchema = z.object({
-  mailbox: z.string().trim().min(1).max(externalMailReadBounds.mailboxCharacters).optional(),
-  unread: z.boolean().optional(),
-  flagged: z.boolean().optional(),
-  sender: z.string().trim().min(1).max(externalMailReadBounds.contactAddressCharacters).optional(),
-  after: z.string().datetime({ offset: true }).optional(),
-  before: z.string().datetime({ offset: true }).optional(),
-  limit: z.number().int().min(1).max(externalMailReadBounds.messageResults).optional(),
-  cursor: z.string().trim().min(1).max(externalMailReadBounds.cursorCharacters).optional(),
-}).strict().superRefine(validateOrderedRange);
+export const externalMessagesListInputSchema = z.preprocess(
+  preprocessListInput,
+  z.object({
+    mailbox: z.string().trim().min(1).max(externalMailReadBounds.mailboxCharacters).optional(),
+    unread: booleanFieldSchema.optional(),
+    flagged: booleanFieldSchema.optional(),
+    sender: z.string().trim().min(1).max(externalMailReadBounds.contactAddressCharacters).optional(),
+    after: isoDatetimeFieldSchema.optional(),
+    before: isoDatetimeFieldSchema.optional(),
+    limit: listLimitFieldSchema.optional(),
+    cursor: cursorFieldSchema.optional(),
+  }).strict().superRefine(validateOrderedRange),
+);
 
 /**
  * Free-text mail search. `query` is matched as a **phrase or single keyword**
  * (the index does substring matching), not as a boolean expression: passing two
  * words looks for them adjacent, not for mail containing both.
  */
-export const externalMessagesSearchInputSchema = z.object({
-  query: z.string().trim().min(1).max(externalMailReadBounds.searchQueryCharacters),
-  accountId: accountIdSchema.optional(),
-  mailbox: z.string().trim().min(1).max(externalMailReadBounds.mailboxCharacters).optional(),
-  subject: z.string().trim().min(1).max(externalMailReadBounds.subjectCharacters).optional(),
-  hasAttachments: z.boolean().optional(),
-  after: z.string().datetime({ offset: true }).optional(),
-  before: z.string().datetime({ offset: true }).optional(),
-  limit: z.number().int().min(1).max(externalMailReadBounds.searchResults).optional(),
-  cursor: z.string().trim().min(1).max(externalMailReadBounds.cursorCharacters).optional(),
-}).strict().superRefine(validateOrderedRange);
+export const externalMessagesSearchInputSchema = z.preprocess(
+  preprocessSearchInput,
+  z.object({
+    query: z.string().trim().min(1).max(externalMailReadBounds.searchQueryCharacters),
+    accountId: z.string().trim().min(1).max(externalMailReadBounds.contactAddressCharacters).optional(),
+    mailbox: z.string().trim().min(1).max(externalMailReadBounds.mailboxCharacters).optional(),
+    subject: z.string().trim().min(1).max(externalMailReadBounds.subjectCharacters).optional(),
+    hasAttachments: booleanFieldSchema.optional(),
+    after: isoDatetimeFieldSchema.optional(),
+    before: isoDatetimeFieldSchema.optional(),
+    limit: searchLimitFieldSchema.optional(),
+    cursor: cursorFieldSchema.optional(),
+  }).strict().superRefine(validateOrderedRange),
+);
 
-export const externalMessageGetInputSchema = z.object({
-  messageId: messageIdSchema,
-}).strict();
+export const externalMessageGetInputSchema = z.preprocess(
+  preprocessMessageGetInput,
+  z.object({
+    messageId: messageIdSchema,
+  }).strict(),
+);
 
-export const externalMessagesBatchGetInputSchema = z.object({
-  messageIds: z.array(messageIdSchema).min(1).max(externalMailReadBounds.batchMessages),
-}).strict();
+export const externalMessagesBatchGetInputSchema = z.preprocess(
+  preprocessMessagesBatchGetInput,
+  z.object({
+    messageIds: z.array(messageIdSchema).min(1).max(externalMailReadBounds.batchMessages),
+  }).strict(),
+);
 
-export const externalThreadGetInputSchema = z.object({
-  threadId: externalMailThreadIdSchema,
-}).strict();
+export const externalThreadGetInputSchema = z.preprocess(
+  preprocessThreadGetInput,
+  z.object({
+    threadId: externalMailThreadIdSchema,
+  }).strict(),
+);
 
-export const externalAttachmentsListInputSchema = z.object({
-  messageId: messageIdSchema,
-}).strict();
+export const externalAttachmentsListInputSchema = z.preprocess(
+  preprocessMessageGetInput,
+  z.object({
+    messageId: messageIdSchema,
+  }).strict(),
+);
 
 const externalOutputTextSchema = (maximum: number) => z.string().max(maximum);
 const externalOutputNonEmptyTextSchema = (maximum: number) => z.string().trim().min(1).max(maximum);
@@ -204,24 +388,19 @@ export const externalMessagesSearchOutputSchema = z.object({
 
 export const externalSummarizeExcerptCharacters = 2_000;
 
+const summarizeLimitFieldSchema = z.preprocess(
+  (value) => typeof value === "string" && /^\d+$/.test(value.trim()) ? Number.parseInt(value.trim(), 10) : value,
+  z.number().int().min(1).max(10).default(5),
+);
+
 export const externalMailSummarizeInputSchema = z.object({
   mailbox: z.string().trim().min(1).max(externalMailReadBounds.mailboxCharacters).optional(),
-  unread: z.boolean().optional(),
+  unread: booleanFieldSchema.optional(),
   sender: z.string().trim().min(1).max(externalMailReadBounds.contactAddressCharacters).optional(),
-  after: z.string().datetime({ offset: true }).optional(),
-  before: z.string().datetime({ offset: true }).optional(),
-  limit: z.number().int().min(1).max(10).default(5),
-}).strict().superRefine((input, context) => {
-  const after = input.after === undefined ? Number.NaN : Date.parse(input.after);
-  const before = input.before === undefined ? Number.NaN : Date.parse(input.before);
-  if (Number.isFinite(after) && Number.isFinite(before) && after > before) {
-    context.addIssue({
-      code: "custom",
-      path: ["before"],
-      message: "The before timestamp must not precede the after timestamp.",
-    });
-  }
-});
+  after: isoDatetimeFieldSchema.optional(),
+  before: isoDatetimeFieldSchema.optional(),
+  limit: summarizeLimitFieldSchema,
+}).strict().superRefine(validateOrderedRange);
 
 export const externalMailSummarizeItemOutputSchema = z.object({
   messageId: messageIdSchema,

@@ -337,7 +337,13 @@ describe("AgentWorkspace conversation switching", () => {
     (api as unknown as { createAgentConversation: unknown }).createAgentConversation = vi.fn(async () => h.convB);
   });
 
-  const renderWorkspace = async (bootstrap: AgentBootstrap = h.bootstrap, currentMessage?: Message, accounts: Account[] = []) => {
+  const renderWorkspace = async (
+    bootstrap: AgentBootstrap = h.bootstrap,
+    currentMessage?: Message,
+    accounts: Account[] = [],
+    initialPrompt?: string,
+    initialAutoSend?: boolean,
+  ) => {
     await act(async () => {
       root.render(
         <I18nProvider>
@@ -345,6 +351,8 @@ describe("AgentWorkspace conversation switching", () => {
             accounts={accounts}
             messages={[]}
             currentMessage={currentMessage}
+            initialPrompt={initialPrompt}
+            initialAutoSend={initialAutoSend}
             onClose={() => undefined}
             onOpenMessage={h.onOpenMessage}
             demoMode={false}
@@ -1363,5 +1371,30 @@ describe("AgentWorkspace conversation switching", () => {
     // Recreating a conversation under the same id must not resurrect hidden
     // messages, so the marks are gone with the conversation.
     expect(revokeMark("conv-a")).toEqual([]);
+  });
+
+  it("pre-fills initialPrompt in composer and seeds currentMessage reference without sending when autoSend is false", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo], "/draft ", false);
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("#agent-composer");
+    expect(textarea?.value).toBe("/draft ");
+    const chips = Array.from(container.querySelectorAll(".agent-reference-chips .agent-reference-chip-open"));
+    expect(chips.some((chip) => chip.textContent?.includes("Reference email subject"))).toBe(true);
+    expect(container.querySelector(".agent-message-user")).toBeNull();
+  });
+
+  it("auto-sends initialPrompt when autoSend is true and seeds references", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo], "/summary", true);
+    await flush();
+
+    expect(api.streamAgentMessage).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        content: "/summary",
+        references: [{ id: "msg-ref-1", subject: "Reference email subject" }],
+      }),
+      expect.any(Function),
+      expect.any(Object),
+    );
   });
 });

@@ -103,6 +103,7 @@ import { useAttachmentExports } from "./app/useAttachmentExports";
 import { useDesktopBridgeHandlers } from "./app/useDesktopBridgeHandlers";
 import { resolveLocale, useI18n } from "./i18n";
 import type { AgentBootstrap } from "./agentTypes";
+import type { ReaderAiLaunchIntent } from "./readerAiActions";
 import { AppDialogs } from "./AppDialogs";
 import { MailReader } from "./MailReader";
 import MessageList from "./MessageList";
@@ -479,6 +480,7 @@ export default function App() {
   // list's scroller. The offset is captured before hiding and re-applied once
   // the column is laid out again.
   const agentReturnScrollTopRef = useRef<number | null>(null);
+  const [agentLaunchIntent, setAgentLaunchIntent] = useState<ReaderAiLaunchIntent | null>(null);
   const clearAgentSwitchTimers = () => {
     for (const timer of agentSwitchTimersRef.current) window.clearTimeout(timer);
     agentSwitchTimersRef.current = [];
@@ -487,8 +489,9 @@ export default function App() {
     agentSwitchTimersRef.current.push(window.setTimeout(run, delay));
   };
 
-  const openAgentWorkspace = useCallback(() => {
+  const openAgentWorkspace = useCallback((intent?: ReaderAiLaunchIntent) => {
     if (demoPresentation) return;
+    setAgentLaunchIntent(intent ?? null);
     clearAgentSwitchTimers();
     if (agentPhaseRef.current === "mail-leaving" || agentPhaseRef.current === "agent-entering") return;
     agentReturnScrollTopRef.current = messageListRef.current?.scrollTop ?? null;
@@ -510,6 +513,7 @@ export default function App() {
 
   const closeAgentWorkspace = useCallback(() => {
     if (demoPresentation) return;
+    setAgentLaunchIntent(null);
     clearAgentSwitchTimers();
     if (agentPhaseRef.current === "agent-leaving" || agentPhaseRef.current === "mail-entering") return;
     agentPhaseRef.current = "agent-leaving";
@@ -3020,7 +3024,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           openAttachmentPreview={openAttachmentPreview}
         />
         </div>
-        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} overlayOpen={state.settingsOpen || Boolean(demoSource)} providerListVersion={agentProviderListVersion} onOpenModelSettings={() => actions.openSettingsTo("models")} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
+        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} initialPrompt={agentLaunchIntent?.prompt} initialAutoSend={agentLaunchIntent?.autoSend} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} overlayOpen={state.settingsOpen || Boolean(demoSource)} providerListVersion={agentProviderListVersion} onOpenModelSettings={() => actions.openSettingsTo("models")} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
           closeAgentWorkspace();
           // Refresh so the translation panel picks up provider changes made in the workspace.
           if (!isDemo) void api.agentBootstrap().then((value) => { const capped: AgentBootstrap = { ...value, conversations: value.conversations.slice(0, 50) }; setPreloadedAgentBootstrap(capped); setAgentProviderSnapshot(capped); }).catch(() => undefined);

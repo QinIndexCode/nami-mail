@@ -728,7 +728,7 @@ export async function inspectDesktopDeepDiagnostic(): Promise<DesktopDeepDiagnos
         out.agent.agentContextChip = chip instanceof HTMLElement && mainPanel instanceof HTMLElement && rail instanceof HTMLElement ? {
           rect: rect(chip),
           tag: chip.tagName,
-          chipTitle: chip.getAttribute("title") ?? "",
+          chipTitle: chip.getAttribute("title") ?? chip.getAttribute("data-tooltip") ?? "",
           subject: (chip.querySelector("span")?.textContent ?? "").slice(0, 60),
           railClearance: Math.round(rail.getBoundingClientRect().left - chip.getBoundingClientRect().right),
           panelClearance: Math.round(mainPanel.getBoundingClientRect().right - chip.getBoundingClientRect().right),

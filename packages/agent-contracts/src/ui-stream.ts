@@ -9,21 +9,26 @@ import { z } from "zod";
  * the web renderer validates them at parse time, so both sides compile and run
  * against the same authority instead of hand-written copies.
  */
+const nullableOptionalString = z.preprocess((v) => (v === null ? undefined : v), z.string().optional());
+const nullableOptionalBoolean = z.preprocess((v) => (v === null ? undefined : v), z.boolean().optional());
+const nullableOptionalNumber = z.preprocess((v) => (v === null ? undefined : v), z.number().optional());
+
 export const agentCitationSchema = z.object({
   id: z.string(),
   messageId: z.string(),
   accountId: z.string(),
-  subject: z.string(),
-  sender: z.string(),
-  sentAt: z.string(),
-  excerpt: z.string(),
-  confidence: z.number().optional(),
+  subject: z.string().nullish().transform((val) => val ?? ""),
+  sender: z.string().nullish().transform((val) => val ?? ""),
+  sentAt: z.string().nullish().transform((val) => val ?? ""),
+  excerpt: z.string().nullish().transform((val) => val ?? ""),
+  confidence: nullableOptionalNumber,
 }).strict();
 
 export const agentToolActivityErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
-  retryable: z.boolean().optional(),
+  suggestion: nullableOptionalString,
+  retryable: nullableOptionalBoolean,
 }).strict();
 
 export const agentToolActivitySchema = z.object({
@@ -31,17 +36,17 @@ export const agentToolActivitySchema = z.object({
   toolName: z.string(),
   title: z.string(),
   state: z.enum(["running", "completed", "failed", "awaiting_confirmation"]),
-  summary: z.string().optional(),
+  summary: nullableOptionalString,
   /** Human-readable "what did this tool do" line (e.g. a search query, or
    *  "query · N results"). Optional; older transcripts omit it. */
-  detail: z.string().optional(),
-  error: agentToolActivityErrorSchema.optional(),
+  detail: nullableOptionalString,
+  error: z.preprocess((v) => (v === null ? undefined : v), agentToolActivityErrorSchema.optional()),
 }).strict();
 
 export const agentConfirmationSchema = z.object({
   id: z.string(),
   title: z.string(),
-  summary: z.string(),
+  summary: z.string().nullish().transform((v) => v ?? ""),
   fields: z.array(z.object({
     label: z.string(),
     value: z.string(),
@@ -53,12 +58,12 @@ export const agentConfirmationSchema = z.object({
 export const agentUiStreamErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
-  suggestion: z.string().optional(),
-  retryable: z.boolean().optional(),
+  suggestion: nullableOptionalString,
+  retryable: nullableOptionalBoolean,
 }).strict();
 
 export const agentUiStreamEventSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("status"), message: z.string().optional() }).strict(),
+  z.object({ type: z.literal("status"), message: nullableOptionalString }).strict(),
   z.object({ type: z.literal("text_delta"), delta: z.string() }).strict(),
   z.object({ type: z.literal("citation"), citation: agentCitationSchema }).strict(),
   z.object({ type: z.literal("tool"), activity: agentToolActivitySchema }).strict(),

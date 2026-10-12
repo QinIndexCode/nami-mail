@@ -40,10 +40,85 @@ export const outboundSubmissionStatuses = [
  */
 export type OutboundSubmissionStatus = (typeof outboundSubmissionStatuses)[number];
 
-export const draftRecipientInputSchema = z.object({
-  name: z.string().trim().min(1).max(externalMailWriteBounds.recipientNameCharacters).optional(),
-  address: z.string().trim().email().max(externalMailWriteBounds.recipientAddressCharacters),
-}).strict();
+function preprocessRecipient(raw: unknown): unknown {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    const match = /^(.*?)\s*<([^>]+)>$/.exec(trimmed);
+    if (match) {
+      return { name: match[1]?.trim() || undefined, address: match[2]?.trim() };
+    }
+    return { address: trimmed };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const obj = { ...(raw as Record<string, unknown>) };
+  if (obj.address === undefined && obj.email !== undefined) {
+    obj.address = obj.email;
+  }
+  delete obj.email;
+  return obj;
+}
+
+export const draftRecipientInputSchema = z.preprocess(
+  preprocessRecipient,
+  z.object({
+    name: z.string().trim().min(1).max(externalMailWriteBounds.recipientNameCharacters).optional(),
+    address: z.string().trim().email().max(externalMailWriteBounds.recipientAddressCharacters),
+  }).strict(),
+);
+
+function preprocessRecipientsList(raw: unknown): unknown {
+  if (typeof raw === "string") {
+    return [preprocessRecipient(raw)];
+  }
+  if (Array.isArray(raw)) {
+    return raw.map(preprocessRecipient);
+  }
+  if (raw && typeof raw === "object") {
+    return [preprocessRecipient(raw)];
+  }
+  return raw;
+}
+
+function preprocessDraftMutationInput(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const obj = { ...(raw as Record<string, unknown>) };
+  if (obj.accountId === undefined && obj.account_id !== undefined) {
+    obj.accountId = obj.account_id;
+  }
+  delete obj.account_id;
+  if (obj.draftId === undefined && obj.draft_id !== undefined) {
+    obj.draftId = obj.draft_id;
+  }
+  delete obj.draft_id;
+  if (obj.messageId === undefined && obj.message_id !== undefined) {
+    obj.messageId = obj.message_id;
+  }
+  delete obj.message_id;
+  if (obj.text === undefined) {
+    const textAlias = obj.body ?? obj.content ?? obj.message;
+    if (typeof textAlias === "string") obj.text = textAlias;
+  }
+  delete obj.body;
+  delete obj.content;
+  delete obj.message;
+  if (obj.to !== undefined) {
+    obj.to = preprocessRecipientsList(obj.to);
+  }
+  if (obj.cc !== undefined) {
+    obj.cc = preprocessRecipientsList(obj.cc);
+  }
+  return obj;
+}
+
+function preprocessDraftDeleteInput(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const obj = { ...(raw as Record<string, unknown>) };
+  if (obj.accountId === undefined && obj.account_id !== undefined) obj.accountId = obj.account_id;
+  if (obj.draftId === undefined && obj.draft_id !== undefined) obj.draftId = obj.draft_id;
+  delete obj.account_id;
+  delete obj.draft_id;
+  return obj;
+}
 
 const outboundAttachmentTokenSchema = z.string().regex(/^out_[0-9a-f-]{36}$/);
 const outboundAttachmentTokensSchema = z.array(outboundAttachmentTokenSchema).max(10).optional();
@@ -72,15 +147,24 @@ function validateDraftRecipients(
   }
 }
 
-export const externalDraftCreateInputSchema = z.object(draftMutationInputShape).strict().superRefine(validateDraftRecipients);
-export const externalDraftUpdateInputSchema = z.object({
-  ...draftMutationInputShape,
-  draftId: draftIdentifierSchema,
-}).strict().superRefine(validateDraftRecipients);
-export const externalDraftDeleteInputSchema = z.object({
-  accountId: accountIdSchema,
-  draftId: draftIdentifierSchema,
-}).strict();
+export const externalDraftCreateInputSchema = z.preprocess(
+  preprocessDraftMutationInput,
+  z.object(draftMutationInputShape).strict().superRefine(validateDraftRecipients),
+);
+export const externalDraftUpdateInputSchema = z.preprocess(
+  preprocessDraftMutationInput,
+  z.object({
+    ...draftMutationInputShape,
+    draftId: draftIdentifierSchema,
+  }).strict().superRefine(validateDraftRecipients),
+);
+export const externalDraftDeleteInputSchema = z.preprocess(
+  preprocessDraftDeleteInput,
+  z.object({
+    accountId: accountIdSchema,
+    draftId: draftIdentifierSchema,
+  }).strict(),
+);
 /**
  * Where `messages.move` should put the message: one of the two shortcuts the
  * surface has always exposed, or an explicit folder path of the message's own
@@ -114,16 +198,22 @@ export const externalSetFlagInputSchema = z.object({
   flag: z.enum(["seen", "flagged"]),
   value: z.boolean(),
 }).strict();
-export const externalSendMailInputSchema = z.object(draftMutationInputShape).strict();
-export const externalReplyMailInputSchema = z.object({
-  accountId: accountIdSchema,
-  messageId: messageIdSchema,
-  to: z.array(draftRecipientInputSchema).max(externalMailWriteBounds.recipientResults).optional(),
-  cc: z.array(draftRecipientInputSchema).max(externalMailWriteBounds.recipientResults).optional(),
-  subject: z.string().trim().max(externalMailWriteBounds.subjectCharacters).optional(),
-  text: z.string().max(externalMailWriteBounds.draftBodyCharacters),
-  attachmentTokens: outboundAttachmentTokensSchema,
-}).strict().superRefine(validateDraftRecipients);
+export const externalSendMailInputSchema = z.preprocess(
+  preprocessDraftMutationInput,
+  z.object(draftMutationInputShape).strict(),
+);
+export const externalReplyMailInputSchema = z.preprocess(
+  preprocessDraftMutationInput,
+  z.object({
+    accountId: accountIdSchema,
+    messageId: messageIdSchema,
+    to: z.array(draftRecipientInputSchema).max(externalMailWriteBounds.recipientResults).optional(),
+    cc: z.array(draftRecipientInputSchema).max(externalMailWriteBounds.recipientResults).optional(),
+    subject: z.string().trim().max(externalMailWriteBounds.subjectCharacters).optional(),
+    text: z.string().max(externalMailWriteBounds.draftBodyCharacters),
+    attachmentTokens: outboundAttachmentTokensSchema,
+  }).strict().superRefine(validateDraftRecipients),
+);
 
 export const externalMailDraftOutputSchema = z.object({
   id: draftIdentifierSchema,
