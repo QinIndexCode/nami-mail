@@ -76,7 +76,7 @@ max-height:min(280px,44dvh);
    flipping the menu near one stays a separate portal follow-up. */
 min-width:max-content;
 box-shadow:var(--shadow-raised);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 flex-direction:column;
 padding:5px;
 display:flex;

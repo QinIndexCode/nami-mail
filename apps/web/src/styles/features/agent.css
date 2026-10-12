@@ -98,7 +98,7 @@ border:1px solid var(--line);
 background:var(--panel-solid);
 min-height:35px;
 color:var(--text-faint);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 align-items:center;
 gap:8px;
 margin-bottom:8px;
@@ -145,7 +145,7 @@ display:grid
 .agent-conversation-row
 {
 border:1px solid #0000;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 min-width:0;
 position:relative;
 /* Conversation rails can hold hundreds of rows; offscreen rows skip render. */
@@ -161,7 +161,7 @@ cursor:pointer;
 text-align:left;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 grid-template-columns:minmax(0,1fr) auto;
 align-items:start;
 gap:8px;
@@ -269,7 +269,7 @@ margin:0
 {
 border:1px solid color-mix(in srgb, var(--focus-ring) 26%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 7%, var(--panel-muted));
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 align-items:center;
 gap:6px;
 padding:8px 8px;
@@ -351,7 +351,7 @@ transform:translateY(0) scale(1)
 border:1.5px solid var(--line-strong);
 background:var(--panel);
 color:#0000;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-xs);
 place-items:center;
 width:17px;
 height:17px;
@@ -2061,7 +2061,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 min-width:140px;
 box-shadow:var(--shadow-sm);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 padding:4px;
 position:fixed;
 transition:opacity .12s ease,transform .12s ease
@@ -2080,7 +2080,7 @@ text-align:left;
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:5px;
+border-radius:var(--radius-sm);
 align-items:center;
 gap:8px;
 padding:8px 10px;
