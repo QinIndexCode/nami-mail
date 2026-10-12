@@ -59,7 +59,7 @@ color:var(--text-soft);
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 flex:none;
 place-items:center;
 padding:0;

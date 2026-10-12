@@ -16,7 +16,7 @@ flex-shrink:0
 flex:1;
 min-height:0;
 overscroll-behavior:contain;
-overflow:hidden auto
+overflow:hidden auto;scrollbar-width:none;-ms-overflow-style:none
 }
 .brand-row
 {
@@ -78,7 +78,7 @@ color:var(--button-text);
 cursor:pointer;
 box-shadow:var(--shadow-sm);
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 align-items:center;
 gap:8px;
 padding:11px 12px;
@@ -254,7 +254,7 @@ cursor:pointer;
 text-align:left;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 align-items:center;
 gap:8px;
 margin-top:2px;

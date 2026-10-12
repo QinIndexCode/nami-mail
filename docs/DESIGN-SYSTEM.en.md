@@ -53,9 +53,9 @@ price of matching Gmail; on narrower windows the column width takes over and cap
 | token | value | used for |
 |---|---|---|
 | `--radius-xs` | `4px` | inner controls, nested states, and small tags |
-| `--radius-sm` | `6px` | most controls: buttons, inputs, list rows, tags, inner card blocks |
-| `--radius-md` | `10px` | panel level: popovers, menus, dialogs, larger cards |
-| `--radius-lg` | `16px` | large panels and the development web app's outer frame |
+| `--radius-sm` | `8px` | most controls: buttons, inputs, list rows, tags, inner card blocks |
+| `--radius-md` | `12px` | panel level: popovers, menus, dialogs, larger cards |
+| `--radius-lg` | `20px` | large panels and the development web app's outer frame |
 | `--radius-pill` | `999px` | pills: status badges, switches, avatars, dots |
 
 **Never write a literal value.** The only exception is a deliberate asymmetric radius (for example

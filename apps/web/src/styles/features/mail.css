@@ -175,7 +175,7 @@ min-height:34px;
 color:var(--text);
 cursor:pointer;
 white-space:nowrap;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 align-items:center;
 gap:8px;
 padding:3px 8px 3px 4px;
@@ -835,7 +835,7 @@ will-change:transform
 }
 .message-item
 {
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 cursor:pointer;
 text-align:left;
 background:0 0;
