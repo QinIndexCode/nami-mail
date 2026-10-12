@@ -28,8 +28,8 @@ export function ManagementDialogShell({
 }: {
   titleId: string;
   title: string;
-  description: string;
-  eyebrow: string;
+  description?: string;
+  eyebrow?: string;
   actions?: ReactNode;
   dialogClassName?: string;
   onClose: () => void;
@@ -65,9 +65,9 @@ export function ManagementDialogShell({
       <section ref={sectionRef} className={`modal-card management-dialog${dialogClassName ? ` ${dialogClassName}` : ""}${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <header className="modal-heading management-heading">
           <div className="management-heading-title">
-            <span className="eyebrow">{eyebrow}</span>
+            {eyebrow && <span className="eyebrow">{eyebrow}</span>}
             <h2 id={titleId}>{title}</h2>
-            <p className="management-heading-description">{description}</p>
+            {description && <p className="management-heading-description">{description}</p>}
           </div>
           <div className="management-heading-actions">
             {actions}
@@ -93,9 +93,7 @@ export function ContactsDialog({ demoMode = false, onClose, fallbackFocusRef }: 
   return (
     <ManagementDialogShell
       titleId="contacts-dialog-title"
-      eyebrow={t("navigation.management")}
       title={t("settings.contacts.title")}
-      description={t("settings.contacts.description")}
       onClose={onClose}
       fallbackFocusRef={fallbackFocusRef}
     >
@@ -115,9 +113,7 @@ export function TemplatesDialog({ demoMode = false, onClose, fallbackFocusRef }:
   return (
     <ManagementDialogShell
       titleId="templates-dialog-title"
-      eyebrow={t("navigation.management")}
       title={t("settings.templates.title")}
-      description={t("settings.templates.description")}
       onClose={onClose}
       fallbackFocusRef={fallbackFocusRef}
     >

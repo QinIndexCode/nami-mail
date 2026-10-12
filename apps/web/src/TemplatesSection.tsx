@@ -418,7 +418,6 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
           <section className={`modal-card template-editor-card${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="template-editor-title" tabIndex={-1}>
             <div className="modal-card-header template-editor-head">
               <div className="template-editor-head-text">
-                <span className="eyebrow">{editingId ? t("settings.templates.edit") : t("settings.templates.addTemplate")}</span>
                 <h3 id="template-editor-title">{editingId ? t("settings.templates.editTitle") : t("settings.templates.addTitle")}</h3>
               </div>
               <button

@@ -29,7 +29,6 @@ describe("management dialogs", () => {
       </I18nProvider>,
     );
     expect(markup).toContain('id="contacts-dialog-title"');
-    expect(markup).toContain(zh("navigation.management"));
     expect(markup).toContain(zh("settings.contacts.title"));
   });
 

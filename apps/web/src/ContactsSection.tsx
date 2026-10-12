@@ -523,7 +523,6 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
               <div className="contact-editor-head">
                 <AvatarEditor name={draft.name} address={draft.email} current={draft.avatarDataUrl} disabled={busy} onChange={(dataUrl) => setDraft({ ...draft, avatarDataUrl: dataUrl })} />
                 <div className="contact-editor-head-text">
-                  <span className="eyebrow">{draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")}</span>
                   <h3 id="contact-editor-title" className="contact-editor-title">{draft.name.trim() || draft.email || t("settings.contacts.title")}</h3>
                 </div>
                 <button

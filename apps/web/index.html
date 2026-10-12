@@ -61,13 +61,13 @@
       .nami-splash-loader.visible { opacity: 1; }
       .nami-splash-loader::after {
         content: ""; position: absolute; left: -40%; width: 40%; height: 100%;
-        background: #456381; border-radius: 2px;
+        background: #20212a; border-radius: 2px;
         animation: nami-loader-slide 1.2s ease-in-out infinite;
       }
       @keyframes nami-loader-slide { 0% { left: -40%; } 100% { left: 100%; } }
       @media (prefers-color-scheme: dark) {
         .nami-splash-loader { background: rgba(200,200,210,.12); }
-        .nami-splash-loader::after { background: #7ba1c4; }
+        .nami-splash-loader::after { background: #f0f1f5; }
       }
       @media (prefers-reduced-motion: reduce) {
         #nami-splash { transition: none; }

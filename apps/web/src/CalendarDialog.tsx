@@ -599,9 +599,7 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
     <>
       <ManagementDialogShell
         titleId="calendar-dialog-title"
-        eyebrow={t("navigation.management")}
         title={t("calendar.title")}
-        description={demoMode ? t("calendar.demoDescription") : t("calendar.description")}
         onClose={guardedRequestClose}
         closing={closing}
         requestClose={guardedRequestClose}
