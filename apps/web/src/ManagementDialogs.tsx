@@ -1,4 +1,4 @@
-import { useRef, type ReactNode, type RefObject } from "react";
+import { useRef, useState, type ReactNode, type RefObject } from "react";
 import { X } from "lucide-react";
 import ContactsSection from "./ContactsSection";
 import TemplatesSection from "./TemplatesSection";
@@ -90,14 +90,16 @@ export type ContactsDialogProps = {
 
 export function ContactsDialog({ demoMode = false, onClose, fallbackFocusRef }: ContactsDialogProps) {
   const { t } = useI18n();
+  const [overlayOpen, setOverlayOpen] = useState(false);
   return (
     <ManagementDialogShell
       titleId="contacts-dialog-title"
       title={t("settings.contacts.title")}
       onClose={onClose}
       fallbackFocusRef={fallbackFocusRef}
+      focusSuspended={overlayOpen}
     >
-      <ContactsSection demoMode={demoMode} />
+      <ContactsSection demoMode={demoMode} onOverlayOpenChange={setOverlayOpen} />
     </ManagementDialogShell>
   );
 }
@@ -110,14 +112,16 @@ export type TemplatesDialogProps = {
 
 export function TemplatesDialog({ demoMode = false, onClose, fallbackFocusRef }: TemplatesDialogProps) {
   const { t } = useI18n();
+  const [overlayOpen, setOverlayOpen] = useState(false);
   return (
     <ManagementDialogShell
       titleId="templates-dialog-title"
       title={t("settings.templates.title")}
       onClose={onClose}
       fallbackFocusRef={fallbackFocusRef}
+      focusSuspended={overlayOpen}
     >
-      <TemplatesSection demoMode={demoMode} />
+      <TemplatesSection demoMode={demoMode} onOverlayOpenChange={setOverlayOpen} />
     </ManagementDialogShell>
   );
 }

@@ -1,5 +1,6 @@
 import { Check, ChevronLeft, ChevronRight, LayoutTemplate, LoaderCircle, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "./api";
 import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
@@ -14,6 +15,7 @@ export type TemplatesSectionProps = {
   demoMode?: boolean;
   /** Test seam: preloaded templates skip the API load. */
   initialTemplates?: MailTemplate[];
+  onOverlayOpenChange?: (open: boolean) => void;
 };
 
 type TemplateDraft = {
@@ -30,7 +32,7 @@ function emptyDraft(): TemplateDraft {
   return { name: "", subject: "", body: "" };
 }
 
-export default function TemplatesSection({ demoMode = false, initialTemplates }: TemplatesSectionProps) {
+export default function TemplatesSection({ demoMode = false, initialTemplates, onOverlayOpenChange }: TemplatesSectionProps) {
   const { t } = useI18n();
   const [templates, setTemplates] = useState<MailTemplate[]>(initialTemplates ?? []);
   const [query, setQuery] = useState("");
@@ -47,6 +49,7 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [notice, setNotice] = useState<Notice>(null);
   const confirmationDialog = useRef<HTMLElement>(null);
+  const editorCard = useRef<HTMLElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -109,9 +112,35 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
 
   useDialogFocus(pendingBulkDelete, confirmationDialog);
   const { closing: confirmClosing, requestClose: requestConfirmClose } = useDismissTransition(() => setPendingBulkDelete(false));
+  useDialogFocus(Boolean(draft), editorCard);
   const { closing: editorClosing, requestClose: requestEditorClose } = useDismissTransition(() => {
     setDraft(null);
     setEditingId(null);
+  });
+
+  const lastOverlayOpenRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    const open = Boolean(draft || pendingBulkDelete);
+    if (lastOverlayOpenRef.current !== open) {
+      lastOverlayOpenRef.current = open;
+      onOverlayOpenChange?.(open);
+    }
+  }, [draft, pendingBulkDelete, onOverlayOpenChange]);
+
+  useEffect(() => {
+    if (!draft && !pendingBulkDelete) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (pendingBulkDelete) {
+        if (!busy) requestConfirmClose();
+      } else {
+        if (!busy) requestEditorClose();
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape, true);
+    return () => window.removeEventListener("keydown", closeOnEscape, true);
   });
 
   const controlsBusy = busy || Boolean(busyTemplateId);
@@ -413,64 +442,72 @@ export default function TemplatesSection({ demoMode = false, initialTemplates }:
           </div>
         )}
       </section>
-      {draft && (
-        <div className={`modal-backdrop settings-modal-backdrop${editorClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && requestEditorClose()}>
-          <section className={`modal-card template-editor-card${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="template-editor-title" tabIndex={-1}>
-            <div className="modal-card-header template-editor-head">
-              <div className="template-editor-head-text">
-                <h3 id="template-editor-title">{editingId ? t("settings.templates.editTitle") : t("settings.templates.addTitle")}</h3>
+      {draft && (() => {
+        const dialog = (
+          <div className={`modal-backdrop template-editor-backdrop${editorClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && requestEditorClose()}>
+            <section ref={editorCard} className={`modal-card template-editor-card${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby="template-editor-title" tabIndex={-1}>
+              <div className="modal-card-header template-editor-head">
+                <div className="template-editor-head-text">
+                  <h3 id="template-editor-title">{editingId ? t("settings.templates.editTitle") : t("settings.templates.addTitle")}</h3>
+                </div>
+                <button
+                  className="icon-button template-editor-close-btn"
+                  type="button"
+                  aria-label={t("common.close")}
+                  data-tooltip={t("common.close")}
+                  disabled={busy}
+                  onClick={requestEditorClose}
+                >
+                  <X size={16} />
+                </button>
               </div>
-              <button
-                className="icon-button template-editor-close-btn"
-                type="button"
-                aria-label={t("common.close")}
-                data-tooltip={t("common.close")}
-                disabled={busy}
-                onClick={requestEditorClose}
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <div className="template-editor">
-              <label className="translation-setting-field" htmlFor="template-editor-name">
-                <span><strong>{t("settings.templates.nameLabel")}</strong></span>
-                <input id="template-editor-name" type="text" value={draft.name} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, name: event.target.value })} data-dialog-initial-focus />
-              </label>
-              <label className="translation-setting-field" htmlFor="template-editor-subject">
-                <span><strong>{t("settings.templates.subjectLabel")}</strong><small>{t("settings.templates.subjectHint")}</small></span>
-                <input id="template-editor-subject" type="text" value={draft.subject} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, subject: event.target.value })} />
-              </label>
-              <label className="translation-setting-field" htmlFor="template-editor-body">
-                <span><strong>{t("settings.templates.bodyLabel")}</strong></span>
-                <textarea id="template-editor-body" value={draft.body} rows={8} disabled={busy} onChange={(event) => setDraft({ ...draft, body: event.target.value })} />
-              </label>
-            </div>
-            <div className="settings-inline-actions template-editor-actions">
-              <button className="secondary-button" type="button" disabled={busy} onClick={requestEditorClose}>
-                {t("common.cancel")}
-              </button>
-              <button className="primary-button" type="button" disabled={busy || !draft.name.trim()} onClick={() => void saveDraft()}>
-                {busy ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{t("settings.templates.save")}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-      {pendingBulkDelete && (
-        <div className={`modal-backdrop confirmation-backdrop${confirmClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && requestConfirmClose()}>
-          <section ref={confirmationDialog} className={`confirmation-card${confirmClosing ? " closing" : ""}`} role="alertdialog" aria-modal="true" aria-labelledby="templates-bulk-confirmation-title" aria-describedby="templates-bulk-confirmation-description" tabIndex={-1}>
-            <span className="eyebrow">{t("settings.confirmation.eyebrow")}</span>
-            <h3 id="templates-bulk-confirmation-title">{t("settings.templates.bulkDeleteTitle", { count: selectedIds.size })}</h3>
-            <p id="templates-bulk-confirmation-description">{t("settings.templates.bulkDeleteDescription")}</p>
-            <div className="confirmation-actions">
-              <button className="secondary-button" type="button" data-dialog-initial-focus disabled={busy} onClick={requestConfirmClose}>{t("common.cancel")}</button>
-              <button className="secondary-button danger-button" type="button" disabled={busy} onClick={() => void removeSelected()}>
-                {busy ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}{t("settings.templates.bulkDeleteAction")}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
+              <div className="template-editor">
+                <label className="translation-setting-field" htmlFor="template-editor-name">
+                  <span><strong>{t("settings.templates.nameLabel")}</strong></span>
+                  <input id="template-editor-name" type="text" value={draft.name} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, name: event.target.value })} data-dialog-initial-focus />
+                </label>
+                <label className="translation-setting-field" htmlFor="template-editor-subject">
+                  <span><strong>{t("settings.templates.subjectLabel")}</strong><small>{t("settings.templates.subjectHint")}</small></span>
+                  <input id="template-editor-subject" type="text" value={draft.subject} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, subject: event.target.value })} />
+                </label>
+                <label className="translation-setting-field" htmlFor="template-editor-body">
+                  <span><strong>{t("settings.templates.bodyLabel")}</strong></span>
+                  <textarea id="template-editor-body" value={draft.body} rows={8} disabled={busy} onChange={(event) => setDraft({ ...draft, body: event.target.value })} />
+                </label>
+              </div>
+              <div className="settings-inline-actions template-editor-actions">
+                <button className="secondary-button" type="button" disabled={busy} onClick={requestEditorClose}>
+                  {t("common.cancel")}
+                </button>
+                <button className="primary-button" type="button" disabled={busy || !draft.name.trim()} onClick={() => void saveDraft()}>
+                  {busy ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{t("settings.templates.save")}
+                </button>
+              </div>
+            </section>
+          </div>
+        );
+        const portalTarget = typeof document !== "undefined" && document.body ? document.body : null;
+        return portalTarget ? createPortal(dialog, portalTarget) : dialog;
+      })()}
+      {pendingBulkDelete && (() => {
+        const dialog = (
+          <div className={`modal-backdrop confirmation-backdrop${confirmClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && requestConfirmClose()}>
+            <section ref={confirmationDialog} className={`confirmation-card${confirmClosing ? " closing" : ""}`} role="alertdialog" aria-modal="true" aria-labelledby="templates-bulk-confirmation-title" aria-describedby="templates-bulk-confirmation-description" tabIndex={-1}>
+              <span className="eyebrow">{t("settings.confirmation.eyebrow")}</span>
+              <h3 id="templates-bulk-confirmation-title">{t("settings.templates.bulkDeleteTitle", { count: selectedIds.size })}</h3>
+              <p id="templates-bulk-confirmation-description">{t("settings.templates.bulkDeleteDescription")}</p>
+              <div className="confirmation-actions">
+                <button className="secondary-button" type="button" data-dialog-initial-focus disabled={busy} onClick={requestConfirmClose}>{t("common.cancel")}</button>
+                <button className="secondary-button danger-button" type="button" disabled={busy} onClick={() => void removeSelected()}>
+                  {busy ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}{t("settings.templates.bulkDeleteAction")}
+                </button>
+              </div>
+            </section>
+          </div>
+        );
+        const portalTarget = typeof document !== "undefined" && document.body ? document.body : null;
+        return portalTarget ? createPortal(dialog, portalTarget) : dialog;
+      })()}
     </>
   );
 }

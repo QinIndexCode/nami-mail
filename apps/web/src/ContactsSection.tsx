@@ -1,5 +1,6 @@
 import { BookUser, Check, ChevronLeft, ChevronRight, LoaderCircle, Pencil, Plus, RefreshCw, Search, Trash2, UserRound, X } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "./api";
 import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
@@ -16,6 +17,7 @@ export type ContactsSectionProps = {
   demoMode?: boolean;
   /** Test seam: preloaded contacts skip the API load. */
   initialContacts?: Contact[];
+  onOverlayOpenChange?: (open: boolean) => void;
 };
 
 type ContactDraft = {
@@ -60,7 +62,7 @@ function emptyDraft(): ContactDraft {
   return { email: "", name: "", notes: "", autoCollected: false, avatarDataUrl: null };
 }
 
-export default function ContactsSection({ demoMode = false, initialContacts }: ContactsSectionProps) {
+export default function ContactsSection({ demoMode = false, initialContacts, onOverlayOpenChange }: ContactsSectionProps) {
   const { t } = useI18n();
   const [contacts, setContacts] = useState<Contact[]>(initialContacts ?? []);
   const [query, setQuery] = useState("");
@@ -163,6 +165,15 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
   const closeEditor = () => {
     if (!busy) requestEditorClose();
   };
+
+  const lastOverlayOpenRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    const open = Boolean(draft || pendingBulkDelete);
+    if (lastOverlayOpenRef.current !== open) {
+      lastOverlayOpenRef.current = open;
+      onOverlayOpenChange?.(open);
+    }
+  }, [draft, pendingBulkDelete, onOverlayOpenChange]);
 
   // Escape first dismisses the editor (capture + stopImmediatePropagation so
   // the host dialog beneath it stays open).
@@ -516,69 +527,77 @@ export default function ContactsSection({ demoMode = false, initialContacts }: C
           </div>
         )}
       </section>
-      {draft && (
-        <div className={`modal-backdrop contact-editor-backdrop${editorClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && closeEditor()}>
-          <section ref={editorPanel} className={`contact-editor-modal${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")} aria-labelledby="contact-editor-title" tabIndex={-1}>
-            <div className="contact-editor" role="form" aria-label={draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")}>
-              <div className="contact-editor-head">
-                <AvatarEditor name={draft.name} address={draft.email} current={draft.avatarDataUrl} disabled={busy} onChange={(dataUrl) => setDraft({ ...draft, avatarDataUrl: dataUrl })} />
-                <div className="contact-editor-head-text">
-                  <h3 id="contact-editor-title" className="contact-editor-title">{draft.name.trim() || draft.email || t("settings.contacts.title")}</h3>
+      {draft && (() => {
+        const dialog = (
+          <div className={`modal-backdrop contact-editor-backdrop${editorClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && closeEditor()}>
+            <section ref={editorPanel} className={`contact-editor-modal${editorClosing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-label={draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")} aria-labelledby="contact-editor-title" tabIndex={-1}>
+              <div className="contact-editor" role="form" aria-label={draft.id ? t("settings.contacts.edit") : t("settings.contacts.addContact")}>
+                <div className="contact-editor-head">
+                  <AvatarEditor name={draft.name} address={draft.email} current={draft.avatarDataUrl} disabled={busy} onChange={(dataUrl) => setDraft({ ...draft, avatarDataUrl: dataUrl })} />
+                  <div className="contact-editor-head-text">
+                    <h3 id="contact-editor-title" className="contact-editor-title">{draft.name.trim() || draft.email || t("settings.contacts.title")}</h3>
+                  </div>
+                  <button
+                    className="icon-button contact-editor-close-btn"
+                    type="button"
+                    aria-label={t("common.close")}
+                    data-tooltip={t("common.close")}
+                    disabled={busy}
+                    onClick={closeEditor}
+                  >
+                    <X size={16} />
+                  </button>
                 </div>
-                <button
-                  className="icon-button contact-editor-close-btn"
-                  type="button"
-                  aria-label={t("common.close")}
-                  data-tooltip={t("common.close")}
-                  disabled={busy}
-                  onClick={closeEditor}
-                >
-                  <X size={16} />
+                {draft.id && draft.autoCollected && (
+                  <div className="contact-editor-source">
+                    <small className="contact-auto-badge">{t("settings.contacts.autoCollected")}</small>
+                    <span>{t("settings.contacts.editPromotesManual")}</span>
+                  </div>
+                )}
+                <label className="calendar-field" htmlFor="contact-email-input">
+                  <span>{t("settings.contacts.emailLabel")}</span>
+                  <input id="contact-email-input" type="text" value={draft.email} autoComplete="off" spellCheck={false} disabled={busy} autoFocus onChange={(event) => setDraft({ ...draft, email: event.target.value })} />
+                </label>
+                <label className="calendar-field" htmlFor="contact-name-input">
+                  <span>{t("settings.contacts.nameLabel")}</span>
+                  <input id="contact-name-input" type="text" value={draft.name} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+                </label>
+                <label className="calendar-field" htmlFor="contact-notes-input">
+                  <span>{t("settings.contacts.notesLabel")}</span>
+                  <textarea id="contact-notes-input" value={draft.notes} rows={3} disabled={busy} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} />
+                </label>
+                <div className="contact-editor-actions">
+                  <button className="secondary-button" type="button" disabled={busy} onClick={closeEditor}>{t("common.cancel")}</button>
+                  <button className="primary-button" type="button" disabled={busy} onClick={() => void saveDraft()}>
+                    {busy ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}{t("settings.contacts.save")}
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
+        );
+        const portalTarget = typeof document !== "undefined" && document.body ? document.body : null;
+        return portalTarget ? createPortal(dialog, portalTarget) : dialog;
+      })()}
+      {pendingBulkDelete && (() => {
+        const dialog = (
+          <div className={`modal-backdrop confirmation-backdrop${confirmClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && requestConfirmClose()}>
+            <section ref={confirmationDialog} className={`confirmation-card${confirmClosing ? " closing" : ""}`} role="alertdialog" aria-modal="true" aria-labelledby="contacts-bulk-confirmation-title" aria-describedby="contacts-bulk-confirmation-description" tabIndex={-1}>
+              <span className="eyebrow">{t("settings.confirmation.eyebrow")}</span>
+              <h3 id="contacts-bulk-confirmation-title">{t("settings.contacts.bulkDeleteTitle", { count: selectedIds.size })}</h3>
+              <p id="contacts-bulk-confirmation-description">{t("settings.contacts.bulkDeleteDescription")}</p>
+              <div className="confirmation-actions">
+                <button className="secondary-button" type="button" data-dialog-initial-focus disabled={busy} onClick={requestConfirmClose}>{t("common.cancel")}</button>
+                <button className="secondary-button danger-button" type="button" disabled={busy} onClick={() => void removeSelected()}>
+                  {busy ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}{t("settings.contacts.bulkDeleteAction")}
                 </button>
               </div>
-              {draft.id && draft.autoCollected && (
-                <div className="contact-editor-source">
-                  <small className="contact-auto-badge">{t("settings.contacts.autoCollected")}</small>
-                  <span>{t("settings.contacts.editPromotesManual")}</span>
-                </div>
-              )}
-              <label className="calendar-field" htmlFor="contact-email-input">
-                <span>{t("settings.contacts.emailLabel")}</span>
-                <input id="contact-email-input" type="text" value={draft.email} autoComplete="off" spellCheck={false} disabled={busy} autoFocus onChange={(event) => setDraft({ ...draft, email: event.target.value })} />
-              </label>
-              <label className="calendar-field" htmlFor="contact-name-input">
-                <span>{t("settings.contacts.nameLabel")}</span>
-                <input id="contact-name-input" type="text" value={draft.name} autoComplete="off" spellCheck={false} disabled={busy} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-              </label>
-              <label className="calendar-field" htmlFor="contact-notes-input">
-                <span>{t("settings.contacts.notesLabel")}</span>
-                <textarea id="contact-notes-input" value={draft.notes} rows={3} disabled={busy} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} />
-              </label>
-              <div className="contact-editor-actions">
-                <button className="secondary-button" type="button" disabled={busy} onClick={closeEditor}>{t("common.cancel")}</button>
-                <button className="primary-button" type="button" disabled={busy} onClick={() => void saveDraft()}>
-                  {busy ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}{t("settings.contacts.save")}
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      )}
-      {pendingBulkDelete && (
-        <div className={`modal-backdrop confirmation-backdrop${confirmClosing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && requestConfirmClose()}>
-          <section ref={confirmationDialog} className={`confirmation-card${confirmClosing ? " closing" : ""}`} role="alertdialog" aria-modal="true" aria-labelledby="contacts-bulk-confirmation-title" aria-describedby="contacts-bulk-confirmation-description" tabIndex={-1}>
-            <span className="eyebrow">{t("settings.confirmation.eyebrow")}</span>
-            <h3 id="contacts-bulk-confirmation-title">{t("settings.contacts.bulkDeleteTitle", { count: selectedIds.size })}</h3>
-            <p id="contacts-bulk-confirmation-description">{t("settings.contacts.bulkDeleteDescription")}</p>
-            <div className="confirmation-actions">
-              <button className="secondary-button" type="button" data-dialog-initial-focus disabled={busy} onClick={requestConfirmClose}>{t("common.cancel")}</button>
-              <button className="secondary-button danger-button" type="button" disabled={busy} onClick={() => void removeSelected()}>
-                {busy ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}{t("settings.contacts.bulkDeleteAction")}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
+            </section>
+          </div>
+        );
+        const portalTarget = typeof document !== "undefined" && document.body ? document.body : null;
+        return portalTarget ? createPortal(dialog, portalTarget) : dialog;
+      })()}
     </>
   );
 }
