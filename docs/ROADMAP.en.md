@@ -14,7 +14,7 @@ This document tracks features that have been confirmed but are not yet scheduled
 
 ## Image upload / multimodal (vision) support
 
-**Status**: confirmed, not scheduled. Not recommended for the 0.3.0 release cycle (large cross-cutting change, and not a core requirement for the mail workflow).
+**Status**: completed (2026-10, merged into main via PR #148). Supports OpenAI, Gemini, Anthropic, and Ollama multimodal vision streaming, provider configuration switches, and dynamic attachment validation.
 
 **Goal**: allow users to attach images in compose / Agent chat so the model can understand them visually (e.g. analyze screenshots, invoices, scans) and draft replies based on them.
 
@@ -36,7 +36,7 @@ This document tracks features that have been confirmed but are not yet scheduled
 
 ## Reading-pane AI shortcuts (AI summary / AI draft reply)
 
-**Status**: agreed shape, not scheduled (evaluated 2026-09-10).
+**Status**: completed (2026-10). Promotes reading toolbar button to "AI summary" (auto-attaches reference + `/summary` + auto-sends); adds "AI draft reply" to More menu (attaches reference + pre-fills `/draft ` + awaits review); extracted `readerAiActions` and `useInitialPrompt` to keep file length ratchets clean.
 
 **Goal**: act on the current mail from the reading pane in one click, landing in the
 Agent workspace with the reference already attached and the instruction already typed.

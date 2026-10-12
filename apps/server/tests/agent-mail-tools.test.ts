@@ -693,6 +693,37 @@ describe("Agent mail tools", () => {
     expect(fake.searchMessages).not.toHaveBeenCalled();
   });
 
+  it("resolves an account email to its scoped account ID when searching", async () => {
+    const fake = fakeMailApplication();
+    fake.listAccounts.mockResolvedValue([{
+      id: "account-1",
+      email: "user@example.com",
+      provider: "custom",
+      displayName: "User",
+      status: "connected",
+      lastSyncedAt: timestamp,
+    }]);
+    fake.searchMessages.mockResolvedValue({
+      items: [],
+      total: 0,
+      truncated: false,
+    });
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const tool = registry.get("messages.search");
+    expect(tool).toBeDefined();
+
+    const outcome = await tool!.execute(context(["account-1"]), {
+      query: "invoice",
+      accountId: "user@example.com",
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(fake.searchMessages).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ accountIds: ["account-1"], query: "invoice" }),
+    );
+  });
+
   it("moves a scoped message to archive or trash after confirmation", async () => {    const fake = fakeMailApplication();
     const registry = createToolRegistry(createMailTools(fake.service));
     const moveTool = registry.get("messages.move");

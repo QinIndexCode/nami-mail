@@ -59,16 +59,69 @@ export const AgentMessageRow = memo(function AgentMessageRowInner({
     >
       {message.revoked ? null : (
         <>
-          {message.quote && <div className="agent-message-quote"><span className="agent-quote-mark" aria-hidden="true">"</span><span className="agent-quote-text">{truncateForPreview(message.quote)}</span><span className="agent-quote-mark" aria-hidden="true">"</span></div>}
+          {message.quote && (
+            <div
+              className="agent-message-quote"
+              style={message.role === "user" ? { marginLeft: "auto", maxWidth: "min(100%, 630px)" } : undefined}
+            >
+              <span className="agent-quote-mark" aria-hidden="true">"</span>
+              <span className="agent-quote-text">{truncateForPreview(message.quote)}</span>
+              <span className="agent-quote-mark" aria-hidden="true">"</span>
+            </div>
+          )}
           {message.references && message.references.length > 0 && (
-            <div className="agent-message-references">
+            <div
+              className="agent-message-references"
+              style={message.role === "user" ? { justifyContent: "flex-end" } : undefined}
+            >
               {message.references.map((reference) => (
-                <button key={reference.id} type="button" className="agent-message-reference" onClick={() => onOpenMessage(reference.id)} title={reference.subject} data-tooltip={t("agent.reference.open")}><Mail size={12} /><span>{reference.subject || t("agent.reference.noSubject")}</span></button>
+                <button
+                  key={reference.id}
+                  type="button"
+                  className="agent-message-reference"
+                  onClick={() => onOpenMessage(reference.id)}
+                  data-tooltip={reference.subject ? `${t("agent.reference.open")}: ${reference.subject}` : t("agent.reference.open")}
+                >
+                  <Mail size={12} />
+                  <span>{reference.subject || t("agent.reference.noSubject")}</span>
+                </button>
               ))}
             </div>
           )}
           {message.content ? <AgentMessageContent content={message.content} streaming={message.state === "streaming"} /> : message.state === "streaming" && <div className="agent-thinking"><span className="agent-thinking-dots" aria-hidden="true"><span className="agent-thinking-dot" /><span className="agent-thinking-dot" /><span className="agent-thinking-dot" /></span>{statusMessage || t("agent.message.thinking")}</div>}
-          {message.attachments && message.attachments.length > 0 && <div className="agent-message-attachments">{visibleAttachments.map((attachment, index) => { const presentation = presentAttachment(attachment.name, attachment.type, t); return <button key={`${attachment.name}-${index}`} type="button" className="agent-message-attachment" onClick={() => onOpenAttachment(attachment.path)} data-tooltip={attachment.path ?? attachment.name}><AttachmentFileIcon kind={presentation.kind} /><span>{attachment.name}</span></button>; })}{attachmentOverflow > 0 && <button type="button" className="agent-message-attachment is-more" aria-expanded={attachmentsExpanded} onClick={() => setAttachmentsExpanded((value) => !value)}>{attachmentsExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}<span>{attachmentsExpanded ? t("agent.message.collapseAttachments") : t("agent.message.expandAttachments", { count: attachmentOverflow })}</span></button>}</div>}
+          {message.attachments && message.attachments.length > 0 && (
+            <div
+              className="agent-message-attachments"
+              style={message.role === "user" ? { justifyContent: "flex-end" } : undefined}
+            >
+              {visibleAttachments.map((attachment, index) => {
+                const presentation = presentAttachment(attachment.name, attachment.type, t);
+                return (
+                  <button
+                    key={`${attachment.name}-${index}`}
+                    type="button"
+                    className="agent-message-attachment"
+                    onClick={() => onOpenAttachment(attachment.path)}
+                    data-tooltip={attachment.path ?? attachment.name}
+                  >
+                    <AttachmentFileIcon kind={presentation.kind} />
+                    <span>{attachment.name}</span>
+                  </button>
+                );
+              })}
+              {attachmentOverflow > 0 && (
+                <button
+                  type="button"
+                  className="agent-message-attachment is-more"
+                  aria-expanded={attachmentsExpanded}
+                  onClick={() => setAttachmentsExpanded((value) => !value)}
+                >
+                  {attachmentsExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  <span>{attachmentsExpanded ? t("agent.message.collapseAttachments") : t("agent.message.expandAttachments", { count: attachmentOverflow })}</span>
+                </button>
+              )}
+            </div>
+          )}
           {message.toolActivities.length > 0 && <AgentToolList activities={message.toolActivities} superseded={superseded} />}
           {message.error && <div className="agent-message-error"><CircleAlert size={15} /><span>{message.error.message}{message.error.suggestion ? ` ${message.error.suggestion}` : ""}</span>{message.error.retryable && <button type="button" onClick={onRetry}>{t("agent.message.retry")}</button>}</div>}
         </>

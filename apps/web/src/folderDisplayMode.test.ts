@@ -65,4 +65,29 @@ describe("folderDisplayMode", () => {
     expect(() => saveFolderDisplayMode("tree")).not.toThrow();
     expect(loadFolderDisplayMode()).toBe("focused");
   });
+
+  describe("tree mode scroll chaining contract", () => {
+    it("ensures .sidebar-content is the unified scroll container and .account-list does not trap scroll events", async () => {
+      const { loadAggregatedCss } = await import("./testUtils/loadStyles");
+      const css = loadAggregatedCss();
+
+      // Find .account-list rule block in CSS
+      const accountListMatch = css.match(/\.account-list\s*\{([^}]+)\}/);
+      expect(accountListMatch).toBeTruthy();
+      const accountListBody = accountListMatch![1];
+
+      // .account-list must NOT trap wheel/trackpad scrolling via overscroll-behavior: contain
+      // nor create a nested scrollport with overflow: hidden auto, because in tree mode
+      // inline folders are rendered inside .account-list and would block .sidebar-content scrolling.
+      expect(accountListBody).not.toMatch(/overscroll-behavior\s*:\s*contain/);
+      expect(accountListBody).not.toMatch(/overflow\s*:\s*hidden\s+auto/);
+
+      // .sidebar-content must remain the overarching scroll container
+      const sidebarContentMatch = css.match(/\.sidebar-content\s*\{([^}]+)\}/);
+      expect(sidebarContentMatch).toBeTruthy();
+      const sidebarContentBody = sidebarContentMatch![1];
+      expect(sidebarContentBody).toMatch(/overflow\s*:\s*hidden\s+auto/);
+      expect(sidebarContentBody).toMatch(/overscroll-behavior\s*:\s*contain/);
+    });
+  });
 });

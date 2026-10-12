@@ -108,7 +108,7 @@ background:color-mix(in srgb, var(--accent) 42%, transparent)
 display:flex;
 flex-direction:column
 }
-.agent-message.user .agent-message-attachments
+.agent-message.user :is(.agent-message-attachments,.agent-message-references)
 {
 order:-1;
 justify-content:flex-end;

@@ -569,11 +569,27 @@ function messagesSearchTool(mailApplication: MailApplicationService): AgentTool<
     execute: async (context, input) => {
       const denied = requireScope<SearchMessagesOutput>(context);
       if (denied) return denied;
-      if (input.accountId && !scopedAccountIds(context).includes(input.accountId)) {
+      let targetAccountId = input.accountId;
+      if (targetAccountId && !scopedAccountIds(context).includes(targetAccountId)) {
+        if (targetAccountId.includes("@")) {
+          const accountsResult = await fromMailApplication(context, () => mailApplication.listAccounts(scopedContext(context)));
+          if (accountsResult.ok && Array.isArray(accountsResult.value)) {
+            const matched = accountsResult.value.find(
+              (acc) => acc.email.toLowerCase() === targetAccountId?.toLowerCase(),
+            );
+            if (matched) {
+              targetAccountId = matched.id;
+            }
+          }
+        } else if (scopedAccountIds(context).length === 1 && /^(default|primary|main)$/i.test(targetAccountId)) {
+          targetAccountId = scopedAccountIds(context)[0];
+        }
+      }
+      if (targetAccountId && !scopedAccountIds(context).includes(targetAccountId)) {
         return scopeDenied("The requested account is outside the current Agent conversation scope.");
       }
       const query: MailSearchQuery = {
-        accountIds: input.accountId ? [input.accountId] : scopedAccountIds(context),
+        accountIds: targetAccountId ? [targetAccountId] : scopedAccountIds(context),
         query: input.query,
         ...(input.mailbox ? { mailbox: input.mailbox } : {}),
         ...(input.subject ? { subject: input.subject } : {}),

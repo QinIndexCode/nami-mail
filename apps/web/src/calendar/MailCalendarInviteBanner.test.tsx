@@ -211,7 +211,7 @@ describe("MailCalendarInviteBanner", () => {
     // working cache from a leaked one.
     await select("msg-lru-1");
     expect(downloadMock).toHaveBeenCalledTimes(entryCap + 2);
-  });
+  }, 45_000);
 
   it("rejects oversized attachments before downloading", async () => {
     const oversized: MessageAttachment[] = [

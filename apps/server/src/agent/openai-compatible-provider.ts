@@ -265,6 +265,28 @@ function appendToolDelta(calls: Map<number, PendingToolCall>, value: unknown): v
   }
 }
 
+function parseToolArguments(raw: string): unknown {
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const codeBlockMatch = /```(?:json)?\s*([\s\S]*?)\s*```/.exec(trimmed);
+    const codeBlockContent = codeBlockMatch?.[1]?.trim();
+    if (codeBlockContent) {
+      try {
+        return JSON.parse(codeBlockContent);
+      } catch {
+        // continue
+      }
+    }
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      return {};
+    }
+    return trimmed;
+  }
+}
+
 function completedToolCalls(calls: Map<number, PendingToolCall>): ToolCall[] {
   const completed: ToolCall[] = [];
   for (const call of [...calls.values()].sort((left, right) => left.index - right.index)) {
@@ -273,18 +295,10 @@ function completedToolCalls(calls: Map<number, PendingToolCall>): ToolCall[] {
     // simply continues without that call. Several OpenAI-compatible services
     // omit the id field or the arguments member on no-arg tools.
     if (!call.id || !call.name) continue;
-    // Malformed model JSON degrades to an empty payload instead of failing
-    // the turn: the tool's input validation rejects it and the engine feeds
-    // the validation error back to the model, which can retry the call.
-    // (Same self-heal contract as anthropic-provider and openai-responses-provider.)
-    let input: unknown = {};
-    if (call.arguments) {
-      try {
-        input = JSON.parse(call.arguments) as unknown;
-      } catch {
-        input = {};
-      }
-    }
+    // Malformed model JSON degrades gracefully through parseToolArguments
+    // instead of failing the turn: the tool's input validation evaluates it
+    // and feeds any validation error back to the model for self-healing.
+    const input = call.arguments ? parseToolArguments(call.arguments) : {};
     completed.push({
       id: call.id,
       toolName: call.name,

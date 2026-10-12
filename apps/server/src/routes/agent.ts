@@ -344,7 +344,7 @@ export function registerAgentRoutes(app: FastifyInstance, deps: AgentRouteDeps):
     } catch (error) {
       if (!deliveryStopped && !reply.raw.destroyed) {
         const body = error instanceof AgentServiceError
-          ? { type: "error", error: { code: error.code, message: error.message, retryable: error.retryable } }
+          ? { type: "error", error: { code: error.code, message: error.message, retryable: error.retryable, ...(error.suggestion ? { suggestion: error.suggestion } : {}) } }
           : { type: "error", error: { code: ROUTE_ERROR_CODES.agent_internal, message: "Agent local service failed to complete the request.", retryable: true } };
         reply.raw.write(`data: ${JSON.stringify(body)}\n\n`);
         reply.raw.write(`data: ${JSON.stringify({ type: "completed", reason: "error" })}\n\n`);

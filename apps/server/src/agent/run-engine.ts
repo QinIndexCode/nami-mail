@@ -208,8 +208,10 @@ const maximumMessageLength = 16_000;
 /** The query a search-class tool was invoked with, defensively extracted from
  *  the model-provided tool input (arrives as unknown). */
 function searchQueryDetail(input: unknown): string | undefined {
-  const query = (input as { query?: unknown } | null | undefined)?.query;
-  return typeof query === "string" && query.trim() !== "" ? shortPreview(query) : undefined;
+  if (typeof input === "string" && input.trim() !== "") return shortPreview(input.trim());
+  const record = (input && typeof input === "object") ? (input as Record<string, unknown>) : undefined;
+  const query = record?.query ?? record?.keyword ?? record?.q ?? record?.text ?? record?.subject ?? record?.searchTerm;
+  return typeof query === "string" && query.trim() !== "" ? shortPreview(query.trim()) : undefined;
 }
 
 /** The result count a search tool reported, defensively extracted from the
@@ -305,7 +307,7 @@ function messageForRag(result: AgentRagSearchResult): AgentCitation {
     id: result.citation.id,
     messageId: result.citation.messageId,
     accountId: result.citation.accountId,
-    subject: result.citation.subject,
+    subject: result.citation.subject ?? "",
     sender: result.citation.sender ?? "",
     sentAt: result.citation.sentAt ?? "",
     excerpt: result.citation.excerpt ?? "",
@@ -1353,7 +1355,7 @@ export class AgentRunEngine {
           }
           const descriptor = this.tools.get(call.toolName)?.descriptor;
           const activityId = `tool-${randomUUID()}`;
-          const searchDetail = call.toolName === "web.search" ? searchQueryDetail(call.input) : undefined;
+          const searchDetail = (call.toolName === "web.search" || call.toolName === "messages.search") ? searchQueryDetail(call.input) : undefined;
           const runningActivity: AgentToolActivity = {
             id: activityId,
             toolName: call.toolName,
@@ -1487,7 +1489,7 @@ export class AgentRunEngine {
           // as mail-derived before it is persisted so a later cloud provider
           // without explicit mail-content consent never receives that history.
           if (succeeded) mailContextIncluded = true;
-          const searchCount = call.toolName === "web.search" && succeeded ? searchResultCount(result.output) : undefined;
+          const searchCount = (call.toolName === "web.search" || call.toolName === "messages.search") && succeeded ? searchResultCount(result.output) : undefined;
           const searchResultDetail = searchCount !== undefined
             ? t("status.search_detail", { query: searchQueryDetail(call.input) ?? "", count: searchCount })
             : undefined;

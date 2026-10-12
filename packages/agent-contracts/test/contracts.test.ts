@@ -232,3 +232,46 @@ test("UI stream schema rejects malformed events", () => {
     assert.equal(agentUiStreamEventSchema.safeParse(event).success, false, JSON.stringify(event));
   }
 });
+
+test("UI stream schema accepts tool activity error with suggestion", () => {
+  const event = {
+    type: "tool" as const,
+    activity: {
+      id: "tool-err-1",
+      toolName: "messages.list",
+      title: "List mail messages",
+      state: "failed" as const,
+      summary: "Tool input was invalid",
+      error: {
+        code: "TOOL_INPUT_INVALID",
+        message: "The input did not match its schema.",
+        suggestion: "Check the tool parameters and try again.",
+        retryable: false,
+      },
+    },
+  };
+  assert.equal(agentUiStreamEventSchema.safeParse(event).success, true);
+});
+
+test("UI stream schema normalizes citations with nullish or missing fields", () => {
+  const event = {
+    type: "citation" as const,
+    citation: {
+      id: "cit-1",
+      messageId: "msg-1",
+      accountId: "acc-1",
+      subject: null,
+      sender: null,
+      sentAt: null,
+      excerpt: null,
+    },
+  };
+  const parsed = agentUiStreamEventSchema.safeParse(event);
+  assert.equal(parsed.success, true);
+  if (parsed.success && parsed.data.type === "citation") {
+    assert.equal(parsed.data.citation.subject, "");
+    assert.equal(parsed.data.citation.sender, "");
+    assert.equal(parsed.data.citation.sentAt, "");
+    assert.equal(parsed.data.citation.excerpt, "");
+  }
+});
