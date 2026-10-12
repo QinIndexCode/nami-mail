@@ -456,7 +456,7 @@ overflow:hidden
 border:1px solid color-mix(in srgb, var(--focus-ring) 42%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 10%, var(--panel-muted));
 color:var(--text-soft);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 flex:none;
 place-items:center;
 width:28px;
