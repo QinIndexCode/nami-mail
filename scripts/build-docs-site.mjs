@@ -565,10 +565,8 @@ function themeToggle(lang) {
   return `<button class="icon-button" type="button" id="theme-toggle" aria-label="${
     lang === "zh" ? "切换主题" : "Switch theme"
   }">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-              <path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M5.6 18.4 7 17m10-10 1.4-1.4" stroke-linecap="round" />
-              <circle cx="12" cy="12" r="4" />
-            </svg>
+            <svg class="theme-icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+            <svg class="theme-icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
           </button>`;
 }
 
@@ -619,6 +617,8 @@ const OG_LOCALE = { zh: "zh_CN", en: "en_US" };
 
 function siteHeader({ prefix, lang, languageControl, current }) {
   const bilingual = (zh, en) => `<span data-lang="zh">${zh}</span><span data-lang="en">${en}</span>`;
+  const extIcon = `<svg class="site-icon site-icon-sm" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
+  const dlIcon = `<svg class="site-icon site-icon-sm" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>`;
   const links = [
     ["home", prefix, "首页", "Home"],
     ["features", `${prefix}#features`, "功能", "Features"],
@@ -626,7 +626,7 @@ function siteHeader({ prefix, lang, languageControl, current }) {
     ["privacy", `${prefix}#privacy`, "本地与隐私", "Privacy"],
     ["docs", `${prefix}docs/`, "文档", "Docs"],
     ["github", REPO_URL, "GitHub", "GitHub"],
-  ].map(([id, href, zh, en]) => `<a href="${href}" data-nav="${id}"${current === id ? ' aria-current="page"' : ""}${id === "github" ? ' rel="noopener"' : ""}>${bilingual(zh, en)}${id === "github" ? ' <span aria-hidden="true">↗</span>' : ""}</a>`).join("\n          ");
+  ].map(([id, href, zh, en]) => `<a href="${href}" data-nav="${id}"${current === id ? ' aria-current="page"' : ""}${id === "github" ? ' rel="noopener"' : ""}>${bilingual(zh, en)}${id === "github" ? ` ${extIcon}` : ""}</a>`).join("\n          ");
   return `    <header class="site-header">
       <div class="wrap">
         <a class="brand" href="${prefix}" aria-label="Nami Mail">
@@ -639,7 +639,7 @@ function siteHeader({ prefix, lang, languageControl, current }) {
         <div class="header-actions">
           ${languageControl}
           ${themeToggle(lang)}
-          <a class="button header-download" href="${prefix}#download">${bilingual("下载", "Download")}<span aria-hidden="true">↓</span></a>
+          <a class="button header-download" href="${prefix}#download">${bilingual("下载", "Download")} ${dlIcon}</a>
           <details class="mobile-navigation">
             <summary>${bilingual("菜单", "Menu")}</summary>
             <nav aria-label="${lang === "zh" ? "移动导航" : "Mobile"}">
@@ -837,7 +837,7 @@ function renderQuickLinks(topics, lang) {
               <span class="quick-link-title">${escapeHtml(entry.label[lang])}</span>
               <span class="quick-link-blurb">${escapeHtml(entry.blurb[lang])}</span>
             </span>
-            <span class="quick-link-arrow" aria-hidden="true">→</span>
+            <span class="quick-link-arrow" aria-hidden="true"><svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></span>
           </a>`;
   })
     .filter(Boolean)

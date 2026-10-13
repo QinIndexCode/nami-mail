@@ -355,6 +355,50 @@ html[data-lang="en"] [data-lang="zh"] {
   color: var(--text);
 }
 
+/* Theme toggle icon switching based on active theme */
+#theme-toggle .theme-icon-sun,
+#theme-toggle .theme-icon-moon {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+:root[data-theme="dark"] #theme-toggle .theme-icon-moon,
+:root:not([data-theme="light"]) #theme-toggle .theme-icon-moon {
+  display: none;
+}
+
+:root[data-theme="dark"] #theme-toggle .theme-icon-sun,
+:root:not([data-theme="light"]) #theme-toggle .theme-icon-sun {
+  display: block;
+}
+
+:root[data-theme="light"] #theme-toggle .theme-icon-sun {
+  display: none;
+}
+
+:root[data-theme="light"] #theme-toggle .theme-icon-moon {
+  display: block;
+}
+
+/* --- icon primitives --------------------------------------------------- */
+
+.site-icon {
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.site-icon-xs {
+  width: 12px;
+  height: 12px;
+}
+
+.site-icon-sm {
+  width: 14px;
+  height: 14px;
+}
+
 /* --- buttons ------------------------------------------------------------ */
 
 .button {
