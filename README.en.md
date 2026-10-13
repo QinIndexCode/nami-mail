@@ -28,15 +28,15 @@ Nami Mail is a local-first, multi-account desktop mail client for Windows. It br
 
 > The password field is only for long-lived credentials required by the provider: Gmail and iCloud normally require an app password, QQ and NetEase require a client authorization code, and a self-hosted mailbox can require its mailbox password. Credentials are never sent to a service other than Nami Mail and the selected mail provider; they are used only for a direct provider connection. OAuth refresh tokens are also encrypted and stored locally only.
 
-## What's New in 0.4.3
+## What's New in 0.5.0
 
-- **Folder display modes**: switch the sidebar between a multi-account tree mode (every account visible, each folding its own folders) and a focused mode (single-account view with a bottom folder list); the preference is stored locally.
-- **Dual-model auto-reply & dry-run sandbox**: the screening model and the drafting model can be configured independently; a zero-side-effect sandbox visualizes link-cleaning token savings, rule matches, model decisions, and draft previews end to end.
-- **Agent output stability & experience**: the streaming tail-loss defect (queued deltas dropped during conversation switches) is fully fixed; drafted replies stream in with a typewriter effect; context-window budgets, smart pruning of oversized tool results, and automatic multi-turn history compression were added.
-- **External connections & cross-platform IPC**: a clear separation of built-in MCP, locally exposed MCP servers, and the external CLI over a unified IPC transport layer (Windows named pipes / Unix domain sockets).
-- **Settings overhaul & update stability**: the wall-of-text settings UI was rebuilt around inline hover tooltips; update installs no longer hang 30 seconds on a lingering SSE connection, and a pre-flight disk-space check runs before download and install.
+- **Full-Stack Local Calendar & Meeting Invites**: Built-in month view calendar with event CRUD; mail invite banners with direct join links (Tencent Meeting, Zoom, Feishu, Teams, Meet); ICS import with UID in-place deduplication; 15-minute reminders.
+- **End-to-End Multimodal Model Integration**: Independent toggles for image, audio, video, and PDF context attachments; adaptive Composer file picker with category badges; strict backward-compatible plain-text fallback.
+- **UI Design System & Visual Overhaul**: Restored radius tokens (8px/12px/20px) and concentric corner principle; hidden sidebar scrollbars; full-width markdown tables; translucent frosted loading skeletons.
+- **Real-Time Account Syncing Visibility**: Live pulsing dot and status subtitle for active sync passes; hardened concurrent request timing during folder navigation.
+- **Agent Resilience & Engineering**: Self-healing fallback for malformed tool JSON, token budget estimation and pruning, history compression, and App.tsx decomposed into 8 domain hooks.
 
-See the [release notes](docs/releases/v0.4.3.en.md) and [changelog](CHANGELOG.en.md) for details.
+See the [release notes](docs/releases/v0.5.0.en.md) and [changelog](CHANGELOG.en.md) for details.
 
 ## Get Started
 

@@ -4,7 +4,8 @@
 
 This directory contains reviewable, reusable GitHub Release bodies. Every release note should serve real users rather than copy build logs, CI output, or internal environment variables.
 
-- [v0.4.3](v0.4.3.en.md) is the current latest release note, covering settings UI/UX overhaul, link sanitization & token reduction, context budget management, and auto-reply simulator.
+- [v0.5.0](v0.5.0.en.md) is the milestone release covering full-stack local calendar, multimodal models, design system UI overhaul, and streaming hardening.
+- [v0.4.3](v0.4.3.en.md) covers settings UI/UX overhaul, link sanitization & token reduction, context budget management, and auto-reply simulator.
 - [v0.4.2](v0.4.2.en.md) is the Windows custom install directory fix and BIMI brand avatar release.
 - [v0.4.1](v0.4.1.en.md) is the UX polish release with BIMI brand avatars and compose attachment improvements (drag-and-drop and clipboard paste).
 - [v0.4.0](v0.4.0.en.md) is the stability-focused release (agent revoke/resend races, the notification-sound fix, conversation-thread completion and quote folding, plus the website and docs site).

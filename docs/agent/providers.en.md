@@ -32,6 +32,7 @@ Without any configured model, the assistant shows "Set up a usable model first" 
 | Endpoint | Use HTTPS; loopback HTTP is allowed only for local servers |
 | Model name | The exact model ID the server provides |
 | Request timeout | In milliseconds, 1,000 to 120,000 |
+| Multimodal capabilities | Individually toggle supported input modalities: Image, Audio, Video, PDF |
 | API key | Written only to local encrypted storage; never shown again after saving |
 
 API key behavior:
@@ -53,6 +54,13 @@ API key behavior:
 - **Set as default model**: new conversations prefer this model.
 - Status badges: `Configuration complete`, `Connection verified`, `Connection needs review`, `Connection unavailable`; local and cloud models are labeled separately.
 - A failed connection check keeps the configuration so you can fix and retry; common errors include auth rejection, timeout, unreachable server, rate limiting, and configuration changed during the check.
+
+## Multimodal Input Capabilities
+
+- **Explicit Opt-in**: Model capabilities vary significantly. NamiMail Agent uses explicit modality toggles rather than guessing from model names.
+- **Supported Modalities**: You can independently enable image, audio, video, and PDF document processing per model.
+- **Backward Compatibility & Plain-Text Fallback**: Any model configured without multimodal support strictly degrades to plain-text mode. Composer attachment pickers automatically enforce this to prevent upstream API failures.
+- **Protocol Adaptation**: The server adapts multimodal payloads end-to-end across OpenAI Chat, OpenAI Responses, Anthropic Claude, and Google Gemini native multimodal specifications with base64 and media URL normalization.
 
 ## Related Documentation
 

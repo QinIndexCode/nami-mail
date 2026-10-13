@@ -24,6 +24,7 @@ Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端开源�
 | 安装与更新 / Installation and updates | [INSTALLING.en.md](docs/INSTALLING.en.md) | [INSTALLING.zh-CN.md](docs/INSTALLING.zh-CN.md) |
 | 邮箱接入 / Email providers | [EMAIL-PROVIDERS.en.md](docs/EMAIL-PROVIDERS.en.md) | [EMAIL-PROVIDERS.zh-CN.md](docs/EMAIL-PROVIDERS.zh-CN.md) |
 | 邮件翻译 / Mail translation | [TRANSLATION.en.md](docs/TRANSLATION.en.md) | [TRANSLATION.zh-CN.md](docs/TRANSLATION.zh-CN.md) |
+| 日历与邮件邀请 / Calendar and invites | [CALENDAR.en.md](docs/CALENDAR.en.md) | [CALENDAR.zh-CN.md](docs/CALENDAR.zh-CN.md) |
 | 外部 Mail 接口 / External Mail interface | [EXTERNAL-MAIL-INTERFACE.en.md](docs/EXTERNAL-MAIL-INTERFACE.en.md) | [EXTERNAL-MAIL-INTERFACE.zh-CN.md](docs/EXTERNAL-MAIL-INTERFACE.zh-CN.md) |
 | CLI 参考 / CLI reference | [cli/README.en.md](docs/cli/README.en.md) | [cli/README.zh-CN.md](docs/cli/README.zh-CN.md) |
 | MCP Server | [mcp/README.en.md](docs/mcp/README.en.md) | [mcp/README.zh-CN.md](docs/mcp/README.zh-CN.md) |
