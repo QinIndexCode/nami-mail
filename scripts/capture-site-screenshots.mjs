@@ -5,8 +5,13 @@ import { spawn } from "node:child_process";
 const targetDir = "C:\\Users\\Admin\\.gemini\\antigravity\\brain\\f03fc857-880d-4264-ab70-580c3db09020";
 
 async function capture() {
-  const server = spawn("node", ["scripts/preview-site.mjs"], { stdio: "inherit" });
-  await new Promise((r) => setTimeout(r, 1200));
+  let server = null;
+  try {
+    await fetch("http://127.0.0.1:5176/");
+  } catch {
+    server = spawn("node", ["scripts/preview-site.mjs"], { stdio: "inherit" });
+    await new Promise((r) => setTimeout(r, 1200));
+  }
 
   const browser = await chromium.launch();
   try {
@@ -43,7 +48,7 @@ async function capture() {
 
   } finally {
     await browser.close();
-    server.kill();
+    if (server) server.kill();
   }
   console.log("Screenshots captured successfully.");
 }

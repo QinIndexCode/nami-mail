@@ -88,6 +88,9 @@
 
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-wave-wrap" aria-hidden="true">
+          <canvas id="hero-wave-canvas" class="hero-wave-canvas"></canvas>
+        </div>
         <div class="wrap">
           <a class="release-link" href="https://github.com/QinIndexCode/nami-mail/releases" rel="noopener"><span class="status-dot" aria-hidden="true"></span><span data-lang="zh">开源 · Windows x64</span><span data-lang="en">Open source · Windows x64</span> <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
           <h1 class="display" id="hero-title"><span data-lang="zh">多个邮箱，<br />一个收件箱。</span><span data-lang="en">All your mail.<br />One place to work.</span></h1>
@@ -218,6 +221,7 @@
     </main>
 
     <footer class="site-footer"><div class="wrap"><div class="footer-grid"><a class="brand" href="./"><img class="mark mark-light" src="./assets/brand/mark-light.png" alt="" width="26" height="26"/><img class="mark mark-dark" src="./assets/brand/mark-dark.png" alt="" width="26" height="26"/><span>Nami Mail</span></a><nav class="footer-nav" aria-label="Footer"><a href="./docs/"><span data-lang="zh">文档</span><span data-lang="en">Docs</span></a><a href="./docs/PRIVACY.zh-CN.html" data-lang="zh">隐私</a><a href="./docs/PRIVACY.en.html" data-lang="en">Privacy</a><a href="./docs/_root/SECURITY.zh-CN.html" data-lang="zh">安全</a><a href="./docs/_root/SECURITY.en.html" data-lang="en">Security</a><a href="./docs/_root/SUPPORT.zh-CN.html" data-lang="zh">支持</a><a href="./docs/_root/SUPPORT.en.html" data-lang="en">Support</a><a href="https://github.com/QinIndexCode/nami-mail" rel="noopener">GitHub <svg class="site-icon site-icon-sm" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a></nav></div><div class="footer-legal"><span>© <span id="year">2026</span> Nami Mail</span><span data-lang="zh">MIT 许可 · 本站不使用分析脚本</span><span data-lang="en">MIT license · No analytics</span></div></div></footer>
+    <script src="./wave.js" defer></script>
     <script src="./site.js" defer></script>
   </body>
 </html>
