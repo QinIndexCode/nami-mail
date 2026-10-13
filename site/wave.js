@@ -1,12 +1,12 @@
-/* Nami Mail landing page — flat breathing dot matrix background.
+/* Nami Mail landing page — monochromatic boids flocking dot matrix background.
  *
- * Renders a clean 2D Cartesian dot grid strictly conforming to Nami Mail's
- * application design system tokens (--canvas: #0c0d10 / #f4f5f8, --text-faint: #9da1b0 / #626674,
- * and brand --success: #75b98a / #2f6d42).
- *
- * Features gentle, unified rhythmic breathing with optical dot expansion during
- * inhalation, and subtle pointer proximity illumination. Zero gradients, zero chaotic
- * colors. Conserves battery by pausing when scrolled off-screen or tab is hidden.
+ * Renders a clean 2D Cartesian dot grid strictly in black, white, and gray tones.
+ * Uses a Craig Reynolds Boids flocking simulation to create emergent, organic randomness:
+ * - Resting/dark background dots have increased base brightness for crisp structure.
+ * - Illuminated/bright areas expand in size and render as sharp square pixels.
+ * - Flocking boids steer gracefully with separation, alignment, cohesion, and wander forces,
+ *   scattering upon pointer proximity and leaving a subtle trailing energy wake.
+ * - Conserves battery by pausing when scrolled off-screen or tab is hidden.
  */
 (function () {
   "use strict";
@@ -32,7 +32,12 @@
   var lastTimestamp = 0;
   var elapsed = 0;
 
-  var SPACING = 24; // 24px grid pitch (aligned to 4px/8px tokens)
+  var SPACING = 24; // 24px grid pitch
+  var BOID_COUNT = 38;
+
+  var cols = 0;
+  var rows = 0;
+  var gridEnergy = null;
 
   var pointer = {
     x: -9999,
@@ -41,6 +46,152 @@
     targetY: -9999,
     active: false,
   };
+
+  // Boid flock agent
+  function Boid(x, y, angle) {
+    this.x = x;
+    this.y = y;
+    var a = angle !== undefined ? angle : Math.random() * Math.PI * 2;
+    var speed = 1.8 + Math.random() * 1.4;
+    this.vx = Math.cos(a) * speed;
+    this.vy = Math.sin(a) * speed;
+    this.maxSpeed = 3.0;
+    this.maxForce = 0.10;
+    this.wanderAngle = Math.random() * Math.PI * 2;
+  }
+
+  Boid.prototype.update = function (boids, w, h, ptr) {
+    var sepX = 0, sepY = 0, sepCount = 0;
+    var aliVx = 0, aliVy = 0, aliCount = 0;
+    var cohX = 0, cohY = 0, cohCount = 0;
+
+    var sepDist = 70;
+    var neighborDist = 160;
+
+    for (var i = 0; i < boids.length; i++) {
+      var other = boids[i];
+      if (other === this) continue;
+      var dx = other.x - this.x;
+      var dy = other.y - this.y;
+      var dist = Math.hypot(dx, dy);
+
+      if (dist > 0 && dist < sepDist) {
+        var weight = (1 - dist / sepDist);
+        sepX -= (dx / dist) * weight * 1.6;
+        sepY -= (dy / dist) * weight * 1.6;
+        sepCount++;
+      }
+
+      if (dist > 0 && dist < neighborDist) {
+        aliVx += other.vx;
+        aliVy += other.vy;
+        aliCount++;
+
+        cohX += other.x;
+        cohY += other.y;
+        cohCount++;
+      }
+    }
+
+    var fx = 0, fy = 0;
+
+    if (sepCount > 0) {
+      fx += sepX * 2.0;
+      fy += sepY * 2.0;
+    }
+
+    if (aliCount > 0) {
+      aliVx /= aliCount;
+      aliVy /= aliCount;
+      fx += (aliVx - this.vx) * 0.75;
+      fy += (aliVy - this.vy) * 0.75;
+    }
+
+    if (cohCount > 0) {
+      cohX /= cohCount;
+      cohY /= cohCount;
+      var toTargetX = cohX - this.x;
+      var toTargetY = cohY - this.y;
+      var dTarget = Math.hypot(toTargetX, toTargetY);
+      if (dTarget > 50) {
+        var desiredVx = (toTargetX / dTarget) * this.maxSpeed;
+        var desiredVy = (toTargetY / dTarget) * this.maxSpeed;
+        fx += (desiredVx - this.vx) * 0.22;
+        fy += (desiredVy - this.vy) * 0.22;
+      }
+    }
+
+    // Organic wander force
+    this.wanderAngle += (Math.random() - 0.5) * 0.5;
+    fx += Math.cos(this.wanderAngle) * 0.55;
+    fy += Math.sin(this.wanderAngle) * 0.55;
+
+    // Boundary soft containment
+    var pad = 90;
+    if (this.x < pad) fx += (pad - this.x) * 0.035;
+    if (this.x > w - pad) fx -= (this.x - (w - pad)) * 0.035;
+    if (this.y < pad) fy += (pad - this.y) * 0.035;
+    if (this.y > h - pad) fy -= (this.y - (h - pad)) * 0.035;
+
+    // Pointer avoidance
+    if (ptr && ptr.active && ptr.x > -1000) {
+      var pdx = this.x - ptr.x;
+      var pdy = this.y - ptr.y;
+      var pdist = Math.hypot(pdx, pdy);
+      if (pdist < 180 && pdist > 0) {
+        var pforce = (1 - pdist / 180) * 2.8;
+        fx += (pdx / pdist) * pforce;
+        fy += (pdy / pdist) * pforce;
+      }
+    }
+
+    // Force clamping
+    var fMag = Math.hypot(fx, fy);
+    if (fMag > this.maxForce) {
+      fx = (fx / fMag) * this.maxForce;
+      fy = (fy / fMag) * this.maxForce;
+    }
+
+    this.vx += fx;
+    this.vy += fy;
+
+    // Speed clamping
+    var speed = Math.hypot(this.vx, this.vy);
+    if (speed > this.maxSpeed) {
+      this.vx = (this.vx / speed) * this.maxSpeed;
+      this.vy = (this.vy / speed) * this.maxSpeed;
+    } else if (speed < 1.0) {
+      this.vx = (this.vx / (speed || 1)) * 1.0;
+      this.vy = (this.vy / (speed || 1)) * 1.0;
+    }
+
+    this.x += this.vx;
+    this.y += this.vy;
+
+    // Safety edge wrap
+    if (this.x < -40) this.x = w + 40;
+    if (this.x > w + 40) this.x = -40;
+    if (this.y < -40) this.y = h + 40;
+    if (this.y > h + 40) this.y = -40;
+  };
+
+  var boids = [];
+
+  function initBoids() {
+    boids = [];
+    for (var i = 0; i < BOID_COUNT; i++) {
+      var x = width * (0.2 + 0.6 * Math.random());
+      var y = height * (0.2 + 0.5 * Math.random());
+      var angle = -0.3 + (Math.random() - 0.5) * 1.4;
+      boids.push(new Boid(x, y, angle));
+    }
+    // Warm up simulation
+    for (var f = 0; f < 100; f++) {
+      for (var b = 0; b < boids.length; b++) {
+        boids[b].update(boids, width, height, null);
+      }
+    }
+  }
 
   function updateSize() {
     var rect = canvas.getBoundingClientRect();
@@ -53,92 +204,126 @@
     canvas.height = Math.round(height * dpr);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(dpr, dpr);
+
+    cols = Math.ceil(width / SPACING) + 2;
+    rows = Math.ceil(height / SPACING) + 2;
+    gridEnergy = new Float32Array(cols * rows);
+
+    if (boids.length === 0) {
+      initBoids();
+    }
     return true;
   }
 
-  function getThemePalette() {
+  function getMonochromePalette() {
     var isDark = root.dataset.theme === "dark" ||
       (!root.dataset.theme && window.matchMedia("(prefers-color-scheme: dark)").matches);
 
     if (isDark) {
       return {
         isDark: true,
-        baseR: 157, baseG: 161, baseB: 176, // Slate (--text-faint: #9da1b0)
-        accentR: 117, accentG: 185, accentB: 138, // Nami Brand Mint (--success: #75b98a)
-        baseAlpha: 0.06,
-        breathAlpha: 0.28,
-        pointerAlpha: 0.40,
+        // Resting dark dots: increased brightness slightly (baseAlpha: 0.22)
+        baseR: 170, baseG: 175, baseB: 190,
+        baseAlpha: 0.22,
+        // Bright squares: crisp pure white (peakAlpha: 0.90)
+        peakR: 255, peakG: 255, peakB: 255,
+        peakAlpha: 0.90,
       };
     }
     return {
       isDark: false,
-      baseR: 98, baseG: 102, baseB: 116,  // Marine Slate (--text-faint: #626674)
-      accentR: 47, accentG: 109, accentB: 66,   // Spruce Jade (--success: #2f6d42)
-      baseAlpha: 0.05,
-      breathAlpha: 0.20,
-      pointerAlpha: 0.28,
+      // Resting dark dots: increased brightness slightly (baseAlpha: 0.18)
+      baseR: 105, baseG: 110, baseB: 125,
+      baseAlpha: 0.18,
+      // Bright squares: deep slate black (peakAlpha: 0.85)
+      peakR: 18, peakG: 19, peakB: 24,
+      peakAlpha: 0.85,
     };
   }
 
-  function renderFrame(timeSec) {
-    if (width <= 0 || height <= 0) return;
+  function renderFrame() {
+    if (width <= 0 || height <= 0 || !gridEnergy) return;
     ctx.clearRect(0, 0, width, height);
 
-    var palette = getThemePalette();
+    var palette = getMonochromePalette();
 
     // Smooth pointer tracking
     if (pointer.active) {
-      pointer.x += (pointer.targetX - pointer.x) * 0.14;
-      pointer.y += (pointer.targetY - pointer.y) * 0.14;
+      pointer.x += (pointer.targetX - pointer.x) * 0.16;
+      pointer.y += (pointer.targetY - pointer.y) * 0.16;
     } else {
-      pointer.x += (-9999 - pointer.x) * 0.14;
-      pointer.y += (-9999 - pointer.y) * 0.14;
+      pointer.x += (-9999 - pointer.x) * 0.16;
+      pointer.y += (-9999 - pointer.y) * 0.16;
     }
 
-    var cols = Math.ceil(width / SPACING) + 1;
-    var rows = Math.ceil(height / SPACING) + 1;
+    // Update boids simulation
+    for (var i = 0; i < boids.length; i++) {
+      boids[i].update(boids, width, height, pointer);
+    }
+
     var startX = (width - (cols - 1) * SPACING) / 2;
     var startY = (height - (rows - 1) * SPACING) / 2;
 
-    var centerX = width * 0.60;
-    var centerY = height * 0.35;
+    var boidRadius = 90;
+    var boidRadiusSq = boidRadius * boidRadius;
 
     for (var r = 0; r < rows; r++) {
       var y = startY + r * SPACING;
 
       for (var c = 0; c < cols; c++) {
+        var idx = r * cols + c;
         var x = startX + c * SPACING;
 
-        // Gentle, calm traveling breathing pulse across the Cartesian grid
-        var distCenter = Math.hypot(x - centerX, y - centerY);
-        var breathPhase = Math.sin(timeSec * 1.15 - distCenter * 0.0022);
-        var breath = Math.max(0, breathPhase) ** 1.35;
-
-        // Pointer proximity illumination
-        var pointerGlow = 0;
-        if (pointer.x > -1000) {
-          var pDist = Math.hypot(x - pointer.x, y - pointer.y);
-          if (pDist < 180) {
-            pointerGlow = Math.exp(-((pDist * pDist) / 8000));
+        // Boid flock proximity
+        var instantGlow = 0;
+        for (var b = 0; b < boids.length; b++) {
+          var dx = x - boids[b].x;
+          var dy = y - boids[b].y;
+          var d2 = dx * dx + dy * dy;
+          if (d2 < boidRadiusSq) {
+            var w = 1 - d2 / boidRadiusSq;
+            instantGlow += w * w;
           }
         }
 
-        var totalHighlight = Math.min(1.0, breath * 0.85 + pointerGlow * 0.65);
+        // Trailing wake persistence gives fluid motion
+        gridEnergy[idx] = gridEnergy[idx] * 0.88 + Math.min(1.2, instantGlow * 0.55) * 0.12;
+        var energy = Math.min(1.0, gridEnergy[idx]);
 
-        // Clean interpolation using strictly the application theme tokens
-        var red = Math.round(palette.baseR * (1 - totalHighlight) + palette.accentR * totalHighlight);
-        var green = Math.round(palette.baseG * (1 - totalHighlight) + palette.accentG * totalHighlight);
-        var blue = Math.round(palette.baseB * (1 - totalHighlight) + palette.accentB * totalHighlight);
+        // Pointer proximity glow
+        var pointerGlow = 0;
+        if (pointer.active && pointer.x > -1000) {
+          var pdx = x - pointer.x;
+          var pdy = y - pointer.y;
+          var pd2 = pdx * pdx + pdy * pdy;
+          if (pd2 < 25600) { // 160px
+            pointerGlow = Math.exp(-pd2 / 9000);
+          }
+        }
 
-        var alpha = palette.baseAlpha + breath * palette.breathAlpha + pointerGlow * palette.pointerAlpha;
+        var totalGlow = Math.min(1.0, energy * 0.95 + pointerGlow * 0.65);
 
-        // Dynamic optical expansion on breathing: resting 1.0px swells to 2.2px
-        var radius = 1.0 + totalHighlight * 1.25;
+        // Strict monochrome interpolation
+        var red = Math.round(palette.baseR * (1 - totalGlow) + palette.peakR * totalGlow);
+        var green = Math.round(palette.baseG * (1 - totalGlow) + palette.peakG * totalGlow);
+        var blue = Math.round(palette.baseB * (1 - totalGlow) + palette.peakB * totalGlow);
+        var alpha = palette.baseAlpha + totalGlow * (palette.peakAlpha - palette.baseAlpha);
 
-        ctx.beginPath();
-        ctx.arc(x, y, radius, 0, Math.PI * 2);
         ctx.fillStyle = "rgba(" + red + "," + green + "," + blue + "," + alpha.toFixed(3) + ")";
-        ctx.fill();
+
+        // "增加暗部亮度一点点，亮部点阵则扩大并且为方形"
+        if (totalGlow > 0.18) {
+          // Bright part: expanded size (2.4px -> 5.6px) and rendered as square!
+          var size = 2.4 + totalGlow * 3.2;
+          var half = size / 2;
+          ctx.fillRect(Math.round(x - half), Math.round(y - half), Math.round(size), Math.round(size));
+        } else {
+          // Dark part: subtle dot with boosted base brightness
+          var radius = 1.2;
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
   }
@@ -152,14 +337,14 @@
     if (dt > 0.08) dt = 0.08;
     elapsed += dt;
 
-    renderFrame(elapsed);
+    renderFrame();
     animId = requestAnimationFrame(loop);
   }
 
   function start() {
     if (isRunning) return;
     if (prefersReducedMotion) {
-      renderFrame(1.6);
+      renderFrame();
       return;
     }
     if (!isIntersecting || !isVisible) return;
@@ -190,7 +375,7 @@
   // Setup event listeners
   window.addEventListener("resize", function () {
     if (updateSize()) {
-      if (prefersReducedMotion) renderFrame(elapsed || 1.6);
+      if (prefersReducedMotion) renderFrame();
     }
   }, { passive: true });
 
@@ -222,7 +407,7 @@
   // Observe theme changes on documentElement
   if (typeof MutationObserver === "function") {
     var themeObserver = new MutationObserver(function () {
-      if (!isRunning) renderFrame(elapsed || 1.6);
+      if (!isRunning) renderFrame();
     });
     themeObserver.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
   }
@@ -234,7 +419,7 @@
       prefersReducedMotion = e.matches;
       if (prefersReducedMotion) {
         stop();
-        renderFrame(1.6);
+        renderFrame();
       } else {
         start();
       }

@@ -469,7 +469,7 @@ html[data-lang="en"] [data-lang="zh"] {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--success);
+  background: var(--text-soft);
 }
 
 .chip {
@@ -544,8 +544,8 @@ pre {
 }
 
 .copy-button.is-copied {
-  color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  color: var(--text);
+  border-color: var(--line-strong);
   opacity: 1;
 }
 
