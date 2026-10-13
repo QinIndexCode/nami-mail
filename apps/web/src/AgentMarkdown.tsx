@@ -56,11 +56,9 @@ const markdownComponents: Components = {
       </a>
     );
   },
-  table: ({ node: _node, className, children, ...props }) => (
+  table: ({ node: _node, children, ...props }) => (
     <div className="agent-table-wrap">
-      <table {...props} className={["agent-markdown-table", className].filter(Boolean).join(" ")}>
-        {children}
-      </table>
+      <table {...props}>{children}</table>
     </div>
   ),
 };
