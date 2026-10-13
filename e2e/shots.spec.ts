@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { roundScreenshotFile } from "../scripts/round-screenshots.mjs";
 
 /**
  * Regenerates the screenshots the READMEs embed.
@@ -42,11 +43,13 @@ for (const target of targets) {
     // Let the list settle: avatars, counts and the scroll-reveal band animate in.
     await page.waitForTimeout(2_500);
     await page.locator(".app-frame").screenshot({ path: target.inbox });
+    await roundScreenshotFile(target.inbox);
 
     await page.locator(".agent-launch-button").first().click();
     await expect(page.locator(".agent-workspace")).toBeVisible();
     await expect(page.locator(".agent-workspace .agent-conversation-title, .agent-workspace .agent-message").first()).toBeVisible();
     await page.waitForTimeout(1_200);
     await page.locator(".app-frame").screenshot({ path: target.agent });
+    await roundScreenshotFile(target.agent);
   });
 }
