@@ -1,12 +1,13 @@
-/* Nami Mail landing page — monochromatic boids flocking dot matrix background.
+/* Nami Mail landing page — emergent vortex fluid flow dot matrix background.
  *
- * Renders a clean 2D Cartesian dot grid strictly in black, white, and gray tones.
- * Uses a Craig Reynolds Boids flocking simulation to create emergent, organic randomness:
- * - Resting/dark background dots have increased base brightness for crisp structure.
- * - Illuminated/bright areas expand in size and render as sharp square pixels.
- * - Flocking boids steer gracefully with separation, alignment, cohesion, and wander forces,
- *   scattering upon pointer proximity and leaving a subtle trailing energy wake.
- * - Conserves battery by pausing when scrolled off-screen or tab is hidden.
+ * Simulates a 2D Hamiltonian vortex fluid field (Kirchhoff vortex dynamics) advecting
+ * continuous stream tracers across a Cartesian dot matrix, strictly in monochrome (black, white, gray):
+ * - Emergent chaotic fluid flow: vortices mutually induce velocities, producing natural
+ *   meandering river streams, turbulent eddies, and organic branching currents.
+ * - Base/dark dots: slightly boosted brightness (baseAlpha 0.22 / 0.18) so matrix structure is clear.
+ * - Illuminated/bright streams: dots expand up to 5.6px and render as crisp square pixels.
+ * - Pointer interaction: cursor injects local vorticity and velocity, dispersing fluid streams.
+ * - Conserves battery: pauses when off-screen or tab is hidden, respects prefers-reduced-motion.
  */
 (function () {
   "use strict";
@@ -29,12 +30,7 @@
   var isVisible = !document.hidden;
   var prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  var lastTimestamp = 0;
-  var elapsed = 0;
-
   var SPACING = 24; // 24px grid pitch
-  var BOID_COUNT = 38;
-
   var cols = 0;
   var rows = 0;
   var gridEnergy = null;
@@ -47,149 +43,111 @@
     active: false,
   };
 
-  // Boid flock agent
-  function Boid(x, y, angle) {
-    this.x = x;
-    this.y = y;
-    var a = angle !== undefined ? angle : Math.random() * Math.PI * 2;
-    var speed = 1.8 + Math.random() * 1.4;
-    this.vx = Math.cos(a) * speed;
-    this.vy = Math.sin(a) * speed;
-    this.maxSpeed = 3.0;
-    this.maxForce = 0.10;
-    this.wanderAngle = Math.random() * Math.PI * 2;
+  // Hamiltonian fluid vortices
+  var VORTEX_COUNT = 8;
+  var vortices = [];
+
+  function initVortices() {
+    vortices = [];
+    for (var i = 0; i < VORTEX_COUNT; i++) {
+      vortices.push({
+        x: width * (0.15 + 0.7 * Math.random()),
+        y: height * (0.15 + 0.7 * Math.random()),
+        gamma: (Math.random() > 0.5 ? 1 : -1) * (1400 + Math.random() * 1600),
+      });
+    }
   }
 
-  Boid.prototype.update = function (boids, w, h, ptr) {
-    var sepX = 0, sepY = 0, sepCount = 0;
-    var aliVx = 0, aliVy = 0, aliCount = 0;
-    var cohX = 0, cohY = 0, cohCount = 0;
+  // Stream tracers (fluid advection particles)
+  var TRACER_COUNT = 160;
+  var tracers = [];
 
-    var sepDist = 70;
-    var neighborDist = 160;
+  function Tracer() {
+    this.reset();
+  }
 
-    for (var i = 0; i < boids.length; i++) {
-      var other = boids[i];
-      if (other === this) continue;
-      var dx = other.x - this.x;
-      var dy = other.y - this.y;
-      var dist = Math.hypot(dx, dy);
+  Tracer.prototype.reset = function () {
+    this.x = Math.random() * (width || 1200);
+    this.y = Math.random() * (height || 800);
+    this.vx = 0;
+    this.vy = 0;
+    this.life = 0;
+    this.maxLife = 140 + Math.random() * 160;
+  };
 
-      if (dist > 0 && dist < sepDist) {
-        var weight = (1 - dist / sepDist);
-        sepX -= (dx / dist) * weight * 1.6;
-        sepY -= (dy / dist) * weight * 1.6;
-        sepCount++;
-      }
-
-      if (dist > 0 && dist < neighborDist) {
-        aliVx += other.vx;
-        aliVy += other.vy;
-        aliCount++;
-
-        cohX += other.x;
-        cohY += other.y;
-        cohCount++;
-      }
+  Tracer.prototype.update = function (vorts, ptr) {
+    // Biot-Savart induced velocity from all vortices
+    var u = 0, v = 0;
+    for (var i = 0; i < vorts.length; i++) {
+      var vt = vorts[i];
+      var dx = this.x - vt.x;
+      var dy = this.y - vt.y;
+      var r2 = dx * dx + dy * dy + 3600; // Soften core singularity
+      var factor = vt.gamma / (r2 * 6.28);
+      u += -dy * factor;
+      v += dx * factor;
     }
 
-    var fx = 0, fy = 0;
+    // Ambient gentle meandering flow (drives continuous screen-wide current)
+    u += 0.85;
+    v += Math.sin(this.x * 0.003) * 0.45;
 
-    if (sepCount > 0) {
-      fx += sepX * 2.0;
-      fy += sepY * 2.0;
-    }
-
-    if (aliCount > 0) {
-      aliVx /= aliCount;
-      aliVy /= aliCount;
-      fx += (aliVx - this.vx) * 0.75;
-      fy += (aliVy - this.vy) * 0.75;
-    }
-
-    if (cohCount > 0) {
-      cohX /= cohCount;
-      cohY /= cohCount;
-      var toTargetX = cohX - this.x;
-      var toTargetY = cohY - this.y;
-      var dTarget = Math.hypot(toTargetX, toTargetY);
-      if (dTarget > 50) {
-        var desiredVx = (toTargetX / dTarget) * this.maxSpeed;
-        var desiredVy = (toTargetY / dTarget) * this.maxSpeed;
-        fx += (desiredVx - this.vx) * 0.22;
-        fy += (desiredVy - this.vy) * 0.22;
-      }
-    }
-
-    // Organic wander force
-    this.wanderAngle += (Math.random() - 0.5) * 0.5;
-    fx += Math.cos(this.wanderAngle) * 0.55;
-    fy += Math.sin(this.wanderAngle) * 0.55;
-
-    // Boundary soft containment
-    var pad = 90;
-    if (this.x < pad) fx += (pad - this.x) * 0.035;
-    if (this.x > w - pad) fx -= (this.x - (w - pad)) * 0.035;
-    if (this.y < pad) fy += (pad - this.y) * 0.035;
-    if (this.y > h - pad) fy -= (this.y - (h - pad)) * 0.035;
-
-    // Pointer avoidance
+    // Pointer disturbance
     if (ptr && ptr.active && ptr.x > -1000) {
       var pdx = this.x - ptr.x;
       var pdy = this.y - ptr.y;
-      var pdist = Math.hypot(pdx, pdy);
-      if (pdist < 180 && pdist > 0) {
-        var pforce = (1 - pdist / 180) * 2.8;
-        fx += (pdx / pdist) * pforce;
-        fy += (pdy / pdist) * pforce;
+      var pr2 = pdx * pdx + pdy * pdy;
+      if (pr2 < 32400) { // 180px
+        var pr = Math.sqrt(pr2) || 1;
+        var pf = (1 - pr / 180) * 4.0;
+        u += (pdx / pr) * pf - (pdy / pr) * pf * 0.75;
+        v += (pdy / pr) * pf + (pdx / pr) * pf * 0.75;
       }
     }
 
-    // Force clamping
-    var fMag = Math.hypot(fx, fy);
-    if (fMag > this.maxForce) {
-      fx = (fx / fMag) * this.maxForce;
-      fy = (fy / fMag) * this.maxForce;
-    }
-
-    this.vx += fx;
-    this.vy += fy;
-
-    // Speed clamping
-    var speed = Math.hypot(this.vx, this.vy);
-    if (speed > this.maxSpeed) {
-      this.vx = (this.vx / speed) * this.maxSpeed;
-      this.vy = (this.vy / speed) * this.maxSpeed;
-    } else if (speed < 1.0) {
-      this.vx = (this.vx / (speed || 1)) * 1.0;
-      this.vy = (this.vy / (speed || 1)) * 1.0;
-    }
+    // Velocity integration with smooth momentum
+    this.vx += (u - this.vx) * 0.12;
+    this.vy += (v - this.vy) * 0.12;
 
     this.x += this.vx;
     this.y += this.vy;
 
-    // Safety edge wrap
-    if (this.x < -40) this.x = w + 40;
-    if (this.x > w + 40) this.x = -40;
-    if (this.y < -40) this.y = h + 40;
-    if (this.y > h + 40) this.y = -40;
+    this.life++;
+    if (this.life > this.maxLife || this.x < -40 || this.x > width + 40 || this.y < -40 || this.y > height + 40) {
+      this.reset();
+    }
   };
 
-  var boids = [];
-
-  function initBoids() {
-    boids = [];
-    for (var i = 0; i < BOID_COUNT; i++) {
-      var x = width * (0.2 + 0.6 * Math.random());
-      var y = height * (0.2 + 0.5 * Math.random());
-      var angle = -0.3 + (Math.random() - 0.5) * 1.4;
-      boids.push(new Boid(x, y, angle));
+  function initTracers() {
+    tracers = [];
+    for (var i = 0; i < TRACER_COUNT; i++) {
+      tracers.push(new Tracer());
     }
-    // Warm up simulation
-    for (var f = 0; f < 100; f++) {
-      for (var b = 0; b < boids.length; b++) {
-        boids[b].update(boids, width, height, null);
+  }
+
+  function updateVortices() {
+    for (var i = 0; i < vortices.length; i++) {
+      var v1 = vortices[i];
+      var vx = 0, vy = 0;
+      for (var j = 0; j < vortices.length; j++) {
+        if (i === j) continue;
+        var v2 = vortices[j];
+        var dx = v1.x - v2.x;
+        var dy = v1.y - v2.y;
+        var r2 = dx * dx + dy * dy + 8000;
+        var factor = v2.gamma / (r2 * 6.28);
+        vx += -dy * factor;
+        vy += dx * factor;
       }
+      v1.x += vx * 0.35;
+      v1.y += vy * 0.35;
+
+      // Soft boundary turn
+      var pad = 100;
+      if (v1.x < pad) v1.x += (pad - v1.x) * 0.02;
+      if (v1.x > width - pad) v1.x -= (v1.x - (width - pad)) * 0.02;
+      if (v1.y < pad) v1.y += (pad - v1.y) * 0.02;
+      if (v1.y > height - pad) v1.y -= (v1.y - (height - pad)) * 0.02;
     }
   }
 
@@ -209,8 +167,15 @@
     rows = Math.ceil(height / SPACING) + 2;
     gridEnergy = new Float32Array(cols * rows);
 
-    if (boids.length === 0) {
-      initBoids();
+    if (vortices.length === 0) initVortices();
+    if (tracers.length === 0) initTracers();
+
+    // Warm up simulation
+    for (var s = 0; s < 60; s++) {
+      updateVortices();
+      for (var t = 0; t < tracers.length; t++) {
+        tracers[t].update(vortices, null);
+      }
     }
     return true;
   }
@@ -222,20 +187,20 @@
     if (isDark) {
       return {
         isDark: true,
-        // Resting dark dots: increased brightness slightly (baseAlpha: 0.22)
+        // Base dark dots: slightly boosted brightness
         baseR: 170, baseG: 175, baseB: 190,
         baseAlpha: 0.22,
-        // Bright squares: crisp pure white (peakAlpha: 0.90)
+        // Bright squares: crisp pure white
         peakR: 255, peakG: 255, peakB: 255,
         peakAlpha: 0.90,
       };
     }
     return {
       isDark: false,
-      // Resting dark dots: increased brightness slightly (baseAlpha: 0.18)
+      // Base dark dots: slightly boosted brightness
       baseR: 105, baseG: 110, baseB: 125,
       baseAlpha: 0.18,
-      // Bright squares: deep slate black (peakAlpha: 0.85)
+      // Bright squares: deep slate black
       peakR: 18, peakG: 19, peakB: 24,
       peakAlpha: 0.85,
     };
@@ -256,17 +221,43 @@
       pointer.y += (-9999 - pointer.y) * 0.16;
     }
 
-    // Update boids simulation
-    for (var i = 0; i < boids.length; i++) {
-      boids[i].update(boids, width, height, pointer);
+    // Step physical vortices and advect fluid tracers
+    updateVortices();
+    for (var i = 0; i < tracers.length; i++) {
+      tracers[i].update(vortices, pointer);
     }
 
     var startX = (width - (cols - 1) * SPACING) / 2;
     var startY = (height - (rows - 1) * SPACING) / 2;
 
-    var boidRadius = 90;
-    var boidRadiusSq = boidRadius * boidRadius;
+    // 1. Decay previous grid energy
+    var totalCells = cols * rows;
+    for (var i = 0; i < totalCells; i++) {
+      gridEnergy[i] *= 0.88;
+    }
 
+    // 2. Splat tracer energy into local neighborhood in O(N)
+    for (var t = 0; t < tracers.length; t++) {
+      var tr = tracers[t];
+      var gc = Math.round((tr.x - startX) / SPACING);
+      var gr = Math.round((tr.y - startY) / SPACING);
+
+      for (var dr = -2; dr <= 2; dr++) {
+        var r = gr + dr;
+        if (r < 0 || r >= rows) continue;
+        for (var dc = -2; dc <= 2; dc++) {
+          var c = gc + dc;
+          if (c < 0 || c >= cols) continue;
+          var d2 = dc * dc + dr * dr;
+          if (d2 <= 5) {
+            var w = 1 - d2 / 6;
+            gridEnergy[r * cols + c] += w * 0.28;
+          }
+        }
+      }
+    }
+
+    // 3. Render grid points
     for (var r = 0; r < rows; r++) {
       var y = startY + r * SPACING;
 
@@ -274,23 +265,9 @@
         var idx = r * cols + c;
         var x = startX + c * SPACING;
 
-        // Boid flock proximity
-        var instantGlow = 0;
-        for (var b = 0; b < boids.length; b++) {
-          var dx = x - boids[b].x;
-          var dy = y - boids[b].y;
-          var d2 = dx * dx + dy * dy;
-          if (d2 < boidRadiusSq) {
-            var w = 1 - d2 / boidRadiusSq;
-            instantGlow += w * w;
-          }
-        }
-
-        // Trailing wake persistence gives fluid motion
-        gridEnergy[idx] = gridEnergy[idx] * 0.88 + Math.min(1.2, instantGlow * 0.55) * 0.12;
         var energy = Math.min(1.0, gridEnergy[idx]);
 
-        // Pointer proximity glow
+        // Pointer proximity illumination
         var pointerGlow = 0;
         if (pointer.active && pointer.x > -1000) {
           var pdx = x - pointer.x;
@@ -312,13 +289,13 @@
         ctx.fillStyle = "rgba(" + red + "," + green + "," + blue + "," + alpha.toFixed(3) + ")";
 
         // "增加暗部亮度一点点，亮部点阵则扩大并且为方形"
-        if (totalGlow > 0.18) {
+        if (totalGlow > 0.16) {
           // Bright part: expanded size (2.4px -> 5.6px) and rendered as square!
-          var size = 2.4 + totalGlow * 3.2;
+          var size = 2.4 + totalGlow * 3.4;
           var half = size / 2;
           ctx.fillRect(Math.round(x - half), Math.round(y - half), Math.round(size), Math.round(size));
         } else {
-          // Dark part: subtle dot with boosted base brightness
+          // Dark part: subtle round dot with boosted base brightness
           var radius = 1.2;
           ctx.beginPath();
           ctx.arc(x, y, radius, 0, Math.PI * 2);
@@ -330,14 +307,12 @@
 
   function loop(timestamp) {
     if (!isRunning) return;
-
     if (!lastTimestamp) lastTimestamp = timestamp;
     var dt = (timestamp - lastTimestamp) / 1000;
-    lastTimestamp = timestamp;
-    if (dt > 0.08) dt = 0.08;
-    elapsed += dt;
-
-    renderFrame();
+    if (dt >= 0.015) {
+      lastTimestamp = timestamp;
+      renderFrame();
+    }
     animId = requestAnimationFrame(loop);
   }
 
@@ -349,7 +324,6 @@
     }
     if (!isIntersecting || !isVisible) return;
     isRunning = true;
-    lastTimestamp = 0;
     animId = requestAnimationFrame(loop);
   }
 
