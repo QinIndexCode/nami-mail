@@ -487,3 +487,21 @@ export const toolLabelKeys: Readonly<Record<string, string>> = {
   "settings.update": "agent.tool.settingsUpdate",
   "time.now": "agent.tool.timeNow",
 };
+
+/**
+ * Resolves the user message index whose scrubber bar is visually closest
+ * to a vertical click/pointer position within the track.
+ */
+export function findNearestScrubberIndex(y: number, count: number, viewport: number, barGap: number): number {
+  if (count <= 1) return 0;
+  let nearest = 0;
+  let nearestDistance = Infinity;
+  for (let index = 0; index < count; index += 1) {
+    const distance = Math.abs(viewport + index * barGap - y);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearest = index;
+    }
+  }
+  return nearest;
+}

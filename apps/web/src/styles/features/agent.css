@@ -639,11 +639,11 @@ opacity:.42
 {
 display:none
 }
-.agent-privacy-notice,.agent-scope-picker
+.agent-privacy-notice
 {
-border:1px solid var(--line);
+border:1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
 min-width:0;
-color:var(--text-soft);
+color:color-mix(in srgb, var(--danger) 82%, var(--text));
 border-radius:var(--radius-sm);
 align-items:center;
 gap:5px;
@@ -652,20 +652,26 @@ font-size:9px;
 line-height:1.35;
 display:inline-flex
 }
-.agent-privacy-notice
-{
-border-color:color-mix(in srgb, var(--danger) 35%, var(--line));
-color:color-mix(in srgb, var(--danger) 82%, var(--text))
-}
 .agent-scope-picker
 {
+border:1px solid var(--line);
+background:color-mix(in srgb, var(--panel-muted) 85%, transparent);
+min-width:0;
 max-width:220px;
-min-height:27px;
+min-height:28px;
+color:var(--text-soft);
+border-radius:var(--radius-pill);
+align-items:center;
+gap:6px;
+padding:4px 10px;
+font-size:11px;
+font-weight:550;
+line-height:1.35;
+display:inline-flex;
 overflow:hidden;
 cursor:pointer;
 font-family:inherit;
-border:1px solid transparent;
-background:0 0
+transition:background .15s,border-color .15s,color .15s
 }
 .agent-scope-picker svg
 {
@@ -680,13 +686,9 @@ white-space:nowrap
 }
 .agent-scope-picker:hover,.agent-scope-picker:focus-visible
 {
-background:var(--hover)
+background:var(--hover); border-color:var(--line-strong); color:var(--text)
 }
-.agent-scope-picker:focus-visible
-{
-box-shadow:0 0 0 3px var(--focus-ring-subtle);
-outline:none
-}
+.agent-scope-picker:focus-visible { box-shadow:0 0 0 3px var(--focus-ring-subtle); outline:none }
 .agent-scope-chevron
 {
 flex:none;
@@ -996,7 +998,7 @@ animation:.28s cubic-bezier(.2,.8,.2,1) both agent-message-in
 .agent-message
 {
 content-visibility:auto;
-contain-intrinsic-size:auto 120px
+contain-intrinsic-size:auto 120px;scroll-margin-top:16px
 }
 .agent-message.user+.agent-message.assistant,.agent-message.assistant+.agent-message.user
 {
@@ -1054,7 +1056,7 @@ justify-content:flex-end
 .agent-message-meta time
 {
 font-family:var(--font-mono);
-font-size:8px
+font-size:10px
 }
 .agent-message-actions
 {
@@ -1153,12 +1155,11 @@ user-select:text!important
 }
 .agent-message.user .agent-message-content
 {
-border:1px solid color-mix(in srgb, var(--focus-ring) 24%, var(--line));
-background:color-mix(in srgb, var(--focus-ring) 6%, var(--panel-muted));
-border-radius:var(--radius-md) var(--radius-md) var(--radius-xs);
-max-width:min(100%,630px);
-margin-left:auto;
-padding:10px 14px
+border:1px solid color-mix(in srgb, var(--focus-ring) 18%, var(--line-strong));
+background:color-mix(in srgb, var(--focus-ring) 5%, var(--panel-solid));
+box-shadow:var(--shadow-sm);
+border-radius:var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);
+max-width:min(100%,630px); margin-left:auto; padding:10px 15px
 }
 .agent-message-content p
 {

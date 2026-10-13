@@ -624,6 +624,7 @@ export function useAgentSession({
   // Replay a background session on re-entry
   // ---------------------------------------------------------------------------
   const replayBackgroundSession = useCallback((session: SessionStream, conversationView: AgentConversation) => {
+    if (session.done) return;
     const messages = conversationView.messages;
     // Only a streaming assistant row *after the last user message* can belong to
     // the current run: an interrupted run's inFlight row sits before that user
@@ -653,8 +654,7 @@ export function useAgentSession({
             content: "",
             createdAt: currentTime(),
             state: "streaming",
-            citations: [],
-            toolActivities: [],
+            citations: [], toolActivities: [],
           },
         ];
       }
@@ -668,8 +668,7 @@ export function useAgentSession({
         content: "",
         createdAt: currentTime(),
         state: "streaming",
-        citations: [],
-        toolActivities: [],
+        citations: [], toolActivities: [],
       };
       let rebuilt = base;
       for (const event of session.events) rebuilt = messageWithEvent(rebuilt, event);

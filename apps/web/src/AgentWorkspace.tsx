@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   Bot,
   Brain,
@@ -65,6 +65,7 @@ import { AgentMessageRow } from "./agent/AgentMessageRow";
 import { AgentConfirmationCard } from "./agent/AgentConfirmationCard";
 import { AgentScrubberBar, RevokeNotice } from "./agent/AgentSmallComponents";
 import { AgentPickerPopover } from "./agent/AgentPickerPopover";
+import { useTranscriptScroll } from "./agent/useTranscriptScroll";
 import {
   type AgentMode,
   SCRUBBER_BAR_GAP,
@@ -96,6 +97,7 @@ import {
   truncateForContext,
   applyConfirmationDecision,
   expireConfirmation,
+  findNearestScrubberIndex,
   OLLAMA_DEFAULT_ENDPOINT,
 } from "./agent/agent-utils";
 import { useMountedVisible } from "./hooks/useMountedVisible";
@@ -248,7 +250,6 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
    *  itself is applied after the collapse finishes so real-mode removal gets
    *  the same exit transition as demo mode. */
   const [leavingConfirmationIds, setLeavingConfirmationIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<ProcessedFile[]>([]);
   const [processingFileName, setProcessingFileName] = useState<string | null>(null);
   const [citationsExpanded, setCitationsExpanded] = useState(false);
@@ -283,11 +284,8 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
   // Track height drives the edge blur of bars; kept in state so the blur
   // recalculates on resize without reading the DOM during render.
   const [scrubberTrackHeight, setScrubberTrackHeight] = useState(0);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const sidebarMenuRef = useRef<HTMLDivElement>(null);
-  const transcriptRef = useRef<HTMLDivElement>(null);
-  const stickToBottomRef = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceRef = useRef<HTMLElement>(null);
@@ -322,6 +320,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
   const retryLastUserTurn = useCallback(() => {
     const target = activeMessagesRef.current?.slice().reverse().find((item) => item.role === "user");
     setComposer(target?.content ?? "");
+    if (target?.quote) setQuoteContext(target.quote);
     window.requestAnimationFrame(() => composerRef.current?.focus());
   }, []);
 
@@ -665,20 +664,6 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
     void api.agentProviders().then((snapshot) => { if (active) applyProviderList(snapshot); }).catch(() => undefined);
     return () => { active = false; };
   }, [applyProviderList, demoMode, providerListVersion]);
-  // Auto-scroll the transcript as the assistant streams new tokens. We track a
-  // "stick to bottom" ref: while true, every content change scrolls to the
-  // bottom instantly (instant scroll is smoother than smooth-scroll for fast
-  // token streams). When the user scrolls up manually, we stop following; when
-  // they scroll back to the bottom (or click the scroll-to-bottom button), we
-  // resume. Using a ref avoids re-renders on every scroll tick.
-  // Layout, not passive: this must land before paint, or every token frame
-  // paints at the previous offset and the transcript crawls a frame behind.
-  useLayoutEffect(() => {
-    if (!stickToBottomRef.current) return;
-    const el = transcriptRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [active?.messages, streaming]);
   // Auto-resize the composer textarea to fit its content up to max-height (160px).
   useEffect(() => {
     const el = composerRef.current;
@@ -687,27 +672,28 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
     el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
   }, [composer]);
-  useEffect(() => {
-    const el = transcriptRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      setShowScrollToBottom(distanceFromBottom > 120);
-      stickToBottomRef.current = distanceFromBottom < 40;
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, []);
-  const scrollToBottom = useCallback(() => {
-    stickToBottomRef.current = true;
-    messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
-  }, []);
   // Scrubber: re-measure user-message anchors whenever the set of user messages
   // changes — keyed on the joined id list, or every token frame pays a layout.
   const userMessages = useMemo(
     () => active?.messages.filter((message) => message.role === "user" && !message.revoked) ?? [],
     [active?.messages],
   );
+  const {
+    transcriptRef,
+    messagesEndRef,
+    showScrollToBottom,
+    scrollToBottom,
+    pinToBottom,
+    jumpToUserMessage,
+  } = useTranscriptScroll({
+    activeConversationId: active?.id,
+    activeMessages: active?.messages,
+    loadingConversationId,
+    streaming,
+    userMessages,
+    userMessageElsRef,
+    userMarkerPositions,
+  });
   // Index of the newest user turn. Rows before it are superseded: the user has
   // moved on, so their failure warnings fold up instead of staying expanded.
   const lastUserMessageIndex = useMemo(() => {
@@ -751,7 +737,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
       // so bars stay aligned regardless of where the transcript is scrolled.
       return node.getBoundingClientRect().top - containerRect.top + el.scrollTop;
     }));
-  }, [userMessageIdsKey]);
+  }, [transcriptRef, userMessageIdsKey]);
   // Initialise the scrubber viewport whenever the bar group changes or the
   // track resizes: centre the group when it fits, bottom-anchor it (newest
   // visible) once it overflows. Kept in sync with the ref the handlers read.
@@ -791,15 +777,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
     // The mountain peak follows the cursor in real time: pick the bar whose
     // rendered centre is closest to the pointer within the fixed-interval
     // layout at the current viewport offset.
-    let nearest = 0;
-    let nearestDistance = Infinity;
-    for (let index = 0; index < count; index += 1) {
-      const distance = Math.abs(viewport + index * SCRUBBER_BAR_GAP - y);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearest = index;
-      }
-    }
+    const nearest = findNearestScrubberIndex(y, count, viewport, SCRUBBER_BAR_GAP);
     // Restart the preview delay only when the cursor moves onto a different
     // bar; staying on the same bar keeps the pending timer so the bubble
     // appears after resting for a moment.
@@ -809,7 +787,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
       setHoveredUserIndex(nearest);
       scrubberPreviewTimerRef.current = window.setTimeout(() => setShowScrubberPreview(true), SCRUBBER_PREVIEW_DELAY_MS);
     }
-  }, [hoveredUserIndex, userMessages.length]);
+  }, [hoveredUserIndex, transcriptRef, userMessages.length]);
   // The wheel replaces the old edge-zone auto-scroll: it moves the BAR GROUP
   // (never the transcript content) by the scroll delta so the user controls
   // the speed directly. Only active once the group overflows the track.
@@ -838,13 +816,6 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
     scrubberViewportRef.current = next;
     setScrubberViewport(next);
   }, [userMessages.length]);
-  const jumpToUserMessage = useCallback((index: number) => {
-    const el = transcriptRef.current;
-    const position = userMarkerPositions[index];
-    if (!el || position === undefined) return;
-    stickToBottomRef.current = false;
-    el.scrollTo({ top: Math.max(0, position - 16), behavior: "smooth" });
-  }, [userMarkerPositions]);
   // While hovering the scrubber every bar grows; the nearest one is longest
   // and neighbours fall off towards the base, forming a mountain around the
   // cursor. All bars are longer than the resting state once hovered.
@@ -855,7 +826,11 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
   const hoveredUserMessage = hoveredUserIndex !== null ? userMessages[hoveredUserIndex] : undefined;
   const hoveredUserPreview = hoveredUserMessage
     ? truncateForPreview(
-      hoveredUserMessage.content || hoveredUserMessage.attachments?.map((attachment) => attachment.name).join(", ") || "",
+      hoveredUserMessage.content
+      || hoveredUserMessage.attachments?.map((attachment) => attachment.name).join(", ")
+      || hoveredUserMessage.references?.map((reference) => reference.subject).filter(Boolean).join(", ")
+      || hoveredUserMessage.quote
+      || "",
       120,
     )
     : "";
@@ -1140,7 +1115,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
       setActive((current) => current && current.id === id
         ? keepAheadTranscript(current, conversationView, live)
         : conversationView);
-      if (session) replayBackgroundSession(session, conversationView);
+      if (live && session) replayBackgroundSession(session, conversationView);
       syncBackgroundRuns();
       // Re-surface a background run's cached failure as an error row (consumed
       // once shown). Guarded by the functional updater so a live replay that
@@ -1419,6 +1394,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
     setAttachedFiles([]);
     setQuoteContext(null);
     setLoadError(null);
+    pinToBottom();
     setConfirmationErrors({});
     // Sending a new message dismisses the revoke notice immediately.
     setRevokeNoticeUntil(null);
@@ -1464,7 +1440,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
       ...(mailReferences.length > 0 ? { references: mailReferences.map((reference) => ({ id: reference.id, subject: reference.subject })) } : {}),
     };
     await runStream({ conversation, assistantMessage, streamPayload });
-  }, [active, attachedFiles, bootstrap?.enabled, composer, demoMode, loadingConversationId, mailReferences, mode, onOpenModelSettings, prepareInterruptToSend, quoteContext, runStream, scope, selectedProvider, t]);
+  }, [active, attachedFiles, bootstrap?.enabled, composer, demoMode, loadingConversationId, mailReferences, mode, onOpenModelSettings, pinToBottom, prepareInterruptToSend, quoteContext, runStream, scope, selectedProvider, t]);
 
   useInitialPrompt({
     initialPrompt,
@@ -1875,7 +1851,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
             <span className="agent-heading-mark" aria-hidden="true"><AgentMark size={21} /></span>
             {renaming && active ? (
               <form onSubmit={(event) => { event.preventDefault(); void renameConversation(); }}><input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} aria-label={t("agent.conversation.rename")} autoFocus onBlur={() => setRenaming(false)} /></form>
-            ) : <div className="agent-conversation-title"><span className="eyebrow">{t("agent.eyebrow")}</span><span className="agent-title-line"><h1 title={active?.title}>{active?.title ?? t("agent.conversation.newTitle")}</h1>{active && <button className="icon-button" type="button" aria-label={t("agent.conversation.rename")} data-tooltip={t("agent.conversation.rename")} onClick={() => { setDraftTitle(active.title); setRenaming(true); }}><Pencil size={15} /></button>}</span></div>}
+            ) : <div className="agent-conversation-title"><span className="eyebrow">{t("agent.eyebrow")}</span><span className="agent-title-line"><h1 data-tooltip={active?.title || undefined}>{active?.title ?? t("agent.conversation.newTitle")}</h1>{active && <button className="icon-button" type="button" aria-label={t("agent.conversation.rename")} data-tooltip={t("agent.conversation.rename")} onClick={() => { setDraftTitle(active.title); setRenaming(true); }}><Pencil size={15} /></button>}</span></div>}
           </div>
           <div className="agent-header-actions">
             <div className="agent-scope-picker-wrap" ref={scopePickerRef}>
@@ -2005,7 +1981,15 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
             }}
             onMouseMove={handleScrubberMove}
             onWheel={handleScrubberWheel}
-            onClick={() => { if (hoveredUserIndex !== null) jumpToUserMessage(hoveredUserIndex); }}
+            onClick={(event) => {
+              const targetIndex = hoveredUserIndex ?? findNearestScrubberIndex(
+                event.clientY - event.currentTarget.getBoundingClientRect().top,
+                userMessages.length,
+                scrubberViewportRef.current ?? 0,
+                SCRUBBER_BAR_GAP,
+              );
+              jumpToUserMessage(targetIndex);
+            }}
           >
             {scrubberViewport !== null && userMessages.map((message, index) => {
               // Bars are spaced at a fixed interval; the group's viewport
@@ -2028,6 +2012,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
               <div
                 className="agent-scrubber-preview"
                 style={{
+                  pointerEvents: "none",
                   top: `clamp(14px, calc(${scrubberViewport + hoveredUserIndex! * SCRUBBER_BAR_GAP}px), calc(100% - 14px))`,
                 }}
               >
@@ -2079,7 +2064,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
             <div className="agent-reference-chips">
               {mailReferences.map((reference) => (
                 <span key={reference.id} className="agent-reference-chip">
-                  <button type="button" className="agent-reference-chip-open" onClick={() => onOpenMessage(reference.id)} title={reference.subject || t("agent.reference.noSubject")} data-tooltip={reference.subject ? `${t("agent.reference.open")}: ${reference.subject}` : t("agent.reference.open")}><Mail size={12} /><span>{reference.subject || t("agent.reference.noSubject")}</span><span className="agent-reference-chip-account">{reference.accountEmail}</span></button>
+                  <button type="button" className="agent-reference-chip-open" onClick={() => onOpenMessage(reference.id)} data-tooltip={reference.subject ? `${t("agent.reference.open")}: ${reference.subject}` : t("agent.reference.open")}><Mail size={12} /><span>{reference.subject || t("agent.reference.noSubject")}</span><span className="agent-reference-chip-account">{reference.accountEmail}</span></button>
                   <button type="button" className="agent-reference-chip-remove" onClick={() => removeMailReference(reference.id)} aria-label={t("agent.reference.dismiss")} data-tooltip={t("agent.reference.dismiss")}><X size={11} /></button>
                 </span>
               ))}
@@ -2236,7 +2221,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
                       <span className="agent-memory-suggestion-label">{t("agent.memory.suggestion.title")}</span>
                     </div>
                     <div className="agent-memory-suggestion-body">
-                      <span className="agent-memory-suggestion-text" title={summary}>{summary}</span>
+                      <span className="agent-memory-suggestion-text" data-tooltip={summary}>{summary}</span>
                     </div>
                     <div className="agent-memory-suggestion-actions">
                       <button
@@ -2309,7 +2294,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
                 {hasConfiguredProvider && (
                   <div className="agent-composer-model-wrap" ref={modelPickerRef}>
                     <button type="button" className="agent-composer-model" onClick={() => setModelPickerOpen((open) => !open)} aria-expanded={modelPickerOpen} aria-haspopup="menu" aria-controls="agent-model-picker" aria-label={t("agent.provider.label")} disabled={streaming}>
-                      <span title={selectedProvider?.model}>{selectedProvider ? selectedProvider.label : ""}</span>
+                      <span title={selectedProvider?.model} data-tooltip={selectedProvider?.model}>{selectedProvider ? selectedProvider.label : ""}</span>
                       <ChevronDown size={11} className={`agent-model-chevron${modelPickerOpen ? " open" : ""}`} aria-hidden="true" />
                     </button>
                     {modelPopover.mounted && (
@@ -2329,7 +2314,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
                               }
                               setModelPickerOpen(false);
                             }}>
-                              <span className="agent-model-option-name" title={provider.model}>{provider.label}</span>
+                              <span className="agent-model-option-name" title={provider.model} data-tooltip={provider.model}>{provider.label}</span>
                               {isCurrent && <Check size={13} className="agent-popover-option-check" />}
                             </button>
                           );

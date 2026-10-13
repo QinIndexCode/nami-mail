@@ -54,6 +54,7 @@ export const AgentMessageRow = memo(function AgentMessageRowInner({
   const visibleAttachments = attachmentsExpanded || attachmentOverflow <= 0 ? allAttachments : allAttachments.slice(0, 5);
   return (
     <article
+      data-message-id={message.id}
       className={`agent-message ${message.role} ${message.state === "streaming" ? "streaming" : ""}${message.interrupted ? " interrupted" : ""}`}
       ref={message.role === "user" ? userMessageRef : undefined}
     >
