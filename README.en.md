@@ -8,6 +8,15 @@
   <img src="docs/nami-mail-wordmark.svg" alt="Nami Mail" width="480" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/github/v/release/QinIndexCode/nami-mail?label=Release&color=2563eb&style=flat-square" alt="Release" /></a>
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/badge/Platform-Windows%20x64-0284c7?style=flat-square" alt="Platform" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%E2%89%A524.21.0-16a34a?style=flat-square" alt="Node" /></a>
+  <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-43-4f46e5?style=flat-square" alt="Electron" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-059669?style=flat-square" alt="License" /></a>
+  <a href="https://qinindexcode.github.io/nami-mail/"><img src="https://img.shields.io/badge/Website-Live-7c3aed?style=flat-square" alt="Website" /></a>
+</p>
+
 Nami Mail is a local-first, multi-account desktop mail client for Windows. It brings Gmail, iCloud, QQ, 163, Outlook/Hotmail, Yahoo, AOL, Fastmail, Yandex, and other IMAP/SMTP-capable accounts into one inbox that runs on your own machine. Common providers use app passwords or client authorization codes; configured Google and Microsoft accounts can use OAuth 2.0 sign-in.
 
 <p align="center">
@@ -49,16 +58,20 @@ See [Windows installation and updates](docs/INSTALLING.en.md) for first installa
 - [Documentation index](docs/README.en.md): find English and Chinese documentation by user, contributor, or release task.
 - [Windows installation and updates](docs/INSTALLING.en.md): downloads, installation, first launch, uninstallation, update prompts, and SmartScreen guidance.
 - [Email provider setup](docs/EMAIL-PROVIDERS.en.md): provider preparation, OAuth, manual IMAP/SMTP, and common connection issues.
+- [Calendar and mail invitations](docs/CALENDAR.en.md): invite banners, ICS import/export with UID dedupe, and event reminders.
+- [Auto-reply](docs/AUTO-REPLY.en.md): dual-model screening and drafting, scope rules, the confirmation flow, and the dry-run sandbox.
 - [External Mail interface](docs/EXTERNAL-MAIL-INTERFACE.en.md): the read-only CLI/MCP interface and security boundary for paired local scripts and MCP clients.
 - [CLI reference](docs/cli/README.en.md): commands, parameters, output formats, and examples for the `namimail` CLI.
 - [MCP Server](docs/mcp/README.en.md): local MCP stdio integration, tool discovery, and security boundaries.
 - [NamiMail Agent usage](docs/agent/usage.en.md): using the mail assistant — conversations, mail scope, source citations, and confirmations.
+- [NamiMail Agent tools catalog](docs/agent/tools.en.md): comprehensive suite of mail, calendar, contacts, memory, audit, and utility tools.
 - [NamiMail Agent model providers](docs/agent/providers.en.md): configuring OpenAI-compatible/Ollama/Claude/Gemini models, API keys, and cloud mail-content consent.
 - [NamiMail Agent external MCP servers](docs/agent/mcp-servers.en.md): connecting external MCP servers to extend the assistant's tools.
 - [NamiMail Agent architecture](docs/agent/architecture.en.md): local-first Agent design, embedded workspace, and external Broker boundary.
 - [Mail RAG](docs/rag/architecture.en.md): ingestion, cleaning, retrieval, deletion synchronization, and consistency.
 - [Message translation](docs/TRANSLATION.en.md): optional translation-service configuration, the explicit-send boundary, and privacy considerations.
 - [Privacy and local data](docs/PRIVACY.en.md): local data, encryption boundaries, and third-party connections.
+- [Design system](docs/DESIGN-SYSTEM.en.md): visual baselines, 8px/12px/20px radius tokens, and concentric corner principles.
 - [Support guide](SUPPORT.en.md): account setup, network problems, and suitable issue reports.
 - [Security policy](SECURITY.en.md): how and when to report vulnerabilities privately.
 - [Contributing guide](CONTRIBUTING.en.md), [code of conduct](CODE_OF_CONDUCT.en.md), [development guide](docs/DEVELOPMENT.en.md), and [architecture and trust boundaries](docs/ARCHITECTURE.en.md): local development, collaboration boundaries, tests, process boundaries, and pull-request requirements.

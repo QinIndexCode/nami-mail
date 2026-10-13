@@ -8,6 +8,15 @@
   <img src="docs/nami-mail-wordmark.svg" alt="Nami Mail" width="480" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/github/v/release/QinIndexCode/nami-mail?label=Release&color=2563eb&style=flat-square" alt="Release" /></a>
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/badge/Platform-Windows%20x64-0284c7?style=flat-square" alt="Platform" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%E2%89%A524.21.0-16a34a?style=flat-square" alt="Node" /></a>
+  <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-43-4f46e5?style=flat-square" alt="Electron" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-059669?style=flat-square" alt="License" /></a>
+  <a href="https://qinindexcode.github.io/nami-mail/"><img src="https://img.shields.io/badge/Website-Live-7c3aed?style=flat-square" alt="Website" /></a>
+</p>
+
 Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端。它把 Gmail、iCloud、QQ、163、Outlook/Hotmail、Yahoo、AOL、Fastmail、Yandex 以及其他支持 IMAP/SMTP 的邮箱集中到由你本机运行的统一收件箱中。常见邮箱可使用应用专用密码/授权码；已配置的 Google 与 Microsoft 账户可使用 OAuth 2.0 登录。
 
 <p align="center">
@@ -49,16 +58,20 @@ Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端。它�
 - [文档导航](docs/README.md)：按使用、贡献和发布任务查找中英文文档。
 - [Windows 安装与更新指南](docs/INSTALLING.zh-CN.md)：下载、安装、首次启动、卸载、更新提示和 SmartScreen 风险说明。
 - [邮箱接入指南](docs/EMAIL-PROVIDERS.zh-CN.md)：服务商认证准备、OAuth、手动 IMAP/SMTP 和常见连接问题。
+- [日历与邮件邀请](docs/CALENDAR.zh-CN.md)：邮件邀请横幅、ICS 导入导出（按 UID 去重）与事件提醒。
+- [自动回复](docs/AUTO-REPLY.zh-CN.md)：双模型判定与草稿、范围规则、确认流程与沙盒模拟器。
 - [外部 Mail 接口](docs/EXTERNAL-MAIL-INTERFACE.zh-CN.md)：供已配对本机脚本和 MCP 客户端使用的只读 CLI/MCP 接口与安全边界。
 - [CLI 参考](docs/cli/README.zh-CN.md)：`namimail` CLI 的命令、参数、输出格式和示例。
 - [MCP Server](docs/mcp/README.zh-CN.md)：本机 MCP stdio 接入、工具发现和安全边界。
 - [NamiMail Agent 使用指南](docs/agent/usage.zh-CN.md)：对话管理、邮件范围、来源引用与确认流程。
+- [NamiMail Agent 工具目录](docs/agent/tools.zh-CN.md)：邮件、日历、通讯录、记忆、审计与系统实用工具完整清单。
 - [NamiMail Agent 模型提供商配置](docs/agent/providers.zh-CN.md)：OpenAI 兼容/Ollama/Claude/Gemini 模型、密钥与云端邮件内容授权。
 - [NamiMail Agent 接入外部 MCP 服务器](docs/agent/mcp-servers.zh-CN.md)：接入外部 MCP 服务器扩展助理工具。
 - [NamiMail Agent 架构](docs/agent/architecture.zh-CN.md)：本地优先的 Agent 设计、嵌入式工作区与外部 Broker 边界。
 - [邮件 RAG](docs/rag/architecture.zh-CN.md)：邮件入库、清洗、检索、删除同步与一致性说明。
 - [邮件正文翻译](docs/TRANSLATION.zh-CN.md)：可选翻译服务的配置、主动发送边界和隐私注意事项。
 - [隐私与本地数据说明](docs/PRIVACY.zh-CN.md)：本地保存内容、加密边界和第三方连接。
+- [UI 设计系统](docs/DESIGN-SYSTEM.zh-CN.md)：视觉基线、8px/12px/20px 圆角 Token 与同心圆角法则。
 - [支持指南](SUPPORT.zh-CN.md)：邮箱接入、网络问题和适合提交 Issue 的内容。
 - [安全策略](SECURITY.zh-CN.md)：私下报告漏洞的方式和范围。
 - [贡献指南](CONTRIBUTING.zh-CN.md)、[社区行为准则](CODE_OF_CONDUCT.zh-CN.md)、[开发说明](docs/DEVELOPMENT.zh-CN.md) 与 [架构与信任边界](docs/ARCHITECTURE.zh-CN.md)：本地开发、协作边界、测试、进程边界和 Pull Request 要求。
