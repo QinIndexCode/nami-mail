@@ -28,7 +28,7 @@ A fixed offline screen runs on top of this and always skips: mail in junk folder
 ## Confirmation, Audit, and Sensitive Content
 
 - Agent-drafted replies always surface a confirmation card (valid for 5 minutes) where you approve or decline the send; pending and sent outcomes are reported through in-app notifications.
-- Declined or failed replies are recorded in a local decision log you can review in the UI.
+- Declined or failed replies are recorded in a local decision log you can review in the UI; the embedded Agent also provides a read-only audit tool `auto-reply.declined.search` to inspect reasons for declined or skipped auto-replies directly via chat.
 - Messages containing sensitive keywords (passwords, verification codes, and similar) are flagged and routed to the highest-priority confirmation surface; the model still re-confirms sensitivity.
 
 ## Dry-Run Sandbox
