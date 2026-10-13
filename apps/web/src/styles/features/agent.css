@@ -1327,18 +1327,15 @@ max-width:100%;
 display:inline-block;
 overflow:hidden
 }
+.agent-table-wrap
+{
+border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel-solid);
+max-width:100%; margin:12px 0; overflow-x:auto
+}
 .agent-message-content table
 {
-border:1px solid var(--line);
-border-collapse:separate;
-border-spacing:0;
-background:var(--panel-solid);
-border-radius:var(--radius-sm);
-max-width:100%;
-margin:10px 0;
-font-size:12px;
-display:block;
-overflow-x:auto
+border-collapse:separate; border-spacing:0; width:100%; min-width:100%;
+font-size:12px; margin:0; border:none; background:0 0
 }
 .agent-message-content :is(th,td)
 {
@@ -1347,7 +1344,7 @@ border-bottom:1px solid var(--line);
 text-align:left;
 vertical-align:top;
 min-width:96px;
-padding:8px 8px
+padding:8px 12px
 }
 .agent-message-content :is(th,td):last-child
 {
@@ -1359,7 +1356,7 @@ border-bottom:0
 }
 .agent-message-content th
 {
-background:var(--panel-muted);
+background:color-mix(in srgb, var(--focus-ring) 4%, var(--panel-muted));
 color:var(--text-soft);
 font-size:11px;
 font-weight:700
@@ -1423,13 +1420,12 @@ padding:2px 0 14px
 }
 .agent-skeleton-bubble
 {
-border:1px solid color-mix(in srgb, var(--focus-ring) 18%, var(--line));
-background:color-mix(in srgb, var(--focus-ring) 5%, var(--panel-muted));
-border-radius:var(--radius-md) var(--radius-md) var(--radius-xs);
-max-width:min(100%,630px);
-margin-left:auto;
-padding:10px 14px
+border:1px solid color-mix(in srgb, var(--focus-ring) 14%, var(--line));
+background:color-mix(in srgb, var(--focus-ring) 4%, transparent);
+border-radius:var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);
+max-width:min(100%,480px); width:320px; margin-left:auto; padding:10px 14px
 }
+.agent-message.skeleton.user .agent-skeleton-content { align-items:flex-end }
 .agent-skeleton-content
 {
 flex-direction:column;
@@ -1440,7 +1436,7 @@ display:flex
 {
 height:11px;
 border-radius:var(--radius-sm);
-background:var(--text-faint);
+background:color-mix(in srgb, var(--text) 32%, transparent);
 animation:1.4s ease-in-out infinite agent-skeleton-sweep
 }
 .agent-skeleton-chrome
@@ -1448,7 +1444,7 @@ animation:1.4s ease-in-out infinite agent-skeleton-sweep
 border-radius:4px;
 width:44px;
 height:8px;
-background:var(--text-faint);
+background:color-mix(in srgb, var(--text) 24%, transparent);
 animation:1.4s ease-in-out infinite agent-skeleton-sweep;
 display:inline-block
 }
@@ -1456,11 +1452,11 @@ display:inline-block
 {
 0%,to
 {
-opacity:.08
+opacity:.25
 }
 50%
 {
-opacity:.24
+opacity:.65
 }
 }
 .agent-thinking-dot:nth-child(2)

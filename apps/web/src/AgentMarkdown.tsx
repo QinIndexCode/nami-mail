@@ -50,12 +50,19 @@ const markdownComponents: Components = {
         href={src}
         target="_blank"
         rel="noreferrer noopener"
-        title={title || alt || undefined}
+        data-tooltip={title || alt || undefined}
       >
         {alt || src}
       </a>
     );
   },
+  table: ({ node: _node, className, children, ...props }) => (
+    <div className="agent-table-wrap">
+      <table {...props} className={["agent-markdown-table", className].filter(Boolean).join(" ")}>
+        {children}
+      </table>
+    </div>
+  ),
 };
 
 /**
