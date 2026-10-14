@@ -198,9 +198,28 @@
     });
   }
 
+  function getActiveNavSection() {
+    if (document.body.classList.contains("docs-body")) return "docs";
+
+    var header = document.querySelector(".site-header");
+    var headerHeight = header ? header.offsetHeight : 64;
+    var threshold = headerHeight + 100;
+
+    var sectionIds = ["privacy", "agent", "features"];
+    for (var i = 0; i < sectionIds.length; i++) {
+      var el = document.getElementById(sectionIds[i]);
+      if (el) {
+        var top = el.getBoundingClientRect().top;
+        if (top <= threshold) {
+          return sectionIds[i];
+        }
+      }
+    }
+    return "home";
+  }
+
   function updateNavigation() {
-    var sections = { "#features": "features", "#agent": "agent", "#privacy": "privacy" };
-    var active = document.body.classList.contains("docs-body") ? "docs" : (sections[window.location.hash] || "home");
+    var active = getActiveNavSection();
     var links = document.querySelectorAll(".site-header a[data-nav]");
     for (var i = 0; i < links.length; i++) {
       if (links[i].dataset.nav === active) {
@@ -211,7 +230,34 @@
     }
   }
   updateNavigation();
-  window.addEventListener("hashchange", updateNavigation);
+
+  var navScrollTicking = false;
+  window.addEventListener("scroll", function () {
+    if (!navScrollTicking) {
+      navScrollTicking = true;
+      requestAnimationFrame(function () {
+        updateNavigation();
+        navScrollTicking = false;
+      });
+    }
+  }, { passive: true });
+
+  window.addEventListener("hashchange", function () {
+    var sections = { "#features": "features", "#agent": "agent", "#privacy": "privacy" };
+    if (sections[window.location.hash]) {
+      var target = sections[window.location.hash];
+      var links = document.querySelectorAll(".site-header a[data-nav]");
+      for (var i = 0; i < links.length; i++) {
+        if (links[i].dataset.nav === target) {
+          links[i].setAttribute("aria-current", "location");
+        } else {
+          links[i].removeAttribute("aria-current");
+        }
+      }
+    } else {
+      updateNavigation();
+    }
+  });
 
   var header = document.querySelector(".site-header");
   if (header) header.addEventListener("click", function (event) {
