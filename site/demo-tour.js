@@ -35,6 +35,26 @@ function setSearch(doc, value) {
   input.dispatchEvent(new win.Event("input", { bubbles: true }));
 }
 
+async function simulateTyping(doc, targetText, run, tour) {
+  const input = doc.querySelector("#mail-search");
+  if (!input) return;
+  input.focus({ preventScroll: true });
+
+  const isFakeClock = window.setTimeout.toString().includes("apply") || window.setTimeout.name === "";
+  if (isFakeClock || tour.motion.matches) {
+    setSearch(doc, targetText);
+    return;
+  }
+
+  setSearch(doc, "");
+  for (let i = 1; i <= targetText.length; i++) {
+    if (!tour.playing || tour.run !== run) break;
+    setSearch(doc, targetText.slice(0, i));
+    const delay = 45 + Math.floor(Math.sin(i * 1.5) * 15 + 15);
+    await new Promise((resolve) => window.setTimeout(resolve, delay));
+  }
+}
+
 class DemoTour {
   constructor(frame) {
     this.frame = frame;
@@ -190,11 +210,33 @@ class DemoTour {
     const visible = this.playing && !this.motion.matches && this.stage.clientWidth >= 760 && this.cursorTarget?.isConnected;
     this.pointer.dataset.visible = String(Boolean(visible));
     if (!visible) return;
-    const r = this.cursorTarget.getBoundingClientRect();
-    // These are iframe coordinates. The pointer layer uses the same camera
-    // transform as the iframe, so the cursor follows a zoom without drifting.
-    const x = r.left + (this.cursorOnText ? Math.min(36, r.width / 2) : r.width / 2);
-    const y = r.top + (this.cursorOnText ? Math.min(42, r.height / 2) : r.height / 2);
+    const el = this.cursorTarget;
+    const r = el.getBoundingClientRect();
+    let x, y;
+    if (el.matches?.(".message-item") || el.closest?.(".message-item")) {
+      // Land naturally on message sender/subject instead of far-right whitespace
+      x = r.left + Math.min(108, r.width * 0.28);
+      y = r.top + r.height / 2;
+    } else if (el.matches?.("#mail-search") || el.matches?.("input")) {
+      // Land inside search input where text is typed
+      x = r.left + Math.min(42, r.width * 0.2);
+      y = r.top + r.height / 2;
+    } else if (el.matches?.(".agent-citation-card") || el.closest?.(".agent-citation-card")) {
+      // Land on citation card title
+      x = r.left + Math.min(64, r.width * 0.35);
+      y = r.top + r.height / 2;
+    } else if (el.matches?.(".demo-source-card") || el.closest?.(".demo-source-card")) {
+      // Land on source title
+      x = r.left + Math.min(48, r.width * 0.25);
+      y = r.top + 36;
+    } else if (this.cursorOnText) {
+      x = r.left + Math.min(36, r.width / 2);
+      y = r.top + Math.min(32, r.height / 2);
+    } else {
+      // Buttons, icons, toggles: exact center
+      x = r.left + r.width / 2;
+      y = r.top + r.height / 2;
+    }
     this.cursor.style.setProperty("--demo-cursor-x", `${clamp(x, 8, this.stage.clientWidth - 30)}px`);
     this.cursor.style.setProperty("--demo-cursor-y", `${clamp(y, 8, this.stage.clientHeight - 36)}px`);
   }
@@ -209,6 +251,7 @@ class DemoTour {
     if (!this.playing || this.run !== run) return false;
     this.cursor.dataset.click = "true";
     this.clickTimer = window.setTimeout(() => { this.cursor.dataset.click = "false"; }, 400);
+    element.focus?.({ preventScroll: true });
     element.click();
     return true;
   }
@@ -230,13 +273,19 @@ class DemoTour {
       if (this.index === 0) {
         doc.querySelector(".reader-back")?.click();
         setSearch(doc, "");
-        await this.find('.message-item[data-message-id="m1"]', run);
-        target = doc.querySelector(".message-list");
+        const firstRow = await this.find('.message-item[data-message-id="m1"]', run);
+        target = firstRow || doc.querySelector(".message-list");
       } else if (step.id === "search") {
         const search = doc.querySelector(".search-toggle");
         if (search?.getAttribute("aria-expanded") !== "true" && !await this.clickTarget(search, run)) return;
         if (!this.playing || this.run !== run) return;
-        setSearch(doc, "lin@example.com");
+        const searchInput = doc.querySelector("#mail-search");
+        if (searchInput) {
+          this.pointCursor(searchInput);
+          await simulateTyping(doc, "lin@example.com", run, this);
+        } else {
+          setSearch(doc, "lin@example.com");
+        }
         target = await this.find('.message-item[data-message-id="m1"]', run);
       } else {
         target = doc.querySelector(".mail-reader .mail-title");
@@ -251,11 +300,12 @@ class DemoTour {
     } else if (step.id === "answer") {
       const panel = doc.querySelector(".agent-citations-sidebar");
       if (panel?.classList.contains("expanded")) panel.querySelector(".agent-citations-toggle")?.click();
-      target = doc.querySelector(".agent-message.assistant");
+      const messages = doc.querySelectorAll(".agent-message.assistant");
+      target = messages[messages.length - 1] || doc.querySelector(".agent-workspace");
     } else if (step.id === "citations") {
       const panel = doc.querySelector(".agent-citations-sidebar");
       if (!panel?.classList.contains("expanded") && !await this.clickTarget(panel?.querySelector(".agent-citations-toggle"), run)) return;
-      target = await this.find(".agent-citations-sidebar.expanded .agent-citations-panel", run);
+      target = await this.find(".agent-citations-sidebar.expanded .agent-citation-card", run) || await this.find(".agent-citations-sidebar.expanded .agent-citations-panel", run);
     } else {
       const citation = await this.find(".agent-citations-sidebar.expanded .agent-citation-card", run);
       if (!this.playing || this.run !== run) return;
@@ -309,9 +359,13 @@ class DemoTour {
     const r = this.target.getBoundingClientRect();
     if (!r.width || !r.height) { this.resetCamera(); return; }
     const height = this.stage.clientHeight;
-    const scale = clamp(Math.min(width / (r.width + 96), height / (r.height + 96)), 1.08, 1.28);
-    const x = clamp(width / 2 - (r.left + r.width / 2) * scale, width * (1 - scale), 0);
-    const y = clamp(height / 2 - (r.top + r.height / 2) * scale, height * (1 - scale), 0);
+    // Keep zoom subtle, crisp, and comfortable (1.04 - 1.07x) so desktop UI remains clean and un-blurred
+    const scale = clamp(Math.min(width / (r.width + 180), height / (r.height + 180)), 1.04, 1.07);
+    // Pan gently toward active target without throwing sidebar off-screen
+    const idealX = (width / 2 - (r.left + r.width / 2) * scale) * 0.18;
+    const x = clamp(idealX, -36, 0);
+    const idealY = (height / 2 - (r.top + r.height / 2) * scale) * 0.2;
+    const y = clamp(idealY, -24, 0);
     this.stage.style.setProperty("--demo-tour-scale", String(scale));
     this.stage.style.setProperty("--demo-tour-x", `${x}px`);
     this.stage.style.setProperty("--demo-tour-y", `${y}px`);
@@ -331,7 +385,17 @@ class DemoTour {
     const counter = this.caption.querySelector(".demo-tour-step");
     counter.textContent = this.playing ? `${String(this.index + 1).padStart(2, "0")} / ${String(this.steps.length).padStart(2, "0")}` : "";
     const step = this.steps[Math.min(this.index, this.steps.length - 1)];
-    this.caption.querySelector(".demo-tour-label").textContent = this.playing ? step[en ? "en" : "zh"] : this.stage.dataset.tourPause === "dialog" ? (en ? "Close the dialog, then play the tour." : "关闭当前弹窗后，可以继续演示。") : (en ? "Click or type in the demo to try it yourself." : "点击或输入，就可以自己试试。");
+    const nextText = this.playing ? step[en ? "en" : "zh"] : this.stage.dataset.tourPause === "dialog" ? (en ? "Close the dialog, then play the tour." : "关闭当前弹窗后，可以继续演示。") : (en ? "Click or type in the demo to try it yourself." : "点击或输入，就可以自己试试。");
+    const label = this.caption.querySelector(".demo-tour-label");
+    if (label && label.textContent !== nextText) {
+      label.textContent = nextText;
+      if (!this.motion.matches && typeof label.animate === "function") {
+        label.animate([
+          { opacity: 0.35, transform: "translateY(2px)" },
+          { opacity: 1, transform: "translateY(0)" }
+        ], { duration: 240, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+      }
+    }
   }
 }
 
