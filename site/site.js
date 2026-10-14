@@ -216,8 +216,25 @@
   var header = document.querySelector(".site-header");
   if (header) header.addEventListener("click", function (event) {
     var link = event.target instanceof Element ? event.target.closest("a") : null;
-    if (link && link.id !== "lang-toggle" && new URL(link.href).origin === window.location.origin) {
+    if (!link) return;
+    if (link.id !== "lang-toggle" && new URL(link.href).origin === window.location.origin) {
       remember(LANG_KEY, root.dataset.lang === "en" ? "en" : "zh");
+    }
+
+    if (!document.body.classList.contains("docs-body")) {
+      var isHomeLink = link.dataset.nav === "home" || link.classList.contains("brand");
+      if (isHomeLink) {
+        event.preventDefault();
+        var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        window.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" });
+        if (window.location.hash) {
+          history.pushState(null, "", window.location.pathname.replace(/\/index\.html$/, "/") + window.location.search);
+        }
+        updateNavigation();
+        if (mobileNavigation && mobileNavigation.open) {
+          mobileNavigation.open = false;
+        }
+      }
     }
   });
 
