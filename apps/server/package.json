@@ -16,7 +16,7 @@
     "typecheck:tests": "tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
-    "@fastify/cors": "^11.1.0",
+    "@fastify/cors": "^11.3.1",
     "@fastify/static": "^10.1.4",
     "@nami/agent-contracts": "file:../../packages/agent-contracts",
     "@nami/agent-core": "file:../../packages/agent-core",
