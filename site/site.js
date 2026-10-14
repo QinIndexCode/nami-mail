@@ -157,6 +157,7 @@
       if (event.source !== frame.contentWindow || data.view !== frame.dataset.demo || !frame.dataset.started) continue;
       window.clearTimeout(demoTimers.get(frame));
       updateDemoState(frame, "ready");
+      attachFrameWheel(frame);
     }
   });
 
@@ -362,6 +363,9 @@
   if (demoObserver) window.addEventListener("scroll", scheduleVisibleDemos, { passive: true });
   for (var demoIndex = 0; demoIndex < demoFrames.length; demoIndex++) {
     var stage = demoFrames[demoIndex].closest(".demo-stage");
+    demoFrames[demoIndex].addEventListener("load", function (e) {
+      attachFrameWheel(e.currentTarget);
+    });
     if (demoObserver) demoObserver.observe(stage);
     stage.querySelector("[data-demo-retry]").addEventListener("click", function (event) {
       var stage = event.currentTarget.closest(".demo-stage");
@@ -374,6 +378,117 @@
     window.addEventListener("scroll", scanVisibleDemos, { passive: true });
     window.addEventListener("resize", scanVisibleDemos);
     scanVisibleDemos();
+  }
+
+  // Forward wheel events from embedded demo frames to the outer window when unmanaged
+  function attachFrameWheel(frame) {
+    try {
+      if (!frame || !frame.contentWindow) return;
+      try {
+        frame.contentWindow.removeEventListener("wheel", frame._namiWheelHandler);
+      } catch (e) {}
+      frame._namiWheelHandler = function (e) {
+        if (document.activeElement !== frame) {
+          e.preventDefault();
+          window.dispatchEvent(new WheelEvent("wheel", {
+            deltaY: e.deltaY,
+            deltaX: e.deltaX,
+            deltaMode: e.deltaMode
+          }));
+        }
+      };
+      frame.contentWindow.addEventListener("wheel", frame._namiWheelHandler, { passive: false });
+    } catch (err) {}
+  }
+
+  // Smooth intent-based anchor section scroll controller.
+  // Each scroll intent moves by fixed section height with gentle easing, without threshold spring resistance.
+  function initAnchorScroll() {
+    if (document.body.classList.contains("docs-body") || !document.getElementById("demo")) return;
+
+    var DURATION = 700;
+    var isAnimating = false;
+    var animTimer = null;
+
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function getSnapStops() {
+      var header = document.querySelector(".site-header");
+      var headerHeight = header ? header.offsetHeight : 64;
+      var maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      var sectionIds = ["demo", "features", "agent", "privacy", "retrieval", "cli", "docs", "testimonials", "download"];
+      var stops = [0];
+
+      for (var i = 0; i < sectionIds.length; i++) {
+        var el = document.getElementById(sectionIds[i]);
+        if (!el) continue;
+        var top = Math.min(maxScroll, Math.max(0, el.offsetTop - headerHeight));
+        if (!stops.some(function (s) { return Math.abs(s - top) < 24; })) {
+          stops.push(top);
+        }
+      }
+
+      if (!stops.some(function (s) { return Math.abs(s - maxScroll) < 24; })) {
+        stops.push(maxScroll);
+      }
+
+      stops.sort(function (a, b) { return a - b; });
+      return stops;
+    }
+
+    function smoothScrollTo(destY) {
+      if (Math.abs(destY - window.scrollY) < 4) return;
+      isAnimating = true;
+      clearTimeout(animTimer);
+      window.scrollTo({ top: destY, behavior: "smooth" });
+      animTimer = setTimeout(function () {
+        isAnimating = false;
+      }, 650);
+    }
+
+    window.addEventListener(
+      "wheel",
+      function (e) {
+        if (isAnimating) {
+          e.preventDefault();
+          return;
+        }
+
+        var delta = e.deltaY;
+        if (Math.abs(delta) < 8) return;
+
+        var currentY = window.scrollY;
+        var stops = getSnapStops();
+
+        if (delta > 0) {
+          for (var i = 0; i < stops.length; i++) {
+            if (stops[i] > currentY + 30) {
+              e.preventDefault();
+              smoothScrollTo(stops[i]);
+              return;
+            }
+          }
+        } else {
+          for (var j = stops.length - 1; j >= 0; j--) {
+            if (stops[j] < currentY - 30) {
+              e.preventDefault();
+              smoothScrollTo(stops[j]);
+              return;
+            }
+          }
+        }
+      },
+      { passive: false }
+    );
+  }
+
+  initAnchorScroll();
+
+  // Attach frame wheel forwarding for any frames already in DOM
+  for (var k = 0; k < demoFrames.length; k++) {
+    attachFrameWheel(demoFrames[k]);
   }
 
 })();
