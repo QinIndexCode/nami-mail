@@ -328,13 +328,13 @@ if ($shouldRestartPreviousVersion) {
       if (-not [string]::IsNullOrWhiteSpace($ExpectedSignerThumbprint)) {
         Assert-ValidSignature $CurrentExecutablePath $ExpectedSignerThumbprint
       }
-      Start-Process -FilePath $CurrentExecutablePath
+      Start-Process -FilePath $CurrentExecutablePath -WorkingDirectory (Split-Path -Parent $CurrentExecutablePath)
     } finally { $currentExecutableLock.Dispose() }
   } catch {
     try { Write-InstallFailure $TargetVersion $stage $ResultPath } catch {}
   }
 } elseif ($installationSucceeded -and (Test-Path -LiteralPath $CurrentExecutablePath)) {
-  Start-Process -FilePath $CurrentExecutablePath
+  Start-Process -FilePath $CurrentExecutablePath -WorkingDirectory (Split-Path -Parent $CurrentExecutablePath)
 }
 exit 0
 `;

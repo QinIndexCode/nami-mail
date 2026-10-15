@@ -452,6 +452,9 @@ async function startWithPendingRecord(
   const recordPath = pendingInstallRecordPath(profile);
   await fs.mkdir(path.dirname(recordPath), { recursive: true });
   await fs.writeFile(recordPath, JSON.stringify({ schemaVersion: 1, ...record }), "utf8");
+  const versionDirectory = path.join(profile, "updates", record.toVersion);
+  await fs.mkdir(versionDirectory, { recursive: true });
+  await fs.writeFile(path.join(versionDirectory, "fixture.zip"), "data");
   const updater = new DesktopUpdater({
     currentVersion,
     isPackaged: true,
@@ -471,7 +474,7 @@ async function startWithPendingRecord(
     recoverAfterInstallFailure: () => undefined,
     quitForInstall: () => undefined,
   });
-  return { updater, recordPath, snapshot: await updater.start() };
+  return { updater, recordPath, snapshot: await updater.start(), versionDirectory };
 }
 
 test("records the install intent before the helper takes over", async (t) => {
@@ -509,7 +512,7 @@ test("clears the install record when the installer never starts", async (t) => {
 });
 
 test("reports a recorded install that never changed the running version", async (t) => {
-  const { updater, recordPath, snapshot } = await startWithPendingRecord(t, {
+  const { updater, recordPath, snapshot, versionDirectory } = await startWithPendingRecord(t, {
     fromVersion: "1.2.2",
     toVersion: targetVersion,
     startedAt: "2026-07-22T06:00:00.000Z",
@@ -521,11 +524,13 @@ test("reports a recorded install that never changed the running version", async 
   assert.deepEqual(snapshot.args, {});
   // One-shot notice: the record is consumed once it has been reported.
   await assert.rejects(fs.access(recordPath), /ENOENT/);
+  // Stale version cache is cleared so subsequent checks never re-enter the loop.
+  await assert.rejects(fs.access(versionDirectory), /ENOENT/);
   updater.dispose();
 });
 
 test("leaves a fresh install record for a later launch to judge", async (t) => {
-  const { updater, recordPath, snapshot } = await startWithPendingRecord(t, {
+  const { updater, recordPath, snapshot, versionDirectory } = await startWithPendingRecord(t, {
     fromVersion: "1.2.2",
     toVersion: targetVersion,
     // Inside the helper's own 90s hand-over window plus install time.
@@ -534,6 +539,7 @@ test("leaves a fresh install record for a later launch to judge", async (t) => {
   assert.equal(snapshot.phase, "idle");
   assert.equal(snapshot.reason, "scheduled");
   await fs.access(recordPath);
+  await fs.access(versionDirectory);
   updater.dispose();
 });
 
