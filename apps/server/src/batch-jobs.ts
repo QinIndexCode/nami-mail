@@ -7,6 +7,7 @@ import {
   batchMoveMessages,
   moveMessageToFolder,
   resolveMoveDestination,
+  type MessageMoveTarget,
 } from "./sync-moves.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import { safeLogout } from "./imap-logout.js";
@@ -42,7 +43,7 @@ export type BatchJobCreateRequest = {
   query: MessageListFilterQuery;
 } | {
   kind: "move";
-  target: "archive" | "trash";
+  target: MessageMoveTarget;
   query: MessageListFilterQuery;
 };
 
@@ -86,7 +87,7 @@ type BatchJobRecord = {
   /** Set when the job settles; the undo window counts from this moment. */
   completedAt?: number;
   error?: string;
-  target?: "archive" | "trash";
+  target?: MessageMoveTarget;
   query?: MessageListFilterQuery;
   /**
    * The ids a move job acts on, fixed when the job was accepted. Resolving the

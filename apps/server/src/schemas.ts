@@ -103,8 +103,20 @@ export const submissionsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 }).strict();
 
+/**
+ * The move-target vocabulary, shared by every entry point that names one: the
+ * single-message route, the explicit batch route, and a predicate-wide job.
+ * Spelling it out per schema let the job copy fall two members short of the
+ * others, and the renderer's report-spam action — `junk`, as `inbox` is the
+ * recovery path — built a payload `POST /api/batch-jobs` rejected outright
+ * before a job was ever created. `MessageMoveTarget` in sync-moves.ts is the
+ * engine-side twin of this set; the engine resolves each member's destination
+ * by SPECIAL-USE.
+ */
+const moveTargetSchema = z.enum(["archive", "trash", "junk", "inbox"]);
+
 export const messageMoveSchema = z.object({
-  target: z.enum(["archive", "trash", "junk", "inbox"]),
+  target: moveTargetSchema,
 }).strict();
 
 export const messageFlagsPatchSchema = z.object({
@@ -131,7 +143,7 @@ export const batchMessageFlagsPatchSchema = z.object({
 
 export const batchMessageMoveSchema = z.object({
   ids: batchMessageIdsSchema,
-  target: z.enum(["archive", "trash", "junk", "inbox"]),
+  target: moveTargetSchema,
 }).strict();
 
 export const batchJobQuerySchema = z.object({
@@ -161,7 +173,7 @@ export const batchJobCreateSchema = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({
     kind: z.literal("move"),
-    target: z.enum(["archive", "trash"]),
+    target: moveTargetSchema,
     query: batchJobQuerySchema,
   }).strict(),
 ]);

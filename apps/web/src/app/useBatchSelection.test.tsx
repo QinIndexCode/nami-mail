@@ -311,3 +311,20 @@ it("drops the predicate selection on a full load without disarming the running j
   expect(pagedWrites.at(-1), "the selection of the replaced view is gone").toBe(false);
   expect(jobWrites.at(-1), "a full load must not clear the running job").toBe(armed);
 });
+
+it("forwards a predicate move's target as asked, junk included", async () => {
+  // The toolbar's report-spam action is the one that exercised this: the job
+  // endpoint's move vocabulary was spelled out per schema and had fallen two
+  // members short of the explicit route's, so `junk` came back as a 400 and no
+  // job ever existed. The target travels to the create call unchanged, and the
+  // predicate path never degrades into an id list of the loaded page.
+  await act(async () => { setMatchingTotalState(mailbox.length + 9); });
+  await act(async () => { current.selectAllVisibleMessages(); });
+  mocks.create.mockResolvedValue({ ok: true, jobId: "j1" });
+
+  await act(async () => { await current.batchMoveMessages("junk"); });
+
+  expect(mocks.create, "one job for the whole matching selection").toHaveBeenCalledTimes(1);
+  expect(mocks.create.mock.calls[0]![0]).toMatchObject({ kind: "move", target: "junk" });
+  expect(mocks.move, "a predicate move is not a page of ids").not.toHaveBeenCalled();
+});

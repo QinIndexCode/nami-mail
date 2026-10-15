@@ -1708,6 +1708,34 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(moved).toEqual({ mailbox: "Archive", uid: 101 });
   });
 
+  it("moves a predicate selection to the junk folder behind one job", async () => {
+    // Report-spam is the action this covers: the job endpoint accepted
+    // archive/trash only, so a predicate-wide "mark all matching as junk"
+    // answered 400 and no job was ever created. The job's target reaches the
+    // same move engine as the explicit path, which resolves the destination by
+    // SPECIAL-USE (some providers localise the folder path, so the path alone
+    // is not a match).
+    const mailClient = readyMailClient();
+    mailClient.messageMove.mockImplementation(async () => ({ uidMap: new Map([[41, 101]]) }));
+    imapClientForAccount.mockReturnValue(mailClient);
+    const { now, insertMessage } = seedJobAccount("job-move-junk");
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("job-move-junk", "Junk", "Junk", "\\Junk", 0, 0);
+    insertMessage.run("job-junk-1", "job-move-junk", "INBOX", 41, "Spam", "Demo", "demo@example.com", "[]", now, "s", "s", "", "[]", 0, 10, now);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/batch-jobs",
+      payload: { kind: "move", target: "junk", query: { accountId: "job-move-junk", unread: true } },
+    });
+    expect(created.statusCode).toBe(200);
+
+    const job = await waitForJob(created.json().jobId);
+    expect(job).toMatchObject({ kind: "move", status: "completed", total: 1, done: 1, updated: 1, failed: 0 });
+    const moved = db.prepare("SELECT mailbox, uid FROM messages WHERE id = ?").get("job-junk-1") as { mailbox: string; uid: number };
+    expect(moved).toEqual({ mailbox: "Junk", uid: 101 });
+  });
+
   it("updates, exposes and clears an account display name", async () => {
     db.prepare(`
       INSERT INTO accounts (id, email, provider, provider_name, encrypted_password,
