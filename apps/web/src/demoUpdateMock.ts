@@ -31,8 +31,8 @@ export function resolveDemoUpdateSnapshot(isDemo: boolean): DesktopUpdateSnapsho
 
   return {
     schemaVersion: 2,
-    currentVersion: typeof __NAMI_APP_VERSION__ !== "undefined" ? __NAMI_APP_VERSION__ : "0.4.3",
-    targetVersion: "0.4.4",
+    currentVersion: typeof __NAMI_APP_VERSION__ !== "undefined" ? __NAMI_APP_VERSION__ : "0.5.0",
+    targetVersion: "0.5.1",
     phase,
     reason: isStorage
       ? "storageInsufficient"

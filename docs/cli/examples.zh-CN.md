@@ -13,7 +13,7 @@ namimail version
 ```
 
 ```json
-{"name":"NamiMail","version":"0.4.3"}
+{"name":"NamiMail","version":"0.5.0"}
 ```
 
 ## 只读查询

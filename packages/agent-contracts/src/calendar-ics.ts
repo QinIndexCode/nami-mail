@@ -190,7 +190,7 @@ export function generateIcs(events: readonly CalendarEventExportSource[], calend
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Nami Mail//Nami Calendar v0.4.3//EN",
+    "PRODID:-//Nami Mail//Nami Calendar v0.5.0//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     `X-WR-CALNAME:${escapeIcsText(calendarName)}`,
