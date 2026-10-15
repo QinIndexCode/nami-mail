@@ -114,6 +114,7 @@ test("the ZIP installer helper binds verified archive bytes to one extracted ins
     "The final read lock must be opened only after the trusted writer hash is sealed.",
   );
   assert.match(script, /Assert-ValidSignature/);
+  assert.match(script, /Start-Process -FilePath \$installerPath -ArgumentList @\('\/S', '--updated'\) -PassThru -Wait/);
   assert.match(script, /if \(\$installer\.ExitCode -ne 0\) \{ throw "Nami Mail installer exited with code \$\(\$installer\.ExitCode\)\." \}/);
   assert.match(script, /\$installationSucceeded = \$true/);
   assert.match(script, /function Remove-TransientFile/);
@@ -227,13 +228,7 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
     return;
   }
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-installer-success-"));
-  // eslint-disable-next-line prefer-const -- helper is reassigned at the start of the spawn below.
-  let helper: ChildProcess | undefined;
   t.after(async () => {
-    if (helper && helper.exitCode === null && helper.signalCode === null) {
-      helper.kill();
-      await waitForChildExit(helper, "forced Windows update-helper cleanup", 2_000).catch(() => undefined);
-    }
     // The helper restarts the current executable after it exits. Its process
     // can retain the source fixture's EXE handle briefly, even after the
     // helper's exit event. Retrying only transient Windows lock errors makes
@@ -247,9 +242,7 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
   const cacheDirectory = path.join(directory, "updates");
   const versionDirectory = path.join(cacheDirectory, "0.1.1");
   const archivePath = path.join(versionDirectory, "Nami-Mail-0.1.1-win-x64.zip");
-  const workDirectory = path.join(versionDirectory, "install-work", "fixture");
   const resultPath = path.join(cacheDirectory, "install-result.json");
-  const helperPath = path.join(versionDirectory, "helpers", "install-helper.ps1");
   const compiler = path.join(process.env.SystemRoot ?? "C:\\Windows", "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
   const sourcePath = path.join(directory, "installer.cs");
   try {
@@ -261,7 +254,6 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
 
   await fs.mkdir(sourceDirectory);
   await fs.mkdir(versionDirectory, { recursive: true });
-  await fs.mkdir(path.dirname(helperPath), { recursive: true });
   await fs.writeFile(sourcePath, "public static class Program { [System.STAThread] public static void Main() {} }", "utf8");
   await execFileAsync(compiler, ["/nologo", "/target:winexe", `/out:${installerSource}`, sourcePath], {
     windowsHide: true,
@@ -287,7 +279,6 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
   const archive = await fs.readFile(archivePath);
   const archiveSha512 = createHash("sha512").update(archive).digest("base64");
   const archiveSize = archive.byteLength;
-  const currentExecutableSha512 = createHash("sha512").update(await fs.readFile(installerSource)).digest("base64");
   const { stdout: archiveProbe } = await execFileAsync(powershell, [
     "-NoProfile",
     "-NonInteractive",
@@ -299,56 +290,34 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
     timeout: 30_000,
   });
   assert.equal(archiveProbe.trim(), `${archiveSize}|${archiveSha512}`);
-  await fs.writeFile(helperPath, createZipUpdateInstallerScript(), "utf8");
-
-  helper = spawn(powershell, [
-    "-NoProfile",
-    "-NonInteractive",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    helperPath,
-    "-ParentProcessId",
-    "2147483647",
-    "-ArchivePath",
+  const launched = await launchZipUpdateInstaller({
+    cacheDirectory,
     archivePath,
-    "-ArchiveSize",
-    String(archiveSize),
-    "-ArchiveSha512",
+    archiveSize,
     archiveSha512,
-    "-TargetVersion",
-    "0.1.1",
-    "-VersionDirectory",
-    versionDirectory,
-    "-InstallerName",
+    targetVersion: "0.1.1",
     installerName,
-    "-CurrentExecutablePath",
-    installerSource,
-    "-CurrentExecutableSha512",
-    currentExecutableSha512,
-    "-WorkDirectory",
-    workDirectory,
-    "-ResultPath",
-    resultPath,
-  ], {
-    stdio: "ignore",
-    windowsHide: true,
+    currentExecutablePath: installerSource,
+    trust: { kind: "ed25519" },
+    parentProcessId: 2147483647,
   });
-  let exitCode: number | null;
-  try {
-    exitCode = await waitForChildExit(helper, "the Windows update helper", 10_000);
-  } catch (error) {
-    if (helper.exitCode === null && helper.signalCode === null) {
-      helper.kill();
-      await waitForChildExit(helper, "forced Windows update-helper cleanup", 2_000).catch(() => undefined);
+  assert.equal(launched, true);
+
+  const deadline = Date.now() + 15_000;
+  while (true) {
+    try {
+      await fs.access(versionDirectory);
+      if (Date.now() >= deadline) {
+        throw new Error("Timed out waiting for the update helper to complete and remove the version directory.");
+      }
+      await sleep(50);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+      throw error;
     }
-    throw error;
   }
-  assert.equal(exitCode, 0);
 
   await assert.rejects(fs.access(archivePath), /ENOENT/);
-  await assert.rejects(fs.access(workDirectory), /ENOENT/);
   await assert.rejects(fs.access(resultPath), /ENOENT/);
-  await assert.rejects(fs.access(helperPath), /ENOENT/);
   await assert.rejects(fs.access(versionDirectory), /ENOENT/);
 });

@@ -49,6 +49,14 @@ function powershellPath(): string {
   );
 }
 
+function comspecPath(): string {
+  return process.env.COMSPEC?.trim() || path.join(
+    process.env.SystemRoot?.trim() || "C:\\Windows",
+    "System32",
+    "cmd.exe",
+  );
+}
+
 function normalizeSigner(value: AuthenticodeResult): TrustedWindowsSigner | undefined {
   const publisher = typeof value.SimpleName === "string" && value.SimpleName.trim()
     ? value.SimpleName.trim()
@@ -285,7 +293,7 @@ try {
     Assert-ValidSignature $installerPath $ExpectedSignerThumbprint
   }
   $stage = 'install'
-  $installer = Start-Process -FilePath $installerPath -ArgumentList @('/S') -PassThru -Wait
+  $installer = Start-Process -FilePath $installerPath -ArgumentList @('/S', '--updated') -PassThru -Wait
   if ($installer.ExitCode -ne 0) { throw "Nami Mail installer exited with code $($installer.ExitCode)." }
   Remove-Item -LiteralPath $ResultPath -Force -ErrorAction SilentlyContinue
   $installationSucceeded = $true
@@ -348,9 +356,11 @@ export async function launchZipUpdateInstaller(plan: ZipUpdateInstallerPlan): Pr
     const signerArguments = plan.trust.kind === "authenticode"
       ? ["-ExpectedSignerThumbprint", plan.trust.signer.thumbprint]
       : [];
-    const child = spawn(powershellPath(), [
+    const psArguments = [
       "-NoProfile",
       "-NonInteractive",
+      "-WindowStyle",
+      "Hidden",
       "-ExecutionPolicy",
       "Bypass",
       "-File",
@@ -378,15 +388,44 @@ export async function launchZipUpdateInstaller(plan: ZipUpdateInstallerPlan): Pr
       workDirectory,
       "-ResultPath",
       resultPath,
+    ];
+    // Launch via Windows shell (cmd.exe /d /s /c start "") instead of direct Node
+    // `detached: true` on powershell.exe. In Node.js on Windows, detached spawns
+    // pass DETACHED_PROCESS (0x00000008) to CreateProcessW, which causes CUI
+    // subsystem applications like powershell.exe with ignored stdio to abort
+    // host initialization and exit silently with code 0 before running the script.
+    // The `start ""` shell command launches the PowerShell process with its own
+    // independent console session, detached from Node and surviving parent exit.
+    const child = spawn(comspecPath(), [
+      "/d",
+      "/s",
+      "/c",
+      "start",
+      '""',
+      powershellPath(),
+      ...psArguments,
     ], {
-      detached: true,
       env: minimalSpawnEnvironment(),
       stdio: "ignore",
       windowsHide: true,
     });
     await new Promise<void>((resolve, reject) => {
-      child.once("spawn", resolve);
-      child.once("error", reject);
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error("Timed out waiting for update helper launcher to start."));
+      }, 15_000);
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`Update helper launcher exited with code ${code ?? "null"}.`));
+        }
+      });
     });
     child.unref();
     return true;
