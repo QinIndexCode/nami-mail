@@ -152,30 +152,28 @@ it("keeps the busy flag and the selection for a newer batch when an older one fi
 });
 
 it("does not release a pin an overlapping batch still holds", async () => {
-  let finishFirst!: (value: unknown) => void;
+  let rejectFirst!: (error: Error) => void;
   let finishSecond!: (value: unknown) => void;
-  mocks.flags.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }));
+  mocks.flags.mockImplementationOnce(() => new Promise((_resolve, rejectPromise) => { rejectFirst = rejectPromise; }));
   mocks.flags.mockImplementationOnce(() => new Promise((resolve) => { finishSecond = resolve; }));
   let first!: Promise<void>;
   let second!: Promise<void>;
-  // The two batches must touch DIFFERENT flags, and one of the optimistic
-  // values must differ from the server's, or the assertion below could hold
-  // either way: `seen` is the discriminating one (the server still reports
-  // false while the first batch's own optimistic value is true).
+  // The FAILING batch is the one that releases a pin twice — once before its
+  // reconciling reload and once after it — so this is where an unconditional
+  // release would take the holder of the batch still in flight with it. The two
+  // batches must touch different flags: `flagged` is the only value the newer
+  // batch ever wrote, so if its holder is dropped, the newer batch's own reload
+  // overwrites it with the server's truth and the assertion below fails.
   await act(async () => { first = current.batchUpdateFlags({ seen: true }, "read"); });
   await act(async () => { second = current.batchUpdateFlags({ flagged: true }, "star"); });
-  expect(displayed[0].seen).toBe(true);
+  expect(displayed[0].seen, "the first batch applied its own patch optimistically").toBe(true);
 
-  try {
-    await act(async () => { finishFirst({ ok: true, updated: 1, failed: 0 }); await first; });
-    // Pins are counted holders: the finishing batch releases only its own, so
-    // the snapshot it reloads cannot flip the row back under the batch that is
-    // still in flight.
-    expect(displayed[0].seen, "the newer batch's pin must survive the older one's unpin").toBe(true);
-    expect(displayed[0].flagged, "the newer batch's own optimistic value is pinned by itself").toBe(true);
-  } finally {
-    await act(async () => { finishSecond({ ok: true, updated: 1, failed: 0 }); await second; });
-  }
+  await act(async () => { rejectFirst(new Error("offline")); await first; });
+  expect(current.batchBusy, "the newer batch is still in flight").toBe(true);
+
+  await act(async () => { finishSecond({ ok: true, updated: 1, failed: 0 }); await second; });
+
+  expect(displayed[0].flagged, "the newer batch's optimistic value must outlive its own reconciling reload").toBe(true);
 });
 
 it("restores the rows of a failed move after its reconciling reload", async () => {
