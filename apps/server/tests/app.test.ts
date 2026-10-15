@@ -1265,6 +1265,32 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(atCap.statusCode).toBe(200);
   });
 
+  it("refuses a move selection past the same id cap in one piece", async () => {
+    // Both batch endpoints share `batchMessageIdsSchema`, but the two renderer
+    // paths split at very different sizes — 5000 for a flags commit (local
+    // bookkeeping, so the cap is the only bound) and 100 for a move (a real MOVE
+    // per group, each taking the account's write slot). Neither may drift past
+    // the server's number, and the endpoint the renderer chunks hardest is not
+    // the one that would notice first: a move payload over the cap is refused
+    // outright, so the boundary is pinned here too rather than inferred from the
+    // flags endpoint.
+    const ids = Array.from({ length: 5001 }, (_, index) => `missing-move-cap-${index}`);
+    const over = await app.inject({
+      method: "POST",
+      url: "/api/messages/batch/move",
+      payload: { ids, target: "archive" },
+    });
+    expect(over.statusCode).toBe(400);
+    expect(over.json()).toMatchObject({ ok: false });
+
+    const atCap = await app.inject({
+      method: "POST",
+      url: "/api/messages/batch/move",
+      payload: { ids: ids.slice(0, 5000), target: "archive" },
+    });
+    expect(atCap.statusCode).toBe(200);
+  });
+
   it("validates batch message moves and reports per-message outcomes", async () => {
     const malformed = await app.inject({
       method: "POST",
