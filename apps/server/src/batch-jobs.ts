@@ -11,17 +11,30 @@ import {
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import { safeLogout } from "./imap-logout.js";
 import { accountById } from "./account-store.js";
-import { updateMessageFlagsBatch, type MessageFlagsPatch } from "./sync-flags.js";
+import type { MessageFlagsPatch } from "./sync-flags.js";
+import {
+  applyPreparedFlagsInTransaction,
+  prepareLocalFlags,
+} from "./flags-outbox.js";
+import type { createOperationQueue } from "./operation-queue.js";
 import type { AgentMailStateEvents } from "./agent/mail-state-events.js";
 import type { OAuthService } from "./oauth.js";
 import { getSyncMessageLimit } from "./settings.js";
 
 // In-memory batch jobs for predicate-scoped ("select all matching this view")
-// operations. Jobs resolve the affected message ids server-side so a 20 000
-// message selection never crosses the wire as an id list, mirroring how mail
-// clients apply bulk actions to a saved search instead of a page of ids.
+// MOVE operations. Jobs resolve the affected message ids server-side so a
+// 20 000 message selection never crosses the wire as an id list, mirroring how
+// mail clients apply bulk actions to a saved search instead of a page of ids.
 // Jobs are ephemeral: a server restart loses in-flight work and undo scope
 // (the same limitation as a short undo window).
+//
+// FLAGS jobs no longer live here: they are materialized local-first into the
+// durable `batch_jobs` tables at acceptance (see `acceptFlagsJob`), and the
+// background push reuses the same `flags-push` FIFO chain the explicit-id
+// path uses. Both entry points share one state, one transaction shape, and
+// one scheduling rule — the older remote-first flags path (`runJob`'s chunked
+// `updateMessageFlagsBatch`) raced explicit commits and could lose the last
+// user intent.
 
 export type BatchJobCreateRequest = {
   kind: "flags";
@@ -73,7 +86,6 @@ type BatchJobRecord = {
   /** Set when the job settles; the undo window counts from this moment. */
   completedAt?: number;
   error?: string;
-  patch?: MessageFlagsPatch;
   target?: "archive" | "trash";
   query?: MessageListFilterQuery;
   /** Undo scope of a flags job, server-side only: never leaves this process. */
@@ -88,11 +100,15 @@ export type BatchJobDeps = {
   masterKey: Buffer;
   oauthService?: OAuthService;
   agentMailEvents?: AgentMailStateEvents;
+  operationQueue: ReturnType<typeof createOperationQueue>;
 };
 
 export const BATCH_JOB_UNDO_WINDOW_MS = 5 * 60_000;
 const BATCH_JOB_TTL_MS = 15 * 60_000;
-const FLAGS_CHUNK_SIZE = 100;
+// Entries per durable `flags-push` row staged by a flags job's acceptance
+// commit. Bounds each background STORE (and each later settlement scan's
+// payload) instead of staging one row with the whole selection's delta.
+const FLAGS_PUSH_ROW_ENTRY_LIMIT = 1000;
 // One MOVE command per (account, source mailbox) group per chunk, issued on a
 // connection the job reuses for every chunk (see the session in `runJob`): a
 // chunk boundary used to cost a connect/logout round trip, and 40 000 ids at
@@ -258,6 +274,157 @@ function pruneJobs(): void {
   }
 }
 
+/** The same TTL as the in-memory registry, applied to the durable flags jobs. */
+function pruneFlagsJobs(db: DatabaseHandle): void {
+  const cutoff = Date.now() - BATCH_JOB_TTL_MS;
+  const expired = db.prepare("SELECT id FROM batch_jobs WHERE completed_at IS NOT NULL AND completed_at < ?").all(cutoff) as Array<{ id: string }>;
+  if (!expired.length) return;
+  db.prepare("DELETE FROM batch_job_messages WHERE job_id IN (SELECT id FROM batch_jobs WHERE completed_at IS NOT NULL AND completed_at < ?)").run(cutoff);
+  db.prepare("DELETE FROM batch_jobs WHERE completed_at IS NOT NULL AND completed_at < ?").run(cutoff);
+  for (const { id } of expired) flagJobHandles.delete(id);
+}
+
+type BatchJobDbRow = {
+  id: string;
+  parent_id: string | null;
+  kind: "flags" | "undo";
+  patch_json: string | null;
+  status: "running" | "completed" | "failed";
+  total: number;
+  updated: number;
+  failed: number;
+  created_at: number;
+  completed_at: number | null;
+  error: string | null;
+  undone: number;
+  undo_window_ms: number;
+};
+
+/**
+ * One pass over the `flags-push` rows materializes the ids the pending-or-
+ * running rows still own and the ids a terminal-failed row named, then four
+ * indexed counts read the job's projection. The shape mirrors
+ * `clearPendingFlagsMarkers`' protection scan so a 3,000-id job costs one
+ * queue pass per poll, not one pass per message.
+ *
+ * Failure accounting: a changed id counts as failed when its marker is still
+ * set with no pending-or-running row naming it (every row that ever named it
+ * settled failed), or when its marker was cleared by the settlement hook
+ * after a terminal failure. A later commit for the same id from another
+ * entry point is NOT re-attributed here — the job's receipt answers for its
+ * own push, and per-message version attribution arrives with the taskList
+ * versions.
+ */
+const FLAGS_JOB_PROJECTION_SQL = `
+  WITH push_pending AS MATERIALIZED (
+    SELECT DISTINCT json_extract(entry.value, '$.id') AS mid
+    FROM operation_queue, json_each(operation_queue.payload_json, '$.entries') AS entry
+    WHERE operation_queue.kind = 'flags-push'
+      AND operation_queue.status IN ('pending', 'running')
+      AND json_valid(operation_queue.payload_json)
+  ), push_failed AS MATERIALIZED (
+    SELECT DISTINCT json_extract(entry.value, '$.id') AS mid
+    FROM operation_queue, json_each(operation_queue.payload_json, '$.entries') AS entry
+    WHERE operation_queue.kind = 'flags-push'
+      AND operation_queue.status = 'failed'
+      AND json_valid(operation_queue.payload_json)
+  ), changed AS MATERIALIZED (
+    SELECT b.message_id AS mid, COALESCE(msg.pending_flags_push, 0) AS marked
+    FROM batch_job_messages b
+    LEFT JOIN messages msg ON msg.id = b.message_id
+    WHERE b.job_id = ? AND b.changed = 1
+  )
+  SELECT
+    (SELECT COUNT(*) FROM changed) AS changed,
+    (SELECT COUNT(*) FROM changed WHERE marked = 1) AS marked,
+    (SELECT COUNT(*) FROM changed c
+      WHERE c.marked = 1 AND EXISTS (SELECT 1 FROM push_pending p WHERE p.mid = c.mid)) AS syncing,
+    (SELECT COUNT(*) FROM changed c
+      WHERE NOT EXISTS (SELECT 1 FROM push_pending p WHERE p.mid = c.mid)
+        AND ((c.marked = 1) OR EXISTS (SELECT 1 FROM push_failed f WHERE f.mid = c.mid))) AS failed_pushes
+`;
+
+/**
+ * Accepts a local-first flags job: one transaction commits the patch to the
+ * cache, the folder counters, the durable `flags-push` rows, the `batch_jobs`
+ * record and the fixed selection (`batch_job_messages`) — the selection is
+ * resolved by the caller BEFORE the transaction, so the job targets exactly
+ * the messages the filter matched at acceptance and can never re-resolve
+ * against a state its own commit has already changed. The FIFO starters join
+ * only after the commit.
+ */
+function acceptFlagsJob(
+  deps: BatchJobDeps,
+  params: {
+    kind: "flags" | "undo";
+    parentId?: string;
+    patch: MessageFlagsPatch;
+    ids: readonly string[];
+  },
+): BatchJobSnapshot {
+  const { db, operationQueue, agentMailEvents } = deps;
+  const id = randomUUID();
+  const createdAt = Date.now();
+  const { prepared } = prepareLocalFlags(db, params.ids, params.patch);
+  const failed = params.ids.length - prepared.length;
+  let changedIds: string[] = [];
+  let starters: Array<() => void> = [];
+  db.transaction(() => {
+    const applied = applyPreparedFlagsInTransaction(db, prepared, operationQueue, agentMailEvents, {
+      // One bounded STORE per push row instead of one enormous command per
+      // account; the per-account FIFO chain keeps the slices in order.
+      maxEntriesPerPushRow: FLAGS_PUSH_ROW_ENTRY_LIMIT,
+    });
+    changedIds = applied.changedIds;
+    starters = applied.starters;
+    db.prepare(`
+      INSERT INTO batch_jobs (id, parent_id, kind, patch_json, status, total, updated, failed, created_at, completed_at, undone, undo_window_ms)
+      VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, NULL, 0, ?)
+    `).run(id, params.parentId ?? null, params.kind, JSON.stringify(params.patch), params.ids.length, changedIds.length, failed, createdAt, BATCH_JOB_UNDO_WINDOW_MS);
+    const insertSelection = db.prepare("INSERT INTO batch_job_messages (job_id, message_id, changed) VALUES (?, ?, ?)");
+    const changedSet = new Set(changedIds);
+    for (const messageId of params.ids) {
+      insertSelection.run(id, messageId, changedSet.has(messageId) ? 1 : 0);
+    }
+  })();
+  for (const starter of starters) starter();
+  flagJobHandles.set(id, deps.db);
+  const row = db.prepare("SELECT * FROM batch_jobs WHERE id = ?").get(id) as BatchJobDbRow;
+  return snapshotFromDbRow(deps.db, row);
+}
+
+/**
+ * Progress projection of a durable flags job, read from live state: the
+ * push markers and the queue rows decide how much of the fixed selection has
+ * converged. When nothing is syncing anymore the job settles — the terminal
+ * status and the folded failure count are persisted lazily on the first
+ * observation, so a job that converges while nobody polls still settles
+ * correctly on the next read and its undo window starts there.
+ */
+function snapshotFromDbRow(db: DatabaseHandle, row: BatchJobDbRow): BatchJobSnapshot {
+  const base = {
+    id: row.id,
+    kind: row.kind,
+    total: row.total,
+    updated: row.updated,
+    createdAt: row.created_at,
+    undoWindowMs: row.undo_window_ms,
+    ...(row.undone ? { undone: true } : {}),
+    ...(row.error ? { error: row.error } : {}),
+  };
+  if (row.status !== "running") {
+    return { ...base, status: row.status, done: row.total, failed: row.failed };
+  }
+  const counts = db.prepare(FLAGS_JOB_PROJECTION_SQL).get(row.id) as { changed: number; marked: number; syncing: number; failed_pushes: number };
+  const failed = row.failed + counts.failed_pushes;
+  if (counts.syncing === 0) {
+    const completedAt = Date.now();
+    db.prepare("UPDATE batch_jobs SET status = 'completed', failed = ?, completed_at = ? WHERE id = ? AND status = 'running'").run(failed, completedAt, row.id);
+    return { ...base, status: "completed", done: row.total, failed };
+  }
+  return { ...base, status: "running", done: row.total - counts.syncing, failed };
+}
+
 function enqueue(run: () => Promise<void>): void {
   queueTail = queueTail.then(run, run);
 }
@@ -278,9 +445,26 @@ function toSnapshot(job: BatchJobRecord): BatchJobSnapshot {
   };
 }
 
+/**
+ * Handles of the databases that own the durable flags jobs, keyed by job id.
+ * The snapshot API is job-id-only (the renderer's poll and the audit scripts
+ * hold no handle), and the runtime is single-database — the registry just
+ * lets the poll resolve the right handle. Entries live as long as their job
+ * rows and are dropped with them by {@link pruneFlagsJobs}.
+ */
+const flagJobHandles = new Map<string, DatabaseHandle>();
+
 export function getBatchJobSnapshot(jobId: string): BatchJobSnapshot | null {
   const job = jobs.get(jobId);
-  return job ? toSnapshot(job) : null;
+  if (job) return toSnapshot(job);
+  const db = flagJobHandles.get(jobId);
+  if (!db) return null;
+  const row = jobDbRow(db, jobId);
+  return row ? snapshotFromDbRow(db, row) : null;
+}
+
+function jobDbRow(db: DatabaseHandle, jobId: string): BatchJobDbRow | undefined {
+  return db.prepare("SELECT * FROM batch_jobs WHERE id = ?").get(jobId) as BatchJobDbRow | undefined;
 }
 
 /** Returns every message id matching the view filters, newest first. */
@@ -294,6 +478,15 @@ function resolveMessageIds(db: DatabaseHandle, query: MessageListFilterQuery): s
 
 export function createBatchJob(request: BatchJobCreateRequest, deps: BatchJobDeps): BatchJobSnapshot {
   pruneJobs();
+  if (request.kind === "flags") {
+    pruneFlagsJobs(deps.db);
+    // Local-first: the fixed selection, the metadata commit, the folder
+    // counters, the durable push rows and the job record land in ONE
+    // transaction, and the response carries the actually-changed counts. The
+    // background FIFO does the rest; GET projects progress from live state.
+    const ids = resolveMessageIds(deps.db, request.query);
+    return acceptFlagsJob(deps, { kind: "flags", patch: request.patch, ids });
+  }
   const record: BatchJobRecord = {
     id: randomUUID(),
     kind: request.kind,
@@ -303,7 +496,8 @@ export function createBatchJob(request: BatchJobCreateRequest, deps: BatchJobDep
     updated: 0,
     failed: 0,
     createdAt: Date.now(),
-    ...(request.kind === "flags" ? { patch: request.patch, query: request.query } : { target: request.target, query: request.query }),
+    target: request.target,
+    query: request.query,
     changedIds: [],
     undoEntries: [],
     undone: false,
@@ -319,17 +513,7 @@ async function runJob(record: BatchJobRecord, deps: BatchJobDeps): Promise<void>
   try {
     const ids = resolveMessageIds(deps.db, record.query);
     record.total = ids.length;
-    if (record.kind === "flags" && record.patch) {
-      const { db, masterKey, oauthService, agentMailEvents } = deps;
-      for (let offset = 0; offset < ids.length; offset += FLAGS_CHUNK_SIZE) {
-        const chunk = ids.slice(offset, offset + FLAGS_CHUNK_SIZE);
-        const result = await updateMessageFlagsBatch(db, masterKey, chunk, record.patch, oauthService, agentMailEvents);
-        record.updated += result.updated;
-        record.failed += result.failed;
-        record.changedIds.push(...result.changedIds);
-        record.done += chunk.length;
-      }
-    } else if (record.kind === "move" && record.target) {
+    if (record.kind === "move" && record.target) {
       // Snapshot every origin mailbox up front so undo can restore it. The
       // lookup is chunked because the selection is unbounded (see
       // ORIGIN_LOOKUP_CHUNK_SIZE); merging the chunks into one map keeps the
@@ -389,12 +573,39 @@ export type BatchJobUndoOutcome = {
 };
 
 /**
- * Reverses a completed job within its undo window. Flags are flipped back on
- * exactly the ids that actually changed (per-record changedIds), moves are
- * sent back to their original mailbox. The reverse runs as its own queued job
- * so the store is never mutated twice concurrently.
+ * Reverses a completed job within its undo window. A durable flags job's
+ * undo scope is its `changed` selection rows — it survives a restart, unlike
+ * the in-memory move scope. The reverse is itself a local-first job (same
+ * commit shape, same FIFO chain) tracked as a new undo record, so the store
+ * is never mutated twice concurrently and the undo is pollable to completion.
+ * Moves still undo from the in-memory registry with their original mailboxes.
  */
 export function undoBatchJob(jobId: string, deps: BatchJobDeps): BatchJobUndoOutcome {
+  const parentRow = jobDbRow(deps.db, jobId);
+  if (parentRow) return undoFlagsJob(parentRow, deps);
+  return undoMoveJob(jobId, deps);
+}
+
+function undoFlagsJob(parent: BatchJobDbRow, deps: BatchJobDeps): BatchJobUndoOutcome {
+  if (parent.status !== "completed") return { ok: false, reason: "not_completed" };
+  if (parent.undone) return { ok: false, reason: "already_undone" };
+  // Count from completion, not creation: a long-running job that finishes
+  // after several minutes must still expose its full undo window.
+  if (Date.now() - (parent.completed_at ?? parent.created_at) > parent.undo_window_ms) return { ok: false, reason: "expired" };
+  const patch = JSON.parse(parent.patch_json ?? "{}") as MessageFlagsPatch;
+  const reverse: MessageFlagsPatch = {};
+  if (patch.seen !== undefined) reverse.seen = !patch.seen;
+  if (patch.flagged !== undefined) reverse.flagged = !patch.flagged;
+  const changedIds = deps.db
+    .prepare("SELECT message_id FROM batch_job_messages WHERE job_id = ? AND changed = 1 ORDER BY rowid")
+    .pluck()
+    .all(parent.id) as string[];
+  deps.db.prepare("UPDATE batch_jobs SET undone = 1 WHERE id = ?").run(parent.id);
+  const undoJob = acceptFlagsJob(deps, { kind: "undo", parentId: parent.id, patch: reverse, ids: changedIds });
+  return { ok: true, started: true, jobId: undoJob.id };
+}
+
+function undoMoveJob(jobId: string, deps: BatchJobDeps): BatchJobUndoOutcome {
   const parent = jobs.get(jobId);
   if (!parent) return { ok: false, reason: "not_found" };
   if (parent.status !== "completed") return { ok: false, reason: "not_completed" };
@@ -409,13 +620,13 @@ export function undoBatchJob(jobId: string, deps: BatchJobDeps): BatchJobUndoOut
     parentId: parent.id,
     kind: "undo",
     status: "running",
-    total: parent.kind === "flags" ? parent.changedIds.length : parent.undoEntries.length,
+    total: parent.undoEntries.length,
     done: 0,
     updated: 0,
     failed: 0,
     createdAt: Date.now(),
-    changedIds: parent.kind === "flags" ? [...parent.changedIds] : [],
-    undoEntries: parent.kind === "move" ? [...parent.undoEntries] : [],
+    changedIds: [],
+    undoEntries: [...parent.undoEntries],
     undone: false,
     undoWindowMs: BATCH_JOB_UNDO_WINDOW_MS,
   };
@@ -426,20 +637,7 @@ export function undoBatchJob(jobId: string, deps: BatchJobDeps): BatchJobUndoOut
 
 async function runUndo(record: BatchJobRecord, parent: BatchJobRecord, deps: BatchJobDeps): Promise<void> {
   try {
-    if (parent.kind === "flags") {
-      const reverse: MessageFlagsPatch = {};
-      if (parent.patch?.seen !== undefined) reverse.seen = !parent.patch.seen;
-      if (parent.patch?.flagged !== undefined) reverse.flagged = !parent.patch.flagged;
-      if (Object.keys(reverse).length) {
-        for (let offset = 0; offset < record.changedIds.length; offset += FLAGS_CHUNK_SIZE) {
-          const chunk = record.changedIds.slice(offset, offset + FLAGS_CHUNK_SIZE);
-          const result = await updateMessageFlagsBatch(deps.db, deps.masterKey, chunk, reverse, deps.oauthService, deps.agentMailEvents);
-          record.updated += result.updated;
-          record.failed += result.failed;
-          record.done += chunk.length;
-        }
-      }
-    } else {
+    {
       // The job's destination folder guards the restore: a message that was
       // manually moved elsewhere after the job ran must not be dragged back
       // by the undo.

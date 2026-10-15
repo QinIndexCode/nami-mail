@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { RuntimeContext } from "../types.js";
+import type { createOperationQueue } from "../operation-queue.js";
 import { createBatchJob, getBatchJobSnapshot, undoBatchJob } from "../batch-jobs.js";
 import { validationMessage } from "../helpers.js";
 import { batchJobCreateSchema } from "../schemas.js";
@@ -8,6 +9,7 @@ import { ROUTE_ERROR_CODES, routeErrorCodeForStatus } from "./error-codes.js";
 export type BatchJobRouteDeps = {
   context: RuntimeContext;
   log: FastifyInstance["log"];
+  operationQueue: ReturnType<typeof createOperationQueue>;
 };
 
 export function registerBatchJobRoutes(app: FastifyInstance, deps: BatchJobRouteDeps): void {
@@ -21,6 +23,7 @@ export function registerBatchJobRoutes(app: FastifyInstance, deps: BatchJobRoute
       masterKey: context.masterKey,
       oauthService: context.oauthService,
       agentMailEvents: context.agentMailEvents,
+      operationQueue: deps.operationQueue,
     });
     // The job runs in the background; the renderer polls GET for progress.
     return { ok: true, jobId: job.id };
@@ -46,6 +49,7 @@ export function registerBatchJobRoutes(app: FastifyInstance, deps: BatchJobRoute
       masterKey: context.masterKey,
       oauthService: context.oauthService,
       agentMailEvents: context.agentMailEvents,
+      operationQueue: deps.operationQueue,
     });
     if (!outcome.ok) {
       const status = outcome.reason === "not_found" ? 404 : 409;

@@ -1497,7 +1497,7 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(JSON.parse(untouched)).toEqual(["\\Seen"]);
   });
 
-  it("counts every message as failed when the provider is unreachable", async () => {
+  it("keeps the local target when the provider is unreachable and reports accepted counts", async () => {
     imapClientForAccount.mockReturnValue(undefined as never);
     const { now, insertMessage } = seedJobAccount("job-dead");
     insertMessage.run("job-dead-1", "job-dead", "INBOX", 21, "Stuck", "Demo", "demo@example.com", "[]", now, "s", "s", "", "[]", 0, 10, now);
@@ -1510,12 +1510,18 @@ it("keeps an Agent stream running after the client closes its response", async (
     });
     const { jobId } = created.json();
 
-    const job = await waitForJob(jobId);
-    // Nothing reached the server, so nothing may be persisted or counted as
-    // "updated" — every message must surface as failed instead.
-    expect(job).toMatchObject({ status: "completed", total: 2, done: 2, updated: 0, failed: 2 });
-    const stale = (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("job-dead-1") as { flags_json: string }).flags_json;
-    expect(JSON.parse(stale)).toEqual([]);
+    // Local-first: the acceptance commit is the user's target state, so the
+    // counts are "accepted" (not provider-confirmed) and the cache keeps the
+    // choice while the background push retries against the dead provider.
+    // The push rows retry with real backoff (~90s to exhaustion), so the
+    // terminal settlement is covered deterministically in batch-jobs.test.ts;
+    // here the unreachable-provider contract is observable immediately.
+    const accepted = await app.inject({ method: "GET", url: `/api/batch-jobs/${jobId}` });
+    expect(accepted.json().job).toMatchObject({ status: "running", total: 2, done: 0, updated: 2, failed: 0 });
+    const local = (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("job-dead-1") as { flags_json: string }).flags_json;
+    expect(JSON.parse(local)).toContain("\\Seen");
+    const marked = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE pending_flags_push = 1").get() as { n: number };
+    expect(marked.n).toBe(2);
   });
 
   it("rejects malformed job payloads and unknown job ids", async () => {

@@ -3,6 +3,7 @@ import path from "node:path";
 import type Database from "better-sqlite3";
 import { loadDatabaseConstructor } from "./native-sqlite.js";
 import { MESSAGE_FTS_SCHEMA_SQL } from "./message-search.js";
+import { BATCH_JOB_SCHEMA_SQL } from "./batch-job-schema.js";
 import { MESSAGE_FLAG_INDEX_SQL } from "./message-flag-indexes.js";
 import { MESSAGE_LIST_ACCOUNT_INDEX_SQL, MESSAGE_LIST_GLOBAL_INDEX_SQL } from "./message-list-indexes.js";
 
@@ -411,6 +412,10 @@ CREATE INDEX IF NOT EXISTS idx_operation_queue_ready
   ON operation_queue(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_operation_queue_account
   ON operation_queue(account_id, status, created_at);
+
+-- Durable flags batch jobs and their fixed per-message selections. The DDL
+-- lives in batch-job-schema.ts, which carries the design rationale.
+${BATCH_JOB_SCHEMA_SQL}
 
 -- Full-text search over the decrypted message payload. The messages table keeps
 -- the encrypted envelope; this FTS5 table holds the plaintext searchable text

@@ -12,6 +12,9 @@ import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { createBatchJob, getBatchJobSnapshot, undoBatchJob } from "../src/batch-jobs.js";
 import { indexMessageFts } from "../src/message-search.js";
 import type { MessageListFilterQuery } from "../src/message-filters.js";
+import { createOperationQueue } from "../src/operation-queue.js";
+import { clearPendingFlagsMarkers, commitLocalFlags, pushFlagsRemote } from "../src/flags-outbox.js";
+import { AccountWriteSlotTimeoutError } from "../src/sync-locks.js";
 
 describe("batch jobs (predicate-scoped list operations)", () => {
   let db: DatabaseHandle;
@@ -29,6 +32,26 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     }),
     logout: vi.fn(async () => undefined),
   };
+
+  /**
+   * Mirrors app.ts's queue wiring: the flags-push executor plus the durable
+   * settlement hook that clears the per-message push markers. Without the
+   * hook a local-first job's markers would never clear and the job would
+   * never settle.
+   */
+  function jobDeps() {
+    const operationQueue = createOperationQueue(db, {
+      onOperationSettled: (kind, payload, rowId) => {
+        if (kind !== "flags-push") return;
+        const { entries } = payload as { entries?: Array<{ id: string }> };
+        if (Array.isArray(entries)) clearPendingFlagsMarkers(db, entries.map((entry) => entry.id), rowId);
+      },
+    });
+    operationQueue.registerRunner("flags-push", async (payload) => {
+      await pushFlagsRemote({ db, masterKey }, payload as { accountId: string; entries: never[] });
+    });
+    return { db, masterKey, oauthService: undefined as undefined, operationQueue };
+  }
 
   /** Waits until the queued job settles, then returns its snapshot. */
   async function waitForJob(jobId: string, status: "completed" | "failed" = "completed", attempts = 200) {
@@ -170,7 +193,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
   ];
 
   it("exposes progress numbers only — never the undo scope — on every snapshot", async () => {
-    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { db, masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { ...jobDeps() });
     // A job that is still running is the payload the 600ms poll loop re-reads
     // for minutes: it must already be free of the changed-id array.
     expect(Object.keys(created).sort()).toEqual(PROGRESS_KEYS);
@@ -186,7 +209,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
 
     // The undo scope is gone from the wire but intact in memory: the undo job
     // reverses exactly the three messages the flags job changed.
-    const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+    const undone = undoBatchJob(created.id, { ...jobDeps() });
     expect(undone.ok).toBe(true);
     const undoJob = await waitForJob(undone.jobId!);
     expect(Object.keys(undoJob).sort()).toEqual(PROGRESS_KEYS);
@@ -215,7 +238,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
       }
     })();
 
-    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: { folder: "INBOX" } }, { db, masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: { folder: "INBOX" } }, { ...jobDeps() });
     const done = await waitForJob(created.id);
 
     expect(done.total).toBe(COUNT + 3);
@@ -225,7 +248,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     expect(JSON.stringify(done).length).toBeLessThan(300);
 
     // Undo still reverses the whole scope, which is where the ids live now.
-    const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+    const undone = undoBatchJob(created.id, { ...jobDeps() });
     const undoJob = await waitForJob(undone.jobId!);
     expect(undoJob.updated).toBe(COUNT + 3);
   });
@@ -239,24 +262,24 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     let now = 1_700_000_000_000;
     const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
-      const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { db, masterKey, oauthService: undefined });
+      const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { ...jobDeps() });
       await waitForJob(created.id);
 
       // Inside the window: a create sweeps the Map but must not touch a scope
       // that undo can still read.
-      createBatchJob({ kind: "flags", patch: { flagged: true }, query: inboxQuery }, { db, masterKey, oauthService: undefined });
-      const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+      createBatchJob({ kind: "flags", patch: { flagged: true }, query: inboxQuery }, { ...jobDeps() });
+      const undone = undoBatchJob(created.id, { ...jobDeps() });
       expect(undone.ok).toBe(true);
       expect((await waitForJob(undone.jobId!)).updated).toBe(3);
 
       // Past the window: the same create-sweep runs, and the job is still
       // pollable but permanently un-undoable — exactly as before the sweep.
-      const expiring = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { db, masterKey, oauthService: undefined });
+      const expiring = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { ...jobDeps() });
       await waitForJob(expiring.id);
       now += 6 * 60_000;
-      createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { db, masterKey, oauthService: undefined });
+      createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { ...jobDeps() });
       expect(getBatchJobSnapshot(expiring.id)).toMatchObject({ status: "completed", updated: 3 });
-      expect(undoBatchJob(expiring.id, { db, masterKey, oauthService: undefined })).toEqual({ ok: false, reason: "expired" });
+      expect(undoBatchJob(expiring.id, { ...jobDeps() })).toEqual({ ok: false, reason: "expired" });
     } finally {
       dateSpy.mockRestore();
     }
@@ -266,24 +289,24 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     let now = 1_700_000_000_000;
     const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
-      const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { db, masterKey, oauthService: undefined });
+      const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { ...jobDeps() });
       await waitForJob(created.id);
       expect(getBatchJobSnapshot(created.id)).not.toBeNull();
 
       // Past the TTL, the next create sweeps it; a progress poll for a job the
       // server has forgotten is a 404, the same as an unknown id.
       now += 16 * 60_000;
-      const next = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { db, masterKey, oauthService: undefined });
+      const next = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { ...jobDeps() });
       expect(next.id).not.toBe(created.id);
       expect(getBatchJobSnapshot(created.id)).toBeNull();
-      expect(undoBatchJob(created.id, { db, masterKey, oauthService: undefined })).toEqual({ ok: false, reason: "not_found" });
+      expect(undoBatchJob(created.id, { ...jobDeps() })).toEqual({ ok: false, reason: "not_found" });
     } finally {
       dateSpy.mockRestore();
     }
   });
 
   it("moves a predicate selection with aggregated batch calls and restores it on undo", async () => {
-    const created = createBatchJob({ kind: "move", target: "trash", query: inboxQuery }, { db, masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "move", target: "trash", query: inboxQuery }, { ...jobDeps() });
     const done = await waitForJob(created.id);
 
     expect(done.status).toBe("completed");
@@ -299,7 +322,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     // The job's connection is handed back when the job settles.
     expect(client.logout).toHaveBeenCalledTimes(1);
 
-    const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+    const undone = undoBatchJob(created.id, { ...jobDeps() });
     expect(undone.ok).toBe(true);
     const undoJob = await waitForJob(undone.jobId!);
     expect(undoJob.updated).toBe(3);
@@ -310,7 +333,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
   });
 
   it("applies a flags job to the whole predicate scope and flips only changed ids on undo", async () => {
-    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { db, masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { ...jobDeps() });
     const done = await waitForJob(created.id);
 
     expect(done.status).toBe("completed");
@@ -320,7 +343,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
       expect(JSON.parse(row.flags_json)).toContain("\\Seen");
     }
 
-    const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+    const undone = undoBatchJob(created.id, { ...jobDeps() });
     expect(undone.ok).toBe(true);
     const undoJob = await waitForJob(undone.jobId!);
     expect(undoJob.updated).toBe(3);
@@ -355,7 +378,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
 
     const scoped = createBatchJob(
       { kind: "flags", patch: { flagged: true }, query: { q: "Quarterly" } },
-      { db, masterKey, oauthService: undefined },
+      { ...jobDeps() },
     );
     const scopedDone = await waitForJob(scoped.id);
     expect(scopedDone.status).toBe("completed");
@@ -367,7 +390,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
 
     const global = createBatchJob(
       { kind: "flags", patch: { seen: true }, query: { q: "Quarterly", scope: "all" } },
-      { db, masterKey, oauthService: undefined },
+      { ...jobDeps() },
     );
     const globalDone = await waitForJob(global.id);
     expect(globalDone.status).toBe("completed");
@@ -377,13 +400,13 @@ describe("batch jobs (predicate-scoped list operations)", () => {
 
     // The undo scope of the scoped job is exactly the one message it changed —
     // proven by the reverse, not by an id list in the progress payload.
-    const scopedUndo = undoBatchJob(scoped.id, { db, masterKey, oauthService: undefined });
+    const scopedUndo = undoBatchJob(scoped.id, { ...jobDeps() });
     expect(scopedUndo.ok).toBe(true);
     expect((await waitForJob(scopedUndo.jobId!)).updated).toBe(1);
     expect(flagsOf("global-inbox")).toEqual(["\\Seen"]);
     expect(flagsOf("global-projects")).toEqual(["\\Seen"]);
 
-    const globalUndo = undoBatchJob(global.id, { db, masterKey, oauthService: undefined });
+    const globalUndo = undoBatchJob(global.id, { ...jobDeps() });
     expect((await waitForJob(globalUndo.jobId!)).updated).toBe(2);
     expect(flagsOf("global-inbox")).toEqual([]);
     expect(flagsOf("global-projects")).toEqual([]);
@@ -415,26 +438,26 @@ describe("batch jobs (predicate-scoped list operations)", () => {
 
     const created = createBatchJob(
       { kind: "flags", patch: { seen: true }, query: { hasAttachments: true } },
-      { db, masterKey, oauthService: undefined },
+      { ...jobDeps() },
     );
     const done = await waitForJob(created.id);
     expect(done.status).toBe("completed");
     expect(done.updated).toBe(1);
     expect(db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("plain-projects")).toEqual({ flags_json: "[]" });
 
-    const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+    const undone = undoBatchJob(created.id, { ...jobDeps() });
     expect(undone.ok).toBe(true);
     const undoJob = await waitForJob(undone.jobId!);
     expect(undoJob.updated).toBe(1);
   });
 
   it("leaves a message alone on undo when the user re-moved it after the job", async () => {
-    const created = createBatchJob({ kind: "move", target: "trash", query: inboxQuery }, { db, masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "move", target: "trash", query: inboxQuery }, { ...jobDeps() });
     await waitForJob(created.id);
     // The user manually re-moved message-2 to a label folder after the job.
     db.prepare("UPDATE messages SET mailbox = ? WHERE id = ?").run("Projects", "message-2");
 
-    const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+    const undone = undoBatchJob(created.id, { ...jobDeps() });
     expect(undone.ok).toBe(true);
     const undoJob = await waitForJob(undone.jobId!);
     expect(undoJob.updated).toBe(3);
@@ -453,7 +476,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
       .run("message-1", "message-2", "message-3");
     db.prepare("UPDATE folders SET total = 3 WHERE account_id = ? AND path = ?").run("account-1", "Trash");
 
-    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Trash" } }, { db, masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Trash" } }, { ...jobDeps() });
     const done = await waitForJob(created.id);
 
     expect(done.updated).toBe(3);
@@ -461,7 +484,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     expect(client.connect).not.toHaveBeenCalled();
     expect(client.messageMove).not.toHaveBeenCalled();
 
-    const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+    const undone = undoBatchJob(created.id, { ...jobDeps() });
     expect(undone.ok).toBe(true);
     const undoJob = await waitForJob(undone.jobId!);
     expect(undoJob.updated).toBe(3);
@@ -495,7 +518,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     })();
     const opened = trackOpenedClients();
 
-    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Projects" } }, { db, masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Projects" } }, { ...jobDeps() });
     const done = await waitForJob(created.id, "completed", 4000);
 
     expect(done.total).toBe(COUNT);
@@ -512,7 +535,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     // settled job never leaves a socket open.
     expect(opened[0]!.logout).toHaveBeenCalledTimes(1);
 
-    const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+    const undone = undoBatchJob(created.id, { ...jobDeps() });
     const undoJob = await waitForJob(undone.jobId!, "completed", 4000);
 
     // The undo keeps its per-message protocol — one MOVE per restored message,
@@ -547,12 +570,12 @@ describe("batch jobs (predicate-scoped list operations)", () => {
       if (index === 1) entry.messageMove.mockResolvedValue(null as never);
     });
 
-    const created = createBatchJob({ kind: "move", target: "trash", query: inboxQuery }, { db, masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "move", target: "trash", query: inboxQuery }, { ...jobDeps() });
     const done = await waitForJob(created.id);
     expect(done.updated).toBe(3);
     expect(opened).toHaveLength(1);
 
-    const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+    const undone = undoBatchJob(created.id, { ...jobDeps() });
     const undoJob = await waitForJob(undone.jobId!);
 
     // Accounting is per entry, unchanged: the refused one fails, the other two
@@ -608,7 +631,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
       return prepare(sql);
     });
 
-    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Projects" } }, { db, masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Projects" } }, { ...jobDeps() });
     const done = await waitForJob(created.id, "failed", 400);
 
     expect(done.status).toBe("failed");
@@ -687,7 +710,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
       });
     });
 
-    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Projects" } }, { db, masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Projects" } }, { ...jobDeps() });
     const done = await waitForJob(created.id, "completed", 2000);
 
     expect(done.total).toBe(COUNT);
@@ -702,7 +725,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
 
     // Undo still restores every origin mailbox, which is what the chunked
     // lookup exists for.
-    const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+    const undone = undoBatchJob(created.id, { ...jobDeps() });
     const undoJob = await waitForJob(undone.jobId!, "completed", 2000);
     expect(undoJob.updated).toBe(COUNT);
     expect(undoJob.failed).toBe(0);
@@ -772,7 +795,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
       return compile(sql);
     });
 
-    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Projects" } }, { db, masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Projects" } }, { ...jobDeps() });
     const done = await waitForJob(created.id, "completed", 2000);
 
     expect(done.total).toBe(COUNT);
@@ -806,10 +829,13 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     const originSnapshot = "SELECT id, mailbox FROM messages WHERE id IN (";
     expect([...bySql].filter(([sql, count]) => count > 1 && !sql.startsWith(originSnapshot))).toEqual([]);
     // The whole job: scope query, two snapshot widths, the row lookup, the two
-    // per-group reads and the six move statements — 13 prepares for 2500 rows.
+    // per-group reads and the six move statements — 13 prepares for 2500 rows
+    // — plus the 5 statements createOperationQueue compiles once at
+    // construction (insert/markRunning/markSettled/prune/pending scan), a
+    // fixed cost of the deps the flags unification threads through every job.
     // A per-group regression in either of the two per-group readers puts this
     // back at 61; a per-message one puts it above 15 000.
-    expect(compiled).toBe(13);
+    expect(compiled).toBe(18);
   });
 
   it("moves a selection larger than the SQLite variable ceiling", { timeout: 30_000 }, async () => {
@@ -845,7 +871,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
       FROM seq
     `).run(COUNT, now, now);
 
-    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Projects" } }, { db: memoizingDb(db), masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Projects" } }, { ...jobDeps(), db: memoizingDb(db) });
     const done = await waitForJob(created.id, "completed", 20_000);
 
     // Read back through the raw handle: the ids really were resolved from 40 000
@@ -859,6 +885,63 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE mailbox = 'Trash'").get()).toEqual({ count: COUNT });
   });
 
+  it("commits the fixed selection local-first before any provider round trip", async () => {
+    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, jobDeps());
+    // No IMAP call has happened yet, but the local cache, the folder counter,
+    // the durable push rows and the fixed selection are already committed.
+    expect(client.messageFlagsAdd).not.toHaveBeenCalled();
+    const local = db.prepare("SELECT flags_json FROM messages WHERE id = 'message-1'").get() as { flags_json: string };
+    expect(JSON.parse(local.flags_json)).toEqual(["\\Seen"]);
+    expect(created).toMatchObject({ status: "running", total: 3, updated: 3, failed: 0, done: 0 });
+    const staged = db.prepare("SELECT COUNT(*) AS n FROM operation_queue WHERE kind = 'flags-push' AND status IN ('pending', 'running')").get() as { n: number };
+    expect(staged.n).toBeGreaterThan(0);
+    // The background FIFO then converges the provider and the projection
+    // settles the job.
+    const done = await waitForJob(created.id);
+    expect(done).toMatchObject({ status: "completed", total: 3, done: 3, updated: 3, failed: 0 });
+  });
+
+  it("an explicit commit after a predicate job wins locally and remotely", async () => {
+    // Pause the job's first push mid-STORE, commit the reverse explicitly,
+    // then release: the newer intent must survive the older job's completion.
+    let releaseStore: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { releaseStore = resolve; });
+    client.messageFlagsAdd.mockImplementationOnce(async () => { await gate; });
+    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, jobDeps());
+    await vi.waitFor(() => expect(client.messageFlagsAdd).toHaveBeenCalled());
+    const deps = jobDeps();
+    const outcome = commitLocalFlags(db, ["message-1", "message-2", "message-3"], { seen: false }, deps.operationQueue);
+    expect(outcome).toMatchObject({ updated: 3, failed: 0 });
+    releaseStore();
+    await waitForJob(created.id);
+    await vi.waitFor(() => {
+      const pending = db.prepare("SELECT COUNT(*) AS n FROM operation_queue WHERE status IN ('pending', 'running')").get() as { n: number };
+      expect(pending.n).toBe(0);
+    });
+    const local = db.prepare("SELECT flags_json FROM messages WHERE id = 'message-1'").get() as { flags_json: string };
+    expect(JSON.parse(local.flags_json), "the last acknowledged request was mark-unread").toEqual([]);
+    const marked = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE pending_flags_push = 1").get() as { n: number };
+    expect(marked.n).toBe(0);
+  });
+
+  it("settles a flags job as failed when its pushes exhaust retries", async () => {
+    const deps = jobDeps();
+    deps.operationQueue.registerRunner("flags-push", async () => {
+      // Terminal by queue contract: a saturated write slot is never retried,
+      // so the eight-attempt backoff cycle collapses to one attempt and the
+      // settlement hook clears the markers for good.
+      throw new AccountWriteSlotTimeoutError("account-1");
+    });
+    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, deps);
+    const done = await waitForJob(created.id);
+    expect(done).toMatchObject({ status: "completed", total: 3, done: 3, updated: 3, failed: 3 });
+    const markers = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE pending_flags_push = 1").get() as { n: number };
+    expect(markers.n).toBe(0);
+    // The user's target stays in the cache for the next successful push.
+    const local = db.prepare("SELECT flags_json FROM messages WHERE id = 'message-1'").get() as { flags_json: string };
+    expect(JSON.parse(local.flags_json)).toEqual(["\\Seen"]);
+  });
+
   it("opens the undo window when the job completes, not when it was created", async () => {    let now = 1_700_000_000_000;
     const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
     // Hold the first STORE open so the job spans longer than the undo window
@@ -867,7 +950,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     const gate = new Promise<void>((resolve) => { releaseStore = resolve; });
     client.messageFlagsAdd.mockImplementationOnce(async () => { await gate; });
 
-    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { db, masterKey, oauthService: undefined });
+    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { ...jobDeps() });
     // Let the job start and block on the STORE gate, then let more than the
     // undo window pass before it finishes.
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -877,15 +960,15 @@ describe("batch jobs (predicate-scoped list operations)", () => {
 
     // Undo is still within the window measured from completion (0 minutes),
     // even though the job outlived the window measured from creation.
-    const undone = undoBatchJob(created.id, { db, masterKey, oauthService: undefined });
+    const undone = undoBatchJob(created.id, { ...jobDeps() });
     expect(undone.ok).toBe(true);
     await waitForJob(undone.jobId!);
     // A second job completes right away; once the window since ITS completion
     // passes, undo must expire.
-    const after = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { db, masterKey, oauthService: undefined });
+    const after = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { ...jobDeps() });
     await waitForJob(after.id);
     now += 6 * 60_000;
-    expect(undoBatchJob(after.id, { db, masterKey, oauthService: undefined })).toEqual({ ok: false, reason: "expired" });
+    expect(undoBatchJob(after.id, { ...jobDeps() })).toEqual({ ok: false, reason: "expired" });
     dateSpy.mockRestore();
   });
 });

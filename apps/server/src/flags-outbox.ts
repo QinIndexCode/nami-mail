@@ -55,35 +55,50 @@ type PendingRow = {
   pending_move_state: string | null;
 };
 
+export type PreparedFlagsChange = {
+  message: PendingRow;
+  nextFlags: string[];
+  add: string[];
+  remove: string[];
+  seenChanged: boolean;
+};
+
+export type PreparedFlagsPatch = {
+  prepared: PreparedFlagsChange[];
+  blocked: string[];
+};
+
 /**
- * Applies the patch to the local cache and queues the remote push. Throws
- * "Message not found." when none of the ids exist (the single-message route
- * maps that to its 404/422 contract); messages that are move-blocked count as
- * failed, mirroring the synchronous path's per-message semantics.
+ * Reads the rows and diffs the patch against the current cache — no writes.
+ * Shared by every local-first flags entry point so all of them prepare the
+ * exact same delta shape. The read is chunked because a predicate selection
+ * has no id cap and one IN (...) list would hit the driver's per-statement
+ * variable ceiling (measured at 32 766 in this codebase).
  */
-export function commitLocalFlags(
+export function prepareLocalFlags(
   db: DatabaseHandle,
   messageIds: readonly string[],
   patch: MessageFlagsPatch,
-  operationQueue: OperationQueue,
-  agentEvents?: AgentMailEventSink,
-): LocalFlagsCommit {
-  if (!messageIds.length || !Object.keys(patch).length) return { updated: 0, failed: 0, changedIds: [] };
-  const placeholders = messageIds.map(() => "?").join(", ");
-  const rows = db
-    .prepare(`SELECT id, account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id IN (${placeholders})`)
-    .all(...messageIds) as PendingRow[];
+): PreparedFlagsPatch {
+  if (!messageIds.length || !Object.keys(patch).length) return { prepared: [], blocked: [] };
+  const readChunkSize = 10_000;
+  const rowsById = new Map<string, PendingRow>();
+  for (let offset = 0; offset < messageIds.length; offset += readChunkSize) {
+    const chunk = messageIds.slice(offset, offset + readChunkSize);
+    const rows = db
+      .prepare(`SELECT id, account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id IN (${chunk.map(() => "?").join(", ")})`)
+      .all(...chunk) as PendingRow[];
+    for (const row of rows) rowsById.set(row.id, row);
+  }
 
-  type PreparedMessage = {
-    message: PendingRow;
-    nextFlags: string[];
-    add: string[];
-    remove: string[];
-    seenChanged: boolean;
-  };
-  const prepared: PreparedMessage[] = [];
+  const prepared: PreparedFlagsChange[] = [];
   const blocked: string[] = [];
-  for (const message of rows) {
+  const visited = new Set<string>();
+  for (const id of messageIds) {
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const message = rowsById.get(id);
+    if (!message) continue;
     if (moveActionBlockedError(message)) {
       blocked.push(message.id);
       continue;
@@ -105,11 +120,44 @@ export function commitLocalFlags(
     }
     prepared.push({ message, nextFlags: [...nextFlags], add, remove, seenChanged: currentFlags.has("\\Seen") !== nextFlags.has("\\Seen") });
   }
+  return { prepared, blocked };
+}
 
+export type AppliedFlagsCommit = {
+  changedIds: string[];
+  /**
+   * Starters that join the staged `flags-push` rows to their per-account FIFO
+   * chains. MUST be called only after the enclosing transaction commits — the
+   * rows are not readable before that.
+   */
+  starters: Array<() => void>;
+};
+
+/**
+ * The transaction-body half of a local-first flags commit: per-message
+ * `flags_json`/marker writes, folder unread accounting, agent events, and the
+ * durable per-account `flags-push` rows. Runs inside the caller's transaction
+ * (commitLocalFlags opens its own; the batch-job materializer runs inside the
+ * acceptance transaction so job, selection, and metadata commit as one).
+ *
+ * `maxEntriesPerPushRow` splits an account's delta across several FIFO rows
+ * (each carrying at most that many entries). A predicate selection is
+ * unbounded, and one row with tens of thousands of entries would turn into
+ * one enormous STORE command and one enormous payload for every later
+ * settlement scan; chunked rows keep each push bounded and the per-account
+ * FIFO chain composes the slices in order.
+ */
+export function applyPreparedFlagsInTransaction(
+  db: DatabaseHandle,
+  prepared: readonly PreparedFlagsChange[],
+  operationQueue: OperationQueue,
+  agentEvents?: AgentMailEventSink,
+  options: { maxEntriesPerPushRow?: number } = {},
+): AppliedFlagsCommit {
   const changedIds: string[] = [];
-  // One durable push row per account. Entries carry the delta against the
-  // remote-confirmed flags (the pre-patch local cache), so ordered execution
-  // composes consecutive user toggles to the latest local state.
+  // Entries carry the delta against the remote-confirmed flags (the
+  // pre-patch local cache), so ordered execution composes consecutive user
+  // toggles to the latest local state.
   const entriesByAccount = new Map<string, Array<{ id: string; mailbox: string; uid: number; add: string[]; remove: string[] }>>();
   for (const item of prepared) {
     if (!item.add.length && !item.remove.length) continue;
@@ -125,50 +173,74 @@ export function commitLocalFlags(
   // sync skip this message's flags forever, so the two must commit or roll
   // back as one unit. The FIFO chain is only joined after the commit, because
   // the row is not readable before it.
-  const startPushes: Array<() => void> = [];
-  db.transaction(() => {
-    for (const item of prepared) {
-      const { message } = item;
-      if (!item.add.length && !item.remove.length) continue;
-      db.prepare("UPDATE messages SET flags_json = ?, pending_flags_push = 1 WHERE id = ?")
-        .run(JSON.stringify(item.nextFlags), message.id);
-      changedIds.push(message.id);
-      if (item.seenChanged) {
-        db.prepare(`
-          UPDATE folders
-          SET unseen = CASE
-            WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
-            ELSE unseen + 1
-          END
-          WHERE account_id = ? AND path = ?
-        `).run(item.nextFlags.includes("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
-      }
-      if (agentEvents) {
-        const lease = leases.get(message.account_id) ?? agentEvents.acquireLease(message.account_id);
-        leases.set(message.account_id, lease);
-        if (lease) {
-          agentEvents.messageUpsertedWithinTransaction(lease, message.id, {
-            mailbox: message.mailbox,
-            uid: message.uid,
-            remoteIdLookup: message.remote_id_lookup,
-            flags: [...item.nextFlags].sort(),
-            pendingMoveDestination: message.pending_move_destination,
-            pendingMoveState: message.pending_move_state,
-          });
-        }
+  const starters: Array<() => void> = [];
+  for (const item of prepared) {
+    const { message } = item;
+    if (!item.add.length && !item.remove.length) continue;
+    db.prepare("UPDATE messages SET flags_json = ?, pending_flags_push = 1 WHERE id = ?")
+      .run(JSON.stringify(item.nextFlags), message.id);
+    changedIds.push(message.id);
+    if (item.seenChanged) {
+      db.prepare(`
+        UPDATE folders
+        SET unseen = CASE
+          WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
+          ELSE unseen + 1
+        END
+        WHERE account_id = ? AND path = ?
+      `).run(item.nextFlags.includes("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
+    }
+    if (agentEvents) {
+      const lease = leases.get(message.account_id) ?? agentEvents.acquireLease(message.account_id);
+      leases.set(message.account_id, lease);
+      if (lease) {
+        agentEvents.messageUpsertedWithinTransaction(lease, message.id, {
+          mailbox: message.mailbox,
+          uid: message.uid,
+          remoteIdLookup: message.remote_id_lookup,
+          flags: [...item.nextFlags].sort(),
+          pendingMoveDestination: message.pending_move_destination,
+          pendingMoveState: message.pending_move_state,
+        });
       }
     }
-    for (const [accountId, entries] of entriesByAccount) {
-      startPushes.push(operationQueue.stageBackgroundInTransaction([accountId], "flags-push", { accountId, entries }));
+  }
+  for (const [accountId, entries] of entriesByAccount) {
+    const limit = options.maxEntriesPerPushRow;
+    const rowSize = limit && limit > 0 ? limit : entries.length;
+    for (let offset = 0; offset < entries.length; offset += rowSize) {
+      const slice = entries.slice(offset, offset + rowSize);
+      starters.push(operationQueue.stageBackgroundInTransaction([accountId], "flags-push", { accountId, entries: slice }));
     }
-  })();
-  for (const startPush of startPushes) startPush();
+  }
+  return { changedIds, starters };
+}
 
-  const failed = blocked.length + (messageIds.length - rows.length);
-  const changedSet = new Set(changedIds);
+/**
+ * Applies the patch to the local cache and queues the remote push. Throws
+ * "Message not found." when none of the ids exist (the single-message route
+ * maps that to its 404/422 contract); messages that are move-blocked count as
+ * failed, mirroring the synchronous path's per-message semantics.
+ */
+export function commitLocalFlags(
+  db: DatabaseHandle,
+  messageIds: readonly string[],
+  patch: MessageFlagsPatch,
+  operationQueue: OperationQueue,
+  agentEvents?: AgentMailEventSink,
+): LocalFlagsCommit {
+  if (!messageIds.length || !Object.keys(patch).length) return { updated: 0, failed: 0, changedIds: [] };
+  const { prepared, blocked } = prepareLocalFlags(db, messageIds, patch);
+  const applied = db.transaction(() => applyPreparedFlagsInTransaction(db, prepared, operationQueue, agentEvents))();
+  for (const startPush of applied.starters) startPush();
+
+  const changedSet = new Set(applied.changedIds);
   return {
-    updated: rows.length - blocked.length,
-    failed,
+    updated: prepared.length - blocked.length,
+    // blocked + missing: every input id that is not a found, unblocked row
+    // (rows are deduplicated by the IN read, so duplicates count as missing),
+    // matching the original per-row accounting.
+    failed: messageIds.length - prepared.length,
     changedIds: messageIds.filter((id) => changedSet.has(id)),
   };
 }

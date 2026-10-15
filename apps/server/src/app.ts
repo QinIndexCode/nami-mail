@@ -508,7 +508,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
 
   registerBackupRoutes(app, { context, log: app.log });
 
-  registerBatchJobRoutes(app, { context, log: app.log });
+  registerBatchJobRoutes(app, { context, log: app.log, operationQueue });
   notePhase("build:register-remaining-routes");
 
   app.get("/api/stats", async () => {
