@@ -1,3 +1,17 @@
+## [0.5.1] - 2026-10-15
+
+### 修复
+
+- **Windows 重启并更新静默退出缺陷（Node.js Issue #51018）**：
+  - 彻底重构更新器后台 PowerShell 启动机制：解决原 Node.js `spawn` 传递 `detached: true` 导致 Win32 `DETACHED_PROCESS` 使 CUI 控制台初始化失败闪退的严重缺陷；
+  - 改用 Windows 系统内置命令 `cmd.exe /d /s /c start "" powershell.exe -WindowStyle Hidden ...`，在独立且完整的会话中拉起后台更新与安装进程，不受父进程退出影响。
+- **补齐 NSIS 原地覆盖升级参数**：
+  - 安装器执行参数显式补齐 `@('/S', '--updated')`，严格对齐 `installer.nsh` 的静默升级逻辑，杜绝误触发运行冲突确认弹窗，并防止覆盖升级时误抹除或重置用户的自定义安装路径。
+- **修正重启工作目录漂移**：
+  - 更新完成自启动新版本主程序时，显式指定 `-WorkingDirectory (Split-Path -Parent $CurrentExecutablePath)`，防止因从 `cmd.exe` 启动而让新进程工作目录错误漂移为 `C:\Windows\System32`。
+- **增加更新失败缓存熔断与死循环保护**：
+  - 当启动检测发现记录的更新未成功改变运行版本时，主动清理损坏或未应用的更新包缓存，彻底杜绝重启后无限弹出“重启并更新”提示。
+
 ## [0.5.0] - 2026-10-13
 
 ### 新增

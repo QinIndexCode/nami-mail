@@ -1,3 +1,17 @@
+## [0.5.1] - 2026-10-15
+
+### Fixed
+
+- **Windows Restart-and-Update Silent Exit (Node.js Issue #51018)**:
+  - Re-architected updater background PowerShell launcher: avoided Node.js `spawn` with `detached: true`, which passes Win32 `DETACHED_PROCESS` and causes CUI console applications like PowerShell to fail ConHost initialization and exit silently with code 0 before running script logic;
+  - Replaced with Windows system shell `cmd.exe /d /s /c start "" powershell.exe -WindowStyle Hidden ...`, ensuring the update helper runs in an independent console session detached from the exiting Electron parent.
+- **Added NSIS In-Place Upgrade Arguments (`--updated`)**:
+  - Installer execution parameters now explicitly include `@('/S', '--updated')`, strictly aligning with `installer.nsh` to prevent unexpected running-process dialog prompts and protect custom installation paths (e.g. non-default drives) from being reset.
+- **Fixed Working Directory Drift on Application Relaunch**:
+  - Relaunching Nami Mail after update completion now explicitly specifies `-WorkingDirectory (Split-Path -Parent $CurrentExecutablePath)`, preventing the new application process from inheriting `C:\Windows\System32` as its current working directory.
+- **Added Update Failure Cache Purge & Loop Circuit-Breaker**:
+  - When startup detection finds that a recorded installation did not change the running version, the updater now purges the cached archive, permanently eliminating recursive "Restart and update" prompt dialogs.
+
 ## [0.5.0] - 2026-10-13
 
 ### Added

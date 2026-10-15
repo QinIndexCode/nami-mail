@@ -13,7 +13,7 @@ namimail version
 ```
 
 ```json
-{"name":"NamiMail","version":"0.5.0"}
+{"name":"NamiMail","version":"0.5.1"}
 ```
 
 ## Read-only queries

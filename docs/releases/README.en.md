@@ -4,6 +4,7 @@
 
 This directory contains reviewable, reusable GitHub Release bodies. Every release note should serve real users rather than copy build logs, CI output, or internal environment variables.
 
+- [v0.5.1](v0.5.1.en.md) is the critical patch release resolving Windows in-app updater process detachment, working directory drift, and in-place upgrade arguments.
 - [v0.5.0](v0.5.0.en.md) is the milestone release covering full-stack local calendar, multimodal models, design system UI overhaul, and streaming hardening.
 - [v0.4.3](v0.4.3.en.md) covers settings UI/UX overhaul, link sanitization & token reduction, context budget management, and auto-reply simulator.
 - [v0.4.2](v0.4.2.en.md) is the Windows custom install directory fix and BIMI brand avatar release.
