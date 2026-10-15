@@ -23,6 +23,7 @@ import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerOutboundAttachmentRoutes } from "./routes/outbound-attachments.js";
 import { registerBatchJobRoutes } from "./routes/batch-jobs.js";
 import { clearOrphanedPendingFlagsMarkers, clearPendingFlagsMarkers, pushFlagsRemote, type FlagsPushEntry } from "./flags-outbox.js";
+import { rebuildFlagsJobHandles } from "./batch-jobs.js";
 import {
   oauthProviderFor,
   providerInfo,
@@ -315,6 +316,10 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const push = payload as { accountId: string; entries: FlagsPushEntry[] };
     await pushFlagsRemote({ db: context.db, masterKey: context.masterKey, accessTokenProvider: context.oauthService }, push);
   });
+  // Re-register the durable flags jobs this database already carries, so a
+  // restart keeps them pollable instead of answering 404 while their undo
+  // scope stays queryable.
+  rebuildFlagsJobHandles(context.db);
   // Repair `pending_flags_push` markers that no queued push is behind before
   // the resumed queue starts: a marker only syncs ever clears again is a
   // message whose flags stop following the server for good. Runs against the

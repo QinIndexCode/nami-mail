@@ -9,7 +9,7 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 });
 
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import { createBatchJob, getBatchJobSnapshot, undoBatchJob } from "../src/batch-jobs.js";
+import { createBatchJob, getBatchJobSnapshot, rebuildFlagsJobHandles, undoBatchJob } from "../src/batch-jobs.js";
 import { indexMessageFts } from "../src/message-search.js";
 import type { MessageListFilterQuery } from "../src/message-filters.js";
 import { createOperationQueue } from "../src/operation-queue.js";
@@ -940,6 +940,22 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     // The user's target stays in the cache for the next successful push.
     const local = db.prepare("SELECT flags_json FROM messages WHERE id = 'message-1'").get() as { flags_json: string };
     expect(JSON.parse(local.flags_json)).toEqual(["\\Seen"]);
+  });
+
+  it("keeps durable jobs pollable and undoable after a restart", async () => {
+    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, jobDeps());
+    await waitForJob(created.id);
+    // Simulate the restart: a fresh in-memory registry over the same
+    // database. The durable rows survive; the pollable registry must be
+    // rebuildable from them.
+    rebuildFlagsJobHandles(db);
+    expect(getBatchJobSnapshot(created.id)).toMatchObject({ status: "completed", total: 3, updated: 3 });
+    const undone = undoBatchJob(created.id, jobDeps());
+    expect(undone).toMatchObject({ ok: true, started: true });
+    const undoJob = await waitForJob(undone.jobId!);
+    expect(undoJob).toMatchObject({ status: "completed", total: 3, updated: 3 });
+    const local = db.prepare("SELECT flags_json FROM messages WHERE id = 'message-1'").get() as { flags_json: string };
+    expect(JSON.parse(local.flags_json), "the undo reverses the recorded changed ids").toEqual([]);
   });
 
   it("opens the undo window when the job completes, not when it was created", async () => {    let now = 1_700_000_000_000;

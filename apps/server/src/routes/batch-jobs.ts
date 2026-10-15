@@ -14,17 +14,18 @@ export type BatchJobRouteDeps = {
 
 export function registerBatchJobRoutes(app: FastifyInstance, deps: BatchJobRouteDeps): void {
   const { context } = deps;
+  const jobDeps = {
+    db: context.db,
+    masterKey: context.masterKey,
+    oauthService: context.oauthService,
+    agentMailEvents: context.agentMailEvents,
+    operationQueue: deps.operationQueue,
+  };
 
   app.post("/api/batch-jobs", async (request, reply) => {
     const parsed = batchJobCreateSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
-    const job = createBatchJob(parsed.data, {
-      db: context.db,
-      masterKey: context.masterKey,
-      oauthService: context.oauthService,
-      agentMailEvents: context.agentMailEvents,
-      operationQueue: deps.operationQueue,
-    });
+    const job = createBatchJob(parsed.data, jobDeps);
     // The job runs in the background; the renderer polls GET for progress.
     return { ok: true, jobId: job.id };
   });
@@ -44,13 +45,7 @@ export function registerBatchJobRoutes(app: FastifyInstance, deps: BatchJobRoute
   });
 
   app.post<{ Params: { id: string } }>("/api/batch-jobs/:id/undo", async (request, reply) => {
-    const outcome = undoBatchJob(request.params.id, {
-      db: context.db,
-      masterKey: context.masterKey,
-      oauthService: context.oauthService,
-      agentMailEvents: context.agentMailEvents,
-      operationQueue: deps.operationQueue,
-    });
+    const outcome = undoBatchJob(request.params.id, jobDeps);
     if (!outcome.ok) {
       const status = outcome.reason === "not_found" ? 404 : 409;
       return reply.code(status).send({ ok: false, code: routeErrorCodeForStatus(status), jobId: request.params.id, reason: outcome.reason, message: "无法撤销该批量任务。" });

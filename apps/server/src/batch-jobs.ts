@@ -277,11 +277,34 @@ function pruneJobs(): void {
 /** The same TTL as the in-memory registry, applied to the durable flags jobs. */
 function pruneFlagsJobs(db: DatabaseHandle): void {
   const cutoff = Date.now() - BATCH_JOB_TTL_MS;
+  // A job nobody ever polls would stay 'running' forever and never reach the
+  // completed_at cutoff — project each expired running row once here (the
+  // projection settles it when its pushes have converged) so the TTL applies
+  // to every job, polled or not. A row still running past the TTL is wedged
+  // beyond the retries' ~90s budget and is evicted like its in-memory
+  // counterpart would be.
+  const staleRunning = db.prepare("SELECT id FROM batch_jobs WHERE status = 'running' AND created_at < ?").all(cutoff) as Array<{ id: string }>;
+  for (const { id } of staleRunning) {
+    const row = jobDbRow(db, id);
+    if (row) snapshotFromDbRow(db, row);
+  }
   const expired = db.prepare("SELECT id FROM batch_jobs WHERE completed_at IS NOT NULL AND completed_at < ?").all(cutoff) as Array<{ id: string }>;
   if (!expired.length) return;
   db.prepare("DELETE FROM batch_job_messages WHERE job_id IN (SELECT id FROM batch_jobs WHERE completed_at IS NOT NULL AND completed_at < ?)").run(cutoff);
   db.prepare("DELETE FROM batch_jobs WHERE completed_at IS NOT NULL AND completed_at < ?").run(cutoff);
   for (const { id } of expired) flagJobHandles.delete(id);
+}
+
+/**
+ * Re-registers every surviving durable flags job after a restart. The job-id
+ * registry is in-memory by necessity (the snapshot API takes no handle), but
+ * it must be REBUILDABLE — a restart may not turn a pollable job into a 404
+ * while its undo scope stays queryable, which would contradict the
+ * registry's whole reason to exist.
+ */
+export function rebuildFlagsJobHandles(db: DatabaseHandle): void {
+  const rows = db.prepare("SELECT id FROM batch_jobs").all() as Array<{ id: string }>;
+  for (const { id } of rows) flagJobHandles.set(id, db);
 }
 
 type BatchJobDbRow = {
@@ -360,6 +383,8 @@ function acceptFlagsJob(
     parentId?: string;
     patch: MessageFlagsPatch;
     ids: readonly string[];
+    /** Marks the parent job undone inside the SAME transaction (undo path). */
+    alsoMarkUndone?: string;
   },
 ): BatchJobSnapshot {
   const { db, operationQueue, agentMailEvents } = deps;
@@ -385,6 +410,9 @@ function acceptFlagsJob(
     const changedSet = new Set(changedIds);
     for (const messageId of params.ids) {
       insertSelection.run(id, messageId, changedSet.has(messageId) ? 1 : 0);
+    }
+    if (params.alsoMarkUndone) {
+      db.prepare("UPDATE batch_jobs SET undone = 1 WHERE id = ?").run(params.alsoMarkUndone);
     }
   })();
   for (const starter of starters) starter();
@@ -587,11 +615,8 @@ export function undoBatchJob(jobId: string, deps: BatchJobDeps): BatchJobUndoOut
 }
 
 function undoFlagsJob(parent: BatchJobDbRow, deps: BatchJobDeps): BatchJobUndoOutcome {
-  if (parent.status !== "completed") return { ok: false, reason: "not_completed" };
-  if (parent.undone) return { ok: false, reason: "already_undone" };
-  // Count from completion, not creation: a long-running job that finishes
-  // after several minutes must still expose its full undo window.
-  if (Date.now() - (parent.completed_at ?? parent.created_at) > parent.undo_window_ms) return { ok: false, reason: "expired" };
+  const guard = undoGuard(parent.status, Boolean(parent.undone), parent.completed_at, parent.undo_window_ms);
+  if (guard) return guard;
   const patch = JSON.parse(parent.patch_json ?? "{}") as MessageFlagsPatch;
   const reverse: MessageFlagsPatch = {};
   if (patch.seen !== undefined) reverse.seen = !patch.seen;
@@ -600,19 +625,35 @@ function undoFlagsJob(parent: BatchJobDbRow, deps: BatchJobDeps): BatchJobUndoOu
     .prepare("SELECT message_id FROM batch_job_messages WHERE job_id = ? AND changed = 1 ORDER BY rowid")
     .pluck()
     .all(parent.id) as string[];
-  deps.db.prepare("UPDATE batch_jobs SET undone = 1 WHERE id = ?").run(parent.id);
-  const undoJob = acceptFlagsJob(deps, { kind: "undo", parentId: parent.id, patch: reverse, ids: changedIds });
+  // The undone mark commits inside the undo job's own transaction (see
+  // acceptFlagsJob's alsoMarkUndone): a crash between the two would consume
+  // the one undo without leaving the reverse job behind. The mark must NOT
+  // be wrapped in an outer transaction here — acceptFlagsJob joins its push
+  // rows to the FIFO chain after ITS commit, and an outer transaction would
+  // make the rows invisible to the chain.
+  const undoJob = acceptFlagsJob(deps, { kind: "undo", parentId: parent.id, patch: reverse, ids: changedIds, alsoMarkUndone: parent.id });
   return { ok: true, started: true, jobId: undoJob.id };
+}
+
+type UndoGuard = { ok: false; reason: "not_completed" | "already_undone" | "expired" };
+
+/** The one undo per job, within its window — shared by both job stores. */
+function undoGuard(status: string, undone: boolean, completedAt: number | null | undefined, undoWindowMs: number): UndoGuard | null {
+  if (status !== "completed") return { ok: false, reason: "not_completed" };
+  if (undone) return { ok: false, reason: "already_undone" };
+  // Count from completion, not creation: a long-running job that finishes
+  // after several minutes must still expose its full undo window. A completed
+  // row always carries its completion timestamp; the fallback only exists for
+  // the in-memory record type.
+  if (Date.now() - (completedAt ?? 0) > undoWindowMs) return { ok: false, reason: "expired" };
+  return null;
 }
 
 function undoMoveJob(jobId: string, deps: BatchJobDeps): BatchJobUndoOutcome {
   const parent = jobs.get(jobId);
   if (!parent) return { ok: false, reason: "not_found" };
-  if (parent.status !== "completed") return { ok: false, reason: "not_completed" };
-  if (parent.undone) return { ok: false, reason: "already_undone" };
-  // Count from completion, not creation: a long-running job that finishes
-  // after several minutes must still expose its full undo window.
-  if (Date.now() - (parent.completedAt ?? parent.createdAt) > parent.undoWindowMs) return { ok: false, reason: "expired" };
+  const guard = undoGuard(parent.status, parent.undone, parent.completedAt, parent.undoWindowMs);
+  if (guard) return guard;
   parent.undone = true;
 
   const record: BatchJobRecord = {
