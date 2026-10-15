@@ -18,7 +18,7 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 
 import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import { clearOrphanedPendingFlagsMarkers, clearPendingFlagsMarkers, commitLocalFlags } from "../src/flags-outbox.js";
+import { clearOrphanedPendingFlagsMarkers, clearPendingFlagsMarkers, commitLocalFlags, restoreFailedFlagsTargets } from "../src/flags-outbox.js";
 import { createOperationQueue } from "../src/operation-queue.js";
 import type { OperationQueue } from "../src/operation-queue.js";
 
@@ -72,6 +72,26 @@ function insertFlagsPushRow(
 function markerOf(db: DatabaseHandle, id: string): number | null {
   const row = db.prepare("SELECT pending_flags_push FROM messages WHERE id = ?").get(id) as { pending_flags_push: number | null };
   return row.pending_flags_push;
+}
+
+function unseenOf(db: DatabaseHandle, path: string): number {
+  const row = db.prepare("SELECT unseen FROM folders WHERE path = ?").get(path) as { unseen: number };
+  return row.unseen;
+}
+
+/**
+ * A queue that records nothing. Tests that drive the commit and rollback paths
+ * directly insert the rows they need by hand instead.
+ */
+function stubQueue(overrides: Partial<OperationQueue>): OperationQueue {
+  return {
+    registerRunner: () => undefined,
+    enqueueAndRun: async () => undefined as never,
+    enqueueBackground: () => undefined,
+    resumePending: async () => 0,
+    stageBackgroundInTransaction: () => () => undefined,
+    ...overrides,
+  } as OperationQueue;
 }
 
 describe("orphaned flag push markers", () => {
@@ -161,17 +181,6 @@ describe("flag commit durability", () => {
   afterEach(() => {
     if (db) db.close();
   });
-
-  function stubQueue(overrides: Partial<OperationQueue>): OperationQueue {
-    return {
-      registerRunner: () => undefined,
-      enqueueAndRun: async () => undefined as never,
-      enqueueBackground: () => undefined,
-      resumePending: async () => 0,
-      stageBackgroundInTransaction: () => () => undefined,
-      ...overrides,
-    } as OperationQueue;
-  }
 
   it("records the push row inside the same transaction as the marker it belongs to", () => {
     const seenDuringStaging: Array<number | null> = [];
@@ -475,6 +484,41 @@ describe("late executor completion cannot clear a running push's protection", ()
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * The refused-target rollback reverses the optimistic unread delta on the
+ * mailbox the commit landed in, read from the settling row's staged entries.
+ * When that row names no readable position there is nothing to ask, and the
+ * rollback has to fall back to the mailbox the message has now rather than
+ * throw: a payload it cannot parse must not cost the user the rollback itself.
+ */
+describe("rolling back a refused flags push with no recorded position", () => {
+  let db: DatabaseHandle;
+
+  beforeEach(() => {
+    db = openDatabase(":memory:");
+    insertAccount(db, "account-1");
+    insertMessage(db, "message-1", "account-1", 1);
+  });
+
+  afterEach(() => {
+    if (db) db.close();
+  });
+
+  it("falls back to the message's current mailbox when the payload cannot be read", () => {
+    db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run(JSON.stringify([]), "message-1");
+    commitLocalFlags(db, ["message-1"], { seen: true }, stubQueue({}));
+    expect(markerOf(db, "message-1")).toBe(1);
+
+    insertFlagsPushRow(db, "push-unreadable", "account-1", ["message-1"], "failed");
+    db.prepare("UPDATE operation_queue SET payload_json = ? WHERE id = ?").run("{ not json", "push-unreadable");
+
+    restoreFailedFlagsTargets(db, ["message-1"], "push-unreadable");
+
+    expect(markerOf(db, "message-1"), "the target is rolled back even without a readable position").toBe(0);
+    expect(unseenOf(db, "INBOX"), "and the delta is reversed on the mailbox the message has now").toBe(1);
   });
 });
 

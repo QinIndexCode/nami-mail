@@ -420,14 +420,17 @@ function stagedMailboxes(db: DatabaseHandle, rowId: string): Map<string, string>
   const mailboxes = new Map<string, string>();
   const row = db.prepare("SELECT payload_json FROM operation_queue WHERE id = ?").get(rowId) as { payload_json: string } | undefined;
   if (!row) return mailboxes;
+  let payload: unknown;
   try {
-    const payload = JSON.parse(row.payload_json) as { entries?: Array<{ id?: unknown; mailbox?: unknown }> };
-    if (!Array.isArray(payload.entries)) return mailboxes;
-    for (const entry of payload.entries) {
-      if (typeof entry?.id === "string" && typeof entry.mailbox === "string") mailboxes.set(entry.id, entry.mailbox);
-    }
+    payload = JSON.parse(row.payload_json);
   } catch {
     // A payload that cannot be read names no position; the fallback stands.
+    return mailboxes;
+  }
+  const entries = (payload as { entries?: unknown } | null)?.entries;
+  if (!Array.isArray(entries)) return mailboxes;
+  for (const entry of entries as Array<{ id?: unknown; mailbox?: unknown } | null>) {
+    if (typeof entry?.id === "string" && typeof entry.mailbox === "string") mailboxes.set(entry.id, entry.mailbox);
   }
   return mailboxes;
 }
@@ -459,6 +462,7 @@ export function restoreFailedFlagsTargets(db: DatabaseHandle, messageIds: readon
   if (!unique.length) return;
   const protectedIds = flagsPushProtectedMessageIds(db, settledRowId);
   const restorable = unique.filter((id) => !protectedIds.has(id));
+  if (!restorable.length) return;
   const committedIn = stagedMailboxes(db, settledRowId);
   const chunkSize = 10_000;
   for (let offset = 0; offset < restorable.length; offset += chunkSize) {
@@ -482,10 +486,10 @@ export function restoreFailedFlagsTargets(db: DatabaseHandle, messageIds: readon
       //
       // Known bound: the counters move on EVERY seen flip, so when the bit
       // flipped more than once across different mailboxes before this
-      // settlement, no single-folder correction can undo the net exactly — the
-      // per-attribute versions the metadata phase plans are what would. The
-      // next sync also upserts folder counts from the provider, which bounds
-      // the divergence either way.
+      // settlement, no single-folder correction can undo the net exactly.
+      // Recording a version per attribute — which this codebase does not do
+      // yet — is what would. The next sync also upserts folder counts from the
+      // provider, which bounds the divergence either way.
       if (target.includes("\\Seen") !== restored.includes("\\Seen")) {
         db.prepare(`
           UPDATE folders
