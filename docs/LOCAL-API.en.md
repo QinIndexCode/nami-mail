@@ -21,7 +21,7 @@ Translation processes the plain-text body of the selected message only after the
 
 Returns the runtime's capability without exposing the service URL, API key, or message content. Possible response shapes:
 
-Runtimes that do not manage translation configuration (e.g. development):
+Runtimes that do not manage translation configuration (e.g. without managed configuration, `enabled` reflects whether the underlying service is configured and can be `true` or `false`):
 
 ```json
 {
@@ -47,6 +47,10 @@ With an external service configured, the response reports the enabled state and,
 }
 ```
 
+### `GET /api/translation/configuration` and `PUT /api/translation/configuration`
+
+Fetches or updates translation configuration (including `primary`, `backup`, `endpoint`, and whether an API key is set). Runtimes without managed configuration return `409` (`translation_configuration_managed`); invalid payloads on `PUT` return `400` (`translation_configuration_invalid`).
+
 ### `POST /api/messages/:id/translate`
 
 Request body:
@@ -56,6 +60,8 @@ Request body:
   "targetLocale": "zh-CN"
 }
 ```
+
+Bodies exceeding the global ceiling of 50,000 characters (`MAX_TRANSLATION_TEXT_LENGTH`) are rejected with `413` (`translation_request_too_large`).
 
 For bodies within the 5,000-character single-chunk limit the response is a single JSON result:
 
@@ -67,7 +73,15 @@ For bodies within the 5,000-character single-chunk limit the response is a singl
 }
 ```
 
-An external LibreTranslate-compatible runtime can additionally return `detectedLanguage`. For bodies over 5,000 characters the text is split into multiple chunks and the response becomes a `text/event-stream` SSE event stream: results are pushed as chunk events, and callers must consume the event stream rather than parsing JSON. See [Message Translation](TRANSLATION.en.md) for data boundaries, the three translation paths, and recovery guidance.
+An external LibreTranslate-compatible runtime can additionally return `detectedLanguage` in nested object form. For bodies between 5,000 and 50,000 characters the text is split into multiple chunks and the response becomes a `text/event-stream` SSE event stream: results are pushed as chunk events, and callers must consume the event stream rather than parsing JSON.
+
+### `POST /api/translate-segments`
+
+Performs batch translation of fragmented UI text pieces (e.g. meeting invite excerpts), accepting `{ "segments": string[], "targetLocale": string }`.
+
+### `POST /api/messages/:id/translate-llm`
+
+Dedicated streaming translation endpoint for LLMs, streaming Markdown/text via SSE to the reader interface. Gated strictly by user model configuration and cloud mail-content consent, and bounded by the 50,000-character ceiling (`413` on overflow). See [Message Translation](TRANSLATION.en.md) for data boundaries, the three translation paths, and recovery guidance.
 
 ## Compatibility and Evolution
 

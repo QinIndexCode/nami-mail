@@ -27,11 +27,11 @@
 
 | 文件 | 行数 | max-lines 棘轮 | 已有可参照的拆分 |
 |---|---|---|---|
-| `apps/desktop/src/main.mts` | 2110 | 2112 | `desktop-diagnostics` / `desktop-external-open` / `desktop-notification-sound` / `server-bridge` / `server-host` / `server-process` / `update-pending-install` |
-| `apps/server/src/agent-service.ts` | 1304 | 1315 | 已分出 `agent/` 下 50 个模块（run-engine / provider-service / confirmations / tools / memory / mcp …） |
-| `apps/web/src/App.tsx` | 3031 | 4380 | `mailListState` / `sendingStatus` / `contextMenu` / `dialogRouting` / `scrollAnchor` / `perfTelemetry` |
-| `apps/web/src/AgentWorkspace.tsx` | 2502 | 2516 | `agent/useAgentSession` |
-| `apps/web/src/styles.css` | 30（纯 `@import` 索引） | 见 `styles-size.test.ts` | 实际样式在 `styles/` 下 30 个模块（base 6 / components 4 / features 16 / overlays 3 / tokens 1），聚合 17670 行，由 `styles-size.test.ts` 的 `FROZEN_AGGREGATED_MAX_LINES = 17682` 棘轮锁定 |
+| `apps/desktop/src/main.mts` | 2137 | 2147 | `desktop-diagnostics` / `desktop-external-open` / `desktop-notification-sound` / `server-bridge` / `server-host` / `server-process` / `update-pending-install` |
+| `apps/server/src/agent-service.ts` | 1308 | 1315 | 已分出 `agent/` 下 50 个模块（run-engine / provider-service / confirmations / tools / memory / mcp …） |
+| `apps/web/src/App.tsx` | 3105 | 4380 | `mailListState` / `sendingStatus` / `contextMenu` / `dialogRouting` / `scrollAnchor` / `perfTelemetry` |
+| `apps/web/src/AgentWorkspace.tsx` | 2462 | 2516 | `agent/useAgentSession` |
+| `apps/web/src/styles.css` | 30（纯 `@import` 索引） | 见 `styles-size.test.ts` | 实际样式在 `styles/` 下 30 个模块（base 6 / components 4 / features 16 / overlays 3 / tokens 1），聚合 17575 行，由 `styles-size.test.ts` 的 `FROZEN_AGGREGATED_MAX_LINES = 17674` 棘轮锁定 |
 
 > 棘轮数字的**唯一权威来源是 `eslint.config.mjs` 的 `max-lines` 数据表**（以及 `styles-size.test.ts` 对聚合 CSS 的棘轮）。本表只作快照参考，不要以本文为准去改阈值。
 
@@ -83,6 +83,6 @@
 
 1. `npm run typecheck`（四 workspace）
 2. 对应 workspace 全量单测。**测试文件数实测（2026-10-07，`*.test.ts(x)` 文件数口径，非用例数）**：desktop 33 / server 132 / web 119。用例数会随批次变化，请以 `npm test` 实际输出为准，不要沿用本文数字。
-3. `npm run test:e2e`（默认跑 smoke / interactions / update-footer / geometry 4 个 spec；`e2e/` 下共 8 个 spec，其中 `ui-stress.spec.ts` 是需种子数据 + 长超时的独立压测通道，`capture-*` / `shots` 是无入口的手动工具）
+3. `npm run test:e2e`（默认跑 smoke / interactions / update-footer / geometry 4 个 spec；`e2e/` 下共 9 个 spec（含 `real-chain.spec.ts` 真实链路用例），其中 `ui-stress.spec.ts` 是需种子数据 + 长超时的独立压测通道，`capture-*` / `shots` 是无入口的手动工具）
 4. 涉及 main.mts 的步骤额外跑 `npm run smoke:desktop`，涉及打包行为时跑 `npm run smoke:package`
 5. 每步一个提交，提交信息写清「搬了什么、为什么这样切、怎么验证的」

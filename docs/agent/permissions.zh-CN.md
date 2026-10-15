@@ -11,14 +11,14 @@
 | 访问级别 | 可达能力上限 |
 | --- | --- |
 | `read-only` | 已授权范围内的只读工具 |
-| `send-confirmed` | 所有写操作（含发送）每次都在界面请求一次性确认 |
-| `full-access` | 自动执行所有操作（含发送与删除），不再逐项确认；仍不绕过范围与审计 |
+| `send-confirmed` | 要求确认的写操作与所有高风险操作每次都在界面请求一次性确认（安全写入如记忆管理除外） |
+| `full-access` | 自动执行绝大多数操作（含发送与普通删除），不再逐项确认；但不可逆操作（如删除账户 `accounts.delete`）仍强制要求可见确认；仍不绕过范围与审计 |
 
 `accountScope` 是 `none`、`selected` 或 `all`。选定范围绝不能通过空参数、批量列表、线程引用或 RAG 结果扩大为其他账户。
 
 ## 一次性 GUI 确认
 
-确认策略按档位决定：`read-only` 档不做任何确认（写操作被拒绝）；`send-confirmed` 档每次写操作（含发送）都在可见的应用内 UI 弹出一次性不可变确认；`full-access` 档在开启前由用户阅读明确警告并确认，之后自动执行、不再逐项确认。确认记录是不可变事件，而不是可编辑的布尔值。
+确认策略按档位决定：`read-only` 档不做任何确认（写操作被拒绝）；`send-confirmed` 档对声明了 `confirmationPolicy: "required"` 的写操作及所有高风险操作在可见的应用内 UI 弹出一次性不可变确认（无须确认的本地安全写操作如保存记忆 `memory.save` 等直接放行）；`full-access` 档在开启前由用户阅读明确警告并确认，之后自动执行绝大多数操作，但具有 `irreversible: true` 的不可逆操作（如删除账户）仍强制要求在界面进行可见确认。确认记录是不可变事件，而不是可编辑的布尔值。
 
 请求快照包含操作标题、用户可读摘要、关键字段、账号、工具、`requestId`、不可变 payload hash 和到期时间。批准时必须同时匹配：
 
@@ -40,13 +40,13 @@
 
 三个入口各自独立配置访问级别：内置 Agent 使用 `agentAccessLevel`（默认 `send-confirmed`），外部 CLI 使用 `agentCliAccessLevel`（默认 `read-only`），外部 MCP 使用 `agentMcpAccessLevel`（默认 `read-only`）。档位均为 `read-only` / `send-confirmed` / `full-access`；设置项位于桌面应用设置界面"权限"分组，三个下拉相邻，CLI 与 MCP 是两项独立设置但内容相同。
 
-CLI/MCP v1 支持三档模型。权限判断位于宿主：宿主为外部 caller 构造访问级别并按配置档位收紧（clamp），已配对客户端不能自行提升级别；请求超过配置级别返回 `PERMISSION_DENIED`。CLI 的 `--yes`、MCP 参数或模型工具调用都不能充当确认或提权。`send-confirmed` 档每次写操作都在桌面端弹出可见的一次性不可变确认；`full-access` 档开启前必须由用户在 UI 中阅读明确警告并确认，开启后在已批准账户范围内自动执行所有操作（含发送与删除），范围与审计仍然生效。内置 Agent 的 `full-access` 同样需要开启前警告。
+CLI/MCP v1 支持三档模型。权限判断位于宿主：宿主为外部 caller 构造访问级别并按配置档位收紧（clamp），已配对客户端不能自行提升级别；请求超过配置级别返回 `PERMISSION_DENIED`。CLI 的 `--yes`、MCP 参数或模型工具调用都不能充当确认或提权。`send-confirmed` 档对要求确认的写操作在桌面端弹出可见的一次性不可变确认；`full-access` 档开启前必须由用户在 UI 中阅读明确警告并确认，开启后在已批准账户范围内自动执行绝大多数操作（含发送与普通删除），但不可逆操作（如删除账户）仍强制要求可见确认，范围与审计仍然生效。内置 Agent 的 `full-access` 同样需要开启前警告。
 
 ## 错误语义
 
 - `PERMISSION_DENIED`：访问级别或 scope 不满足。
 - `SCOPE_DENIED`：目标账号不属于调用方范围。
-- `NOT_SUPPORTED`：工具不可供外部 caller（如 `messages.search`、`rag.*`、`agent.chat`、`agent.run`、附件导出）。
+- `NOT_SUPPORTED`：工具不可供外部 caller（如 `rag.*`、`agent.chat`、`agent.run`、附件导出）。
 - `CONFIRMATION_REQUIRED`：操作需要正在运行的 GUI 确认。
 - `BROKER_SECURITY_UNAVAILABLE`：无法证明安全本地 IPC，不能降级。
 

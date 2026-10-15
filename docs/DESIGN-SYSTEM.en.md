@@ -7,7 +7,7 @@ converged while the whole drifted. Read this before changing styles.
 
 - Source of truth for styles: `apps/web/src/styles.css`
 - Themes: `:root` (light) and `:root[data-theme=dark]`, with semantic tokens defined in pairs
-- How to verify a visual change: `npm run test:e2e` (three specs), `npm run smoke:desktop`, and the tests that assert against the stylesheet
+- How to verify a visual change: `npm run test:e2e` (four specs, including geometry), `npm run smoke:desktop`, and the tests that assert against the stylesheet
 
 The current visual direction uses neutral panels, thin borders, and restrained selection states.
 Interface headings and controls use the system sans-serif stack in `--font-ui`; mail bodies keep
@@ -116,7 +116,8 @@ Current distribution (`styles.css`): `8px`(28) / `9px`(81) / `10px`(155+) / `11p
 
 | context | value |
 |---|---|
-| reading-pane body (`.mail-text, .mail-html`) | `1.7` |
+| reading-pane plain text (`.mail-text`) | `1.75` |
+| reading-pane HTML body (`.mail-html`) | `1.7` |
 | title (`.mail-title h2`) | `1.24` |
 | UI text | `1.3`–`1.45` |
 | resets (icon rows etc.) | `0` / `1` |
@@ -200,7 +201,7 @@ of cleanup:
 
 > Correction: the audit guessed "about six redundant `!important`". Checking them showed otherwise —
 > the named ones are either the structural cases above or are winning against a higher-specificity rule
-> (such as `.sidebar-footer>div`). Only one was provably redundant; it is gone. Removing the other 52
+> (such as `.sidebar-footer>div`). Only one was provably redundant; it is gone. Removing the other 53
 > needs **browser-level cascade verification** (computed-style comparisons) per declaration, which is not
 > worth the risk, so they stay, held by a ratchet that stops the count growing. (The audit's listing was
 truncated, which is why its count did not add up.)
@@ -213,7 +214,7 @@ truncated, which is why its count did not add up.)
 | ~~Desaturate `--cal-*` / attachment colours~~ | ~~12 rules~~ | **done** (batch AD, which also fixed chip labels sitting at 2.18–3.25:1) |
 | ~~Merge fractional type steps~~ | ~~10 sites~~ | **done** (batch AD); fractional sizes are now zero-tolerance |
 | ~~Snap `7px`/`9px` spacing~~ | ~~217 lines~~ | **done** (batch AD). **The target was corrected** — see below |
-| Redundant `!important` | guessed 6, actually 1 | **the provable one is done**; the other 52 need browser-level cascade verification |
+| Redundant `!important` | guessed 6, actually 1 | **the provable one is done**; the other 53 need browser-level cascade verification |
 | ~~Audit `outline:none` pairings~~ | ~~42 sites~~ | **done**: unpaired count is held at 0 by the test |
 
 **Converged** (2026-09-10): accent colours (calendar + attachment kinds) tokenised and desaturated with

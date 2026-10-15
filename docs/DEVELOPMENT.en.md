@@ -99,7 +99,7 @@ Documentation is kept as one file per language, and **any file that carries pros
 - Chinese: `xxx.zh-CN.md`
 - English: `xxx.en.md`
 
-An unsuffixed `xxx.md` is **only allowed as a language entry** — a title plus language links and nothing else. The only files that use this exception today are each directory's `README.md`, and `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md` and `CHANGELOG.md` at the repository root, which GitHub expects unsuffixed; all of them are now entry pages whose prose lives in the matching `.zh-CN.md` / `.en.md`.
+An unsuffixed `xxx.md` is **only allowed as a language entry** — a title plus language links and nothing else. The only files that use this exception today are each directory's `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md` and `CHANGELOG.md` at the repository root, which GitHub expects unsuffixed (all of them are entry pages whose prose lives in the matching `.zh-CN.md` / `.en.md`), plus `docs/releases/v*.md` (which serve as compound bilingual draft bodies for direct pasting into GitHub Releases; their language-specific prose is symmetrically maintained in the adjacent `v*.zh-CN.md` and `v*.en.md`).
 
 When adding or editing documentation:
 

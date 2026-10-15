@@ -9,11 +9,11 @@ Tools register with lower-case dotted identifiers and versioned descriptors. A d
 | Mode | Typical use | External CLI/MCP v1 | Confirmation |
 | --- | --- | --- | --- |
 | `read` | Accounts, folders, messages, threads, attachment metadata, RAG queries | Allowed only inside paired scope | None |
-| `draft` | Create, update, or delete drafts | Allowed at `send-confirmed` and above (one of the seven write tools) | Visible confirmation per write until `full-access` |
-| `write` | Mark, move, or archive | Allowed at `send-confirmed` and above | Visible confirmation per write until `full-access` |
-| `high-risk` | Send, forward, permanent delete, bulk writes, content egress | Only `mail.reply` / `messages.send` are external | Durable audit and one-time GUI confirmation required |
+| `draft` | Create, update, or delete drafts, reply drafts | Allowed at `send-confirmed` and above (one of the seven write tools) | Operations with `required` policy require visible confirmation until `full-access` |
+| `write` | Mark, move, archive, update memory or settings | Allowed at `send-confirmed` and above | Operations with `required` policy require visible confirmation until `full-access` (safe writes like `memory.*` are exempt) |
+| `high-risk` | Send, forward, permanent delete, bulk writes, content egress | Only `messages.send` is external | Durable audit and one-time GUI confirmation required |
 
-External CLI/MCP v1 exposes 16 tools: nine read-only plus seven bounded writes (draft create/update/delete, move, flag, send, reply). The default `read-only` level keeps only reads available; elevating the level enables the write tools. `--yes`, MCP arguments, a paired identity, or model output never relaxes the access level or replace confirmation.
+External CLI/MCP v1 exposes 16 tools: nine read-only plus seven bounded writes (draft create/update/delete, move, flag, send, reply draft). The default `read-only` level keeps only reads available; elevating the level enables the write tools. `--yes`, MCP arguments, a paired identity, or model output never relaxes the access level or replace confirmation.
 
 ## Built-in Domain Toolsets
 
@@ -26,7 +26,7 @@ Mail tools connect to the existing `MailApplicationService` facade, reusing remo
 | Tool Identifier | Mode | Required Scopes | External CLI/MCP | Confirmation Policy | Description |
 | --- | --- | --- | --- | --- | --- |
 | `accounts.list` | `read` | `read:accounts` | Allowed | None | Lists configured mail accounts and sync states visible to the caller. |
-| `accounts.delete` | `write` | `write:accounts` | Internal only | One-time GUI confirmation (`delete-account`) | Removes a mail account and purges its local cache. |
+| `accounts.delete` | `high-risk` | `write:accounts` | Internal only | One-time GUI confirmation (`delete-account`, irreversible, confirmed even under `full-access`) | Removes a mail account and purges its local cache. |
 | `folders.list` | `read` | `read:folders` | Allowed | None | Lists mail folders for a specified account. |
 | `messages.list` | `read` | `read:messages` | Allowed | None | Paginated listing of message metadata (filters: sender, unread, flagged, etc.). |
 | `messages.get` | `read` | `read:messages` | Allowed | None | Fetches message details and body text (bounded truncation). |
@@ -41,7 +41,7 @@ Mail tools connect to the existing `MailApplicationService` facade, reusing remo
 | `messages.move` | `write` | `write:messages` | Allowed | One-time GUI confirmation (`move-mail`) | Moves messages to Archive, Trash, or a destination folder. |
 | `messages.set-flag` | `write` | `write:messages` | Allowed | One-time GUI confirmation (`set-flag`) | Updates read (`seen`) or flagged status. |
 | `messages.send` | `high-risk` | `write:messages` | Allowed | One-time GUI confirmation (`send-mail`) | Composes and sends a new message through the account's SMTP provider. |
-| `mail.reply` | `high-risk` | `write:messages` | Allowed | One-time GUI confirmation (`reply-mail`) | Creates and sends a reply to an existing message. |
+| `mail.reply` | `draft` | `write:messages` | Allowed | One-time GUI confirmation (`reply-mail`) | Creates a reply draft to an existing message (does not send). |
 
 ### 2. Calendar Tools (`calendar.*`)
 

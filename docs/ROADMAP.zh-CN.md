@@ -22,8 +22,8 @@
 
 - **vision 判定**：采用**显式开关**——模型配置（ProviderConfiguration）新增 `vision: boolean`，用户在新增/编辑模型时勾选"多模态模型"后才允许上传图片。不做模型名自动探测（不可靠）。
 - **契约扩展（最小侵入）**：
-  - `ProviderChatMessage` 新增可选 `images?: string[]`（base64 data URL），`content` 字符串保持不变 → 历史消息完全兼容。
-  - `providerCapabilitiesSchema` 新增 `vision: boolean`。
+  - `ProviderChatMessage` 的 `content` 扩展为联合类型 `string | ProviderContentPart[]`（包含 `text`、`image_url`、`document` parts 形态），纯文本字符串与历史消息完全向下兼容。
+  - `providerCapabilitiesSchema` / 模型配置扩展 `modalities` 多模态能力描述。
 - **各 provider 适配器转换**：
   | 适配器 | 转换目标 |
   |---|---|
@@ -77,14 +77,14 @@
 `--warning` `#b67816`→`#9a6510`）；**可执行基线落成**（`themeContrast.test.ts` 8 条 + `designTokens.test.ts` 10 条，后者含债务棘轮，
 只许下降，并阻止新增越界值）。
 
-**视觉一致性**（`apps/web/src/styles.css` 16,900 行审计结论）：
+**视觉一致性**（历史 `apps/web/src/styles.css` 16,900 行审计结论，现已拆分为 `styles/` 下 30 个子模块，总行数由 `styles-size.test.ts` 聚合棘轮门禁管控）：
 
 - ~~硬编码颜色绕过 token：日历色板 6 色未 token 化且深色主题无覆盖~~ **已完成**（Batch Y）。
 - ~~半径碎片化：至少 15 个不同值，而 token 只定义 `--radius-sm/md/lg`~~ **已完成数值归一与 token 化**（Batch Y/Z：`var(--radius-*)` 引用 2 → 约 179 处）；越界值仍以棘轮预算约束，待并档。
 - ~~阴影硬编码：一次性高度阴影跨层级混用~~ **已完成**（Batch AC）：25 处候选里 12 处折进 `--shadow-raised`/`--shadow-sm`，另删 2 条多余深色覆盖；**高度阴影字面量现为 0**（余 18 处状态光晕 + 2 处原生滑杆细节，均属文档化豁免类别）。
 - 字号碎片化：~~约 13 个值（含 `11.5px` 小数）~~ **已复核（2026-10-07）：`apps/web/src/styles/**` 中已无任何半像素 font-size**，该条已不成立；字号档位收敛情况需重新统计后再决定是否立项。
-- 间距偏离 4px 栅格：最突出是 `7px` / `9px`（合计 100+ 处）。
-- 32 处 `!important` 中约 6 处冗余；42 处 `outline:none` 需逐条确认有 focus ring 配对。
+- ~~间距偏离 4px 栅格：最突出是 `7px` / `9px`（合计 100+ 处）~~ **已完成**（Batch AD）：7px/9px 归零，间距目标修正为 2px 子栅格，其余奇数值由棘轮预算锁定。
+- ~~32 处 `!important` 中约 6 处冗余；42 处 `outline:none` 需逐条确认有 focus ring 配对~~ **已完成**（Batch AD）：可静态证明冗余的 1 处 `!important` 已消除，其余 53 处由棘轮锁定；未配对 `outline:none` 由自动化测试锁定为 0。
 - ~~**孤儿类名**：`sync-progress-banner` 在 `App.tsx` 使用但样式文件中完全无对应规则。~~ **已复核（2026-10-07）：该类名已存在规则**（`styles/features/mail.css:786` 与 `styles/base/responsive.css:642`），本条与上方「已完成」段自相矛盾，现予撤销。
 - 已有良好基础：`prefers-reduced-motion` 覆盖 9 处、`:focus-visible` 56 处、tone 色已在深色下覆盖。
 
@@ -92,7 +92,7 @@
 
 - 列表接口对每页返回完整 `htmlBody`，IPC 体积大（详情正文随列表一起传）。
 - `/api/stats` 每 60s 轮询做全表 `SUM(CASE ...)`，且 `flags_json LIKE '%\Seen%'` 不可走索引；`messages` 缺 `flags_json` 派生列索引。
-- 列表排序用 `ORDER BY COALESCE(sent_at, created_at)` 表达式，无法用 `idx_messages_sent_at`；分页为 `LIMIT/OFFSET` 深分页。
+- ~~列表排序用 `ORDER BY COALESCE(sent_at, created_at)` 表达式，无法用 `idx_messages_sent_at`；分页为 `LIMIT/OFFSET` 深分页。~~ **已完成**：已重构为 keyset 游标分页（`message-cursor.ts`、`message-list-indexes.ts`，游标字段为 `cursor`），支持百万级行数 O(1) 连续翻页，消除了深分页性能损耗。
 - 每请求重复 `db.prepare(...)`，无语句缓存。
 - `App.tsx` 首屏已并行（`Promise.all`），无需改动。
 

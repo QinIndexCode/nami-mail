@@ -97,7 +97,7 @@ npm.cmd run package:win:github
 - 中文：`xxx.zh-CN.md`
 - 英文：`xxx.en.md`
 
-不带后缀的 `xxx.md` **只允许作为语言入口**——只有标题和语言切换链接，不承载正文。目前符合这个例外的只有各目录的 `README.md`，以及 GitHub 约定放在仓库根的 `CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`、`SUPPORT.md`、`CHANGELOG.md`（它们都已改成入口页，正文在对应的 `.zh-CN.md` / `.en.md`）。
+不带后缀的 `xxx.md` **只允许作为语言入口**——只有标题和语言切换链接，不承载正文。目前符合这个例外的只有各目录的 `README.md`、GitHub 约定放在仓库根的 `CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`、`SUPPORT.md`、`CHANGELOG.md`（它们都已改成入口页，正文在对应的 `.zh-CN.md` / `.en.md`），以及 `docs/releases/v*.md`（专门作为直接粘贴至 GitHub Releases 页面兼具双语的复合发布说明草稿；其分语言正文仍严格对称保存在相邻的 `v*.zh-CN.md` 与 `v*.en.md` 中）。
 
 新增或改动文档时：
 

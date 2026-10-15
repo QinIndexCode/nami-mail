@@ -18,11 +18,11 @@ The import modal accepts a local `.ics` file (or attachment content carried over
 - **Append mode (default)**: adds events to the existing calendar. Events are deduplicated by their ICS UID — re-importing the same calendar never double-books; matching events are updated in place (reported as "updated").
 - **Replace mode**: clears all existing events first, then imports the new content.
 
-Manually created events carry no UID and do not participate in import deduplication. Exports emit the stored UID verbatim, so an import → export → re-import round trip is lossless.
+Events originally imported from external sources preserve their stored UID in exports, making an import → export → re-import round trip lossless and idempotent; events created manually in the app carry a NULL UID in the database (exports synthesize a UID from the internal event ID), so re-importing them will insert duplicate rows since deduplication only matches non-null UIDs.
 
 ## Event Reminders
 
-While the app is running, a reminder toast fires 15 minutes before an event starts; clicking it opens the calendar. The same event is never reminded twice, and reminders more than 30 minutes stale are ignored. Reminders respect the notification toggle — turning off notifications silences calendar reminders too. The deduplication record (up to 200 entries) is kept in local browser storage.
+While the app is running, a reminder toast fires 15 minutes before a timed event starts; for all-day events, the reminder fires at 09:00 on the day of the event. Clicking it opens the calendar. The same event is never reminded twice, and reminders more than 30 minutes stale are ignored. Reminders respect the notification toggle — turning off notifications silences calendar reminders too. The deduplication record (up to 200 entries) is kept in local browser storage.
 
 ## Agent Calendar Tools
 

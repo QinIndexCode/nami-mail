@@ -20,8 +20,9 @@ This document tracks features that have been confirmed but are not yet scheduled
 
 **Key design points** (from prior research):
 
-- **Vision detection**: explicit opt-in — add `vision: boolean` to the provider configuration; the user checks a "multimodal model" box when adding/editing a model before image upload is allowed. No automatic model-name detection (unreliable).
-- **Contract extension (minimal)**: add optional `images?: string[]` (base64 data URLs) to `ProviderChatMessage`; keep `content` as a string for full backward compatibility. Add `vision: boolean` to `providerCapabilitiesSchema`.
+- **Contract extension (minimal)**:
+  - `ProviderChatMessage`'s `content` extends to union `string | ProviderContentPart[]` (supporting `text`, `image_url`, `document` parts), keeping string content and historical messages fully backward compatible.
+  - `providerCapabilitiesSchema` and model configuration expand `modalities` capability description.
 - **Provider adapter mapping**:
   | Adapter | Mapping |
   |---|---|
@@ -79,14 +80,14 @@ WCAG 4.5:1 floor (`--text-faint` `#727279`→`#66666c`, `--warning` `#b67816`→
 **executable baseline** landed (`themeContrast.test.ts`, 8 tests, plus `designTokens.test.ts`,
 10 tests, including a debt ratchet that may only go down and rejects new off-scale values).
 
-**Visual consistency** (audit of the 16,900-line `apps/web/src/styles.css`):
+**Visual consistency** (historical audit of the 16,900-line `apps/web/src/styles.css`, now split into 30 modules under `styles/` and guarded by `styles-size.test.ts` aggregated ratchet):
 
 - ~~Hardcoded colours bypass the tokens: the six calendar colours are not tokenised and have no dark-theme override~~ **done** (batch Y).
 - ~~Radius fragmentation: at least 15 distinct values against three tokens~~ **values normalised and tokenised** (batches Y/Z: `var(--radius-*)` references 2 → ~179); the off-scale ones are still held by a ratchet budget until they are merged.
 - ~~Hardcoded shadows: one-off elevation shadows mixed across layers~~ **done** (batch AC): 12 of 25 candidates folded into `--shadow-raised`/`--shadow-sm` and 2 redundant dark overrides deleted; **elevation literals are now 0** (18 state halos + 2 native slider details remain, both documented exemptions).
 - Font-size fragmentation: ~~~13 values including a fractional `11.5px`~~ **re-verified 2026-10-07: no fractional font-size remains under `apps/web/src/styles/**`, so this item no longer holds**; recount the size scale before deciding whether to open a new batch.
-- Spacing drifts off the 4px grid: `7px` / `9px` account for 100+ occurrences.
-- Of 32 `!important` declarations ~6 are redundant; the 42 `outline:none` sites each need confirming against a focus-ring replacement.
+- ~~Spacing drifts off the 4px grid: `7px` / `9px` account for 100+ occurrences~~ **done** (batch AD): `7px`/`9px` eliminated; spacing target corrected to a 2px sub-grid with odd values held by a ratchet budget.
+- ~~Of 32 `!important` declarations ~6 are redundant; the 42 `outline:none` sites each need confirming against a focus-ring replacement~~ **done** (batch AD): the 1 provably redundant `!important` eliminated, the other 53 locked by ratchet; unpaired `outline:none` count held at 0 by test.
 - ~~**Orphan class**: `sync-progress-banner` is used in `App.tsx` but has no rule at all in the stylesheet.~~ **Re-verified 2026-10-07: rules for that class do exist** (`styles/features/mail.css:786` and `styles/base/responsive.css:642`); this item contradicted the "delivered" section above and is withdrawn.
 - Good foundations already in place: 9 `prefers-reduced-motion` blocks, 56 `:focus-visible` rules, tone colours already themed for dark mode.
 
@@ -94,7 +95,7 @@ WCAG 4.5:1 floor (`--text-faint` `#727279`→`#66666c`, `--warning` `#b67816`→
 
 - The list endpoint returns the full `htmlBody` for every page, so list payloads are large.
 - `/api/stats` polls every 60s with a full-table `SUM(CASE ...)`, and `flags_json LIKE '%\Seen%'` cannot use an index; `messages` has no derived-column index for flags.
-- The list sorts by `ORDER BY COALESCE(sent_at, created_at)` (an expression, so `idx_messages_sent_at` cannot help) and pages with `LIMIT/OFFSET`.
+- ~~The list sorts by `ORDER BY COALESCE(sent_at, created_at)` (an expression, so `idx_messages_sent_at` cannot help) and pages with `LIMIT/OFFSET`.~~ **Done**: refactored to keyset cursor pagination (`message-cursor.ts`, `message-list-indexes.ts`, with opaque `cursor` tokens), eliminating deep pagination latency and guaranteeing total ordering across pages.
 - Every request re-prepares its statements; there is no statement cache.
 - First paint already fetches in parallel (`Promise.all`) — no change needed.
 

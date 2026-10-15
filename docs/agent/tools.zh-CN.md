@@ -9,11 +9,11 @@
 | 模式 | 典型用途 | 外部 CLI/MCP v1 | 确认 |
 | --- | --- | --- | --- |
 | `read` | 账户、文件夹、邮件、线程、附件元数据、RAG 查询 | 允许，且必须在配对范围内 | 不需要 |
-| `draft` | 创建/更新/删除草稿 | 允许（`send-confirmed` 及以上，7 个写工具之一） | 每次写操作需可见确认，直至 `full-access` |
-| `write` | 标记、移动、归档 | 允许（`send-confirmed` 及以上） | 每次写操作需可见确认，直至 `full-access` |
-| `high-risk` | 发送、转发、永久删除、批量写入、内容外发 | 仅 `mail.reply` / `messages.send` 对外开放 | 必须一次性 GUI 确认和持久审计 |
+| `draft` | 创建/更新/删除草稿、起草回复 | 允许（`send-confirmed` 及以上，7 个写工具之一） | 声明 `required` 的操作需可见确认，直至 `full-access` |
+| `write` | 标记、移动、归档、修改记忆与设置 | 允许（`send-confirmed` 及以上） | 声明 `required` 的操作需可见确认，直至 `full-access`（`memory.*` 等安全写入免确认） |
+| `high-risk` | 发送、转发、永久删除、批量写入、内容外发 | 仅 `messages.send` 对外开放 | 必须一次性 GUI 确认和持久审计 |
 
-外部 CLI/MCP v1 共 16 个工具：9 个只读 + 7 个受限写入（草稿创建/更新/删除、移动、标记、发送、回复）。默认 `read-only` 档只开放只读；提升档位后写工具可用。命令行的 `--yes`、MCP 参数、已配对身份或模型输出都不会放宽权限档位或代替确认。
+外部 CLI/MCP v1 共 16 个工具：9 个只读 + 7 个受限写入（草稿创建/更新/删除、移动、标记、发送、回复草稿）。默认 `read-only` 档只开放只读；提升档位后写工具可用。命令行的 `--yes`、MCP 参数、已配对身份或模型输出都不会放宽权限档位或代替确认。
 
 ## 核心工具目录
 
@@ -26,7 +26,7 @@
 | 工具标识 | 模式 | 必需 Scope | 外部 CLI/MCP | 确认策略 | 功能说明 |
 | --- | --- | --- | --- | --- | --- |
 | `accounts.list` | `read` | `read:accounts` | 允许 | 无需确认 | 列出调用方可见的配置账户及同步状态。 |
-| `accounts.delete` | `write` | `write:accounts` | 仅内部 | 一次性 GUI 确认 (`delete-account`) | 移除指定邮箱账户及其本地缓存。 |
+| `accounts.delete` | `high-risk` | `write:accounts` | 仅内部 | 一次性 GUI 确认 (`delete-account`，不可逆，`full-access` 下仍需确认) | 移除指定邮箱账户及其本地缓存。 |
 | `folders.list` | `read` | `read:folders` | 允许 | 无需确认 | 列出指定账户的邮箱文件夹树。 |
 | `messages.list` | `read` | `read:messages` | 允许 | 无需确认 | 分页列出邮件元数据（支持发件人、未读、星标等过滤）。 |
 | `messages.get` | `read` | `read:messages` | 允许 | 无需确认 | 获取指定邮件详情与正文内容（有界截断保护）。 |
@@ -41,7 +41,7 @@
 | `messages.move` | `write` | `write:messages` | 允许 | 一次性 GUI 确认 (`move-mail`) | 将邮件移动到归档、废纸篓或目标文件夹。 |
 | `messages.set-flag` | `write` | `write:messages` | 允许 | 一次性 GUI 确认 (`set-flag`) | 标记邮件已读状态（`seen`）或星标（`flagged`）。 |
 | `messages.send` | `high-risk` | `write:messages` | 允许 | 一次性 GUI 确认 (`send-mail`) | 撰写并通过账户 SMTP 发送新邮件。 |
-| `mail.reply` | `high-risk` | `write:messages` | 允许 | 一次性 GUI 确认 (`reply-mail`) | 针对现有邮件起草并发送回复。 |
+| `mail.reply` | `draft` | `write:messages` | 允许 | 一次性 GUI 确认 (`reply-mail`) | 针对现有邮件起草回复草稿（不触发发送）。 |
 
 ### 2. 日历工具 (`calendar.*`)
 

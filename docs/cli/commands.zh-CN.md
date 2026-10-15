@@ -51,7 +51,7 @@ namimail <组> <操作> [选项]
 
 ## 默认拒绝的写命令（仅当 CLI 权限为只读时）
 
-下列写命令在 CLI 权限为 `read-only`（默认档位）时返回 `PERMISSION_DENIED`，请求不会转发给 Broker：
+下列写命令在 CLI 权限为 `read-only`（默认档位）时，由宿主 Broker 权限引擎严格拦截并返回 `PERMISSION_DENIED`（所有写命令均由宿主安全门控统一判定）：
 
 ```text
 draft create | draft update | draft delete

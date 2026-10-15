@@ -37,6 +37,6 @@ Settings includes a zero-side-effect auto-reply sandbox: enter a test message or
 
 ## Data and Boundaries
 
-- llm mode sends the cleaned message content (tracking links normalized, inline images compressed to save tokens) to your configured model provider. Without a configured model the feature is unavailable; a broken configuration shows a clear warning in Settings.
+- llm mode sends the cleaned and truncated message content (tracking links normalized to `[链接: domain]`, inline images replaced with `[内联图片]` text placeholders without sending image bytes, and bodies bounded to the first 1,000 characters with a 400-character snippet limit to strictly bound tokens) to your configured model provider. Without a configured model the feature is unavailable; a broken configuration shows a clear warning in Settings.
 - template mode is fully offline and never sends message content to any third party.
 - Auto-reply only processes newly synced inbox mail; it never reads historical mail and never changes provider-side auto-reply or vacation settings.

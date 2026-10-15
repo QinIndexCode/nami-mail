@@ -16,15 +16,16 @@ Choose a scope before asking. The scope defines which mail the assistant may ret
 
 | Scope | Meaning |
 | --- | --- |
-| All accounts | Analyzes mail across all accounts; suitable for cross-account summaries |
-| Current account | Only the account of the currently selected message (a message must be selected) |
+| All accounts (`all`) | Analyzes mail across all configured accounts; suitable for cross-account summaries |
+| Selected account (`selected_account`) | Analyzes only the currently active/selected account; does not require selecting a specific message |
+| Current message (`current_message`) | Analyzes only the currently selected message(s); requires messages to be selected beforehand |
 
 Mail outside the scope is never retrieved or sent; content sent to cloud models is always bounded by the selected scope.
 
 ## Asking and Generation
 
 - Type a question and send; click **Stop** while generating.
-- You can **attach files** as conversation context: when selecting a multimodal-enabled model, the file picker adaptively supports images (PNG/JPEG/GIF/WEBP), audio/video, and PDF documents, displaying dedicated file type badges inside the composer; removing an attachment takes it out of the context.
+- You can **attach files** as conversation context: when selecting a multimodal-enabled model, the file picker adaptively supports images (PNG/JPEG/GIF/WEBP) and PDF documents, displaying dedicated file type badges inside the composer; removing an attachment takes it out of the context.
 - Local models never send mail content to the cloud; before cloud consent, a cloud model only receives text you actively type, and after consent it still only receives content within the selected scope.
 - Sending mail and high-risk operations always require your confirmation.
 

@@ -43,7 +43,7 @@ The service should accept a JSON request like the one below and return JSON with
 }
 ```
 
-The target language is derived from the current interface language, e.g. `zh-CN` becomes `zh`. When the provider requires an API key, handle the `api_key` field per its LibreTranslate-compatible protocol. External services may additionally return `detectedLanguage` as the detection result.
+The target language is derived from the current interface language, e.g. `zh-CN` becomes `zh`. When the provider requires an API key, handle the `api_key` field per its LibreTranslate-compatible protocol. External services may additionally return a nested language detection result per the LibreTranslate specification (e.g. `{"detectedLanguage": {"language": "en", "confidence": 98}}`; the runtime inspects `detectedLanguage.language`, and a flat top-level string is ignored).
 
 ### LLM translation (fallback path, requires a configured model)
 
@@ -59,7 +59,7 @@ LLM translation is an alternative when the regular paths fail or are unavailable
 
 All three paths send the **plain-text body of the current message** to the target you chose: the built-in chain sends it to the Google Translate / MyMemory public endpoints; the LibreTranslate-compatible path sends it to your configured service endpoint; the LLM path sends it to your configured model provider. Beyond that, subjects, account addresses, attachments, attachment content, and the local database are never uploaded automatically by translation.
 
-Translation requests are not retried against other services, and results are not persisted in the local database, files, or a separate cache. Service configuration is stored encrypted on the device. Demo mode never contacts a translation endpoint and shows a local deterministic preview.
+Within a translation request, the runtime supports automatic fallback and chained engine attempts (the built-in engine automatically falls back from Google to MyMemory on failure, and configured engines proceed sequentially through primary → backup → built-in chain until all fail); translation results are not persisted in the local database, files, or a separate cache. Service configuration is stored encrypted on the device. Demo mode never contacts a translation endpoint and shows a local deterministic preview.
 
 Before sending a body to a third-party translation service or model provider, review its privacy policy, data-processing location, and compliance requirements. Mail can contain sensitive information; even over HTTPS, Nami Mail cannot replace your own security assessment of the provider. If you do not want the body to leave the machine, do not use translation.
 
@@ -67,6 +67,6 @@ Before sending a body to a third-party translation service or model provider, re
 
 Machine translation can mistranslate terminology, dates, negation, names, code snippets, or formatting. Use it as reading aid only — never as the sole basis for legal, financial, medical, safety, or business decisions; verify important content against the original.
 
-The built-in and LibreTranslate paths chunk long bodies automatically; the LLM path caps bodies at 50,000 characters and returns `413` beyond that. With a LibreTranslate-compatible service, a missing endpoint also reports a configuration error; connection problems distinguish TLS certificate verification failures, TLS negotiation failures, unresolvable DNS, unreachable networks, refused connections, dropped connections, and timeouts. On TLS certificate errors, do not disable verification — check system time, proxies, and the server certificate.
+All translation paths (built-in free, LibreTranslate, and LLM) share a global body limit of 50,000 characters (`MAX_TRANSLATION_TEXT_LENGTH`), rejecting oversized requests with `413` (`translation_request_too_large`). Within the 50,000-character ceiling, the built-in and LibreTranslate paths split longer text into semantic 5,000-character chunks and stream partial progress via SSE. With a LibreTranslate-compatible service, a missing endpoint also reports a configuration error; connection problems distinguish TLS certificate verification failures, TLS negotiation failures, unresolvable DNS, unreachable networks, refused connections, dropped connections, and timeouts. On TLS certificate errors, do not disable verification — check system time, proxies, and the server certificate.
 
 When an external translation service returns 401/403/407, check the API key, access rights, or proxy authentication; 429 means rate limiting; 5xx means the service is temporarily unavailable. Nami Mail never shows the service's response body in the UI. Check that the endpoint ends with `/translate`, your network/proxy policy, the service API key, and the timeout, then retry manually.
