@@ -240,7 +240,7 @@ min-height:30px;
 padding:6px 10px;
 font-size:11px
 }
-.contact-editor-backdrop
+.contact-editor-backdrop,.template-editor-backdrop
 {
 z-index:60;
 background:var(--scrim-nested);

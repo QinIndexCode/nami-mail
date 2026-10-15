@@ -2670,6 +2670,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           </nav>
 
           <div className="accounts-heading"><span>{t("mail.accounts")}</span><span className="accounts-heading-actions"><IconButton label={folderDisplayMode === "tree" ? t("mail.folderMode.switchToFocused") : t("mail.folderMode.switchToTree")} onClick={() => setFolderDisplayMode(folderDisplayMode === "tree" ? "focused" : "tree")}><span className="folder-mode-icon" data-mode={folderDisplayMode} aria-hidden="true"><FolderTree size={16} className="folder-mode-tree" /><Focus size={16} className="folder-mode-focused" /></span></IconButton><IconButton label={t("account.add")} onClick={() => { actions.closeMobileSidebar(); actions.openAddAccount(); }}><Plus size={16} /></IconButton></span></div>
+
           <div className="account-list" data-folder-mode={folderDisplayMode} ref={accountListRef}>
             <button aria-pressed={selectedAccount === "all"} className={selectedAccount === "all" ? "active" : ""} onClick={() => { clearUnreadViewRecentlyRead(); beginNavigation({ accountId: "all", folder: "", view }); setSelectedAccount("all"); setAccountsExpanded(false); setSelectedFolder(""); setSelectedId(null); setRecipientDetailsOpen(false); actions.closeMobileSidebar(); }}><span className="account-avatar all"><Layers3 size={14} /></span><span className="account-copy"><strong>{t("mail.allAccounts")}</strong><small>{t("mail.accountCount", { count: accounts.length })}</small></span></button>
             {accounts.map((account) => {

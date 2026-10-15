@@ -129,48 +129,48 @@ overflow-y:auto
 pointer-events:none;
 animation:.17s cubic-bezier(.2,.8,.2,1) both modal-out
 }
-:is(.sidebar-content,.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar
 {
 width:8px;
 height:8px
 }
-:is(.sidebar-content,.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-track
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-track
 {
 background:0 0
 }
-:is(.sidebar-content,.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-button
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-button
 {
 width:0;
 height:0;
 display:none
 }
-:is(.sidebar-content,.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-corner
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-corner
 {
 background:0 0
 }
-:is(.sidebar-content,.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-thumb
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)::-webkit-scrollbar-thumb
 {
 background-clip:padding-box;
 border:2px solid #0000;
 border-radius:var(--radius-pill)
 }
-:is(.sidebar-content,.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list)::-webkit-scrollbar-thumb
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list)::-webkit-scrollbar-thumb
 {
 background:color-mix(in srgb, var(--text-faint) 45%, transparent)
 }
-:is(.sidebar-content,.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list)::-webkit-scrollbar-thumb:hover
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list)::-webkit-scrollbar-thumb:hover
 {
 background:color-mix(in srgb, var(--text-faint) 72%, transparent)
 }
-:is(.sidebar-content,.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list)::-webkit-scrollbar-thumb:active
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list)::-webkit-scrollbar-thumb:active
 {
 background:var(--text-faint)
 }
-.account-list,.folder-list
+.sidebar-content,.account-list,.folder-list
 {
 scrollbar-width:none
 }
-.account-list::-webkit-scrollbar
+.sidebar-content::-webkit-scrollbar,.account-list::-webkit-scrollbar
 {
 width:0;
 height:0;
@@ -182,7 +182,7 @@ width:0;
 height:0;
 display:none
 }
-.account-list::-webkit-scrollbar-thumb
+.sidebar-content::-webkit-scrollbar-thumb,.account-list::-webkit-scrollbar-thumb
 {
 background:0 0
 }
@@ -190,7 +190,7 @@ background:0 0
 {
 background:0 0
 }
-.account-list::-webkit-scrollbar-track
+.sidebar-content::-webkit-scrollbar-track,.account-list::-webkit-scrollbar-track
 {
 background:0 0
 }
@@ -212,7 +212,7 @@ background:var(--text-faint)
 }
 @supports ((-moz-appearance:none))
 {
-:is(.sidebar-content,.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)
+:is(.account-list,.folder-list,.message-list,.mail-reader,.agent-conversation-list,.translation-terms-content,.mail-html,.mail-html pre,.attachment-preview-text,.thread-strip-messages,.modal-backdrop,.modal-card,.update-prompt-card,.accounts-editor-modal,.contact-editor-modal,.calendar-editor-modal,.settings-modal,.settings-body,.compose-card>form,.compose-contact-suggestions,.compose-template-picker,.sending-status-list,.sending-status-details-modal,.external-guide-code,.themed-select-menu,.agent-message-content pre,.agent-message-content table,.agent-slash-menu,.agent-mention-menu,.auto-reply-list,.agent-memory-list,.auto-reply-toast-reply,.settings-account-signature textarea,.template-editor textarea,.calendar-field textarea)
 {
 scrollbar-width:thin;
 scrollbar-color:var(--line-strong) transparent

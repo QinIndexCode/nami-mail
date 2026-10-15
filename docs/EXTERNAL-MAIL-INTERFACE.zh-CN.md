@@ -15,7 +15,7 @@ Nami Mail 外部 Mail v1 是 Windows 桌面版提供的本机、已配对接口�
 
 ## v1 工具面
 
-这 16 项工具（9 个只读 + 7 个写）是外部 Mail v1 的完整能力集。输入对象使用严格 schema，未知字段会被拒绝；首次配对固化的账户 ID 快照决定账户范围，请求参数不能扩大权限。之后新增的账户不可由旧配置文件访问，需撤销并重新配对。
+这 16 项工具（9 个只读 + 7 个写）是外部 Mail v1 的完整能力集。输入对象在经过别名归一化与非关键参数过滤（如将 `q`/`text` 映射为 `query`，过滤检索中非法的 `unread`/`flagged` 等）后严格匹配 Zod Schema，其余未声明字段会被拒绝；首次配对固化的账户 ID 快照决定账户范围，请求参数不能扩大权限。之后新增的账户不可由旧配置文件访问，需撤销并重新配对。
 
 | Tool | CLI | MCP | 严格输入 | Scope |
 | --- | --- | --- | --- | --- |
@@ -36,7 +36,7 @@ Nami Mail 外部 Mail v1 是 Windows 桌面版提供的本机、已配对接口�
 | `messages.send` | `messages send` | `namimail_messages_send` | `{ "accountId": "...", "to": [{ "address": "...", "name"? }], "cc"?, "subject": "...", "text": "...", "attachmentTokens"? }` | `write:mail` |
 | `mail.reply` | `mail reply` | `namimail_mail_reply` | `{ "accountId": "...", "messageId": "...", "to"?, "cc"?, "subject"?, "text": "...", "attachmentTokens"? }` | `write:mail` + `read:messages` |
 
-`after` 和 `before` 必须是带时区的 ISO 8601 时间，且 `before` 不得早于 `after`；`limit` 为 `1..50`。正文和线程正文由宿主限制长度，附件操作只返回元数据，不导出文件。
+`after` 和 `before` 必须是带时区的 ISO 8601 时间，且 `before` 不得早于 `after`；`limit` 按操作分档校验：`messages.list` 支持 `1..50`（默认 20），`messages.search` 支持 `1..20`（默认 10），`mail.summarize` 支持 `1..10`（默认 5）。正文和线程正文由宿主限制长度，附件操作只返回元数据，不导出文件。
 
 ## 写操作与权限档位
 
@@ -64,7 +64,7 @@ Nami Mail 外部 Mail v1 是 Windows 桌面版提供的本机、已配对接口�
 | `threads.get` | `{ "threadId": "...", "messages": [...], "truncated": boolean }` | `messages` 为上述受限消息详情。 |
 | `attachments.list` | `{ "messageId": "...", "attachments": [...], "truncated": boolean }` | 每项含 `partId`、`filename`、`contentType`、`size`、`disposition`。 |
 
-公开数据不会包含 `htmlBody`、原始附件、凭据、数据库路径、文件路径或引用对象。当前 v1 上限是：账户 100、文件夹 500、邮件列表 50、单次 batch_get 10、附件 100、单线程消息 25、正文 8,000 字符、摘要 1,500 字符。`truncated` 或 `bodyTruncated` 为 `true` 时，调用方应把数据视为受限结果，而不是完整邮箱副本。
+公开数据不会包含 `htmlBody`、原始附件、凭据、数据库路径、文件路径或引用对象。当前 v1 上限是：账户 100、文件夹 500、邮件列表 50、检索结果 20、总结邮件 10、单次 batch_get 10、附件 100、单线程消息 25、正文 8,000 字符、邮件片段 snippet 1,500 字符、总结摘录 excerpt 2,000 字符。`truncated` 或 `bodyTruncated` 为 `true` 时，调用方应把数据视为受限结果，而不是完整邮箱副本。
 
 下列功能不属于外部 v1：所有 `rag.*`、附件导出、`agent.chat`、`agent.run`。它们不受权限档位影响——无论访问级别如何都不可用；不会出现在 MCP `tools/list`，也不能通过 CLI 参数、HTTP、TCP、文件 URI、SQLite 或本机 Fastify token 绕过。
 

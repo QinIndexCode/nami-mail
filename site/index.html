@@ -61,14 +61,15 @@
           <a href="#agent" data-nav="agent"><span data-lang="zh">邮件助理</span><span data-lang="en">Assistant</span></a>
           <a href="#privacy" data-nav="privacy"><span data-lang="zh">本地与隐私</span><span data-lang="en">Privacy</span></a>
           <a href="./docs/" data-nav="docs"><span data-lang="zh">文档</span><span data-lang="en">Docs</span></a>
-          <a href="https://github.com/QinIndexCode/nami-mail" data-nav="github" rel="noopener">GitHub <span aria-hidden="true">↗</span></a>
+          <a href="https://github.com/QinIndexCode/nami-mail" data-nav="github" rel="noopener">GitHub <svg class="site-icon site-icon-sm" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a>
         </nav>
         <div class="header-actions">
           <button class="lang-button" type="button" id="lang-toggle" aria-label="Switch language"><span data-lang="zh">EN</span><span data-lang="en">中文</span></button>
           <button class="icon-button" type="button" id="theme-toggle" aria-label="Switch theme">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M5.6 18.4 7 17m10-10 1.4-1.4" stroke-linecap="round"/><circle cx="12" cy="12" r="4"/></svg>
+            <svg class="theme-icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+            <svg class="theme-icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
           </button>
-          <a class="button header-download" href="#download"><span data-lang="zh">下载</span><span data-lang="en">Download</span><span aria-hidden="true">↓</span></a>
+          <a class="button header-download" href="#download"><span data-lang="zh">下载</span><span data-lang="en">Download</span> <svg class="site-icon site-icon-sm" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg></a>
           <details class="mobile-navigation">
             <summary><span data-lang="zh">菜单</span><span data-lang="en">Menu</span></summary>
             <nav aria-label="移动导航">
@@ -77,7 +78,7 @@
               <a href="#agent" data-nav="agent"><span data-lang="zh">邮件助理</span><span data-lang="en">Assistant</span></a>
               <a href="#privacy" data-nav="privacy"><span data-lang="zh">本地与隐私</span><span data-lang="en">Privacy</span></a>
               <a href="./docs/" data-nav="docs"><span data-lang="zh">文档</span><span data-lang="en">Docs</span></a>
-              <a href="https://github.com/QinIndexCode/nami-mail" data-nav="github" rel="noopener">GitHub <span aria-hidden="true">↗</span></a>
+              <a href="https://github.com/QinIndexCode/nami-mail" data-nav="github" rel="noopener">GitHub <svg class="site-icon site-icon-sm" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a>
               <a href="#download"><span data-lang="zh">下载 Windows 版</span><span data-lang="en">Download for Windows</span></a>
             </nav>
           </details>
@@ -87,19 +88,55 @@
 
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
-        <div class="wrap">
-          <a class="release-link" href="https://github.com/QinIndexCode/nami-mail/releases" rel="noopener"><span class="status-dot" aria-hidden="true"></span><span data-lang="zh">开源 · Windows x64</span><span data-lang="en">Open source · Windows x64</span><span aria-hidden="true">→</span></a>
-          <h1 class="display" id="hero-title"><span data-lang="zh">多个邮箱，<br />一个收件箱。</span><span data-lang="en">All your mail.<br />One place to work.</span></h1>
-          <div class="hero-bottom">
-            <p class="lede"><span data-lang="zh">在一个窗口里收邮件、找邮件、写回复。<br />邮件数据保存在你的电脑上。</span><span data-lang="en">Read, find, and reply without switching inboxes.<br />Your mail is stored on your computer.</span></p>
-            <div class="hero-actions">
-              <a class="button" href="https://github.com/QinIndexCode/nami-mail/releases/latest" rel="noopener"><span data-lang="zh">下载 Windows 版</span><span data-lang="en">Download for Windows</span><span aria-hidden="true">↓</span></a>
-              <a class="text-link" href="./docs/INSTALLING.zh-CN.html" data-lang="zh">安装指南 <span aria-hidden="true">↗</span></a>
-              <a class="text-link" href="./docs/INSTALLING.en.html" data-lang="en">Installation guide <span aria-hidden="true">↗</span></a>
+        <div class="hero-wave-wrap" aria-hidden="true">
+          <canvas id="hero-wave-canvas" class="hero-wave-canvas"></canvas>
+        </div>
+        <div class="wrap hero-wrap">
+          <div class="hero-content-grid">
+            <div class="hero-left">
+              <a class="release-link" href="https://github.com/QinIndexCode/nami-mail/releases" rel="noopener">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span data-lang="zh">开源 · Windows x64</span>
+                <span data-lang="en">Open source · Windows x64</span>
+                <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+              </a>
+              <h1 class="display hero-headline" id="hero-title">
+                <span data-lang="zh">Work comfortably<br />with <strong>NamiMail</strong></span>
+                <span data-lang="en">Work comfortably<br />with <strong>NamiMail</strong></span>
+              </h1>
+              <p class="lede hero-lede">
+                <span data-lang="zh">多个邮箱，一个收件箱。邮件数据保存在你的电脑上。</span>
+                <span data-lang="en">Read, find, and reply without switching inboxes. Your mail is stored on your computer.</span>
+              </p>
+            </div>
+            <div class="hero-right">
+              <a class="button button-hero-download" href="https://github.com/QinIndexCode/nami-mail/releases/latest" rel="noopener">
+                <svg class="site-icon site-icon-win" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+                <span data-lang="zh">下载 Windows 版</span>
+                <span data-lang="en">Download for Windows</span>
+              </a>
+              <div class="hero-meta">
+                <span class="meta-tag">v0.1.0-alpha</span>
+                <span class="meta-dot">·</span>
+                <a class="text-link" href="./docs/INSTALLING.zh-CN.html" data-lang="zh">安装指南 <svg class="site-icon site-icon-xs" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a>
+                <a class="text-link" href="./docs/INSTALLING.en.html" data-lang="en">Install Guide <svg class="site-icon site-icon-xs" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a>
+                <span class="meta-dot">·</span>
+                <a class="text-link" href="https://github.com/QinIndexCode/nami-mail" rel="noopener"><span data-lang="zh">开源协议</span><span data-lang="en">License</span></a>
+              </div>
             </div>
           </div>
+          <a class="hero-scroll-cue" href="#demo" aria-label="向下滚动至演示">
+            <span data-lang="zh">探索收件箱</span>
+            <span data-lang="en">Explore demo</span>
+            <svg class="site-icon site-icon-xs" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+          </a>
+        </div>
+      </section>
+
+      <section id="demo" class="demo-showcase-section">
+        <div class="wrap">
           <figure class="hero-surface">
-            <div class="demo-toolbar"><span><i class="status-dot" aria-hidden="true"></i><span data-lang="zh">试试收件箱</span><span data-lang="en">Try the inbox</span></span><div><button type="button" class="demo-tour-toggle" data-demo-tour-toggle="mail" hidden></button><button type="button" class="demo-closeup-toggle" data-demo-closeup="mail" aria-pressed="true" hidden></button><button type="button" class="demo-reset" data-demo-reset="mail" hidden><span data-lang="zh">重置</span><span data-lang="en">Reset</span></button><a class="demo-open" data-demo-open="mail" href="./demo/?demo=1&amp;preview=site" target="_blank" rel="noopener"><span data-lang="zh">单独打开 ↗</span><span data-lang="en">Open demo ↗</span></a></div></div>
+            <div class="demo-toolbar"><span><i class="status-dot" aria-hidden="true"></i><span class="label-bracket">[ 00 ]</span> <span data-lang="zh">试试多账户收件箱</span><span data-lang="en">Try the multi-account inbox</span></span><div><button type="button" class="demo-tour-toggle" data-demo-tour-toggle="mail" hidden></button><button type="button" class="demo-closeup-toggle" data-demo-closeup="mail" aria-pressed="true" hidden></button><button type="button" class="demo-reset" data-demo-reset="mail" hidden><span data-lang="zh">重置</span><span data-lang="en">Reset</span></button><a class="demo-open" data-demo-open="mail" href="./demo/?demo=1&amp;preview=site" target="_blank" rel="noopener"><span data-lang="zh">单独打开</span><span data-lang="en">Open demo</span> <svg class="site-icon site-icon-xs" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a></div></div>
             <div class="demo-stage" data-state="waiting">
               <div class="demo-placeholder" role="status">
                 <div class="nami-splash-content"><img class="nami-splash-logo" src="./assets/brand/splash-logo.png" alt="" width="64" height="64" /><span class="nami-splash-divider" aria-hidden="true"></span><span class="nami-splash-wordmark">Nami Mail</span></div>
@@ -108,7 +145,7 @@
                 <button class="demo-retry button" type="button" data-demo-retry="mail" hidden><span data-lang="zh">重试</span><span data-lang="en">Retry</span></button>
               </div>
               <iframe class="demo-frame" data-demo="mail" title="Nami Mail 收件箱演示" loading="lazy" sandbox="allow-scripts allow-same-origin" hidden></iframe>
-              <div class="demo-tour-pointer" aria-hidden="true"><span class="demo-tour-cursor"><img src="./assets/demo-cursor.png" alt="" width="23" height="24" draggable="false" /></span></div><div class="demo-tour-progress" aria-hidden="true"></div>
+              <div class="demo-tour-pointer" aria-hidden="true"><span class="demo-tour-cursor"><img src="./assets/demo-cursor.png" alt="" width="23" height="24" draggable="false" /></span></div>
             </div>
             <div class="demo-tour-caption" hidden><span class="demo-tour-step" aria-hidden="true"></span><span class="demo-tour-label" role="status"></span></div>
             <noscript><img data-lang="zh" src="./assets/nami-mail-inbox-zh.png" width="1440" height="900" alt="Nami Mail 多账户收件箱" /><img data-lang="en" src="./assets/nami-mail-inbox-en.png" width="1440" height="900" alt="Nami Mail multi-account inbox" /></noscript>
@@ -117,39 +154,32 @@
         </div>
       </section>
 
-      <section class="provider-strip" aria-label="Supported mail providers">
-        <div class="wrap">
-          <p><span data-lang="zh">连接你已经在用的邮箱</span><span data-lang="en">Works with the accounts you already use</span></p>
-          <ul><li>Gmail</li><li>iCloud</li><li>Outlook</li><li>QQ 邮箱</li><li>163 邮箱</li><li>IMAP / SMTP</li></ul>
-          <a class="text-link" href="./docs/EMAIL-PROVIDERS.zh-CN.html" data-lang="zh">查看接入方式 →</a><a class="text-link" href="./docs/EMAIL-PROVIDERS.en.html" data-lang="en">Account setup →</a>
-        </div>
-      </section>
-
       <section id="features" class="section">
         <div class="wrap">
-          <header class="section-head">
-            <p class="section-label">01 / <span data-lang="zh">日常邮件</span><span data-lang="en">Everyday mail</span></p>
-            <h2><span data-lang="zh">日常邮件，<br />集中处理。</span><span data-lang="en">Everyday mail,<br />all in one place.</span></h2>
+          <header class="section-head split-heading">
+            <div>
+              <p class="section-label"><span class="label-bracket">[ 01 ]</span> <span data-lang="zh">日常邮件</span><span data-lang="en">Everyday mail</span></p>
+              <h2><span data-lang="zh">日常邮件，<br />集中处理。</span><span data-lang="en">Everyday mail,<br />all in one place.</span></h2>
+            </div>
             <p><span data-lang="zh">工作邮箱和个人邮箱放在一起查看，也可以按账户分别处理。</span><span data-lang="en">See work and personal mail together, or focus on a single account.</span></p>
           </header>
           <div class="feature-grid">
             <article class="feature feature-main">
-              <span class="feature-icon" aria-hidden="true">↳</span>
+              <div class="feature-icon-badge" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></div>
               <h3><span data-lang="zh">少切换几个窗口</span><span data-lang="en">Fewer inboxes to switch between</span></h3>
               <p><span data-lang="zh">统一收件箱保留账户来源。未读、标星、归档和稍后处理，各有自己的入口。</span><span data-lang="en">Every message keeps its account identity. Unread, starred, archived, and snoozed mail each have a place.</span></p>
-              <div class="inbox-illustration" aria-hidden="true"><div><b>收件箱 / Inbox</b><span>All accounts</span></div><div><i class="mail-dot"></i><b>Mira Studio</b><span>Design review</span></div><div><i></i><b>林澈</b><span>周末，在安静的地方见</span></div><div><i></i><b>Noah</b><span>Re: launch checklist</span></div></div>
+              <div class="inbox-illustration" aria-hidden="true"><div><b class="inbox-header-title">统一收件箱 · All Inboxes</b><span class="inbox-header-badge">3 unread</span></div><div><i class="mail-dot is-unread"></i><b>Mira Studio</b><span class="inbox-acc acc-gmail">Gmail</span><span>Design review</span><span class="inbox-time">14:20</span></div><div><i class="mail-dot"></i><b>林澈</b><span class="inbox-acc acc-outlook">Outlook</span><span>周末，在安静的地方见</span><span class="inbox-time">11:05</span></div><div><i class="mail-dot"></i><b>Noah</b><span class="inbox-acc acc-icloud">iCloud</span><span>Re: launch checklist</span><span class="inbox-time">09:12</span></div></div>
             </article>
-            <article class="feature"><span class="feature-icon" aria-hidden="true">⌕</span><h3><span data-lang="zh">查找邮件与附件</span><span data-lang="en">Find mail and attachments</span></h3><p><span data-lang="zh">按关键词、时间和附件类型筛选；需要更多上下文时，可以让助理检索本地邮件。</span><span data-lang="en">Filter by keywords, date, and attachment type. Ask the assistant to search your local mail when you need more context.</span></p><div class="mini-tags"><span>PDF</span><span data-lang="zh">最近一个月</span><span data-lang="en">Last month</span><span data-lang="zh">带附件</span><span data-lang="en">Attachments</span></div></article>
-            <article class="feature"><span class="feature-icon" aria-hidden="true">↗</span><h3><span data-lang="zh">写完，再决定何时发送</span><span data-lang="en">Write now. Choose when to send.</span></h3><p><span data-lang="zh">保存草稿，插入常用模板，设置账户签名；也可以安排定时发送。</span><span data-lang="en">Save a draft, insert a template, add your account signature, or schedule a message for later.</span></p><div class="mini-tags"><span data-lang="zh">草稿</span><span data-lang="en">Drafts</span><span data-lang="zh">模板</span><span data-lang="en">Templates</span><span data-lang="zh">定时发送</span><span data-lang="en">Schedule</span></div></article>
+            <article class="feature feature-search"><div class="feature-icon-badge" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></div><h3><span data-lang="zh">查找邮件与附件</span><span data-lang="en">Find mail and attachments</span></h3><p><span data-lang="zh">按关键词、时间和附件类型筛选；需要更多上下文时，可以让助理检索本地邮件。</span><span data-lang="en">Filter by keywords, date, and attachment type. Ask the assistant to search your local mail when you need more context.</span></p><div class="mini-tags"><span class="tag-accent">PDF</span><span data-lang="zh">最近一个月</span><span data-lang="en">Last month</span><span data-lang="zh">带附件</span><span data-lang="en">Attachments</span></div></article>
+            <article class="feature feature-schedule"><div class="feature-icon-badge" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div><h3><span data-lang="zh">写完，再决定何时发送</span><span data-lang="en">Write now. Choose when to send.</span></h3><p><span data-lang="zh">保存草稿，插入常用模板，设置账户签名；也可以安排定时发送。</span><span data-lang="en">Save a draft, insert a template, add your account signature, or schedule a message for later.</span></p><div class="mini-tags"><span data-lang="zh">草稿</span><span data-lang="en">Drafts</span><span data-lang="zh">模板</span><span data-lang="en">Templates</span><span class="tag-accent" data-lang="zh">定时发送</span><span class="tag-accent" data-lang="en">Schedule</span></div></article>
           </div>
         </div>
       </section>
 
       <section id="agent" class="section product-section">
         <div class="wrap">
-          <header class="section-head split-heading"><div><p class="section-label">02 / <span data-lang="zh">邮件助理</span><span data-lang="en">Mail assistant</span></p><h2><span data-lang="zh">从邮件里找答案，<br />再写下一封。</span><span data-lang="en">Find the context.<br />Draft the next reply.</span></h2></div><p><span data-lang="zh">助理可以检索邮件、整理信息和拟写回复。模型、邮件范围和操作权限由你设置。</span><span data-lang="en">Search messages, put information together, and draft replies. You choose the model, mail scope, and permissions.</span></p></header>
           <figure class="product-surface">
-            <div class="demo-toolbar"><span><i class="status-dot" aria-hidden="true"></i><span data-lang="zh">试试邮件助理</span><span data-lang="en">Try the assistant</span></span><div><button type="button" class="demo-tour-toggle" data-demo-tour-toggle="agent" hidden></button><button type="button" class="demo-closeup-toggle" data-demo-closeup="agent" aria-pressed="true" hidden></button><button type="button" class="demo-reset" data-demo-reset="agent" hidden><span data-lang="zh">重置</span><span data-lang="en">Reset</span></button><a class="demo-open" data-demo-open="agent" href="./demo/?demo=1&amp;preview=site&amp;view=agent" target="_blank" rel="noopener"><span data-lang="zh">单独打开 ↗</span><span data-lang="en">Open demo ↗</span></a></div></div>
+            <div class="demo-toolbar"><span><i class="status-dot" aria-hidden="true"></i><span class="label-bracket">[ 02 ]</span> <span data-lang="zh">试试邮件助理</span><span data-lang="en">Try the assistant</span></span><div><button type="button" class="demo-tour-toggle" data-demo-tour-toggle="agent" hidden></button><button type="button" class="demo-closeup-toggle" data-demo-closeup="agent" aria-pressed="true" hidden></button><button type="button" class="demo-reset" data-demo-reset="agent" hidden><span data-lang="zh">重置</span><span data-lang="en">Reset</span></button><a class="demo-open" data-demo-open="agent" href="./demo/?demo=1&amp;preview=site&amp;view=agent" target="_blank" rel="noopener"><span data-lang="zh">单独打开</span><span data-lang="en">Open demo</span> <svg class="site-icon site-icon-xs" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a></div></div>
             <div class="demo-stage" data-state="waiting">
               <div class="demo-placeholder" role="status">
                 <div class="nami-splash-content"><img class="nami-splash-logo" src="./assets/brand/splash-logo.png" alt="" width="64" height="64" /><span class="nami-splash-divider" aria-hidden="true"></span><span class="nami-splash-wordmark">Nami Mail</span></div>
@@ -158,65 +188,138 @@
                 <button class="demo-retry button" type="button" data-demo-retry="agent" hidden><span data-lang="zh">重试</span><span data-lang="en">Retry</span></button>
               </div>
               <iframe class="demo-frame demo-frame-agent" data-demo="agent" title="Nami Mail 邮件助理演示" loading="lazy" sandbox="allow-scripts allow-same-origin" hidden></iframe>
-              <div class="demo-tour-pointer" aria-hidden="true"><span class="demo-tour-cursor"><img src="./assets/demo-cursor.png" alt="" width="23" height="24" draggable="false" /></span></div><div class="demo-tour-progress" aria-hidden="true"></div>
+              <div class="demo-tour-pointer" aria-hidden="true"><span class="demo-tour-cursor"><img src="./assets/demo-cursor.png" alt="" width="23" height="24" draggable="false" /></span></div>
             </div>
             <div class="demo-tour-caption" hidden><span class="demo-tour-step" aria-hidden="true"></span><span class="demo-tour-label" role="status"></span></div>
             <noscript><img data-lang="zh" src="./assets/nami-mail-agent-zh.png" width="1440" height="900" alt="Nami Mail 邮件助理界面" /><img data-lang="en" src="./assets/nami-mail-agent-en.png" width="1440" height="900" alt="Nami Mail assistant workspace" /></noscript>
             <figcaption><span data-lang="zh">使用示例邮件与预设答复，可查看答复与来源。</span><span data-lang="en">Sample messages and a preset answer. View the reply and follow its sources.</span></figcaption>
           </figure>
-          <div class="detail-grid"><div><h3><span data-lang="zh">回答带来源</span><span data-lang="en">Check the sources</span></h3><p><span data-lang="zh">检索结果可以引用原邮件，点击引用即可回到正文。</span><span data-lang="en">Follow a source reference back to the original message.</span></p></div><div><h3><span data-lang="zh">接入你选择的模型</span><span data-lang="en">Use your preferred model</span></h3><p><span data-lang="zh">支持 OpenAI 兼容接口、Claude、Gemini 和本地 Ollama。</span><span data-lang="en">Connect an OpenAI-compatible service, Claude, Gemini, or local Ollama.</span></p></div><div><h3><span data-lang="zh">权限可以收紧</span><span data-lang="en">Set the limits</span></h3><p><span data-lang="zh">选择只读或发送确认模式；云模型访问邮件内容需要单独授权。</span><span data-lang="en">Choose read-only or send-confirmed access. Cloud access to mail content requires separate authorization.</span></p></div></div>
         </div>
       </section>
 
       <section id="privacy" class="section">
         <div class="wrap privacy-grid">
-          <div class="section-head"><p class="section-label">03 / <span data-lang="zh">本地优先</span><span data-lang="en">Local first</span></p><h2><span data-lang="zh">邮箱连服务商，<br />数据留在电脑上。</span><span data-lang="en">Your provider.<br />Your computer.</span></h2><p><span data-lang="zh">Nami Mail 直接连接邮箱服务商。邮件缓存、账户凭据和密钥保存在本机。</span><span data-lang="en">Nami Mail connects directly to your mail provider. Cached mail, credentials, and keys are stored locally.</span></p><a class="text-link" href="./docs/PRIVACY.zh-CN.html" data-lang="zh">阅读隐私与数据说明 ↗</a><a class="text-link" href="./docs/PRIVACY.en.html" data-lang="en">Read the privacy and data guide ↗</a></div>
+          <div class="section-head"><p class="section-label"><span class="label-bracket">[ 03 ]</span> <span data-lang="zh">本地优先</span><span data-lang="en">Local first</span></p><h2><span data-lang="zh">邮箱连服务商，<br />数据留在电脑上。</span><span data-lang="en">Your provider.<br />Your computer.</span></h2><p><span data-lang="zh">Nami Mail 直接连接邮箱服务商。邮件缓存、账户凭据和密钥保存在本机。</span><span data-lang="en">Nami Mail connects directly to your mail provider. Cached mail, credentials, and keys are stored locally.</span></p><a class="text-link" href="./docs/PRIVACY.zh-CN.html" data-lang="zh">阅读隐私与数据说明 <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a><a class="text-link" href="./docs/PRIVACY.en.html" data-lang="en">Read the privacy and data guide <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a></div>
           <div class="privacy-facts">
-            <div><span class="fact-number">01</span><div><h3><span data-lang="zh">本地保存与检索</span><span data-lang="en">Local storage and search</span></h3><p><span data-lang="zh">已同步的邮件保存在本机。附件在打开或下载时按需读取，邮件检索在本机运行。</span><span data-lang="en">Synced mail is stored locally. Attachments are fetched when opened or downloaded. Mail search runs on your computer.</span></p></div></div>
-            <div><span class="fact-number">02</span><div><h3><span data-lang="zh">AI 和翻译是可选项</span><span data-lang="en">AI and translation are optional</span></h3><p><span data-lang="zh">使用云模型或翻译服务时，相关内容会发送到你配置的服务。可以先查看数据范围，再决定是否启用。</span><span data-lang="en">Cloud models and translation services receive the content needed for that task. Review the data scope before enabling them.</span></p></div></div>
-            <div><span class="fact-number">03</span><div><h3><span data-lang="zh">源代码可以查阅</span><span data-lang="en">The source is open</span></h3><p><span data-lang="zh">代码、构建流程和数据说明都在公开仓库中。</span><span data-lang="en">Inspect the code, build process, and data documentation in the public repository.</span></p></div></div>
+            <div class="privacy-fact-card"><span class="fact-number">01</span><div><h3><span data-lang="zh">本地保存与检索</span><span data-lang="en">Local storage and search</span></h3><p><span data-lang="zh">已同步的邮件保存在本机。附件在打开或下载时按需读取，邮件检索在本机运行。</span><span data-lang="en">Synced mail is stored locally. Attachments are fetched when opened or downloaded. Mail search runs on your computer.</span></p></div><span class="fact-tag" aria-hidden="true"><span data-lang="zh">100% 本地</span><span data-lang="en">100% Local</span></span></div>
+            <div class="privacy-fact-card"><span class="fact-number">02</span><div><h3><span data-lang="zh">AI 和翻译是可选项</span><span data-lang="en">AI and translation are optional</span></h3><p><span data-lang="zh">使用云模型或翻译服务时，相关内容会发送到你配置的服务。可以先查看数据范围，再决定是否启用。</span><span data-lang="en">Cloud models and translation services receive the content needed for that task. Review the data scope before enabling them.</span></p></div><span class="fact-tag" aria-hidden="true"><span data-lang="zh">按需授权</span><span data-lang="en">Zero Relay</span></span></div>
+            <div class="privacy-fact-card"><span class="fact-number">03</span><div><h3><span data-lang="zh">源代码可以查阅</span><span data-lang="en">The source is open</span></h3><p><span data-lang="zh">代码、构建流程和数据说明都在公开仓库中。</span><span data-lang="en">Inspect the code, build process, and data documentation in the public repository.</span></p></div><span class="fact-tag" aria-hidden="true"><span data-lang="zh">公开透明</span><span data-lang="en">Open source</span></span></div>
           </div>
         </div>
       </section>
 
       <section id="retrieval" class="section compact-section">
-        <div class="wrap split-heading"><div><p class="section-label">04 / <span data-lang="zh">检索</span><span data-lang="en">Search</span></p><h2><span data-lang="zh">记不清主题，<br />也可以从内容找。</span><span data-lang="en">Start with what<br />you remember.</span></h2></div><div><p><span data-lang="zh">关键词搜索用于快速筛选，助理检索用于查找相关邮件。找到结果后，再回到原邮件核对。</span><span data-lang="en">Use keywords to narrow the list, or ask the assistant to find related mail. Open the original messages to verify the result.</span></p><a class="text-link" href="./docs/rag/architecture.zh-CN.html" data-lang="zh">了解邮件检索 ↗</a><a class="text-link" href="./docs/rag/architecture.en.html" data-lang="en">How mail retrieval works ↗</a></div></div>
+        <div class="wrap retrieval-wrap">
+          <div class="split-heading">
+            <div><p class="section-label"><span class="label-bracket">[ 04 ]</span> <span data-lang="zh">邮件检索</span><span data-lang="en">Instant Search</span></p><h2><span data-lang="zh">记不清主题，<br />也可以从内容找。</span><span data-lang="en">Start with what<br />you remember.</span></h2></div>
+            <div><p><span data-lang="zh">关键词搜索用于快速筛选，助理检索用于查找相关邮件。找到结果后，再回到原邮件核对。</span><span data-lang="en">Use keywords to narrow the list, or ask the assistant to find related mail. Open the original messages to verify the result.</span></p><a class="text-link" href="./docs/rag/architecture.zh-CN.html" data-lang="zh">了解邮件检索 <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a><a class="text-link" href="./docs/rag/architecture.en.html" data-lang="en">How mail retrieval works <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a></div>
+          </div>
+          <div class="search-spotlight-bar" aria-hidden="true">
+            <div class="spotlight-input">
+              <svg class="site-icon site-icon-sm" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <span class="spotlight-query">林澈 <mark>“方案”</mark></span>
+              <span class="spotlight-kbd">Ctrl K</span>
+            </div>
+            <div class="spotlight-results">
+              <span class="spotlight-chip is-active"><i class="status-dot"></i> <span data-lang="zh">2 封相关邮件</span><span data-lang="en">2 messages</span></span>
+              <span class="spotlight-chip"><span data-lang="zh">1 个附件 (PDF)</span><span data-lang="en">1 PDF</span></span>
+              <span class="spotlight-meta"><span data-lang="zh">本地 SQLite 全文检索 · 8ms</span><span data-lang="en">Local SQLite FTS5 · 8ms</span></span>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section id="cli" class="section">
         <div class="wrap integration-grid">
-          <div class="section-head"><p class="section-label">05 / CLI &amp; MCP</p><h2><span data-lang="zh">也能接入<br />你的工作流程。</span><span data-lang="en">Fits into your<br />existing workflow.</span></h2><p><span data-lang="zh">通过本机配对，让脚本或兼容 MCP 的工具读取邮件。可访问的账户和工具由权限设置控制。</span><span data-lang="en">Pair a local script or MCP client to read mail. Permissions determine which accounts and tools it can access.</span></p><a class="text-link" href="./docs/cli/README.zh-CN.html" data-lang="zh">查看 CLI 文档 ↗</a><a class="text-link" href="./docs/cli/README.en.html" data-lang="en">Read the CLI guide ↗</a></div>
-          <div class="terminal"><div class="terminal-header"><span class="surface-dots"><i></i><i></i><i></i></span><span>namimail / PowerShell</span></div><pre><code>namimail --help</code></pre><p><span data-lang="zh">从命令帮助开始。配对步骤、账户范围与可用工具见接口文档。</span><span data-lang="en">Start with command help. See the interface guide for pairing, account scope, and available tools.</span></p><a href="./docs/mcp/README.zh-CN.html" data-lang="zh">MCP 接入说明 →</a><a href="./docs/mcp/README.en.html" data-lang="en">MCP setup →</a></div>
+          <div class="section-head"><p class="section-label"><span class="label-bracket">[ 05 ]</span> CLI &amp; MCP</p><h2><span data-lang="zh">也能接入<br />你的工作流程。</span><span data-lang="en">Fits into your<br />existing workflow.</span></h2><p><span data-lang="zh">通过本机配对，让脚本或兼容 MCP 的工具读取邮件。可访问的账户和工具由权限设置控制。</span><span data-lang="en">Pair a local script or MCP client to read mail. Permissions determine which accounts and tools it can access.</span></p><a class="text-link" href="./docs/cli/README.zh-CN.html" data-lang="zh">查看 CLI 文档 <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a><a class="text-link" href="./docs/cli/README.en.html" data-lang="en">Read the CLI guide <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a></div>
+          <div class="terminal">
+            <div class="terminal-header">
+              <span class="terminal-traffic" aria-hidden="true"><i class="traffic-close"></i><i class="traffic-min"></i><i class="traffic-max"></i></span>
+              <span class="terminal-title"><svg class="site-icon site-icon-xs" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg> namimail / PowerShell</span>
+            </div>
+            <pre><code><span class="term-prompt">$</span> <span class="term-cmd">namimail sync</span> <span class="term-flag">--all</span>
+<span class="term-ok">✔</span> <span data-lang="zh">3 个账户已同步 (0.24s)</span><span data-lang="en">3 accounts synchronized (0.24s)</span>
+<span class="term-prompt">$</span> <span class="term-cmd">namimail mcp</span> status
+<span class="term-accent">●</span> <span data-lang="zh">MCP Server 运行中 (stdio 协议已就绪)</span><span data-lang="en">MCP Server running on stdio</span></code></pre>
+            <p><span data-lang="zh">从命令帮助开始。配对步骤、账户范围与可用工具见接口文档。</span><span data-lang="en">Start with command help. See the interface guide for pairing, account scope, and available tools.</span></p>
+            <div class="terminal-actions">
+              <a href="./docs/mcp/README.zh-CN.html" data-lang="zh">MCP 接入说明 <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+              <a href="./docs/mcp/README.en.html" data-lang="en">MCP setup <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+              <span class="terminal-mcp-badge" aria-hidden="true">Model Context Protocol</span>
+            </div>
+          </div>
         </div>
       </section>
 
       <section id="docs" class="section">
         <div class="wrap">
-          <header class="section-head split-heading"><div><p class="section-label">06 / <span data-lang="zh">使用文档</span><span data-lang="en">Documentation</span></p><h2><span data-lang="zh">从接入第一个邮箱开始。</span><span data-lang="en">Start with your first account.</span></h2></div><a class="text-link" href="./docs/"><span data-lang="zh">全部文档 →</span><span data-lang="en">All documentation →</span></a></header>
+          <header class="section-head split-heading"><div><p class="section-label"><span class="label-bracket">[ 06 ]</span> <span data-lang="zh">使用文档</span><span data-lang="en">Documentation</span></p><h2><span data-lang="zh">从接入第一个邮箱开始。</span><span data-lang="en">Start with your first account.</span></h2></div><a class="text-link" href="./docs/"><span data-lang="zh">全部文档</span><span data-lang="en">All documentation</span> <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a></header>
           <div class="docs-grid">
-            <a class="doc-link" href="./docs/INSTALLING.zh-CN.html" data-lang="zh"><span>01</span><h3>安装与更新</h3><p>下载、安装、数据保留与版本更新。</p><span aria-hidden="true">↗</span></a><a class="doc-link" href="./docs/INSTALLING.en.html" data-lang="en"><span>01</span><h3>Install and update</h3><p>Downloads, installation, data retention, and updates.</p><span aria-hidden="true">↗</span></a>
-            <a class="doc-link" href="./docs/EMAIL-PROVIDERS.zh-CN.html" data-lang="zh"><span>02</span><h3>接入邮箱</h3><p>授权码、OAuth 与各服务商的配置方式。</p><span aria-hidden="true">↗</span></a><a class="doc-link" href="./docs/EMAIL-PROVIDERS.en.html" data-lang="en"><span>02</span><h3>Connect an account</h3><p>App passwords, OAuth, and provider setup.</p><span aria-hidden="true">↗</span></a>
-            <a class="doc-link" href="./docs/agent/usage.zh-CN.html" data-lang="zh"><span>03</span><h3>使用邮件助理</h3><p>配置模型、选择邮件范围、查看来源。</p><span aria-hidden="true">↗</span></a><a class="doc-link" href="./docs/agent/usage.en.html" data-lang="en"><span>03</span><h3>Use the assistant</h3><p>Models, mail scope, and source references.</p><span aria-hidden="true">↗</span></a>
+            <a class="doc-link" href="./docs/INSTALLING.zh-CN.html" data-lang="zh"><span class="doc-badge">01 · 快速起步</span><div class="doc-icon-badge" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg></div><h3>安装与更新</h3><p>下载、安装、数据保留与版本更新。</p><svg class="doc-link-arrow site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a><a class="doc-link" href="./docs/INSTALLING.en.html" data-lang="en"><span class="doc-badge">01 · Getting Started</span><div class="doc-icon-badge" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg></div><h3>Install and update</h3><p>Downloads, installation, data retention, and updates.</p><svg class="doc-link-arrow site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a>
+            <a class="doc-link" href="./docs/EMAIL-PROVIDERS.zh-CN.html" data-lang="zh"><span class="doc-badge">02 · 协议配置</span><div class="doc-icon-badge" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg></div><h3>接入邮箱</h3><p>授权码、OAuth 与各服务商的配置方式。</p><svg class="doc-link-arrow site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a><a class="doc-link" href="./docs/EMAIL-PROVIDERS.en.html" data-lang="en"><span class="doc-badge">02 · Protocols</span><div class="doc-icon-badge" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg></div><h3>Connect an account</h3><p>App passwords, OAuth, and provider setup.</p><svg class="doc-link-arrow site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a>
+            <a class="doc-link" href="./docs/agent/usage.zh-CN.html" data-lang="zh"><span class="doc-badge">03 · 助理协同</span><div class="doc-icon-badge" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg></div><h3>使用邮件助理</h3><p>配置模型、选择邮件范围、查看来源。</p><svg class="doc-link-arrow site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a><a class="doc-link" href="./docs/agent/usage.en.html" data-lang="en"><span class="doc-badge">03 · Intelligence</span><div class="doc-icon-badge" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg></div><h3>Use the assistant</h3><p>Models, mail scope, and source references.</p><svg class="doc-link-arrow site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a>
+          </div>
+        </div>
+      </section>
+
+      <section id="testimonials" class="section testimonials-section">
+        <div class="wrap">
+          <header class="section-head split-heading">
+            <div>
+              <p class="section-label"><span class="label-bracket">[ 07 ]</span> <span data-lang="zh">社区之声</span><span data-lang="en">Community</span></p>
+              <h2><span data-lang="zh">暂无评价</span><span data-lang="en">No Reviews Yet</span></h2>
+            </div>
+            <p><span data-lang="zh">欢迎试用 Nami Mail，期待你的第一个使用反馈与建议。</span><span data-lang="en">Try Nami Mail and be the first to share your experience with us.</span></p>
+          </header>
+          <div class="testimonials-empty">
+            <div class="testimonials-empty-icon" aria-hidden="true">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              </svg>
+            </div>
+            <h3><span data-lang="zh">等待第一位探索者的声音</span><span data-lang="en">Awaiting the First Review</span></h3>
+            <p><span data-lang="zh">Nami Mail 正在持续迭代中。如果你在日常使用中有任何感受、功能需求或建议，欢迎前往 GitHub Discussions 畅所欲言。</span><span data-lang="en">Nami Mail is actively evolving. If you have any thoughts, feature suggestions, or questions, we'd love to hear from you on GitHub.</span></p>
+            <div class="testimonials-empty-actions">
+              <a class="button button-sm" href="https://github.com/QinIndexCode/nami-mail/discussions" target="_blank" rel="noopener">
+                <span data-lang="zh">前往 GitHub Discussions 交流</span><span data-lang="en">Join GitHub Discussions</span>
+                <svg class="site-icon site-icon-xs" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+              </a>
+            </div>
           </div>
         </div>
       </section>
 
       <section id="download" class="section download-section">
-        <div class="wrap"><div><p class="section-label">NAMI MAIL / WINDOWS</p><h2><span data-lang="zh">把第一个邮箱接进来。</span><span data-lang="en">Bring your first inbox in.</span></h2><p><span data-lang="zh">从 GitHub Releases 下载 Windows x64 安装程序。</span><span data-lang="en">Download the Windows x64 installer from GitHub Releases.</span></p></div><a class="button" href="https://github.com/QinIndexCode/nami-mail/releases/latest" rel="noopener"><span data-lang="zh">下载 Windows 版</span><span data-lang="en">Download for Windows</span><span aria-hidden="true">↓</span></a></div>
+        <div class="wrap">
+          <div class="download-card">
+            <div>
+              <p class="section-label">NAMI MAIL / WINDOWS</p>
+              <h2><span data-lang="zh">把第一个邮箱接进来。</span><span data-lang="en">Bring your first inbox in.</span></h2>
+              <p><span data-lang="zh">从 GitHub Releases 下载 Windows x64 安装程序。</span><span data-lang="en">Download the Windows x64 installer from GitHub Releases.</span></p>
+              <div class="download-meta" aria-hidden="true">
+                <span class="download-pill">Windows 10 / 11 · x64</span>
+                <span class="download-pill"><span data-lang="zh">离线安装包</span><span data-lang="en">Offline installer</span></span>
+                <span class="download-pill"><span data-lang="zh">开源透明</span><span data-lang="en">Open source</span></span>
+              </div>
+            </div>
+            <a class="button button-lg" href="https://github.com/QinIndexCode/nami-mail/releases/latest" rel="noopener"><span data-lang="zh">下载 Windows 版</span><span data-lang="en">Download for Windows</span> <svg class="site-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg></a>
+          </div>
+        </div>
       </section>
 
-      <section class="section faq-section">
+      <section id="faq" class="section faq-section">
         <div class="wrap"><h2><span data-lang="zh">开始前，可能想问的几件事。</span><span data-lang="en">A few things before you start.</span></h2><div class="faq-list">
-          <details><summary><span data-lang="zh">支持哪些系统？</span><span data-lang="en">Which platforms are supported?</span></summary><p><span data-lang="zh">目前提供 Windows x64 安装程序，下载与安装步骤见安装指南。</span><span data-lang="en">The installer supports Windows x64. See the installation guide for download and setup steps.</span></p></details>
-          <details><summary><span data-lang="zh">必须配置 AI 才能用吗？</span><span data-lang="en">Do I need to configure an AI model?</span></summary><p><span data-lang="zh">不需要。收发、阅读、草稿和邮件筛选可以独立使用。需要助理时，再配置本地或云端模型。</span><span data-lang="en">No. Sending, reading, drafts, and filters work independently. Configure a local or cloud model when you want the assistant.</span></p></details>
-          <details><summary><span data-lang="zh">邮件会发送到 Nami Mail 的服务器吗？</span><span data-lang="en">Does mail pass through a Nami Mail server?</span></summary><p><span data-lang="zh">客户端直接连接邮箱服务商，本地保存邮件数据。主动使用云模型、翻译或外部工具时，相关内容可能发送到对应服务，具体范围见隐私说明。</span><span data-lang="en">The client connects directly to your provider and stores mail locally. Cloud models, translation, and external tools may receive task-related content when you use them; see the privacy guide for the scope.</span></p></details>
+          <details><summary><span data-lang="zh">支持哪些系统？</span><span data-lang="en">Which platforms are supported?</span><svg class="faq-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></summary><p><span data-lang="zh">目前提供 Windows x64 安装程序，下载与安装步骤见安装指南。</span><span data-lang="en">The installer supports Windows x64. See the installation guide for download and setup steps.</span></p></details>
+          <details><summary><span data-lang="zh">必须配置 AI 才能用吗？</span><span data-lang="en">Do I need to configure an AI model?</span><svg class="faq-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></summary><p><span data-lang="zh">不需要。收发、阅读、草稿和邮件筛选可以独立使用。需要助理时，再配置本地或云端模型。</span><span data-lang="en">No. Sending, reading, drafts, and filters work independently. Configure a local or cloud model when you want the assistant.</span></p></details>
+          <details><summary><span data-lang="zh">邮件会发送到 Nami Mail 的服务器吗？</span><span data-lang="en">Does mail pass through a Nami Mail server?</span><svg class="faq-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></summary><p><span data-lang="zh">客户端直接连接邮箱服务商，本地保存邮件数据。主动使用云模型、翻译或外部工具时，相关内容可能发送到对应服务，具体范围见隐私说明。</span><span data-lang="en">The client connects directly to your provider and stores mail locally. Cloud models, translation, and external tools may receive task-related content when you use them; see the privacy guide for the scope.</span></p></details>
         </div></div>
       </section>
 
-      <section id="contributors" class="contributors-section"><div class="wrap"><div><p class="section-label"><span data-lang="zh">开源项目</span><span data-lang="en">Open source</span></p><h2><span data-lang="zh">感谢一起做这个项目的人。</span><span data-lang="en">Thanks to the people building it.</span></h2><a class="text-link" href="./docs/_root/CONTRIBUTING.zh-CN.html" data-lang="zh">参与贡献 →</a><a class="text-link" href="./docs/_root/CONTRIBUTING.en.html" data-lang="en">Contribute →</a></div><ul class="contributors-list"><li><a href="https://github.com/QinIndexCode" rel="noopener"><img src="https://avatars.githubusercontent.com/u/177287013?v=4" width="40" height="40" alt="" loading="lazy" decoding="async" />QinIndexCode</a></li><li><a href="https://github.com/JIE-jiee" rel="noopener"><img src="https://avatars.githubusercontent.com/u/130622560?v=4" width="40" height="40" alt="" loading="lazy" decoding="async" />JIE-jiee</a></li></ul></div></section>
+      <section id="contributors" class="contributors-section"><div class="wrap"><div><p class="section-label"><span data-lang="zh">开源项目</span><span data-lang="en">Open source</span></p><h2><span data-lang="zh">感谢一起做这个项目的人。</span><span data-lang="en">Thanks to the people building it.</span></h2><a class="text-link" href="./docs/_root/CONTRIBUTING.zh-CN.html" data-lang="zh">参与贡献 <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a><a class="text-link" href="./docs/_root/CONTRIBUTING.en.html" data-lang="en">Contribute <svg class="site-icon site-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a></div><ul class="contributors-list"><li><a href="https://github.com/QinIndexCode" rel="noopener"><img src="https://avatars.githubusercontent.com/u/177287013?v=4" width="40" height="40" alt="" loading="lazy" decoding="async" />QinIndexCode</a></li><li><a href="https://github.com/JIE-jiee" rel="noopener"><img src="https://avatars.githubusercontent.com/u/130622560?v=4" width="40" height="40" alt="" loading="lazy" decoding="async" />JIE-jiee</a></li></ul></div></section>
     </main>
 
-    <footer class="site-footer"><div class="wrap"><div class="footer-grid"><a class="brand" href="./"><img class="mark mark-light" src="./assets/brand/mark-light.png" alt="" width="26" height="26"/><img class="mark mark-dark" src="./assets/brand/mark-dark.png" alt="" width="26" height="26"/><span>Nami Mail</span></a><nav class="footer-nav" aria-label="Footer"><a href="./docs/"><span data-lang="zh">文档</span><span data-lang="en">Docs</span></a><a href="./docs/PRIVACY.zh-CN.html" data-lang="zh">隐私</a><a href="./docs/PRIVACY.en.html" data-lang="en">Privacy</a><a href="./docs/_root/SECURITY.zh-CN.html" data-lang="zh">安全</a><a href="./docs/_root/SECURITY.en.html" data-lang="en">Security</a><a href="./docs/_root/SUPPORT.zh-CN.html" data-lang="zh">支持</a><a href="./docs/_root/SUPPORT.en.html" data-lang="en">Support</a><a href="https://github.com/QinIndexCode/nami-mail" rel="noopener">GitHub ↗</a></nav></div><div class="footer-legal"><span>© <span id="year">2026</span> Nami Mail</span><span data-lang="zh">MIT 许可 · 本站不使用分析脚本</span><span data-lang="en">MIT license · No analytics</span></div></div></footer>
+    <footer class="site-footer"><div class="wrap"><div class="footer-grid"><a class="brand" href="./"><img class="mark mark-light" src="./assets/brand/mark-light.png" alt="" width="26" height="26"/><img class="mark mark-dark" src="./assets/brand/mark-dark.png" alt="" width="26" height="26"/><span>Nami Mail</span></a><nav class="footer-nav" aria-label="Footer"><a href="./docs/"><span data-lang="zh">文档</span><span data-lang="en">Docs</span></a><a href="./docs/PRIVACY.zh-CN.html" data-lang="zh">隐私</a><a href="./docs/PRIVACY.en.html" data-lang="en">Privacy</a><a href="./docs/_root/SECURITY.zh-CN.html" data-lang="zh">安全</a><a href="./docs/_root/SECURITY.en.html" data-lang="en">Security</a><a href="./docs/_root/SUPPORT.zh-CN.html" data-lang="zh">支持</a><a href="./docs/_root/SUPPORT.en.html" data-lang="en">Support</a><a href="https://github.com/QinIndexCode/nami-mail" rel="noopener">GitHub <svg class="site-icon site-icon-sm" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a></nav></div><div class="footer-legal"><span>© <span id="year">2026</span> Nami Mail</span><span data-lang="zh">MIT 许可 · 本站不使用分析脚本</span><span data-lang="en">MIT license · No analytics</span></div></div></footer>
+    <script src="./wave.js" defer></script>
     <script src="./site.js" defer></script>
   </body>
 </html>

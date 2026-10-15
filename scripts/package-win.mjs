@@ -142,6 +142,7 @@ if (ed25519SigningKey) {
 
 try {
   await run(process.execPath, [npmCli, "run", "build"], cleanEnvironment);
+  await run(process.execPath, [path.join(projectRoot, "scripts", "sync-site-demo.mjs")], cleanEnvironment);
   await run(process.execPath, [npmCli, "run", "verify:electron-sqlite"], cleanEnvironment);
 
   const packageStartedAt = Date.now();

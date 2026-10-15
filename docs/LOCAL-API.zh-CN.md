@@ -21,7 +21,7 @@
 
 返回当前运行时的可用性，不返回服务地址、API Key 或邮件内容。可能的响应形状：
 
-未管理翻译配置的运行时（例如开发环境）：
+未管理翻译配置的运行时（例如未开启受管配置时，`enabled` 取决于底层服务是否已配置，可为 `true` 或 `false`）：
 
 ```json
 {
@@ -47,6 +47,10 @@
 }
 ```
 
+### `GET /api/translation/configuration` 与 `PUT /api/translation/configuration`
+
+获取或更新翻译设置（包含 `primary`、`backup`、`endpoint` 及是否已配置 API key 等摘要）。未开启受管配置的运行时返回 `409` (`translation_configuration_managed`)；格式校验不通过时 `PUT` 返回 `400` (`translation_configuration_invalid`)。
+
 ### `POST /api/messages/:id/translate`
 
 请求体：
@@ -56,6 +60,8 @@
   "targetLocale": "zh-CN"
 }
 ```
+
+正文超过全局上限 50,000 字符（`MAX_TRANSLATION_TEXT_LENGTH`）时直接拒绝并返回 `413` (`translation_request_too_large`)。
 
 正文不超过单块上限 5,000 字符时返回单个 JSON 结果：
 
@@ -67,7 +73,15 @@
 }
 ```
 
-外部 LibreTranslate 兼容运行时可以额外返回 `detectedLanguage`。正文超过 5,000 字符（单块上限）时会被拆分为多个分块，响应改为 `text/event-stream` 的 SSE 事件流：结果按块以事件形式推送，调用方必须按事件流消费，不能按 JSON 解析。完整的数据边界、三条翻译路径与故障处理见[邮件正文翻译](TRANSLATION.zh-CN.md)。
+外部 LibreTranslate 兼容运行时可以额外返回嵌套对象格式的 `detectedLanguage`。正文在 5,000 到 50,000 字符之间时会被智能拆分为多个分块，响应改为 `text/event-stream` 的 SSE 事件流：结果按块以事件形式推送，调用方必须按事件流消费，不能按 JSON 解析。
+
+### `POST /api/translate-segments`
+
+用于界面碎片化文本片段（例如邀请摘要等）的批量翻译，请求体包含 `segments: string[]` 与 `targetLocale: string`。
+
+### `POST /api/messages/:id/translate-llm`
+
+大语言模型流式翻译专属端点，通过 SSE 实时向阅读界面推送模型生成的 Markdown/文本。该端点受用户模型配置与云端内容授权开关严格门控，正文同样受 50,000 字符上限约束（超限返回 `413`）。完整的数据边界、三条翻译路径与故障处理见[邮件正文翻译](TRANSLATION.zh-CN.md)。
 
 ## 兼容性与演进
 

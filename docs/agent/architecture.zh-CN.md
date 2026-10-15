@@ -67,7 +67,7 @@ agent-contracts <- agent-core <- server/agent <- server runtime
 
 ## Provider 与翻译
 
-Provider 使用能力模型，而非以厂商名称授权。当前代码包含 OpenAI-compatible/Ollama 适配器；其他 Provider 仅是契约保留，未经实际实现和验证不得标记为可用。
+Provider 使用能力模型，而非以厂商名称授权。当前代码内置完整实现了四套原生适配器：OpenAI-compatible（同时覆盖本地 Ollama）、Anthropic Claude、Google Gemini 与 OpenAI Responses，均完整支持流式生成、工具调用、健康检查及多模态 Vision 图像理解能力。其他底层字面（如 custom）保留于契约中。
 
 - 云端 Provider 的邮件内容外发默认关闭。用户必须在可见设置中明确同意，界面应显示 Provider、模型、范围和将发送的上下文。
 - API key 只可位于安全凭据存储或由 DPAPI 保护的配置中，不能写入普通设置、日志、浏览器状态或 IPC 输出。

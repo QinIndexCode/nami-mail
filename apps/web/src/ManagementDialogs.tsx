@@ -1,4 +1,4 @@
-import { useRef, type ReactNode, type RefObject } from "react";
+import { useRef, useState, type ReactNode, type RefObject } from "react";
 import { X } from "lucide-react";
 import ContactsSection from "./ContactsSection";
 import TemplatesSection from "./TemplatesSection";
@@ -28,8 +28,8 @@ export function ManagementDialogShell({
 }: {
   titleId: string;
   title: string;
-  description: string;
-  eyebrow: string;
+  description?: string;
+  eyebrow?: string;
   actions?: ReactNode;
   dialogClassName?: string;
   onClose: () => void;
@@ -65,9 +65,9 @@ export function ManagementDialogShell({
       <section ref={sectionRef} className={`modal-card management-dialog${dialogClassName ? ` ${dialogClassName}` : ""}${closing ? " closing" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <header className="modal-heading management-heading">
           <div className="management-heading-title">
-            <span className="eyebrow">{eyebrow}</span>
+            {eyebrow && <span className="eyebrow">{eyebrow}</span>}
             <h2 id={titleId}>{title}</h2>
-            <p className="management-heading-description">{description}</p>
+            {description && <p className="management-heading-description">{description}</p>}
           </div>
           <div className="management-heading-actions">
             {actions}
@@ -90,16 +90,16 @@ export type ContactsDialogProps = {
 
 export function ContactsDialog({ demoMode = false, onClose, fallbackFocusRef }: ContactsDialogProps) {
   const { t } = useI18n();
+  const [overlayOpen, setOverlayOpen] = useState(false);
   return (
     <ManagementDialogShell
       titleId="contacts-dialog-title"
-      eyebrow={t("navigation.management")}
       title={t("settings.contacts.title")}
-      description={t("settings.contacts.description")}
       onClose={onClose}
       fallbackFocusRef={fallbackFocusRef}
+      focusSuspended={overlayOpen}
     >
-      <ContactsSection demoMode={demoMode} />
+      <ContactsSection demoMode={demoMode} onOverlayOpenChange={setOverlayOpen} />
     </ManagementDialogShell>
   );
 }
@@ -112,16 +112,16 @@ export type TemplatesDialogProps = {
 
 export function TemplatesDialog({ demoMode = false, onClose, fallbackFocusRef }: TemplatesDialogProps) {
   const { t } = useI18n();
+  const [overlayOpen, setOverlayOpen] = useState(false);
   return (
     <ManagementDialogShell
       titleId="templates-dialog-title"
-      eyebrow={t("navigation.management")}
       title={t("settings.templates.title")}
-      description={t("settings.templates.description")}
       onClose={onClose}
       fallbackFocusRef={fallbackFocusRef}
+      focusSuspended={overlayOpen}
     >
-      <TemplatesSection demoMode={demoMode} />
+      <TemplatesSection demoMode={demoMode} onOverlayOpenChange={setOverlayOpen} />
     </ManagementDialogShell>
   );
 }

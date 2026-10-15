@@ -27,11 +27,11 @@ Line counts measured with `(Get-Content <path>).Count`.
 
 | File | Lines | max-lines ratchet | Existing extractions to copy the pattern from |
 |---|---|---|---|
-| `apps/desktop/src/main.mts` | 2110 | 2112 | `desktop-diagnostics` / `desktop-external-open` / `desktop-notification-sound` / `server-bridge` / `server-host` / `server-process` / `update-pending-install` |
-| `apps/server/src/agent-service.ts` | 1304 | 1315 | 50 modules already under `agent/` (run-engine / provider-service / confirmations / tools / memory / mcp …) |
-| `apps/web/src/App.tsx` | 3031 | 4380 | `mailListState` / `sendingStatus` / `contextMenu` / `dialogRouting` / `scrollAnchor` / `perfTelemetry` |
-| `apps/web/src/AgentWorkspace.tsx` | 2502 | 2516 | `agent/useAgentSession` |
-| `apps/web/src/styles.css` | 30 (pure `@import` index) | see `styles-size.test.ts` | the real styles live in 30 modules under `styles/` (base 6 / components 4 / features 16 / overlays 3 / tokens 1), 17,670 lines aggregated, locked by `FROZEN_AGGREGATED_MAX_LINES = 17682` in `styles-size.test.ts` |
+| `apps/desktop/src/main.mts` | 2137 | 2147 | `desktop-diagnostics` / `desktop-external-open` / `desktop-notification-sound` / `server-bridge` / `server-host` / `server-process` / `update-pending-install` |
+| `apps/server/src/agent-service.ts` | 1308 | 1315 | 50 modules already under `agent/` (run-engine / provider-service / confirmations / tools / memory / mcp …) |
+| `apps/web/src/App.tsx` | 3105 | 4380 | `mailListState` / `sendingStatus` / `contextMenu` / `dialogRouting` / `scrollAnchor` / `perfTelemetry` |
+| `apps/web/src/AgentWorkspace.tsx` | 2462 | 2516 | `agent/useAgentSession` |
+| `apps/web/src/styles.css` | 30 (pure `@import` index) | see `styles-size.test.ts` | the real styles live in 30 modules under `styles/` (base 6 / components 4 / features 16 / overlays 3 / tokens 1), 17,575 lines aggregated, locked by `FROZEN_AGGREGATED_MAX_LINES = 17674` in `styles-size.test.ts` |
 
 > The **authoritative source for every ratchet number is the `max-lines` data table in `eslint.config.mjs`** (plus the aggregated-CSS ratchet in `styles-size.test.ts`). This table is a snapshot only — do not change thresholds based on it.
 
@@ -83,6 +83,6 @@ The original mapping for this step (shape, state ownership, wiring points) lande
 
 1. `npm run typecheck` (all four workspaces)
 2. Full unit tests for the touched workspace. **Test file counts measured 2026-10-07 (`*.test.ts(x)` files, not test cases)**: desktop 33 / server 132 / web 119. Case counts move with every batch, so trust the actual `npm test` output rather than the numbers written here.
-3. `npm run test:e2e` (runs smoke / interactions / update-footer / geometry by default; there are 8 specs under `e2e/`, of which `ui-stress.spec.ts` is a standalone stress channel needing seed data and a long timeout, and `capture-*` / `shots` are manual tools with no entry point)
+3. `npm run test:e2e` (runs smoke / interactions / update-footer / geometry by default; there are 9 specs under `e2e/` (including `real-chain.spec.ts` for real end-to-end chains), of which `ui-stress.spec.ts` is a standalone stress channel needing seed data and a long timeout, and `capture-*` / `shots` are manual tools with no entry point)
 4. Steps touching `main.mts` also run `npm run smoke:desktop`; when packaging behaviour is involved, run `npm run smoke:package`
 5. One commit per step, stating what moved, why the seam was cut there, and how it was verified

@@ -15,7 +15,7 @@ Do not copy the database, discovery file, pipe name, pairing state, or local API
 
 ## V1 Tool Surface
 
-These sixteen tools (nine read-only plus seven write) are the complete External Mail v1 surface. Input objects use strict schemas and reject unknown fields. The account-ID snapshot from first pairing determines scope, and request values can never expand it. An account added later is not accessible by the old profile until it is revoked and paired again.
+These sixteen tools (nine read-only plus seven write) are the complete External Mail v1 surface. Input objects are normalized across aliases and non-essential query parameters (e.g. mapping `q`/`text` to `query` and dropping invalid search filters like `unread`/`flagged`) before being validated against strict Zod schemas; unrecognized fields are rejected. The account-ID snapshot from first pairing determines scope, and request values can never expand it. An account added later is not accessible by the old profile until it is revoked and paired again.
 
 | Tool | CLI | MCP | Strict input | Scope |
 | --- | --- | --- | --- | --- |
@@ -36,7 +36,7 @@ These sixteen tools (nine read-only plus seven write) are the complete External 
 | `messages.send` | `messages send` | `namimail_messages_send` | `{ "accountId": "...", "to": [{ "address": "...", "name"? }], "cc"?, "subject": "...", "text": "...", "attachmentTokens"? }` | `write:mail` |
 | `mail.reply` | `mail reply` | `namimail_mail_reply` | `{ "accountId": "...", "messageId": "...", "to"?, "cc"?, "subject"?, "text": "...", "attachmentTokens"? }` | `write:mail` + `read:messages` |
 
-`after` and `before` must be ISO 8601 timestamps with offsets, and `before` must not precede `after`; `limit` is `1..50`. The host bounds message and thread bodies. The attachment operation returns metadata only and never exports a file.
+`after` and `before` must be ISO 8601 timestamps with offsets, and `before` must not precede `after`; `limit` is validated per operation: `messages.list` accepts `1..50` (default 20), `messages.search` accepts `1..20` (default 10), and `mail.summarize` accepts `1..10` (default 5). The host bounds message and thread bodies. The attachment operation returns metadata only and never exports a file.
 
 ## Write Operations and Permission Levels
 
@@ -64,7 +64,7 @@ Every successful response `data` is strictly validated by the shared v1 schema a
 | `threads.get` | `{ "threadId": "...", "messages": [...], "truncated": boolean }` | `messages` contains the bounded message detail above. |
 | `attachments.list` | `{ "messageId": "...", "attachments": [...], "truncated": boolean }` | Each entry has `partId`, `filename`, `contentType`, `size`, and `disposition`. |
 
-Public data never includes `htmlBody`, raw attachments, credentials, database paths, file paths, or redaction objects. Current v1 limits are 100 accounts, 500 folders, 50 listed messages, 10 messages per batch_get call, 100 attachments, 25 messages per thread, an 8,000-character body, and a 1,500-character snippet. When `truncated` or `bodyTruncated` is `true`, treat the data as a bounded result, never as a complete mailbox copy.
+Public data never includes `htmlBody`, raw attachments, credentials, database paths, file paths, or redaction objects. Current v1 limits are 100 accounts, 500 folders, 50 listed messages, 20 search results, 10 summary messages, 10 messages per batch_get call, 100 attachments, 25 messages per thread, an 8,000-character body, a 1,500-character snippet, and a 2,000-character summarize excerpt. When `truncated` or `bodyTruncated` is `true`, treat the data as a bounded result, never as a complete mailbox copy.
 
 Every `rag.*` operation, attachment export, `agent.chat`, and `agent.run` are outside External Mail v1. They are unaffected by permission levels and stay unavailable at every level; they do not appear in MCP `tools/list` and cannot be bypassed through CLI flags, HTTP, TCP, file URIs, SQLite, or the local Fastify token.
 

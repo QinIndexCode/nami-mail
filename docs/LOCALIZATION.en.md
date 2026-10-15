@@ -67,4 +67,4 @@ When adding another documentation language:
 4. When a behavior claim, procedure, or link changes in one language, check its published counterparts in the same change.
 5. Keep the Chinese `CHANGELOG.zh-CN.md` as the authoritative version history. When publishing an English or other-language translation, update it in the same change and identify the Chinese original as the source of version facts. Maintain each user-facing release note in every published language.
 
-Do not interleave large bilingual sections in one Markdown file. Adjacent translations preserve clean heading anchors, links, and GitHub reading flow while sharing icons, screenshots, and other binary assets.
+Do not interleave large bilingual sections in one Markdown file (the sole documented exception being `docs/releases/v*.md`, which serve as compound draft bodies for pasting directly into GitHub Releases while their language-specific text is maintained separately in `v*.zh-CN.md` and `v*.en.md`). Adjacent translations preserve clean heading anchors, links, and GitHub reading flow while sharing icons, screenshots, and other binary assets.

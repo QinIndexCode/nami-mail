@@ -51,7 +51,7 @@ Recipient options accept `address` or `Name <address>` and are comma-separated. 
 
 ## Write commands rejected by default (only when the CLI permission is read-only)
 
-The following write commands return `PERMISSION_DENIED` and are not forwarded to the Broker when the CLI permission is `read-only` (the default level):
+The following write commands return `PERMISSION_DENIED` by the host Broker's permission engine when the CLI permission is `read-only` (the default level; all write operations are enforced centrally at the host gate):
 
 ```text
 draft create | draft update | draft delete

@@ -28,7 +28,7 @@ A fixed offline screen runs on top of this and always skips: mail in junk folder
 ## Confirmation, Audit, and Sensitive Content
 
 - Agent-drafted replies always surface a confirmation card (valid for 5 minutes) where you approve or decline the send; pending and sent outcomes are reported through in-app notifications.
-- Declined or failed replies are recorded in a local decision log you can review in the UI.
+- Declined or failed replies are recorded in a local decision log you can review in the UI; the embedded Agent also provides a read-only audit tool `auto-reply.declined.search` to inspect reasons for declined or skipped auto-replies directly via chat.
 - Messages containing sensitive keywords (passwords, verification codes, and similar) are flagged and routed to the highest-priority confirmation surface; the model still re-confirms sensitivity.
 
 ## Dry-Run Sandbox
@@ -37,6 +37,6 @@ Settings includes a zero-side-effect auto-reply sandbox: enter a test message or
 
 ## Data and Boundaries
 
-- llm mode sends the cleaned message content (tracking links normalized, inline images compressed to save tokens) to your configured model provider. Without a configured model the feature is unavailable; a broken configuration shows a clear warning in Settings.
+- llm mode sends the cleaned and truncated message content (tracking links normalized to `[链接: domain]`, inline images replaced with `[内联图片]` text placeholders without sending image bytes, and bodies bounded to the first 1,000 characters with a 400-character snippet limit to strictly bound tokens) to your configured model provider. Without a configured model the feature is unavailable; a broken configuration shows a clear warning in Settings.
 - template mode is fully offline and never sends message content to any third party.
 - Auto-reply only processes newly synced inbox mail; it never reads historical mail and never changes provider-side auto-reply or vacation settings.

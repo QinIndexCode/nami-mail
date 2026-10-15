@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const labels = {
-  zh: ["首页", "功能", "邮件助理", "本地与隐私", "文档", "GitHub ↗"],
-  en: ["Home", "Features", "Assistant", "Privacy", "Docs", "GitHub ↗"],
+  zh: ["首页", "功能", "邮件助理", "本地与隐私", "文档", "GitHub"],
+  en: ["Home", "Features", "Assistant", "Privacy", "Docs", "GitHub"],
 };
 
 async function expectNavigation(page: Page, language: "zh" | "en", current: string): Promise<void> {

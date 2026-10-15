@@ -473,7 +473,7 @@ border:1px solid var(--line);
 background:var(--panel-solid);
 min-height:64px;
 color:var(--text-faint);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 grid-template-columns:40px minmax(0,1fr) 40px;
 align-items:center;
 gap:10px;

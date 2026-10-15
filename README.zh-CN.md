@@ -8,6 +8,15 @@
   <img src="docs/nami-mail-wordmark.svg" alt="Nami Mail" width="480" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/github/v/release/QinIndexCode/nami-mail?label=Release&color=2563eb&style=flat-square" alt="Release" /></a>
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/badge/Platform-Windows%20x64-0284c7?style=flat-square" alt="Platform" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%E2%89%A524.21.0-16a34a?style=flat-square" alt="Node" /></a>
+  <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-43-4f46e5?style=flat-square" alt="Electron" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-059669?style=flat-square" alt="License" /></a>
+  <a href="https://qinindexcode.github.io/nami-mail/"><img src="https://img.shields.io/badge/Website-Live-7c3aed?style=flat-square" alt="Website" /></a>
+</p>
+
 Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端。它把 Gmail、iCloud、QQ、163、Outlook/Hotmail、Yahoo、AOL、Fastmail、Yandex 以及其他支持 IMAP/SMTP 的邮箱集中到由你本机运行的统一收件箱中。常见邮箱可使用应用专用密码/授权码；已配置的 Google 与 Microsoft 账户可使用 OAuth 2.0 登录。
 
 <p align="center">
@@ -28,15 +37,15 @@ Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端。它�
 
 > 密码输入框只用于服务商要求的长期专用凭据：Gmail 和 iCloud 通常填写应用专用密码，QQ/网易填写客户端授权码，普通自建邮箱填写邮箱密码。凭据不会发送到 Nami Mail 以外的服务，只用于直接连接对应邮箱服务商；OAuth 刷新令牌同样仅加密保存在本机。
 
-## 0.4.3 新功能
+## 0.5.0 新功能
 
-- **文件夹展示模式**：侧边栏可在树模式（多账户层级展开、各自独立折叠）与专注模式（单账户视图 + 底部文件夹列表）之间一键切换，偏好保存在本机。
-- **自动回复双模型与沙盒模拟器**：判定初筛与回复生成可分别配置模型；新增零副作用的自动回复沙盒（Dry-Run），可视化展示链接清洗 Token 节约、规则匹配、模型决策理由与拟定草稿预览。
-- **Agent 输出稳定性与体验**：彻底修复流式输出丢失尾部未排干文本的问题；拟定草稿接入打字机流式渐入；新增上下文窗口预算、超长工具结果智能剪枝与多轮历史自动压缩。
-- **外部连接体系与跨平台 IPC**：严格区分内置 MCP、本地外露 MCP 服务与外部 CLI，抽象统一的跨平台 IPC 传输层（Windows 命名管道 / Unix Domain Sockets）。
-- **设置界面与更新稳定性**：全量设置界面 UI/UX 重构，以内联悬停提示替代文字墙；自动更新安装不再因 SSE 长连接卡死 30 秒，下载与安装前新增磁盘空间主动预检。
+- **全栈本地日历与邮件会议邀请**：内置月视图日历域，支持事件 CRUD；邮件日历邀请横幅直达腾讯会议/Zoom/飞书/Teams/Meet；ICS 导入按 UID 原地去重；15 分钟日程提醒。
+- **端到端多模态大模型接入**：模型配置支持独立开启图片、音频、视频与 PDF 附件；Composer 自适应根据模型能力过滤文件并展示专属类型 Badge；向下严格纯文本兼容。
+- **全套 UI 设计系统与视觉体验重构**：恢复 8px/12px/20px 统一圆角 Token 与同心圆角法则；侧边栏隐藏原生滚动条；全宽 Markdown 表格排版；半透明磨砂骨架屏。
+- **账户同步状态实时感知**：侧边栏实时呈现正在同步脉冲状态点，强化文件夹切换与静默轮询的并发时序防护。
+- **Agent 鲁棒性与工程解耦**：畸形工具 JSON 自愈重试，上下文预算剪枝与多轮会话自动压缩，4355 行超大 App.tsx 拆分为 8 个领域 hooks。
 
-详见 [Release Notes](docs/releases/v0.4.3.zh-CN.md) 和 [变更日志](CHANGELOG.zh-CN.md)。
+详见 [Release Notes](docs/releases/v0.5.0.zh-CN.md) 和 [变更日志](CHANGELOG.zh-CN.md)。
 
 ## 获取和首次使用
 
@@ -49,16 +58,20 @@ Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端。它�
 - [文档导航](docs/README.md)：按使用、贡献和发布任务查找中英文文档。
 - [Windows 安装与更新指南](docs/INSTALLING.zh-CN.md)：下载、安装、首次启动、卸载、更新提示和 SmartScreen 风险说明。
 - [邮箱接入指南](docs/EMAIL-PROVIDERS.zh-CN.md)：服务商认证准备、OAuth、手动 IMAP/SMTP 和常见连接问题。
+- [日历与邮件邀请](docs/CALENDAR.zh-CN.md)：邮件邀请横幅、ICS 导入导出（按 UID 去重）与事件提醒。
+- [自动回复](docs/AUTO-REPLY.zh-CN.md)：双模型判定与草稿、范围规则、确认流程与沙盒模拟器。
 - [外部 Mail 接口](docs/EXTERNAL-MAIL-INTERFACE.zh-CN.md)：供已配对本机脚本和 MCP 客户端使用的只读 CLI/MCP 接口与安全边界。
 - [CLI 参考](docs/cli/README.zh-CN.md)：`namimail` CLI 的命令、参数、输出格式和示例。
 - [MCP Server](docs/mcp/README.zh-CN.md)：本机 MCP stdio 接入、工具发现和安全边界。
 - [NamiMail Agent 使用指南](docs/agent/usage.zh-CN.md)：对话管理、邮件范围、来源引用与确认流程。
+- [NamiMail Agent 工具目录](docs/agent/tools.zh-CN.md)：邮件、日历、通讯录、记忆、审计与系统实用工具完整清单。
 - [NamiMail Agent 模型提供商配置](docs/agent/providers.zh-CN.md)：OpenAI 兼容/Ollama/Claude/Gemini 模型、密钥与云端邮件内容授权。
 - [NamiMail Agent 接入外部 MCP 服务器](docs/agent/mcp-servers.zh-CN.md)：接入外部 MCP 服务器扩展助理工具。
 - [NamiMail Agent 架构](docs/agent/architecture.zh-CN.md)：本地优先的 Agent 设计、嵌入式工作区与外部 Broker 边界。
 - [邮件 RAG](docs/rag/architecture.zh-CN.md)：邮件入库、清洗、检索、删除同步与一致性说明。
 - [邮件正文翻译](docs/TRANSLATION.zh-CN.md)：可选翻译服务的配置、主动发送边界和隐私注意事项。
 - [隐私与本地数据说明](docs/PRIVACY.zh-CN.md)：本地保存内容、加密边界和第三方连接。
+- [UI 设计系统](docs/DESIGN-SYSTEM.zh-CN.md)：视觉基线、8px/12px/20px 圆角 Token 与同心圆角法则。
 - [支持指南](SUPPORT.zh-CN.md)：邮箱接入、网络问题和适合提交 Issue 的内容。
 - [安全策略](SECURITY.zh-CN.md)：私下报告漏洞的方式和范围。
 - [贡献指南](CONTRIBUTING.zh-CN.md)、[社区行为准则](CODE_OF_CONDUCT.zh-CN.md)、[开发说明](docs/DEVELOPMENT.zh-CN.md) 与 [架构与信任边界](docs/ARCHITECTURE.zh-CN.md)：本地开发、协作边界、测试、进程边界和 Pull Request 要求。

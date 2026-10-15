@@ -361,9 +361,7 @@ export default function AccountsDialog({
     <>
       <ManagementDialogShell
         titleId="accounts-dialog-title"
-        eyebrow={t("navigation.management")}
         title={t("settings.account.title")}
-        description={demoMode ? t("settings.account.demoDescription") : t("settings.account.description")}
         onClose={requestClose}
         closing={closing}
         requestClose={requestClose}

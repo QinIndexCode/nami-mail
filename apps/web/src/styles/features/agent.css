@@ -59,7 +59,7 @@ color:var(--text-soft);
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 flex:none;
 place-items:center;
 padding:0;
@@ -98,7 +98,7 @@ border:1px solid var(--line);
 background:var(--panel-solid);
 min-height:35px;
 color:var(--text-faint);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 align-items:center;
 gap:8px;
 margin-bottom:8px;
@@ -145,7 +145,7 @@ display:grid
 .agent-conversation-row
 {
 border:1px solid #0000;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 min-width:0;
 position:relative;
 /* Conversation rails can hold hundreds of rows; offscreen rows skip render. */
@@ -161,7 +161,7 @@ cursor:pointer;
 text-align:left;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 grid-template-columns:minmax(0,1fr) auto;
 align-items:start;
 gap:8px;
@@ -269,7 +269,7 @@ margin:0
 {
 border:1px solid color-mix(in srgb, var(--focus-ring) 26%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 7%, var(--panel-muted));
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 align-items:center;
 gap:6px;
 padding:8px 8px;
@@ -351,7 +351,7 @@ transform:translateY(0) scale(1)
 border:1.5px solid var(--line-strong);
 background:var(--panel);
 color:#0000;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-xs);
 place-items:center;
 width:17px;
 height:17px;
@@ -639,11 +639,11 @@ opacity:.42
 {
 display:none
 }
-.agent-privacy-notice,.agent-scope-picker
+.agent-privacy-notice
 {
-border:1px solid var(--line);
+border:1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
 min-width:0;
-color:var(--text-soft);
+color:color-mix(in srgb, var(--danger) 82%, var(--text));
 border-radius:var(--radius-sm);
 align-items:center;
 gap:5px;
@@ -652,20 +652,26 @@ font-size:9px;
 line-height:1.35;
 display:inline-flex
 }
-.agent-privacy-notice
-{
-border-color:color-mix(in srgb, var(--danger) 35%, var(--line));
-color:color-mix(in srgb, var(--danger) 82%, var(--text))
-}
 .agent-scope-picker
 {
+border:1px solid var(--line);
+background:color-mix(in srgb, var(--panel-muted) 85%, transparent);
+min-width:0;
 max-width:220px;
-min-height:27px;
+min-height:28px;
+color:var(--text-soft);
+border-radius:var(--radius-pill);
+align-items:center;
+gap:6px;
+padding:4px 10px;
+font-size:11px;
+font-weight:550;
+line-height:1.35;
+display:inline-flex;
 overflow:hidden;
 cursor:pointer;
 font-family:inherit;
-border:1px solid transparent;
-background:0 0
+transition:background .15s,border-color .15s,color .15s
 }
 .agent-scope-picker svg
 {
@@ -680,13 +686,9 @@ white-space:nowrap
 }
 .agent-scope-picker:hover,.agent-scope-picker:focus-visible
 {
-background:var(--hover)
+background:var(--hover); border-color:var(--line-strong); color:var(--text)
 }
-.agent-scope-picker:focus-visible
-{
-box-shadow:0 0 0 3px var(--focus-ring-subtle);
-outline:none
-}
+.agent-scope-picker:focus-visible { box-shadow:0 0 0 3px var(--focus-ring-subtle); outline:none }
 .agent-scope-chevron
 {
 flex:none;
@@ -996,7 +998,7 @@ animation:.28s cubic-bezier(.2,.8,.2,1) both agent-message-in
 .agent-message
 {
 content-visibility:auto;
-contain-intrinsic-size:auto 120px
+contain-intrinsic-size:auto 120px;scroll-margin-top:16px
 }
 .agent-message.user+.agent-message.assistant,.agent-message.assistant+.agent-message.user
 {
@@ -1054,7 +1056,7 @@ justify-content:flex-end
 .agent-message-meta time
 {
 font-family:var(--font-mono);
-font-size:8px
+font-size:10px
 }
 .agent-message-actions
 {
@@ -1153,12 +1155,11 @@ user-select:text!important
 }
 .agent-message.user .agent-message-content
 {
-border:1px solid color-mix(in srgb, var(--focus-ring) 24%, var(--line));
-background:color-mix(in srgb, var(--focus-ring) 6%, var(--panel-muted));
-border-radius:var(--radius-md) var(--radius-md) var(--radius-xs);
-max-width:min(100%,630px);
-margin-left:auto;
-padding:10px 14px
+border:1px solid color-mix(in srgb, var(--focus-ring) 18%, var(--line-strong));
+background:color-mix(in srgb, var(--focus-ring) 5%, var(--panel-solid));
+box-shadow:var(--shadow-sm);
+border-radius:var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);
+max-width:min(100%,630px); margin-left:auto; padding:10px 15px
 }
 .agent-message-content p
 {
@@ -1326,18 +1327,15 @@ max-width:100%;
 display:inline-block;
 overflow:hidden
 }
+.agent-table-wrap
+{
+border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel-solid);
+max-width:100%; margin:12px 0; overflow-x:auto
+}
 .agent-message-content table
 {
-border:1px solid var(--line);
-border-collapse:separate;
-border-spacing:0;
-background:var(--panel-solid);
-border-radius:var(--radius-sm);
-max-width:100%;
-margin:10px 0;
-font-size:12px;
-display:block;
-overflow-x:auto
+border-collapse:separate; border-spacing:0; width:100%; min-width:100%;
+font-size:12px; margin:0; border:none; background:0 0
 }
 .agent-message-content :is(th,td)
 {
@@ -1346,7 +1344,7 @@ border-bottom:1px solid var(--line);
 text-align:left;
 vertical-align:top;
 min-width:96px;
-padding:8px 8px
+padding:8px 12px
 }
 .agent-message-content :is(th,td):last-child
 {
@@ -1358,7 +1356,7 @@ border-bottom:0
 }
 .agent-message-content th
 {
-background:var(--panel-muted);
+background:color-mix(in srgb, var(--focus-ring) 4%, var(--panel-muted));
 color:var(--text-soft);
 font-size:11px;
 font-weight:700
@@ -1422,13 +1420,12 @@ padding:2px 0 14px
 }
 .agent-skeleton-bubble
 {
-border:1px solid color-mix(in srgb, var(--focus-ring) 18%, var(--line));
-background:color-mix(in srgb, var(--focus-ring) 5%, var(--panel-muted));
-border-radius:var(--radius-md) var(--radius-md) var(--radius-xs);
-max-width:min(100%,630px);
-margin-left:auto;
-padding:10px 14px
+border:1px solid color-mix(in srgb, var(--focus-ring) 14%, var(--line));
+background:color-mix(in srgb, var(--focus-ring) 4%, transparent);
+border-radius:var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);
+max-width:min(100%,480px); width:320px; margin-left:auto; padding:10px 14px
 }
+.agent-message.skeleton.user .agent-skeleton-content { align-items:flex-end }
 .agent-skeleton-content
 {
 flex-direction:column;
@@ -1439,7 +1436,7 @@ display:flex
 {
 height:11px;
 border-radius:var(--radius-sm);
-background:var(--text-faint);
+background:color-mix(in srgb, var(--text) 32%, transparent);
 animation:1.4s ease-in-out infinite agent-skeleton-sweep
 }
 .agent-skeleton-chrome
@@ -1447,7 +1444,7 @@ animation:1.4s ease-in-out infinite agent-skeleton-sweep
 border-radius:4px;
 width:44px;
 height:8px;
-background:var(--text-faint);
+background:color-mix(in srgb, var(--text) 24%, transparent);
 animation:1.4s ease-in-out infinite agent-skeleton-sweep;
 display:inline-block
 }
@@ -1455,11 +1452,11 @@ display:inline-block
 {
 0%,to
 {
-opacity:.08
+opacity:.25
 }
 50%
 {
-opacity:.24
+opacity:.65
 }
 }
 .agent-thinking-dot:nth-child(2)
@@ -2061,7 +2058,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 min-width:140px;
 box-shadow:var(--shadow-sm);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 padding:4px;
 position:fixed;
 transition:opacity .12s ease,transform .12s ease
@@ -2080,7 +2077,7 @@ text-align:left;
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:5px;
+border-radius:var(--radius-sm);
 align-items:center;
 gap:8px;
 padding:8px 10px;

@@ -8,6 +8,15 @@
   <img src="docs/nami-mail-wordmark.svg" alt="Nami Mail" width="480" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/github/v/release/QinIndexCode/nami-mail?label=Release&color=2563eb&style=flat-square" alt="Release" /></a>
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/badge/Platform-Windows%20x64-0284c7?style=flat-square" alt="Platform" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%E2%89%A524.21.0-16a34a?style=flat-square" alt="Node" /></a>
+  <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-43-4f46e5?style=flat-square" alt="Electron" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-059669?style=flat-square" alt="License" /></a>
+  <a href="https://qinindexcode.github.io/nami-mail/"><img src="https://img.shields.io/badge/Website-Live-7c3aed?style=flat-square" alt="Website" /></a>
+</p>
+
 Nami Mail is a local-first, multi-account desktop mail client for Windows. It brings Gmail, iCloud, QQ, 163, Outlook/Hotmail, Yahoo, AOL, Fastmail, Yandex, and other IMAP/SMTP-capable accounts into one inbox that runs on your own machine. Common providers use app passwords or client authorization codes; configured Google and Microsoft accounts can use OAuth 2.0 sign-in.
 
 <p align="center">
@@ -28,15 +37,15 @@ Nami Mail is a local-first, multi-account desktop mail client for Windows. It br
 
 > The password field is only for long-lived credentials required by the provider: Gmail and iCloud normally require an app password, QQ and NetEase require a client authorization code, and a self-hosted mailbox can require its mailbox password. Credentials are never sent to a service other than Nami Mail and the selected mail provider; they are used only for a direct provider connection. OAuth refresh tokens are also encrypted and stored locally only.
 
-## What's New in 0.4.3
+## What's New in 0.5.0
 
-- **Folder display modes**: switch the sidebar between a multi-account tree mode (every account visible, each folding its own folders) and a focused mode (single-account view with a bottom folder list); the preference is stored locally.
-- **Dual-model auto-reply & dry-run sandbox**: the screening model and the drafting model can be configured independently; a zero-side-effect sandbox visualizes link-cleaning token savings, rule matches, model decisions, and draft previews end to end.
-- **Agent output stability & experience**: the streaming tail-loss defect (queued deltas dropped during conversation switches) is fully fixed; drafted replies stream in with a typewriter effect; context-window budgets, smart pruning of oversized tool results, and automatic multi-turn history compression were added.
-- **External connections & cross-platform IPC**: a clear separation of built-in MCP, locally exposed MCP servers, and the external CLI over a unified IPC transport layer (Windows named pipes / Unix domain sockets).
-- **Settings overhaul & update stability**: the wall-of-text settings UI was rebuilt around inline hover tooltips; update installs no longer hang 30 seconds on a lingering SSE connection, and a pre-flight disk-space check runs before download and install.
+- **Full-Stack Local Calendar & Meeting Invites**: Built-in month view calendar with event CRUD; mail invite banners with direct join links (Tencent Meeting, Zoom, Feishu, Teams, Meet); ICS import with UID in-place deduplication; 15-minute reminders.
+- **End-to-End Multimodal Model Integration**: Independent toggles for image, audio, video, and PDF context attachments; adaptive Composer file picker with category badges; strict backward-compatible plain-text fallback.
+- **UI Design System & Visual Overhaul**: Restored radius tokens (8px/12px/20px) and concentric corner principle; hidden sidebar scrollbars; full-width markdown tables; translucent frosted loading skeletons.
+- **Real-Time Account Syncing Visibility**: Live pulsing dot and status subtitle for active sync passes; hardened concurrent request timing during folder navigation.
+- **Agent Resilience & Engineering**: Self-healing fallback for malformed tool JSON, token budget estimation and pruning, history compression, and App.tsx decomposed into 8 domain hooks.
 
-See the [release notes](docs/releases/v0.4.3.en.md) and [changelog](CHANGELOG.en.md) for details.
+See the [release notes](docs/releases/v0.5.0.en.md) and [changelog](CHANGELOG.en.md) for details.
 
 ## Get Started
 
@@ -49,16 +58,20 @@ See [Windows installation and updates](docs/INSTALLING.en.md) for first installa
 - [Documentation index](docs/README.en.md): find English and Chinese documentation by user, contributor, or release task.
 - [Windows installation and updates](docs/INSTALLING.en.md): downloads, installation, first launch, uninstallation, update prompts, and SmartScreen guidance.
 - [Email provider setup](docs/EMAIL-PROVIDERS.en.md): provider preparation, OAuth, manual IMAP/SMTP, and common connection issues.
+- [Calendar and mail invitations](docs/CALENDAR.en.md): invite banners, ICS import/export with UID dedupe, and event reminders.
+- [Auto-reply](docs/AUTO-REPLY.en.md): dual-model screening and drafting, scope rules, the confirmation flow, and the dry-run sandbox.
 - [External Mail interface](docs/EXTERNAL-MAIL-INTERFACE.en.md): the read-only CLI/MCP interface and security boundary for paired local scripts and MCP clients.
 - [CLI reference](docs/cli/README.en.md): commands, parameters, output formats, and examples for the `namimail` CLI.
 - [MCP Server](docs/mcp/README.en.md): local MCP stdio integration, tool discovery, and security boundaries.
 - [NamiMail Agent usage](docs/agent/usage.en.md): using the mail assistant — conversations, mail scope, source citations, and confirmations.
+- [NamiMail Agent tools catalog](docs/agent/tools.en.md): comprehensive suite of mail, calendar, contacts, memory, audit, and utility tools.
 - [NamiMail Agent model providers](docs/agent/providers.en.md): configuring OpenAI-compatible/Ollama/Claude/Gemini models, API keys, and cloud mail-content consent.
 - [NamiMail Agent external MCP servers](docs/agent/mcp-servers.en.md): connecting external MCP servers to extend the assistant's tools.
 - [NamiMail Agent architecture](docs/agent/architecture.en.md): local-first Agent design, embedded workspace, and external Broker boundary.
 - [Mail RAG](docs/rag/architecture.en.md): ingestion, cleaning, retrieval, deletion synchronization, and consistency.
 - [Message translation](docs/TRANSLATION.en.md): optional translation-service configuration, the explicit-send boundary, and privacy considerations.
 - [Privacy and local data](docs/PRIVACY.en.md): local data, encryption boundaries, and third-party connections.
+- [Design system](docs/DESIGN-SYSTEM.en.md): visual baselines, 8px/12px/20px radius tokens, and concentric corner principles.
 - [Support guide](SUPPORT.en.md): account setup, network problems, and suitable issue reports.
 - [Security policy](SECURITY.en.md): how and when to report vulnerabilities privately.
 - [Contributing guide](CONTRIBUTING.en.md), [code of conduct](CODE_OF_CONDUCT.en.md), [development guide](docs/DEVELOPMENT.en.md), and [architecture and trust boundaries](docs/ARCHITECTURE.en.md): local development, collaboration boundaries, tests, process boundaries, and pull-request requirements.

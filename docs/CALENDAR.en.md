@@ -18,14 +18,19 @@ The import modal accepts a local `.ics` file (or attachment content carried over
 - **Append mode (default)**: adds events to the existing calendar. Events are deduplicated by their ICS UID — re-importing the same calendar never double-books; matching events are updated in place (reported as "updated").
 - **Replace mode**: clears all existing events first, then imports the new content.
 
-Manually created events carry no UID and do not participate in import deduplication. Exports emit the stored UID verbatim, so an import → export → re-import round trip is lossless.
+Events originally imported from external sources preserve their stored UID in exports, making an import → export → re-import round trip lossless and idempotent; events created manually in the app carry a NULL UID in the database (exports synthesize a UID from the internal event ID), so re-importing them will insert duplicate rows since deduplication only matches non-null UIDs.
 
 ## Event Reminders
 
-While the app is running, a reminder toast fires 15 minutes before an event starts; clicking it opens the calendar. The same event is never reminded twice, and reminders more than 30 minutes stale are ignored. Reminders respect the notification toggle — turning off notifications silences calendar reminders too. The deduplication record (up to 200 entries) is kept in local browser storage.
+While the app is running, a reminder toast fires 15 minutes before a timed event starts; for all-day events, the reminder fires at 09:00 on the day of the event. Clicking it opens the calendar. The same event is never reminded twice, and reminders more than 30 minutes stale are ignored. Reminders respect the notification toggle — turning off notifications silences calendar reminders too. The deduplication record (up to 200 entries) is kept in local browser storage.
+
+## Agent Calendar Tools
+
+The embedded Agent registers four local calendar tools (`calendar.list`, `calendar.create`, `calendar.update`, `calendar.delete`), allowing you to inspect schedules and organize events directly through conversation (e.g. "Do I have meetings this Friday?", "Add a sync tomorrow at 10 AM"). Creation, updates, and deletion require explicit user approval on a visible GUI confirmation card; all events are saved directly into the encrypted local database and never leaked externally.
 
 ## Local Storage and Boundaries
 
 - Event title, description, and location are encrypted at rest with a master-key-derived AES-256-GCM envelope; start/end timestamps stay plaintext in UTC to serve the month view's date-range queries. This matches the mail-cache encryption boundary — it is not whole-database SQLite encryption.
 - Field lengths are bounded: title 300 characters, description 10,000 characters, location 500 characters; a single import accepts at most 5,000 events.
 - The calendar sends nothing to third parties. ICS parsing happens entirely on your machine; the invite banner only downloads the attachment itself from the local service.
+

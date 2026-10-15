@@ -13,7 +13,7 @@ This plan covers only Agent-owned `agent_*` tables, encrypted pages, source even
 3. Migration needs one SQLite transaction, enough disk, and sync/index work that can be stopped.
 4. Before migration, make a recoverable database backup or retain an installer-verified backup; backup access must not be broader than source data.
 
-The current schema has an explicit version row. Version `2` supports an explicit upgrade from version `1`. Unknown table shape, a missing version row, a newer minimum reader, or an older Runtime must fail closed rather than guessing an `ALTER` sequence.
+The current schema has an explicit version row. The current version is `7` (`AGENT_STORE_SCHEMA_VERSION = 7`, `AGENT_STORE_MINIMUM_READER_VERSION = 7`), supporting step-by-step upgrades across historical versions (full V1 → V2 → ... → V7 migration chain). Unknown table shape, a missing version row, a newer minimum reader, or an older Runtime must fail closed rather than guessing an `ALTER` sequence.
 
 ## Execution
 

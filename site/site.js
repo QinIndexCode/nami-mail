@@ -157,6 +157,7 @@
       if (event.source !== frame.contentWindow || data.view !== frame.dataset.demo || !frame.dataset.started) continue;
       window.clearTimeout(demoTimers.get(frame));
       updateDemoState(frame, "ready");
+      attachFrameWheel(frame);
     }
   });
 
@@ -197,12 +198,49 @@
     });
   }
 
+  function getActiveNavSection() {
+    if (document.body.classList.contains("docs-body")) return "docs";
+
+    var header = document.querySelector(".site-header");
+    var headerHeight = header ? header.offsetHeight : 64;
+    var threshold = headerHeight + 120;
+
+    var sections = [
+      { id: "privacy", nav: "privacy" },
+      { id: "agent", nav: "agent" },
+      { id: "features", nav: "features" }
+    ];
+
+    for (var i = 0; i < sections.length; i++) {
+      var el = document.getElementById(sections[i].id);
+      if (el) {
+        var rect = el.getBoundingClientRect();
+        if (rect.top <= threshold && rect.bottom > threshold) {
+          return sections[i].nav;
+        }
+      }
+    }
+
+    var demoEl = document.getElementById("demo");
+    if (demoEl) {
+      var dRect = demoEl.getBoundingClientRect();
+      if (dRect.bottom > threshold) {
+        return "home";
+      }
+    }
+
+    if (window.scrollY < 200) {
+      return "home";
+    }
+
+    return "";
+  }
+
   function updateNavigation() {
-    var sections = { "#features": "features", "#agent": "agent", "#privacy": "privacy" };
-    var active = document.body.classList.contains("docs-body") ? "docs" : (sections[window.location.hash] || "home");
+    var active = getActiveNavSection();
     var links = document.querySelectorAll(".site-header a[data-nav]");
     for (var i = 0; i < links.length; i++) {
-      if (links[i].dataset.nav === active) {
+      if (active && links[i].dataset.nav === active) {
         links[i].setAttribute("aria-current", active === "home" || active === "docs" ? "page" : "location");
       } else {
         links[i].removeAttribute("aria-current");
@@ -210,13 +248,75 @@
     }
   }
   updateNavigation();
-  window.addEventListener("hashchange", updateNavigation);
+
+  var navScrollTicking = false;
+  window.addEventListener("scroll", function () {
+    if (!navScrollTicking) {
+      navScrollTicking = true;
+      requestAnimationFrame(function () {
+        updateNavigation();
+        navScrollTicking = false;
+      });
+    }
+  }, { passive: true });
+
+  window.addEventListener("hashchange", function () {
+    var sections = { "#features": "features", "#agent": "agent", "#privacy": "privacy" };
+    if (sections[window.location.hash]) {
+      var target = sections[window.location.hash];
+      var links = document.querySelectorAll(".site-header a[data-nav]");
+      for (var i = 0; i < links.length; i++) {
+        if (links[i].dataset.nav === target) {
+          links[i].setAttribute("aria-current", "location");
+        } else {
+          links[i].removeAttribute("aria-current");
+        }
+      }
+    } else {
+      updateNavigation();
+    }
+  });
 
   var header = document.querySelector(".site-header");
   if (header) header.addEventListener("click", function (event) {
     var link = event.target instanceof Element ? event.target.closest("a") : null;
-    if (link && link.id !== "lang-toggle" && new URL(link.href).origin === window.location.origin) {
+    if (!link) return;
+    if (link.id !== "lang-toggle" && new URL(link.href).origin === window.location.origin) {
       remember(LANG_KEY, root.dataset.lang === "en" ? "en" : "zh");
+    }
+
+    if (!document.body.classList.contains("docs-body")) {
+      var isHomeLink = link.dataset.nav === "home" || link.classList.contains("brand");
+      var href = link.getAttribute("href") || "";
+      var isAnchor = href.startsWith("#");
+
+      if (isHomeLink) {
+        event.preventDefault();
+        var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        window.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" });
+        if (window.location.hash) {
+          history.pushState(null, "", window.location.pathname.replace(/\/index\.html$/, "/") + window.location.search);
+        }
+        updateNavigation();
+        if (mobileNavigation && mobileNavigation.open) {
+          mobileNavigation.open = false;
+        }
+      } else if (isAnchor) {
+        var targetEl = document.querySelector(href);
+        if (targetEl) {
+          event.preventDefault();
+          var headerEl = document.querySelector(".site-header");
+          var hh = headerEl ? headerEl.offsetHeight : 64;
+          var targetTop = Math.max(0, targetEl.offsetTop - hh);
+          var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          window.scrollTo({ top: targetTop, behavior: reducedMotion ? "auto" : "smooth" });
+          history.pushState(null, "", href);
+          updateNavigation();
+          if (mobileNavigation && mobileNavigation.open) {
+            mobileNavigation.open = false;
+          }
+        }
+      }
     }
   });
 
@@ -362,6 +462,9 @@
   if (demoObserver) window.addEventListener("scroll", scheduleVisibleDemos, { passive: true });
   for (var demoIndex = 0; demoIndex < demoFrames.length; demoIndex++) {
     var stage = demoFrames[demoIndex].closest(".demo-stage");
+    demoFrames[demoIndex].addEventListener("load", function (e) {
+      attachFrameWheel(e.currentTarget);
+    });
     if (demoObserver) demoObserver.observe(stage);
     stage.querySelector("[data-demo-retry]").addEventListener("click", function (event) {
       var stage = event.currentTarget.closest(".demo-stage");
@@ -374,6 +477,117 @@
     window.addEventListener("scroll", scanVisibleDemos, { passive: true });
     window.addEventListener("resize", scanVisibleDemos);
     scanVisibleDemos();
+  }
+
+  // Forward wheel events from embedded demo frames to the outer window when unmanaged
+  function attachFrameWheel(frame) {
+    try {
+      if (!frame || !frame.contentWindow) return;
+      try {
+        frame.contentWindow.removeEventListener("wheel", frame._namiWheelHandler);
+      } catch (e) {}
+      frame._namiWheelHandler = function (e) {
+        if (document.activeElement !== frame) {
+          e.preventDefault();
+          window.dispatchEvent(new WheelEvent("wheel", {
+            deltaY: e.deltaY,
+            deltaX: e.deltaX,
+            deltaMode: e.deltaMode
+          }));
+        }
+      };
+      frame.contentWindow.addEventListener("wheel", frame._namiWheelHandler, { passive: false });
+    } catch (err) {}
+  }
+
+  // Smooth intent-based anchor section scroll controller.
+  // Each scroll intent moves by fixed section height with gentle easing, without threshold spring resistance.
+  function initAnchorScroll() {
+    if (document.body.classList.contains("docs-body") || !document.getElementById("demo")) return;
+
+    var DURATION = 700;
+    var isAnimating = false;
+    var animTimer = null;
+
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function getSnapStops() {
+      var header = document.querySelector(".site-header");
+      var headerHeight = header ? header.offsetHeight : 64;
+      var maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      var sectionIds = ["demo", "features", "agent", "privacy", "retrieval", "cli", "docs", "testimonials", "download", "faq", "contributors"];
+      var stops = [0];
+
+      for (var i = 0; i < sectionIds.length; i++) {
+        var el = document.getElementById(sectionIds[i]);
+        if (!el) continue;
+        var top = Math.min(maxScroll, Math.max(0, el.offsetTop - headerHeight));
+        if (!stops.some(function (s) { return Math.abs(s - top) < 24; })) {
+          stops.push(top);
+        }
+      }
+
+      if (!stops.some(function (s) { return Math.abs(s - maxScroll) < 24; })) {
+        stops.push(maxScroll);
+      }
+
+      stops.sort(function (a, b) { return a - b; });
+      return stops;
+    }
+
+    function smoothScrollTo(destY) {
+      if (Math.abs(destY - window.scrollY) < 4) return;
+      isAnimating = true;
+      clearTimeout(animTimer);
+      window.scrollTo({ top: destY, behavior: "smooth" });
+      animTimer = setTimeout(function () {
+        isAnimating = false;
+      }, 650);
+    }
+
+    window.addEventListener(
+      "wheel",
+      function (e) {
+        if (isAnimating) {
+          e.preventDefault();
+          return;
+        }
+
+        var delta = e.deltaY;
+        if (Math.abs(delta) < 8) return;
+
+        var currentY = window.scrollY;
+        var stops = getSnapStops();
+
+        if (delta > 0) {
+          for (var i = 0; i < stops.length; i++) {
+            if (stops[i] > currentY + 30) {
+              e.preventDefault();
+              smoothScrollTo(stops[i]);
+              return;
+            }
+          }
+        } else {
+          for (var j = stops.length - 1; j >= 0; j--) {
+            if (stops[j] < currentY - 30) {
+              e.preventDefault();
+              smoothScrollTo(stops[j]);
+              return;
+            }
+          }
+        }
+      },
+      { passive: false }
+    );
+  }
+
+  initAnchorScroll();
+
+  // Attach frame wheel forwarding for any frames already in DOM
+  for (var k = 0; k < demoFrames.length; k++) {
+    attachFrameWheel(demoFrames[k]);
   }
 
 })();

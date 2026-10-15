@@ -1,12 +1,26 @@
-## [Unreleased]
+## [0.5.0] - 2026-10-13
 
 ### Added
 
 - **Full-stack calendar**: a shared ICS parser/generator in `@nami/agent-contracts`, a server calendar domain (event CRUD, conflict validation, import modes, and calendar table persistence), and a web calendar module (ICS import modal, mail invite banner, meeting-link extraction, and a reminder pipeline); a unified `useToastQueue` replaces the previously scattered toast handling; four new notification sounds (chime, bubble, calm, ping) wired across web tones, desktop WAV generation, and the settings contract.
 - **ICS import dedupe by UID**: the ICS UID is now persisted (new indexed column with migration); append-mode re-imports of the same calendar upsert in place (reported as updated), and exports emit the stored UID verbatim so round-trips match. The mail invite banner caches parsed attachment content per message + part to avoid re-downloading on every revisit; the web side pre-checks the 10 MB attachment size before downloading, and the parser enforces a 50k-line cap as a decompression-bomb guard.
 - **In-progress account syncing state**: the account status gains an optional runtime `syncing` flag (an in-memory sync lock, not a DB column); while a pass is in flight the sidebar shows a live "syncing" pulsing dot and subtitle instead of lingering on the previous outcome.
+- **End-to-end multimodal model support**: added independent input modality switches (images, audio, video, PDF) to agent model provider configurations, supporting end-to-end base64 and media URL payloads to OpenAI, Gemini, Anthropic, and Ollama providers; the Composer file picker dynamically adapts to the selected model's modalities, attachment chips display category icon badges, and non-multimodal models strictly fall back to plain-text mode for backward compatibility.
 
 ### Fixed
+
+- **Design system radius tokens and visual overhaul**:
+  - Restored design system radius tokens (`--radius-sm: 8px`, `--radius-md: 12px`, `--radius-lg: 20px`) and aligned buttons, list rows, cards, and conversation items;
+  - Enforced the concentric radius principle ($R_{inner} = R_{outer} - padding$), eliminating inner corner distortion across agent marks and conversation heading marks;
+  - Hid sidebar scrollbars (`scrollbar-width: none`) while preserving smooth gesture and wheel scrolling without layout jitter;
+  - Eliminated legacy purple accents, standardized template icons to neutral tokens, and streamlined modal headers to clean single titles;
+  - Portaled template and contact editor dialogs to the document body to escape parent dialog containment and stacking context traps;
+  - Isolated agent transcript scrubber scrolling to container-level coordinates, eliminating full-window layout displacement;
+  - Prevented false thinking indicators when opening completed or cancelled historical sessions;
+  - Wrapped agent markdown tables in `.agent-table-wrap` for full-width layout without right-side voids;
+  - Refined user skeleton screens to translucent containers with shimmering sweep animation (`0.25 ~ 0.65`) matching assistant skeletons.
+- **Agent streaming resilience & tools hardening**: enhanced reader actions, stream interruption graceful degradation, tool preprocessors, and session tree scrolling protection.
+- **Desktop update download pipeline stability**: pipeline owns the write lifecycle, detaches paired error listeners on backpressure drain, and commits preferences only after atomic file rename.
 
 - **Recipient autocomplete double defect**: the lookup previously used the whole recipient field as the needle, so once a complete address had been typed the substring match never returned suggestions again; applying a suggestion rewound only to the last comma, wiping earlier recipients whenever they were separated by spaces or semicolons. The lookup now targets only the trailing token and keeps the preceding separator when applying a suggestion.
 - **Agent self-heal for malformed tool JSON**: the OpenAI Chat-compatible provider no longer fails an entire turn with a non-retryable PROVIDER_ERROR when it meets a malformed arguments string, an incomplete call, or a no-argument call whose arguments member is absent; it now follows the degradation contract already used by the Anthropic and Responses providers (malformed input degrades to an empty object that validation rejects), feeding the error back to the model for a self-healing retry.
