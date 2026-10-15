@@ -524,6 +524,13 @@ function jobDbRow(db: DatabaseHandle, jobId: string): BatchJobDbRow | undefined 
  * state alone would exclude the row the user just starred and can still see.
  * The list endpoints keep the optimistic spelling, because the list must show
  * the user's own writes the moment they make them.
+ *
+ * The union is a superset of the list inside that pending window, so this
+ * can return ids the list no longer displays (marked read locally while the
+ * server still holds them unread) and the job's `total` can exceed the visible
+ * row count. Accepted deliberately: the alternative is a repeated selection
+ * that silently resolves to nothing, and the design fixes the selection when
+ * the user asks for it — not what the predicate happens to match later.
  */
 function resolveMessageIds(db: DatabaseHandle, query: MessageListFilterQuery): string[] {
   const { where, join, params } = buildMessageListSql(query, { flags: "local-or-confirmed" });

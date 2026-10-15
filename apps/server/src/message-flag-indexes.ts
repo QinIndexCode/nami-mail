@@ -62,19 +62,6 @@ export const UNSEEN_PREDICATE_SQL = `flags_json NOT LIKE '%${SEEN_FLAG_TEXT}%'`;
 export const CONFIRMED_FLAGS_SQL = `(CASE WHEN pending_flags_push = 1 THEN COALESCE(pending_flags_base_json, flags_json) ELSE flags_json END)`;
 
 /**
- * The same two views over the confirmed state.
- *
- * No partial index is keyed on these, and none can be: the predicate reads a
- * CASE expression, so the planner cannot prove it implied by an index whose
- * WHERE names `flags_json` directly. That is the intended trade — the list
- * itself keeps the indexed local predicate (it must show the optimistic value
- * immediately), while a batch job's selection resolves a few times per job
- * rather than per row.
- */
-export const CONFIRMED_FLAGGED_PREDICATE_SQL = `(${CONFIRMED_FLAGS_SQL} LIKE '%${FLAGGED_FLAG_TEXT}%')`;
-export const CONFIRMED_UNSEEN_PREDICATE_SQL = `(${CONFIRMED_FLAGS_SQL} NOT LIKE '%${SEEN_FLAG_TEXT}%')`;
-
-/**
  * The view under EITHER reading — the user's target or the server's state.
  *
  * This is what a batch selection resolves on. The list shows the target, so a
@@ -85,6 +72,18 @@ export const CONFIRMED_UNSEEN_PREDICATE_SQL = `(${CONFIRMED_FLAGS_SQL} NOT LIKE 
  * the server is concerned, so it must answer the second selection too). Only
  * the pending window can differ, and inside it both readings are defensible —
  * the union is the one that never loses a message the user meant to act on.
+ *
+ * It is therefore a SUPERSET of what the list displays: inside that window a
+ * row whose local target has already left the view (marked read, while the
+ * server still holds it unread) is selected too. A caller that counts rows must
+ * expect its total to exceed the visible row count by exactly those pending
+ * rows — the job reports the work it was asked to do, not the page's length.
+ *
+ * No partial index can serve these, by design: the predicate reads a CASE
+ * expression, so the planner cannot prove it implied by an index whose WHERE
+ * names `flags_json` directly. The list itself keeps the indexed local
+ * predicate (it must show the optimistic value immediately), while a batch
+ * job's selection resolves a few times per job rather than per row.
  */
 export const EITHER_FLAGGED_PREDICATE_SQL = `(flags_json LIKE '%${FLAGGED_FLAG_TEXT}%' OR ${CONFIRMED_FLAGS_SQL} LIKE '%${FLAGGED_FLAG_TEXT}%')`;
 export const EITHER_UNSEEN_PREDICATE_SQL = `(flags_json NOT LIKE '%${SEEN_FLAG_TEXT}%' OR ${CONFIRMED_FLAGS_SQL} NOT LIKE '%${SEEN_FLAG_TEXT}%')`;

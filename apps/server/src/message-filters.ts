@@ -1,7 +1,5 @@
 import { ftsLikeEscape } from "./message-search.js";
 import {
-  CONFIRMED_FLAGGED_PREDICATE_SQL,
-  CONFIRMED_UNSEEN_PREDICATE_SQL,
   EITHER_FLAGGED_PREDICATE_SQL,
   EITHER_UNSEEN_PREDICATE_SQL,
   FLAGGED_PREDICATE_SQL,
@@ -10,8 +8,9 @@ import {
 import type { AttachmentKind } from "./attachment-kind.js";
 
 // Authoritative WHERE filter fragments for the message list view. Shared by
-// GET /api/messages and the batch-job query resolver so "select all matching
-// this view" always matches exactly what the list shows.
+// GET /api/messages and the batch-job query resolver, so "select all matching
+// this view" matches what the list shows — exactly, apart from the batch
+// resolver's deliberate either-reading union (see MessageListSqlOptions).
 //
 // Folder membership reads the `m.effective_mailbox` VIRTUAL generated column
 // rather than the CASE expression it is defined as: the expression is not a
@@ -108,23 +107,22 @@ export type MessageListSqlOptions = {
    * Which flag state the starred and unread predicates read.
    *
    * "local" (the default, and what the list itself displays) is the user's
-   * optimistic target. "confirmed" is the value the server is known to hold.
-   * "local-or-confirmed" matches under either reading, which is what a batch
-   * job's selection uses: the list shows the target, so a selection may not
-   * exclude a row the user can see, and a message whose earlier job has already
-   * committed its new flags locally but not pushed them yet is still in its old
-   * state as far as the server is concerned — replaying the same selection must
-   * find it again instead of coming back empty.
+   * optimistic target. "local-or-confirmed" matches under either reading, which
+   * is what a batch job's selection uses: the list shows the target, so a
+   * selection may not exclude a row the user can see, and a message whose
+   * earlier job has already committed its new flags locally but not pushed them
+   * yet is still in its old state as far as the server is concerned — replaying
+   * the same selection must find it again instead of coming back empty. It is a
+   * superset of the local view inside the pending window; see the predicate's
+   * own comment for what a row count has to expect from it.
    */
-  flags?: "local" | "confirmed" | "local-or-confirmed";
+  flags?: "local" | "local-or-confirmed";
 };
 
 export function buildMessageListSql(query: MessageListFilterQuery, options: MessageListSqlOptions = {}): MessageListSqlSelection {
-  const flagPredicate = (local: string, confirmed: string, either: string): string => {
-    if (options.flags === "confirmed") return confirmed;
-    if (options.flags === "local-or-confirmed") return either;
-    return `m.${local}`;
-  };
+  const flagPredicate = (local: string, either: string): string => (
+    options.flags === "local-or-confirmed" ? either : `m.${local}`
+  );
   const filters: string[] = [];
   const params: unknown[] = [];
   const search = query.q?.trim();
@@ -147,7 +145,7 @@ export function buildMessageListSql(query: MessageListFilterQuery, options: Mess
     // imported rather than restated: a partial index is only usable when SQLite
     // can prove the query's predicate implies its WHERE clause, so the two
     // spellings have to stay identical down to the backslashes.
-    filters.push(flagPredicate(FLAGGED_PREDICATE_SQL, CONFIRMED_FLAGGED_PREDICATE_SQL, EITHER_FLAGGED_PREDICATE_SQL));
+    filters.push(flagPredicate(FLAGGED_PREDICATE_SQL, EITHER_FLAGGED_PREDICATE_SQL));
   } else if (!globalSearch && query.snoozed) {
     // The Snoozed view lists messages whose snooze has not fired yet.
     filters.push("m.snoozed_until IS NOT NULL AND m.snoozed_until > ?");
@@ -163,7 +161,7 @@ export function buildMessageListSql(query: MessageListFilterQuery, options: Mess
   if (!globalSearch && query.unread) {
     // Same reasoning as the starred predicate above: this is the spelling
     // `idx_messages_unseen` is keyed on.
-    filters.push(flagPredicate(UNSEEN_PREDICATE_SQL, CONFIRMED_UNSEEN_PREDICATE_SQL, EITHER_UNSEEN_PREDICATE_SQL));
+    filters.push(flagPredicate(UNSEEN_PREDICATE_SQL, EITHER_UNSEEN_PREDICATE_SQL));
   }
   // Kind and date refinements apply to every mode, including global search:
   // they narrow the candidate set, they never widen it.

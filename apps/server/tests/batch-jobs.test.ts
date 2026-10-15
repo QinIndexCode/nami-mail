@@ -1045,6 +1045,11 @@ describe("batch jobs (predicate-scoped list operations)", () => {
       const pending = db.prepare("SELECT COUNT(*) AS n FROM operation_queue WHERE status IN ('pending', 'running')").get() as { n: number };
       expect(pending.n).toBe(0);
     });
+    // The protected target was never rolled back, so the newer push lands it
+    // and its own settlement is what confirms the row.
+    const settled = db.prepare("SELECT flags_json, pending_flags_push FROM messages WHERE id = 'message-1'").get() as { flags_json: string; pending_flags_push: number };
+    expect(JSON.parse(settled.flags_json), "the newer push kept its target all the way to the provider").toEqual(["\\Seen", "\\Flagged"]);
+    expect(settled.pending_flags_push, "and its own settlement is what confirms the row").toBe(0);
   });
 
   it("fixes a move job's selection when it is accepted, not when it runs", async () => {
