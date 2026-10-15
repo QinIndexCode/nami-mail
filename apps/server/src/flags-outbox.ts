@@ -196,30 +196,54 @@ export function commitLocalFlags(
  * (`onOperationSettled`), never from inside the executor: an executor can
  * complete late — after a write-slot timeout already settled its row — and a
  * late clear would otherwise drop a newer push's protection.
+ *
+ * The clear is set-based: one pass over the pending-or-running `flags-push`
+ * rows materializes the message ids those rows still protect, and the callers'
+ * ids are then cleared in bulk primary-key chunks. The previous form ran one
+ * conditional UPDATE per message whose EXISTS re-scanned and re-parsed every
+ * queue payload's entries for each message — quadratic in the batch size and
+ * measured at 4.4s of event-loop stall for a 3,000-message settlement while a
+ * 3,000-entry push row was still pending.
  */
+function flagsPushProtectedMessageIds(db: DatabaseHandle, settledRowId?: string): Set<string> {
+  // The valid-payload filter runs inside a MATERIALIZED CTE so json_each only
+  // ever receives payloads json_valid has already accepted, independent of the
+  // query planner's predicate order.
+  const rows = db.prepare(`
+    WITH push AS MATERIALIZED (
+      SELECT payload_json
+      FROM operation_queue
+      WHERE operation_queue.kind = 'flags-push'
+        AND operation_queue.id != ?
+        AND operation_queue.status IN ('pending', 'running')
+        AND json_valid(operation_queue.payload_json)
+    )
+    SELECT DISTINCT json_extract(entry.value, '$.id') AS id
+    FROM push, json_each(push.payload_json, '$.entries') AS entry
+  `).all(settledRowId ?? "") as Array<{ id: string | null }>;
+  const ids = new Set<string>();
+  for (const row of rows) if (row.id !== null) ids.add(row.id);
+  return ids;
+}
+
 export function clearPendingFlagsMarkers(
   db: DatabaseHandle,
   messageIds: readonly string[],
   settledRowId?: string,
 ): void {
-  const update = db.prepare(`
-    UPDATE messages SET pending_flags_push = 0
-    WHERE id = ? AND pending_flags_push = 1
-      AND NOT EXISTS (
-        SELECT 1
-        FROM operation_queue
-        WHERE operation_queue.kind = 'flags-push'
-          AND operation_queue.id != ?
-          AND operation_queue.status IN ('pending', 'running')
-          AND json_valid(operation_queue.payload_json)
-          AND EXISTS (
-            SELECT 1
-            FROM json_each(operation_queue.payload_json, '$.entries') AS entry
-            WHERE json_extract(entry.value, '$.id') = messages.id
-          )
-      )
-  `);
-  for (const id of messageIds) update.run(id, settledRowId ?? "");
+  if (!messageIds.length) return;
+  const protectedIds = flagsPushProtectedMessageIds(db, settledRowId);
+  const clearable = messageIds.filter((id) => !protectedIds.has(id));
+  // Chunked so the statement stays well inside SQLite's host-parameter limit
+  // regardless of how large the settled batch is.
+  const chunkSize = 10_000;
+  for (let start = 0; start < clearable.length; start += chunkSize) {
+    const chunk = clearable.slice(start, start + chunkSize);
+    db.prepare(`
+      UPDATE messages SET pending_flags_push = 0
+      WHERE pending_flags_push = 1 AND id IN (${chunk.map(() => "?").join(", ")})
+    `).run(...chunk);
+  }
 }
 
 /**

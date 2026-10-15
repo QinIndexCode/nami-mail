@@ -319,6 +319,48 @@ describe("settling a flags push keeps newer pushes protected", () => {
 });
 
 /**
+ * The settlement clear is set-based (one materialized pass over pending
+ * rows, then bulk PK-chunked updates). The stress audit measured the old
+ * per-message form at 4.4s for a 3,000-message settlement; these assertions
+ * pin the large-batch correctness invariants that rewrite must keep:
+ * protection across a chunked boundary, and exact clear counts.
+ */
+describe("large-batch settlement clears stay correct", () => {
+  it("keeps protected markers across chunk boundaries and clears the rest", () => {
+    const db = openDatabase(":memory:");
+    try {
+      insertAccount(db, "account-1");
+      // 12,500 messages cross the 10,000-id chunk boundary in the clear.
+      const total = 12_500;
+      const messages: string[] = [];
+      for (let i = 0; i < total; i++) {
+        const id = `message-${i}`;
+        messages.push(id);
+        insertMessage(db, id, "account-1", i + 1, 1);
+      }
+      // One pending row protects every THIRD message, so protected and
+      // clearable ids interleave across the whole batch and both chunks.
+      const protectedEntries = messages.filter((_, index) => index % 3 === 0);
+      insertFlagsPushRow(db, "push-new", "account-1", protectedEntries, "pending");
+
+      clearPendingFlagsMarkers(db, messages);
+
+      const marked = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE pending_flags_push = 1").get() as { n: number };
+      expect(marked.n).toBe(protectedEntries.length);
+
+      // Once the row settles, a second settlement clears the rest.
+      db.prepare("UPDATE operation_queue SET status = 'completed', completed_at = ? WHERE id = 'push-new'")
+        .run(new Date().toISOString());
+      clearPendingFlagsMarkers(db, messages);
+      const remaining = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE pending_flags_push = 1").get() as { n: number };
+      expect(remaining.n).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+/**
  * R03 recheck: the queue settles a row durably and only THEN notifies the
  * owner. A late executor completion that arrives after its row has already
  * settled (the sync-locks timeout rejects the wrapper while the underlying
