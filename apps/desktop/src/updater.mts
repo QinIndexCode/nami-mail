@@ -185,6 +185,7 @@ export class DesktopUpdater {
     // describe this installation.
     await this.pendingInstall.clear();
     if (outcome !== "not-applied") return false;
+    await this.clearCachedVersion(record.toVersion);
     this.transition("error", "installNotApplied", {
       targetVersion: record.toVersion,
       checkedAt: record.startedAt,
