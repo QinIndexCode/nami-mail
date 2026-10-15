@@ -67,13 +67,17 @@ describe("createBatchJobRunner", () => {
       runner.start(MOVE_PAYLOAD, RUN_OPTS);
 
       expect(deps.onBusy).toHaveBeenNthCalledWith(1, true);
+      // Armed before the server has named the job, so a second click inside the
+      // create round trip cannot start a job the server would accept.
+      expect(deps.onSnapshot).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: "", kind: "move", status: "running" }));
       await flush();
       expect(deps.onBusy).toHaveBeenNthCalledWith(2, false);
-      expect(deps.onSnapshot).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: "j1", status: "running" }));
+      expect(deps.onSnapshot).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: "j1", status: "running" }));
+      expect(deps.reconcile).toHaveBeenCalledTimes(1);
 
       // First poll keeps the job visible and schedules the next tick.
       await vi.advanceTimersByTimeAsync(600);
-      expect(deps.onSnapshot).toHaveBeenNthCalledWith(2, expect.objectContaining({ status: "running" }));
+      expect(deps.onSnapshot).toHaveBeenNthCalledWith(3, expect.objectContaining({ status: "running" }));
       expect(deps.reload).not.toHaveBeenCalled();
 
       // Second poll sees the settled job and reconciles.
@@ -131,6 +135,38 @@ describe("createBatchJobRunner", () => {
 
       expect(deps.reconcile, "a refused create committed nothing to pull in").not.toHaveBeenCalled();
       expect(deps.onBusy).toHaveBeenLastCalledWith(false);
+      // The placeholder the bar was armed with has to go: a job that was never
+      // accepted must not leave the actions inert.
+      expect(deps.onSnapshot).toHaveBeenLastCalledWith(null);
+      expect(deps.showToast).toHaveBeenCalledWith(expect.any(String), "error");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("arms the bar before the server names the job", async () => {
+    vi.useFakeTimers();
+    try {
+      let assignJobId!: (value: { jobId: string }) => void;
+      apiMocks.batchJobCreate.mockImplementation(() => new Promise((resolve) => { assignJobId = resolve; }));
+      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j1", status: "running" }) });
+      const deps = makeDeps();
+      const runner = createBatchJobRunner(deps);
+
+      runner.start(MOVE_PAYLOAD, RUN_OPTS);
+
+      // Mid-round-trip: this is the window a double click lands in, and nothing
+      // else would have marked a batch as under way.
+      expect(deps.onBusy).toHaveBeenLastCalledWith(true);
+      expect(deps.onSnapshot).toHaveBeenCalledTimes(1);
+      expect(deps.onSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "move", status: "running" }));
+
+      assignJobId({ jobId: "j1" });
+      await flush();
+
+      // The server's id takes over that placeholder rather than adding a job.
+      // (Later ticks of the poll loop may report the same job again.)
+      expect(deps.onSnapshot).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: "j1", status: "running" }));
     } finally {
       vi.useRealTimers();
     }

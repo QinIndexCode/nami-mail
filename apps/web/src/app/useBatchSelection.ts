@@ -219,9 +219,13 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     setSelectionMode(false);
     setSelectedMessageIds(new Set());
     setSelectAllPaged(false);
-    setBatchJob(null);
+    // The job snapshot is deliberately left alone: it is what keeps the bar's
+    // actions inert, and a job does not stop when the user closes the bar. The
+    // poll loop owns its lifetime and every terminal path clears it, so it
+    // cannot outlive the job; clearing it here would re-arm the actions — and a
+    // second batch over the same rows — for the rest of the run.
     setPendingBatchDelete(false);
-  }, [setBatchJob, setPendingBatchDelete, setSelectAllPaged]);
+  }, [setPendingBatchDelete, setSelectAllPaged]);
 
   // The current view expressed as a server-side filter scope for predicate
   // batch operations. Mirrors buildMessageQuery so the job touches exactly
@@ -528,12 +532,14 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
         };
 
         // The server accepts up to SERVER_BATCH_ID_LIMIT ids per request, but a
-        // move is split far below that on purpose. A flag commit is local bookkeeping;
-        // a move is a real MOVE per (account, mailbox) group, so the chunk size
-        // decides how many messages one refused or lost command can fail at once
-        // and for how long the chunk's write slot is held. The counters live
-        // outside the try so the catch can distinguish processed chunks from
-        // unprocessed ones.
+        // move is split far below that on purpose. A flag commit is local
+        // bookkeeping; a move is a real MOVE per (account, mailbox) group, each
+        // one taking the account's write lock, so the chunk size is what decides
+        // how many messages a refused or lost command can strand at once and how
+        // long those locks are held (a group that fails falls back to
+        // per-message moves, which strands less still). The counters live outside
+        // the try so the catch can distinguish processed chunks from unprocessed
+        // ones.
         const CHUNK_SIZE = 100;
         let updated = 0;
         let failed = 0;

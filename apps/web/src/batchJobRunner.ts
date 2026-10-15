@@ -28,17 +28,25 @@ export type BatchJobRunnerDeps = {
   reload: (opts: { silent: boolean }) => Promise<void> | void;
   /**
    * Pulls the server's *already committed* local state into the UI the moment a
-   * job is accepted, instead of at settlement.
+   * job is accepted, instead of at settlement — for the jobs whose acceptance
+   * commits anything.
    *
-   * A job's acceptance transaction carries the fixed selection, the metadata,
-   * the folder counters and the durable push rows, so by the time
-   * `batchJobCreate` resolves the local state is final — only the remote IMAP
+   * A flags job's acceptance transaction carries the fixed selection, the
+   * metadata, the folder counters and the durable push rows, so by the time
+   * `batchJobCreate` resolves the local state is final; only the remote IMAP
    * push is outstanding, and on a large selection it can take tens of seconds.
-   * Without this call the UI keeps describing the pre-commit state for that
-   * whole window, the counters most visibly: a predicate selection optimistically
+   * Without this call the UI keeps describing the pre-commit state for that whole
+   * window, the counters most visibly: a predicate selection optimistically
    * touches only the loaded rows (the renderer never holds all of them), so the
-   * unread total and folder badges stay wrong until the poll happens to see the
-   * job settle.
+   * unread total and the folder badges stay wrong until the poll happens to see
+   * the job settle.
+   *
+   * A move job is the other shape: its acceptance only records the selection and
+   * queues the work, each chunk committing as it runs, so here the call reads the
+   * state that is local at that instant and nothing more. That is still the right
+   * thing to do — it is one read of the truth the user is looking at — but it is
+   * not a reconcile of the move itself, and the list will not reflect a move
+   * until the job settles.
    *
    * MUST be a refresh that leaves the list as it is — App wires its
    * pagination-preserving silent refresh here. The full `reload` collapses the
@@ -193,6 +201,13 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
 
   const start = (payload: BatchJobCreatePayload, opts: BatchJobRunOptions): void => {
     onBusy(true);
+    // The bar has to be inert from the moment a batch is asked for, not from the
+    // moment the server names it: the create is a round trip against a job that
+    // takes tens of seconds to finish once accepted, and a second click inside
+    // that window — a double click is enough — would have the server accept a
+    // second job over the same rows. The id is filled in as soon as the server
+    // assigns one; nothing reads it before then.
+    onSnapshot({ id: "", kind: payload.kind, status: "running", total: 0, done: 0, updated: 0, failed: 0, createdAt: now() });
     void api.batchJobCreate(payload).then(({ jobId }) => {
       onSnapshot({ id: jobId, kind: payload.kind, status: "running", total: 0, done: 0, updated: 0, failed: 0, createdAt: Date.now() });
       // The job runs server-side; release the toolbar (progress comes from
@@ -205,6 +220,12 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
       poll(jobId, opts);
     }).catch((error: unknown) => {
       onBusy(false);
+      // A refused create committed nothing, so the placeholder goes with it —
+      // otherwise the bar would stay inert for a job that does not exist. A
+      // response lost on the way back is indistinguishable from a refusal here
+      // and is deliberately not reconciled either: the next background refresh
+      // is what corrects a commit whose acknowledgement never arrived.
+      onSnapshot(null);
       opts.onSettled?.();
       showToast(mailErrorToastMessage(error, t(payload.kind === "flags" ? "mail.error.batchUpdate" : "mail.error.move"), t), "error");
     });

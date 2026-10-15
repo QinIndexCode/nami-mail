@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyPinnedUnseenCorrections, createPendingLocalState, mergePendingLocalState } from "../mailListState";
 import type * as apiModule from "../api";
+import type { BatchJobSnapshot } from "../api";
 import type { Account, Message, Stats } from "../types";
 import { useBatchSelection, type BatchSelection } from "./useBatchSelection";
 
@@ -41,6 +42,8 @@ let mailbox: Message[];
  * are meant to shield, and the truth a failed write must fall back to. */
 let server: Message[];
 const toast = vi.fn();
+/** Every value the hook hands to `setBatchJob`, in order. */
+const jobWrites: Array<BatchJobSnapshot | null> = [];
 
 function Harness() {
   const [messages, setMessages] = useState(() => mailbox);
@@ -48,7 +51,7 @@ function Harness() {
   const [stats, setStats] = useState<Stats>({ accounts: 1, messages: 1, unread: 1 });
   const [selectAllPaged, setSelectAllPaged] = useState(false);
   const [pendingBatchDelete, setPendingBatchDelete] = useState(false);
-  const [, setBatchJob] = useState(null);
+  const [, setBatchJob] = useState<BatchJobSnapshot | null>(null);
   const [, setTotal] = useState(1);
   const messagesRef = useRef(messages);
   const pendingRef = useRef(createPendingLocalState());
@@ -79,7 +82,7 @@ function Harness() {
     dateBounds: { after: undefined, before: undefined }, load, loadRef,
     reconcileRef: { current: () => undefined }, loadRequestRef,
     messagesRef, pendingLocalStateRef: pendingRef, viewRef, selectAllPaged, setSelectAllPaged,
-    setBatchJob: setBatchJob as never, pendingBatchDelete, setPendingBatchDelete,
+    setBatchJob: ((job: BatchJobSnapshot | null) => { jobWrites.push(job); setBatchJob(job); }) as never, pendingBatchDelete, setPendingBatchDelete,
     pinMovedAway: (ids, destination) => { for (const id of ids) pendingRef.current.movedAway.set(id, destination); },
     unpinMovedAway: (ids) => { for (const id of ids) pendingRef.current.movedAway.delete(id); },
     setMessages, setAccounts, setStats, setMessageTotal: setTotal,
@@ -92,6 +95,7 @@ function Harness() {
 beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.resetAllMocks();
+  jobWrites.length = 0;
   mailbox = [original];
   server = [original];
   host = document.createElement("div");
@@ -238,7 +242,22 @@ it("splits an explicit selection at the server's id cap instead of sending a req
 
   // Two requests, each at or under the cap — not one refused request, and not a
   // hundred-id walking pace that would reacquire the write slot 51 times.
-  expect(mocks.flags.mock.calls.map((call) => (call[0] as string[]).length)).toEqual([SERVER_BATCH_ID_LIMIT, 1]);
+  const chunks = mocks.flags.mock.calls.map((call) => call[0] as string[]);
+  expect(chunks.map((chunk) => chunk.length)).toEqual([SERVER_BATCH_ID_LIMIT, 1]);
+  // Membership too, not just sizes: every row exactly once, in order, so a chunk
+  // boundary cannot duplicate one row and drop another and still read as right.
+  expect(chunks.flat()).toEqual(rows.map((row) => row.id));
   expect(displayed.every((message) => message.seen), "the whole selection committed").toBe(true);
   expect(toast.mock.calls.some((call) => call[0] === "success"), "no chunk boundary may read as a partial failure").toBe(true);
+});
+
+it("closes the bar without disarming a job that is still running", async () => {
+  // The job snapshot is the only thing keeping the bar's actions inert, and a job
+  // does not stop when the user closes the bar. Clearing it here would re-arm the
+  // actions — a second batch over the rows the job is still working through — so
+  // the poll loop, which clears it on every terminal path, owns its lifetime.
+  await act(async () => { current.exitSelectionMode(); });
+
+  expect(current.selectionMode).toBe(false);
+  expect(jobWrites, "closing the bar must not clear the running job").toEqual([]);
 });
