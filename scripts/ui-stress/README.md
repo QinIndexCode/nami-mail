@@ -37,12 +37,14 @@ latency then isolates UI behavior.
 2. **Scroll pagination** — click the load-more footer repeatedly until the
    last page. Per-page pre-click/click/settle timings, request latencies,
    longtask totals, and detected list resets.
-3. **Batch mark-read of everything loaded** — select-all → marker-read;
-   web splits into chunks of 100 PATCHes; blocks the toolbar until done.
-4. **Batch archive of everything loaded** — single POST to the move endpoint
-   (note: the server caps ids at 100/schema — see findings).
-5. **100-item selection archive** — incremental per-row selection cost, then
-   one 100-id move request.
+3. **Batch mark-read of everything loaded** — select-all twice → the
+   predicate-wide flags job (`/api/batch-jobs` plus its 600 ms status poll);
+   the toolbar stays on screen but inert for the whole run.
+4. **Batch archive of everything loaded** — the same predicate selection into
+   the move job; it exits selection mode when it succeeds and rolls the refused
+   rows back into the selection when the server rejects.
+5. **Small (in-viewport) selection archive** — incremental per-row selection
+   cost, then one move request for the hand-picked rows.
 
 Perf instrumentation is injected via `addInitScript`: a rAF frame sampler,
 a PerformanceObserver for longtasks, a fetch wrapper recording per-API
@@ -50,6 +52,13 @@ request durations, and a toast history sampler. The terms-of-use dialog is
 automatically accepted by a watchdog (it can appear after boot).
 
 ## Reference numbers (2026-08-09, Windows, Chromium headless, dev build)
+
+These were measured against the client-side batch paths of that day — flags
+split into 50 PATCHes of 100, a move sent as one request carrying every
+selected id — before both went through the server-side predicate jobs the
+phases now drive. They are the baseline for that code, not numbers for today's
+paths: re-run the harness rather than citing them as current. Findings 2, 3 and
+5 have been re-checked against the code on 2026-10-16 (see below).
 
 ### Phase 1 — initial render (100-item first page)
 
@@ -95,7 +104,8 @@ logs).
 
 Failed outright in 0.33 s: single request with 5 000 ids → server schema
 rejects >100 ids → error toast "移动邮件失败". No chunking in the move path
-(unlike flags).
+(unlike flags). That is the client shape this run predates: today the selection
+drives a server-side job (see findings 3 and 5).
 
 ### Phase 5 — 100-item selection archive (5k)
 
@@ -104,6 +114,27 @@ The 100-id move request itself: 597 ms total; server-side 184 ms (fast
 connect-refusals); result `updated: 0` → error toast "移动邮件失败".
 
 ## Findings
+
+Status on 2026-10-16 — these no longer describe the code:
+
+- **2 (silent refresh washes out pagination)** — the periodic tick now runs the
+  pagination-preserving silent refresh (`realtimeSync`'s `onRefresh` →
+  `requestRefresh` → `silentRefresh` in `apps/web/src/App.tsx`), not a full
+  `load`. The run below still recorded list resets, so re-measure before
+  treating the entries here as gone.
+- **3 (batch move >100 ids always fails)** — the boundaries moved and are pinned
+  by tests now: the flags batch sends one request per 5 000 ids
+  (`SERVER_BATCH_ID_LIMIT` in `apps/web/src/app/useBatchSelection.ts`,
+  mirroring `batchMessageIdsSchema` in `apps/server/src/schemas.ts`), a move
+  chunks at 100 of its own accord (each chunk is a real MOVE per mailbox group
+  and takes that account's write slot), and a predicate selection goes through
+  a server-side job instead of a request carrying every id. Both endpoints'
+  caps are asserted in `apps/server/tests/app.test.ts`.
+- **5 (batch move exits selection mode even on total failure)** — a refused move
+  rolls its failed rows back into the list and re-selects them
+  (`batchMoveMessages` in `apps/web/src/app/useBatchSelection.ts`).
+
+Not re-checked on 2026-10-16: 1, 4, 6, 7.
 
 1. **List DOM explodes** — ~28 DOM nodes per row ⇒ 20k rows ≈ 560k nodes;
    initial commit at 20k is fine but every subsequent re-render and click
