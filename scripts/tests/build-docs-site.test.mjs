@@ -347,6 +347,12 @@ test("the landing page only links at documents and assets that exist", () => {
   const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
   const html = readFileSync(join(repoRoot, "site", "index.html"), "utf8");
 
+  // The hero meta badge must stay synchronized with the declared package version.
+  const packageManifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+  const versionMatch = html.match(/<span class="meta-tag">v([^<]+)<\/span>/);
+  assert.ok(versionMatch, "landing page must declare a hero version badge");
+  assert.equal(versionMatch[1], packageManifest.version, "landing page hero version badge must match package.json");
+
   // Documentation shortcuts: `./docs/<topic>.<lang>.html` has to correspond to a
   // real document, or the landing page is advertising a page the build will not
   // produce.

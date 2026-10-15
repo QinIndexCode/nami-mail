@@ -11,6 +11,7 @@ import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
+import { syncSiteVersion } from "./sync-site-version.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const webRoot = join(repoRoot, "apps", "web");
@@ -43,6 +44,7 @@ export async function syncSiteDemo({ silent = false } = {}) {
     console.log("[sync-site-demo] Synchronizing site demo with latest apps/web implementation...");
   }
 
+  syncSiteVersion({ repoRoot });
   ensureContracts();
 
   let appEntry = null;
