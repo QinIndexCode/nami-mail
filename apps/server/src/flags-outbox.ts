@@ -371,10 +371,36 @@ export type FlagsPushEntry = {
 };
 
 /**
+ * Resolves each id's CURRENT position from the local cache. A `flags-push` row
+ * is staged with the position the message had at commit time; a foreground
+ * move can rewrite `mailbox`/`uid` before the row runs, and STOREing at the
+ * stale UID would either miss the message or, worse, hit whichever message
+ * inherited that UID in the old mailbox. The stable local message id is the
+ * only position-independent handle, so the executor re-resolves from it.
+ * Chunked like every other id-list read (the driver's variable ceiling).
+ */
+function currentPositions(db: DatabaseHandle, ids: readonly string[]): Map<string, { mailbox: string; uid: number }> {
+  const chunkSize = 10_000;
+  const unique = [...new Set(ids)];
+  const positions = new Map<string, { mailbox: string; uid: number }>();
+  for (let offset = 0; offset < unique.length; offset += chunkSize) {
+    const chunk = unique.slice(offset, offset + chunkSize);
+    const rows = db
+      .prepare(`SELECT id, mailbox, uid FROM messages WHERE id IN (${chunk.map(() => "?").join(", ")})`)
+      .all(...chunk) as Array<{ id: string; mailbox: string; uid: number }>;
+    for (const row of rows) positions.set(row.id, { mailbox: row.mailbox, uid: row.uid });
+  }
+  return positions;
+}
+
+/**
  * The `flags-push` executor: pushes committed local deltas to the provider
  * with one IMAP connection per account and one STORE per (mailbox, flag-group).
- * Throws on provider failure so the queue retries; markers are cleared by the
- * caller only when the push has settled (success or permanent failure).
+ * Entries carry the delta as staged and are re-positioned by message id at
+ * execution time; an entry whose message is gone from the cache is dropped
+ * (there is nothing left to push). Throws on provider failure so the queue
+ * retries; markers are cleared by the caller only when the push has settled
+ * (success or permanent failure).
  */
 export async function pushFlagsRemote(
   deps: FlagsPushDeps,
@@ -382,14 +408,17 @@ export async function pushFlagsRemote(
 ): Promise<void> {
   const account = accountById(deps.db, payload.accountId);
   if (!account) throw new Error("Account not found.");
+  const positions = currentPositions(deps.db, payload.entries.map((entry) => entry.id));
   const client = await imapClientForAccount(account, deps.masterKey, deps.accessTokenProvider);
   try {
     await client.connect();
     const byMailbox = new Map<string, FlagsPushEntry[]>();
     for (const entry of payload.entries) {
-      const group = byMailbox.get(entry.mailbox) ?? [];
-      group.push(entry);
-      byMailbox.set(entry.mailbox, group);
+      const position = positions.get(entry.id);
+      if (!position) continue;
+      const group = byMailbox.get(position.mailbox) ?? [];
+      group.push({ ...entry, mailbox: position.mailbox, uid: position.uid });
+      byMailbox.set(position.mailbox, group);
     }
     for (const [mailbox, entries] of byMailbox) {
       const lock = await client.getMailboxLock(mailbox);

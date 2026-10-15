@@ -12,6 +12,7 @@ import type { FastifyInstance } from "fastify";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp, MAX_BACKGROUND_UPLOAD_BYTES } from "../src/app.js";
+import { pushFlagsRemote } from "../src/flags-outbox.js";
 import { AGENT_ATTACHMENT_TEXT_LIMIT, AgentService, composeAttachmentContent } from "../src/agent-service.js";
 import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
 import { applyAgentStoreSchema } from "../src/agent/schema.js";
@@ -53,6 +54,31 @@ function readyMailClient() {
     messageMove: vi.fn(async () => ({ uidMap: new Map<number, number>() })),
     logout: vi.fn(async () => undefined),
   };
+}
+
+/**
+ * Records which mailbox each STORE was issued against, so a test can prove the
+ * executor targeted the message's CURRENT position rather than the one staged
+ * when the delta was committed.
+ */
+function recordingMailClient() {
+  const stores: Array<{ mailbox: string; uids: number[]; add: string[] }> = [];
+  let selected = "";
+  const client = {
+    usable: true,
+    connect: vi.fn(async () => undefined),
+    getMailboxLock: vi.fn(async (mailbox: string) => {
+      selected = mailbox;
+      return { release: vi.fn() };
+    }),
+    messageFlagsAdd: vi.fn(async (uids: number[], flags: string[]) => {
+      stores.push({ mailbox: selected, uids: [...uids], add: [...flags] });
+    }),
+    messageFlagsRemove: vi.fn(async () => undefined),
+    messageMove: vi.fn(async () => ({ uidMap: new Map<number, number>() })),
+    logout: vi.fn(async () => undefined),
+  };
+  return { client, stores };
 }
 
 async function createValidPng() {
@@ -1444,6 +1470,41 @@ it("keeps an Agent stream running after the client closes its response", async (
     const marker = db.prepare("SELECT pending_flags_push, flags_json FROM messages WHERE id = ?").get("flag-push-1") as { pending_flags_push: number; flags_json: string };
     expect(marker.pending_flags_push).toBe(0);
     expect(JSON.parse(marker.flags_json)).toEqual(["\\Seen"]);
+  });
+
+  it("re-resolves a queued push to the message's current position", async () => {
+    const recorder = recordingMailClient();
+    imapClientForAccount.mockReturnValue(recorder.client);
+    const { now, insertMessage } = seedJobAccount("flag-reposition");
+    insertMessage.run("flag-reposition-1", "flag-reposition", "INBOX", 81, "Reposition", "Demo", "demo@example.com", "[]", now, "s", "s", "", "[]", 0, 10, now);
+
+    // The delta is staged where the message sat, then a foreground move lands
+    // before the push runs: the local row now points into the destination with
+    // its new UID. STOREing at the staged position would target whatever
+    // inherited UID 81 in INBOX, or nothing at all — either way the flags the
+    // user set would not follow the message.
+    const payload = { accountId: "flag-reposition", entries: [{ id: "flag-reposition-1", mailbox: "INBOX", uid: 81, add: ["\\Seen"], remove: [] }] };
+    db.prepare("UPDATE messages SET mailbox = 'Trash', uid = 181 WHERE id = ?").run("flag-reposition-1");
+    await pushFlagsRemote({ db, masterKey: Buffer.alloc(32, 7) }, payload);
+
+    expect(recorder.stores).toEqual([{ mailbox: "Trash", uids: [181], add: ["\\Seen"] }]);
+  });
+
+  it("drops a queued push whose message is no longer in the cache", async () => {
+    const recorder = recordingMailClient();
+    imapClientForAccount.mockReturnValue(recorder.client);
+    seedJobAccount("flag-vanished");
+
+    // No message row to re-resolve: there is nothing to push, and the staged
+    // UID may well belong to a different message by now. No STORE may be
+    // issued at all.
+    await pushFlagsRemote({ db, masterKey: Buffer.alloc(32, 7) }, {
+      accountId: "flag-vanished",
+      entries: [{ id: "flag-vanished-1", mailbox: "INBOX", uid: 9, add: ["\\Seen"], remove: [] }],
+    });
+
+    expect(recorder.stores).toEqual([]);
+    expect(recorder.client.getMailboxLock).not.toHaveBeenCalled();
   });
 
   async function waitForJob(jobId: string, tries = 120) {
