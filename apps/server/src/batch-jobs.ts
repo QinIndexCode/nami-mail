@@ -301,9 +301,14 @@ function pruneFlagsJobs(db: DatabaseHandle): void {
  * it must be REBUILDABLE — a restart may not turn a pollable job into a 404
  * while its undo scope stays queryable, which would contradict the
  * registry's whole reason to exist.
+ *
+ * The rebuild REPLACES the registry rather than merging into it: this
+ * database is the authority on which jobs exist, and merging would keep
+ * handles to jobs of a previous (possibly closed) database alive.
  */
 export function rebuildFlagsJobHandles(db: DatabaseHandle): void {
   const rows = db.prepare("SELECT id FROM batch_jobs").all() as Array<{ id: string }>;
+  flagJobHandles.clear();
   for (const { id } of rows) flagJobHandles.set(id, db);
 }
 
@@ -412,7 +417,12 @@ function acceptFlagsJob(
       insertSelection.run(id, messageId, changedSet.has(messageId) ? 1 : 0);
     }
     if (params.alsoMarkUndone) {
-      db.prepare("UPDATE batch_jobs SET undone = 1 WHERE id = ?").run(params.alsoMarkUndone);
+      // Conditional so the one undo stays one even if the guard read ever
+      // stops being synchronous with this write: a lost race marks nothing
+      // and aborts the acceptance (rolling back the reverse job's rows too)
+      // instead of accepting a second reversal.
+      const marked = db.prepare("UPDATE batch_jobs SET undone = 1 WHERE id = ? AND undone = 0").run(params.alsoMarkUndone);
+      if (marked.changes === 0) throw new BatchJobUndoneError();
     }
   })();
   for (const starter of starters) starter();
@@ -628,11 +638,26 @@ function undoFlagsJob(parent: BatchJobDbRow, deps: BatchJobDeps): BatchJobUndoOu
   // The undone mark commits inside the undo job's own transaction (see
   // acceptFlagsJob's alsoMarkUndone): a crash between the two would consume
   // the one undo without leaving the reverse job behind. The mark must NOT
-  // be wrapped in an outer transaction here — acceptFlagsJob joins its push
-  // rows to the FIFO chain after ITS commit, and an outer transaction would
-  // make the rows invisible to the chain.
-  const undoJob = acceptFlagsJob(deps, { kind: "undo", parentId: parent.id, patch: reverse, ids: changedIds, alsoMarkUndone: parent.id });
+  // be wrapped in an outer transaction here — acceptFlagsJob only joins its
+  // push rows to the FIFO chain after its own commit, so an outer rollback
+  // would leave already-started chains driving rows that no longer exist.
+  let undoJob: BatchJobSnapshot;
+  try {
+    undoJob = acceptFlagsJob(deps, { kind: "undo", parentId: parent.id, patch: reverse, ids: changedIds, alsoMarkUndone: parent.id });
+  } catch (error) {
+    // A concurrent undo consumed the mark first; the acceptance rolled itself
+    // back, so this attempt must report the same thing a later guard read
+    // would have.
+    if (error instanceof BatchJobUndoneError) return { ok: false, reason: "already_undone" };
+    throw error;
+  }
   return { ok: true, started: true, jobId: undoJob.id };
+}
+
+class BatchJobUndoneError extends Error {
+  constructor() {
+    super("Batch job already undone.");
+  }
 }
 
 type UndoGuard = { ok: false; reason: "not_completed" | "already_undone" | "expired" };

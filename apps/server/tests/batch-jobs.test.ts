@@ -9,7 +9,7 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 });
 
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import { createBatchJob, getBatchJobSnapshot, rebuildFlagsJobHandles, undoBatchJob } from "../src/batch-jobs.js";
+import { createBatchJob, getBatchJobSnapshot, undoBatchJob } from "../src/batch-jobs.js";
 import { indexMessageFts } from "../src/message-search.js";
 import type { MessageListFilterQuery } from "../src/message-filters.js";
 import { createOperationQueue } from "../src/operation-queue.js";
@@ -942,20 +942,94 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     expect(JSON.parse(local.flags_json)).toEqual(["\\Seen"]);
   });
 
-  it("keeps durable jobs pollable and undoable after a restart", async () => {
+  it("re-registers durable jobs at boot so a restart cannot 404 them", async () => {
     const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, jobDeps());
     await waitForJob(created.id);
-    // Simulate the restart: a fresh in-memory registry over the same
-    // database. The durable rows survive; the pollable registry must be
-    // rebuildable from them.
-    rebuildFlagsJobHandles(db);
-    expect(getBatchJobSnapshot(created.id)).toMatchObject({ status: "completed", total: 3, updated: 3 });
-    const undone = undoBatchJob(created.id, jobDeps());
+    // A real restart begins with an EMPTY module registry over the surviving
+    // database. Re-importing the module produces exactly that, so the defect
+    // this guards against actually reproduces here: a durable, pollable job
+    // whose handle nobody rebuilt answers 404. Asserting that gap first is
+    // what makes the assertion after the rebuild meaningful.
+    vi.resetModules();
+    const restarted = await import("../src/batch-jobs.js");
+    expect(restarted.getBatchJobSnapshot(created.id), "a durable job with no rebuilt handle is a 404").toBeNull();
+    restarted.rebuildFlagsJobHandles(db);
+    expect(restarted.getBatchJobSnapshot(created.id)).toMatchObject({ status: "completed", total: 3, updated: 3 });
+    // Undo reads the row rather than the registry, so it survives too — and
+    // the reverse job is pollable through the rebuilt registry.
+    const undone = restarted.undoBatchJob(created.id, jobDeps());
     expect(undone).toMatchObject({ ok: true, started: true });
-    const undoJob = await waitForJob(undone.jobId!);
-    expect(undoJob).toMatchObject({ status: "completed", total: 3, updated: 3 });
+    await vi.waitFor(() => {
+      expect(restarted.getBatchJobSnapshot(undone.jobId!)).toMatchObject({ status: "completed", total: 3, updated: 3 });
+    });
     const local = db.prepare("SELECT flags_json FROM messages WHERE id = 'message-1'").get() as { flags_json: string };
     expect(JSON.parse(local.flags_json), "the undo reverses the recorded changed ids").toEqual([]);
+  });
+
+  it("rolls the entire undo back when a statement in its transaction fails", async () => {
+    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, jobDeps());
+    await waitForJob(created.id);
+    const counts = () => ({
+      jobs: (db.prepare("SELECT COUNT(*) AS n FROM batch_jobs").get() as { n: number }).n,
+      selection: (db.prepare("SELECT COUNT(*) AS n FROM batch_job_messages").get() as { n: number }).n,
+      queue: (db.prepare("SELECT COUNT(*) AS n FROM operation_queue").get() as { n: number }).n,
+      flags: (db.prepare("SELECT flags_json FROM messages WHERE id = 'message-1'").get() as { flags_json: string }).flags_json,
+    });
+    const before = counts();
+    // Fail the undone mark — the LAST statement of the acceptance transaction,
+    // after the reverse metadata writes and the staged push rows.
+    const failingDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "prepare") {
+          return (sql: string) => {
+            const statement = target.prepare(sql);
+            if (!sql.includes("SET undone = 1")) return statement;
+            return new Proxy(statement, {
+              get: (held, key) => (key === "run" ? () => { throw new Error("injected failure"); } : Reflect.get(held, key)),
+            });
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as DatabaseHandle;
+
+    expect(() => undoBatchJob(created.id, { ...jobDeps(), db: failingDb })).toThrow("injected failure");
+    // Undone mark, reverse job, its fixed selection, the staged pushes and the
+    // reverse metadata commit are ONE unit: none of them may survive.
+    expect(counts()).toEqual(before);
+    expect(db.prepare("SELECT undone FROM batch_jobs WHERE id = ?").get(created.id)).toEqual({ undone: 0 });
+  });
+
+  it("settles and reclaims a job nobody ever polled once its TTL expires", async () => {
+    let now = Date.now();
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, jobDeps());
+      // The pushes drain while nobody polls the job: completion is only
+      // observed on a read, so the durable row stays 'running' past its TTL.
+      await vi.waitFor(() => {
+        const pending = db.prepare("SELECT COUNT(*) AS n FROM operation_queue WHERE status IN ('pending', 'running')").get() as { n: number };
+        expect(pending.n).toBe(0);
+      });
+      expect(db.prepare("SELECT status FROM batch_jobs WHERE id = ?").get(created.id), "unpolled job stays running").toEqual({ status: "running" });
+
+      // TTL passes with no poller; the next acceptance settles the abandoned
+      // row through the projection and starts its (fresh) completion clock.
+      now += 20 * 60_000;
+      createBatchJob({ kind: "flags", patch: { seen: true }, query: { ...inboxQuery, folder: "Archive" } }, jobDeps());
+      expect(db.prepare("SELECT status FROM batch_jobs WHERE id = ?").get(created.id)).toEqual({ status: "completed" });
+      expect(getBatchJobSnapshot(created.id)).toMatchObject({ status: "completed", total: 3 });
+
+      // One more TTL and the settled row is reclaimed outright — durable jobs
+      // are not immortal just because they were never read.
+      now += 20 * 60_000;
+      createBatchJob({ kind: "flags", patch: { seen: true }, query: { ...inboxQuery, folder: "Archive" } }, jobDeps());
+      expect(db.prepare("SELECT COUNT(*) AS n FROM batch_jobs WHERE id = ?").get(created.id)).toEqual({ n: 0 });
+      expect(getBatchJobSnapshot(created.id), "the reclaimed job's handle is dropped with its row").toBeNull();
+    } finally {
+      dateSpy.mockRestore();
+    }
   });
 
   it("opens the undo window when the job completes, not when it was created", async () => {    let now = 1_700_000_000_000;
