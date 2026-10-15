@@ -1243,6 +1243,28 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(response.body.length).toBe(JSON.stringify({ ok: true, updated: 0, failed: 150 }).length);
   });
 
+  it("refuses a selection past its id cap in one piece", async () => {
+    // The renderer splits an explicit selection at exactly this boundary (see
+    // SERVER_BATCH_ID_LIMIT in apps/web/src/app/useBatchSelection.ts). One id
+    // more is refused outright, so the two numbers have to agree — otherwise a
+    // large selection reaches the user as an error they cannot act on.
+    const ids = Array.from({ length: 5001 }, (_, index) => `missing-cap-${index}`);
+    const over = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/batch/flags",
+      payload: { ids, patch: { seen: true } },
+    });
+    expect(over.statusCode).toBe(400);
+    expect(over.json()).toMatchObject({ ok: false });
+
+    const atCap = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/batch/flags",
+      payload: { ids: ids.slice(0, 5000), patch: { seen: true } },
+    });
+    expect(atCap.statusCode).toBe(200);
+  });
+
   it("validates batch message moves and reports per-message outcomes", async () => {
     const malformed = await app.inject({
       method: "POST",

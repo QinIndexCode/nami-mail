@@ -7,12 +7,46 @@ const MAX_JOB_DURATION_MS = 10 * 60_000;
 /** Consecutive status-read failures tolerated before a follow-up gives up. */
 const MAX_STATUS_READ_FAILURES = 3;
 
+/**
+ * Best-effort reconcile: a refresh that fails (or throws synchronously) has
+ * nothing to add, and must never reach the job's own state machine — the
+ * settlement reload remains the authority on what the server holds.
+ */
+function reconcileQuietly(reconcile: () => Promise<void> | void): void {
+  try {
+    void Promise.resolve(reconcile()).catch(() => undefined);
+  } catch {
+    // A synchronous throw is the same non-event as a rejected promise here.
+  }
+}
+
 export type BatchJobToastKind = "success" | "error" | "info";
 export type BatchJobToastAction = { label: string; run: () => void };
 
 export type BatchJobRunnerDeps = {
   showToast: (message: string, kind: BatchJobToastKind, action?: BatchJobToastAction) => void;
   reload: (opts: { silent: boolean }) => Promise<void> | void;
+  /**
+   * Pulls the server's *already committed* local state into the UI the moment a
+   * job is accepted, instead of at settlement.
+   *
+   * A job's acceptance transaction carries the fixed selection, the metadata,
+   * the folder counters and the durable push rows, so by the time
+   * `batchJobCreate` resolves the local state is final — only the remote IMAP
+   * push is outstanding, and on a large selection it can take tens of seconds.
+   * Without this call the UI keeps describing the pre-commit state for that
+   * whole window, the counters most visibly: a predicate selection optimistically
+   * touches only the loaded rows (the renderer never holds all of them), so the
+   * unread total and folder badges stay wrong until the poll happens to see the
+   * job settle.
+   *
+   * MUST be a refresh that leaves the list as it is — App wires its
+   * pagination-preserving silent refresh here. The full `reload` collapses the
+   * loaded pages back to the first one and clears the predicate selection the
+   * toolbar is describing, neither of which belongs over a job that is still
+   * running; settlement is where that reset belongs.
+   */
+  reconcile: () => Promise<void> | void;
   exitSelectionMode: () => void;
   t: Translate;
   onSnapshot: (job: BatchJobSnapshot | null) => void;
@@ -30,17 +64,17 @@ export type BatchJobRunOptions = {
 };
 
 /**
- * Drives a server-side batch job: create → poll until it settles → report the
- * real outcome with an undo action → reconciling reload. The toolbar stays
- * interactive throughout; only the poll loop and the final reload run in the
- * background. Guards against a vanished job (server restart) and runaway
- * polling.
+ * Drives a server-side batch job: create → reconcile the committed local state
+ * → poll until it settles → report the real outcome with an undo action →
+ * reconciling reload. The toolbar stays interactive throughout; only the
+ * reconcile, the poll loop and the final reload run in the background. Guards
+ * against a vanished job (server restart) and runaway polling.
  *
  * Extracted from App.tsx so the state machine has its own unit tests; App
  * wires the React-side callbacks (snapshot/busy state, toasts, reload).
  */
 export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
-  const { showToast, t, reload, exitSelectionMode, onSnapshot, onBusy } = deps;
+  const { showToast, t, reload, reconcile, exitSelectionMode, onSnapshot, onBusy } = deps;
   const now = deps.now ?? Date.now;
   /** Per-batch polling deadlines, keyed by job id. */
   const runDeadlines = new Map<string, number>();
@@ -164,6 +198,9 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
       // The job runs server-side; release the toolbar (progress comes from
       // the poll loop) so the list stays interactive.
       onBusy(false);
+      // The commit landed with the acceptance, so the state on screen can be
+      // brought up to date now rather than when the remote push finishes.
+      reconcileQuietly(reconcile);
       runDeadlines.set(jobId, now());
       poll(jobId, opts);
     }).catch((error: unknown) => {

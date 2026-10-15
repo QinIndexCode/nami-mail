@@ -29,6 +29,7 @@ function makeDeps(overrides: Partial<BatchJobRunnerDeps> = {}) {
   return {
     showToast: vi.fn(),
     reload: vi.fn().mockResolvedValue(undefined),
+    reconcile: vi.fn().mockResolvedValue(undefined),
     exitSelectionMode: vi.fn(),
     t,
     onSnapshot: vi.fn(),
@@ -83,6 +84,85 @@ describe("createBatchJobRunner", () => {
       expect(deps.exitSelectionMode).toHaveBeenCalledTimes(1);
       expect(deps.showToast).toHaveBeenCalledWith("mail.selection.moved{\"count\":3}", "success", expect.objectContaining({ label: "mail.selection.undo" }));
       expect(deps.reload).toHaveBeenCalledWith({ silent: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconciles the committed local state the moment the job is accepted", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      const runner = createBatchJobRunner(deps);
+      apiMocks.batchJobCreate.mockResolvedValue({ jobId: "j1" });
+      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j1", status: "running" }) });
+
+      runner.start(MOVE_PAYLOAD, RUN_OPTS);
+      // Nothing has committed until the create resolves: the acceptance
+      // transaction is what applies the selection, so there is nothing to pull
+      // in before it, and the user's counters are still describing pre-commit
+      // state for exactly as long as the remote push takes — tens of seconds on
+      // a large selection.
+      expect(deps.reconcile).not.toHaveBeenCalled();
+
+      await flush();
+      expect(deps.reconcile, "the commit landed with the acceptance").toHaveBeenCalledTimes(1);
+
+      // Per-tick reconciliation would be pointless work: the counters were made
+      // right at acceptance, and the next authoritative read is the settlement
+      // reload. The list must also stay untouched while the job runs.
+      await vi.advanceTimersByTimeAsync(1200);
+      expect(deps.reconcile).toHaveBeenCalledTimes(1);
+      expect(deps.reload).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconciles nothing when the job is never accepted", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      const runner = createBatchJobRunner(deps);
+      apiMocks.batchJobCreate.mockRejectedValue(new Error("offline"));
+
+      runner.start(MOVE_PAYLOAD, RUN_OPTS);
+      await flush();
+
+      expect(deps.reconcile, "a refused create committed nothing to pull in").not.toHaveBeenCalled();
+      expect(deps.onBusy).toHaveBeenLastCalledWith(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps running the job when the acceptance-time reconcile fails", async () => {
+    vi.useFakeTimers();
+    try {
+      // The reconcile is a convenience read of state the server already holds;
+      // the settlement reload is the authority. A platform refresh that fails —
+      // or throws before it even returns a promise — must not stop the poll,
+      // drop the job, or surface an unhandled rejection.
+      const deps = makeDeps({ reconcile: vi.fn().mockRejectedValue(new Error("offline")) });
+      const runner = createBatchJobRunner(deps);
+      apiMocks.batchJobCreate.mockResolvedValue({ jobId: "j1" });
+      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j1", status: "done", total: 2, done: 2, updated: 2 }) });
+
+      runner.start(MOVE_PAYLOAD, RUN_OPTS);
+      await flush();
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(deps.onSnapshot).toHaveBeenLastCalledWith(null);
+      expect(deps.showToast).toHaveBeenCalledWith("mail.selection.moved{\"count\":2}", "success", expect.objectContaining({ label: "mail.selection.undo" }));
+      expect(deps.reload).toHaveBeenCalledWith({ silent: true });
+
+      const throwing = makeDeps({ reconcile: (() => { throw new Error("offline"); }) as BatchJobRunnerDeps["reconcile"] });
+      const throwingRunner = createBatchJobRunner(throwing);
+      throwingRunner.start(MOVE_PAYLOAD, RUN_OPTS);
+      await flush();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(throwing.onSnapshot, "a synchronous throw is the same non-event").toHaveBeenLastCalledWith(null);
+      expect(throwing.reload).toHaveBeenCalledWith({ silent: true });
     } finally {
       vi.useRealTimers();
     }

@@ -20,7 +20,6 @@ import {
   ListFilter,
   LoaderCircle,
   Mail,
-  MailOpen,
   Menu,
   Moon,
   Paperclip,
@@ -34,7 +33,7 @@ import {
   ShieldCheck,
   SquareCheckBig,
   Star,
-  Sun, Users, Trash2, WifiOff, X,
+  Sun, Users, WifiOff, X,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
 import { CustomAvatar, SenderAvatar, accountTone } from "./SenderAvatar";
@@ -105,6 +104,7 @@ import { resolveLocale, useI18n } from "./i18n";
 import type { AgentBootstrap } from "./agentTypes";
 import type { ReaderAiLaunchIntent } from "./readerAiActions";
 import { AppDialogs } from "./AppDialogs";
+import { SelectionToolbar } from "./SelectionToolbar";
 import { MailReader } from "./MailReader";
 import MessageList from "./MessageList";
 import {
@@ -976,6 +976,16 @@ await refreshSubmissions(nextAccounts, { silent: true });
       // Silent refresh must never disturb the current list; the next tick retries.
     }
   }, [captureScrollAnchor, refreshSubmissions, serverQuery, view]);
+  // A batch job's acceptance commits locally long before its remote push
+  // finishes, so the runner reconciles against the state on screen the moment
+  // the job is accepted — and it has to be THIS refresh, not `load`. The job is
+  // still running: a full reload would collapse the loaded pages back to the
+  // first one under the user, and clear the predicate selection the bar is
+  // describing while the job it started is still working through it. Reading the
+  // refresh through a ref keeps the runner from being rebuilt whenever the view
+  // underneath it changes.
+  const silentRefreshRef = useRef(silentRefresh);
+  silentRefreshRef.current = silentRefresh;
 
   // One gate for every refresh trigger (SSE events, the desktop new-mail IPC
   // bridge, the poll fallback and the Agent's mail-state changes). While the
@@ -1354,6 +1364,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     dateBounds,
     load,
     loadRef,
+    reconcileRef: silentRefreshRef,
     loadRequestRef,
     messagesRef,
     pendingLocalStateRef,
@@ -2879,31 +2890,24 @@ const emptyMessageList = useMemo(() => (query.trim()
                 </span>
               )}
             </div>
-            <div className="list-toolbar selection-toolbar" aria-hidden={!selectionMode}>
-              <button className="selection-select-all" type="button" onClick={selectAllVisibleMessages} disabled={!filteredMessages.length}>{selectAllPaged ? t("mail.selection.selectAllMatching", { count: currentMessageTotal }) : t("mail.selection.selectAll")}</button>
-              <span className="selection-count">{batchJob ? t("mail.selection.batchProcessing", { done: batchJob.done, total: batchJob.total || currentMessageTotal }) : batchBusy ? t("mail.selection.busy") : t("mail.selection.count", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}</span>
-              <div className="selection-actions">
-                <IconButton label={t("mail.action.markRead")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: true }, "mail.selection.markedRead")} disabled={!selectedMessageIds.size}><MailOpen size={15} /></IconButton>
-                <IconButton label={t("mail.action.markUnread")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: false }, "mail.selection.markedUnread")} disabled={!selectedMessageIds.size}><Mail size={15} /></IconButton>
-                <IconButton label={t("mail.action.star")} className="selection-action" onClick={() => void batchUpdateFlags({ flagged: true }, "mail.selection.starred")} disabled={!selectedMessageIds.size}><Star size={15} /></IconButton>
-                <IconButton label={t("mail.action.unstar")} className="selection-action" onClick={() => void batchUpdateFlags({ flagged: false }, "mail.selection.unstarred")} disabled={!selectedMessageIds.size}><Star size={15} fill="none" /></IconButton>
-                <span className="toolbar-divider" aria-hidden="true" />
-                <IconButton label={t("mail.action.archive")} className="selection-action" onClick={() => void batchMoveMessages("archive")} disabled={!selectedMessageIds.size}><Archive size={15} /></IconButton>
-                <IconButton label={t("mail.action.reportSpam")} className="selection-action" onClick={() => void batchMoveMessages("junk")} disabled={!selectedMessageIds.size}><ShieldCheck size={15} /></IconButton>
-                <IconButton
-                  label={t("mail.action.moveToTrash")}
-                  className="selection-action selection-action-danger"
-                  onClick={() => {
-                    resetBatchDeleteConfirmClosing();
-                    setPendingBatchDelete(true);
-                  }}
-                  disabled={!selectedMessageIds.size && !selectAllPaged}
-                >
-                  <Trash2 size={15} />
-                </IconButton>
-              </div>
-              <button className="selection-done" type="button" onClick={exitSelectionMode} disabled={batchBusy}>{t("mail.selection.done")}</button>
-            </div>
+            <SelectionToolbar
+              visible={selectionMode}
+              selectAllPaged={selectAllPaged}
+              selectedCount={selectedMessageIds.size}
+              selectableCount={filteredMessages.length}
+              matchingCount={currentMessageTotal}
+              job={batchJob}
+              busy={batchBusy}
+              onSelectAll={selectAllVisibleMessages}
+              onSetSeen={(seen) => void batchUpdateFlags({ seen }, seen ? "mail.selection.markedRead" : "mail.selection.markedUnread")}
+              onSetFlagged={(flagged) => void batchUpdateFlags({ flagged }, flagged ? "mail.selection.starred" : "mail.selection.unstarred")}
+              onMove={(target) => void batchMoveMessages(target)}
+              onTrash={() => {
+                resetBatchDeleteConfirmClosing();
+                setPendingBatchDelete(true);
+              }}
+              onDone={exitSelectionMode}
+            />
           </div>
 
           <Profiler id="MessageList" onRender={onMessageListRender}>

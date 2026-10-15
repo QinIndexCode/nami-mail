@@ -24,6 +24,18 @@ import type { Account, Message, Stats } from "../types";
 type ShowToast = ReturnType<typeof useToastQueue>["showToast"];
 type MailView = MessageListQuery["messageView"];
 
+/**
+ * The most ids one batch request may carry. The server's `batchMessageIdsSchema`
+ * rejects anything longer outright (apps/server/src/schemas.ts), so the renderer
+ * splits an explicit selection at this boundary instead of sending a request
+ * that is refused as invalid.
+ *
+ * Deliberately not 100: one request is one local commit and one account-write-slot
+ * acquisition, and paying that per hundred messages is what made a large
+ * selection wait behind a running sync. A selection that fits stays one request.
+ */
+const SERVER_BATCH_ID_LIMIT = 5000;
+
 export interface BatchSelectionLoadOptions {
   silent?: boolean;
 }
@@ -50,6 +62,12 @@ export interface BatchSelectionOptions {
   load: (options?: BatchSelectionLoadOptions) => Promise<void>;
   /** Latest `load`, read through a ref so a running job reloads the list on screen. */
   loadRef: { current: (options?: BatchSelectionLoadOptions) => Promise<void> };
+  /**
+   * The pagination-preserving silent refresh, read through a ref so a running
+   * job reconciles against the list on screen without rebuilding the runner
+   * (which would abandon its poll loop) every time the view changes.
+   */
+  reconcileRef: { current: () => Promise<void> | void };
   /** Monotonic epoch of list loads; bumped to invalidate in-flight refreshes. */
   loadRequestRef: { current: number };
   messagesRef: { current: Message[] };
@@ -113,6 +131,7 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     dateBounds,
     load,
     loadRef,
+    reconcileRef,
     loadRequestRef,
     messagesRef,
     pendingLocalStateRef,
@@ -238,15 +257,16 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
 
   // Batch job state machine lives in batchJobRunner.ts (unit-tested there);
   // the caller wires the React-side callbacks: snapshot/busy state, toasts,
-  // reload.
+  // reload, and the acceptance-time reconcile.
   const batchJobRunner = useMemo(() => createBatchJobRunner({
     showToast,
     t,
     reload: (opts) => loadRef.current(opts),
+    reconcile: () => reconcileRef.current(),
     exitSelectionMode,
     onSnapshot: setBatchJob,
     onBusy: setBatchBusy,
-  }), [exitSelectionMode, loadRef, setBatchJob, showToast, t]);
+  }), [exitSelectionMode, loadRef, reconcileRef, setBatchJob, showToast, t]);
 
   const startBatchJob = useCallback((payload: BatchJobCreatePayload, opts: BatchJobRunOptions) => {
     batchJobRunner.start(payload, opts);
@@ -341,18 +361,29 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
       if (!isDemo) {
         // One request = one local commit = milliseconds. The IMAP STORE is
         // pushed server-side by the durable write-behind queue, so the
-        // response never queues behind a running sync or batch.
-        const result = await api.batchUpdateMessageFlags(ids, patch);
-        if (result.failed) {
+        // response never queues behind a running sync or batch. Only the
+        // request size is bounded, so a selection past the cap is split into
+        // requests of exactly the cap: a flag commit is local work with no
+        // per-command failure to bound, so there is nothing to gain from
+        // chunking it any finer than the server's own limit.
+        let updated = 0;
+        let failed = 0;
+        const failedIds: string[] = [];
+        for (let offset = 0; offset < ids.length; offset += SERVER_BATCH_ID_LIMIT) {
+          const result = await api.batchUpdateMessageFlags(ids.slice(offset, offset + SERVER_BATCH_ID_LIMIT), patch);
+          updated += result.updated;
+          failed += result.failed;
+          for (const failure of result.failures ?? []) failedIds.push(failure.id);
+        }
+        if (failed) {
           applied = false;
           // Drop the pins *before* the reconciling reload so it restores the
           // server's truth for the refused rows instead of re-applying the
           // optimistic value. The server reports per-id failures when it can;
           // when it does not, no row may keep an unconfirmed value, so every
           // pin of this batch drops and the reload settles all of them.
-          const failedIds = (result.failures ?? []).map((failure) => failure.id);
           unpin(failedIds.length ? failedIds : ids);
-          showToast(t("mail.selection.partialFailure", { done: result.updated, failed: result.failed }), "error");
+          showToast(t("mail.selection.partialFailure", { done: updated, failed }), "error");
         }
       }
       // A partial failure already reported itself; claiming success on top of
@@ -496,10 +527,13 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
           }
         };
 
-        // The server caps a single batch at 100 ids; split large selections
-        // into chunks exactly like batchUpdateFlags so moves never fail with
-        // a 400 for size alone. The counters live outside the try so the
-        // catch can distinguish processed chunks from unprocessed ones.
+        // The server accepts up to SERVER_BATCH_ID_LIMIT ids per request, but a
+        // move is split far below that on purpose. A flag commit is local bookkeeping;
+        // a move is a real MOVE per (account, mailbox) group, so the chunk size
+        // decides how many messages one refused or lost command can fail at once
+        // and for how long the chunk's write slot is held. The counters live
+        // outside the try so the catch can distinguish processed chunks from
+        // unprocessed ones.
         const CHUNK_SIZE = 100;
         let updated = 0;
         let failed = 0;

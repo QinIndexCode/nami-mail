@@ -33,13 +33,17 @@ let host: HTMLDivElement;
 let current: BatchSelection;
 let displayed: Message[];
 let displayedStats: Stats;
+/** The rows the harness seeds itself with. It is read once, on the first render,
+ *  so a test that needs a selection past the server's id cap has to swap it in
+ *  and remount before it acts. */
+let mailbox: Message[];
 /** What the server would answer on the next reload — the authority the pins
  * are meant to shield, and the truth a failed write must fall back to. */
 let server: Message[];
 const toast = vi.fn();
 
 function Harness() {
-  const [messages, setMessages] = useState([original]);
+  const [messages, setMessages] = useState(() => mailbox);
   const [accounts, setAccounts] = useState(initialAccounts);
   const [stats, setStats] = useState<Stats>({ accounts: 1, messages: 1, unread: 1 });
   const [selectAllPaged, setSelectAllPaged] = useState(false);
@@ -70,9 +74,10 @@ function Harness() {
   current = useBatchSelection({
     isDemo: false, t: ((key: string) => key) as never, showToast: toast,
     sortOrder: "newest", filteredMessages: messages, messages, accounts, stats,
-    loadedServerMessageCount: 1, currentMessageTotal: 1, searchScope: "view", debouncedQuery: "",
+    loadedServerMessageCount: mailbox.length, currentMessageTotal: mailbox.length, searchScope: "view", debouncedQuery: "",
     selectedAccount: "all", selectedFolder: "", view: "inbox", attachmentKindFilter: undefined,
-    dateBounds: { after: undefined, before: undefined }, load, loadRef, loadRequestRef,
+    dateBounds: { after: undefined, before: undefined }, load, loadRef,
+    reconcileRef: { current: () => undefined }, loadRequestRef,
     messagesRef, pendingLocalStateRef: pendingRef, viewRef, selectAllPaged, setSelectAllPaged,
     setBatchJob: setBatchJob as never, pendingBatchDelete, setPendingBatchDelete,
     pinMovedAway: (ids, destination) => { for (const id of ids) pendingRef.current.movedAway.set(id, destination); },
@@ -87,6 +92,7 @@ function Harness() {
 beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.resetAllMocks();
+  mailbox = [original];
   server = [original];
   host = document.createElement("div");
   document.body.append(host);
@@ -190,4 +196,49 @@ it("restores the rows of a failed move after its reconciling reload", async () =
   // that reports it at its old mailbox, re-removing what was just put back.
   expect(displayed, "a failed move must not leave messages apparently deleted").toHaveLength(1);
   expect(current.selectedMessageIds.has("m1")).toBe(true);
+});
+
+/**
+ * The server's per-request id cap, restated here on purpose: the renderer has to
+ * split an explicit selection at exactly this boundary, and a request one id
+ * longer is refused outright (`batchMessageIdsSchema` in apps/server/src/schemas.ts,
+ * pinned by "refuses a selection past its id cap in one piece" in
+ * apps/server/tests/app.test.ts). If either side moves, one of the two tests
+ * fails instead of the mismatch reaching a user as an unactionable error.
+ */
+const SERVER_BATCH_ID_LIMIT = 5000;
+
+/** A mailbox of `count` distinct unread INBOX rows. */
+function mailboxOf(count: number): Message[] {
+  return Array.from({ length: count }, (_, index) => ({ ...original, id: `m${index + 1}`, uid: index + 1 }));
+}
+
+/** Re-seeds the harness with another mailbox: its rows are read on the first
+ *  render, so a selection past the id cap has to be mounted before it is acted
+ *  on. The beforeEach render is discarded. */
+async function remountWithMailbox(messages: Message[]) {
+  await act(async () => { root.unmount(); });
+  host.remove();
+  mailbox = messages;
+  server = messages;
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => { root.render(<Harness />); });
+}
+
+it("splits an explicit selection at the server's id cap instead of sending a request it refuses", async () => {
+  const rows = mailboxOf(SERVER_BATCH_ID_LIMIT + 1);
+  await remountWithMailbox(rows);
+  await act(async () => { current.selectMessageRange(rows.map((row) => row.id)); });
+  expect(current.selectedMessageIds.size).toBe(SERVER_BATCH_ID_LIMIT + 1);
+
+  mocks.flags.mockImplementation(async (ids: string[]) => ({ ok: true, updated: ids.length, failed: 0 }));
+  await act(async () => { await current.batchUpdateFlags({ seen: true }, "success"); });
+
+  // Two requests, each at or under the cap — not one refused request, and not a
+  // hundred-id walking pace that would reacquire the write slot 51 times.
+  expect(mocks.flags.mock.calls.map((call) => (call[0] as string[]).length)).toEqual([SERVER_BATCH_ID_LIMIT, 1]);
+  expect(displayed.every((message) => message.seen), "the whole selection committed").toBe(true);
+  expect(toast.mock.calls.some((call) => call[0] === "success"), "no chunk boundary may read as a partial failure").toBe(true);
 });
