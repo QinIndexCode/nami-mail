@@ -270,9 +270,11 @@ export function commitLocalFlags(
  * the message is its marker cleared.
  *
  * `settledRowId` names the queue row whose settlement triggered this clear
- * (from the `onOperationSettled` hook). Its own row is still `running` at
- * that instant, so excluding it is what lets a lone push clear its own
- * messages. Omit it (startup reconciliation, tests) to check every row.
+ * (from the `onOperationSettled` hook), and is excluded from the protection
+ * scan. The exclusion is already implied — the hook fires only once the row has
+ * reached its terminal state, so the status filter below cannot match it — and
+ * is kept so that a lone push clearing its own messages does not depend on that
+ * ordering holding. Omit it (startup reconciliation, tests) to check every row.
  *
  * Callers settle this from the queue's durable-settle hook
  * (`onOperationSettled`), never from inside the executor: an executor can
@@ -444,6 +446,14 @@ export function restoreFailedFlagsTargets(db: DatabaseHandle, messageIds: readon
       // The commit moved the folder's unread count optimistically; rolling the
       // target back has to move it back the same way, mirroring the statement
       // in applyPreparedFlagsInTransaction (its argument is "is seen now").
+      //
+      // Known bound: the delta is reversed on the row's CURRENT mailbox. A row
+      // moved after the commit that applied the delta carries no record of
+      // where that was, so the correction lands on the destination folder and
+      // the origin stays decremented — two badges off until the next sync
+      // upserts folder counts from the provider. Reversing exactly needs the
+      // per-flip history the metadata phase is meant to record, not one more
+      // column: the counters move on every flip, not only on the first.
       if (target.includes("\\Seen") !== restored.includes("\\Seen")) {
         db.prepare(`
           UPDATE folders
