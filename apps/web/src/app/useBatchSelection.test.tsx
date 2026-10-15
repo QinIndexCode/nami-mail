@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useRef, useState } from "react";
+import { act, useCallback, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyPinnedUnseenCorrections, createPendingLocalState, mergePendingLocalState } from "../mailListState";
@@ -8,10 +8,18 @@ import type { BatchJobSnapshot } from "../api";
 import type { Account, Message, Stats } from "../types";
 import { useBatchSelection, type BatchSelection } from "./useBatchSelection";
 
-const mocks = vi.hoisted(() => ({ flags: vi.fn(), move: vi.fn() }));
+const mocks = vi.hoisted(() => ({ flags: vi.fn(), move: vi.fn(), create: vi.fn() }));
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof apiModule>();
-  return { ...actual, api: { ...actual.api, batchUpdateMessageFlags: mocks.flags, batchMoveMessages: mocks.move } };
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      batchUpdateMessageFlags: mocks.flags,
+      batchMoveMessages: mocks.move,
+      batchJobCreate: mocks.create,
+    },
+  };
 });
 
 const original: Message = {
@@ -44,12 +52,23 @@ let server: Message[];
 const toast = vi.fn();
 /** Every value the hook hands to `setBatchJob`, in order. */
 const jobWrites: Array<BatchJobSnapshot | null> = [];
+/** Every value the hook hands to `setSelectAllPaged`, in order. */
+const pagedWrites: boolean[] = [];
+/** Drives `currentMessageTotal`, i.e. how many rows a predicate-wide selection
+ *  would cover. A page shorter than this is what arms "select all matching". */
+let setMatchingTotalState: (value: number) => void = () => undefined;
 
 function Harness() {
   const [messages, setMessages] = useState(() => mailbox);
   const [accounts, setAccounts] = useState(initialAccounts);
   const [stats, setStats] = useState<Stats>({ accounts: 1, messages: 1, unread: 1 });
-  const [selectAllPaged, setSelectAllPaged] = useState(false);
+  const [selectAllPaged, setSelectAllPagedState] = useState(false);
+  const [matchingTotal, setMatchingTotal] = useState(mailbox.length);
+  const setSelectAllPaged = useCallback((value: boolean) => {
+    pagedWrites.push(value);
+    setSelectAllPagedState(value);
+  }, []);
+  setMatchingTotalState = setMatchingTotal;
   const [pendingBatchDelete, setPendingBatchDelete] = useState(false);
   const [, setBatchJob] = useState<BatchJobSnapshot | null>(null);
   const [, setTotal] = useState(1);
@@ -77,7 +96,7 @@ function Harness() {
   current = useBatchSelection({
     isDemo: false, t: ((key: string) => key) as never, showToast: toast,
     sortOrder: "newest", filteredMessages: messages, messages, accounts, stats,
-    loadedServerMessageCount: mailbox.length, currentMessageTotal: mailbox.length, searchScope: "view", debouncedQuery: "",
+    loadedServerMessageCount: mailbox.length, currentMessageTotal: matchingTotal, searchScope: "view", debouncedQuery: "",
     selectedAccount: "all", selectedFolder: "", view: "inbox", attachmentKindFilter: undefined,
     dateBounds: { after: undefined, before: undefined }, load, loadRef,
     reconcileRef: { current: () => undefined }, loadRequestRef,
@@ -96,6 +115,7 @@ beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.resetAllMocks();
   jobWrites.length = 0;
+  pagedWrites.length = 0;
   mailbox = [original];
   server = [original];
   host = document.createElement("div");
@@ -251,13 +271,43 @@ it("splits an explicit selection at the server's id cap instead of sending a req
   expect(toast.mock.calls.some((call) => call[0] === "success"), "no chunk boundary may read as a partial failure").toBe(true);
 });
 
+/** Arms a predicate-wide selection ("select all matching", over a page smaller
+ *  than the matching total) and asks for the batch job it implies. The create
+ *  never settles, so the job sits exactly where the bar is most exposed: in
+ *  flight, with only the placeholder snapshot holding the actions back. Returns
+ *  the snapshot the hook was handed for that job. */
+async function startPredicateJob(): Promise<BatchJobSnapshot | null> {
+  await act(async () => { setMatchingTotalState(mailbox.length + 9); });
+  await act(async () => { current.selectAllVisibleMessages(); });
+  mocks.create.mockImplementation(() => new Promise(() => {}));
+  await act(async () => { await current.batchUpdateFlags({ seen: true }, "success"); });
+  return jobWrites.at(-1) ?? null;
+}
+
 it("closes the bar without disarming a job that is still running", async () => {
   // The job snapshot is the only thing keeping the bar's actions inert, and a job
   // does not stop when the user closes the bar. Clearing it here would re-arm the
   // actions — a second batch over the rows the job is still working through — so
   // the poll loop, which clears it on every terminal path, owns its lifetime.
+  const armed = await startPredicateJob();
+  expect(armed, "a predicate selection starts a job, and the bar is inert for it").not.toBeNull();
+
   await act(async () => { current.exitSelectionMode(); });
 
   expect(current.selectionMode).toBe(false);
-  expect(jobWrites, "closing the bar must not clear the running job").toEqual([]);
+  expect(jobWrites.at(-1), "closing the bar must not clear the running job").toBe(armed);
+});
+
+it("drops the predicate selection on a full load without disarming the running job", async () => {
+  // A full load (folder/account switch, a sync, an account change) replaces the
+  // list wholesale. The predicate selection was scoped to the view that just
+  // went away, while the job it started keeps running — so the reset takes the
+  // selection and must leave the bar inert. `load` calls exactly this policy.
+  const armed = await startPredicateJob();
+  expect(pagedWrites.at(-1), "the predicate selection is armed").toBe(true);
+
+  await act(async () => { current.resetSelectionOnFullLoad(); });
+
+  expect(pagedWrites.at(-1), "the selection of the replaced view is gone").toBe(false);
+  expect(jobWrites.at(-1), "a full load must not clear the running job").toBe(armed);
 });

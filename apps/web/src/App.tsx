@@ -692,6 +692,13 @@ export default function App() {
     setPendingArchiveMoves(next);
   }, []);
 
+  // What a full list load invalidates. The policy lives with the batch
+  // selection state machine, which is the only place that knows a job may be
+  // running (it must not be disarmed by a reload — see
+  // useBatchSelection.resetSelectionOnFullLoad). `load` is declared before that
+  // hook, so it reaches the policy through a ref.
+  const fullLoadResetRef = useRef<() => void>(() => {});
+
   const load = useCallback(async ({
     silent = false,
     accountId = selectedAccount,
@@ -708,10 +715,7 @@ export default function App() {
     scope?: "view" | "all";
   } = {}) => {
     const requestId = ++loadRequestRef.current;
-    // A full reload re-renders a fresh view; any predicate-wide selection was
-    // scoped to the previous one.
-    setSelectAllPaged(false);
-    setBatchJob(null);
+    fullLoadResetRef.current();
     try {
       if (!silent) setLoading(true);
       setFatalError(null);
@@ -1325,9 +1329,11 @@ await refreshSubmissions(nextAccounts, { silent: true });
         ? t("mail.loaded", { loaded: loadedServerMessageCount, total: currentMessageTotal })
         : t("mail.recentlySynced");
 
-  // Multi-select + bulk operations live in useBatchSelection. Predicate-wide
-  // selection state (selectAllPaged/batchJob) and the delete-confirmation flag
-  // stay up here because `load` and useDialogRouting precede this call.
+  // Multi-select + bulk operations live in useBatchSelection. The predicate-wide
+  // selection flag, the job snapshot and the delete-confirmation flag stay up
+  // here because `load` (which reads the predicate flag) and useDialogRouting
+  // precede this call; what a full load does to them is the hook's policy
+  // (resetSelectionOnFullLoad), reached from `load` through a ref.
   const {
     selectionMode,
     selectedMessageIds,
@@ -1341,6 +1347,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     selectMessageRange,
     selectAllVisibleMessages,
     exitSelectionMode,
+    resetSelectionOnFullLoad,
     applyBatchFlaggedChange,
     batchUpdateFlags,
     batchMoveMessages,
@@ -1381,6 +1388,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     setStats,
     setMessageTotal,
   });
+  fullLoadResetRef.current = resetSelectionOnFullLoad;
 
   useEffect(() => {
     if (!selectedId || filteredMessages.some((message) => message.id === selectedId)) return;

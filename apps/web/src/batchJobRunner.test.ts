@@ -75,9 +75,11 @@ describe("createBatchJobRunner", () => {
       expect(deps.onSnapshot).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: "j1", status: "running" }));
       expect(deps.reconcile).toHaveBeenCalledTimes(1);
 
-      // First poll keeps the job visible and schedules the next tick.
+      // First poll keeps the job visible and schedules the next tick. The id is
+      // asserted, not just the ordinal: a tick that reported the placeholder
+      // again (an unnamed job) would otherwise pass as the same snapshot.
       await vi.advanceTimersByTimeAsync(600);
-      expect(deps.onSnapshot).toHaveBeenNthCalledWith(3, expect.objectContaining({ status: "running" }));
+      expect(deps.onSnapshot).toHaveBeenNthCalledWith(3, expect.objectContaining({ id: "j1", status: "running" }));
       expect(deps.reload).not.toHaveBeenCalled();
 
       // Second poll sees the settled job and reconciles.
@@ -156,10 +158,11 @@ describe("createBatchJobRunner", () => {
       runner.start(MOVE_PAYLOAD, RUN_OPTS);
 
       // Mid-round-trip: this is the window a double click lands in, and nothing
-      // else would have marked a batch as under way.
+      // else would have marked a batch as under way. The empty id is what says
+      // this is the placeholder rather than a job the server has named.
       expect(deps.onBusy).toHaveBeenLastCalledWith(true);
       expect(deps.onSnapshot).toHaveBeenCalledTimes(1);
-      expect(deps.onSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "move", status: "running" }));
+      expect(deps.onSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ id: "", kind: "move", status: "running" }));
 
       assignJobId({ jobId: "j1" });
       await flush();
@@ -410,6 +413,12 @@ describe("createBatchJobRunner", () => {
 
     runner.start(MOVE_PAYLOAD, RUN_OPTS);
     await flush();
+
+    // Both snapshots of a job are stamped by the same clock: the placeholder the
+    // bar is armed with and the one the server's id lands in describe one job, so
+    // neither may reach for wall-clock time behind the injected clock's back.
+    expect(deps.onSnapshot).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: "", createdAt: 0 }));
+    expect(deps.onSnapshot).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: "j5", createdAt: 0 }));
 
     // The budget measures elapsed time since the job started, not wall-clock now().
     clock = 11 * 60_000;

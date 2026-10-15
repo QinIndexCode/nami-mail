@@ -209,7 +209,10 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
     // assigns one; nothing reads it before then.
     onSnapshot({ id: "", kind: payload.kind, status: "running", total: 0, done: 0, updated: 0, failed: 0, createdAt: now() });
     void api.batchJobCreate(payload).then(({ jobId }) => {
-      onSnapshot({ id: jobId, kind: payload.kind, status: "running", total: 0, done: 0, updated: 0, failed: 0, createdAt: Date.now() });
+      // Same clock as the placeholder it replaces: the two snapshots describe
+      // one job, and reading wall-clock time here would make them disagree
+      // under the injected clock the polling budget is measured with.
+      onSnapshot({ id: jobId, kind: payload.kind, status: "running", total: 0, done: 0, updated: 0, failed: 0, createdAt: now() });
       // The job runs server-side; release the toolbar (progress comes from
       // the poll loop) so the list stays interactive.
       onBusy(false);

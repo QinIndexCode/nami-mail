@@ -105,6 +105,19 @@ export interface BatchSelection {
   selectMessageRange: (ids: string[]) => void;
   selectAllVisibleMessages: () => void;
   exitSelectionMode: () => void;
+  /**
+   * A full list load replaces the view wholesale (folder/account switch, a
+   * sync, an account being added). The predicate-wide selection was scoped to
+   * the view that just went away, so it goes with it.
+   *
+   * The job snapshot deliberately does NOT go with it. A job does not stop when
+   * the list reloads, and that snapshot is the only thing keeping the bar's
+   * actions inert (see exitSelectionMode); clearing it here re-armed every
+   * action, and let a second job start over the same rows, for the rest of the
+   * run — the full reload came from the user, so nothing else was going to
+   * repair it before the next 600 ms poll tick.
+   */
+  resetSelectionOnFullLoad: () => void;
   applyBatchFlaggedChange: (ids: readonly string[], flagged: boolean) => void;
   batchUpdateFlags: (patch: { seen?: boolean; flagged?: boolean }, successKey: string) => Promise<void>;
   batchMoveMessages: (target: MoveTarget) => Promise<void>;
@@ -226,6 +239,14 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     // second batch over the same rows — for the rest of the run.
     setPendingBatchDelete(false);
   }, [setPendingBatchDelete, setSelectAllPaged]);
+
+  const resetSelectionOnFullLoad = useCallback(() => {
+    // The predicate selection was scoped to the view that is being replaced.
+    setSelectAllPaged(false);
+    // The job snapshot is deliberately left alone, exactly as in
+    // exitSelectionMode above: a full load does not stop the job, and the
+    // snapshot is the bar's only guard while the poll loop still owns it.
+  }, [setSelectAllPaged]);
 
   // The current view expressed as a server-side filter scope for predicate
   // batch operations. Mirrors buildMessageQuery so the job touches exactly
@@ -611,6 +632,7 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     selectMessageRange,
     selectAllVisibleMessages,
     exitSelectionMode,
+    resetSelectionOnFullLoad,
     applyBatchFlaggedChange,
     batchUpdateFlags,
     batchMoveMessages,
