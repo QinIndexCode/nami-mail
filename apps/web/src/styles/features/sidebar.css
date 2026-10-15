@@ -678,8 +678,8 @@ to { opacity:1; transform:translateY(0); }
 @media (prefers-reduced-motion:reduce) {
 .sidebar-footer-update-row { animation:none; }
 }
-/* Compact short windows, including embedded demos; overflow stays scrollable. */
-@media (height<=740px) {
+/* Compact short windows (below 600px); overflow stays scrollable. */
+@media (height<=600px) {
 .sidebar { padding:12px 12px 10px; }
 .brand-row { padding-bottom:8px; }
 .compose-button { padding-block:8px; }

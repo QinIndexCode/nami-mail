@@ -33,6 +33,10 @@
   var lastTimestamp = 0;
   var simTime = Math.random() * 100;
 
+  // 24 FPS frame rate limit for authentic cinematic pixel art aesthetic & reduced CPU/GPU usage
+  var TARGET_FPS = 24;
+  var FRAME_INTERVAL = 1000 / TARGET_FPS; // ~41.67 ms per frame
+
   // 6px pitch grid; supports 4x4 solid, 4x4 hollow ring, and 2x2 mist dots
   var SPACING = 6;
   var CELL_SIZE = 4;
@@ -138,7 +142,7 @@
       cy: customY !== undefined ? customY : cRows * (0.15 + 0.7 * Math.random()),
       radius: 0,
       maxRadius: 22 + Math.random() * 18,
-      speed: 0.22 + Math.random() * 0.10,
+      speed: (0.22 + Math.random() * 0.10) * 2.5,
       strength: 0.22 + Math.random() * 0.10,
     };
   }
@@ -258,7 +262,7 @@
         var gcC = cc * COARSE_STEP;
 
         // 1. Persistent fluid wake + active radiating pointer wave rings
-        var wake = coarseWake[cIdx] * 0.93;
+        var wake = coarseWake[cIdx] * 0.84;
         if (hasPointer) {
           var dx = cc - pxCoarse;
           var dy = cr - pyCoarse;
@@ -350,21 +354,21 @@
     ctx.clearRect(0, 0, width, height);
     buildPaletteBuckets();
 
-    // Lively simulation step
-    simTime += 0.022;
+    // Lively simulation step calibrated for 24 FPS (~1.32 units/sec)
+    simTime += 0.055;
 
     if (pointer.active) {
       var prevX = pointer.x < -1000 ? pointer.targetX : pointer.x;
       var prevY = pointer.y < -1000 ? pointer.targetY : pointer.y;
-      pointer.x = prevX + (pointer.targetX - prevX) * 0.25;
-      pointer.y = prevY + (pointer.targetY - prevY) * 0.25;
+      pointer.x = prevX + (pointer.targetX - prevX) * 0.48;
+      pointer.y = prevY + (pointer.targetY - prevY) * 0.48;
       var vx = pointer.x - prevX;
       var vy = pointer.y - prevY;
       pointer.speed = Math.min(32, Math.sqrt(vx * vx + vy * vy));
     } else {
-      pointer.speed *= 0.88;
-      pointer.x += (-9999 - pointer.x) * 0.12;
-      pointer.y += (-9999 - pointer.y) * 0.12;
+      pointer.speed *= 0.75;
+      pointer.x += (-9999 - pointer.x) * 0.25;
+      pointer.y += (-9999 - pointer.y) * 0.25;
     }
 
     computeTidalField();
@@ -507,10 +511,19 @@
 
   function loop(timestamp) {
     if (!isRunning) return;
-    if (!lastTimestamp) lastTimestamp = timestamp;
-    var dt = (timestamp - lastTimestamp) / 1000;
-    if (dt >= 0.016) {
+    if (!lastTimestamp) {
       lastTimestamp = timestamp;
+      renderFrame();
+      animId = requestAnimationFrame(loop);
+      return;
+    }
+    var elapsed = timestamp - lastTimestamp;
+    if (elapsed >= FRAME_INTERVAL) {
+      if (elapsed > 200) {
+        lastTimestamp = timestamp;
+      } else {
+        lastTimestamp += FRAME_INTERVAL;
+      }
       renderFrame();
     }
     animId = requestAnimationFrame(loop);
@@ -524,11 +537,13 @@
     }
     if (!isIntersecting || !isVisible) return;
     isRunning = true;
+    lastTimestamp = 0;
     animId = requestAnimationFrame(loop);
   }
 
   function stop() {
     isRunning = false;
+    lastTimestamp = 0;
     if (animId) {
       cancelAnimationFrame(animId);
       animId = null;

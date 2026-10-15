@@ -203,26 +203,44 @@
 
     var header = document.querySelector(".site-header");
     var headerHeight = header ? header.offsetHeight : 64;
-    var threshold = headerHeight + 100;
+    var threshold = headerHeight + 120;
 
-    var sectionIds = ["privacy", "agent", "features"];
-    for (var i = 0; i < sectionIds.length; i++) {
-      var el = document.getElementById(sectionIds[i]);
+    var sections = [
+      { id: "privacy", nav: "privacy" },
+      { id: "agent", nav: "agent" },
+      { id: "features", nav: "features" }
+    ];
+
+    for (var i = 0; i < sections.length; i++) {
+      var el = document.getElementById(sections[i].id);
       if (el) {
-        var top = el.getBoundingClientRect().top;
-        if (top <= threshold) {
-          return sectionIds[i];
+        var rect = el.getBoundingClientRect();
+        if (rect.top <= threshold && rect.bottom > threshold) {
+          return sections[i].nav;
         }
       }
     }
-    return "home";
+
+    var demoEl = document.getElementById("demo");
+    if (demoEl) {
+      var dRect = demoEl.getBoundingClientRect();
+      if (dRect.bottom > threshold) {
+        return "home";
+      }
+    }
+
+    if (window.scrollY < 200) {
+      return "home";
+    }
+
+    return "";
   }
 
   function updateNavigation() {
     var active = getActiveNavSection();
     var links = document.querySelectorAll(".site-header a[data-nav]");
     for (var i = 0; i < links.length; i++) {
-      if (links[i].dataset.nav === active) {
+      if (active && links[i].dataset.nav === active) {
         links[i].setAttribute("aria-current", active === "home" || active === "docs" ? "page" : "location");
       } else {
         links[i].removeAttribute("aria-current");
@@ -269,6 +287,9 @@
 
     if (!document.body.classList.contains("docs-body")) {
       var isHomeLink = link.dataset.nav === "home" || link.classList.contains("brand");
+      var href = link.getAttribute("href") || "";
+      var isAnchor = href.startsWith("#");
+
       if (isHomeLink) {
         event.preventDefault();
         var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -279,6 +300,21 @@
         updateNavigation();
         if (mobileNavigation && mobileNavigation.open) {
           mobileNavigation.open = false;
+        }
+      } else if (isAnchor) {
+        var targetEl = document.querySelector(href);
+        if (targetEl) {
+          event.preventDefault();
+          var headerEl = document.querySelector(".site-header");
+          var hh = headerEl ? headerEl.offsetHeight : 64;
+          var targetTop = Math.max(0, targetEl.offsetTop - hh);
+          var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          window.scrollTo({ top: targetTop, behavior: reducedMotion ? "auto" : "smooth" });
+          history.pushState(null, "", href);
+          updateNavigation();
+          if (mobileNavigation && mobileNavigation.open) {
+            mobileNavigation.open = false;
+          }
         }
       }
     }
@@ -481,7 +517,7 @@
       var header = document.querySelector(".site-header");
       var headerHeight = header ? header.offsetHeight : 64;
       var maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-      var sectionIds = ["demo", "features", "agent", "privacy", "retrieval", "cli", "docs", "testimonials", "download"];
+      var sectionIds = ["demo", "features", "agent", "privacy", "retrieval", "cli", "docs", "testimonials", "download", "faq", "contributors"];
       var stops = [0];
 
       for (var i = 0; i < sectionIds.length; i++) {

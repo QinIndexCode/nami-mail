@@ -145,7 +145,6 @@ class DemoTour {
     } else {
       this.stage.dataset.tourState = "waiting";
       delete this.stage.dataset.tourStep;
-      this.stage.style.setProperty("--demo-tour-progress", "0");
     }
     this.render();
   }
@@ -180,6 +179,7 @@ class DemoTour {
 
   play(delay = 0) {
     if (!this.ready) return;
+    this.visible = visibleFraction(this.stage) >= VISIBLE_FRACTION && !document.hidden;
     this.stop();
     this.playing = this.visible;
     this.stage.dataset.tourState = this.visible ? "playing" : "waiting";
@@ -318,7 +318,6 @@ class DemoTour {
     this.target = target;
     this.pointCursor(target, true);
     this.stage.dataset.tourStep = step.id;
-    this.stage.style.setProperty("--demo-tour-progress", String((this.index + 1) / this.steps.length));
     this.updateCamera();
     // Source panels expand inside the client. Measure again once that layout
     // transition has settled; a paused tour must never move the camera later.
@@ -352,7 +351,7 @@ class DemoTour {
 
   updateCamera() {
     const width = this.stage.clientWidth;
-    if (!this.playing || this.steps[this.index]?.id === "overview" || !this.closeupEnabled || this.motion.matches || width < 760 || !this.target?.isConnected) {
+    if (!this.playing || !this.closeupEnabled || this.motion.matches || width < 760 || !this.target?.isConnected) {
       this.resetCamera();
       return;
     }
@@ -408,7 +407,7 @@ export function initDemoTours(frames) {
   });
   const observer = typeof IntersectionObserver === "function" ? new IntersectionObserver(scan, { threshold: [0, VISIBLE_FRACTION, 1], rootMargin: "-64px 0px 0px 0px" }) : null;
   tours.forEach((tour) => observer?.observe(tour.stage));
-  if (!observer) window.addEventListener("scroll", scan, { passive: true });
+  window.addEventListener("scroll", scan, { passive: true });
   window.addEventListener("resize", scan);
   document.addEventListener("visibilitychange", scan);
   window.addEventListener("pagehide", () => tours.forEach((tour) => tour.setVisible(false)));
