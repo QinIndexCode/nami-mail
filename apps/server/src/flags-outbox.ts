@@ -406,6 +406,33 @@ function currentPositions(db: DatabaseHandle, ids: readonly string[]): Map<strin
 }
 
 /**
+ * The mailbox each id was committed in, as recorded by the `flags-push` row
+ * that staged it.
+ *
+ * A staged entry carries the position the message had when the commit applied
+ * its flags, and a foreground or background move rewrites
+ * `messages.mailbox`/`uid` without touching the payload. Rolling a refused
+ * delta back therefore has to ask the staging row where the commit landed, not
+ * the message where it is now. Ids the row does not name — a direct caller, a
+ * test — fall back to the current mailbox, as does an unreadable payload.
+ */
+function stagedMailboxes(db: DatabaseHandle, rowId: string): Map<string, string> {
+  const mailboxes = new Map<string, string>();
+  const row = db.prepare("SELECT payload_json FROM operation_queue WHERE id = ?").get(rowId) as { payload_json: string } | undefined;
+  if (!row) return mailboxes;
+  try {
+    const payload = JSON.parse(row.payload_json) as { entries?: Array<{ id?: unknown; mailbox?: unknown }> };
+    if (!Array.isArray(payload.entries)) return mailboxes;
+    for (const entry of payload.entries) {
+      if (typeof entry?.id === "string" && typeof entry.mailbox === "string") mailboxes.set(entry.id, entry.mailbox);
+    }
+  } catch {
+    // A payload that cannot be read names no position; the fallback stands.
+  }
+  return mailboxes;
+}
+
+/**
  * Rolls a permanently failed push's local target back to the value the server
  * was known to hold before it.
  *
@@ -421,12 +448,18 @@ function currentPositions(db: DatabaseHandle, ids: readonly string[]): Map<strin
  * Legacy rows without a recorded baseline keep their target too: there is
  * nothing trustworthy to restore them to, and inventing a value would be worse
  * than leaving the optimistic one for the next sync to correct.
+ *
+ * The optimistic unread delta goes back to the mailbox the commit landed in,
+ * not to the message's current one: a move between the two folders would
+ * otherwise leave the origin short and hand the destination a count nobody
+ * asked for.
  */
 export function restoreFailedFlagsTargets(db: DatabaseHandle, messageIds: readonly string[], settledRowId: string): void {
   const unique = [...new Set(messageIds)];
   if (!unique.length) return;
   const protectedIds = flagsPushProtectedMessageIds(db, settledRowId);
   const restorable = unique.filter((id) => !protectedIds.has(id));
+  const committedIn = stagedMailboxes(db, settledRowId);
   const chunkSize = 10_000;
   for (let offset = 0; offset < restorable.length; offset += chunkSize) {
     const chunk = restorable.slice(offset, offset + chunkSize);
@@ -447,13 +480,12 @@ export function restoreFailedFlagsTargets(db: DatabaseHandle, messageIds: readon
       // target back has to move it back the same way, mirroring the statement
       // in applyPreparedFlagsInTransaction (its argument is "is seen now").
       //
-      // Known bound: the delta is reversed on the row's CURRENT mailbox. A row
-      // moved after the commit that applied the delta carries no record of
-      // where that was, so the correction lands on the destination folder and
-      // the origin stays decremented — two badges off until the next sync
-      // upserts folder counts from the provider. Reversing exactly needs the
-      // per-flip history the metadata phase is meant to record, not one more
-      // column: the counters move on every flip, not only on the first.
+      // Known bound: the counters move on EVERY seen flip, so when the bit
+      // flipped more than once across different mailboxes before this
+      // settlement, no single-folder correction can undo the net exactly — the
+      // per-attribute versions the metadata phase plans are what would. The
+      // next sync also upserts folder counts from the provider, which bounds
+      // the divergence either way.
       if (target.includes("\\Seen") !== restored.includes("\\Seen")) {
         db.prepare(`
           UPDATE folders
@@ -462,7 +494,7 @@ export function restoreFailedFlagsTargets(db: DatabaseHandle, messageIds: readon
             ELSE unseen + 1
           END
           WHERE account_id = ? AND path = ?
-        `).run(restored.includes("\\Seen") ? 1 : 0, row.account_id, row.mailbox);
+        `).run(restored.includes("\\Seen") ? 1 : 0, row.account_id, committedIn.get(row.id) ?? row.mailbox);
       }
     }
   }

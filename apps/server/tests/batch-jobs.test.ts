@@ -1013,6 +1013,37 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     expect(folder.unseen).toBe(3);
   });
 
+  it("gives a refused push's unread delta back to the folder the commit landed in", async () => {
+    // The commit marks three INBOX messages read, so its optimistic unseen
+    // delta landed on INBOX. One message is moved to Trash while the push is
+    // still in flight and the push is then refused for good: rolling the delta
+    // back on the message's CURRENT folder would leave INBOX three short and
+    // hand Trash a count nobody asked for.
+    let releasePush!: () => void;
+    const gate = new Promise<void>((resolve) => { releasePush = resolve; });
+    const operationQueue = createOperationQueue(db, { onOperationSettled: settlementHook(db) });
+    operationQueue.registerRunner("flags-push", async () => {
+      await gate;
+      throw new AccountWriteSlotTimeoutError("account-1");
+    });
+    const deps = { db, masterKey, oauthService: undefined as undefined, operationQueue };
+
+    const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, deps);
+    await vi.waitFor(() => {
+      const running = db.prepare("SELECT COUNT(*) AS n FROM operation_queue WHERE kind = 'flags-push' AND status = 'running'").get() as { n: number };
+      expect(running.n).toBe(1);
+    });
+    db.prepare("UPDATE messages SET mailbox = 'Trash', uid = 142 WHERE id = 'message-1'").run();
+
+    releasePush();
+    await waitForJob(created.id);
+
+    const inbox = db.prepare("SELECT unseen FROM folders WHERE path = 'INBOX'").get() as { unseen: number };
+    expect(inbox.unseen, "the delta was applied to INBOX at commit time and comes back there").toBe(3);
+    const trash = db.prepare("SELECT unseen FROM folders WHERE path = 'Trash'").get() as { unseen: number };
+    expect(trash.unseen, "the move's destination never carried the optimistic delta").toBe(0);
+  });
+
   it("gives a refused push's target back while a newer push still stands", async () => {
     // Two commits land before either push runs: the older one is refused for
     // good, the newer one is held open. The older settlement must not roll the
