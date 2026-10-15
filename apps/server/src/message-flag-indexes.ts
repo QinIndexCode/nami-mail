@@ -75,6 +75,21 @@ export const CONFIRMED_FLAGGED_PREDICATE_SQL = `(${CONFIRMED_FLAGS_SQL} LIKE '%$
 export const CONFIRMED_UNSEEN_PREDICATE_SQL = `(${CONFIRMED_FLAGS_SQL} NOT LIKE '%${SEEN_FLAG_TEXT}%')`;
 
 /**
+ * The view under EITHER reading — the user's target or the server's state.
+ *
+ * This is what a batch selection resolves on. The list shows the target, so a
+ * selection must never exclude a row the user can see (they just starred it,
+ * and the view they are selecting in shows it starred); and the server's state
+ * must not be silently excluded either, or replaying a select-all after a
+ * pending write would come back empty (the message is still unread as far as
+ * the server is concerned, so it must answer the second selection too). Only
+ * the pending window can differ, and inside it both readings are defensible —
+ * the union is the one that never loses a message the user meant to act on.
+ */
+export const EITHER_FLAGGED_PREDICATE_SQL = `(flags_json LIKE '%${FLAGGED_FLAG_TEXT}%' OR ${CONFIRMED_FLAGS_SQL} LIKE '%${FLAGGED_FLAG_TEXT}%')`;
+export const EITHER_UNSEEN_PREDICATE_SQL = `(flags_json NOT LIKE '%${SEEN_FLAG_TEXT}%' OR ${CONFIRMED_FLAGS_SQL} NOT LIKE '%${SEEN_FLAG_TEXT}%')`;
+
+/**
  * The two negations, for callers that filter on the opposite sense (the Agent's
  * list tool takes a boolean, so it needs both). No partial index is keyed on
  * these — there is no "seen" or "unflagged" view to serve, and adding one is a

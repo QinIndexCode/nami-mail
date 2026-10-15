@@ -485,8 +485,14 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
             if (restoredInView) setMessageTotal((total) => total + restoredInView);
           }
           if (failed.length) {
-            setSelectionMode(true);
-            setSelectedMessageIds(new Set(failedIds));
+            // Re-arming the failed rows is this batch's own business: an older
+            // move must not take the selection away from a batch the user
+            // started afterwards, which is why this is the one state write the
+            // liveness check gates.
+            if (batchOperationRef.current === operationId) {
+              setSelectionMode(true);
+              setSelectedMessageIds(new Set(failedIds));
+            }
           }
         };
 

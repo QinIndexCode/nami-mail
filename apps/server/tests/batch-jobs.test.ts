@@ -13,7 +13,7 @@ import { createBatchJob, getBatchJobSnapshot, undoBatchJob } from "../src/batch-
 import { indexMessageFts } from "../src/message-search.js";
 import type { MessageListFilterQuery } from "../src/message-filters.js";
 import { createOperationQueue } from "../src/operation-queue.js";
-import { clearPendingFlagsMarkers, commitLocalFlags, pushFlagsRemote } from "../src/flags-outbox.js";
+import { clearPendingFlagsMarkers, commitLocalFlags, pushFlagsRemote, restoreFailedFlagsTargets } from "../src/flags-outbox.js";
 import { AccountWriteSlotTimeoutError } from "../src/sync-locks.js";
 
 describe("batch jobs (predicate-scoped list operations)", () => {
@@ -34,19 +34,29 @@ describe("batch jobs (predicate-scoped list operations)", () => {
   };
 
   /**
+   * Mirrors app.ts's settlement hook exactly, both halves: the marker clears
+   * once the push behind it has durably settled, and a push that was given up
+   * on gives its local target back FIRST — the marker is the only thing that
+   * says the target is unconfirmed, so a refused target left in place would be
+   * read as the server's state from then on.
+   */
+  const settlementHook = (handle: DatabaseHandle) => (kind: string, payload: unknown, rowId: string): void => {
+    if (kind !== "flags-push") return;
+    const { entries } = payload as { entries?: Array<{ id: string }> };
+    if (!Array.isArray(entries)) return;
+    const ids = entries.map((entry) => entry.id);
+    const settled = handle.prepare("SELECT status FROM operation_queue WHERE id = ?").get(rowId) as { status: string } | undefined;
+    if (settled?.status === "failed") restoreFailedFlagsTargets(handle, ids, rowId);
+    clearPendingFlagsMarkers(handle, ids, rowId);
+  };
+
+  /**
    * Mirrors app.ts's queue wiring: the flags-push executor plus the durable
-   * settlement hook that clears the per-message push markers. Without the
-   * hook a local-first job's markers would never clear and the job would
-   * never settle.
+   * settlement hook. Without the hook a local-first job's markers would never
+   * clear and the job would never settle.
    */
   function jobDeps() {
-    const operationQueue = createOperationQueue(db, {
-      onOperationSettled: (kind, payload, rowId) => {
-        if (kind !== "flags-push") return;
-        const { entries } = payload as { entries?: Array<{ id: string }> };
-        if (Array.isArray(entries)) clearPendingFlagsMarkers(db, entries.map((entry) => entry.id), rowId);
-      },
-    });
+    const operationQueue = createOperationQueue(db, { onOperationSettled: settlementHook(db) });
     operationQueue.registerRunner("flags-push", async (payload) => {
       await pushFlagsRemote({ db, masterKey }, payload as { accountId: string; entries: never[] });
     });
@@ -62,13 +72,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
   function gatedJobDeps() {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    const operationQueue = createOperationQueue(db, {
-      onOperationSettled: (kind, payload, rowId) => {
-        if (kind !== "flags-push") return;
-        const { entries } = payload as { entries?: Array<{ id: string }> };
-        if (Array.isArray(entries)) clearPendingFlagsMarkers(db, entries.map((entry) => entry.id), rowId);
-      },
-    });
+    const operationQueue = createOperationQueue(db, { onOperationSettled: settlementHook(db) });
     operationQueue.registerRunner("flags-push", async (payload) => {
       await gate;
       await pushFlagsRemote({ db, masterKey }, payload as { accountId: string; entries: never[] });
@@ -997,9 +1001,66 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     expect(done).toMatchObject({ status: "completed", total: 3, done: 3, updated: 3, failed: 3 });
     const markers = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE pending_flags_push = 1").get() as { n: number };
     expect(markers.n).toBe(0);
-    // The user's target stays in the cache for the next successful push.
-    const local = db.prepare("SELECT flags_json FROM messages WHERE id = 'message-1'").get() as { flags_json: string };
-    expect(JSON.parse(local.flags_json)).toEqual(["\\Seen"]);
+    // The refused target is GIVEN BACK, not kept "for the next push" — there is
+    // no next push: the marker is what queues one, and it is clear now, so a
+    // target left in place would be read as the server's state forever. The
+    // failure is reported to the user instead, which is where it belongs.
+    const local = db.prepare("SELECT flags_json, pending_flags_base_json FROM messages WHERE id = 'message-1'").get() as { flags_json: string; pending_flags_base_json: string | null };
+    expect(JSON.parse(local.flags_json)).toEqual([]);
+    expect(local.pending_flags_base_json).toBeNull();
+    // ...and the optimistic badge change goes back with it.
+    const folder = db.prepare("SELECT unseen FROM folders WHERE path = 'INBOX'").get() as { unseen: number };
+    expect(folder.unseen).toBe(3);
+  });
+
+  it("gives a refused push's target back while a newer push still stands", async () => {
+    // Two commits land before either push runs: the older one is refused for
+    // good, the newer one is held open. The older settlement must not roll the
+    // newer operation's target back — the user asked for it afterwards.
+    let releaseSecond!: () => void;
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    let attempts = 0;
+    const operationQueue = createOperationQueue(db, { onOperationSettled: settlementHook(db) });
+    operationQueue.registerRunner("flags-push", async (payload) => {
+      attempts += 1;
+      if (attempts === 1) throw new AccountWriteSlotTimeoutError("account-1");
+      await secondGate;
+      await pushFlagsRemote({ db, masterKey }, payload as { accountId: string; entries: never[] });
+    });
+    const deps = { db, masterKey, oauthService: undefined as undefined, operationQueue };
+
+    createBatchJob({ kind: "flags", patch: { seen: true }, query: { ...inboxQuery, unread: true } }, deps);
+    createBatchJob({ kind: "flags", patch: { flagged: true }, query: { ...inboxQuery, unread: true } }, deps);
+
+    await vi.waitFor(() => {
+      const failed = db.prepare("SELECT COUNT(*) AS n FROM operation_queue WHERE status = 'failed'").get() as { n: number };
+      expect(failed.n).toBe(1);
+    });
+    const row = db.prepare("SELECT flags_json, pending_flags_push FROM messages WHERE id = 'message-1'").get() as { flags_json: string; pending_flags_push: number };
+    expect(JSON.parse(row.flags_json), "the newer push still names this message").toEqual(["\\Seen", "\\Flagged"]);
+    expect(row.pending_flags_push, "so it stays unconfirmed until that push settles").toBe(1);
+
+    releaseSecond();
+    await vi.waitFor(() => {
+      const pending = db.prepare("SELECT COUNT(*) AS n FROM operation_queue WHERE status IN ('pending', 'running')").get() as { n: number };
+      expect(pending.n).toBe(0);
+    });
+  });
+
+  it("fixes a move job's selection when it is accepted, not when it runs", async () => {
+    const created = createBatchJob({ kind: "move", target: "trash", query: { ...inboxQuery, unread: true } }, jobDeps());
+    expect(created.total).toBe(3);
+
+    // The predicate stops matching before the job runs: a selection resolved at
+    // execution time would come back empty and the move would silently do
+    // nothing, which is exactly the drift the accept-time materialisation (and
+    // the same rule on the flags path) exists to prevent.
+    db.prepare("UPDATE messages SET flags_json = ?, pending_flags_push = 0").run(JSON.stringify(["\\Seen"]));
+
+    const done = await waitForJob(created.id);
+    expect(done).toMatchObject({ status: "completed", total: 3, updated: 3 });
+    const moved = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE mailbox = 'Trash'").get() as { n: number };
+    expect(moved.n).toBe(3);
   });
 
   it("re-registers durable jobs at boot so a restart cannot 404 them", async () => {

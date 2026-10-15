@@ -88,6 +88,13 @@ type BatchJobRecord = {
   error?: string;
   target?: "archive" | "trash";
   query?: MessageListFilterQuery;
+  /**
+   * The ids a move job acts on, fixed when the job was accepted. Resolving the
+   * predicate at execution time instead would let other batches reorganise the
+   * mailboxes under a job the user already started (design §1). Server-side
+   * only, like `changedIds`.
+   */
+  selection: string[];
   /** Undo scope of a flags job, server-side only: never leaves this process. */
   changedIds: string[];
   undoEntries: Array<{ id: string; fromMailbox: string }>;
@@ -508,16 +515,18 @@ function jobDbRow(db: DatabaseHandle, jobId: string): BatchJobDbRow | undefined 
 /**
  * Returns every message id matching the view filters, newest first.
  *
- * The flag predicates resolve against the CONFIRMED state, not the local
- * target: a job's selection is materialised once, at accept (or, for a move
- * job, at execution), and a message whose earlier job has already committed its
- * new flags locally but not pushed them yet must still be found. This is what
- * keeps "select every unread message, mark read, then mark unread again" from
- * resolving the second selection to nothing. The list endpoints keep the
- * optimistic spelling, because the list must show the user's own writes.
+ * The flag predicates resolve under EITHER reading — the user's target or the
+ * server's state. A selection is materialised once, when the job is accepted,
+ * and a message whose earlier job has already committed its new flags locally
+ * but not pushed them yet is still unread as far as the server is concerned:
+ * resolving on the target alone would make "select every unread message, mark
+ * read, then mark unread again" come back empty. Resolving on the server's
+ * state alone would exclude the row the user just starred and can still see.
+ * The list endpoints keep the optimistic spelling, because the list must show
+ * the user's own writes the moment they make them.
  */
 function resolveMessageIds(db: DatabaseHandle, query: MessageListFilterQuery): string[] {
-  const { where, join, params } = buildMessageListSql(query, { flags: "confirmed" });
+  const { where, join, params } = buildMessageListSql(query, { flags: "local-or-confirmed" });
   return db
     .prepare(`SELECT m.id ${join} ${where} ORDER BY COALESCE(m.sent_at, m.created_at) DESC`)
     .pluck()
@@ -535,17 +544,24 @@ export function createBatchJob(request: BatchJobCreateRequest, deps: BatchJobDep
     const ids = resolveMessageIds(deps.db, request.query);
     return acceptFlagsJob(deps, { kind: "flags", patch: request.patch, ids });
   }
+  // The selection is materialised HERE, at accept, for the same reason the
+  // flags path resolves before its acceptance transaction: the job must act on
+  // the messages the user selected when they asked, not on whatever the
+  // predicate matches minutes later, after other batches have reorganised the
+  // mailboxes under it.
+  const selection = resolveMessageIds(deps.db, request.query);
   const record: BatchJobRecord = {
     id: randomUUID(),
     kind: request.kind,
     status: "running",
-    total: 0,
+    total: selection.length,
     done: 0,
     updated: 0,
     failed: 0,
     createdAt: Date.now(),
     target: request.target,
     query: request.query,
+    selection,
     changedIds: [],
     undoEntries: [],
     undone: false,
@@ -559,8 +575,8 @@ export function createBatchJob(request: BatchJobCreateRequest, deps: BatchJobDep
 async function runJob(record: BatchJobRecord, deps: BatchJobDeps): Promise<void> {
   if (!record.query) return;
   try {
-    const ids = resolveMessageIds(deps.db, record.query);
-    record.total = ids.length;
+    // Fixed at accept — see createBatchJob. `total` was already set from it.
+    const ids = record.selection;
     if (record.kind === "move" && record.target) {
       // Snapshot every origin mailbox up front so undo can restore it. The
       // lookup is chunked because the selection is unbounded (see
@@ -701,6 +717,8 @@ function undoMoveJob(jobId: string, deps: BatchJobDeps): BatchJobUndoOutcome {
     updated: 0,
     failed: 0,
     createdAt: Date.now(),
+    // An undo acts on the entries it recorded, never on a selection.
+    selection: [],
     changedIds: [],
     undoEntries: [...parent.undoEntries],
     undone: false,

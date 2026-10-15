@@ -4,6 +4,8 @@ import type { Translate } from "./i18n";
 
 const POLL_INTERVAL_MS = 600;
 const MAX_JOB_DURATION_MS = 10 * 60_000;
+/** Consecutive status-read failures tolerated before a follow-up gives up. */
+const MAX_STATUS_READ_FAILURES = 3;
 
 export type BatchJobToastKind = "success" | "error" | "info";
 export type BatchJobToastAction = { label: string; run: () => void };
@@ -40,7 +42,8 @@ export type BatchJobRunOptions = {
 export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
   const { showToast, t, reload, exitSelectionMode, onSnapshot, onBusy } = deps;
   const now = deps.now ?? Date.now;
-  let startedAt = 0;
+  /** Per-batch polling deadlines, keyed by job id. */
+  const runDeadlines = new Map<string, number>();
 
   /**
    * Follows an already-accepted job to its terminal state without touching the
@@ -51,17 +54,23 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
    */
   const followToSettled = (jobId: string, onSettled: () => void): void => {
     const startedFollowingAt = now();
+    // A status read can fail transiently (a blip, a restart in progress). One
+    // failed read used to end the follow-up on the spot, which is exactly the
+    // "undo looks inert" symptom this loop exists to remove, so give up only
+    // after a few consecutive failures — and let the deadline bound the rest.
+    let consecutiveReadFailures = 0;
     const next = async (): Promise<void> => {
       if (now() - startedFollowingAt > MAX_JOB_DURATION_MS) {
         onSettled();
         return;
       }
-      let settled = true;
+      let settled = false;
       try {
         settled = (await api.batchJobStatus(jobId)).job.status !== "running";
+        consecutiveReadFailures = 0;
       } catch {
-        // A status read that fails cannot confirm the inverse job; reconcile
-        // from the server anyway rather than polling until the deadline.
+        consecutiveReadFailures += 1;
+        settled = consecutiveReadFailures >= MAX_STATUS_READ_FAILURES;
       }
       if (settled) {
         onSettled();
@@ -73,8 +82,14 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
   };
 
   const poll = (jobId: string, opts: BatchJobRunOptions): void => {
+    // Deadlines are keyed by job: the runner serves overlapping batches, and a
+    // single deadline on the runner would be reset by every newer batch, letting
+    // an earlier one poll past its budget.
+    if (!runDeadlines.has(jobId)) runDeadlines.set(jobId, now());
+    const runStartedAt = runDeadlines.get(jobId)!;
     const next = async (): Promise<void> => {
-      if (now() - startedAt > MAX_JOB_DURATION_MS) {
+      if (now() - runStartedAt > MAX_JOB_DURATION_MS) {
+        runDeadlines.delete(jobId);
         onSnapshot(null);
         showToast(t("mail.selection.jobError"), "error");
         opts.onSettled?.();
@@ -88,12 +103,14 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
           return;
         }
         if (job.status === "failed") {
+          runDeadlines.delete(jobId);
           onSnapshot(null);
           showToast(job.error ?? t("mail.selection.jobError"), "error");
           await reload({ silent: true });
           opts.onSettled?.();
           return;
         }
+        runDeadlines.delete(jobId);
         onSnapshot(null);
         // Undo is jobId-only: the server holds the changed ids of the job it
         // recorded, so the toast action must not grow a dependency on the
@@ -128,8 +145,10 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
           showToast(t(opts.successKey, { count: job.total }), "success", job.total > 0 ? undoAction : undefined);
         }
         await reload({ silent: true });
+        runDeadlines.delete(jobId);
         opts.onSettled?.();
       } catch {
+        runDeadlines.delete(jobId);
         onSnapshot(null);
         showToast(t("mail.selection.jobError"), "error");
         opts.onSettled?.();
@@ -141,11 +160,11 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
   const start = (payload: BatchJobCreatePayload, opts: BatchJobRunOptions): void => {
     onBusy(true);
     void api.batchJobCreate(payload).then(({ jobId }) => {
-      startedAt = now();
       onSnapshot({ id: jobId, kind: payload.kind, status: "running", total: 0, done: 0, updated: 0, failed: 0, createdAt: Date.now() });
       // The job runs server-side; release the toolbar (progress comes from
       // the poll loop) so the list stays interactive.
       onBusy(false);
+      runDeadlines.set(jobId, now());
       poll(jobId, opts);
     }).catch((error: unknown) => {
       onBusy(false);

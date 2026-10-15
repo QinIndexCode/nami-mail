@@ -22,7 +22,7 @@ import { registerBackupRoutes } from "./routes/backup.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerOutboundAttachmentRoutes } from "./routes/outbound-attachments.js";
 import { registerBatchJobRoutes } from "./routes/batch-jobs.js";
-import { clearOrphanedPendingFlagsMarkers, clearPendingFlagsMarkers, pushFlagsRemote, type FlagsPushEntry } from "./flags-outbox.js";
+import { clearOrphanedPendingFlagsMarkers, clearPendingFlagsMarkers, pushFlagsRemote, restoreFailedFlagsTargets, type FlagsPushEntry } from "./flags-outbox.js";
 import { rebuildFlagsJobHandles } from "./batch-jobs.js";
 import {
   oauthProviderFor,
@@ -286,7 +286,15 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       if (kind === "flags-push") {
         const { entries } = payload as { entries?: FlagsPushEntry[] };
         if (Array.isArray(entries)) {
-          clearPendingFlagsMarkers(context.db, entries.map((entry) => entry.id), rowId);
+          const ids = entries.map((entry) => entry.id);
+          // The hook fires for success AND for a given-up push, so the row's
+          // durable status — not the fact of settling — says whether the
+          // provider took the delta. A given-up push must give its target back
+          // before the marker clears, or the rejected value is read as the
+          // server's state from then on (design §4).
+          const settled = context.db.prepare("SELECT status FROM operation_queue WHERE id = ?").get(rowId) as { status: string } | undefined;
+          if (settled?.status === "failed") restoreFailedFlagsTargets(context.db, ids, rowId);
+          clearPendingFlagsMarkers(context.db, ids, rowId);
         }
       }
     },

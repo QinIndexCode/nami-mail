@@ -404,6 +404,61 @@ function currentPositions(db: DatabaseHandle, ids: readonly string[]): Map<strin
 }
 
 /**
+ * Rolls a permanently failed push's local target back to the value the server
+ * was known to hold before it.
+ *
+ * The settlement hook clears the push marker whether the provider took the
+ * delta or the queue gave up on it, and once the marker is clear `flags_json`
+ * IS read as the server's state (see CONFIRMED_FLAGS_SQL). A refused target
+ * left in place would therefore be reported as confirmed for good: the badge
+ * and every later selection would treat a write the server never accepted as
+ * fact, and nothing would ever correct it.
+ *
+ * Messages that a newer push still names keep their target — that push
+ * supersedes this one, and rolling back would overwrite the newer intent.
+ * Legacy rows without a recorded baseline keep their target too: there is
+ * nothing trustworthy to restore them to, and inventing a value would be worse
+ * than leaving the optimistic one for the next sync to correct.
+ */
+export function restoreFailedFlagsTargets(db: DatabaseHandle, messageIds: readonly string[], settledRowId: string): void {
+  const unique = [...new Set(messageIds)];
+  if (!unique.length) return;
+  const protectedIds = flagsPushProtectedMessageIds(db, settledRowId);
+  const restorable = unique.filter((id) => !protectedIds.has(id));
+  const chunkSize = 10_000;
+  for (let offset = 0; offset < restorable.length; offset += chunkSize) {
+    const chunk = restorable.slice(offset, offset + chunkSize);
+    const rows = db
+      .prepare(`
+        SELECT id, account_id, mailbox, flags_json, pending_flags_base_json
+        FROM messages
+        WHERE pending_flags_push = 1 AND id IN (${chunk.map(() => "?").join(", ")})
+      `)
+      .all(...chunk) as Array<{ id: string; account_id: string; mailbox: string; flags_json: string; pending_flags_base_json: string | null }>;
+    for (const row of rows) {
+      if (row.pending_flags_base_json === null) continue;
+      const target = JSON.parse(row.flags_json) as string[];
+      const restored = JSON.parse(row.pending_flags_base_json) as string[];
+      db.prepare("UPDATE messages SET flags_json = ?, pending_flags_push = 0, pending_flags_base_json = NULL WHERE id = ?")
+        .run(row.pending_flags_base_json, row.id);
+      // The commit moved the folder's unread count optimistically; rolling the
+      // target back has to move it back the same way, mirroring the statement
+      // in applyPreparedFlagsInTransaction (its argument is "is seen now").
+      if (target.includes("\\Seen") !== restored.includes("\\Seen")) {
+        db.prepare(`
+          UPDATE folders
+          SET unseen = CASE
+            WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
+            ELSE unseen + 1
+          END
+          WHERE account_id = ? AND path = ?
+        `).run(restored.includes("\\Seen") ? 1 : 0, row.account_id, row.mailbox);
+      }
+    }
+  }
+}
+
+/**
  * The `flags-push` executor: pushes committed local deltas to the provider
  * with one IMAP connection per account and one STORE per (mailbox, flag-group).
  * Entries carry the delta as staged and are re-positioned by message id at
