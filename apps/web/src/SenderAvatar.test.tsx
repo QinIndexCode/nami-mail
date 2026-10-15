@@ -51,6 +51,7 @@ beforeEach(() => {
   installLocalStorageStub();
   resetBimiLogosForTests();
   getBimiAvatarMock.mockReset();
+  getBimiAvatarMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -84,10 +85,35 @@ describe("SenderAvatar", () => {
   it("keys the Gravatar lookup with the RFC 1321 md5 of the lowercased email", () => {
     // Both digests were cross-checked against node:crypto's md5 of the
     // lowercased address; they pin the little-endian digest serialization.
-    const apple = renderTree(<SenderAvatar name="Apple News" address="News@InsideApple.Apple.com" tone={0} gravatarEnabled={true} bimiEnabled={false} />);
+    const apple = renderTree(<SenderAvatar name="Apple News" address="News@InsideApple.Apple.com" tone={0} gravatarEnabled={true} bimiEnabled={false} brandAvatarEnabled={false} />);
     expect(apple).toContain("gravatar.com/avatar/e1a703880d8baa3819ff17f779914ad6");
     const nyt = renderTree(<SenderAvatar name="NYT" address="nytdirect@nytimes.com" tone={1} gravatarEnabled={true} bimiEnabled={false} />);
     expect(nyt).toContain("gravatar.com/avatar/cf775fbf8e1b63a401d480d2cbd482be");
+  });
+
+  it("shows the built-in official brand avatar before BIMI and Gravatar", () => {
+    const github = renderTree(
+      <SenderAvatar name="GitHub" address="notifications@github.com" tone={0} gravatarEnabled={true} bimiEnabled={true} />,
+    );
+    expect(github).toContain("brand-avatar");
+    expect(github).toContain('aria-label="GitHub"');
+    expect(github).toMatch(/rgb\(24,\s*23,\s*23\)|#181717/);
+    expect(github).not.toContain("gravatar.com");
+    expect(getBimiAvatarMock).not.toHaveBeenCalled();
+
+    const aliyun = renderTree(
+      <SenderAvatar name="Aliyun" address="service@notice.aliyun.com" tone={1} gravatarEnabled={true} bimiEnabled={true} />,
+    );
+    expect(aliyun).toContain("brand-avatar");
+    expect(aliyun).toContain('aria-label="Aliyun"');
+  });
+
+  it("can disable the built-in brand avatar to fall through", () => {
+    const github = renderTree(
+      <SenderAvatar name="GitHub" address="notifications@github.com" tone={0} gravatarEnabled={false} bimiEnabled={false} brandAvatarEnabled={false} />,
+    );
+    expect(github).not.toContain("brand-avatar");
+    expect(github).toContain(">GI<");
   });
 
   it("shows the BIMI logo before Gravatar and requests only the domain", async () => {
