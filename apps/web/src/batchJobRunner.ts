@@ -42,6 +42,36 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
   const now = deps.now ?? Date.now;
   let startedAt = 0;
 
+  /**
+   * Follows an already-accepted job to its terminal state without touching the
+   * UI's progress state, then reports. The undo POST only *accepts* the inverse
+   * job — the reverse itself runs server-side afterwards — so reloading when
+   * the POST returns would snapshot the pre-undo list and the undo would look
+   * like it did nothing.
+   */
+  const followToSettled = (jobId: string, onSettled: () => void): void => {
+    const startedFollowingAt = now();
+    const next = async (): Promise<void> => {
+      if (now() - startedFollowingAt > MAX_JOB_DURATION_MS) {
+        onSettled();
+        return;
+      }
+      let settled = true;
+      try {
+        settled = (await api.batchJobStatus(jobId)).job.status !== "running";
+      } catch {
+        // A status read that fails cannot confirm the inverse job; reconcile
+        // from the server anyway rather than polling until the deadline.
+      }
+      if (settled) {
+        onSettled();
+        return;
+      }
+      setTimeout(() => void next(), POLL_INTERVAL_MS);
+    };
+    void next();
+  };
+
   const poll = (jobId: string, opts: BatchJobRunOptions): void => {
     const next = async (): Promise<void> => {
       if (now() - startedAt > MAX_JOB_DURATION_MS) {
@@ -73,7 +103,16 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
           label: t("mail.selection.undo"),
           run: () => {
             showToast(t("mail.selection.undoStarted"), "info");
-            void api.batchJobUndo(jobId).then(() => void reload({ silent: true })).catch(() => {
+            void api.batchJobUndo(jobId).then((result) => {
+              const undoJobId = result?.jobId;
+              // No job id means the server either refused the undo or answered
+              // without one; there is nothing to follow, so reconcile now.
+              if (!undoJobId) {
+                void reload({ silent: true });
+                return;
+              }
+              followToSettled(undoJobId, () => void reload({ silent: true }));
+            }).catch(() => {
               showToast(t("mail.selection.jobError"), "error");
             });
           },

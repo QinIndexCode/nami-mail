@@ -133,6 +133,9 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<ReadonlySet<string>>(() => new Set());
   const [batchBusy, setBatchBusy] = useState(false);
+  // Monotonic batch identity. Overlapping batches are legitimate; completion
+  // handling compares against this so only the newest one retires shared state.
+  const batchOperationRef = useRef(0);
   const { closing: batchDeleteConfirmClosing, requestClose: requestBatchDeleteConfirmClose, reset: resetBatchDeleteConfirmClosing } = useDismissTransition(
     useCallback(() => setPendingBatchDelete(false), [setPendingBatchDelete]),
   );
@@ -285,11 +288,21 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     // cannot flip the rows back mid-batch.
     const affectedIds = selectionJobQuery ? filteredMessages.map((message) => message.id) : ids;
     if (!affectedIds.length && !selectionJobQuery) return;
+    // Pins are counted holders, and this operation is ONE holder per id: it
+    // releases exactly what it took, exactly once. Releasing twice would drop
+    // the holder of an overlapping batch that is still in flight.
+    const held = new Set<string>();
     const pin = (list: readonly string[]) => {
-      for (const id of list) pinFlagOverride(pendingLocalStateRef.current, id);
+      for (const id of list) {
+        pinFlagOverride(pendingLocalStateRef.current, id);
+        held.add(id);
+      }
     };
     const unpin = (list: readonly string[]) => {
-      for (const id of list) unpinFlagOverride(pendingLocalStateRef.current, id);
+      for (const id of list) {
+        if (!held.delete(id)) continue;
+        unpinFlagOverride(pendingLocalStateRef.current, id);
+      }
     };
     // Predicate scope: the server resolves every matching id behind a job (the
     // local list only holds a page of them).
@@ -307,6 +320,11 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
       return;
     }
     setBatchBusy(true);
+    // Every batch carries its own identity. Overlapping batches are possible —
+    // the toolbar stays interactive while a request is in flight — so a batch
+    // that finishes must only report ITS work as done: an older completion may
+    // neither clear the busy flag nor drop the selection a newer action owns.
+    const operationId = ++batchOperationRef.current;
     pin(ids);
     // Telemetry: the optimistic apply runs on the main thread for every
     // selected row and the chunk loop paces server work — both are the
@@ -327,35 +345,48 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
         const result = await api.batchUpdateMessageFlags(ids, patch);
         if (result.failed) {
           applied = false;
-          // The rows the server refused never got their optimistic flags. Drop
-          // their pins *before* the reconciling reload so it restores the
-          // server's truth for them instead of re-applying the optimistic value.
-          unpin((result.failures ?? []).map((failure) => failure.id));
+          // Drop the pins *before* the reconciling reload so it restores the
+          // server's truth for the refused rows instead of re-applying the
+          // optimistic value. The server reports per-id failures when it can;
+          // when it does not, no row may keep an unconfirmed value, so every
+          // pin of this batch drops and the reload settles all of them.
+          const failedIds = (result.failures ?? []).map((failure) => failure.id);
+          unpin(failedIds.length ? failedIds : ids);
           showToast(t("mail.selection.partialFailure", { done: result.updated, failed: result.failed }), "error");
         }
       }
-      showToast(t(successKey, { count: ids.length }));
+      // A partial failure already reported itself; claiming success on top of
+      // it would be the last word the user sees.
+      if (applied) showToast(t(successKey, { count: ids.length }));
     } catch (error) {
       // The server owns the authoritative flags; reload to restore truth.
       applied = false;
       showToast(mailErrorToastMessage(error, t("mail.error.batchUpdate"), t), "error");
     } finally {
       finishBatch({ count: ids.length });
-      // The reconciling reload doubles as the pin barrier: it bumps the load
-      // epoch (discarding any in-flight stale refresh) and lands a server
-      // snapshot taken after the local commit. Only then may pins drop.
+      // The reconciling reload doubles as the pin barrier, but which side of it
+      // the pins drop on depends on whether the write landed. On success they
+      // must outlive the reload: an in-flight refresh that started before the
+      // local commit would otherwise land after it and flip the rows back. On
+      // failure there is no commit to protect, and pins that outlive the reload
+      // would pin the optimistic value over the server's authoritative one —
+      // the rejected write would look like it succeeded.
+      if (!applied) unpin(ids);
       try {
         await load({ silent: true });
       } catch {
-        // load handles its own errors; pins still clear below.
+        // load handles its own errors; the pins still clear below.
       }
       unpin(ids);
       // The action landed and the list is reconciled, so the selection is spent:
       // drop it (and leave multi-select) rather than leaving rows armed for an
       // accidental second batch. A failed action keeps the selection so the user
-      // can retry it.
-      if (applied) exitSelectionMode();
-      setBatchBusy(false);
+      // can retry it. Both wait for the newest batch: an older one finishing
+      // must not retire a selection its successor is still using.
+      if (batchOperationRef.current === operationId) {
+        if (applied) exitSelectionMode();
+        setBatchBusy(false);
+      }
     }
   };
 
@@ -369,6 +400,7 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
       return;
     }
     setBatchBusy(true);
+    const operationId = ++batchOperationRef.current;
     // The selection leaves the list and the toolbar immediately; failures are
     // rolled back (re-inserted and re-selected) once the server responds.
     exitSelectionMode();
@@ -500,6 +532,11 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
           const unreconciled = new Set(ids.slice(processed));
           for (const id of failedIds) unreconciled.add(id);
           rollback(unreconciled);
+          // Release the destination pins for the rows going back into the list
+          // BEFORE the reconciling reload: a pinned id is dropped from any
+          // snapshot that still reports it at the old mailbox, so reloading
+          // first would re-remove the very rows this rollback restored.
+          unpinMovedAway([...unreconciled]);
           await load({ silent: true });
           showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
         }
@@ -509,7 +546,9 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
       showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
     } finally {
       unpinMovedAway(ids);
-      setBatchBusy(false);
+      // Only the newest batch retires the busy flag; an older move finishing
+      // must not report a newer action as done.
+      if (batchOperationRef.current === operationId) setBatchBusy(false);
     }
   };
 

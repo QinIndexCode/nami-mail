@@ -49,6 +49,32 @@ export const FLAGGED_PREDICATE_SQL = `flags_json LIKE '%${FLAGGED_FLAG_TEXT}%'`;
 export const UNSEEN_PREDICATE_SQL = `flags_json NOT LIKE '%${SEEN_FLAG_TEXT}%'`;
 
 /**
+ * The flag text the server is known to hold, for a row whose local value may be
+ * an unconfirmed optimistic write.
+ *
+ * `flags_json` is updated by the local-first commit along with the
+ * `pending_flags_push` marker, so while that marker is set it is the user's
+ * TARGET, not the server's state; `pending_flags_base_json` holds the value
+ * from before the row first went pending. Once the marker is cleared the two
+ * cannot diverge — the settlement hook only clears it after the push behind the
+ * row has finished — so both spellings select the same rows for a settled row.
+ */
+export const CONFIRMED_FLAGS_SQL = `(CASE WHEN pending_flags_push = 1 THEN COALESCE(pending_flags_base_json, flags_json) ELSE flags_json END)`;
+
+/**
+ * The same two views over the confirmed state.
+ *
+ * No partial index is keyed on these, and none can be: the predicate reads a
+ * CASE expression, so the planner cannot prove it implied by an index whose
+ * WHERE names `flags_json` directly. That is the intended trade — the list
+ * itself keeps the indexed local predicate (it must show the optimistic value
+ * immediately), while a batch job's selection resolves a few times per job
+ * rather than per row.
+ */
+export const CONFIRMED_FLAGGED_PREDICATE_SQL = `(${CONFIRMED_FLAGS_SQL} LIKE '%${FLAGGED_FLAG_TEXT}%')`;
+export const CONFIRMED_UNSEEN_PREDICATE_SQL = `(${CONFIRMED_FLAGS_SQL} NOT LIKE '%${SEEN_FLAG_TEXT}%')`;
+
+/**
  * The two negations, for callers that filter on the opposite sense (the Agent's
  * list tool takes a boolean, so it needs both). No partial index is keyed on
  * these — there is no "seen" or "unflagged" view to serve, and adding one is a

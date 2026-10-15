@@ -505,9 +505,19 @@ function jobDbRow(db: DatabaseHandle, jobId: string): BatchJobDbRow | undefined 
   return db.prepare("SELECT * FROM batch_jobs WHERE id = ?").get(jobId) as BatchJobDbRow | undefined;
 }
 
-/** Returns every message id matching the view filters, newest first. */
+/**
+ * Returns every message id matching the view filters, newest first.
+ *
+ * The flag predicates resolve against the CONFIRMED state, not the local
+ * target: a job's selection is materialised once, at accept (or, for a move
+ * job, at execution), and a message whose earlier job has already committed its
+ * new flags locally but not pushed them yet must still be found. This is what
+ * keeps "select every unread message, mark read, then mark unread again" from
+ * resolving the second selection to nothing. The list endpoints keep the
+ * optimistic spelling, because the list must show the user's own writes.
+ */
 function resolveMessageIds(db: DatabaseHandle, query: MessageListFilterQuery): string[] {
-  const { where, join, params } = buildMessageListSql(query);
+  const { where, join, params } = buildMessageListSql(query, { flags: "confirmed" });
   return db
     .prepare(`SELECT m.id ${join} ${where} ORDER BY COALESCE(m.sent_at, m.created_at) DESC`)
     .pluck()

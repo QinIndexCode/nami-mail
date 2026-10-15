@@ -624,6 +624,12 @@ function migrateDatabase(db: DatabaseHandle): void {
   // for its background IMAP STORE. The sync path must not overwrite
   // flags_json from the (stale) remote while the marker is set.
   addMessageColumn("pending_flags_push", "pending_flags_push INTEGER");
+  // The flag value from before the row FIRST went pending: the last value the
+  // server was known to hold. While the marker above is set, `flags_json` is
+  // the user's target, and a bulk selection must resolve against the server's
+  // state instead (see CONFIRMED_FLAGS_SQL) or a replayed selection comes back
+  // empty. Only meaningful while that marker is set.
+  addMessageColumn("pending_flags_base_json", "pending_flags_base_json TEXT");
   // Keep legacy rows NULL so the next normal sync can hydrate their Cc
   // recipients instead of silently treating the missing field as empty.
   addMessageColumn("cc_json", "cc_json TEXT");

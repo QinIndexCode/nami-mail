@@ -1,5 +1,5 @@
 import { ftsLikeEscape } from "./message-search.js";
-import { FLAGGED_PREDICATE_SQL, UNSEEN_PREDICATE_SQL } from "./message-flag-indexes.js";
+import { CONFIRMED_FLAGGED_PREDICATE_SQL, CONFIRMED_UNSEEN_PREDICATE_SQL, FLAGGED_PREDICATE_SQL, UNSEEN_PREDICATE_SQL } from "./message-flag-indexes.js";
 import type { AttachmentKind } from "./attachment-kind.js";
 
 // Authoritative WHERE filter fragments for the message list view. Shared by
@@ -96,7 +96,23 @@ export type MessageListSqlSelection = {
  * snoozed views, otherwise the unified inbox (snoozed-hidden until due).
  * A `q` search switches to the FTS join and prepends its LIKE parameters.
  */
-export function buildMessageListSql(query: MessageListFilterQuery): MessageListSqlSelection {
+export type MessageListSqlOptions = {
+  /**
+   * Which flag state the starred and unread predicates read.
+   *
+   * "local" (the default, and what the list itself displays) is the optimistic
+   * target. "confirmed" is the value the server is known to hold, which is what
+   * a batch job's selection must use: a selection is materialised when the job
+   * is accepted, and a message whose earlier job already committed its new
+   * flags locally but has not pushed them yet is still, as far as the server is
+   * concerned, in its old state. Filtering on the target would silently shrink
+   * the second selection to nothing.
+   */
+  flags?: "local" | "confirmed";
+};
+
+export function buildMessageListSql(query: MessageListFilterQuery, options: MessageListSqlOptions = {}): MessageListSqlSelection {
+  const confirmedFlags = options.flags === "confirmed";
   const filters: string[] = [];
   const params: unknown[] = [];
   const search = query.q?.trim();
@@ -119,7 +135,7 @@ export function buildMessageListSql(query: MessageListFilterQuery): MessageListS
     // imported rather than restated: a partial index is only usable when SQLite
     // can prove the query's predicate implies its WHERE clause, so the two
     // spellings have to stay identical down to the backslashes.
-    filters.push(`m.${FLAGGED_PREDICATE_SQL}`);
+    filters.push(confirmedFlags ? CONFIRMED_FLAGGED_PREDICATE_SQL : `m.${FLAGGED_PREDICATE_SQL}`);
   } else if (!globalSearch && query.snoozed) {
     // The Snoozed view lists messages whose snooze has not fired yet.
     filters.push("m.snoozed_until IS NOT NULL AND m.snoozed_until > ?");
@@ -135,7 +151,7 @@ export function buildMessageListSql(query: MessageListFilterQuery): MessageListS
   if (!globalSearch && query.unread) {
     // Same reasoning as the starred predicate above: this is the spelling
     // `idx_messages_unseen` is keyed on.
-    filters.push(`m.${UNSEEN_PREDICATE_SQL}`);
+    filters.push(confirmedFlags ? CONFIRMED_UNSEEN_PREDICATE_SQL : `m.${UNSEEN_PREDICATE_SQL}`);
   }
   // Kind and date refinements apply to every mode, including global search:
   // they narrow the candidate set, they never widen it.

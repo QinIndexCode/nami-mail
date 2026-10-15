@@ -177,8 +177,18 @@ export function applyPreparedFlagsInTransaction(
   for (const item of prepared) {
     const { message } = item;
     if (!item.add.length && !item.remove.length) continue;
-    db.prepare("UPDATE messages SET flags_json = ?, pending_flags_push = 1 WHERE id = ?")
-      .run(JSON.stringify(item.nextFlags), message.id);
+    // The pending baseline changes only on the TRANSITION into pending: a
+    // commit that lands while an earlier push for the same row is still
+    // outstanding must keep the older baseline, or the optimistic value would
+    // be recorded as the server's state. SQLite evaluates every SET expression
+    // against the pre-update row, so the CASE below reads the old marker.
+    db.prepare(`
+      UPDATE messages
+      SET flags_json = ?,
+          pending_flags_push = 1,
+          pending_flags_base_json = CASE WHEN pending_flags_push = 1 THEN pending_flags_base_json ELSE flags_json END
+      WHERE id = ?
+    `).run(JSON.stringify(item.nextFlags), message.id);
     changedIds.push(message.id);
     if (item.seenChanged) {
       db.prepare(`

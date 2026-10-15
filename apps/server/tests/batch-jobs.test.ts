@@ -53,6 +53,29 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     return { db, masterKey, oauthService: undefined as undefined, operationQueue };
   }
 
+  /**
+   * The real wiring with the push held open: the local commit has happened but
+   * the provider has not answered, which is the whole window in which the
+   * local target and the server's state disagree. `release()` lets the held
+   * push finish so the test can leave the queue idle.
+   */
+  function gatedJobDeps() {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const operationQueue = createOperationQueue(db, {
+      onOperationSettled: (kind, payload, rowId) => {
+        if (kind !== "flags-push") return;
+        const { entries } = payload as { entries?: Array<{ id: string }> };
+        if (Array.isArray(entries)) clearPendingFlagsMarkers(db, entries.map((entry) => entry.id), rowId);
+      },
+    });
+    operationQueue.registerRunner("flags-push", async (payload) => {
+      await gate;
+      await pushFlagsRemote({ db, masterKey }, payload as { accountId: string; entries: never[] });
+    });
+    return { deps: { db, masterKey, oauthService: undefined as undefined, operationQueue }, release: () => release() };
+  }
+
   /** Waits until the queued job settles, then returns its snapshot. */
   async function waitForJob(jobId: string, status: "completed" | "failed" = "completed", attempts = 200) {
     for (let i = 0; i < attempts; i += 1) {
@@ -191,6 +214,43 @@ describe("batch jobs (predicate-scoped list operations)", () => {
   const PROGRESS_KEYS = [
     "createdAt", "done", "failed", "id", "kind", "status", "total", "undoWindowMs", "updated",
   ];
+
+  it("resolves a job's selection against the confirmed flags, not the pending target", async () => {
+    const { deps, release } = gatedJobDeps();
+    // Job 1 commits "read" locally and its push is still outstanding, so as far
+    // as the server is concerned the messages are unread.
+    const first = createBatchJob({ kind: "flags", patch: { seen: true }, query: { ...inboxQuery, unread: true } }, deps);
+    await vi.waitFor(() => {
+      const running = db.prepare("SELECT COUNT(*) AS n FROM operation_queue WHERE kind = 'flags-push' AND status = 'running'").get() as { n: number };
+      expect(running.n).toBe(1);
+    });
+    expect(db.prepare("SELECT pending_flags_push FROM messages WHERE id = 'message-1'").get(), "job 1's target is already committed").toEqual({ pending_flags_push: 1 });
+
+    // Job 2 replays the same selection to mark it unread again. Resolved against
+    // the local target it would be EMPTY, and the user's reversal would silently
+    // do nothing.
+    const second = createBatchJob({ kind: "flags", patch: { seen: false }, query: { ...inboxQuery, unread: true } }, deps);
+    expect(second.total, "the selection must not vanish while the first push is outstanding").toBe(3);
+    expect(db.prepare("SELECT pending_flags_base_json FROM messages WHERE id = 'message-1'").get(), "the baseline is the last value the server was known to hold").toEqual({ pending_flags_base_json: "[]" });
+
+    release();
+    await waitForJob(first.id);
+    await waitForJob(second.id);
+    const local = db.prepare("SELECT flags_json FROM messages WHERE id = 'message-1'").get() as { flags_json: string };
+    expect(JSON.parse(local.flags_json), "the last acknowledged request was mark-unread").toEqual([]);
+  });
+
+  it("treats the local target as confirmed once the last push behind it has settled", async () => {
+    const deps = jobDeps();
+    const first = createBatchJob({ kind: "flags", patch: { seen: true }, query: { ...inboxQuery, unread: true } }, deps);
+    await waitForJob(first.id);
+    expect(db.prepare("SELECT pending_flags_push FROM messages WHERE id = 'message-1'").get()).toEqual({ pending_flags_push: 0 });
+
+    // No divergence is left to protect, so an unread selection is now empty —
+    // the confirmed baseline is not a second, frozen copy of the old value.
+    const second = createBatchJob({ kind: "flags", patch: { seen: false }, query: { ...inboxQuery, unread: true } }, deps);
+    expect(second.total).toBe(0);
+  });
 
   it("exposes progress numbers only — never the undo scope — on every snapshot", async () => {
     const created = createBatchJob({ kind: "flags", patch: { seen: true }, query: inboxQuery }, { ...jobDeps() });

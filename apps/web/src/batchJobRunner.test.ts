@@ -114,6 +114,70 @@ describe("createBatchJobRunner", () => {
     }
   });
 
+  it("follows the inverse job before reloading, so the undo lands in the UI", async () => {
+    vi.useFakeTimers();
+    try {
+      const showToast = vi.fn();
+      const reload = vi.fn(async () => undefined);
+      const deps = makeDeps({ showToast, reload });
+      const runner = createBatchJobRunner(deps);
+      let inverseFinished = false;
+      apiMocks.batchJobCreate.mockResolvedValue({ jobId: "j9" });
+      apiMocks.batchJobStatus.mockImplementation(async (id: string) => ({
+        job: job({ id, status: id === "j9" ? "completed" : inverseFinished ? "completed" : "running", total: 2, updated: 2 }),
+      }));
+      apiMocks.batchJobUndo.mockImplementation(async () => {
+        setTimeout(() => { inverseFinished = true; }, 1500);
+        return { ok: true, jobId: "undo-9" };
+      });
+
+      runner.start(MOVE_PAYLOAD, RUN_OPTS);
+      await vi.advanceTimersByTimeAsync(600);
+      const undo = showToast.mock.calls.find(([, kind]) => kind === "success")?.[2];
+      expect(undo).toBeDefined();
+      const beforeUndo = reload.mock.calls.length;
+
+      undo!.run();
+      // The POST only ACCEPTS the inverse job. Reloading here would snapshot
+      // the pre-undo list and the undo would look like it did nothing.
+      await vi.advanceTimersByTimeAsync(600);
+      expect(apiMocks.batchJobStatus).toHaveBeenCalledWith("undo-9");
+      expect(reload.mock.calls.length, "the undo POST alone must not reconcile").toBe(beforeUndo);
+
+      // The inverse job finishes 1.5s in; the follow-up poll reconciles then.
+      await vi.advanceTimersByTimeAsync(1800);
+      expect(reload.mock.calls.length).toBe(beforeUndo + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconciles immediately when the undo answer carries no job id", async () => {
+    vi.useFakeTimers();
+    try {
+      const showToast = vi.fn();
+      const reload = vi.fn(async () => undefined);
+      const deps = makeDeps({ showToast, reload });
+      const runner = createBatchJobRunner(deps);
+      apiMocks.batchJobCreate.mockResolvedValue({ jobId: "j10" });
+      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j10", status: "completed", total: 1, updated: 1 }) });
+      apiMocks.batchJobUndo.mockResolvedValue({ ok: false, reason: "expired" });
+
+      runner.start(MOVE_PAYLOAD, RUN_OPTS);
+      await vi.advanceTimersByTimeAsync(600);
+      const beforeUndo = reload.mock.calls.length;
+      showToast.mock.calls.find(([, kind]) => kind === "success")?.[2]!.run();
+      await flush();
+
+      // Nothing to follow, so the only way to show what the server holds is to
+      // ask it now.
+      expect(reload.mock.calls.length).toBe(beforeUndo + 1);
+      expect(apiMocks.batchJobStatus).not.toHaveBeenCalledWith("undo-10");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports partial failure with an undo action and still reloads", async () => {
     vi.useFakeTimers();
     try {
