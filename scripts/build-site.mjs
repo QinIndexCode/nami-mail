@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { writeFileSync } from "node:fs";
 import { build } from "vite";
 import { buildDocsSite } from "./build-docs-site.mjs";
+import { syncSiteVersion } from "./sync-site-version.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const webRoot = join(repoRoot, "apps", "web");
@@ -108,12 +109,20 @@ async function buildDemo() {
   console.log(`Interactive demo -> ${demoOutput}`);
 }
 
-try {
+export async function buildSite({ checkOnly = false } = {}) {
+  syncSiteVersion({ repoRoot, checkOnly });
   buildBrand();
   buildDocs();
   buildContracts();
   await buildDemo();
-} catch (error) {
-  console.error(`build-site: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  try {
+    const checkOnly = process.argv.includes("--check");
+    await buildSite({ checkOnly });
+  } catch (error) {
+    console.error(`build-site: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
 }

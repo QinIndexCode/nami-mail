@@ -5,9 +5,11 @@ import { test } from "node:test";
 
 const repoRoot = join(import.meta.dirname, "..", "..");
 
-test("package.json exposes sync:demo and build:site commands", () => {
+test("package.json exposes sync:demo, sync:version and build:site commands", () => {
   const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
   assert.equal(pkg.scripts["sync:demo"], "node scripts/sync-site-demo.mjs");
+  assert.equal(pkg.scripts["sync:version"], "node scripts/sync-site-version.mjs");
+  assert.equal(pkg.scripts["sync:version:check"], "node scripts/sync-site-version.mjs --check");
   assert.equal(pkg.scripts["build:site"], "node scripts/build-site.mjs");
 });
 

@@ -29,3 +29,15 @@ if (!releaseNotes.trim()) {
   throw new Error(`docs/releases/${tag}.md is empty — promote-github-release.mjs requires non-empty release notes.`);
 }
 console.log(`release notes ok: docs/releases/${tag}.md`);
+
+const siteIndexPath = path.join(projectRoot, "site", "index.html");
+const siteIndexHtml = await fs.readFile(siteIndexPath, "utf8");
+const expectedBadge = `<span class="meta-tag">${tag}</span>`;
+if (!siteIndexHtml.includes(expectedBadge)) {
+  const match = siteIndexHtml.match(/<span class="meta-tag">([^<]+)<\/span>/);
+  const current = match ? match[1] : "missing";
+  throw new Error(
+    `site/index.html hero version tag is out of sync with release version: expected ${tag}, found ${current}. Run "node scripts/sync-site-version.mjs" or update site/index.html.`
+  );
+}
+console.log(`site hero version tag ok: ${tag}`);
