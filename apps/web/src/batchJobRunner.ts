@@ -41,12 +41,15 @@ export type BatchJobRunnerDeps = {
    * unread total and the folder badges stay wrong until the poll happens to see
    * the job settle.
    *
-   * A move job is the other shape: its acceptance only records the selection and
-   * queues the work, each chunk committing as it runs, so here the call reads the
-   * state that is local at that instant and nothing more. That is still the right
-   * thing to do — it is one read of the truth the user is looking at — but it is
-   * not a reconcile of the move itself, and the list will not reflect a move
-   * until the job settles.
+   * A move job commits just as much at acceptance, and in the same transaction:
+   * the selection AND each message's destination goal. The goal is what a
+   * message's folder membership is read from, so by the time the create resolves
+   * the rows are already out of the source view the renderer is showing — which
+   * is what makes a "delete all matching" leave the list immediately instead of
+   * when IMAP confirms. Only the destination side of the counters fills in as
+   * the chunks are delivered (a message is counted in the folder it arrived in,
+   * not in the one it was promised to), so this reconcile is genuinely a
+   * reconcile of the move, not just a read of what was already true.
    *
    * MUST be a refresh that leaves the list as it is — App wires its
    * pagination-preserving silent refresh here. The full `reload` collapses the

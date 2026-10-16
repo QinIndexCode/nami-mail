@@ -2,13 +2,13 @@
 import { act, useCallback, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { applyPinnedUnseenCorrections, createPendingLocalState, mergePendingLocalState } from "../mailListState";
+import { applyPinnedUnseenCorrections, createPendingLocalState, mergePendingLocalState, type MutablePendingLocalState } from "../mailListState";
 import type * as apiModule from "../api";
 import type { BatchJobSnapshot } from "../api";
 import type { Account, Message, Stats } from "../types";
 import { useBatchSelection, type BatchSelection } from "./useBatchSelection";
 
-const mocks = vi.hoisted(() => ({ flags: vi.fn(), move: vi.fn(), create: vi.fn() }));
+const mocks = vi.hoisted(() => ({ flags: vi.fn(), move: vi.fn(), create: vi.fn(), status: vi.fn() }));
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof apiModule>();
   return {
@@ -18,6 +18,7 @@ vi.mock("../api", async (importOriginal) => {
       batchUpdateMessageFlags: mocks.flags,
       batchMoveMessages: mocks.move,
       batchJobCreate: mocks.create,
+      batchJobStatus: mocks.status,
     },
   };
 });
@@ -54,6 +55,9 @@ const toast = vi.fn();
 const jobWrites: Array<BatchJobSnapshot | null> = [];
 /** Every value the hook hands to `setSelectAllPaged`, in order. */
 const pagedWrites: boolean[] = [];
+/** The hook's pending-local-state registry, so a test can observe its pins
+ *  (the rows a snapshot must keep out of the list until the server agrees). */
+let pending: MutablePendingLocalState;
 /** Drives `currentMessageTotal`, i.e. how many rows a predicate-wide selection
  *  would cover. A page shorter than this is what arms "select all matching". */
 let setMatchingTotalState: (value: number) => void = () => undefined;
@@ -74,6 +78,7 @@ function Harness() {
   const [, setTotal] = useState(1);
   const messagesRef = useRef(messages);
   const pendingRef = useRef(createPendingLocalState());
+  pending = pendingRef.current;
   const loadRequestRef = useRef(0);
   const viewRef = useRef("inbox" as const);
   const load = async () => {
@@ -310,6 +315,49 @@ it("drops the predicate selection on a full load without disarming the running j
 
   expect(pagedWrites.at(-1), "the selection of the replaced view is gone").toBe(false);
   expect(jobWrites.at(-1), "a full load must not clear the running job").toBe(armed);
+});
+
+it("takes a predicate move's rows out of the view at acceptance, not at settlement", async () => {
+  // The complaint this covers: "select all matching" + delete used to leave the
+  // rows sitting in the list until IMAP confirmed each chunk, because only the
+  // explicit-id path touched local state. The job row's acceptance commits every
+  // matching id's destination locally, so the loaded rows can leave at once —
+  // and the pin is what keeps a refresh racing the acceptance from putting them
+  // back while the server still reports them in the source folder.
+  await act(async () => { setMatchingTotalState(mailbox.length + 9); });
+  await act(async () => { current.selectAllVisibleMessages(); });
+  // Accepted but never settled: the assertion below is about the acceptance.
+  mocks.create.mockImplementation(() => new Promise(() => {}));
+
+  await act(async () => { await current.batchMoveMessages("trash"); });
+
+  expect(displayed, "the accepted move leaves the source view immediately").toHaveLength(0);
+  expect(pending.movedAway.get("m1"), "the row is held out until the server agrees it arrived").toBe("Trash");
+});
+
+it("releases a predicate move's pin before the reload that must restore the refused rows", async () => {
+  // A job that settles with failures reports them in the source folder again.
+  // The pin has to be gone before the job's reconciling reload, not after it:
+  // a row the server still reports in the source folder is DROPPED by its own
+  // pin, so a late release leaves the list missing exactly the messages the
+  // partial-failure toast is talking about.
+  await act(async () => { setMatchingTotalState(mailbox.length + 9); });
+  await act(async () => { current.selectAllVisibleMessages(); });
+  mocks.create.mockResolvedValue({ ok: true, jobId: "j1" });
+  mocks.status.mockResolvedValue({
+    job: { id: "j1", kind: "move", status: "completed", total: 1, done: 1, updated: 1, failed: 0, createdAt: 0 },
+  });
+
+  await act(async () => { await current.batchMoveMessages("trash"); });
+
+  await act(async () => {
+    await vi.waitFor(() => expect(pending.movedAway.size).toBe(0));
+  });
+  // The harness's server still reports the row in INBOX, which is the same shape
+  // a refused chunk comes back as. Releasing the pin only after the reload would
+  // leave this list empty: the reload would have merged the row through a pin
+  // that still expected it in Trash, and nothing re-reads it afterwards.
+  expect(displayed.map((message) => message.id)).toEqual(["m1"]);
 });
 
 it("forwards a predicate move's target as asked, junk included", async () => {

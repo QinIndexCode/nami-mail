@@ -280,6 +280,23 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     };
   }, [attachmentKindFilter, dateBounds, debouncedQuery, isDemo, searchScope, selectAllPaged, selectedAccount, selectedFolder, view]);
 
+  /**
+   * Releases the destination pins of a running move job. The runner's first
+   * terminal snapshot is the last moment that is still BEFORE its reconciling
+   * reload, which is where the pins have to go: the reload is what brings the
+   * rows the server refused back into the list, and a pin still holding them
+   * would hide exactly the messages a partial-failure toast is about. Clearing
+   * them in `onSettled` instead would be one reload too late.
+   */
+  const releaseMovePinsRef = useRef<(() => void) | null>(null);
+  const handleJobSnapshot = useCallback((job: BatchJobSnapshot | null) => {
+    if (!job) {
+      releaseMovePinsRef.current?.();
+      releaseMovePinsRef.current = null;
+    }
+    setBatchJob(job);
+  }, [setBatchJob]);
+
   // Batch job state machine lives in batchJobRunner.ts (unit-tested there);
   // the caller wires the React-side callbacks: snapshot/busy state, toasts,
   // reload, and the acceptance-time reconcile.
@@ -289,9 +306,9 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     reload: (opts) => loadRef.current(opts),
     reconcile: () => reconcileRef.current(),
     exitSelectionMode,
-    onSnapshot: setBatchJob,
+    onSnapshot: handleJobSnapshot,
     onBusy: setBatchBusy,
-  }), [exitSelectionMode, loadRef, reconcileRef, setBatchJob, showToast, t]);
+  }), [exitSelectionMode, handleJobSnapshot, loadRef, reconcileRef, showToast, t]);
 
   const startBatchJob = useCallback((payload: BatchJobCreatePayload, opts: BatchJobRunOptions) => {
     batchJobRunner.start(payload, opts);
@@ -450,9 +467,40 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     const ids = [...selectedMessageIds];
     if (!ids.length && !selectAllPaged) return;
     if (batchBusy) showToast(t("mail.action.queued"), "info");
-    // Predicate scope: server moves every matching id behind a job.
+    // Predicate scope: the server moves every matching id behind a job, and —
+    // like the flag path above — its acceptance commits locally, so the rows on
+    // screen leave now instead of when IMAP confirms. The pending destination IS
+    // the destination as far as every reader is concerned: the job row records
+    // the goal for the whole selection (not just the page the renderer holds) in
+    // one transaction, so a message is out of this view from the moment the
+    // create resolves.
     if (selectionJobQuery) {
-      startBatchJob({ kind: "move", target, query: selectionJobQuery }, { successKey: moveActionKey(target, true), exitOnSuccess: true });
+      const movedIds = filteredMessages.map((message) => message.id);
+      const movedSet = new Set(movedIds);
+      // Invalidate any in-flight reload so it cannot resurrect the removed rows
+      // from pre-acceptance server state, and hold them out of every snapshot
+      // that starts afterwards too — a background refresh or a poll tick lands
+      // between this click and the acceptance.
+      loadRequestRef.current += 1;
+      messagesRef.current = messagesRef.current.filter((item) => !movedSet.has(item.id));
+      setMessages(messagesRef.current);
+      for (const message of filteredMessages) {
+        pinMovedAway([message.id], demoMoveDestination(accounts, message.accountId, target));
+      }
+      if (movedIds.length) setMessageTotal((total) => Math.max(0, total - movedIds.length));
+      // A pin may outlive the acceptance, never the settlement: the messages the
+      // server gave back are reported in the source folder again, and a pin still
+      // holding them would hide exactly the rows a partial-failure toast tells
+      // the user to look for. Both hooks below release, and both are needed —
+      // the snapshot callback fires before the job's reconciling reload (the one
+      // that must see the restored rows), while `onSettled` is the backstop for
+      // the paths that end without one.
+      releaseMovePinsRef.current = () => unpinMovedAway(movedIds);
+      startBatchJob({ kind: "move", target, query: selectionJobQuery }, {
+        successKey: moveActionKey(target, true),
+        exitOnSuccess: true,
+        onSettled: () => unpinMovedAway(movedIds),
+      });
       return;
     }
     setBatchBusy(true);
