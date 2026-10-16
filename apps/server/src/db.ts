@@ -3,7 +3,7 @@ import path from "node:path";
 import type Database from "better-sqlite3";
 import { loadDatabaseConstructor } from "./native-sqlite.js";
 import { MESSAGE_FTS_SCHEMA_SQL } from "./message-search.js";
-import { BATCH_JOB_SCHEMA_SQL } from "./batch-job-schema.js";
+import { BATCH_JOB_SCHEMA_SQL, migrateBatchJobMoveKind } from "./batch-job-schema.js";
 import { MESSAGE_FLAG_INDEX_SQL } from "./message-flag-indexes.js";
 import { MESSAGE_LIST_ACCOUNT_INDEX_SQL, MESSAGE_LIST_GLOBAL_INDEX_SQL } from "./message-list-indexes.js";
 
@@ -841,4 +841,6 @@ function migrateDatabase(db: DatabaseHandle): void {
   if (!templateColumns.some((column) => column.name === "builtin")) {
     db.exec("ALTER TABLE mail_templates ADD COLUMN builtin INTEGER NOT NULL DEFAULT 0 CHECK (builtin IN (0, 1))");
   }
+  // A move job needs both batch-job tables rebuilt once; see batch-job-schema.ts.
+  migrateBatchJobMoveKind(db);
 }

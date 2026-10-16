@@ -263,4 +263,104 @@ describe("database schema versioning", () => {
       db.close();
     }
   });
+
+  it("rebuilds the flags-only batch job tables into the move-capable shape, keeping their rows", () => {
+    // The build before move jobs joined the durable records wrote this exact
+    // pair: batch_jobs admitted kind 'flags'/'undo' only, so a move job's INSERT
+    // hit the CHECK, and batch_job_messages had neither the undo origin nor the
+    // failed marker. SQLite cannot ALTER a CHECK, so the pair is rebuilt in
+    // place once. The child is dropped before its parent on purpose: dropping a
+    // parent whose child rows still reference it would cascade those rows away
+    // instead of copying them into the rebuilt child.
+    const databasePath = blankDatabasePath("batch-jobs-move-kind");
+    const legacy = new Database(databasePath);
+    legacy.exec(`
+      CREATE TABLE batch_jobs (
+        id TEXT PRIMARY KEY,
+        parent_id TEXT,
+        kind TEXT NOT NULL CHECK (kind IN ('flags', 'undo')),
+        patch_json TEXT,
+        status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+        total INTEGER NOT NULL,
+        updated INTEGER NOT NULL,
+        failed INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        error TEXT,
+        undone INTEGER NOT NULL DEFAULT 0,
+        undo_window_ms INTEGER NOT NULL
+      );
+      CREATE INDEX idx_batch_jobs_completed_at ON batch_jobs(completed_at) WHERE completed_at IS NOT NULL;
+      CREATE TABLE batch_job_messages (
+        job_id TEXT NOT NULL REFERENCES batch_jobs(id) ON DELETE CASCADE,
+        message_id TEXT NOT NULL,
+        changed INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (job_id, message_id)
+      );
+      CREATE INDEX idx_batch_job_messages_message ON batch_job_messages(message_id);
+      INSERT INTO batch_jobs (id, parent_id, kind, patch_json, status, total, updated, failed, created_at, completed_at, error, undone, undo_window_ms)
+      VALUES ('job-flags-1', NULL, 'flags', '{"flags":{"read":true}}', 'completed', 2, 1, 1, 1000, 2000, 'one refused', 0, 300000);
+      INSERT INTO batch_job_messages (job_id, message_id, changed)
+      VALUES ('job-flags-1', 'message-1', 1), ('job-flags-1', 'message-2', 0);
+    `);
+    legacy.close();
+
+    const migrated = openDatabase(databasePath);
+    try {
+      // Rows survive verbatim; the move-only columns start empty for them.
+      expect(migrated.prepare(
+        "SELECT id, kind, patch_json, target, status, total, updated, failed, created_at, completed_at, error, undone, undo_window_ms "
+        + "FROM batch_jobs WHERE id = 'job-flags-1'",
+      ).get()).toEqual({
+        id: "job-flags-1",
+        kind: "flags",
+        patch_json: '{"flags":{"read":true}}',
+        target: null,
+        status: "completed",
+        total: 2,
+        updated: 1,
+        failed: 1,
+        created_at: 1000,
+        completed_at: 2000,
+        error: "one refused",
+        undone: 0,
+        undo_window_ms: 300000,
+      });
+      expect(migrated.prepare(
+        "SELECT job_id, message_id, changed, origin_mailbox, destination_mailbox, failed FROM batch_job_messages ORDER BY message_id",
+      ).all()).toEqual([
+        { job_id: "job-flags-1", message_id: "message-1", changed: 1, origin_mailbox: null, destination_mailbox: null, failed: 0 },
+        { job_id: "job-flags-1", message_id: "message-2", changed: 0, origin_mailbox: null, destination_mailbox: null, failed: 0 },
+      ]);
+
+      // A move job inserts now, and the child's cascade still points at the
+      // rebuilt parent rather than at the table that was dropped.
+      migrated.prepare(
+        "INSERT INTO batch_jobs (id, kind, target, status, total, updated, failed, created_at, undo_window_ms) "
+        + "VALUES ('job-move-1', 'move', 'trash', 'running', 1, 0, 0, 3000, 300000)",
+      ).run();
+      migrated.prepare(
+        "INSERT INTO batch_job_messages (job_id, message_id, changed, origin_mailbox) "
+        + "VALUES ('job-move-1', 'message-3', 1, 'INBOX')",
+      ).run();
+      migrated.prepare("DELETE FROM batch_jobs WHERE id = 'job-move-1'").run();
+      expect(migrated.prepare("SELECT COUNT(*) FROM batch_job_messages WHERE job_id = 'job-move-1'").pluck().get()).toBe(0);
+
+      // The widened CHECK still rejects a kind it does not list.
+      expect(() => migrated.prepare(
+        "INSERT INTO batch_jobs (id, kind, status, total, updated, failed, created_at, undo_window_ms) "
+        + "VALUES ('job-bad', 'archive', 'running', 1, 0, 0, 4000, 300000)",
+      ).run()).toThrow(/CHECK/);
+
+      // The schema constant created these before the rebuild, so dropping the
+      // old tables dropped them too; the migration has to put them back.
+      const indexes = migrated.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name IN ('batch_jobs', 'batch_job_messages')",
+      ).pluck().all() as string[];
+      expect(indexes).toContain("idx_batch_jobs_completed_at");
+      expect(indexes).toContain("idx_batch_job_messages_message");
+    } finally {
+      migrated.close();
+    }
+  });
 });

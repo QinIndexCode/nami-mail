@@ -9,7 +9,7 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 });
 
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import { createBatchJob, getBatchJobSnapshot, undoBatchJob } from "../src/batch-jobs.js";
+import { createBatchJob, getBatchJobSnapshot, pendingMoveJobIds, revertMoveJobFailures, runMoveBatchRow, undoBatchJob, type MoveJobRowPayload } from "../src/batch-jobs.js";
 import { indexMessageFts } from "../src/message-search.js";
 import type { MessageListFilterQuery } from "../src/message-filters.js";
 import { createOperationQueue } from "../src/operation-queue.js";
@@ -34,13 +34,22 @@ describe("batch jobs (predicate-scoped list operations)", () => {
   };
 
   /**
-   * Mirrors app.ts's settlement hook exactly, both halves: the marker clears
-   * once the push behind it has durably settled, and a push that was given up
-   * on gives its local target back FIRST — the marker is the only thing that
+   * Mirrors app.ts's settlement hook exactly, all three halves: the marker
+   * clears once the push behind it has durably settled, a push that was given
+   * up on gives its local target back FIRST — the marker is the only thing that
    * says the target is unconfirmed, so a refused target left in place would be
-   * read as the server's state from then on.
+   * read as the server's state from then on — and a move job's given-up row
+   * hands its account's remaining goals back so the refused messages reappear
+   * in the list.
    */
   const settlementHook = (handle: DatabaseHandle) => (kind: string, payload: unknown, rowId: string): void => {
+    if (kind === "batch-move") {
+      const { jobId, accountId } = payload as { jobId?: string; accountId?: string };
+      if (!jobId || !accountId) return;
+      const settled = handle.prepare("SELECT status FROM operation_queue WHERE id = ?").get(rowId) as { status: string } | undefined;
+      if (settled?.status === "failed") revertMoveJobFailures(handle, jobId, pendingMoveJobIds(handle, jobId, accountId));
+      return;
+    }
     if (kind !== "flags-push") return;
     const { entries } = payload as { entries?: Array<{ id: string }> };
     if (!Array.isArray(entries)) return;
@@ -51,16 +60,36 @@ describe("batch jobs (predicate-scoped list operations)", () => {
   };
 
   /**
-   * Mirrors app.ts's queue wiring: the flags-push executor plus the durable
-   * settlement hook. Without the hook a local-first job's markers would never
-   * clear and the job would never settle.
+   * Mirrors app.ts's queue wiring: the flags-push executor, the batch-move
+   * executor and the durable settlement hook. Without the hook a local-first
+   * job's markers would never clear and the job would never settle.
    */
   function jobDeps() {
     const operationQueue = createOperationQueue(db, { onOperationSettled: settlementHook(db) });
     operationQueue.registerRunner("flags-push", async (payload) => {
       await pushFlagsRemote({ db, masterKey }, payload as { accountId: string; entries: never[] });
     });
+    operationQueue.registerRunner("batch-move", async (payload) => {
+      await runMoveBatchRow(payload as MoveJobRowPayload, { db, masterKey, oauthService: undefined as undefined, operationQueue });
+    });
     return { db, masterKey, oauthService: undefined as undefined, operationQueue };
+  }
+
+  /**
+   * The same deps, except that an accepted row is committed and never
+   * dispatched — what a process that died between the acceptance commit and the
+   * starter leaves behind. It is also how a test holds a job in its
+   * acceptance-time state: a runner that merely never resolves would keep the
+   * account write slot forever and starve every later test in this file.
+   */
+  function undeliveredDeps() {
+    const deps = jobDeps();
+    const stage = deps.operationQueue.stageBackgroundInTransaction.bind(deps.operationQueue);
+    deps.operationQueue.stageBackgroundInTransaction = (accounts, kind, payload) => {
+      stage(accounts, kind, payload);
+      return () => {};
+    };
+    return deps;
   }
 
   /**
@@ -369,6 +398,47 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     }
   });
 
+  it("takes the whole predicate selection out of its source folder at acceptance", async () => {
+    // The symptom this path exists to remove: "select all matching" + delete used
+    // to leave every row in the list until IMAP confirmed each chunk. Acceptance
+    // commits each matching message's destination goal, and folder membership IS
+    // that goal, so the view is empty — and the source badge already down — before
+    // a single chunk has run.
+    const deps = undeliveredDeps();
+
+    const created = createBatchJob({ kind: "move", target: "trash", query: inboxQuery }, deps);
+
+    expect(created.total, "the whole matching selection is committed, not the loaded page").toBe(3);
+    expect(getBatchJobSnapshot(created.id)).toMatchObject({ status: "running", done: 0, updated: 0, failed: 0 });
+    // The list's own folder filter, spelled the way message-filters.ts spells it.
+    expect(db.prepare("SELECT COUNT(*) AS n FROM messages WHERE effective_mailbox = 'INBOX'").get(), "the source view is already empty").toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM messages WHERE effective_mailbox = 'Trash'").get()).toEqual({ n: 3 });
+    expect(db.prepare("SELECT total FROM folders WHERE path = 'INBOX'").get(), "the source badge follows the departure").toEqual({ total: 0 });
+    // Nothing has been delivered yet: the rows are still physically where the
+    // provider has them, and no arrival has been counted.
+    expect(db.prepare("SELECT COUNT(*) AS n FROM messages WHERE mailbox = 'INBOX'").get()).toEqual({ n: 3 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM messages WHERE mailbox = 'Trash'").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT total FROM folders WHERE path = 'Trash'").get()).toEqual({ total: 0 });
+  });
+
+  it("counts an accepted departure once, not again when the provider confirms", async () => {
+    // The folder row is the server's own total, not a count of the rows this
+    // renderer happens to hold, so it is set above them here. That is what makes
+    // the double count visible at all: the acceptance takes the three messages
+    // out of the source, and if confirming them took them out again the total
+    // would end one lower. A fixture whose total hits the floor at zero cannot
+    // tell the two apart.
+    db.prepare("UPDATE folders SET total = 5, unseen = 5 WHERE path = 'INBOX'").run();
+
+    const created = createBatchJob({ kind: "move", target: "trash", query: inboxQuery }, { ...jobDeps() });
+    expect(db.prepare("SELECT total, unseen FROM folders WHERE path = 'INBOX'").get(), "the acceptance is the only departure").toEqual({ total: 2, unseen: 2 });
+
+    const done = await waitForJob(created.id);
+    expect(done).toMatchObject({ status: "completed", updated: 3, failed: 0 });
+    expect(db.prepare("SELECT total, unseen FROM folders WHERE path = 'INBOX'").get(), "the confirm leaves the source alone").toEqual({ total: 2, unseen: 2 });
+    expect(db.prepare("SELECT total, unseen FROM folders WHERE path = 'Trash'").get(), "the confirm counts the arrival").toEqual({ total: 3, unseen: 3 });
+  });
+
   it("moves a predicate selection with aggregated batch calls and restores it on undo", async () => {
     const created = createBatchJob({ kind: "move", target: "trash", query: inboxQuery }, { ...jobDeps() });
     const done = await waitForJob(created.id);
@@ -533,9 +603,11 @@ describe("batch jobs (predicate-scoped list operations)", () => {
   });
 
   it("counts idempotent moves (already in the target folder) as updated", async () => {
-    // A re-delete inside the Trash view: every matched message already lives
-    // in the target folder. The job must count them as moved without issuing
-    // any IMAP command, and undo must be a no-op too.
+    // A re-delete inside the Trash view: every matched message already lives in
+    // the target folder. The job must count them as moved without issuing any
+    // IMAP command, and undo must do nothing at all — the messages never left
+    // where they are, so there is nothing to put back and the undo's scope is
+    // empty (the ids the acceptance refused to touch are not `changed` rows).
     db.prepare("UPDATE messages SET mailbox = 'Trash', uid = uid + 200 WHERE id IN (?, ?, ?)")
       .run("message-1", "message-2", "message-3");
     db.prepare("UPDATE folders SET total = 3 WHERE account_id = ? AND path = ?").run("account-1", "Trash");
@@ -551,9 +623,13 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     const undone = undoBatchJob(created.id, { ...jobDeps() });
     expect(undone.ok).toBe(true);
     const undoJob = await waitForJob(undone.jobId!);
-    expect(undoJob.updated).toBe(3);
+    expect(undoJob.total).toBe(0);
+    expect(undoJob.updated).toBe(0);
     expect(undoJob.failed).toBe(0);
     expect(client.messageMove).not.toHaveBeenCalled();
+    for (const id of ["message-1", "message-2", "message-3"]) {
+      expect(db.prepare("SELECT mailbox FROM messages WHERE id = ?").get(id)).toEqual({ mailbox: "Trash" });
+    }
   });
 
   it("pays one IMAP connection per account for a whole move job and its undo", { timeout: 20_000 }, async () => {
@@ -660,17 +736,19 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     }
   });
 
-  it("logs a job's connection out even when the job dies mid-flight", { timeout: 20_000 }, async () => {
-    // Hoisting the connection to job scope means the job now owns a socket
-    // that outlives a single batch, so a job that throws between chunks must
-    // still hand it back — otherwise every failed job leaks a connection and
-    // the next one dials another.
+  it("hands a job row's connection back when the delivery dies mid-flight", { timeout: 20_000 }, async () => {
+    // A job row dials ONE socket and then walks every chunk of its account on
+    // it, so a row that throws between chunks must still hand that socket back
+    // — otherwise every failed delivery leaks a connection and the next
+    // attempt dials another.
     //
-    // 150 ids is two chunks of different sizes (100 and 50) so the throw lands
-    // on the *second* chunk's row lookup: a second chunk of the same size would
-    // reuse the compiled statement and never reach `prepare` at all. The
-    // lookup is the first statement of a batch and sits outside the per-group
-    // guard, so its failure ends the job instead of one message's.
+    // The executor is driven directly (the queue's own retry loop is not the
+    // subject here, and its backoff cycle is ~90 seconds long). 150 ids is two
+    // chunks of different sizes (100 and 50), so the throw lands on the
+    // *second* chunk's row lookup: a second chunk of the same size would reuse
+    // the compiled statement and never reach `prepare` at all. That lookup is
+    // the first statement of a batch and sits outside the per-group guard, so
+    // its failure ends the row instead of failing one message.
     const COUNT = 150;
     const now = new Date().toISOString();
     const insert = db.prepare(`
@@ -686,44 +764,57 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     })();
     const opened = trackOpenedClients();
 
+    // Accept the job with its background row stubbed out, so the durable
+    // selection exists and the real executor can be run by hand below.
+    const deps = jobDeps();
+    deps.operationQueue.registerRunner("batch-move", async () => undefined);
+    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Projects" } }, deps);
+    await vi.waitFor(() => {
+      const queued = db.prepare("SELECT COUNT(*) AS n FROM operation_queue WHERE status IN ('pending', 'running')").get() as { n: number };
+      expect(queued.n).toBe(0);
+    });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM messages WHERE mailbox = 'Projects'").get()).toEqual({ n: COUNT });
+
     const prepare = db.prepare.bind(db);
     let rowLookups = 0;
     vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
-      if (sql.includes("SELECT id, account_id, mailbox, uid") && rowLookups++ >= 1) {
+      if (sql.startsWith("SELECT id, account_id, mailbox, uid") && rowLookups++ >= 1) {
         throw new Error("cache is gone");
       }
       return prepare(sql);
     });
 
-    const created = createBatchJob({ kind: "move", target: "trash", query: { folder: "Projects" } }, { ...jobDeps() });
-    const done = await waitForJob(created.id, "failed", 400);
+    await expect(runMoveBatchRow({ target: "trash", jobId: created.id, accountId: "account-1" }, deps))
+      .rejects.toThrow("cache is gone");
 
-    expect(done.status).toBe("failed");
-    expect(done.error).toBe("cache is gone");
-    // The first chunk completed before the job died, so the job really did
-    // reach the provider with the connection it then had to release.
-    expect(done.updated).toBe(100);
-    expect(done.done).toBe(100);
+    // The first chunk had already reached the provider on the connection the
+    // row then had to release: 100 messages really moved, and the one socket
+    // was dialled once and handed back once.
+    expect(db.prepare("SELECT COUNT(*) AS n FROM messages WHERE mailbox = 'Trash'").get()).toEqual({ n: 100 });
     expect(opened).toHaveLength(1);
     expect(opened[0]!.connect).toHaveBeenCalledTimes(1);
     expect(opened[0]!.logout).toHaveBeenCalledTimes(1);
+    // ...and the 50 the row never got to are still exactly where the acceptance
+    // left them, goals intact, for the queue's next attempt to find.
+    expect(pendingMoveJobIds(db, created.id, "account-1")).toHaveLength(50);
   });
 
-  it("looks up move origins in bounded chunks instead of one giant IN list", { timeout: 20_000 }, async () => {
-    // A predicate-scoped selection has no row cap, so the origin snapshot must
-    // be split: the driver rejects a statement with more bound variables than
-    // its ceiling, and a 40 000-message "select all" used to fail the whole job
-    // at 0% with the raw SQL in the toast. 2500 ids must therefore be looked up
-    // as 1000 + 1000 + 500.
+  it("reads a move job's rows in bounded chunks instead of one giant IN list", { timeout: 20_000 }, async () => {
+    // A predicate-scoped selection has no row cap, so the read that materialises
+    // it must be split: the driver rejects a statement with more bound variables
+    // than its ceiling, and a 40 000-message "select all" used to fail the whole
+    // job at 0% with the raw SQL in the toast. 2500 ids must therefore reach the
+    // database as 1000 + 1000 + 500.
     //
     // The two counts below are the whole contract, and they are deliberately
     // different numbers:
-    //   * bound per call — 1000, 1000, 500: the selection really is split into
-    //     three lookups, each far below the driver ceiling. Chunking did not
-    //     quietly become one giant IN list again.
-    //   * compiled once — 1000, 500: the two chunks of the same size run one
-    //     prepared statement, so the job no longer re-runs sqlite3_prepare on
-    //     SQL text that is byte-identical to what the chunk before it already
+    //   * bound per call — 1000, 1000, 500 for the acceptance read, then one
+    //     call per executed chunk (100 ids each): the selection really is split,
+    //     each call far below the driver ceiling. Chunking did not quietly
+    //     become one giant IN list again.
+    //   * compiled once per width — 1000, 500, 100: chunks of the same size run
+    //     one prepared statement, so the job no longer re-runs sqlite3_prepare
+    //     on SQL text that is byte-identical to what the chunk before it already
     //     compiled. Only the placeholder count is reused; the ids stay bound
     //     parameters, which is what the per-call counts above prove.
     // Asserting compiles alone would let a cache hide the chunking, and
@@ -755,7 +846,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     const prepare = db.prepare.bind(db);
     vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
       const statement = prepare(sql);
-      if (!sql.includes("SELECT id, mailbox FROM messages WHERE id IN")) return statement;
+      if (!sql.startsWith("SELECT id, account_id, mailbox, uid, flags_json")) return statement;
       compiled.push(sql);
       // Count the values each lookup actually binds, not just how many
       // statements were compiled: a reused statement is invisible to the
@@ -779,16 +870,16 @@ describe("batch jobs (predicate-scoped list operations)", () => {
 
     expect(done.total).toBe(COUNT);
     expect(done.updated).toBe(COUNT);
-    // Three lookups, in the chunk sizes the selection actually splits into.
-    expect(boundPerCall).toEqual([1000, 1000, 500]);
+    // The acceptance read is three calls in the sizes the selection actually
+    // splits into, and every call in the whole job — acceptance or executed
+    // chunk — stays under the driver's variable ceiling.
+    expect(boundPerCall.slice(0, 3)).toEqual([1000, 1000, 500]);
+    expect(Math.max(...boundPerCall)).toBeLessThanOrEqual(1000);
     // ...served by one compiled statement per distinct size, never more.
-    expect(compiled.map((sql) => (sql.match(/\?/g) ?? []).length)).toEqual([1000, 500]);
-    for (const sql of compiled) {
-      expect((sql.match(/\?/g) ?? []).length).toBeLessThanOrEqual(1000);
-    }
+    expect(compiled.map((sql) => (sql.match(/\?/g) ?? []).length)).toEqual([1000, 500, 100]);
 
-    // Undo still restores every origin mailbox, which is what the chunked
-    // lookup exists for.
+    // Undo still restores every origin mailbox, which is what the recorded
+    // origin exists for.
     const undone = undoBatchJob(created.id, { ...jobDeps() });
     const undoJob = await waitForJob(undone.jobId!, "completed", 2000);
     expect(undoJob.updated).toBe(COUNT);
@@ -810,13 +901,13 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     // 40 000-row case below runs through `memoizingDb`, which would hide the
     // difference entirely.
     //
-    // Three assertions, deliberately redundant. `counts` pins the exact number
-    // of compiles per statement, so a regression names the statement that
-    // started recompiling; `unnamed` says *no* SQL the job issues is compiled
-    // more than once beyond the one shape the previous case documents, so a
+    // The assertions below are deliberately redundant. `counts` pins the exact
+    // number of compiles per statement, so a regression names the statement that
+    // started recompiling; the `bySql` floors say *no* SQL the job issues is
+    // compiled more than once beyond the shapes this test accounts for, so a
     // new per-message statement is caught even though this test has never heard
-    // of it; and `compiled` is the whole job's total, so two statements
-    // recompiling together cannot hide behind the per-name map.
+    // of it. A total would not add to that: two statements recompiling together
+    // are already two entries over one in `bySql`.
     const COUNT = 2500;
     const now = new Date().toISOString();
     const insert = db.prepare(`
@@ -834,7 +925,6 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     // is the contract, not the indentation.
     const SHAPES: Record<string, string> = {
       "batch row lookup": "SELECT id, account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id IN (",
-      "origin snapshot chunk": "SELECT id, mailbox FROM messages WHERE id IN (",
       "begin move intent": "SET pending_move_destination = ?, pending_move_state = 'intent', pending_move_candidate_uid = ?",
       "clear move intent": "SET pending_move_destination = NULL, pending_move_state = NULL",
       "uidplus duplicate read": "SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived FROM messages WHERE account_id = ? AND mailbox = ? AND uid = ? AND id <> ?",
@@ -848,9 +938,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     const counts = new Map<string, number>();
     const bySql = new Map<string, number>();
     const compile = db.prepare.bind(db);
-    let compiled = 0;
     vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
-      compiled += 1;
       const normalized = sql.replace(/\s+/g, " ").trim();
       bySql.set(normalized, (bySql.get(normalized) ?? 0) + 1);
       for (const [name, fragment] of Object.entries(SHAPES)) {
@@ -864,14 +952,17 @@ describe("batch jobs (predicate-scoped list operations)", () => {
 
     expect(done.total).toBe(COUNT);
     expect(done.updated).toBe(COUNT);
-    // One compile per statement the job actually ran, however many rows it ran
-    // it on. The row lookup is one width (MOVE_CHUNK_SIZE) across all 25 calls,
-    // and the account read and the destination lookup are the two statements
-    // that used to be rebuilt per (account, mailbox) group — 25 groups, 25
+    // One compile per statement the job owns, however many rows it ran it on.
+    // The row lookup is the single shape that legitimately exists more than
+    // once, and not because of the rows: its SQL text carries the IN list, so
+    // there is one statement per distinct chunk width the job reads — 1000 and
+    // 500 for the acceptance read, 100 for the chunks it executes. Three
+    // statements for 2500 rows, where a per-chunk regression would be 25 and a
+    // per-row one 2500. The account read and the destination lookup are the
+    // two that used to be rebuilt per (account, mailbox) group — 25 groups, 25
     // compiles each, 50 of the job's 61 prepares for byte-identical SQL.
     expect(Object.fromEntries(counts)).toEqual({
-      "batch row lookup": 1,
-      "origin snapshot chunk": 2,
+      "batch row lookup": 3,
       "begin move intent": 1,
       "clear move intent": 1,
       "uidplus duplicate read": 1,
@@ -882,24 +973,21 @@ describe("batch jobs (predicate-scoped list operations)", () => {
       "account read": 1,
       "destination lookup": 1,
     });
-    // ...and no statement this test does not name is recompiling either. The
-    // origin snapshot is the one exception, and only because the previous case
-    // documents it: it compiles once per chunk *shape* (1000 and 500), which is
-    // two, not 25. Everything else in the job must appear exactly once.
-    expect([...counts].filter(([name, count]) => count > 1 && name !== "origin snapshot chunk")).toEqual([]);
+    // ...and no statement this test does not name is recompiling either: every
+    // other shape the job contains appears exactly once.
+    expect([...counts].filter(([name, count]) => count > 1 && name !== "batch row lookup")).toEqual([]);
+    // Undo no longer looks a selection up at all: each message's origin is
+    // recorded in `batch_job_messages` when the selection is accepted, so the
+    // per-job origin snapshot this used to compile and chunk is gone.
+    expect([...bySql].some(([sql]) => sql.startsWith("SELECT id, mailbox FROM messages WHERE id IN"))).toBe(false);
     // The same floor stated over the *raw* SQL rather than the shapes above, so
-    // a statement this test has never heard of is caught too. Only the two
-    // origin-snapshot widths may exceed one, and that is the documented case.
-    const originSnapshot = "SELECT id, mailbox FROM messages WHERE id IN (";
-    expect([...bySql].filter(([sql, count]) => count > 1 && !sql.startsWith(originSnapshot))).toEqual([]);
-    // The whole job: scope query, two snapshot widths, the row lookup, the two
-    // per-group reads and the six move statements — 13 prepares for 2500 rows
-    // — plus the 5 statements createOperationQueue compiles once at
-    // construction (insert/markRunning/markSettled/prune/pending scan), a
-    // fixed cost of the deps the flags unification threads through every job.
-    // A per-group regression in either of the two per-group readers puts this
-    // back at 61; a per-message one puts it above 15 000.
-    expect(compiled).toBe(18);
+    // a statement this test has never heard of is caught too. Two per-poll reads
+    // are the only repeats allowed: a durable job is re-read with its projection
+    // every time the renderer polls, and neither statement's text depends on the
+    // selection. Anything else repeating — a per-group or a per-row statement —
+    // fails here.
+    const perPoll = (sql: string) => sql.startsWith("SELECT * FROM batch_jobs WHERE id = ?") || sql.startsWith("WITH selection AS (");
+    expect([...bySql].filter(([sql, count]) => count > 1 && !perPoll(sql)).map(([sql]) => sql)).toEqual([]);
   });
 
   it("moves a selection larger than the SQLite variable ceiling", { timeout: 30_000 }, async () => {
@@ -1110,7 +1198,7 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     vi.resetModules();
     const restarted = await import("../src/batch-jobs.js");
     expect(restarted.getBatchJobSnapshot(created.id), "a durable job with no rebuilt handle is a 404").toBeNull();
-    restarted.rebuildFlagsJobHandles(db);
+    restarted.rebuildJobHandles(db);
     expect(restarted.getBatchJobSnapshot(created.id)).toMatchObject({ status: "completed", total: 3, updated: 3 });
     // Undo reads the row rather than the registry, so it survives too — and
     // the reverse job is pollable through the rebuilt registry.
@@ -1121,6 +1209,43 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     });
     const local = db.prepare("SELECT flags_json FROM messages WHERE id = 'message-1'").get() as { flags_json: string };
     expect(JSON.parse(local.flags_json), "the undo reverses the recorded changed ids").toEqual([]);
+  });
+
+  it("finishes a move job a restart interrupted, and can still undo it", async () => {
+    // The move job used to live in a Map: a restart mid-flight lost both its work
+    // and its undo scope, because neither was ever a row. Now the acceptance
+    // commits the selection, the queued chunk, each message's goal and each
+    // message's origin in one transaction, so recovery is the ordinary path —
+    // resume the queue and let the executor re-read what it still owes. The
+    // acceptance here commits the row; the process dies before the starter joins
+    // it to the FIFO chain.
+    const accepted = undeliveredDeps();
+    const created = createBatchJob({ kind: "move", target: "trash", query: inboxQuery }, accepted);
+    expect(created.total).toBe(3);
+
+    vi.resetModules();
+    const restarted = await import("../src/batch-jobs.js");
+    restarted.rebuildJobHandles(db);
+    const queue = createOperationQueue(db, { onOperationSettled: settlementHook(db) });
+    queue.registerRunner("batch-move", async (payload) => {
+      await restarted.runMoveBatchRow(payload as MoveJobRowPayload, { db, masterKey, oauthService: undefined as undefined, operationQueue: queue });
+    });
+
+    expect(await queue.resumePending(), "the accepted chunk is a row, so the restart has work to pick up").toBe(1);
+    await vi.waitFor(() => {
+      expect(restarted.getBatchJobSnapshot(created.id)).toMatchObject({ status: "completed", total: 3, updated: 3, failed: 0 });
+    });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM messages WHERE mailbox = 'Trash'").get()).toEqual({ n: 3 });
+    expect(db.prepare("SELECT total FROM folders WHERE path = 'Trash'").get()).toEqual({ total: 3 });
+
+    // The undo scope outlives the process too: it is the recorded origin of each
+    // row, not a list the old process was holding.
+    const undone = restarted.undoBatchJob(created.id, { db, masterKey, oauthService: undefined as undefined, operationQueue: queue });
+    expect(undone).toMatchObject({ ok: true, started: true });
+    await vi.waitFor(() => {
+      expect(restarted.getBatchJobSnapshot(undone.jobId!)).toMatchObject({ status: "completed", total: 3, updated: 3, failed: 0 });
+    });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM messages WHERE mailbox = 'INBOX'").get()).toEqual({ n: 3 });
   });
 
   it("rolls the entire undo back when a statement in its transaction fails", async () => {
@@ -1189,7 +1314,8 @@ describe("batch jobs (predicate-scoped list operations)", () => {
     }
   });
 
-  it("opens the undo window when the job completes, not when it was created", async () => {    let now = 1_700_000_000_000;
+  it("opens the undo window when the job completes, not when it was created", async () => {
+    let now = 1_700_000_000_000;
     const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
     // Hold the first STORE open so the job spans longer than the undo window
     // measured from its creation.

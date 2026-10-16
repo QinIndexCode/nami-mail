@@ -7,11 +7,18 @@ import {
   batchMoveMessages,
   moveMessageToFolder,
   resolveMoveDestination,
+  type BatchMessageMoveOutcome,
   type MessageMoveTarget,
 } from "./sync-moves.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import { safeLogout } from "./imap-logout.js";
 import { accountById } from "./account-store.js";
+import {
+  countSourceFolderDeparture,
+  moveStatements,
+  revertSourceFolderDeparture,
+} from "./sync-move-statements.js";
+import { MAILBOX_SYNCING_ERROR, MAIL_MOVE_IN_FLIGHT_ERROR } from "./message-storage.js";
 import type { MessageFlagsPatch } from "./sync-flags.js";
 import {
   applyPreparedFlagsInTransaction,
@@ -22,20 +29,21 @@ import type { AgentMailStateEvents } from "./agent/mail-state-events.js";
 import type { OAuthService } from "./oauth.js";
 import { getSyncMessageLimit } from "./settings.js";
 
-// In-memory batch jobs for predicate-scoped ("select all matching this view")
-// MOVE operations. Jobs resolve the affected message ids server-side so a
-// 20 000 message selection never crosses the wire as an id list, mirroring how
-// mail clients apply bulk actions to a saved search instead of a page of ids.
-// Jobs are ephemeral: a server restart loses in-flight work and undo scope
-// (the same limitation as a short undo window).
+// Predicate-scoped ("select all matching this view") batch operations. The
+// affected message ids are resolved server-side so a 20 000-message selection
+// never crosses the wire as an id list, mirroring how mail clients apply bulk
+// actions to a saved search instead of a page of ids.
 //
-// FLAGS jobs no longer live here: they are materialized local-first into the
-// durable `batch_jobs` tables at acceptance (see `acceptFlagsJob`), and the
-// background push reuses the same `flags-push` FIFO chain the explicit-id
-// path uses. Both entry points share one state, one transaction shape, and
-// one scheduling rule — the older remote-first flags path (`runJob`'s chunked
-// `updateMessageFlagsBatch`) raced explicit commits and could lose the last
-// user intent.
+// Both kinds are now local-first and durable: acceptance materializes the
+// intent into the `batch_jobs` tables inside one transaction (see
+// `acceptFlagsJob` / `acceptMoveJob`) and stages background work — `flags-push`
+// for flags, `batch-move` for moves — that reuses the explicit-id path's FIFO
+// chain. So a server restart resumes in-flight work and keeps the undo scope
+// (both live in `batch_job_messages`, not in a Map). Both entry points share
+// one state, one transaction shape, and one scheduling rule — the older
+// remote-first paths (`runJob`'s chunked `updateMessageFlagsBatch`, and the
+// in-memory move loop) raced explicit commits and could lose the last user
+// intent.
 
 export type BatchJobCreateRequest = {
   kind: "flags";
@@ -53,12 +61,12 @@ export type BatchJobKind = BatchJobCreateRequest["kind"] | "undo";
  * Progress view of a job — the entire `GET /api/batch-jobs/:id` contract.
  *
  * Deliberately carries progress numbers only. The undo scope (a flags job's
- * `changedIds`, one entry per changed message) is NOT part of it: a 30 000-id
- * selection serialized 1.3 MB per response, and the renderer polls this every
- * 600ms for up to 10 minutes — 1.3 GB of never-read JSON. Nothing outside the
- * server ever consumed it (`undoBatchJob` reads the in-memory record, not a
- * snapshot), so the progress response and the undo scope are now disjoint: the
- * list lives only in the `jobs` Map, where undo already reads it.
+ * `changed` selection rows, a move job's per-message `origin_mailbox`) is NOT
+ * part of it: a 30 000-id selection serialized 1.3 MB per response, and the
+ * renderer polls this every 600ms for up to 10 minutes — 1.3 GB of never-read
+ * JSON. Nothing outside the server ever consumed it (`undoBatchJob` reads the
+ * `batch_job_messages` rows, never a snapshot), so the progress response and
+ * the undo scope stay disjoint.
  */
 export type BatchJobSnapshot = {
   id: string;
@@ -90,14 +98,11 @@ type BatchJobRecord = {
   target?: MessageMoveTarget;
   query?: MessageListFilterQuery;
   /**
-   * The ids a move job acts on, fixed when the job was accepted. Resolving the
-   * predicate at execution time instead would let other batches reorganise the
-   * mailboxes under a job the user already started (design §1). Server-side
-   * only, like `changedIds`.
+   * Undo scope of a move job, server-side only: where each message sat when the
+   * move was accepted. `undoMoveJob` reads the same scope fresh from
+   * `batch_job_messages` when it starts the reverse job; this copy is what the
+   * reverse job iterates, so it must not be re-read mid-flight.
    */
-  selection: string[];
-  /** Undo scope of a flags job, server-side only: never leaves this process. */
-  changedIds: string[];
   undoEntries: Array<{ id: string; fromMailbox: string }>;
   undone: boolean;
   undoWindowMs: number;
@@ -209,54 +214,13 @@ function createJobMoveConnections(db: DatabaseHandle, masterKey: Buffer, accessT
 // rejects a statement past its own parameter ceiling (measured: 32 766 ids
 // succeed, 40 000 throw "too many SQL variables"). A predicate-scoped
 // selection has no row cap — the 5000-id cap covers explicit id lists, not
-// "select all matching this view" — so the origin snapshot below must not put
-// the whole selection into one IN (...) list: a 40 000-message move failed the
-// entire job at 0% and echoed the raw SQL into the UI toast. 1000 keeps the
-// statement far below any driver ceiling at the same order of magnitude as
-// MOVE_CHUNK_SIZE, and chunked lookups of 40 000 rows measured at 60ms.
+// "select all matching this view" — so an acceptance-time classification or a
+// failure revert must not put the whole selection into one IN (...) list: a
+// 40 000-message move failed the entire job at 0% and echoed the raw SQL into
+// the UI toast. 1000 keeps the statement far below any driver ceiling at the
+// same order of magnitude as MOVE_CHUNK_SIZE, and chunked lookups of 40 000
+// rows measured at 60ms.
 const ORIGIN_LOOKUP_CHUNK_SIZE = 1000;
-
-/** The origin snapshot's statement for one chunk shape (text keyed by size). */
-function originLookupStatement(db: DatabaseHandle, chunk: readonly string[]) {
-  return db.prepare(`
-    SELECT id, mailbox FROM messages WHERE id IN (${chunk.map(() => "?").join(", ")})
-  `);
-}
-
-/**
- * Original mailbox of each id, so undo can restore it.
- *
- * Every chunk asks the same question of the same SQL text — only the number of
- * `?` placeholders varies, and only the *last* chunk can be shorter than the
- * rest — so the compiled statement is kept for the lifetime of this lookup and
- * reused by every chunk of the same size. A 40 000-id selection therefore
- * compiles two statements instead of 40 identical ones (measured: the repeated
- * compilation was 58.8% of that case's runtime). Only the placeholder count is
- * reused; the ids are always passed as bound parameters and never
- * interpolated into the statement text, so the driver's per-statement variable
- * ceiling is still decided by the same SQL the uncached path issued.
- *
- * The cache is local to the call rather than module-level: a lookup runs once
- * per job inside one database handle, so a local map can never outlive its
- * handle (the failure mode a module-level cache would have to defend against
- * with a WeakMap) and can never hand a statement compiled against one database
- * to a query against another.
- */
-function originMailboxesById(db: DatabaseHandle, ids: readonly string[]): Map<string, string> {
-  const byId = new Map<string, string>();
-  const statements = new Map<number, ReturnType<typeof originLookupStatement>>();
-  for (let offset = 0; offset < ids.length; offset += ORIGIN_LOOKUP_CHUNK_SIZE) {
-    const chunk = ids.slice(offset, offset + ORIGIN_LOOKUP_CHUNK_SIZE);
-    let statement = statements.get(chunk.length);
-    if (!statement) {
-      statement = originLookupStatement(db, chunk);
-      statements.set(chunk.length, statement);
-    }
-    const rows = statement.all(...chunk) as Array<{ id: string; mailbox: string }>;
-    for (const row of rows) byId.set(row.id, row.mailbox);
-  }
-  return byId;
-}
 
 const jobs = new Map<string, BatchJobRecord>();
 let queueTail: Promise<void> = Promise.resolve();
@@ -269,21 +233,20 @@ function pruneJobs(): void {
       jobs.delete(id);
       continue;
     }
-    // The undo scope is the job's memory footprint (one id per changed message,
-    // plus one {id, mailbox} per moved message), and it is dead weight the
-    // moment the undo window closes — `undoBatchJob` already answers "expired"
-    // without ever reading these. The Map keeps a job for the full TTL, so a
-    // storm of batch operations would otherwise pin every settled job's arrays
-    // for another 10 minutes past the point where anything can read them.
+    // The undo scope (one {id, mailbox} per moved message) is the record's only
+    // real memory footprint, and it is dead weight the moment the undo window
+    // closes — `undoBatchJob` already answers "expired" without ever reading
+    // it. The Map keeps a job for the full TTL, so a storm of batch operations
+    // would otherwise pin every settled job's array for another 10 minutes past
+    // the point where anything can read it.
     if (job.completedAt !== undefined && now - job.completedAt > job.undoWindowMs) {
-      job.changedIds = [];
       job.undoEntries = [];
     }
   }
 }
 
-/** The same TTL as the in-memory registry, applied to the durable flags jobs. */
-function pruneFlagsJobs(db: DatabaseHandle): void {
+/** The same TTL as the in-memory registry, applied to the durable jobs. */
+function pruneDurableJobs(db: DatabaseHandle): void {
   const cutoff = Date.now() - BATCH_JOB_TTL_MS;
   // A job nobody ever polls would stay 'running' forever and never reach the
   // completed_at cutoff — project each expired running row once here (the
@@ -300,31 +263,32 @@ function pruneFlagsJobs(db: DatabaseHandle): void {
   if (!expired.length) return;
   db.prepare("DELETE FROM batch_job_messages WHERE job_id IN (SELECT id FROM batch_jobs WHERE completed_at IS NOT NULL AND completed_at < ?)").run(cutoff);
   db.prepare("DELETE FROM batch_jobs WHERE completed_at IS NOT NULL AND completed_at < ?").run(cutoff);
-  for (const { id } of expired) flagJobHandles.delete(id);
+  for (const { id } of expired) durableJobHandles.delete(id);
 }
 
 /**
- * Re-registers every surviving durable flags job after a restart. The job-id
- * registry is in-memory by necessity (the snapshot API takes no handle), but
- * it must be REBUILDABLE — a restart may not turn a pollable job into a 404
- * while its undo scope stays queryable, which would contradict the
- * registry's whole reason to exist.
+ * Re-registers every surviving durable job after a restart, of either kind. The
+ * job-id registry is in-memory by necessity (the snapshot API takes no handle),
+ * but it must be REBUILDABLE — a restart may not turn a pollable job into a 404
+ * while its undo scope stays queryable, which would contradict the registry's
+ * whole reason to exist.
  *
  * The rebuild REPLACES the registry rather than merging into it: this
  * database is the authority on which jobs exist, and merging would keep
  * handles to jobs of a previous (possibly closed) database alive.
  */
-export function rebuildFlagsJobHandles(db: DatabaseHandle): void {
+export function rebuildJobHandles(db: DatabaseHandle): void {
   const rows = db.prepare("SELECT id FROM batch_jobs").all() as Array<{ id: string }>;
-  flagJobHandles.clear();
-  for (const { id } of rows) flagJobHandles.set(id, db);
+  durableJobHandles.clear();
+  for (const { id } of rows) durableJobHandles.set(id, db);
 }
 
 type BatchJobDbRow = {
   id: string;
   parent_id: string | null;
-  kind: "flags" | "undo";
+  kind: "flags" | "move" | "undo";
   patch_json: string | null;
+  target: MessageMoveTarget | null;
   status: "running" | "completed" | "failed";
   total: number;
   updated: number;
@@ -434,7 +398,7 @@ function acceptFlagsJob(
     }
   })();
   for (const starter of starters) starter();
-  flagJobHandles.set(id, deps.db);
+  durableJobHandles.set(id, deps.db);
   const row = db.prepare("SELECT * FROM batch_jobs WHERE id = ?").get(id) as BatchJobDbRow;
   return snapshotFromDbRow(deps.db, row);
 }
@@ -452,23 +416,95 @@ function snapshotFromDbRow(db: DatabaseHandle, row: BatchJobDbRow): BatchJobSnap
     id: row.id,
     kind: row.kind,
     total: row.total,
-    updated: row.updated,
     createdAt: row.created_at,
     undoWindowMs: row.undo_window_ms,
     ...(row.undone ? { undone: true } : {}),
     ...(row.error ? { error: row.error } : {}),
   };
   if (row.status !== "running") {
-    return { ...base, status: row.status, done: row.total, failed: row.failed };
+    return { ...base, status: row.status, done: row.total, updated: row.updated, failed: row.failed };
   }
-  const counts = db.prepare(FLAGS_JOB_PROJECTION_SQL).get(row.id) as { changed: number; marked: number; syncing: number; failed_pushes: number };
-  const failed = row.failed + counts.failed_pushes;
-  if (counts.syncing === 0) {
+  // A move job's progress comes from its fixed selection, never from the
+  // executor: the executor is one durable queue row per chunk with no memory of
+  // the job, and after a restart resumed a chunk its numbers would belong to
+  // another attempt. The live rows say everything already — a message still
+  // carrying the acceptance-time goal has not been delivered, one sitting in
+  // its destination folder has, and the ones the job gave up on are marked.
+  const moveCounts = row.kind === "move" ? (db.prepare(MOVE_JOB_PROJECTION_SQL).get(row.id) as MoveJobCounts) : null;
+  const flagsCounts = moveCounts ? null : (db.prepare(FLAGS_JOB_PROJECTION_SQL).get(row.id) as { changed: number; marked: number; syncing: number; failed_pushes: number });
+  // `row.updated` is the accept-time count of the ids that needed no work at
+  // all (already in the destination folder); `arrived` adds the delivered ones,
+  // so a move job's `updated` only becomes its real total once the MOVEs land.
+  const updated = moveCounts ? row.updated + moveCounts.arrived : row.updated;
+  const failed = moveCounts ? row.failed + moveCounts.failed : row.failed + flagsCounts!.failed_pushes;
+  const syncing = moveCounts ? moveCounts.syncing : flagsCounts!.syncing;
+  // A move job also stays running while a chunk of it is still queued. Its
+  // selection can read as fully settled between the acceptance commit and the
+  // worker's first claim — every row is a goal awaiting delivery — so without
+  // this the job would settle itself the moment it was created.
+  if (syncing === 0 && !(moveCounts && moveJobHasQueuedWork(db, row.id))) {
     const completedAt = Date.now();
-    db.prepare("UPDATE batch_jobs SET status = 'completed', failed = ?, completed_at = ? WHERE id = ? AND status = 'running'").run(failed, completedAt, row.id);
-    return { ...base, status: "completed", done: row.total, failed };
+    // Persist the derived numbers with the terminal status: the settled branch
+    // above never re-reads the projection, so this is the only writing of
+    // `updated` and the terminal `failed` — both are summed, never assigned
+    // twice, because the status guard makes this run once.
+    db.prepare("UPDATE batch_jobs SET status = 'completed', updated = ?, failed = ?, completed_at = ? WHERE id = ? AND status = 'running'").run(updated, failed, completedAt, row.id);
+    return { ...base, status: "completed", done: row.total, updated, failed };
   }
-  return { ...base, status: "running", done: row.total - counts.syncing, failed };
+  return { ...base, status: "running", done: row.total - syncing, updated, failed };
+}
+
+type MoveJobCounts = { arrived: number; syncing: number; failed: number };
+
+/**
+ * The move job's projection over its fixed selection — the ids whose acceptance
+ * wrote a goal (`changed = 1`; the ones that needed no work are counted in
+ * `batch_jobs.updated` instead and are not visible here).
+ *
+ * `arrived` counts a delivered message: it sits in the folder the job promised.
+ * `syncing` counts the ones that have not arrived yet: still carrying the goal
+ * this job wrote (the chunk that owns them has not run) or mid-`intent` (the
+ * command is in flight, or its response was lost and the reconcile step owns
+ * it). An `intent` counts as syncing even though its destination field matches,
+ * which is what keeps a message from being reported as both moved and pending.
+ *
+ * `failed` covers two different give-ups: a delivery the provider refused, whose
+ * revert cleared the goal and marked the row (`marked = 1`), and a goal that has
+ * gone missing without the message arriving (no pending destination and not in
+ * the destination folder) — the state a cleared goal leaves behind.
+ */
+const MOVE_JOB_PROJECTION_SQL = `
+  WITH selection AS (
+    SELECT b.destination_mailbox AS destination_mailbox,
+           b.failed AS marked,
+           m.mailbox AS mailbox,
+           m.pending_move_destination AS pending_destination,
+           m.pending_move_state AS pending_state
+    FROM batch_job_messages b
+    JOIN messages m ON m.id = b.message_id
+    WHERE b.job_id = ? AND b.changed = 1
+  )
+  SELECT
+    COALESCE(SUM(CASE WHEN mailbox = destination_mailbox THEN 1 ELSE 0 END), 0) AS arrived,
+    COALESCE(SUM(CASE
+      WHEN (pending_state = 'intent' OR pending_state IS NULL)
+       AND pending_destination = destination_mailbox THEN 1 ELSE 0 END), 0) AS syncing,
+    COALESCE(SUM(CASE
+      WHEN marked = 1
+        OR (mailbox <> destination_mailbox AND COALESCE(pending_destination, '') = '') THEN 1 ELSE 0 END), 0) AS failed
+  FROM selection
+`;
+
+/** Whether a chunk of this job is still queued or running. */
+function moveJobHasQueuedWork(db: DatabaseHandle, jobId: string): boolean {
+  const row = db.prepare(`
+    SELECT 1 AS queued FROM operation_queue
+    WHERE kind = 'batch-move'
+      AND status IN ('pending', 'running')
+      AND json_extract(payload_json, '$.jobId') = ?
+    LIMIT 1
+  `).get(jobId);
+  return Boolean(row);
 }
 
 function enqueue(run: () => Promise<void>): void {
@@ -492,18 +528,18 @@ function toSnapshot(job: BatchJobRecord): BatchJobSnapshot {
 }
 
 /**
- * Handles of the databases that own the durable flags jobs, keyed by job id.
- * The snapshot API is job-id-only (the renderer's poll and the audit scripts
- * hold no handle), and the runtime is single-database — the registry just
- * lets the poll resolve the right handle. Entries live as long as their job
- * rows and are dropped with them by {@link pruneFlagsJobs}.
+ * Handles of the databases that own the durable jobs (flags and move), keyed by
+ * job id. The snapshot API is job-id-only (the renderer's poll and the audit
+ * scripts hold no handle), and the runtime is single-database — the registry
+ * just lets the poll resolve the right handle. Entries live as long as their
+ * job rows and are dropped with them by {@link pruneDurableJobs}.
  */
-const flagJobHandles = new Map<string, DatabaseHandle>();
+const durableJobHandles = new Map<string, DatabaseHandle>();
 
 export function getBatchJobSnapshot(jobId: string): BatchJobSnapshot | null {
   const job = jobs.get(jobId);
   if (job) return toSnapshot(job);
-  const db = flagJobHandles.get(jobId);
+  const db = durableJobHandles.get(jobId);
   if (!db) return null;
   const row = jobDbRow(db, jobId);
   return row ? snapshotFromDbRow(db, row) : null;
@@ -543,12 +579,13 @@ function resolveMessageIds(db: DatabaseHandle, query: MessageListFilterQuery): s
 
 export function createBatchJob(request: BatchJobCreateRequest, deps: BatchJobDeps): BatchJobSnapshot {
   pruneJobs();
+  pruneDurableJobs(deps.db);
+  // Local-first, both kinds: the fixed selection, the metadata commit, the
+  // folder counters, the durable work rows and the job record land in ONE
+  // transaction, and the response is answered from that commit — before the
+  // first provider command. For flags the background FIFO pushes the delta; for
+  // a move it issues the MOVEs. GET projects progress from live state.
   if (request.kind === "flags") {
-    pruneFlagsJobs(deps.db);
-    // Local-first: the fixed selection, the metadata commit, the folder
-    // counters, the durable push rows and the job record land in ONE
-    // transaction, and the response carries the actually-changed counts. The
-    // background FIFO does the rest; GET projects progress from live state.
     const ids = resolveMessageIds(deps.db, request.query);
     return acceptFlagsJob(deps, { kind: "flags", patch: request.patch, ids });
   }
@@ -557,84 +594,352 @@ export function createBatchJob(request: BatchJobCreateRequest, deps: BatchJobDep
   // the messages the user selected when they asked, not on whatever the
   // predicate matches minutes later, after other batches have reorganised the
   // mailboxes under it.
-  const selection = resolveMessageIds(deps.db, request.query);
-  const record: BatchJobRecord = {
-    id: randomUUID(),
-    kind: request.kind,
-    status: "running",
-    total: selection.length,
-    done: 0,
-    updated: 0,
-    failed: 0,
-    createdAt: Date.now(),
-    target: request.target,
-    query: request.query,
-    selection,
-    changedIds: [],
-    undoEntries: [],
-    undone: false,
-    undoWindowMs: BATCH_JOB_UNDO_WINDOW_MS,
-  };
-  jobs.set(record.id, record);
-  enqueue(() => runJob(record, deps));
-  return toSnapshot(record);
+  return acceptMoveJob(deps, { target: request.target, ids: resolveMessageIds(deps.db, request.query) });
 }
 
-async function runJob(record: BatchJobRecord, deps: BatchJobDeps): Promise<void> {
-  if (!record.query) return;
-  try {
-    // Fixed at accept — see createBatchJob. `total` was already set from it.
-    const ids = record.selection;
-    if (record.kind === "move" && record.target) {
-      // Snapshot every origin mailbox up front so undo can restore it. The
-      // lookup is chunked because the selection is unbounded (see
-      // ORIGIN_LOOKUP_CHUNK_SIZE); merging the chunks into one map keeps the
-      // single-IN semantics: one entry per id, and a row listed twice (the
-      // global-search join can repeat a message) still yields the one mailbox
-      // the id resolves to.
-      const originMailboxById = originMailboxesById(deps.db, ids);
-      // One connection per account for the whole job, handed back in the
-      // `finally` below. The job is the only caller that issues many batches
-      // in a row, and a per-batch connection cost 400 dials on a 40 000-id
-      // selection. Accounting is untouched: the per-chunk outcomes, the
-      // undoEntries order and the per-chunk background reconcile below all
-      // still run exactly as they did, once per chunk.
-      const session = createJobMoveConnections(deps.db, deps.masterKey, deps.oauthService);
+/** A message row as much of this file needs it: identity, origin, goal state. */
+type MoveJobMessageRow = {
+  id: string;
+  account_id: string;
+  mailbox: string;
+  flags_json: string;
+  pending_move_destination: string | null;
+  pending_move_state: string | null;
+};
+
+type MoveJobDestination = NonNullable<ReturnType<typeof resolveMoveDestination>>;
+
+type MoveJobAcceptRequest = { target: MessageMoveTarget; ids: readonly string[] };
+
+/**
+ * The acceptance commit of a local-first move job.
+ *
+ * Everything the user asked for happens here, in one transaction, before any
+ * provider command: the selection is fixed (`batch_job_messages`, which also
+ * records where each message came from — the only record of it once the message
+ * has left), each message writes the user's GOAL (the destination with no
+ * 'intent' state, which every existing reader already treats as "this message
+ * belongs to that folder", so the rows leave their source view and the folder
+ * counters drop the moment the user confirms), and one durable `batch-move` row
+ * per chunk of ids joins the same FIFO chain the explicit-id path uses. Only
+ * then does the request answer.
+ *
+ * The alternative — resolve, then wait for the provider chunk by chunk — is
+ * what made a bulk delete look frozen: the rows stayed in the list, and the
+ * counters stayed put, until the last MOVE had been confirmed.
+ */
+function acceptMoveJob(deps: BatchJobDeps, request: MoveJobAcceptRequest): BatchJobSnapshot {
+  const { db } = deps;
+  const statements = moveStatements(db);
+  const jobId = randomUUID();
+  const createdAt = Date.now();
+  // Read in chunks: a 40 000-id selection in one IN list exceeded the driver's
+  // variable ceiling (see ORIGIN_LOOKUP_CHUNK_SIZE). Merging the chunks into
+  // one map keeps single-IN semantics — one entry per id, and an id the
+  // global-search join repeated still resolves to the one row it names.
+  const rowsById = new Map<string, MoveJobMessageRow>();
+  for (let offset = 0; offset < request.ids.length; offset += ORIGIN_LOOKUP_CHUNK_SIZE) {
+    const chunk = request.ids.slice(offset, offset + ORIGIN_LOOKUP_CHUNK_SIZE);
+    const rows = statements.rowsByIds(chunk.length).all(...chunk) as MoveJobMessageRow[];
+    for (const row of rows) rowsById.set(row.id, row);
+  }
+  // One destination resolution per account, outside the transaction: it reads
+  // folders, and it throws when the account has no folder for the target.
+  const destinations = new Map<string, MoveJobDestination | null>();
+  const destinationFor = (accountId: string): MoveJobDestination | null => {
+    if (!destinations.has(accountId)) {
+      let destination: MoveJobDestination | null = null;
       try {
-        for (let offset = 0; offset < ids.length; offset += MOVE_CHUNK_SIZE) {
-          const chunk = ids.slice(offset, offset + MOVE_CHUNK_SIZE);
-          const outcome = await batchMoveMessages(deps.db, deps.masterKey, chunk, record.target, deps.oauthService, deps.agentMailEvents, session.cache);
-          record.updated += outcome.updated;
-          record.failed += outcome.failures.length;
-          const failedIds = new Set(outcome.failures.map((failure) => failure.id));
-          for (const id of chunk) {
-            if (failedIds.has(id)) continue;
-            const fromMailbox = originMailboxById.get(id);
-            if (fromMailbox) record.undoEntries.push({ id, fromMailbox });
-          }
-          for (const accountId of outcome.pendingAccounts) {
-            // The provider could not confirm a batch MOVE outcome (no UIDPLUS or
-            // a lost response). Reconcile in the background so the cache shows
-            // the verified destination instead of a stale local snapshot.
-            void syncAccount(deps.db, deps.masterKey, accountId, getSyncMessageLimit(deps.db), deps.oauthService, deps.agentMailEvents)
-              .catch((error) => {
-                serverLog.warn({ batchJobId: record.id, accountId }, "Background move reconciliation failed", error);
-              });
-          }
-          record.done += chunk.length;
+        destination = resolveMoveDestination(db, accountId, request.target);
+      } catch {
+        // An account without a target folder (or one mid-delete) cannot take
+        // this move; the message is refused below rather than queued forever.
+        destination = null;
+      }
+      destinations.set(accountId, destination);
+    }
+    return destinations.get(accountId) ?? null;
+  };
+
+  const movable: Array<{ message: MoveJobMessageRow; destination: MoveJobDestination }> = [];
+  const selection: Array<{ messageId: string; originMailbox: string | null; destinationMailbox: string | null }> = [];
+  let updated = 0;
+  let failed = 0;
+  for (const id of request.ids) {
+    const message = rowsById.get(id);
+    const destination = message ? destinationFor(message.account_id) : null;
+    if (!message || !destination) {
+      failed += 1;
+      selection.push({ messageId: id, originMailbox: message?.mailbox ?? null, destinationMailbox: destination?.path ?? null });
+      continue;
+    }
+    if (message.mailbox === destination.path) {
+      // Already where the job would put it: the work is a no-op, and writing a
+      // goal here would leave a pending record that nothing ever resolves.
+      updated += 1;
+      selection.push({ messageId: id, originMailbox: message.mailbox, destinationMailbox: destination.path });
+      continue;
+    }
+    if (message.pending_move_destination || message.pending_move_state) {
+      // Another move already owns this message. The job refuses it up front
+      // instead of queueing work that would be blocked on arrival.
+      failed += 1;
+      selection.push({ messageId: id, originMailbox: message.mailbox, destinationMailbox: destination.path });
+      continue;
+    }
+    selection.push({ messageId: id, originMailbox: message.mailbox, destinationMailbox: destination.path });
+    movable.push({ message, destination });
+  }
+
+  const starters = db.transaction(() => {
+    const delivered: Array<{ accountId: string; id: string }> = [];
+    const selectionRow = db.prepare("SELECT message_id FROM batch_job_messages WHERE job_id = ? AND message_id = ?");
+    for (const { message, destination } of movable) {
+      const wroteGoal = statements.beginMoveGoal.run(destination.path, destination.special_use, message.id);
+      if (wroteGoal.changes !== 1) {
+        // The row changed between the read above and this transaction (a
+        // concurrent move claimed it). Count it as refused rather than queueing
+        // work on a row this job no longer owns.
+        failed += 1;
+        continue;
+      }
+      // The message leaves its SOURCE folder now. The destination side is
+      // counted when the move is confirmed, because the one case that must not
+      // count it — a cached copy of the same server message already sitting in
+      // that folder — is only knowable once UIDPLUS or the reconcile has run.
+      countSourceFolderDeparture(statements, message);
+      delivered.push({ accountId: message.account_id, id: message.id });
+    }
+    // A refused id is marked changed=0: it is part of the fixed selection (and
+    // of the job's totals) but the job has no work for it and no goal to clear.
+    const marked = new Set(delivered.map((entry) => entry.id));
+    db.prepare(`
+      INSERT INTO batch_jobs (
+        id, parent_id, kind, patch_json, target, status, total, updated, failed,
+        created_at, completed_at, error, undone, undo_window_ms
+      ) VALUES (?, NULL, 'move', NULL, ?, 'running', ?, ?, ?, ?, NULL, NULL, 0, ?)
+    `).run(jobId, request.target, request.ids.length, updated, failed, createdAt, BATCH_JOB_UNDO_WINDOW_MS);
+    const insertSelection = db.prepare(`
+      INSERT INTO batch_job_messages (job_id, message_id, changed, origin_mailbox, destination_mailbox, failed)
+      VALUES (?, ?, ?, ?, ?, 0)
+    `);
+    for (const entry of selection) {
+      // A duplicate id in one selection (the global-search join can repeat a
+      // message) would violate the primary key; the first row already carries
+      // the outcome, so a repeat is dropped.
+      if (selectionRow.get(jobId, entry.messageId)) continue;
+      insertSelection.run(jobId, entry.messageId, marked.has(entry.messageId) ? 1 : 0, entry.originMailbox, entry.destinationMailbox);
+    }
+    // One durable row per ACCOUNT — not per chunk of 100. The executor re-reads
+    // the ids that still carry a goal when its row runs (`pendingMoveJobIds`),
+    // so the payload stays a constant size however big the selection is, and a
+    // resumed row delivers exactly the remainder instead of replaying a chunk
+    // another attempt may have already moved. The granularity is also what buys
+    // the connection reuse: every chunk of the account's move rides the single
+    // session its row opens, which is the property that turned a 40 000-message
+    // delete from ~400 connects back into one per account.
+    const staged: Array<() => void> = [];
+    for (const accountId of new Set(delivered.map((entry) => entry.accountId))) {
+      staged.push(deps.operationQueue.stageBackgroundInTransaction(
+        [accountId],
+        "batch-move",
+        { target: request.target, jobId, accountId },
+      ));
+    }
+    return staged;
+  })();
+  // The FIFO chain starts only after the commit: a starter that ran inside the
+  // transaction would dispatch work a rollback had already erased.
+  for (const start of starters) start();
+  // Registered like a flags job's: the snapshot API is job-id-only and resolves
+  // the database through this map, so without it the renderer would poll a 404
+  // for a job that is running perfectly well.
+  durableJobHandles.set(jobId, db);
+  return snapshotFromDbRow(db, jobDbRow(db, jobId) as BatchJobDbRow);
+}
+
+/**
+ * A `batch-move` row's payload. Two shapes share the kind: the explicit-id
+ * route (`{ ids, target }`, whose HTTP call is still waiting for the reply) and
+ * one ACCOUNT's worth of a local-first move job (`{ target, jobId, accountId }`,
+ * whose response was answered at acceptance). The job shape deliberately carries
+ * no ids: they are re-read from `batch_job_messages` when the row runs, so the
+ * payload cannot go stale against the durable selection.
+ */
+export type MoveJobRowPayload = {
+  target: MessageMoveTarget;
+  ids?: string[];
+  jobId?: string;
+  accountId?: string;
+};
+
+/**
+ * The ids a job row still owes the provider: this account's rows whose
+ * acceptance-time goal is neither delivered nor given up on.
+ *
+ * Reached by the goal columns, not by a stored list, so it is also what makes a
+ * retry resume instead of replay: an id whose `pending_move_state` is no longer
+ * NULL has been claimed (its command is in flight or its response was lost and
+ * sync's reconcile owns it), an id in the destination folder has arrived, an id
+ * whose goal was reverted is marked `failed`, and one the user has since
+ * re-moved carries the newer goal instead — all four are excluded.
+ */
+export function pendingMoveJobIds(db: DatabaseHandle, jobId: string, accountId: string): string[] {
+  return db.prepare(`
+    SELECT m.id FROM batch_job_messages b
+    JOIN messages m ON m.id = b.message_id
+    WHERE b.job_id = ? AND b.changed = 1 AND b.failed = 0
+      AND m.account_id = ?
+      AND m.pending_move_state IS NULL
+      AND b.destination_mailbox IS NOT NULL
+      AND m.pending_move_destination = b.destination_mailbox
+    ORDER BY b.rowid
+  `).pluck().all(jobId, accountId) as string[];
+}
+
+/**
+ * A "wait your turn" refusal: the account was syncing or already moving, so the
+ * message's goal must survive and the row must be retried. Kept as the exact
+ * texts `batchMoveMessages` reports them under — the failure list carries
+ * messages, not error objects, and these two are pushed through verbatim (see
+ * `knownLocalMoveErrors`, which keeps the translator from flattening them into
+ * the generic provider error).
+ */
+const RETRYABLE_MOVE_FAILURES = new Set([MAILBOX_SYNCING_ERROR, MAIL_MOVE_IN_FLIGHT_ERROR]);
+
+/**
+ * Executes one durable `batch-move` row and returns its per-message outcome.
+ * The explicit-id route's shape is answered exactly as before (per-message
+ * failures, no throw); a job row is where the local-first bookkeeping lives.
+ */
+export async function runMoveBatchRow(payload: MoveJobRowPayload, deps: BatchJobDeps): Promise<BatchMessageMoveOutcome> {
+  if (!payload.jobId || !payload.accountId) {
+    return batchMoveMessages(deps.db, deps.masterKey, payload.ids ?? [], payload.target, deps.oauthService, deps.agentMailEvents);
+  }
+  return runMoveJobRow(deps, payload.jobId, payload.accountId, payload.target);
+}
+
+/**
+ * Delivers one account's worth of a move job: every chunk of ids the job still
+ * owes, on one connection, then the job-side bookkeeping.
+ *
+ * A refusal the provider is unlikely to repeat (a bad message, a missing
+ * folder) gives its goal back immediately: the message reappears in its source
+ * view and the job counts it failed, instead of staying hidden behind a promise
+ * nobody will keep. A "wait your turn" refusal is the opposite — reverting it
+ * would only make the list flicker and the goal come right back — so those keep
+ * their goals and fail the row, and the queue retries it with backoff.
+ */
+async function runMoveJobRow(
+  deps: BatchJobDeps,
+  jobId: string,
+  accountId: string,
+  target: MessageMoveTarget,
+): Promise<BatchMessageMoveOutcome> {
+  const outcome: BatchMessageMoveOutcome = { updated: 0, failed: 0, failures: [], pendingAccounts: new Set() };
+  const ids = pendingMoveJobIds(deps.db, jobId, accountId);
+  if (ids.length === 0) return outcome;
+  const session = createJobMoveConnections(deps.db, deps.masterKey, deps.oauthService);
+  try {
+    for (let offset = 0; offset < ids.length; offset += MOVE_CHUNK_SIZE) {
+      const chunk = await batchMoveMessages(
+        deps.db,
+        deps.masterKey,
+        ids.slice(offset, offset + MOVE_CHUNK_SIZE),
+        target,
+        deps.oauthService,
+        deps.agentMailEvents,
+        session.cache,
+      );
+      outcome.updated += chunk.updated;
+      outcome.failed += chunk.failed;
+      outcome.failures.push(...chunk.failures);
+      for (const pending of chunk.pendingAccounts) outcome.pendingAccounts.add(pending);
+    }
+    for (const pendingAccount of outcome.pendingAccounts) {
+      // The provider could not confirm this batch's MOVE outcome (no UIDPLUS or
+      // a lost response). Reconcile in the background so the cache shows the
+      // verified destination instead of a stale local snapshot.
+      void syncAccount(deps.db, deps.masterKey, pendingAccount, getSyncMessageLimit(deps.db), deps.oauthService, deps.agentMailEvents)
+        .catch((error) => {
+          serverLog.warn({ batchJobId: jobId, accountId: pendingAccount }, "Background move reconciliation failed", error);
+        });
+    }
+    const retryable = outcome.failures.filter((failure) => RETRYABLE_MOVE_FAILURES.has(failure.message));
+    revertMoveJobFailures(deps.db, jobId, outcome.failures
+      .filter((failure) => !RETRYABLE_MOVE_FAILURES.has(failure.message))
+      .map((failure) => failure.id));
+    // Throwing (rather than returning) is what makes the queue keep the row and
+    // retry it. The goals of the waiting ids are still intact, so the retry
+    // finds them again — and only them.
+    if (retryable.length > 0) throw new Error(retryable[0]!.message);
+    return outcome;
+  } finally {
+    await session.release();
+  }
+}
+
+/**
+ * Puts back what a move job could not deliver: the acceptance-time goal of each
+ * refused id, and the source-folder count that went with it.
+ *
+ * The `failed` mark in `batch_job_messages` is the one-time latch — a row that
+ * already carries it is done, whichever path got here first (the executor
+ * reporting a provider refusal, or the queue giving up on a whole chunk). The
+ * count only goes back for a message that never arrived: a delivery the provider
+ * accepted keeps its departure counted, and a message the user re-moved since
+ * belongs to that newer decision, not to this job.
+ */
+export function revertMoveJobFailures(db: DatabaseHandle, jobId: string, ids: readonly string[]): number {
+  if (ids.length === 0) return 0;
+  const statements = moveStatements(db);
+  return db.transaction(() => {
+    let reverted = 0;
+    for (let offset = 0; offset < ids.length; offset += ORIGIN_LOOKUP_CHUNK_SIZE) {
+      const chunk = ids.slice(offset, offset + ORIGIN_LOOKUP_CHUNK_SIZE);
+      const rows = statements.rowsByIds(chunk.length).all(...chunk) as MoveJobMessageRow[];
+      const messageById = new Map(rows.map((row) => [row.id, row]));
+      const marked = db.prepare(`
+        SELECT message_id, destination_mailbox FROM batch_job_messages
+        WHERE job_id = ? AND changed = 1 AND failed = 0
+          AND message_id IN (${chunk.map(() => "?").join(", ")})
+      `).all(jobId, ...chunk) as Array<{ message_id: string; destination_mailbox: string | null }>;
+      const claim = db.prepare("UPDATE batch_job_messages SET failed = 1 WHERE job_id = ? AND message_id = ? AND changed = 1 AND failed = 0");
+      for (const entry of marked) {
+        const message = messageById.get(entry.message_id);
+        if (!message) {
+          // The message is gone from the cache; there is no goal to clear and no
+          // counter to give back, but the selection must stop claiming it.
+          claim.run(jobId, entry.message_id);
+          continue;
         }
-      } finally {
-        // Every connection this job opened is closed when the job ends, on the
-        // success path and on the throw that marks the job failed alike.
-        await session.release();
+        // The goal clear is a no-op when the worker already consumed it (an
+        // intent it cleared on refusal) — the count still has to come back,
+        // because the departure was counted at acceptance, not at the claim.
+        statements.clearMoveGoal.run(entry.message_id, entry.destination_mailbox);
+        if (neverArrived(message, entry.destination_mailbox)) {
+          revertSourceFolderDeparture(statements, message);
+          reverted += 1;
+        }
+        claim.run(jobId, entry.message_id);
       }
     }
-    record.completedAt = Date.now();
-    record.status = "completed";
-  } catch (error) {
-    record.status = "failed";
-    record.error = error instanceof Error ? error.message : "批量任务失败。";
-  }
+    return reverted;
+  })();
+}
+
+/**
+ * Whether a message the job could not deliver is still sitting where it started.
+ * The mirror image of the projection's "arrived" test: an in-flight `intent` is
+ * ambiguous (the command may have landed) and sync owns it, and a goal pointing
+ * somewhere else is a newer user decision.
+ */
+function neverArrived(message: MoveJobMessageRow, destinationMailbox: string | null): boolean {
+  if (!destinationMailbox) return false;
+  if (message.mailbox === destinationMailbox) return false;
+  if (message.pending_move_state === "intent") return false;
+  if (message.pending_move_destination && message.pending_move_destination !== destinationMailbox) return false;
+  return true;
 }
 
 export type BatchJobUndoOutcome = {
@@ -645,17 +950,18 @@ export type BatchJobUndoOutcome = {
 };
 
 /**
- * Reverses a completed job within its undo window. A durable flags job's
- * undo scope is its `changed` selection rows — it survives a restart, unlike
- * the in-memory move scope. The reverse is itself a local-first job (same
- * commit shape, same FIFO chain) tracked as a new undo record, so the store
- * is never mutated twice concurrently and the undo is pollable to completion.
- * Moves still undo from the in-memory registry with their original mailboxes.
+ * Reverses a completed job within its undo window. Both kinds read their undo
+ * scope from the durable `batch_job_messages` rows — flags from its `changed`
+ * selection, moves from each row's `origin_mailbox` — so the scope survives a
+ * restart. The reverse is itself a local-first job (same commit shape, same
+ * FIFO chain) tracked as a new undo record, so the store is never mutated
+ * twice concurrently and the undo is pollable to completion.
  */
 export function undoBatchJob(jobId: string, deps: BatchJobDeps): BatchJobUndoOutcome {
   const parentRow = jobDbRow(deps.db, jobId);
-  if (parentRow) return undoFlagsJob(parentRow, deps);
-  return undoMoveJob(jobId, deps);
+  if (!parentRow) return { ok: false, reason: "not_found" };
+  if (parentRow.kind === "move") return undoMoveJob(parentRow, deps);
+  return undoFlagsJob(parentRow, deps);
 }
 
 function undoFlagsJob(parent: BatchJobDbRow, deps: BatchJobDeps): BatchJobUndoOutcome {
@@ -708,36 +1014,56 @@ function undoGuard(status: string, undone: boolean, completedAt: number | null |
   return null;
 }
 
-function undoMoveJob(jobId: string, deps: BatchJobDeps): BatchJobUndoOutcome {
-  const parent = jobs.get(jobId);
-  if (!parent) return { ok: false, reason: "not_found" };
-  const guard = undoGuard(parent.status, parent.undone, parent.completedAt, parent.undoWindowMs);
+function undoMoveJob(parent: BatchJobDbRow, deps: BatchJobDeps): BatchJobUndoOutcome {
+  const guard = undoGuard(parent.status, Boolean(parent.undone), parent.completed_at, parent.undo_window_ms);
   if (guard) return guard;
-  parent.undone = true;
-
+  // The scope is the job's fixed selection: `origin_mailbox` is where each
+  // message sat when the move was accepted — the only record of it, since the
+  // message has left that folder by now — and the rows the job gave up on never
+  // moved, so the undo must not drag them anywhere.
+  const entries = deps.db.prepare(`
+    SELECT message_id AS id, origin_mailbox AS fromMailbox
+    FROM batch_job_messages
+    WHERE job_id = ? AND changed = 1 AND failed = 0 AND origin_mailbox IS NOT NULL
+    ORDER BY rowid
+  `).all(parent.id) as Array<{ id: string; fromMailbox: string }>;
   const record: BatchJobRecord = {
     id: randomUUID(),
     parentId: parent.id,
     kind: "undo",
     status: "running",
-    total: parent.undoEntries.length,
+    total: entries.length,
     done: 0,
     updated: 0,
     failed: 0,
     createdAt: Date.now(),
-    // An undo acts on the entries it recorded, never on a selection.
-    selection: [],
-    changedIds: [],
-    undoEntries: [...parent.undoEntries],
+    // An undo acts on the entries it recorded, never on a selection. The target
+    // travels with it because `runUndo` guards the restore with it: a message
+    // the user re-moved after the job ran must stay where it is.
+    target: parent.target ?? undefined,
+    undoEntries: entries.map((entry) => ({ id: entry.id, fromMailbox: entry.fromMailbox })),
     undone: false,
     undoWindowMs: BATCH_JOB_UNDO_WINDOW_MS,
   };
+  // The parent's `undone` mark is the durable half of the one-undo guarantee:
+  // it is claimed in one conditional UPDATE, so a second undo after a restart
+  // cannot start. Deliberately NO `batch_jobs` row for the reverse job: a move
+  // undo runs in this process (not through the operation queue), so its row
+  // could never be resumed, and after a restart `snapshotFromDbRow` — which
+  // has no move-undo projection and would fall through to the flags one —
+  // would report a phantom "completed" for work that never ran. The reverse
+  // job stays in `jobs` for its window, exactly like the flags undo's in-memory
+  // tracking of the poll id; the parent row is what outlives the process.
+  const claimed = deps.db
+    .prepare("UPDATE batch_jobs SET undone = 1 WHERE id = ? AND undone = 0 AND status = 'completed'")
+    .run(parent.id);
+  if (claimed.changes !== 1) return { ok: false, reason: "already_undone" };
   jobs.set(record.id, record);
   enqueue(() => runUndo(record, parent, deps));
   return { ok: true, started: true, jobId: record.id };
 }
 
-async function runUndo(record: BatchJobRecord, parent: BatchJobRecord, deps: BatchJobDeps): Promise<void> {
+async function runUndo(record: BatchJobRecord, parent: { target?: MessageMoveTarget | null }, deps: BatchJobDeps): Promise<void> {
   try {
     {
       // The job's destination folder guards the restore: a message that was

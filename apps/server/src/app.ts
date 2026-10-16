@@ -23,7 +23,7 @@ import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerOutboundAttachmentRoutes } from "./routes/outbound-attachments.js";
 import { registerBatchJobRoutes } from "./routes/batch-jobs.js";
 import { clearOrphanedPendingFlagsMarkers, clearPendingFlagsMarkers, pushFlagsRemote, restoreFailedFlagsTargets, type FlagsPushEntry } from "./flags-outbox.js";
-import { rebuildFlagsJobHandles } from "./batch-jobs.js";
+import { pendingMoveJobIds, rebuildJobHandles, revertMoveJobFailures, runMoveBatchRow, type MoveJobRowPayload } from "./batch-jobs.js";
 import {
   oauthProviderFor,
   providerInfo,
@@ -52,7 +52,7 @@ import { normalizeScheduledTimesMigration } from "./scheduled-times-migration.js
 import { providerPresets } from "./providers.js";
 import { TranslationConfigurationStore } from "./translation-configuration.js";
 import { buildTranslationService } from "./routes/translation.js";
-import { batchMoveMessages, moveMessage, type MessageMoveTarget } from "./sync-moves.js";
+import { moveMessage, type MessageMoveTarget } from "./sync-moves.js";
 import {
   updateMessageFlags,
   updateMessageFlagsBatch,
@@ -297,6 +297,19 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
           clearPendingFlagsMarkers(context.db, ids, rowId);
         }
       }
+      // A `batch-move` row for a move job that the queue gave up on: put back
+      // the acceptance-time goals of everything it still owed this account, so
+      // the refused messages reappear in the list instead of hiding behind a
+      // promise nobody will keep. The row's own ids are re-derived, not read
+      // from the payload — the payload never carried them, and by now the
+      // retries have already delivered part of the account.
+      if (kind === "batch-move") {
+        const { jobId, accountId } = payload as { jobId?: string; accountId?: string };
+        if (jobId && accountId) {
+          const settled = context.db.prepare("SELECT status FROM operation_queue WHERE id = ?").get(rowId) as { status: string } | undefined;
+          if (settled?.status === "failed") revertMoveJobFailures(context.db, jobId, pendingMoveJobIds(context.db, jobId, accountId));
+        }
+      }
     },
   });
   operationQueue.registerRunner("move", async (payload) => {
@@ -304,8 +317,17 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     return moveMessage(context.db, context.masterKey, messageId, target, context.oauthService, context.agentMailEvents);
   });
   operationQueue.registerRunner("batch-move", async (payload) => {
-    const { ids, target } = payload as { ids: string[]; target: MessageMoveTarget };
-    return batchMoveMessages(context.db, context.masterKey, ids, target, context.oauthService, context.agentMailEvents);
+    // One executor for both payload shapes: the explicit-id route and one chunk
+    // of a local-first move job. It reuses one IMAP connection per account
+    // across the chunk and owns the job-side failure bookkeeping, so the chunk's
+    // goal rows and folder counts go back when the provider refuses them.
+    return runMoveBatchRow(payload as MoveJobRowPayload, {
+      db: context.db,
+      masterKey: context.masterKey,
+      oauthService: context.oauthService,
+      agentMailEvents: context.agentMailEvents,
+      operationQueue,
+    });
   });
   operationQueue.registerRunner("flags", async (payload) => {
     // One executor serves both payload shapes: a single-message patch
@@ -324,10 +346,10 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     const push = payload as { accountId: string; entries: FlagsPushEntry[] };
     await pushFlagsRemote({ db: context.db, masterKey: context.masterKey, accessTokenProvider: context.oauthService }, push);
   });
-  // Re-register the durable flags jobs this database already carries, so a
-  // restart keeps them pollable instead of answering 404 while their undo
-  // scope stays queryable.
-  rebuildFlagsJobHandles(context.db);
+  // Re-register the durable jobs this database already carries, so a restart
+  // keeps them pollable instead of answering 404 while their undo scope stays
+  // queryable.
+  rebuildJobHandles(context.db);
   // Repair `pending_flags_push` markers that no queued push is behind before
   // the resumed queue starts: a marker only syncs ever clears again is a
   // message whose flags stop following the server for good. Runs against the

@@ -103,6 +103,55 @@ const BEGIN_MOVE_INTENT_SQL = `
           pending_move_special_use = ?
       WHERE id = ? AND COALESCE(pending_move_destination, '') = ''
     `;
+// The acceptance-time GOAL of a local-first move job. `pending_move_state` is
+// deliberately NULL: every reader in the codebase already treats "a destination
+// without the 'intent' state" as "this message belongs to the destination
+// folder", which is exactly the user's goal the moment they confirm a bulk
+// delete — the row leaves the source view immediately, the remote-deletion
+// probe and backup skip it (they key off `pending_move_destination`), and the
+// archived filter's COALESCE(state,'confirmed') files an archive goal in the
+// archived view. 'intent' stays reserved for "the MOVE command may be in
+// flight", which the worker writes below as it claims its own goal.
+//
+// The guard mirrors `moveActionBlockedError`: a row that already carries a
+// destination is somebody else's pending move (or the user's own newer
+// action) and must not be hijacked.
+const BEGIN_MOVE_GOAL_SQL = `
+    UPDATE messages
+    SET pending_move_destination = ?,
+        pending_move_special_use = ?,
+        pending_move_candidate_uid = NULL,
+        pending_move_state = NULL
+    WHERE id = ? AND COALESCE(pending_move_destination, '') = '' AND pending_move_state IS NULL
+  `;
+// The worker claiming the goal it wrote at acceptance: `BEGIN_MOVE_INTENT_SQL`
+// refuses any row that already has a destination, which is right for a user
+// action and wrong for the job that owns the goal — it would block on its own
+// record. This claims exactly the one case that belongs to the caller: a row
+// whose untouched goal points at the very destination this move is going to.
+const CLAIM_MOVE_GOAL_SQL = `
+    UPDATE messages
+    SET pending_move_destination = ?,
+        pending_move_state = 'intent',
+        pending_move_candidate_uid = ?,
+        pending_move_special_use = ?
+    WHERE id = ? AND (
+      COALESCE(pending_move_destination, '') = ''
+      OR (pending_move_state IS NULL AND pending_move_destination = ?)
+    )
+  `;
+// Puts a goal back: the provider refused the message, or the work gave up on
+// it. The guard is what makes this safe to run twice — only an untouched goal
+// for this exact destination is cleared, so an intent the worker already
+// claimed (and the recovery paths that own it) is never clobbered.
+const CLEAR_MOVE_GOAL_SQL = `
+    UPDATE messages
+    SET pending_move_destination = NULL,
+        pending_move_special_use = NULL,
+        pending_move_candidate_uid = NULL,
+        pending_move_state = NULL
+    WHERE id = ? AND pending_move_state IS NULL AND pending_move_destination = ?
+  `;
 const CANDIDATE_UID_SQL = `
     SELECT uid FROM messages
     WHERE account_id = ? AND mailbox = ? AND remote_id_lookup = ? AND id <> ?
@@ -216,6 +265,12 @@ export type MoveStatements = {
   readonly clearMoveIntent: MoveStatement;
   /** Claims the durable 'intent' before the provider command is issued. */
   readonly beginMoveIntent: MoveStatement;
+  /** Writes the acceptance-time goal of a local-first move job. */
+  readonly beginMoveGoal: MoveStatement;
+  /** Claims a job's own goal as an 'intent' before the command is issued. */
+  readonly claimMoveGoal: MoveStatement;
+  /** Puts an unclaimed goal back after a refusal or a give-up. */
+  readonly clearMoveGoal: MoveStatement;
   /** The unique cached destination copy to reconcile onto, if there is one. */
   readonly candidateUid: MoveStatement;
   /** Is the preferred negative placeholder UID still occupied? */
@@ -288,6 +343,9 @@ export function createMoveStatements(db: DatabaseHandle): MoveStatements {
   return {
     get clearMoveIntent() { return once("clearMoveIntent", CLEAR_MOVE_INTENT_SQL); },
     get beginMoveIntent() { return once("beginMoveIntent", BEGIN_MOVE_INTENT_SQL); },
+    get beginMoveGoal() { return once("beginMoveGoal", BEGIN_MOVE_GOAL_SQL); },
+    get claimMoveGoal() { return once("claimMoveGoal", CLAIM_MOVE_GOAL_SQL); },
+    get clearMoveGoal() { return once("clearMoveGoal", CLEAR_MOVE_GOAL_SQL); },
     get candidateUid() { return once("candidateUid", CANDIDATE_UID_SQL); },
     get preferredUidInUse() { return once("preferredUidInUse", PREFERRED_UID_IN_USE_SQL); },
     get lowestPendingUid() { return once("lowestPendingUid", LOWEST_PENDING_UID_SQL); },
@@ -333,16 +391,48 @@ export function updateFolderCountsForMove(
   message: { account_id: string; mailbox: string; flags_json: string },
   destination: MoveDestination,
   destinationAlreadyCached = false,
+  sourceCountedAlready = false,
 ): void {
-  const unseen = messageIsUnseen(message.flags_json) ? 1 : 0;
-  statements.decreaseFolderCount.run(unseen, message.account_id, message.mailbox);
+  // A local-first job already took the message out of its source folder when it
+  // accepted the selection, and it can only ever take it out once. The
+  // destination side stays here because the one case that must not count it —
+  // a cached copy of the same server message already sitting in that folder —
+  // is only knowable once UIDPLUS or the reconcile step has run.
+  if (!sourceCountedAlready) countSourceFolderDeparture(statements, message);
 
   // Gmail's \All already contains the message before archive removes its
   // Inbox label. Physical archive, trash, junk, and inbox folders gain a new
   // membership (the last one when a misclassified Junk message is recovered).
   if (!destinationAlreadyCached && (destination.special_use === "\\Archive" || destination.special_use === "\\Trash" || destination.special_use === "\\Junk" || destination.special_use === "\\Inbox")) {
-    statements.increaseFolderCount.run(unseen, message.account_id, destination.path);
+    statements.increaseFolderCount.run(unseen(message), message.account_id, destination.path);
   }
+}
+
+/**
+ * The acceptance-commit half of a local-first move: the message leaves its
+ * source folder the moment the user confirms, long before the provider has
+ * been asked. Splitting it from the destination half is what keeps a
+ * refusal/give-up pair exactly reversible — {@link revertSourceFolderDeparture}
+ * puts back precisely what this took, and neither has to reason about the
+ * cached-destination case that only the confirm path can see.
+ */
+export function countSourceFolderDeparture(
+  statements: MoveStatements,
+  message: { account_id: string; mailbox: string; flags_json: string },
+): void {
+  statements.decreaseFolderCount.run(unseen(message), message.account_id, message.mailbox);
+}
+
+/** Undoes {@link countSourceFolderDeparture}. */
+export function revertSourceFolderDeparture(
+  statements: MoveStatements,
+  message: { account_id: string; mailbox: string; flags_json: string },
+): void {
+  statements.increaseFolderCount.run(unseen(message), message.account_id, message.mailbox);
+}
+
+function unseen(message: { flags_json: string }): number {
+  return messageIsUnseen(message.flags_json) ? 1 : 0;
 }
 
 export function pendingMoveUid(
