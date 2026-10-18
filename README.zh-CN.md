@@ -9,12 +9,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/github/v/release/QinIndexCode/nami-mail?label=Release&color=2563eb&style=flat-square" alt="Release" /></a>
-  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/badge/Platform-Windows%20x64-0284c7?style=flat-square" alt="Platform" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%E2%89%A524.21.0-16a34a?style=flat-square" alt="Node" /></a>
-  <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-43-4f46e5?style=flat-square" alt="Electron" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-059669?style=flat-square" alt="License" /></a>
-  <a href="https://qinindexcode.github.io/nami-mail/"><img src="https://img.shields.io/badge/Website-Live-7c3aed?style=flat-square" alt="Website" /></a>
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/github/v/release/QinIndexCode/nami-mail?label=Release&color=2563eb&style=flat" alt="Release" /></a>
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/badge/Platform-Windows%20x64-0284c7?style=flat" alt="Platform" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%E2%89%A524.21.0-16a34a?style=flat" alt="Node" /></a>
+  <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-43-4f46e5?style=flat" alt="Electron" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-059669?style=flat" alt="License" /></a>
+  <a href="https://qinindexcode.github.io/nami-mail/"><img src="https://img.shields.io/badge/Website-Live-7c3aed?style=flat" alt="Website" /></a>
 </p>
 
 Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端。它把 Gmail、iCloud、QQ、163、Outlook/Hotmail、Yahoo、AOL、Fastmail、Yandex 以及其他支持 IMAP/SMTP 的邮箱集中到由你本机运行的统一收件箱中。常见邮箱可使用应用专用密码/授权码；已配置的 Google 与 Microsoft 账户可使用 OAuth 2.0 登录。
@@ -37,15 +37,19 @@ Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端。它�
 
 > 密码输入框只用于服务商要求的长期专用凭据：Gmail 和 iCloud 通常填写应用专用密码，QQ/网易填写客户端授权码，普通自建邮箱填写邮箱密码。凭据不会发送到 Nami Mail 以外的服务，只用于直接连接对应邮箱服务商；OAuth 刷新令牌同样仅加密保存在本机。
 
-## 0.5.0 新功能
+<!-- whats-new: v0.5.1 -->
+## 0.5.1 新功能
 
-- **全栈本地日历与邮件会议邀请**：内置月视图日历域，支持事件 CRUD；邮件日历邀请横幅直达腾讯会议/Zoom/飞书/Teams/Meet；ICS 导入按 UID 原地去重；15 分钟日程提醒。
-- **端到端多模态大模型接入**：模型配置支持独立开启图片、音频、视频与 PDF 附件；Composer 自适应根据模型能力过滤文件并展示专属类型 Badge；向下严格纯文本兼容。
-- **全套 UI 设计系统与视觉体验重构**：恢复 8px/12px/20px 统一圆角 Token 与同心圆角法则；侧边栏隐藏原生滚动条；全宽 Markdown 表格排版；半透明磨砂骨架屏。
-- **账户同步状态实时感知**：侧边栏实时呈现正在同步脉冲状态点，强化文件夹切换与静默轮询的并发时序防护。
-- **Agent 鲁棒性与工程解耦**：畸形工具 JSON 自愈重试，上下文预算剪枝与多轮会话自动压缩，4355 行超大 App.tsx 拆分为 8 个领域 hooks。
+0.5.1 是针对 Windows 应用内更新器的关键修复版本。
 
-详见 [Release Notes](docs/releases/v0.5.0.zh-CN.md) 和 [变更日志](CHANGELOG.zh-CN.md)。
+- **修复「重启并更新」静默退出**：更新助手改用 `cmd.exe /d /s /c start` 启动，不再使用 Node.js 的 `detached` spawn，因此不会在父进程 Electron 退出时被一并终止、导致任何逻辑都未执行就静默退出（Node.js Issue #51018）。
+- **恢复应用内静默更新**：从 0.5.1 起，后续版本可原地静默安装并自动重启。
+- **补齐 NSIS 原地覆盖升级参数**：运行中的进程按预期处理，自定义安装路径（例如非默认盘符）不会被重置。
+- **修复重启工作目录漂移与更新死循环**：更新后重启的应用从自身目录启动；更新失败会清理缓存包，不再反复弹出更新提示。
+
+> **仍在使用 0.4.3 或 0.5.0？** 这两个版本内置的更新助手带有该缺陷，应用内更新无法成功。请从 [Release 页面](https://github.com/QinIndexCode/nami-mail/releases) 下载 `Nami-Mail-Setup-0.5.1.exe` 并手动运行一次。现有邮件、账户、设置与加密密钥均会保留，无需重新登录或重新配置。
+
+详见 [Release Notes](docs/releases/v0.5.1.zh-CN.md) 和 [变更日志](CHANGELOG.zh-CN.md)。
 
 ## 获取和首次使用
 
@@ -229,7 +233,7 @@ OAuth 回调会回到本机的 `/api/oauth/google/callback` 或 `/api/oauth/micr
 - **邮件模板库**：在设置中管理常用主题与正文模板，撰写或回复时一键插入
 - **附件内联预览**：PDF 与图片在只读预览中渲染，DOCX/PPTX/XLSX 与常见文本文件提供只读文本预览，不导出原始文件
 - **日历**：邮件中的日历邀请横幅、ICS 导入（追加/替换两种模式，按 UID 去重不重复导入）、事件提醒与 ICS 导出
-- **BIMI 品牌图标**：解析并验证企业发件人官方 SVG 品牌图标，经安全净化与本地缓存后展示
+- **BIMI 品牌图标**：读取发件人域名发布的 BIMI 记录（`default._bimi` TXT 中的 `l=`）并展示其指向的 SVG 品牌图标，经安全净化与本地缓存；仅按域名解析，不校验发件人是否通过认证
 - **自动回复**：可选的邮件自动回复，判定初筛与草稿生成可分别配置模型，发送前必须经用户确认
 - **邮件过滤规则**：按条件组合匹配新邮件并自动执行标记已读、加星、归档或移动到指定文件夹；仅在本机生效，不改动服务商端配置
 - **本地备份导出**：一键将全部账户的邮件流式导出为 ZIP 归档

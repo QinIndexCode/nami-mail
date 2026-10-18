@@ -126,6 +126,32 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
     void next();
   };
 
+  /**
+   * Follows every id the undo committed, and reports once all of them have
+   * settled.
+   *
+   * A list rather than one id because the reverse is one undoable task per
+   * account (contract §4.7 A ⑨): a selection spanning three accounts commits
+   * three, and no single root groups them — the response is the only place the
+   * caller learns them. Reporting on the first to settle would reload while the
+   * others are still running, which is the "undo looks inert" symptom the
+   * single-id follow-up was written to remove. An empty list settles
+   * immediately, so a refused undo (`reason`) reconciles now instead of never.
+   */
+  const followAllToSettled = (ids: readonly string[], onSettled: () => void): void => {
+    if (!ids.length) {
+      onSettled();
+      return;
+    }
+    let remaining = ids.length;
+    for (const id of ids) {
+      followToSettled(id, () => {
+        remaining -= 1;
+        if (remaining === 0) onSettled();
+      });
+    }
+  };
+
   const poll = (jobId: string, opts: BatchJobRunOptions): void => {
     // Deadlines are keyed by job: the runner serves overlapping batches, and a
     // single deadline on the runner would be reset by every newer batch, letting
@@ -157,23 +183,20 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
         }
         runDeadlines.delete(jobId);
         onSnapshot(null);
-        // Undo is jobId-only: the server holds the changed ids of the job it
-        // recorded, so the toast action must not grow a dependency on the
-        // progress payload (which is progress numbers only — see
-        // BatchJobSnapshot).
+        // Undo is jobId-only in the request: the server holds the changed ids of
+        // the job it recorded, so the toast action must not grow a dependency on
+        // the progress payload (which is progress numbers only — see
+        // BatchJobSnapshot). The *answer* names the reverse it committed, and
+        // that is what gets followed.
         const undoAction: BatchJobToastAction = {
           label: t("mail.selection.undo"),
           run: () => {
             showToast(t("mail.selection.undoStarted"), "info");
             void api.batchJobUndo(jobId).then((result) => {
-              const undoJobId = result?.jobId;
-              // No job id means the server either refused the undo or answered
-              // without one; there is nothing to follow, so reconcile now.
-              if (!undoJobId) {
-                void reload({ silent: true });
-                return;
-              }
-              followToSettled(undoJobId, () => void reload({ silent: true }));
+              // An empty list means the server either refused the undo or
+              // answered without ids; `followAllToSettled` reconciles now for
+              // exactly that case.
+              followAllToSettled(result?.taskIds ?? [], () => void reload({ silent: true }));
             }).catch(() => {
               showToast(t("mail.selection.jobError"), "error");
             });
@@ -211,7 +234,33 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
     // second job over the same rows. The id is filled in as soon as the server
     // assigns one; nothing reads it before then.
     onSnapshot({ id: "", kind: payload.kind, status: "running", total: 0, done: 0, updated: 0, failed: 0, createdAt: now() });
-    void api.batchJobCreate(payload).then(({ jobId }) => {
+    void api.batchJobCreate(payload).then(async ({ jobId, updated, failed }) => {
+      // A null id is not a failure: the acceptance committed nothing, so there
+      // is no job to poll (the id would 404 forever) and nothing to undo — the
+      // selection was already in the requested state, or matched no message.
+      // The route sends its own counts for exactly this case, and `updated +
+      // failed` is the selection size, which is the number the legacy's
+      // zero-work `batch_jobs` row reported as `total`.
+      if (!jobId) {
+        onSnapshot(null);
+        onBusy(false);
+        if (failed) {
+          showToast(t("mail.selection.partialFailure", { done: updated, failed }), "error");
+        } else {
+          showToast(t(opts.successKey, { count: updated }), "success");
+        }
+        // Same rule as the settled path: the action is done once its local
+        // effect is committed, and this acceptance was the commit.
+        if (updated > 0 && opts.exitOnSuccess) exitSelectionMode();
+        try {
+          await reload({ silent: true });
+        } catch {
+          // The batch is over; a refresh that failed is the next background
+          // refresh's problem, not a reason to leave the toolbar armed.
+        }
+        opts.onSettled?.();
+        return;
+      }
       // Same clock as the placeholder it replaces: the two snapshots describe
       // one job, and reading wall-clock time here would make them disagree
       // under the injected clock the polling budget is measured with.
@@ -224,7 +273,13 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
       reconcileQuietly(reconcile);
       runDeadlines.set(jobId, now());
       poll(jobId, opts);
-    }).catch((error: unknown) => {
+    }, (error: unknown) => {
+      // The refusal handler is `.then`'s SECOND argument, not a chained
+      // `.catch`: a chained catch also receives whatever the accepted path
+      // throws, and would then toast a batch failure over a batch the server had
+      // already accepted and committed. The two are different facts — "the
+      // server refused to start this" versus "reporting an accepted batch went
+      // wrong" — and only the first one is something the user must be told.
       onBusy(false);
       // A refused create committed nothing, so the placeholder goes with it —
       // otherwise the bar would stay inert for a job that does not exist. A

@@ -38,7 +38,7 @@ const BACKUP_PAGE_COLUMNS = "id, account_id, mailbox, uid, subject, sort_key, pe
  * one-shot query produced: account, then folder, then arrival time. Three
  * things are deliberate here.
  *
- * `sort_key` is the VIRTUAL generated column db.ts defines as SORT_KEY_SQL
+ * `sort_key` is the VIRTUAL generated column db-schema.ts defines as SORT_KEY_SQL
  * ("COALESCE(sent_at, created_at)") — literally the expression the old ORDER BY
  * spelled out, so reading the column cannot drift away from it. `uid` only
  * breaks ties between messages that share a sort key, which the old query left

@@ -30,6 +30,11 @@ describe("extractRootDomain", () => {
     expect(extractRootDomain("order.amazon.co.uk")).toBe("amazon.co.uk");
   });
 
+  it("strips the trailing root dot senders sometimes emit", () => {
+    expect(extractRootDomain("service@figma.com.")).toBe("figma.com");
+    expect(extractRootDomain("orders@amazon.co.uk.")).toBe("amazon.co.uk");
+  });
+
   it("handles case insensitivity, whitespace, ports, and invalid strings gracefully", () => {
     expect(extractRootDomain("  News@InsideApple.Apple.COM  ")).toBe("apple.com");
     expect(extractRootDomain("user@localhost:8080")).toBe("localhost");

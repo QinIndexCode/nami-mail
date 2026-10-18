@@ -3,8 +3,9 @@
  * and the message a failed entry is described by.
  *
  * Split out of sync-moves.ts (a frozen-size monolith) because this is the
- * reporting vocabulary rather than the move engine: the batch-job executor and
- * the batch-move route read it, and neither needs the engine to do so.
+ * reporting vocabulary rather than the move engine: `tasks/kinds/move.ts` reads a
+ * batch's outcome back through `batchMoveMessages` and needs this vocabulary to
+ * report it, without the engine having to move with it.
  */
 import { friendlyMailError } from "./mail.js";
 import {
@@ -32,7 +33,7 @@ const knownLocalMoveErrors = new Set([
   PENDING_MOVE_RECONCILIATION_ERROR,
   MOVE_LOCATION_UNVERIFIED_ERROR,
   // The two "wait your turn" conditions are local, retryable states, not
-  // provider failures. They stay verbatim so the batch-job executor can tell a
+  // provider failures. They stay verbatim so the `move` runner can tell a
   // retryable refusal from a terminal one by its message — flattening them into
   // the generic provider error would make a bulk move give its goals back
   // instead of retrying them. Same treatment the route layer already gives them

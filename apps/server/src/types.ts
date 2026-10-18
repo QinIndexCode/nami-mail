@@ -8,6 +8,7 @@ import type { TranslationResult } from "./translation.js";
 import type { TranslationServiceError } from "./translation.js";
 import type { AppSettings } from "./settings.js";
 import type { ServerEventBus } from "./events.js";
+import type { ProviderFactory } from "./provider/types.js";
 import type { AccountWire, ExternalPairingSummary } from "@nami/agent-contracts";
 
 /**
@@ -96,6 +97,12 @@ export type RuntimeContext = {
   // Server-originated mail events fanned out to connected clients over the
   // `GET /api/events` SSE endpoint by the route layer.
   serverEvents?: ServerEventBus;
+  // The mail provider seam (architecture contract §4.4). `buildApp` hands this
+  // to `setProviderFactory`, which is process-global: a host that injects one
+  // replaces ImapFlow/Nodemailer construction for the whole process, and hosts
+  // that omit it keep the real factory. Optional like every other field here so
+  // embedded and test hosts stay free to build a partial context.
+  providers?: ProviderFactory;
   // The owning runtime aborts this signal while the process is shutting down.
   // Route-triggered fire-and-forget syncs (account creation, OAuth first
   // sync, move reconciliation) hand it to `syncAccount` so their IMAP work

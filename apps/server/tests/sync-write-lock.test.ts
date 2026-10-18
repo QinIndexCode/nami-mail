@@ -17,9 +17,9 @@ describe("account write locks", () => {
 
   it("marks held slots so a queued executor's own lock call is skipped", async () => {
     const calls: string[] = [];
-    // Mirrors operation-queue.runRow: the slot is acquired, then the executor
-    // runs within a held-slot context where its nested withAccountWriteLocks
-    // must be a no-op instead of waiting on itself.
+    // Mirrors the task scheduler: the slot is acquired, then the runner executes
+    // inside a held-slot context where its nested withAccountWriteLocks must be a
+    // no-op instead of waiting on itself (`tasks/scheduler.ts:161-163`).
     const releases = await acquireAccountWriteSlots(["account-1"]);
     try {
       await withHeldWriteSlots(["account-1"], async () => {

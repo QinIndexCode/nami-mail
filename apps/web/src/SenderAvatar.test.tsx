@@ -85,35 +85,45 @@ describe("SenderAvatar", () => {
   it("keys the Gravatar lookup with the RFC 1321 md5 of the lowercased email", () => {
     // Both digests were cross-checked against node:crypto's md5 of the
     // lowercased address; they pin the little-endian digest serialization.
-    const apple = renderTree(<SenderAvatar name="Apple News" address="News@InsideApple.Apple.com" tone={0} gravatarEnabled={true} bimiEnabled={false} brandAvatarEnabled={false} />);
+    const apple = renderTree(<SenderAvatar name="Apple News" address="News@InsideApple.Apple.com" tone={0} gravatarEnabled={true} bimiEnabled={false} />);
     expect(apple).toContain("gravatar.com/avatar/e1a703880d8baa3819ff17f779914ad6");
     const nyt = renderTree(<SenderAvatar name="NYT" address="nytdirect@nytimes.com" tone={1} gravatarEnabled={true} bimiEnabled={false} />);
     expect(nyt).toContain("gravatar.com/avatar/cf775fbf8e1b63a401d480d2cbd482be");
   });
 
   it("shows the built-in official brand avatar before BIMI and Gravatar", () => {
-    const github = renderTree(
-      <SenderAvatar name="GitHub" address="notifications@github.com" tone={0} gravatarEnabled={true} bimiEnabled={true} />,
+    const figma = renderTree(
+      <SenderAvatar name="Figma" address="no-reply@figma.com" tone={0} gravatarEnabled={true} bimiEnabled={true} />,
     );
-    expect(github).toContain("brand-avatar");
-    expect(github).toContain('aria-label="GitHub"');
-    expect(github).toMatch(/rgb\(24,\s*23,\s*23\)|#181717/);
-    expect(github).not.toContain("gravatar.com");
+    expect(figma).toContain("brand-avatar");
+    expect(figma).toContain('aria-hidden="true"');
+    expect(figma).not.toContain("aria-label");
+    expect(figma).toMatch(/rgb\(242,\s*78,\s*30\)|#F24E1E/i);
+    expect(figma).not.toContain("gravatar.com");
     expect(getBimiAvatarMock).not.toHaveBeenCalled();
 
-    const aliyun = renderTree(
-      <SenderAvatar name="Aliyun" address="service@notice.aliyun.com" tone={1} gravatarEnabled={true} bimiEnabled={true} />,
+    const paypal = renderTree(
+      <SenderAvatar name="PayPal" address="service@paypal.com" tone={1} gravatarEnabled={true} bimiEnabled={true} />,
     );
-    expect(aliyun).toContain("brand-avatar");
-    expect(aliyun).toContain('aria-label="Aliyun"');
+    expect(paypal).toContain("brand-avatar");
+    expect(paypal).toContain('aria-hidden="true"');
   });
 
-  it("can disable the built-in brand avatar to fall through", () => {
-    const github = renderTree(
-      <SenderAvatar name="GitHub" address="notifications@github.com" tone={0} gravatarEnabled={false} bimiEnabled={false} brandAvatarEnabled={false} />,
+  it("renders the built-in brand avatar unconditionally, with no toggle to turn it off", () => {
+    // The glyph resolves from a bundled table and makes no network request, so it is
+    // on exactly like the local custom avatar; only the two network-backed sources
+    // (BIMI, Gravatar) opt in. If a toggle is ever reintroduced defaulting to off,
+    // the second render below starts containing the initials and this test fails.
+    const withNetworkSources = renderTree(
+      <SenderAvatar name="Figma" address="no-reply@figma.com" tone={0} gravatarEnabled={true} bimiEnabled={true} />,
     );
-    expect(github).not.toContain("brand-avatar");
-    expect(github).toContain(">GI<");
+    const withoutNetworkSources = renderTree(
+      <SenderAvatar name="Figma" address="no-reply@figma.com" tone={0} gravatarEnabled={false} bimiEnabled={false} />,
+    );
+    for (const html of [withNetworkSources, withoutNetworkSources]) {
+      expect(html).toContain("brand-avatar");
+      expect(html).not.toContain(">FI<");
+    }
   });
 
   it("shows the BIMI logo before Gravatar and requests only the domain", async () => {

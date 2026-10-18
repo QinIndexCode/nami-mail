@@ -24,6 +24,7 @@ import { LIST_TEXT_PREVIEW_CHARS } from "../src/message-wire.js";
 import { MAX_STORED_HTML_BODY_BYTES, TRUNCATED_BODY_NOTICE } from "../src/message-body-limits.js";
 import type { OAuthService } from "../src/oauth.js";
 import { markAccountSyncing, unmarkAccountSyncing } from "../src/sync-locks.js";
+import { openTaskPayload, taskRow } from "../src/tasks/store.js";
 
 // Fastify's inject stamps a synthetic default of "Host: localhost:80" on
 // every request that does not carry an explicit host header. The token-less
@@ -1345,11 +1346,11 @@ it("keeps an Agent stream running after the client closes its response", async (
         username_mode, status, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(accountId, `${accountId}@example.com`, "custom", "Job provider", "encrypted", "127.0.0.1", 1, 1, "127.0.0.1", 1, 1, "email", "connected", now);
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(accountId, "INBOX", "INBOX", "\\Inbox", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run(accountId, "INBOX", "INBOX", "\\Inbox");
     if (archiveFolder) {
-      db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-        .run(accountId, "Archive", "Archive", "\\Archive", 0, 0);
+      db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+        .run(accountId, "Archive", "Archive", "\\Archive");
     }
     const insertMessage = db.prepare(`
       INSERT INTO messages (
@@ -1400,6 +1401,101 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect("changedIds" in refused.json()).toBe(false);
   });
 
+  it("answers a single flag update with its task id, and commits the push it names", async () => {
+    imapClientForAccount.mockReturnValue(readyMailClient());
+    const { now, insertMessage } = seedJobAccount("flag-single");
+    insertMessage.run("flag-single-1", "flag-single", "INBOX", 73, "Single", "Demo", "demo@example.com", "[]", now, "f", "f", "", "[]", 0, 10, now);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/flag-single-1",
+      payload: { flagged: true },
+    });
+    expect(response.statusCode).toBe(200);
+    // The whole key set, so bare `ok` surviving untouched is pinned rather than
+    // assumed: the task id and its status are *added* beside it, and nothing is
+    // renamed or removed (§4.6 "响应体只增不改").
+    expect(Object.keys(response.json()).sort()).toEqual(["ok", "status", "taskId"]);
+    const { taskId, status } = response.json() as { taskId: string; status: string };
+    // `pending` is the task vocabulary, not the renderer's: the route hands out a
+    // committed task and the renderer polls by id instead of waiting for the push.
+    expect(status).toBe("pending");
+
+    const task = taskRow(db, taskId);
+    if (!task) throw new Error(`Expected the task the route named, ${taskId}`);
+    expect(task).toMatchObject({ account_id: "flag-single", kind: "flags" });
+    // The id the response names is the row that carries the push, and the local
+    // target state committed in the same transaction as it.
+    const items = db.prepare("SELECT message_id FROM task_items WHERE task_id = ?").all(taskId) as Array<{ message_id: string }>;
+    expect(items).toEqual([{ message_id: "flag-single-1" }]);
+    const flags = JSON.parse(
+      (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("flag-single-1") as { flags_json: string }).flags_json,
+    );
+    expect(flags).toEqual(["\\Flagged"]);
+  });
+
+  it("commits no task for a flag update that changes nothing, and names none", async () => {
+    imapClientForAccount.mockReturnValue(readyMailClient());
+    const { now, insertMessage } = seedJobAccount("flag-noop");
+    insertMessage.run("flag-noop-1", "flag-noop", "INBOX", 74, "Noop", "Demo", "demo@example.com", "[]", now, "n", "n", "", "[\"\\\\Flagged\"]", 0, 10, now);
+    const before = (db.prepare("SELECT COUNT(*) c FROM tasks").get() as { c: number }).c;
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/flag-noop-1",
+      payload: { flagged: true },
+    });
+    // Nothing to push, so nothing to name: a task id here would send the renderer
+    // to poll a task that does not exist. Bare `ok` is what the legacy answered for
+    // "already in that state" and it stays the answer.
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true });
+    expect((db.prepare("SELECT COUNT(*) c FROM tasks").get() as { c: number }).c).toBe(before);
+  });
+
+  it("counts a message blocked by a pending move as failed in a batch flag update", async () => {
+    // The one numeric change the flags switch makes. The legacy formula subtracted
+    // the blocked ids twice (`commitLocalFlags`'s `prepared.length - blocked.length`,
+    // named as deleted in `tasks/kinds/flags.ts:272-273`)
+    // even though a blocked id never entered `prepared`, so it left them out of
+    // `updated` AND `failed` at once -- a selection of two, one of which really did
+    // commit, answered `{updated: 0, failed: 0}`. Contract §4.7 B3 records it.
+    imapClientForAccount.mockReturnValue(readyMailClient());
+    const { now, insertMessage } = seedJobAccount("flag-blocked");
+    insertMessage.run("flag-blocked-1", "flag-blocked", "INBOX", 75, "Fine", "Demo", "demo@example.com", "[]", now, "b", "b", "", "[]", 0, 10, now);
+    // A move whose outcome the provider has not confirmed: `prepareLocalFlags`
+    // refuses to touch the row until the reconciler settles it.
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, pending_move_destination, pending_move_state, pending_move_special_use,
+        subject, from_name, from_address, to_json, sent_at, snippet, text_body, html_body,
+        flags_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "flag-blocked-pending", "flag-blocked", "INBOX", 76, "Archive", "intent", "\\Archive",
+      "Move not confirmed yet", "Demo", "demo@example.com", "[]", now, "", "", "", "[]", 0, 10, now,
+    );
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/messages/batch/flags",
+      payload: { ids: ["flag-blocked-1", "flag-blocked-pending"], patch: { seen: true } },
+    });
+    expect(response.statusCode).toBe(200);
+    // Both ids are accounted for: one committed, one refused.
+    expect(response.json()).toEqual({ ok: true, updated: 1, failed: 1 });
+    // The blocked row is untouched locally -- settling it belongs to the reconciler,
+    // not to this acceptance -- and so it gets no push task.
+    const untouched = JSON.parse(
+      (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("flag-blocked-pending") as { flags_json: string }).flags_json,
+    );
+    expect(untouched).toEqual([]);
+    const items = db
+      .prepare("SELECT message_id FROM task_items WHERE message_id IN (?, ?)")
+      .all("flag-blocked-1", "flag-blocked-pending") as Array<{ message_id: string }>;
+    expect(items).toEqual([{ message_id: "flag-blocked-1" }]);
+  });
+
   it("answers a batch move with counts and failures only — never a moved-id list", async () => {
     // The sibling route. It never echoed a per-id array, so nothing has to
     // change; pinning its key set keeps the two batch contracts from drifting
@@ -1422,7 +1518,7 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(body.updated).toBe(1);
   });
 
-  it("commits batch flags locally and records one durable push per account", async () => {
+  it("commits batch flags locally and records one durable flags task per account", async () => {
     imapClientForAccount.mockReturnValue(readyMailClient());
     const { now, insertMessage } = seedJobAccount("flag-batch-a");
     const { insertMessage: insertMessageB } = seedJobAccount("flag-batch-b");
@@ -1436,46 +1532,52 @@ it("keeps an Agent stream running after the client closes its response", async (
     });
     expect(response.statusCode).toBe(200);
     // `updated: 2` is what this test is about: the two ids really committed.
-    // That it was *these* two ids is proven below by the durable push rows,
-    // which name them per account — the response itself no longer echoes ids.
+    // That it was *these* two ids is proven below by the durable task rows and
+    // their items, which name them per account — the response itself no longer
+    // echoes ids.
     expect(response.json()).toEqual({ ok: true, updated: 2, failed: 0 });
 
-    // The flags are visible locally immediately (write-behind), and one
-    // durable flags-push row per account carries the remote delta — a
-    // shutdown mid-push is recovered by resumePending on startup.
+    // The flags are visible locally immediately, and one durable flags task per
+    // account carries the remote delta — a shutdown mid-push is recovered by the
+    // scheduler's resume on the next start. The claim is the one the queue
+    // version made, read off the task layer instead: the task names the account,
+    // its sealed payload names the account's entries, and the push settles it.
     const flagged = JSON.parse(
       (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("flag-a-1") as { flags_json: string }).flags_json,
     );
     expect(flagged).toEqual(["\\Seen"]);
     for (const _attempt of [0, 0, 0, 0, 0]) {
-      const pending = db.prepare(`
-        SELECT COUNT(*) c FROM operation_queue
-        WHERE kind = 'flags-push' AND status IN ('pending', 'running')
-      `).get() as { c: number };
+      const pending = db.prepare("SELECT COUNT(*) c FROM tasks WHERE kind = 'flags' AND status IN ('pending', 'running')").get() as { c: number };
       if (pending.c === 0) break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     const rows = db
-      .prepare("SELECT account_id, kind, status, payload_json FROM operation_queue WHERE account_id IN (?, ?) ORDER BY account_id")
-      .all("flag-batch-a", "flag-batch-b") as Array<{ account_id: string; kind: string; status: string; payload_json: string }>;
+      .prepare("SELECT id, account_id, status FROM tasks WHERE kind = 'flags' ORDER BY account_id")
+      .all() as Array<{ id: string; account_id: string; status: string }>;
     expect(rows).toHaveLength(2);
     for (const row of rows) {
-      expect(row.kind).toBe("flags-push");
       expect(row.status).toBe("completed");
-      const payload = JSON.parse(row.payload_json) as { accountId: string; entries: Array<{ id: string; mailbox: string; uid: number; add: string[]; remove: string[] }> };
+      const task = taskRow(db, row.id);
+      if (!task) throw new Error(`Expected task ${row.id} to exist`);
+      const payload = openTaskPayload(Buffer.alloc(32, 7), task) as {
+        accountId: string;
+        entries: Array<{ id: string; mailbox: string; uid: number; add: string[]; remove: string[] }>;
+      };
       expect(payload.accountId).toBe(row.account_id);
       expect(payload.entries.length).toBe(1);
       expect(payload.entries[0]?.add).toEqual(["\\Seen"]);
       expect(payload.entries[0]?.remove).toEqual([]);
     }
-    expect(flagged).toEqual(["\\Seen"]);
+    // The items are the per-message record the response deliberately does not
+    // echo: one row per committed message, joining it to the task that pushes it.
+    const items = db.prepare("SELECT message_id FROM task_items ORDER BY message_id").all() as Array<{ message_id: string }>;
+    expect(items.map((item) => item.message_id)).toEqual(["flag-a-1", "flag-b-1"]);
   });
 
   it("commits batch flags locally even when the provider is unreachable, deferring the push", async () => {
-    // Write-behind contract: the response is the local commit (milliseconds,
-    // no provider round-trip). A dead provider shows up as a retrying
-    // flags-push row with the per-message marker set — never as a failed
-    // user action.
+    // Local-first contract: the response is the local commit (milliseconds, no
+    // provider round-trip). A dead provider shows up as a retrying flags task
+    // with the per-message marker set — never as a failed user action.
     imapClientForAccount.mockReturnValue(undefined as never);
     const { now, insertMessage } = seedJobAccount("flag-batch-dead");
     insertMessage.run("flag-dead-1", "flag-batch-dead", "INBOX", 61, "Stuck", "Demo", "demo@example.com", "[]", now, "s", "s", "", "[]", 0, 10, now);
@@ -1493,7 +1595,7 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(local).toEqual(["\\Seen"]);
     const marker = db.prepare("SELECT pending_flags_push FROM messages WHERE id = ?").get("flag-dead-1") as { pending_flags_push: number };
     expect(marker.pending_flags_push).toBe(1);
-    const queued = db.prepare("SELECT COUNT(*) c FROM operation_queue WHERE kind = 'flags-push' AND status IN ('pending','running')").get() as { c: number };
+    const queued = db.prepare("SELECT COUNT(*) c FROM tasks WHERE kind = 'flags' AND status IN ('pending','running')").get() as { c: number };
     expect(queued.c).toBeGreaterThanOrEqual(1);
   });
 
@@ -1606,7 +1708,7 @@ it("keeps an Agent stream running after the client closes its response", async (
     expect(JSON.parse(untouched)).toEqual(["\\Seen"]);
   });
 
-  it("keeps the local target when the provider is unreachable and reports accepted counts", async () => {
+  it("keeps the local target when the provider is unreachable, and reports the push rather than the commit", async () => {
     imapClientForAccount.mockReturnValue(undefined as never);
     const { now, insertMessage } = seedJobAccount("job-dead");
     insertMessage.run("job-dead-1", "job-dead", "INBOX", 21, "Stuck", "Demo", "demo@example.com", "[]", now, "s", "s", "", "[]", 0, 10, now);
@@ -1617,16 +1719,27 @@ it("keeps an Agent stream running after the client closes its response", async (
       url: "/api/batch-jobs",
       payload: { kind: "flags", patch: { seen: true }, query: { accountId: "job-dead" } },
     });
+    // The acceptance's answer is the local commit: both messages were resolved
+    // and both targets are now in force, provider or no provider.
+    expect(created.json()).toMatchObject({ ok: true, updated: 2, failed: 0 });
     const { jobId } = created.json();
 
     // Local-first: the acceptance commit is the user's target state, so the
-    // counts are "accepted" (not provider-confirmed) and the cache keeps the
-    // choice while the background push retries against the dead provider.
-    // The push rows retry with real backoff (~90s to exhaustion), so the
-    // terminal settlement is covered deterministically in batch-jobs.test.ts;
+    // cache keeps the choice while the background push retries against the dead
+    // provider. The push rows retry with real backoff (~90s to exhaustion), so
+    // the terminal settlement is covered deterministically in batch-jobs.test.ts;
     // here the unreachable-provider contract is observable immediately.
+    //
+    // The job's own numbers are the *push's*, not the commit's, and they
+    // therefore read zero here: a task's ledger counts what its runner delivered
+    // (`reportTaskProgress`), and the settlement closes the books on the row's own
+    // arithmetic (`owed = total - updated - failed`), so seeding it with the
+    // locally-committed count would double it. Only the two numbers below -- the
+    // committed target and the markers that still owe a push -- describe what the
+    // user asked for. The acceptance's own count is the create response above
+    // (contract §9 D17).
     const accepted = await app.inject({ method: "GET", url: `/api/batch-jobs/${jobId}` });
-    expect(accepted.json().job).toMatchObject({ status: "running", total: 2, done: 0, updated: 2, failed: 0 });
+    expect(accepted.json().job).toMatchObject({ status: "running", total: 2, done: 0, updated: 0, failed: 0 });
     const local = (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("job-dead-1") as { flags_json: string }).flags_json;
     expect(JSON.parse(local)).toContain("\\Seen");
     const marked = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE pending_flags_push = 1").get() as { n: number };
@@ -1663,8 +1776,19 @@ it("keeps an Agent stream running after the client closes its response", async (
     const firstUndo = await app.inject({ method: "POST", url: `/api/batch-jobs/${jobId}/undo`, payload: {} });
     expect(firstUndo.statusCode).toBe(200);
     expect(firstUndo.json()).toMatchObject({ ok: true });
-    const undoJobId = firstUndo.json().jobId;
-    await waitForJob(undoJobId);
+    // The reverse is committed as one task per account -- a flags parent's
+    // inverse is a flags task, a move parent's is an undo task -- so the answer
+    // is a list of ids rather than the single `jobId` the legacy minted for its
+    // own reverse job. One account here, so one id; the renderer follows them all
+    // (contract §4.7 A ⑨).
+    const undoTaskIds = firstUndo.json().taskIds as string[];
+    const undoTaskId = undoTaskIds[0];
+    // Guarding rather than asserting: an empty list would otherwise poll
+    // `/api/tasks/undefined` and fail as a 404 instead of naming the real fault.
+    if (typeof undoTaskId !== "string") throw new Error(`Expected an undo task id, got ${JSON.stringify(firstUndo.json())}`);
+    // A lone task is its own job as far as the poll is concerned: `jobSnapshot`
+    // falls back to the task row when the id names no job root.
+    await waitForJob(undoTaskId);
     const reverted = (db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("job-undo-1") as { flags_json: string }).flags_json;
     expect(JSON.parse(reverted)).toEqual([]);
 
@@ -1719,8 +1843,8 @@ it("keeps an Agent stream running after the client closes its response", async (
     mailClient.messageMove.mockImplementation(async () => ({ uidMap: new Map([[41, 101]]) }));
     imapClientForAccount.mockReturnValue(mailClient);
     const { now, insertMessage } = seedJobAccount("job-move-junk");
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("job-move-junk", "Junk", "Junk", "\\Junk", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("job-move-junk", "Junk", "Junk", "\\Junk");
     insertMessage.run("job-junk-1", "job-move-junk", "INBOX", 41, "Spam", "Demo", "demo@example.com", "[]", now, "s", "s", "", "[]", 0, 10, now);
 
     const created = await app.inject({
@@ -1816,10 +1940,10 @@ it("keeps an Agent stream running after the client closes its response", async (
         username_mode, status, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run("account-1", "demo@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", new Date().toISOString());
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "INBOX", "Inbox", "\\Inbox", 2, 1);
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Sent", "Sent", "\\Sent", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox");
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Sent", "Sent", "\\Sent");
     const insertMessage = db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
@@ -1894,8 +2018,8 @@ it("keeps an Agent stream running after the client closes its response", async (
         username_mode, status, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run("account-1", "demo@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "INBOX", "Inbox", "\\Inbox", 1, 1);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox");
     const textBody = `head-${"b".repeat(LIST_TEXT_PREVIEW_CHARS * 2)}-tail`;
     const htmlBody = `<p>head</p><img src="cid:logo@mail">`;
     db.prepare(`
@@ -1958,8 +2082,8 @@ it("keeps an Agent stream running after the client closes its response", async (
     `);
     insertAccount.run("account-1", "demo@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
     insertAccount.run("account-2", "two@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "INBOX", "Inbox", "\\Inbox", 3, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox");
     const insertMessage = db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
@@ -2006,11 +2130,11 @@ it("keeps an Agent stream running after the client closes its response", async (
     `);
     insertAccount.run("account-archive", "archive@example.com", "custom", "Archive provider", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
     insertAccount.run("account-gmail", "gmail@example.com", "gmail", "Gmail", "encrypted", "imap.gmail.com", 993, 1, "smtp.gmail.com", 465, 1, "email", "connected", now);
-    const insertFolder = db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)");
-    insertFolder.run("account-archive", "Archive", "Archive", "\\Archive", 1, 0);
-    insertFolder.run("account-archive", "All Mail", "All Mail", "\\All", 1, 0);
-    insertFolder.run("account-gmail", "INBOX", "Inbox", "\\Inbox", 1, 0);
-    insertFolder.run("account-gmail", "[Gmail]/All Mail", "All Mail", "\\All", 3, 0);
+    const insertFolder = db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)");
+    insertFolder.run("account-archive", "Archive", "Archive", "\\Archive");
+    insertFolder.run("account-archive", "All Mail", "All Mail", "\\All");
+    insertFolder.run("account-gmail", "INBOX", "Inbox", "\\Inbox");
+    insertFolder.run("account-gmail", "[Gmail]/All Mail", "All Mail", "\\All");
     const insertMessage = db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, all_mail_archived, subject, from_name, from_address, to_json,
@@ -2058,10 +2182,10 @@ it("keeps an Agent stream running after the client closes its response", async (
         username_mode, status, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run("pending-account", "pending@example.com", "custom", "Pending", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
-    const insertFolder = db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)");
-    insertFolder.run("pending-account", "INBOX", "Inbox", "\\Inbox", 3, 0);
-    insertFolder.run("pending-account", "Archive", "Archive", "\\Archive", 1, 0);
-    insertFolder.run("pending-account", "Trash", "Trash", "\\Trash", 1, 0);
+    const insertFolder = db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)");
+    insertFolder.run("pending-account", "INBOX", "Inbox", "\\Inbox");
+    insertFolder.run("pending-account", "Archive", "Archive", "\\Archive");
+    insertFolder.run("pending-account", "Trash", "Trash", "\\Trash");
     const insertMessage = db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, pending_move_destination, subject, from_name, from_address, to_json,

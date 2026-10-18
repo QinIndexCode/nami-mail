@@ -106,10 +106,10 @@ describe("filter rules", () => {
         username_mode, status, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run("account-1", "demo@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", now);
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "INBOX", "Inbox", "\\Inbox", 1, 1);
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "[Gmail]/All Mail", "All Mail", "\\All", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox");
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "[Gmail]/All Mail", "All Mail", "\\All");
   });
 
   afterEach(() => {
@@ -309,8 +309,8 @@ describe("filter rules API routes", () => {
     app = await buildApp({ db: routeDb, masterKey: Buffer.alloc(32, 7) });
     routeDb.prepare(insertAccountStatement)
       .run("account-1", "demo@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", routeNow);
-    routeDb.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "INBOX", "Inbox", "\\Inbox", 1, 1);
+    routeDb.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox");
   });
 
   afterEach(async () => {

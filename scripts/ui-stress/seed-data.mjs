@@ -157,9 +157,12 @@ db.prepare(`
   new Date(nowMs).toISOString(),
 );
 
+// The folder badge is derived from `messages` (contract §4.5, I4), so a folder
+// row is just its identity: there is no count to seed, and seeding one would be
+// the drift the drop-column migration removed.
 const insertFolder = db.prepare(`
-  INSERT INTO folders (account_id, path, name, special_use, total, unseen)
-  VALUES (?, ?, ?, ?, 0, 0)
+  INSERT INTO folders (account_id, path, name, special_use)
+  VALUES (?, ?, ?, ?)
 `);
 insertFolder.run(accountId, "INBOX", "收件箱", null);
 insertFolder.run(accountId, "[Gmail]/All Mail", "所有邮件", "\\All");

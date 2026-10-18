@@ -102,7 +102,7 @@ const expectedFiles = [
   "node_modules/nodemailer/package.json",
   "node_modules/oauth4webapi/package.json",
   "node_modules/dotenv/package.json",
-  "node_modules/better-sqlite3/package.json",
+  "node_modules/better-sqlite3-multiple-ciphers/package.json",
   "node_modules/sharp/package.json",
   "node_modules/@img/sharp-win32-x64/package.json",
   "node_modules/@nami/agent-contracts/package.json",
@@ -363,7 +363,7 @@ const unpackedSqliteModule = path.join(
   "resources",
   "app.asar.unpacked",
   "node_modules",
-  "better-sqlite3",
+  "better-sqlite3-multiple-ciphers",
 );
 const unpackedSqlitePrebuild = expectedWindowsSqlitePrebuild(unpackedSqliteModule);
 await fs.access(unpackedSqlitePrebuild);

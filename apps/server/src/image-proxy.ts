@@ -3,11 +3,12 @@ import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
-import { Transform } from "node:stream";
+import { Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
   type CacheEntry,
   type UnindexedFile,
+  cacheFileAad,
   cacheFilename,
   cacheMeta,
   ensureCacheDir,
@@ -19,6 +20,7 @@ import {
   saveMeta,
   scheduleFlush,
 } from "./image-cache-index.js";
+import { localFilePurposes, openLocalFile, sealLocalFile } from "./local-file-encryption.js";
 import { serverLog } from "./logging.js";
 
 // ---------------------------------------------------------------------------
@@ -182,7 +184,7 @@ function touchEntry(entry: CacheEntry): void {
 // Cleanup — runs periodically and on startup
 // ---------------------------------------------------------------------------
 
-export function runCacheCleanup(): void {
+export function runCacheCleanup(masterKey: Buffer): void {
   // The pass is pure synchronous fs work and runs both on the startup path
   // (startCacheCleanupTimer) and inside the hourly timer: a failing write
   // (disk full, permissions, an antivirus lock on Windows) must degrade to a
@@ -195,7 +197,7 @@ export function runCacheCleanup(): void {
   // window and the quota keep applying to the bytes on disk.
   try {
     ensureCacheDir();
-    loadMeta();
+    loadMeta(masterKey);
     // Re-read the index through the accessor: a concurrent `proxyImage` can
     // have replaced it since, and the pass must sweep whatever is current.
     const meta = cacheMeta();
@@ -219,6 +221,14 @@ export function runCacheCleanup(): void {
     const unindexedToRemove: string[] = [];
     const unindexed: UnindexedFile[] = [];
     for (const file of listUnindexedFiles()) {
+      // An unsealed 64-hex file was not written by this cache — it either
+      // predates encryption or is not ours — so it goes on sight rather than
+      // waiting out the age window. It is not counted toward the quota because
+      // it is already leaving.
+      if (!file.sealed) {
+        unindexedToRemove.push(file.file);
+        continue;
+      }
       // mtime stands in for the `lastAccess` the lost index used to carry.
       if (now - file.lastAccess > MAX_AGE_MS) {
         unindexedToRemove.push(file.file);
@@ -256,7 +266,7 @@ export function runCacheCleanup(): void {
     for (const key of keysToRemove) {
       const entry = meta[key];
       if (entry) {
-        const full = safeCachePath(entry.file);
+        const full = safeCachePath(key);
         if (full) try { fs.unlinkSync(full); } catch { /* missing is fine */ }
         delete meta[key];
       }
@@ -265,11 +275,11 @@ export function runCacheCleanup(): void {
       const full = safeCachePath(file);
       if (full) try { fs.unlinkSync(full); } catch { /* missing is fine */ }
     }
-    if (keysToRemove.length > 0) saveMeta();
+    if (keysToRemove.length > 0) saveMeta(masterKey);
     // Whatever cache hits marked while the pass ran is written here, so the
     // hourly reconciliation is also the backstop that keeps deferred touches
     // from lingering. A no-op when nothing is pending.
-    flushMeta();
+    flushMeta(masterKey);
     lastCleanupWarnAt = 0; // a clean pass re-arms the throttled warning
   } catch (error) {
     const now = Date.now();
@@ -280,15 +290,15 @@ export function runCacheCleanup(): void {
   }
 }
 
-export function startCacheCleanupTimer(): void {
-  runCacheCleanup();
+export function startCacheCleanupTimer(masterKey: Buffer): void {
+  runCacheCleanup(masterKey);
   // Registered once, here, because this is the one startup path both the CLI
   // service and the desktop utility process go through. The `exit` handler is
   // the backstop for the paths that never reach a graceful close; a shutdown
   // that does close properly writes through `runCacheCleanup`/`flushMeta`.
-  installFlushOnExit();
+  installFlushOnExit(masterKey);
   if (!cleanupTimer) {
-    cleanupTimer = setInterval(runCacheCleanup, CLEANUP_INTERVAL_MS);
+    cleanupTimer = setInterval(() => runCacheCleanup(masterKey), CLEANUP_INTERVAL_MS);
     if (cleanupTimer.unref) cleanupTimer.unref();
   }
 }
@@ -454,35 +464,85 @@ function byteLimitTransform(limit: number): Transform {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch a remote image, cache it to disk, and return the local file path +
- * content-type. Returns `null` if the fetch fails or the URL is disallowed.
+ * Read a cached image back through the seal. A miss, a truncated file and a
+ * tampered file all come back as `undefined` and are all treated the same way —
+ * fetch it again — because the alternative (serving whatever the bytes happen to
+ * be) is what an integrity check exists to prevent.
+ *
+ * The entry is left for the download path to overwrite: the name is derived from
+ * the URL, so the next successful fetch lands on exactly this file.
  */
-export async function proxyImage(url: string): Promise<{ filePath: string; contentType: string } | null> {
+function readSealedCacheFile(masterKey: Buffer, file: string): Buffer | undefined {
+  const full = safeCachePath(file);
+  if (!full) return undefined;
+  try {
+    return openLocalFile(masterKey, localFilePurposes.imageCacheContent, cacheFileAad(file), fs.readFileSync(full));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Write a sealed cache file with no plaintext ever landing on disk: the envelope
+ * is staged next to its target and renamed into place, so a crash leaves either
+ * the previous state or the complete new file, never a half-written image. The
+ * staging name ends in `.tmp`, which the 64-hex cache-name pattern rejects, so
+ * the cleanup pass can never mistake a leftover for a cache entry.
+ */
+function writeSealedCacheFile(masterKey: Buffer, file: string, full: string, plaintext: Buffer): void {
+  const sealed = sealLocalFile(masterKey, localFilePurposes.imageCacheContent, cacheFileAad(file), plaintext);
+  const staging = `${full}.tmp`;
+  try {
+    fs.writeFileSync(staging, sealed);
+    fs.renameSync(staging, full);
+  } catch (error) {
+    try { fs.unlinkSync(staging); } catch { /* nothing staged */ }
+    throw error;
+  }
+}
+
+/**
+ * Fetch a remote image, cache it under its opaque name, and return its bytes and
+ * content-type. Returns `null` if the fetch fails or the URL is disallowed.
+ *
+ * The bytes are returned in memory rather than as a path because the cached file
+ * is ciphertext: the caller gets the image, never the file. One image is bounded
+ * by MAX_FILE_BYTES, so holding it for the length of one request is bounded too,
+ * and the seal is why streaming straight to disk is not an option — an AEAD
+ * authenticates the length up front, so the whole plaintext has to be in hand
+ * before any of it can be written.
+ */
+export async function proxyImage(url: string, masterKey: Buffer): Promise<{ content: Buffer; contentType: string } | null> {
   if (!isAllowedUrl(url)) return null;
 
   ensureCacheDir();
-  loadMeta();
+  loadMeta(masterKey);
+
+  // The index key is the opaque name, so no URL is written anywhere; see
+  // `cacheFilename`.
+  const file = cacheFilename(masterKey, url);
 
   // `cacheMeta()` is re-read at every use below, on purpose: the fetch below
   // awaits, so another in-flight call can rebind the index meanwhile. Reading
   // the binding each time is what keeps concurrent calls writing to one index
   // instead of to two diverging copies of it.
-  const existing = cacheMeta()[url];
+  const existing = cacheMeta()[file];
   if (existing) {
-    const full = safeCachePath(existing.file);
-    if (full && fs.existsSync(full)) {
+    const content = readSealedCacheFile(masterKey, file);
+    if (content) {
       touchEntry(existing);
       // Deferred, not written: a hit only moves lastAccess, whose only reader
       // is the hourly age rule. Writing here is what made one mail with many
       // inline images rewrite the whole index once per image. The mark is
       // coalesced into a single write and flushed on the way out.
-      scheduleFlush();
-      return { filePath: full, contentType: existing.contentType };
+      scheduleFlush(masterKey);
+      return { content, contentType: existing.contentType };
     }
-    // The file is gone, so the entry is dropped. Left unsaved exactly as before:
-    // the hourly reconciliation reclaims such an entry anyway, and persisting it
-    // here would be a behaviour change this batch has no reason to make.
-    delete cacheMeta()[url];
+    // Unreadable, so the entry is dropped and the image is fetched again.
+    // Dropped in memory only, exactly as before: the hourly reconciliation
+    // reclaims such an entry anyway, and persisting it here would be a
+    // behaviour change this batch has no reason to make.
+    delete cacheMeta()[file];
   }
 
   const response = await fetchRemoteImage(url);
@@ -498,51 +558,64 @@ export async function proxyImage(url: string): Promise<{ filePath: string; conte
     return null;
   }
 
-  const file = cacheFilename(url);
   const full = safeCachePath(file);
   if (!full) {
     response.stream.resume();
     return null;
   }
 
-  // Two guards bound the transfer itself: the byte gate (same MAX_FILE_BYTES
-  // ceiling as the header check and the post-write stat check below) and the
-  // wall-clock deadline (FETCH_TIMEOUT_MS is only a socket idle timeout, so a
-  // drip-fed body would otherwise grow forever). `pipeline` destroys every
-  // stream in the chain as soon as one errors — the response, closing the
-  // socket, and the write stream included.
+  // Two guards bound the transfer itself: the byte gate (the same MAX_FILE_BYTES
+  // ceiling as the header check above) and the wall-clock deadline
+  // (FETCH_TIMEOUT_MS is only a socket idle timeout, so a drip-fed body would
+  // otherwise grow forever). `pipeline` destroys every stream in the chain as
+  // soon as one errors — the response, closing the socket, included.
   const deadline = setTimeout(() => {
     response.stream.destroy(downloadLimitError("body transfer exceeded the wall-clock deadline"));
   }, TRANSFER_TIMEOUT_MS);
   deadline.unref();
+  const chunks: Buffer[] = [];
+  let content: Buffer;
   try {
-    await pipeline(response.stream, byteLimitTransform(MAX_FILE_BYTES), fs.createWriteStream(full));
+    await pipeline(
+      response.stream,
+      byteLimitTransform(MAX_FILE_BYTES),
+      // A sink, not a transform: the bytes are held rather than passed on,
+      // because the seal below has to authenticate the whole plaintext at once.
+      new Writable({
+        write(chunk: Buffer, _encoding, callback) {
+          chunks.push(chunk);
+          callback();
+        },
+      }),
+    );
+    content = Buffer.concat(chunks);
   } catch (error) {
-    // The temp file is not in the meta index yet, so nothing else would ever
-    // reclaim it. Unlink failures stay swallowed so they cannot mask the
-    // original error: a limit abort is rethrown for the route layer, anything
-    // else degrades to `null` as before.
-    try { fs.unlinkSync(full); } catch { /* ignore */ }
+    // Nothing was staged, so there is nothing to clean up: the collector holds
+    // bytes that are discarded with it. A limit abort is rethrown for the route
+    // layer, anything else degrades to `null` as before.
     if (isDownloadLimitError(error)) throw error;
     return null;
   } finally {
     clearTimeout(deadline);
   }
 
-  const stat = fs.statSync(full);
-  if (stat.size > MAX_FILE_BYTES) {
-    try { fs.unlinkSync(full); } catch { /* ignore */ }
-    return null;
+  try {
+    writeSealedCacheFile(masterKey, file, full, content);
+  } catch (error) {
+    // The image is already in hand, so a cache write that fails (a full disk, a
+    // lock) must not turn a good response into a 404: serve it and report. The
+    // URL is deliberately not in the log line — it is the one thing this whole
+    // path exists to keep off the disk, and the log is on the disk.
+    serverLog.warn({ error }, "Image cache file could not be written");
+    return { content, contentType };
   }
 
-  cacheMeta()[url] = {
-    file,
-    key: url,
+  cacheMeta()[file] = {
     contentType,
-    size: stat.size,
+    size: content.length,
     lastAccess: Date.now(),
   };
-  saveMeta();
+  saveMeta(masterKey);
 
-  return { filePath: full, contentType };
+  return { content, contentType };
 }

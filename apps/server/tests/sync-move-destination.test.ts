@@ -17,7 +17,7 @@ describe("move destination and account lookups", () => {
   const now = new Date().toISOString();
 
   const addFolder = (path: string, specialUse: string | null, accountId = "account-1") =>
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(accountId, path, path, specialUse);
 
   const addAccount = (id: string) =>

@@ -177,8 +177,8 @@ describe("durable outbound submissions", () => {
     expect(confirmSubmissionsInSent(db, masterKey, "account-1")).toBe(0);
 
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Sent", "Sent", "\\Sent", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Sent", "Sent", "\\Sent");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, message_id, subject, from_name, from_address, to_json,
@@ -202,8 +202,8 @@ describe("durable outbound submissions", () => {
     });
     markSubmissionUnknownDelivery(db, masterKey, prepared.submission.id, "timeout", "SMTP response was lost.");
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Sent", "Sent", "\\Sent", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Sent", "Sent", "\\Sent");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, message_id, subject, from_name, from_address, to_json,

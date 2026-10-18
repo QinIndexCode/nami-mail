@@ -2,23 +2,27 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-// The image cache is a directory of content-addressed files plus one JSON
-// index. These tests pin the index's durability properties on a real temp
-// directory: an index write that can never be observed half-finished, a
-// damaged index that leaves evidence instead of vanishing, and a cleanup pass
-// that keeps reclaiming the directory even when the index no longer describes
-// it. See src/image-cache-index.ts for why those three are one concern.
+// The image cache is a directory of sealed files plus one sealed index. These
+// tests pin the properties that keep the pair durable on a real temp directory:
+// an index write that can never be observed half-finished, a damaged or
+// unreadable index that leaves evidence instead of vanishing, a directory that
+// predates the seal and is discarded rather than carried forward, and a cleanup
+// pass that keeps reclaiming the directory even when the index no longer
+// describes it. See src/image-cache-index.ts for why those are one concern.
 
 const tempRoots: string[] = [];
 
 /**
  * Import fresh module instances bound to a throwaway cache directory, and
- * return them with the path of that directory (it may not exist yet) plus the
- * warnings the freshly imported logger recorded. The cache paths are
- * module-level constants derived from `config.databasePath`, so the env has to
- * be stubbed before the import and the module registry reset.
+ * return them with the path of that directory (it may not exist yet), the
+ * sealing primitives they use, a master key for them, and the warnings the
+ * freshly imported logger recorded. The cache paths are module-level constants
+ * derived from `config.databasePath`, so the env has to be stubbed before the
+ * import and the module registry reset — otherwise these tests would read,
+ * write and delete the real `data/image-cache` of whichever checkout they run
+ * in.
  */
 async function loadCache(env: Record<string, string> = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nami-image-cache-"));
@@ -29,6 +33,8 @@ async function loadCache(env: Record<string, string> = {}) {
 
   const index = await import("../src/image-cache-index.js");
   const proxy = await import("../src/image-proxy.js");
+  const crypto = await import("../src/local-file-encryption.js");
+  const envelope = await import("../src/crypto.js");
   const logging = await import("../src/logging.js");
   const warns: Array<{ meta: object; message: string }> = [];
   logging.setServerLogger({
@@ -36,21 +42,101 @@ async function loadCache(env: Record<string, string> = {}) {
     warn: (meta, message) => warns.push({ meta, message }),
     error: () => undefined,
   });
-  return { cacheDir: path.join(root, "image-cache"), index, proxy, warns };
+  return {
+    cacheDir: path.join(root, "image-cache"),
+    index,
+    proxy,
+    crypto,
+    envelope,
+    masterKey: Buffer.alloc(32, 7),
+    warns,
+  };
 }
+
+type Cache = Awaited<ReturnType<typeof loadCache>>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Write a cache-shaped file (64 hex chars) and backdate its mtime. */
-function writeCacheFile(cacheDir: string, name: string, size: number, mtimeMs: number): string {
-  const full = path.join(cacheDir, name);
+const META_FILE_NAME = "_meta.bin";
+const META_TMP_NAME = "_meta.bin.tmp";
+const LEGACY_META_NAME = "_meta.json";
+const QUARANTINED_INDEX_NAME = "_meta.corrupt-1700000000000.bin";
+
+/** The shape of a cache file name: what an HMAC-SHA256 digest looks like. */
+const CACHE_NAME_RE = /^[0-9a-f]{64}$/;
+/** The shape of a quarantined index, which the sweep has to leave alone. */
+const QUARANTINE_NAME_RE = /^_meta\.corrupt-\d+\.bin$/;
+
+/** A cache name built from a single repeated hex digit. */
+function cacheName(digit: string): string {
+  return digit.repeat(64);
+}
+
+/**
+ * Resolve a file this test owns inside its throwaway cache directory. The name
+ * has to be a plain basename and has to resolve to the direct child it looks
+ * like — the same containment `safeCachePath` enforces in the module under
+ * test. A fixture must not be able to read or write outside the root it was
+ * handed, however it came by the name.
+ */
+function sandboxPath(cache: Cache, name: string): string {
+  if (name.length === 0 || name !== path.basename(name)) {
+    throw new Error(`not a plain file name: ${name}`);
+  }
+  const resolved = path.resolve(cache.cacheDir, name);
+  if (resolved !== path.join(cache.cacheDir, name)) throw new Error(`escapes the cache directory: ${name}`);
+  return resolved;
+}
+
+/** A sandboxed file whose name also has to look like `shape`. */
+function entryPath(cache: Cache, name: string, shape: RegExp = CACHE_NAME_RE): string {
+  if (!shape.test(name)) throw new Error(`not a cache entry name: ${name}`);
+  return sandboxPath(cache, name);
+}
+
+function entry(size: number, lastAccess: number) {
+  return { contentType: "image/png", size, lastAccess };
+}
+
+/** Seal `size` bytes under a cache name and backdate the file's mtime. */
+function writeCacheFile(cache: Cache, name: string, size: number, mtimeMs: number): string {
+  const full = entryPath(cache, name);
+  fs.writeFileSync(full, cache.crypto.sealLocalFile(
+    cache.masterKey,
+    cache.crypto.localFilePurposes.imageCacheContent,
+    cache.index.cacheFileAad(name),
+    Buffer.alloc(size, 0x61),
+  ));
+  fs.utimesSync(full, mtimeMs / 1000, mtimeMs / 1000);
+  return full;
+}
+
+/** A cache-shaped file carrying no seal — the pre-encryption shape. */
+function writeUnsealedCacheFile(cache: Cache, name: string, size: number, mtimeMs: number): string {
+  const full = entryPath(cache, name);
   fs.writeFileSync(full, Buffer.alloc(size, 0x61));
   fs.utimesSync(full, mtimeMs / 1000, mtimeMs / 1000);
   return full;
 }
 
-function entry(file: string, key: string, size: number, lastAccess: number) {
-  return { file, key, contentType: "image/png", size, lastAccess };
+/** A sealed index holding exactly `entries`, written through the real saveMeta. */
+function seedIndex(cache: Cache, entries: Record<string, { contentType: string; size: number; lastAccess: number }>): void {
+  cache.index.loadMeta(cache.masterKey);
+  const meta = cache.index.cacheMeta();
+  for (const [name, value] of Object.entries(entries)) meta[name] = value;
+  cache.index.saveMeta(cache.masterKey);
+}
+
+/** Break an envelope's authentication tag, which is its last 16 bytes. */
+function damageSealedPayload(payload: Buffer): Buffer {
+  const damaged = Buffer.from(payload);
+  const last = damaged.length - 1;
+  damaged.writeUInt8(damaged.readUInt8(last) ^ 0xff, last);
+  return damaged;
+}
+
+function quarantineNames(cacheDir: string): string[] {
+  return fs.readdirSync(cacheDir).filter((name) => QUARANTINE_NAME_RE.test(name));
 }
 
 afterEach(() => {
@@ -63,13 +149,12 @@ afterEach(() => {
 });
 
 describe("saveMeta atomicity", () => {
-  it("stages the index in a temp file and renames it onto _meta.json", async () => {
-    const { cacheDir, index } = await loadCache();
-    const metaFile = path.join(cacheDir, "_meta.json");
-    const tmpFile = path.join(cacheDir, "_meta.json.tmp");
+  it("stages the index in a temp file and renames it onto the live file", async () => {
+    const cache = await loadCache();
+    const metaFile = sandboxPath(cache, META_FILE_NAME);
+    const tmpFile = sandboxPath(cache, META_TMP_NAME);
     const calls: string[] = [];
     vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
-    vi.spyOn(fs, "readFileSync").mockImplementation(() => "{}");
     vi.spyOn(fs, "writeFileSync").mockImplementation(((filePath: fs.PathLike) => {
       calls.push(`write ${String(filePath)}`);
     }) as typeof fs.writeFileSync);
@@ -77,9 +162,9 @@ describe("saveMeta atomicity", () => {
       calls.push(`rename ${String(from)} -> ${String(to)}`);
     }) as typeof fs.renameSync);
 
-    index.loadMeta();
-    index.cacheMeta()["https://cdn.example.com/a.png"] = entry("a".repeat(64), "https://cdn.example.com/a.png", 10, 1);
-    index.saveMeta();
+    cache.index.loadMeta(cache.masterKey);
+    cache.index.cacheMeta()[cacheName("a")] = entry(10, 1);
+    cache.index.saveMeta(cache.masterKey);
 
     // The old code truncated the live index in place, so a reader could observe
     // it mid-write. The replacement has to be: stage, then rename.
@@ -87,64 +172,86 @@ describe("saveMeta atomicity", () => {
     expect(calls).not.toContain(`write ${metaFile}`);
   });
 
-  it("stages the full index and leaves no temp file behind", async () => {
-    const { cacheDir, index } = await loadCache();
-    const metaFile = path.join(cacheDir, "_meta.json");
-    const tmpFile = path.join(cacheDir, "_meta.json.tmp");
-    let staged: unknown;
-    vi.spyOn(fs, "writeFileSync").mockImplementation(((_filePath: fs.PathLike, data: unknown) => {
-      staged = data;
-    }) as typeof fs.writeFileSync);
-    vi.spyOn(fs, "renameSync").mockImplementation((() => undefined) as typeof fs.renameSync);
+  it("writes a sealed index that reads back as the index it was given", async () => {
+    const cache = await loadCache();
+    const metaFile = sandboxPath(cache, META_FILE_NAME);
 
-    index.loadMeta();
-    index.cacheMeta()["https://cdn.example.com/a.png"] = entry("a".repeat(64), "https://cdn.example.com/a.png", 10, 1);
-    index.saveMeta();
+    seedIndex(cache, { [cacheName("a")]: entry(4096, 1) });
 
-    expect(staged).toBe(JSON.stringify(index.cacheMeta()));
-    // A real rename consumes the staged file; nothing is left in the directory
-    // that a later pass could mistake for a cache entry.
-    expect(fs.existsSync(tmpFile)).toBe(false);
-    expect(fs.existsSync(metaFile)).toBe(false); // the rename was stubbed out
+    // Sealed on disk, and the staging file a real rename consumed is gone.
+    expect(cache.crypto.isSealedLocalFile(fs.readFileSync(metaFile))).toBe(true);
+    expect(fs.existsSync(sandboxPath(cache, META_TMP_NAME))).toBe(false);
+    // `loadMeta` re-reads because the save cleared the dirty flag, so this is
+    // the round trip through the seal rather than the in-memory copy.
+    cache.index.loadMeta(cache.masterKey);
+    expect(cache.index.cacheMeta()).toEqual({ [cacheName("a")]: entry(4096, 1) });
+  });
+
+  it("refuses to write through a wiped master key, leaving the readable index intact", async () => {
+    const cache = await loadCache();
+    const metaFile = sandboxPath(cache, META_FILE_NAME);
+    seedIndex(cache, { [cacheName("a")]: entry(10, 1) });
+    const before = fs.readFileSync(metaFile);
+
+    // What teardown leaves behind: the key zeroed in place. A seal attempted
+    // after that produces an index no later run can open, which must not be
+    // allowed to displace the readable one on the way out.
+    const wiped = Buffer.alloc(32, 0);
+    cache.index.cacheMeta()[cacheName("b")] = entry(10, 2);
+    cache.index.saveMeta(wiped);
+    // The deferred path has to refuse for the same reason, dirty flag or not.
+    cache.index.scheduleFlush(wiped);
+    cache.index.flushMeta(wiped);
+
+    expect(fs.readFileSync(metaFile)).toEqual(before);
+    expect(fs.existsSync(sandboxPath(cache, META_TMP_NAME))).toBe(false);
   });
 });
 
 describe("loadMeta corruption recovery", () => {
-  it("moves a torn index aside, reports it, and still returns to service", async () => {
-    const { cacheDir, index, warns } = await loadCache();
-    fs.mkdirSync(cacheDir, { recursive: true });
-    // What a process killed mid-write leaves behind: the head of a valid
-    // document and no tail.
-    const torn = `{"https://cdn.example.com/a.png":{"file":"${"a".repeat(64)}","key":"htt`;
-    fs.writeFileSync(path.join(cacheDir, "_meta.json"), torn, "utf-8");
+  it("moves a damaged index aside, reports it, and still returns to service", async () => {
+    const cache = await loadCache();
+    seedIndex(cache, { [cacheName("a")]: entry(10, 1) });
+    const metaFile = sandboxPath(cache, META_FILE_NAME);
+    // A sealed index whose authentication tag no longer matches: what an
+    // overwritten or bit-rotted file leaves behind.
+    const damaged = damageSealedPayload(fs.readFileSync(metaFile));
+    fs.writeFileSync(metaFile, damaged);
 
-    index.loadMeta();
+    cache.index.loadMeta(cache.masterKey);
 
-    const quarantined = fs.readdirSync(cacheDir).filter((name) => /^_meta\.corrupt-\d+\.json$/.test(name));
+    const quarantined = quarantineNames(cache.cacheDir);
     expect(quarantined).toHaveLength(1);
-    // Evidence, not a deletion: the bytes are still readable, byte for byte.
-    expect(fs.readFileSync(path.join(cacheDir, quarantined[0]!), "utf-8")).toBe(torn);
-    expect(fs.existsSync(path.join(cacheDir, "_meta.json"))).toBe(false);
+    const quarantinedPath = entryPath(cache, quarantined[0]!, QUARANTINE_NAME_RE);
+    // Evidence, not a deletion: the bytes are still there, byte for byte — and
+    // because they are sealed, keeping them costs no readable user content.
+    expect(fs.readFileSync(quarantinedPath)).toEqual(damaged);
+    expect(fs.existsSync(metaFile)).toBe(false);
     // The reset index is empty rather than half-parsed.
-    expect(index.cacheMeta()).toEqual({});
-    // And the failure is visible: the old code swallowed it in the catch.
-    expect(warns).toHaveLength(1);
-    expect(warns[0]?.message).toContain("Image cache index");
-    expect(warns[0]?.meta).toMatchObject({ quarantined: path.join(cacheDir, quarantined[0]!) });
+    expect(cache.index.cacheMeta()).toEqual({});
+    // And the failure is visible, naming the copy it left behind: the old code
+    // swallowed it in the catch.
+    expect(cache.warns).toHaveLength(1);
+    expect(cache.warns[0]?.message).toContain("Image cache index was unusable");
+    expect(cache.warns[0]?.meta).toMatchObject({ quarantined: quarantinedPath });
 
     // The module is back in service: the next save writes a usable index next
     // to the quarantined copy, which is left where it is.
-    index.cacheMeta()["https://cdn.example.com/b.png"] = entry("b".repeat(64), "https://cdn.example.com/b.png", 10, 1);
-    index.saveMeta();
-    const persisted = JSON.parse(fs.readFileSync(path.join(cacheDir, "_meta.json"), "utf-8")) as Record<string, unknown>;
-    expect(Object.keys(persisted)).toEqual(["https://cdn.example.com/b.png"]);
-    expect(fs.readdirSync(cacheDir).filter((name) => name.startsWith("_meta.corrupt-"))).toHaveLength(1);
+    seedIndex(cache, { [cacheName("b")]: entry(10, 1) });
+    cache.index.loadMeta(cache.masterKey);
+    expect(Object.keys(cache.index.cacheMeta())).toEqual([cacheName("b")]);
+    expect(quarantineNames(cache.cacheDir)).toHaveLength(1);
   });
 
   it("reports a damaged index once per process, however often it is read", async () => {
-    const { cacheDir, index, warns } = await loadCache();
-    fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(path.join(cacheDir, "_meta.json"), "{not json", "utf-8");
+    const cache = await loadCache();
+    fs.mkdirSync(cache.cacheDir, { recursive: true });
+    // Sealed, but under another purpose, so it authenticates as ours and still
+    // refuses to open — the state a stale key or a swapped file leaves behind.
+    fs.writeFileSync(
+      sandboxPath(cache, META_FILE_NAME),
+      cache.crypto.sealLocalFile(cache.masterKey, "some-other-purpose", "some-other-aad", Buffer.from("{}")),
+    );
     // A lock that keeps the rename from succeeding (a Windows antivirus hold)
     // leaves the damaged file in place for every read to find again, so the
     // one-warn-per-process rule is the only thing between that and a log line
@@ -153,137 +260,208 @@ describe("loadMeta corruption recovery", () => {
       throw Object.assign(new Error("EPERM: injected lock"), { code: "EPERM" });
     });
 
-    index.loadMeta();
-    index.loadMeta();
-    index.loadMeta();
+    cache.index.loadMeta(cache.masterKey);
+    cache.index.loadMeta(cache.masterKey);
+    cache.index.loadMeta(cache.masterKey);
 
-    expect(warns).toHaveLength(1);
-    // A failed quarantine is not a failed recovery: the index still resets.
-    expect(index.cacheMeta()).toEqual({});
+    expect(cache.warns).toHaveLength(1);
+    // A failed quarantine is not a failed recovery: the index still resets, and
+    // the warning says so by naming no quarantine copy.
+    expect(cache.index.cacheMeta()).toEqual({});
+    expect(cache.warns[0]?.meta).toMatchObject({ quarantined: null });
   });
 
   it("starts empty and silent when the index simply is not there yet", async () => {
-    const { index, warns } = await loadCache();
-    expect(() => index.loadMeta()).not.toThrow();
-    expect(index.cacheMeta()).toEqual({});
-    expect(warns).toEqual([]);
+    const cache = await loadCache();
+    expect(() => cache.index.loadMeta(cache.masterKey)).not.toThrow();
+    expect(cache.index.cacheMeta()).toEqual({});
+    expect(cache.warns).toEqual([]);
   });
 
   it("keeps the rows it can read when a single entry is unusable", async () => {
-    const { cacheDir, index, warns } = await loadCache();
-    fs.mkdirSync(cacheDir, { recursive: true });
-    const good = entry("a".repeat(64), "https://cdn.example.com/a.png", 10, Date.now());
+    const cache = await loadCache();
+    const good = entry(10, Date.now());
+    seedIndex(cache, { [cacheName("a")]: good });
+    const metaFile = sandboxPath(cache, META_FILE_NAME);
+    // Re-seal a document holding one good row, one row with an unusable value,
+    // and one row keyed by a remote URL rather than by a cache filename.
+    cache.index.loadMeta(cache.masterKey);
+    const meta = cache.index.cacheMeta() as Record<string, unknown>;
+    meta[cacheName("a")] = good;
+    meta[cacheName("b")] = { contentType: 42 };
+    meta["https://cdn.example.com/c.png"] = good;
+    cache.index.saveMeta(cache.masterKey);
+
+    cache.index.loadMeta(cache.masterKey);
+
+    // One bad row is not a corrupt document — throwing the whole index away
+    // here would drop the cache for every image, not just the broken one. The
+    // URL-keyed row goes too: the key *is* the filename, so an entry named
+    // anything else could claim a file the sweep would never reclaim.
+    expect(Object.keys(cache.index.cacheMeta())).toEqual([cacheName("a")]);
+    expect(fs.existsSync(metaFile)).toBe(true);
+    expect(cache.warns).toEqual([]);
+  });
+});
+
+describe("pre-encryption cache directory", () => {
+  it("discards a plaintext directory rather than carrying it forward", async () => {
+    const cache = await loadCache();
+    fs.mkdirSync(cache.cacheDir, { recursive: true });
+    writeUnsealedCacheFile(cache, cacheName("a"), 1024, Date.now());
     fs.writeFileSync(
-      path.join(cacheDir, "_meta.json"),
-      JSON.stringify({ "https://cdn.example.com/a.png": good, "https://cdn.example.com/bad.png": { file: 42 } }),
+      sandboxPath(cache, LEGACY_META_NAME),
+      JSON.stringify({ "https://cdn.example.com/a.png": { contentType: "image/png", size: 1024, lastAccess: 1 } }),
       "utf-8",
     );
 
-    index.loadMeta();
+    cache.index.loadMeta(cache.masterKey);
 
-    // One bad row is not a corrupt document — throwing the whole index away
-    // here would drop the cache for every image, not just the broken one.
-    expect(Object.keys(index.cacheMeta())).toEqual(["https://cdn.example.com/a.png"]);
-    expect(index.cacheMeta()["https://cdn.example.com/a.png"]).toEqual(good);
-    expect(warns).toEqual([]);
+    // Every byte in there is a remote resource the mail can reference again and
+    // none of it can be read under the seal, so the directory is emptied rather
+    // than migrated — plaintext carried forward would defeat the seal.
+    expect(fs.readdirSync(cache.cacheDir)).toEqual([]);
+    expect(cache.index.cacheMeta()).toEqual({});
+    expect(cache.warns).toHaveLength(1);
+    expect(cache.warns[0]?.meta).toMatchObject({ reason: "the cache predates local encryption" });
+  });
+
+  it("discards a directory whose index is not sealed", async () => {
+    const cache = await loadCache();
+    fs.mkdirSync(cache.cacheDir, { recursive: true });
+    writeUnsealedCacheFile(cache, cacheName("a"), 1024, Date.now());
+    fs.writeFileSync(sandboxPath(cache, META_FILE_NAME), "{}", "utf-8");
+
+    cache.index.loadMeta(cache.masterKey);
+
+    expect(fs.readdirSync(cache.cacheDir)).toEqual([]);
+    expect(cache.warns).toHaveLength(1);
+    expect(cache.warns[0]?.meta).toMatchObject({ reason: "the index was written before the cache was sealed" });
+  });
+
+  it("drops a leftover plaintext index once a sealed one is in place", async () => {
+    const cache = await loadCache();
+    seedIndex(cache, { [cacheName("a")]: entry(10, 1) });
+    const legacy = sandboxPath(cache, LEGACY_META_NAME);
+    fs.writeFileSync(legacy, "{}", "utf-8");
+
+    cache.index.loadMeta(cache.masterKey);
+
+    // An upgrade interrupted between the two index files: `_meta.bin` is
+    // authoritative, so a plaintext index beside it is not a reason to throw
+    // the sealed directory away.
+    expect(fs.existsSync(legacy)).toBe(false);
+    expect(Object.keys(cache.index.cacheMeta())).toEqual([cacheName("a")]);
+    expect(cache.warns.map((warning) => warning.message))
+      .toEqual(["Removed a plaintext image-cache index left by an interrupted upgrade"]);
   });
 });
 
 describe("runCacheCleanup reconciliation", () => {
   it("reclaims unindexed files by age and by quota when the index describes nothing", async () => {
-    // A 1MB quota with 1MB files makes the size sweep observable without
-    // writing hundreds of megabytes to a temp directory.
-    const { cacheDir, proxy, warns } = await loadCache({ NAMI_MAIL_IMAGE_CACHE_MAX_MB: "1" });
-    fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(path.join(cacheDir, "_meta.json"), "{}", "utf-8"); // index lost, entries gone
+    // A 2MB quota with 1MB files makes the size sweep observable without
+    // writing hundreds of megabytes to a temp directory. It is 2MB rather than
+    // 1MB because the quota is measured on the bytes on disk and a sealed file
+    // is a fixed 36 bytes larger than the image inside it, so a 1MB quota
+    // against three 1MB images would land exactly on that boundary and evict
+    // all three.
+    const cache = await loadCache({ NAMI_MAIL_IMAGE_CACHE_MAX_MB: "2" });
+    fs.mkdirSync(cache.cacheDir, { recursive: true });
 
     const now = Date.now();
     const megabyte = 1024 * 1024;
-    const aged = writeCacheFile(cacheDir, "1".repeat(64), 1024, now - 8 * DAY_MS);
-    const coldest = writeCacheFile(cacheDir, "2".repeat(64), megabyte, now - 3 * 60 * 60 * 1000);
-    const middle = writeCacheFile(cacheDir, "3".repeat(64), megabyte, now - 2 * 60 * 60 * 1000);
-    const newest = writeCacheFile(cacheDir, "4".repeat(64), megabyte, now - 60 * 60 * 1000);
+    const aged = writeCacheFile(cache, cacheName("1"), 1024, now - 8 * DAY_MS);
+    const coldest = writeCacheFile(cache, cacheName("2"), megabyte, now - 3 * 60 * 60 * 1000);
+    const middle = writeCacheFile(cache, cacheName("3"), megabyte, now - 2 * 60 * 60 * 1000);
+    const newest = writeCacheFile(cache, cacheName("4"), megabyte, now - 60 * 60 * 1000);
 
-    proxy.runCacheCleanup();
+    cache.proxy.runCacheCleanup(cache.masterKey);
 
-    // Nothing in the index points at these, but MAX_AGE_MS and
-    // MAX_CACHE_BYTES apply to the directory, not to the index: the past-the-
-    // age file is gone, and the quota drops the two coldest of the three
-    // remaining, in mtime order, exactly as it would for indexed entries.
+    // Nothing in the index points at these, but MAX_AGE_MS and MAX_CACHE_BYTES
+    // apply to the directory, not to the index: the past-the-age file is gone,
+    // and the quota drops the two coldest of the three remaining, in mtime
+    // order, exactly as it would for indexed entries.
     expect(fs.existsSync(aged)).toBe(false);
     expect(fs.existsSync(coldest)).toBe(false);
     expect(fs.existsSync(middle)).toBe(false);
     expect(fs.existsSync(newest)).toBe(true);
-    expect(warns).toEqual([]);
+    // A missing index is the ordinary lost-index case, not a pre-encryption
+    // directory: nothing is discarded wholesale and nothing is reported.
+    expect(cache.warns).toEqual([]);
+  });
+
+  it("reclaims an unsealed cache-shaped file on sight, however young", async () => {
+    const cache = await loadCache();
+    fs.mkdirSync(cache.cacheDir, { recursive: true });
+    const planted = writeUnsealedCacheFile(cache, cacheName("e"), 1024, Date.now());
+    const sealed = writeCacheFile(cache, cacheName("f"), 1024, Date.now());
+
+    cache.proxy.runCacheCleanup(cache.masterKey);
+
+    // The seal is what makes a file recognizably ours, so a young file without
+    // it is not kept for the age window: it was written before encryption, or
+    // by something else entirely.
+    expect(fs.existsSync(planted)).toBe(false);
+    expect(fs.existsSync(sealed)).toBe(true);
   });
 
   it("leaves a healthy index and its young unindexed neighbours alone", async () => {
-    const { cacheDir, index, proxy } = await loadCache();
-    fs.mkdirSync(cacheDir, { recursive: true });
-    const indexed = writeCacheFile(cacheDir, "a".repeat(64), 4096, Date.now() - 60 * 1000);
-    const unindexed = writeCacheFile(cacheDir, "b".repeat(64), 4096, Date.now() - 60 * 1000);
+    const cache = await loadCache();
+    fs.mkdirSync(cache.cacheDir, { recursive: true });
+    const indexed = writeCacheFile(cache, cacheName("a"), 4096, Date.now() - 60 * 1000);
+    const unindexed = writeCacheFile(cache, cacheName("b"), 4096, Date.now() - 60 * 1000);
+    seedIndex(cache, { [cacheName("a")]: entry(4096, Date.now()) });
 
-    index.loadMeta();
-    index.cacheMeta()["https://cdn.example.com/a.png"] = entry(
-      "a".repeat(64),
-      "https://cdn.example.com/a.png",
-      4096,
-      Date.now(),
-    );
-    index.saveMeta();
+    cache.proxy.runCacheCleanup(cache.masterKey);
 
-    proxy.runCacheCleanup();
-
-    // A lost index must cost cache hits, not bytes: a file the pass cannot
-    // age out is kept, and the entry that still describes a live file stays.
+    // A lost index must cost cache hits, not bytes: a file the pass cannot age
+    // out is kept, and the entry that still describes a live file stays.
     expect(fs.existsSync(indexed)).toBe(true);
     expect(fs.existsSync(unindexed)).toBe(true);
+    expect(Object.keys(cache.index.cacheMeta())).toEqual([cacheName("a")]);
   });
 
   it("never touches index files, staging files or anything that is not a cache name", async () => {
-    const { cacheDir, proxy } = await loadCache();
-    fs.mkdirSync(cacheDir, { recursive: true });
+    const cache = await loadCache();
+    fs.mkdirSync(cache.cacheDir, { recursive: true });
     // Old mtimes: anything the sweep considers reclaimable is reclaimable here.
     const stale = Date.now() - 30 * DAY_MS;
-    const stranger = path.join(cacheDir, "notes.txt");
-    const staged = path.join(cacheDir, "_meta.json.tmp");
-    const quarantined = path.join(cacheDir, "_meta.corrupt-1700000000000.json");
+    const stranger = sandboxPath(cache, "notes.txt");
+    const staged = sandboxPath(cache, META_TMP_NAME);
+    const quarantined = sandboxPath(cache, QUARANTINED_INDEX_NAME);
     fs.writeFileSync(stranger, "user data", "utf-8");
-    fs.writeFileSync(staged, "{partial", "utf-8");
-    fs.writeFileSync(quarantined, "{partial", "utf-8");
+    fs.writeFileSync(staged, "partial", "utf-8");
+    fs.writeFileSync(quarantined, "partial", "utf-8");
     fs.utimesSync(stranger, stale / 1000, stale / 1000);
     fs.utimesSync(staged, stale / 1000, stale / 1000);
     fs.utimesSync(quarantined, stale / 1000, stale / 1000);
-    writeCacheFile(cacheDir, "c".repeat(64), 1024, stale);
+    const reclaimable = writeCacheFile(cache, cacheName("c"), 1024, stale);
 
-    proxy.runCacheCleanup();
+    cache.proxy.runCacheCleanup(cache.masterKey);
 
     expect(fs.existsSync(stranger)).toBe(true);
     expect(fs.existsSync(staged)).toBe(true);
     expect(fs.existsSync(quarantined)).toBe(true);
     // The one file that is a cache name, and is past the age window, goes.
-    expect(fs.existsSync(path.join(cacheDir, "c".repeat(64)))).toBe(false);
+    expect(fs.existsSync(reclaimable)).toBe(false);
   });
 
   it("reclaims an aged entry from the index and persists the result atomically", async () => {
-    const { cacheDir, index, proxy } = await loadCache();
-    fs.mkdirSync(cacheDir, { recursive: true });
-    const file = writeCacheFile(cacheDir, "a".repeat(64), 4096, Date.now() - 8 * DAY_MS);
-    index.loadMeta();
-    index.cacheMeta()["https://cdn.example.com/old.png"] = entry(
-      "a".repeat(64),
-      "https://cdn.example.com/old.png",
-      4096,
-      Date.now() - 8 * DAY_MS,
-    );
-    index.saveMeta();
+    const cache = await loadCache();
+    fs.mkdirSync(cache.cacheDir, { recursive: true });
+    const file = writeCacheFile(cache, cacheName("a"), 4096, Date.now() - 8 * DAY_MS);
+    seedIndex(cache, { [cacheName("a")]: entry(4096, Date.now() - 8 * DAY_MS) });
 
-    proxy.runCacheCleanup();
+    cache.proxy.runCacheCleanup(cache.masterKey);
 
     expect(fs.existsSync(file)).toBe(false);
-    const persisted = JSON.parse(fs.readFileSync(path.join(cacheDir, "_meta.json"), "utf-8")) as Record<string, unknown>;
-    expect(persisted).toEqual({});
-    expect(fs.existsSync(path.join(cacheDir, "_meta.json.tmp"))).toBe(false);
+    // Re-read from disk rather than trusting the in-memory map the pass mutated:
+    // this is what proves the eviction was persisted, and that what is on disk
+    // is an empty index rather than merely an emptied live object.
+    cache.index.loadMeta(cache.masterKey);
+    expect(cache.index.cacheMeta()).toEqual({});
+    expect(fs.existsSync(sandboxPath(cache, META_FILE_NAME))).toBe(true);
+    expect(fs.existsSync(sandboxPath(cache, META_TMP_NAME))).toBe(false);
   });
 });
 
@@ -291,10 +469,10 @@ describe("proxyImage against the durable index", () => {
   /**
    * `proxyImage` refuses loopback hosts by design, so these tests fetch a
    * public-looking URL and pin only the DNS step to the loopback fixture. The
-   * address policy is covered by image-proxy.test.ts; here the point is the
-   * cache/index round trip.
+   * address policy itself is covered in image-proxy.test.ts; here the point is
+   * the cache and index round trip.
    */
-  beforeEach(() => {
+  function pinDnsToLoopback(): void {
     const realRequest = http.request.bind(http);
     vi.spyOn(http, "request").mockImplementation(((...args: unknown[]) => {
       const [url, options, callback] = args as [URL, http.RequestOptions, (response: http.IncomingMessage) => void];
@@ -306,9 +484,9 @@ describe("proxyImage against the durable index", () => {
       };
       return realRequest(url, { ...options, ...pinned }, callback);
     }) as typeof http.request);
-  });
+  }
 
-  /** Loopback fixture server. */
+  /** Loopback fixture server that tracks its own sockets so close() is prompt. */
   async function listenFixtureServer(handler: http.RequestListener): Promise<{ port: number; close: () => Promise<void> }> {
     const sockets = new Set<{ destroy(): void }>();
     const server = http.createServer(handler);
@@ -328,64 +506,72 @@ describe("proxyImage against the durable index", () => {
     };
   }
 
-  it("serves a repeat request from the cache and records a readable index", async () => {
-    const { cacheDir, proxy } = await loadCache();
-    const body = Buffer.alloc(4096, 0x62);
-    let requests = 0;
-    const server = await listenFixtureServer((_req, res) => {
-      requests += 1;
+  /** A fixture server that always answers with `body` as an image. */
+  async function listenImageServer(body: Buffer, onRequest: () => void) {
+    return listenFixtureServer((_req, res) => {
+      onRequest();
       res.writeHead(200, { "content-type": "image/png", "content-length": String(body.length) });
       res.end(body);
     });
+  }
+
+  it("serves a repeat request from the cache and records a readable index", async () => {
+    pinDnsToLoopback();
+    const cache = await loadCache();
+    const body = Buffer.alloc(4096, 0x62);
+    let requests = 0;
+    const server = await listenImageServer(body, () => { requests += 1; });
     try {
       const url = `http://cdn.example.com:${server.port}/logo.png`;
-      const first = await proxy.proxyImage(url);
-      const second = await proxy.proxyImage(url);
+      const first = await cache.proxy.proxyImage(url, cache.masterKey);
+      const second = await cache.proxy.proxyImage(url, cache.masterKey);
 
-      // The cache-hit path is unchanged: one download, the same file served.
+      // The cache-hit path is unchanged: one download, the same image served.
       expect(requests).toBe(1);
-      expect(first).not.toBeNull();
-      expect(second?.filePath).toBe(first?.filePath);
-      expect(fs.readFileSync(second!.filePath)).toEqual(body);
+      expect(first?.content.equals(body)).toBe(true);
+      expect(second?.content.equals(body)).toBe(true);
 
-      // The index is a complete, parseable document, and the staged copy it
-      // was written through is gone.
-      const persisted = JSON.parse(fs.readFileSync(path.join(cacheDir, "_meta.json"), "utf-8")) as Record<string, {
-        contentType: string;
-        size: number;
-      }>;
-      expect(Object.keys(persisted)).toEqual([url]);
-      expect(persisted[url]).toMatchObject({ contentType: "image/png", size: body.length });
-      expect(fs.readdirSync(cacheDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+      // The file is sealed, and the index names it by its opaque name rather
+      // than by the URL — the one place the source URL could have survived.
+      const file = cache.index.cacheFilename(cache.masterKey, url);
+      const onDisk = fs.readFileSync(entryPath(cache, file));
+      expect(cache.crypto.isSealedLocalFile(onDisk)).toBe(true);
+      expect(onDisk.length).toBe(body.length + cache.envelope.encryptedBufferEnvelopeOverhead);
+      expect(cache.index.cacheMeta()[file]).toMatchObject({ contentType: "image/png", size: body.length });
+      expect(JSON.stringify(cache.index.cacheMeta())).not.toContain(url);
+      // No staging file survives, and the directory holds only the image and
+      // the index.
+      expect(fs.readdirSync(cache.cacheDir).sort()).toEqual([META_FILE_NAME, file].sort());
     } finally {
       await server.close();
     }
   });
 
-  it("recovers from a torn index: one refetch, then the index is usable again", async () => {
-    const { cacheDir, proxy } = await loadCache();
+  it("recovers from a damaged index: one refetch, then the index is usable again", async () => {
+    pinDnsToLoopback();
+    const cache = await loadCache();
     const body = Buffer.alloc(4096, 0x63);
     let requests = 0;
-    const server = await listenFixtureServer((_req, res) => {
-      requests += 1;
-      res.writeHead(200, { "content-type": "image/png", "content-length": String(body.length) });
-      res.end(body);
-    });
+    const server = await listenImageServer(body, () => { requests += 1; });
     try {
       const url = `http://cdn.example.com:${server.port}/logo.png`;
-      const first = await proxy.proxyImage(url);
-      // Simulate the torn write the atomic replace now prevents.
-      fs.writeFileSync(path.join(cacheDir, "_meta.json"), '{"https://cdn.example.com/logo.png":{"fi', "utf-8");
+      const first = await cache.proxy.proxyImage(url, cache.masterKey);
+      expect(first?.content.equals(body)).toBe(true);
+      // Simulate the damaged write the atomic replace exists to prevent.
+      const metaFile = sandboxPath(cache, META_FILE_NAME);
+      fs.writeFileSync(metaFile, damageSealedPayload(fs.readFileSync(metaFile)));
 
-      const second = await proxy.proxyImage(url);
+      const second = await cache.proxy.proxyImage(url, cache.masterKey);
 
-      // The index is gone, so the file has to be fetched again — but the
+      // The index is gone, so the image has to be fetched again — but the
       // process keeps working, and the directory stays bounded.
       expect(requests).toBe(2);
-      expect(second?.filePath).toBe(first?.filePath);
-      const persisted = JSON.parse(fs.readFileSync(path.join(cacheDir, "_meta.json"), "utf-8")) as Record<string, unknown>;
-      expect(Object.keys(persisted)).toEqual([url]);
-      expect(fs.readdirSync(cacheDir).filter((name) => /^_meta\.corrupt-\d+\.json$/.test(name))).toHaveLength(1);
+      expect(second?.content.equals(body)).toBe(true);
+      cache.index.loadMeta(cache.masterKey);
+      expect(Object.keys(cache.index.cacheMeta()))
+        .toEqual([cache.index.cacheFilename(cache.masterKey, url)]);
+      expect(quarantineNames(cache.cacheDir)).toHaveLength(1);
+      expect(fs.existsSync(sandboxPath(cache, META_TMP_NAME))).toBe(false);
     } finally {
       await server.close();
     }

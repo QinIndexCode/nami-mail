@@ -83,7 +83,7 @@ function insertMessage(db: DatabaseHandle, row: Row): void {
 }
 
 function insertInboxFolder(db: DatabaseHandle, accountId = "account-1"): void {
-  db.prepare("INSERT OR REPLACE INTO folders (account_id, path, name, special_use, total, unseen, uid_validity) VALUES (?, 'INBOX', 'Inbox', '\\Inbox', 0, 0, '1')")
+  db.prepare("INSERT OR REPLACE INTO folders (account_id, path, name, special_use, uid_validity) VALUES (?, 'INBOX', 'Inbox', '\\Inbox', '1')")
     .run(accountId);
 }
 

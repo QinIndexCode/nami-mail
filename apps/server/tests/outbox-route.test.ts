@@ -18,6 +18,7 @@ vi.mock("../src/sync-sent-verify.js", async (importOriginal) => {
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
+import { waitForSendTask } from "./helpers/send-settlement.js";
 
 function insertAccount(db: DatabaseHandle): void {
   db.prepare(`
@@ -64,37 +65,51 @@ describe("outbox send route", () => {
     sendMail.mockRejectedValueOnce(Object.assign(new Error(`${message} password=${secret}`), { code, command: "CONN" }));
     const payload = { ...messagePayload, idempotencyKey: `sub_${code.toLowerCase()}_once` };
 
-    const first = await app.inject({ method: "POST", url: "/api/messages/send", payload });
-    expect(first.statusCode).toBe(202);
-    expect(first.json()).toMatchObject({
-      ok: true,
-      deliveryStatus: "unknown_delivery",
-      submission: { deliveryStatus: "unknown_delivery", errorCode },
-    });
-    expect(first.body).not.toContain(secret);
-    const firstBody = first.json() as { messageId: string; submission: { id: string } };
-    expect(scheduleSentSubmissionVerification).toHaveBeenCalledWith(
-      db,
-      expect.any(Buffer),
-      firstBody.submission.id,
-      undefined,
-      expect.objectContaining({ abortSignal: expect.any(AbortSignal), onDeferred: expect.any(Function) }),
-    );
+    // The acceptance transfers nothing, so it answers with a durable pending
+    // record and the id of the task that will own the socket.
+    const accepted = await app.inject({ method: "POST", url: "/api/messages/send", payload });
+    expect(accepted.statusCode).toBe(202);
+    const acceptedBody = accepted.json() as { messageId: string; taskId?: string; submission: { id: string } };
+    expect(acceptedBody).toMatchObject({ ok: true, deliveryStatus: "pending", status: "pending" });
+    expect(acceptedBody.taskId).toBeTruthy();
+    expect(accepted.body).not.toContain(secret);
 
-    const duplicate = await app.inject({ method: "POST", url: "/api/messages/send", payload });
-    expect(duplicate.statusCode).toBe(202);
-    expect(duplicate.json()).toMatchObject({
-      messageId: firstBody.messageId,
-      deliveryStatus: "unknown_delivery",
-    });
+    // A CONN failure is deliberately outside the pre-acceptance list: the socket
+    // dropped in a way that is indistinguishable from a lost final response, so
+    // the mail may already be out. That makes the attempt terminal -- a retry
+    // could deliver it twice -- which is exactly why this status exists.
+    await expect(waitForSendTask(db, acceptedBody.taskId!)).resolves.toEqual({ status: "unknown_delivery", errorCode });
     expect(sendMail).toHaveBeenCalledTimes(1);
 
-    const lookup = await app.inject({ method: "GET", url: `/api/submissions/${firstBody.submission.id}` });
+    const lookup = await app.inject({ method: "GET", url: `/api/submissions/${acceptedBody.submission.id}` });
     expect(lookup.statusCode).toBe(200);
     expect(lookup.json()).toMatchObject({
       ok: true,
-      submission: { id: firstBody.submission.id, messageId: firstBody.messageId, deliveryStatus: "unknown_delivery" },
+      submission: { id: acceptedBody.submission.id, messageId: acceptedBody.messageId, deliveryStatus: "unknown_delivery", errorCode },
     });
+    // The raw SMTP text never reaches the durable record, so a status read can
+    // never spill a credential.
+    expect(lookup.body).not.toContain(secret);
+
+    // The duplicate must not become a second email: the terminal status is the
+    // answer, and the verifier is armed so the user's "check Sent" can finish.
+    const duplicate = await app.inject({ method: "POST", url: "/api/messages/send", payload });
+    expect(duplicate.statusCode).toBe(202);
+    expect(duplicate.json()).toMatchObject({
+      messageId: acceptedBody.messageId,
+      deliveryStatus: "unknown_delivery",
+    });
+    expect(duplicate.body).not.toContain(secret);
+    expect(sendMail).toHaveBeenCalledTimes(1);
+    expect(scheduleSentSubmissionVerification).toHaveBeenCalledWith(
+      db,
+      expect.any(Buffer),
+      acceptedBody.submission.id,
+      undefined,
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal), onDeferred: expect.any(Function) }),
+    );
+    const stored = JSON.stringify(db.prepare("SELECT * FROM outbound_submissions WHERE id = ?").get(acceptedBody.submission.id));
+    expect(stored).not.toContain(secret);
   });
 
   it("uses the durable RFC Message-ID for SMTP and returns the accepted record on a duplicate POST", async () => {
@@ -109,38 +124,44 @@ describe("outbox send route", () => {
       idempotencyKey: "sub_accepted_once",
     };
 
-    const first = await app.inject({ method: "POST", url: "/api/messages/send", payload });
-    expect(first.statusCode).toBe(200);
-    const firstBody = first.json() as {
+    const accepted = await app.inject({ method: "POST", url: "/api/messages/send", payload });
+    expect(accepted.statusCode).toBe(202);
+    const acceptedBody = accepted.json() as {
       messageId: string;
+      taskId?: string;
       deliveryStatus: string;
       submission: { id: string; subject: string; recipients: string[]; [key: string]: unknown };
     };
-    expect(firstBody.deliveryStatus).toBe("submitted");
-    expect(firstBody.messageId).toMatch(/^<[0-9a-f-]+@example\.com>$/);
-    expect(firstBody.submission).toMatchObject({
+    expect(acceptedBody).toMatchObject({ deliveryStatus: "pending", status: "pending" });
+    expect(acceptedBody.messageId).toMatch(/^<[0-9a-f-]+@example\.com>$/);
+    expect(acceptedBody.submission).toMatchObject({
       subject: "Encrypted status summary",
       recipients: ["recipient-summary-canary@example.com", "cc-summary-canary@example.com"],
     });
-    expect(firstBody.submission).not.toHaveProperty("text");
-    expect(firstBody.submission).not.toHaveProperty("html");
-    expect(first.body).not.toContain("BODY-MUST-NOT-APPEAR-IN-OUTBOX-DTO");
-    expect(first.body).not.toContain("HTML-MUST-NOT-APPEAR-IN-OUTBOX-DTO");
-    const stored = JSON.stringify(db.prepare("SELECT * FROM outbound_submissions WHERE id = ?").get(firstBody.submission.id));
+    expect(acceptedBody.submission).not.toHaveProperty("text");
+    expect(acceptedBody.submission).not.toHaveProperty("html");
+    expect(accepted.body).not.toContain("BODY-MUST-NOT-APPEAR-IN-OUTBOX-DTO");
+    expect(accepted.body).not.toContain("HTML-MUST-NOT-APPEAR-IN-OUTBOX-DTO");
+    const stored = JSON.stringify(db.prepare("SELECT * FROM outbound_submissions WHERE id = ?").get(acceptedBody.submission.id));
     expect(stored).not.toContain("recipient-summary-canary@example.com");
     expect(stored).not.toContain("cc-summary-canary@example.com");
     expect(stored).not.toContain("Encrypted status summary");
     expect(stored).not.toContain("BODY-MUST-NOT-APPEAR-IN-OUTBOX-DTO");
+
+    // The task is what hands the mail to SMTP, and the id it hands over is the
+    // one the acceptance had already committed -- the whole point of the durable
+    // Message-ID: the Sent copy the provider stores is findable by it later.
+    await expect(waitForSendTask(db, acceptedBody.taskId!)).resolves.toEqual({ status: "completed", errorCode: null });
     expect(sendMail).toHaveBeenCalledWith(
       expect.objectContaining({ id: "account-1" }),
       expect.any(Buffer),
-      expect.objectContaining({ messageId: firstBody.messageId }),
+      expect.objectContaining({ messageId: acceptedBody.messageId }),
       undefined,
     );
     expect(scheduleSentSubmissionVerification).toHaveBeenCalledWith(
       db,
       expect.any(Buffer),
-      firstBody.submission.id,
+      acceptedBody.submission.id,
       undefined,
       expect.objectContaining({ abortSignal: expect.any(AbortSignal), onDeferred: expect.any(Function) }),
     );
@@ -148,9 +169,9 @@ describe("outbox send route", () => {
     const duplicate = await app.inject({ method: "POST", url: "/api/messages/send", payload });
     expect(duplicate.statusCode).toBe(200);
     expect(duplicate.json()).toMatchObject({
-      messageId: firstBody.messageId,
+      messageId: acceptedBody.messageId,
       deliveryStatus: "submitted",
-      submission: { id: firstBody.submission.id },
+      submission: { id: acceptedBody.submission.id },
     });
     expect(sendMail).toHaveBeenCalledTimes(1);
 
@@ -158,8 +179,8 @@ describe("outbox send route", () => {
     expect(records.statusCode).toBe(200);
     expect(records.json()).toMatchObject({
       items: [expect.objectContaining({
-        id: firstBody.submission.id,
-        messageId: firstBody.messageId,
+        id: acceptedBody.submission.id,
+        messageId: acceptedBody.messageId,
         subject: "Encrypted status summary",
         recipients: ["recipient-summary-canary@example.com", "cc-summary-canary@example.com"],
         deliveryStatus: "submitted",

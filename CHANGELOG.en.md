@@ -141,7 +141,7 @@
 
 ### Added
 
-- BIMI brand avatar support: resolve and validate enterprise sender SVG brand avatars to enhance visual verification for official mail; protected by strict SVG sanitization, size normalization, two-tier memory/disk caching, and TTL expiry.
+- BIMI brand avatar support: read a sender domain's published BIMI record (the `l=` of its `default._bimi` TXT record) and display the SVG brand avatar it points to, improving visual recognition of official senders; protected by strict SVG sanitization, size normalization, two-tier memory/disk caching, and TTL expiry. Resolves by domain only: it validates neither the DMARC precondition nor the `a=` authority evidence (VMC).
 - Compose attachments drag-and-drop & clipboard paste: drag and drop local files directly into the compose dialog with a clear dashed drop indicator overlay; paste clipboard images into the body editor with `Ctrl+V` for instant attachment creation.
 
 ### Fixed

@@ -9,12 +9,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/github/v/release/QinIndexCode/nami-mail?label=Release&color=2563eb&style=flat-square" alt="Release" /></a>
-  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/badge/Platform-Windows%20x64-0284c7?style=flat-square" alt="Platform" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%E2%89%A524.21.0-16a34a?style=flat-square" alt="Node" /></a>
-  <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-43-4f46e5?style=flat-square" alt="Electron" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-059669?style=flat-square" alt="License" /></a>
-  <a href="https://qinindexcode.github.io/nami-mail/"><img src="https://img.shields.io/badge/Website-Live-7c3aed?style=flat-square" alt="Website" /></a>
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/github/v/release/QinIndexCode/nami-mail?label=Release&color=2563eb&style=flat" alt="Release" /></a>
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/badge/Platform-Windows%20x64-0284c7?style=flat" alt="Platform" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%E2%89%A524.21.0-16a34a?style=flat" alt="Node" /></a>
+  <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-43-4f46e5?style=flat" alt="Electron" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-059669?style=flat" alt="License" /></a>
+  <a href="https://qinindexcode.github.io/nami-mail/"><img src="https://img.shields.io/badge/Website-Live-7c3aed?style=flat" alt="Website" /></a>
 </p>
 
 Nami Mail is a local-first, multi-account desktop mail client for Windows. It brings Gmail, iCloud, QQ, 163, Outlook/Hotmail, Yahoo, AOL, Fastmail, Yandex, and other IMAP/SMTP-capable accounts into one inbox that runs on your own machine. Common providers use app passwords or client authorization codes; configured Google and Microsoft accounts can use OAuth 2.0 sign-in.
@@ -37,15 +37,19 @@ Nami Mail is a local-first, multi-account desktop mail client for Windows. It br
 
 > The password field is only for long-lived credentials required by the provider: Gmail and iCloud normally require an app password, QQ and NetEase require a client authorization code, and a self-hosted mailbox can require its mailbox password. Credentials are never sent to a service other than Nami Mail and the selected mail provider; they are used only for a direct provider connection. OAuth refresh tokens are also encrypted and stored locally only.
 
-## What's New in 0.5.0
+<!-- whats-new: v0.5.1 -->
+## What's New in 0.5.1
 
-- **Full-Stack Local Calendar & Meeting Invites**: Built-in month view calendar with event CRUD; mail invite banners with direct join links (Tencent Meeting, Zoom, Feishu, Teams, Meet); ICS import with UID in-place deduplication; 15-minute reminders.
-- **End-to-End Multimodal Model Integration**: Independent toggles for image, audio, video, and PDF context attachments; adaptive Composer file picker with category badges; strict backward-compatible plain-text fallback.
-- **UI Design System & Visual Overhaul**: Restored radius tokens (8px/12px/20px) and concentric corner principle; hidden sidebar scrollbars; full-width markdown tables; translucent frosted loading skeletons.
-- **Real-Time Account Syncing Visibility**: Live pulsing dot and status subtitle for active sync passes; hardened concurrent request timing during folder navigation.
-- **Agent Resilience & Engineering**: Self-healing fallback for malformed tool JSON, token budget estimation and pruning, history compression, and App.tsx decomposed into 8 domain hooks.
+0.5.1 is a critical patch for the Windows in-app updater.
 
-See the [release notes](docs/releases/v0.5.0.en.md) and [changelog](CHANGELOG.en.md) for details.
+- **Restart and update no longer exits silently**: the background helper is launched through `cmd.exe /d /s /c start` instead of a `detached` Node.js spawn, so it no longer dies with the exiting Electron parent before running any logic (Node.js issue #51018).
+- **In-app silent upgrades restored**: from 0.5.1 onward, later versions install in place and relaunch automatically.
+- **NSIS in-place upgrade arguments completed**: running processes are handled predictably, and custom installation paths (a non-default drive, for example) are preserved.
+- **Relaunch drift and update loops fixed**: the relaunched app starts from its own directory, and a failed update purges its cached archive instead of prompting forever.
+
+> **Already running 0.4.3 or 0.5.0?** In-app update cannot succeed from those builds, because the updater helper bundled inside them carries the flaw. Download `Nami-Mail-Setup-0.5.1.exe` from the [Release page](https://github.com/QinIndexCode/nami-mail/releases) and run it once, manually. Existing mail, accounts, settings, and encryption keys are preserved — no re-login or reconfiguration needed.
+
+See the [release notes](docs/releases/v0.5.1.en.md) and [changelog](CHANGELOG.en.md) for details.
 
 ## Get Started
 
@@ -229,7 +233,7 @@ OAuth callbacks return to local `/api/oauth/google/callback` or `/api/oauth/micr
 - **Template library**: manage frequently used subjects and bodies in Settings and insert one into a compose or reply with a single click.
 - **Inline attachment preview**: PDFs and images render in a read-only viewer; DOCX/PPTX/XLSX and common text files get a read-only text preview without exporting the original file.
 - **Calendar**: mail invite banners, ICS import (append/replace modes with UID-based dedupe so re-imports never double-book), event reminders, and ICS export.
-- **BIMI brand marks**: enterprise sender SVG brand marks are resolved, validated, sanitized, and cached locally before display.
+- **BIMI brand marks**: read a sender domain's published BIMI record (the `l=` of its `default._bimi` TXT record) and display the SVG brand mark it points to, sanitized and cached locally; it resolves by domain only and does not authenticate the sender.
 - **Auto-reply**: optional automatic replies with independently configured screening and drafting models; every send goes through a visible user confirmation.
 - **Filter rules**: match incoming mail against combined conditions and run local actions (mark read, star, archive, or move to a folder); provider-side configurations are never modified.
 - **Local backup export**: stream every account's mail into a ZIP archive with one click.

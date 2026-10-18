@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
-import Database from "better-sqlite3";
+import Database from "better-sqlite3-multiple-ciphers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));

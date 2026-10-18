@@ -2,6 +2,7 @@ import type { Citation } from "@nami/agent-contracts";
 import { discardDraft, saveDraft } from "../drafts.js";
 import type { DatabaseHandle } from "../db.js";
 import { deleteAccountRowWithOptimizedCascade } from "../account-store.js";
+import { folderCounts } from "../folder-counts.js";
 import { messagePayloadForRow, type MessageStorageRow } from "../message-storage.js";
 import type { AccountAccessTokenProvider } from "../mail.js";
 import { sendMail } from "../mail.js";
@@ -282,23 +283,20 @@ export class SqliteMailApplicationService implements MailApplicationService {
   async listFolders(context: MailApplicationContext, accountId: string): Promise<readonly MailFolderView[]> {
     this.assertAccount(context, accountId);
     const rows = this.options.db.prepare(`
-      SELECT account_id, path, name, special_use, total, unseen
+      SELECT account_id, path, name, special_use
       FROM folders WHERE account_id = ? ORDER BY name, path
-    `).all(accountId) as Array<{
-      account_id: string;
-      path: string;
-      name: string;
-      special_use: string | null;
-      total: number;
-      unseen: number;
-    }>;
+    `).all(accountId) as Array<{ account_id: string; path: string; name: string; special_use: string | null }>;
+    // The counts are derived from `messages` rather than stored on the folder
+    // (contract §3.6), and derived through the very helper the sidebar uses, so
+    // the Agent and the UI cannot report two different numbers for one folder.
+    const counts = new Map(folderCounts(this.options.db, accountId).map((count) => [count.path, count]));
     return rows.map((row) => ({
       accountId: row.account_id,
       path: row.path,
       name: row.name,
       specialUse: row.special_use,
-      total: row.total,
-      unseen: row.unseen,
+      total: counts.get(row.path)?.total ?? 0,
+      unseen: counts.get(row.path)?.unseen ?? 0,
     }));
   }
 

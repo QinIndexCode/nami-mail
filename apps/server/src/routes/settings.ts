@@ -1,12 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import fs from "node:fs";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import type { RuntimeContext } from "../types.js";
 import { getAppSettings, getSyncMessageLimit, updateAppSettings, type AppSettings, type AppSettingsPatch } from "../settings.js";
 import { emitSettingsChanged } from "../events.js";
-import { config } from "../config.js";
+import {
+  customBackgroundPath,
+  hasStoredCustomBackground,
+  readCustomBackground,
+  storeCustomBackground,
+} from "../background-image.js";
 import { validationMessage, decodedUploadHeader, MAX_BACKGROUND_UPLOAD_BYTES } from "../helpers.js";
 import { settingsPatchSchema } from "../schemas.js";
 import { ROUTE_ERROR_CODES, routeErrorCodeForStatus } from "./error-codes.js";
@@ -28,20 +31,8 @@ class BackgroundUploadError extends Error {
   }
 }
 
-const customBackgroundPattern = /^custom-background-[a-f0-9-]+\.(jpg|png|webp)$/;
-
-function customBackgroundDirectory(context: RuntimeContext): string {
-  return context.backgroundDirectory ?? path.join(path.dirname(config.databasePath), "backgrounds");
-}
-
-export function customBackgroundPath(context: RuntimeContext, filename: string | null): string | undefined {
-  if (!filename || !customBackgroundPattern.test(filename)) return undefined;
-  return path.join(customBackgroundDirectory(context), filename);
-}
-
 function publicSettings(context: RuntimeContext, settings: AppSettings) {
-  const customPath = customBackgroundPath(context, settings.customBackgroundFilename);
-  const hasCustomBackground = Boolean(customPath && fs.existsSync(customPath));
+  const hasCustomBackground = hasStoredCustomBackground(context, settings.customBackgroundFilename);
   return {
     theme: settings.theme,
     locale: settings.locale,
@@ -139,8 +130,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
     if (!parsed.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
     const current = getAppSettings(context.db);
     const candidate = { ...current, ...parsed.data };
-    const customPath = customBackgroundPath(context, candidate.customBackgroundFilename);
-    if (candidate.backgroundPreset === "custom" && (!customPath || !fs.existsSync(customPath))) {
+    if (candidate.backgroundPreset === "custom" && !hasStoredCustomBackground(context, candidate.customBackgroundFilename)) {
       return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "请先上传自定义背景图片。" });
     }
     const updated = updateAppSettings(context.db, parsed.data as AppSettingsPatch);
@@ -179,13 +169,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       return reply.code(statusCode).send({ ok: false, code: routeErrorCodeForStatus(statusCode), message });
     }
 
-    const directory = customBackgroundDirectory(context);
-    fs.mkdirSync(directory, { recursive: true });
-    const filename = `custom-background-${randomUUID()}.${image.extension}`;
-    const temporaryPath = path.join(directory, `${filename}.tmp`);
-    const destinationPath = path.join(directory, filename);
-    fs.writeFileSync(temporaryPath, image.bytes, { mode: 0o600 });
-    fs.renameSync(temporaryPath, destinationPath);
+    const { filename, filePath: destinationPath } = storeCustomBackground(context, context.masterKey, image.bytes, image.extension);
 
     const previous = getAppSettings(context.db);
     try {
@@ -214,11 +198,8 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
   });
 
   app.get("/api/settings/background-image", async (_request, reply) => {
-    const settings = getAppSettings(context.db);
-    const filePath = customBackgroundPath(context, settings.customBackgroundFilename);
-    if (!filePath || !fs.existsSync(filePath)) return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "未找到自定义背景。" });
-    const extension = path.extname(filePath).toLowerCase();
-    const contentType = extension === ".png" ? "image/png" : extension === ".webp" ? "image/webp" : "image/jpeg";
-    return reply.type(contentType).header("cache-control", "no-store").send(fs.readFileSync(filePath));
+    const background = readCustomBackground(context, context.masterKey);
+    if (!background) return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "未找到自定义背景。" });
+    return reply.type(background.contentType).header("cache-control", "no-store").send(background.bytes);
   });
 }

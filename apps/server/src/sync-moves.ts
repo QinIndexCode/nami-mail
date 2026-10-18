@@ -36,7 +36,6 @@ import {
   moveStatements,
   pendingMoveUid,
   removeTrashSystemViewMirrors,
-  updateFolderCountsForMove,
   type MoveDestination,
   type MoveDuplicateRow,
 } from "./sync-move-statements.js";
@@ -47,7 +46,8 @@ import {
 
 export type MessageMoveTarget = "archive" | "trash" | "junk" | "inbox";
 
-const moveTargets: Record<MessageMoveTarget, { specialUses: string[]; unavailableMessage: string }> = {
+/** Exported for the refused-move vocabulary: `batch-move-outcome.ts` reads its wording. */
+export const moveTargets: Record<MessageMoveTarget, { specialUses: string[]; unavailableMessage: string }> = {
   archive: {
     // Some providers expose their archive view as \All. MOVE removes the source
     // mailbox membership and is therefore the provider-supported archive action.
@@ -242,10 +242,9 @@ export function resolveMoveDestination(
 
 /**
  * Persists the UIDPLUS-confirmed outcome of a provider MOVE: the row is
- * rebound to the exact destination UID, duplicate destination rows from a
- * cached \All copy are dropped, and folder counts are adjusted. Shared by
- * single-message moves and aggregated batch moves so both keep identical
- * intent/UIDPLUS semantics.
+ * rebound to the exact destination UID and duplicate destination rows from a
+ * cached \All copy are dropped. Shared by single-message moves and aggregated
+ * batch moves so both keep identical intent/UIDPLUS semantics.
  */
 function applyMoveConfirmedUidPlus(
   db: DatabaseHandle,
@@ -255,7 +254,6 @@ function applyMoveConfirmedUidPlus(
   destinationUid: number,
   agentEvents?: AgentMailEventSink,
   agentLease?: ReturnType<NonNullable<AgentMailEventSink["acquireLease"]>>,
-  sourceCountedAlready = false,
 ): void {
   db.transaction(() => {
     const statements = moveStatements(db);
@@ -265,10 +263,9 @@ function applyMoveConfirmedUidPlus(
     // row ids disappeared, and by then the DELETE would have already removed
     // every one of them.
     const duplicateDestinationRows = statements.uidPlusDuplicateRows.all(message.account_id, destination.path, destinationUid, messageId) as MoveDuplicateRow[];
-    const removedDestinationRow = statements.uidPlusRemoveDestinationRows.run(message.account_id, destination.path, destinationUid, messageId);
+    statements.uidPlusRemoveDestinationRows.run(message.account_id, destination.path, destinationUid, messageId);
     const updated = statements.uidPlusConfirm.run(destination.path, destinationUid, destination.special_use === "\\All" ? 1 : null, messageId);
     if (updated.changes !== 1) throw new Error("Move intent was not available for UIDPLUS reconciliation.");
-    updateFolderCountsForMove(statements, message, destination, removedDestinationRow.changes > 0, sourceCountedAlready);
     if (destination.special_use === "\\Trash") {
       removeTrashSystemViewMirrors(statements, message, messageId, agentEvents, agentLease);
     }
@@ -307,7 +304,6 @@ function applyMovePendingReconciliation(
   destination: MoveDestination,
   agentEvents?: AgentMailEventSink,
   agentLease?: ReturnType<NonNullable<AgentMailEventSink["acquireLease"]>>,
-  sourceCountedAlready = false,
 ): { refreshPending: boolean; locationUnverified: boolean } {
   db.transaction(() => {
     const statements = moveStatements(db);
@@ -325,9 +321,9 @@ function applyMovePendingReconciliation(
     const duplicateDestinationRows = message.remote_id_lookup
       ? statements.reconcileDuplicateRows.all(message.account_id, destination.path, message.remote_id_lookup, messageId) as MoveDuplicateRow[]
       : [];
-    const removedDestinationRows = message.remote_id_lookup
-      ? statements.reconcileRemoveDestinationRows.run(message.account_id, destination.path, message.remote_id_lookup, messageId)
-      : { changes: 0 };
+    if (message.remote_id_lookup) {
+      statements.reconcileRemoveDestinationRows.run(message.account_id, destination.path, message.remote_id_lookup, messageId);
+    }
     const localPendingUid = pendingMoveUid(statements, message.account_id, message.mailbox, message.uid);
     const confirmed = statements.reconcileConfirm.run(
       localPendingUid,
@@ -338,7 +334,6 @@ function applyMovePendingReconciliation(
       messageId,
     );
     if (confirmed.changes !== 1) throw new Error("Move intent was not available for pending reconciliation.");
-    updateFolderCountsForMove(statements, message, destination, removedDestinationRows.changes > 0, sourceCountedAlready);
     if (destination.special_use === "\\Trash") {
       removeTrashSystemViewMirrors(statements, message, messageId, agentEvents, agentLease);
     }
@@ -479,7 +474,7 @@ async function moveMessageCore(
       }
       const destinationUid = moved.uidMap?.get(message.uid);
       if (typeof destinationUid === "number" && Number.isSafeInteger(destinationUid) && destinationUid > 0) {
-        applyMoveConfirmedUidPlus(db, messageId, message, destination, destinationUid, agentEvents, agentLease, claimedGoal);
+        applyMoveConfirmedUidPlus(db, messageId, message, destination, destinationUid, agentEvents, agentLease);
         moveSettled = true;
         return { accountId: message.account_id, destination: destination.path, refreshPending: false, uid: destinationUid };
       }
@@ -489,7 +484,7 @@ async function moveMessageCore(
     // Servers without UIDPLUS do not identify the destination UID. Keep the
     // encrypted source row durable and expose its effective destination until
     // a later sync can reconcile the exact opaque remote identifier.
-    const reconciled = applyMovePendingReconciliation(db, messageId, message, destination, agentEvents, agentLease, claimedGoal);
+    const reconciled = applyMovePendingReconciliation(db, messageId, message, destination, agentEvents, agentLease);
     moveSettled = true;
     // Without a stable server identifier, the confirmed move is still real,
     // but the local cache cannot safely bind its preserved payload to a target
@@ -563,7 +558,7 @@ async function moveMessagesInOneCommand(
   // acceptance-time goal: those rows already left their source folder when the
   // selection was accepted, so the confirm step must not count that departure
   // a second time.
-  const claimed: Array<{ entry: MoveMessageFields & { id: string }; claimedGoal: boolean }> = [];
+  const claimed: Array<MoveMessageFields & { id: string }> = [];
   let commandAttempted = false;
   try {
     // Same policy as single moves: the account is claimed already, so no new
@@ -607,28 +602,28 @@ async function moveMessagesInOneCommand(
         outcome.failures.push({ id: entry.id, message: PENDING_MOVE_RECONCILIATION_ERROR });
         continue;
       }
-      claimed.push({ entry, claimedGoal });
+      claimed.push(entry);
     }
     if (claimed.length === 0) return outcome;
 
-    const lock = await client.getMailboxLock(claimed[0]!.entry.mailbox);
+    const lock = await client.getMailboxLock(claimed[0]!.mailbox);
     try {
       commandAttempted = true;
-      const moved = await client.messageMove(claimed.map(({ entry }) => entry.uid), destination.path, { uid: true });
+      const moved = await client.messageMove(claimed.map((entry) => entry.uid), destination.path, { uid: true });
       if (!moved) {
         // The provider refused the whole message set. Every claimed intent was
         // recorded before the command and never executed, so clear them all.
-        for (const { entry } of claimed) clearMoveIntent.run(entry.id);
-        for (const { entry } of claimed) outcome.failures.push({ id: entry.id, message: "邮件服务器未确认移动操作，请稍后重试。" });
+        for (const entry of claimed) clearMoveIntent.run(entry.id);
+        for (const entry of claimed) outcome.failures.push({ id: entry.id, message: "邮件服务器未确认移动操作，请稍后重试。" });
         return outcome;
       }
-      for (const { entry, claimedGoal } of claimed) {
+      for (const entry of claimed) {
         try {
           const destinationUid = moved.uidMap?.get(entry.uid);
           if (typeof destinationUid === "number" && Number.isSafeInteger(destinationUid) && destinationUid > 0) {
-            applyMoveConfirmedUidPlus(db, entry.id, entry, destination, destinationUid, agentEvents, agentLease, claimedGoal);
+            applyMoveConfirmedUidPlus(db, entry.id, entry, destination, destinationUid, agentEvents, agentLease);
           } else {
-            const reconciled = applyMovePendingReconciliation(db, entry.id, entry, destination, agentEvents, agentLease, claimedGoal);
+            const reconciled = applyMovePendingReconciliation(db, entry.id, entry, destination, agentEvents, agentLease);
             if (reconciled.refreshPending) outcome.pendingAccounts.add(accountId);
           }
           outcome.updated += 1;
@@ -640,12 +635,12 @@ async function moveMessagesInOneCommand(
       lock.release();
     }
   } catch (error) {
-    const claimedIds = new Set(claimed.map(({ entry }) => entry.id));
+    const claimedIds = new Set(claimed.map((entry) => entry.id));
     if (!commandAttempted) {
       // The command never reached the provider (e.g. the mailbox lock could
       // not be acquired). Mirror the single-move path: clear every claimed
       // intent and report the failure.
-      for (const { entry } of claimed) clearMoveIntent.run(entry.id);
+      for (const entry of claimed) clearMoveIntent.run(entry.id);
       for (const entry of entries) {
         outcome.failures.push({ id: entry.id, message: moveErrorMessage(error) });
       }

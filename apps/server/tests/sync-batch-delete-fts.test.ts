@@ -85,8 +85,8 @@ describe("sync batch deletes keep the FTS index consistent", () => {
 
   function addCachedFolder(path: string, uidValidity: string | null, specialUse: string | null = null): void {
     db.prepare(`
-      INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity)
-      VALUES (?, ?, ?, ?, 1, 0, ?)
+      INSERT INTO folders (account_id, path, name, special_use, uid_validity)
+      VALUES (?, ?, ?, ?, ?)
     `).run("account-1", path, path, specialUse, uidValidity);
   }
 

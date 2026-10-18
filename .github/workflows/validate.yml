@@ -33,6 +33,10 @@ jobs:
       # Match Pages' install policy: native prebuilds are still installed, but
       # Electron downloads and other install scripts are unnecessary here.
       - run: npm ci --ignore-scripts
+      # build-site below repairs the hero badge in this throwaway checkout, so a
+      # forgotten version bump would merge unnoticed. Check the version surfaces
+      # and the release references the repair cannot rewrite, before that runs.
+      - run: node scripts/sync-site-version.mjs --check
       - run: node scripts/build-site.mjs
 
   validate:

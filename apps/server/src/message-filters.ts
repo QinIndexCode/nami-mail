@@ -15,7 +15,8 @@ import type { AttachmentKind } from "./attachment-kind.js";
 // Folder membership reads the `m.effective_mailbox` VIRTUAL generated column
 // rather than the CASE expression it is defined as: the expression is not a
 // bare column, so a folder view could not use any index prefix and fell back to
-// a full scan plus sorter. EFFECTIVE_MAILBOX_SQL in db.ts is the one definition
+// a full scan plus sorter. EFFECTIVE_MAILBOX_SQL in db-schema.ts is the one
+// definition
 // of that value and SQLite owns the column, so this file must never restate the
 // expression.
 

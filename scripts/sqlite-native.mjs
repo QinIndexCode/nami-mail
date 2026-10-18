@@ -6,13 +6,24 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 export const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-export const sqliteModulePath = path.join(projectRoot, "node_modules", "better-sqlite3");
+
+/**
+ * The one place the scripts name the SQLite driver, mirroring
+ * `apps/server/src/native-sqlite.ts`. `better-sqlite3-multiple-ciphers` is the
+ * drop-in fork of better-sqlite3 carrying SQLite3MultipleCiphers, so the
+ * packaging and runtime probes below exercise the driver the app actually
+ * ships — including its ability to encrypt a database (see
+ * verify-electron-sqlite.mjs, whose probe asserts a cipher round trip rather
+ * than a mere module load).
+ */
+export const sqliteModuleName = "better-sqlite3-multiple-ciphers";
+export const sqliteModulePath = path.join(projectRoot, "node_modules", sqliteModuleName);
 
 const require = createRequire(import.meta.url);
 
 /**
- * Nami Mail ships Windows x64 only. better-sqlite3 v13 provides this N-API
- * prebuild, which both the command-line Node runtime and Electron can load.
+ * Nami Mail ships Windows x64 only. The driver provides this N-API prebuild,
+ * which both the command-line Node runtime and Electron can load.
  */
 export function expectedWindowsSqlitePrebuild(modulePath = sqliteModulePath) {
   return path.join(modulePath, "prebuilds", "win32-x64.node");
@@ -25,17 +36,17 @@ export function assertWindowsSqlitePrebuild(modulePath = sqliteModulePath) {
   const prebuildPath = expectedWindowsSqlitePrebuild(modulePath);
   assert.ok(
     fs.existsSync(prebuildPath),
-    `better-sqlite3 v13 Windows N-API prebuild is missing: ${prebuildPath}`,
+    `${sqliteModuleName} Windows N-API prebuild is missing: ${prebuildPath}`,
   );
   return prebuildPath;
 }
 
 export function querySqliteWithCurrentNode() {
-  const Database = require("better-sqlite3");
+  const Database = require(sqliteModuleName);
   const database = new Database(":memory:");
   try {
     const row = database.prepare("SELECT 13 AS value").get();
-    assert.deepEqual(row, { value: 13 }, "better-sqlite3 did not execute the N-API SQLite query.");
+    assert.deepEqual(row, { value: 13 }, `${sqliteModuleName} did not execute the N-API SQLite query.`);
   } finally {
     database.close();
   }

@@ -100,7 +100,7 @@ function legacyRequestFingerprint(request: OutboundSubmissionRequest): string {
 // Every derived key here depends only on (masterKey, purpose): crypto.ts's
 // HKDF salt is a compile-time constant and no per-call randomness enters the
 // derivation, so memoizing per master-key object is safe (same pattern as
-// sync.ts's remoteIdLookupKeyCache). Without the cache the migration
+// message-remote-id.ts's remoteIdLookupKeyCache). Without the cache the migration
 // verification pass re-derived HKDF up to four times per stored submission.
 // Cached keys share the master key's own lifetime (both live for the whole
 // process), which is why they are not zeroed after each use; every callback
@@ -793,7 +793,7 @@ export function recoverInterruptedSubmissions(db: DatabaseHandle, masterKey: Buf
   return rows.length;
 }
 
-/** Marks SMTP-accepted or uncertain submissions confirmed after Sent sync finds the exact RFC Message-ID. */
+/** Marks submissions confirmed once a Sent row *the provider stored* carries the exact RFC Message-ID; a row we wrote optimistically is not evidence (`pending-sent.ts`). */
 export function confirmSubmissionsInSent(db: DatabaseHandle, masterKey: Buffer, accountId: string): number {
   const candidates = db.prepare(`
     SELECT * FROM outbound_submissions
@@ -812,6 +812,7 @@ export function confirmSubmissionsInSent(db: DatabaseHandle, masterKey: Buffer, 
     SELECT m.* FROM messages m
     JOIN folders f ON f.account_id = m.account_id AND f.path = m.mailbox
     WHERE m.account_id = ? AND f.special_use = '\\Sent'
+      AND m.pending_send IS NULL
       AND (m.sent_at IS NULL OR m.sent_at >= ?)
   `).all(accountId, windowStart) as MessageStorageRow[];
   const sentMessageIds = new Set(sentRows.flatMap((row) => {

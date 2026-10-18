@@ -142,7 +142,7 @@ function payloadAad(id: string, accountId: string): string {
 
 // The HKDF derivation dominates bulk decrypt cost and its output depends only
 // on (masterKey, purpose) — crypto.ts mixes in a compile-time-constant salt —
-// so memoize it per master-key object (same pattern as sync.ts's
+// so memoize it per master-key object (same pattern as message-remote-id.ts's
 // remoteIdLookupKeyCache). The cached key shares the master key's own lifetime
 // (both live for the whole process), which is why it is not zeroed after each
 // use unlike a single-shot key. Callers never mutate the key.

@@ -8,6 +8,7 @@ import {
   pollSubmittingSubmission,
   recipientSummary,
   sortSubmissions,
+  submissionInFlight,
   submissionMessageIdSuffix,
   submissionStatusNeedsRefresh,
   submissionStatusPresentation,
@@ -129,10 +130,46 @@ describe("sending status presentation", () => {
     })).resolves.toMatchObject({ deliveryStatus: "submitting" });
   });
 
+  it("polls a queued send, because the acceptance returns before any attempt exists", async () => {
+    // The route now commits the ledger row and its dispatch task and answers
+    // `pending`; the attempt happens afterwards. Leaving the loop keyed on
+    // `submitting` alone would return on the first check and report a send that
+    // had not been tried yet as finished.
+    const queued = { ...baseSubmission, deliveryStatus: "pending" as const };
+    let lookups = 0;
+    const advanced = async () => {
+      lookups += 1;
+      return { ...queued, deliveryStatus: "submitted" as const };
+    };
+
+    await expect(pollSubmittingSubmission(queued, advanced, { wait: async () => undefined }))
+      .resolves.toMatchObject({ deliveryStatus: "submitted" });
+    expect(lookups).toBe(1);
+
+    // And it still stops on `pending`: a task the scheduler has not claimed
+    // leaves the record queued, and the caller says so rather than hanging.
+    await expect(pollSubmittingSubmission(queued, async () => queued, {
+      attempts: 2,
+      wait: async () => undefined,
+    })).resolves.toMatchObject({ deliveryStatus: "pending" });
+  });
+
+  it("treats exactly the two unsettled statuses as in flight", () => {
+    expect(submissionInFlight("pending")).toBe(true);
+    expect(submissionInFlight("submitting")).toBe(true);
+    expect(submissionInFlight("submitted")).toBe(false);
+    expect(submissionInFlight("confirmed")).toBe(false);
+    expect(submissionInFlight("unknown_delivery")).toBe(false);
+    expect(submissionInFlight("failed")).toBe(false);
+  });
+
   it("keeps a bounded client refresh active while Sent-folder verification can still change the record", () => {
     expect(submissionStatusNeedsRefresh("submitting")).toBe(true);
     expect(submissionStatusNeedsRefresh("submitted")).toBe(true);
     expect(submissionStatusNeedsRefresh("unknown_delivery")).toBe(true);
+    // `pending` is the value a send parked on a future sendAt holds for hours,
+    // so refreshing on it would keep the view polling parked mail.
+    expect(submissionStatusNeedsRefresh("pending")).toBe(false);
     expect(submissionStatusNeedsRefresh("confirmed")).toBe(false);
     expect(submissionStatusNeedsRefresh("failed")).toBe(false);
   });

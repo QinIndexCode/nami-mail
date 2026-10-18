@@ -12,11 +12,14 @@ import type * as syncModule from "../src/sync.js";
  * Shutdown vs. route-triggered syncs.
  *
  * The runtime hands its `syncAbortController.signal` to the route layer as
- * `RuntimeContext.syncShutdownSignal`. The fire-and-forget syncs a route
- * starts (first sync after account creation / OAuth callback, the background
- * reconciliation after a move) must unwind when the process shuts down, and
- * must NOT unwind when the client that issued the request navigates away —
- * the exact inverse of the interactive sync route's own request signal.
+ * `RuntimeContext.syncShutdownSignal`. The fire-and-forget syncs a request
+ * starts (first sync after account creation / OAuth callback) must unwind when
+ * the process shuts down, and must NOT unwind when the client that issued the
+ * request navigates away — the exact inverse of the interactive sync route's own
+ * request signal. The move route's background reconciliation is the same
+ * guarantee one layer down: the route no longer starts it (the move task does),
+ * so the signal travels through the task layer instead, and this file walks that
+ * whole chain.
  *
  * Real sockets are used where a client disconnect is part of the behavior
  * under test; the port is discovered before src/config.js is evaluated, so
@@ -25,7 +28,7 @@ import type * as syncModule from "../src/sync.js";
  */
 
 const { testAccountConnection } = vi.hoisted(() => ({ testAccountConnection: vi.fn() }));
-const { moveMessage } = vi.hoisted(() => ({ moveMessage: vi.fn() }));
+const { batchMoveMessages } = vi.hoisted(() => ({ batchMoveMessages: vi.fn() }));
 const { syncAccount } = vi.hoisted(() => ({ syncAccount: vi.fn() }));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
@@ -35,7 +38,7 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 
 vi.mock("../src/sync-moves.js", async (importOriginal) => {
   const actual = await importOriginal<typeof syncMovesModule>();
-  return { ...actual, moveMessage };
+  return { ...actual, batchMoveMessages };
 });
 
 vi.mock("../src/sync.js", async (importOriginal) => {
@@ -104,6 +107,11 @@ function insertMessage(db: ReturnType<typeof openDatabase>, id: string, accountI
     INSERT INTO messages (id, account_id, mailbox, uid, flags_json, has_attachments, attachments_json, size, created_at)
     VALUES (?, ?, 'INBOX', 1, '[]', 0, '[]', 0, ?)
   `).run(id, accountId, new Date().toISOString());
+}
+
+function insertFolder(db: ReturnType<typeof openDatabase>, accountId: string, path: string, specialUse: string): void {
+  db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+    .run(accountId, path, path, specialUse);
 }
 
 async function postJson(
@@ -176,10 +184,21 @@ describe("a process shutdown stops the syncs routes started", () => {
     shutdownController = new AbortController();
     syncAccount.mockImplementation((...args: unknown[]) => blockingPass(args[6] as AbortSignal | undefined));
     testAccountConnection.mockResolvedValue({ folders: [], smtp: true });
-    moveMessage.mockResolvedValue({ accountId: "00000000-0000-4000-8000-000000000001", destination: "Archive", refreshPending: true });
+    // The move's own executor, replaced: the MOVE command is the one thing here
+    // that would dial a real server. Its answer is the shape that asks for a
+    // reconcile -- the provider could not confirm the outcome -- which is what
+    // makes this test about the *runner's* pass rather than the route's.
+    batchMoveMessages.mockResolvedValue({
+      updated: 1,
+      failed: 0,
+      failures: [],
+      pendingAccounts: new Set(["00000000-0000-4000-8000-000000000001"]),
+    });
 
     db = openDatabase(":memory:");
     insertAccount(db);
+    insertFolder(db, "00000000-0000-4000-8000-000000000001", "INBOX", "\\Inbox");
+    insertFolder(db, "00000000-0000-4000-8000-000000000001", "Archive", "\\Archive");
     insertMessage(db, "message-1", "00000000-0000-4000-8000-000000000001");
     const context = {
       db,
@@ -225,14 +244,22 @@ describe("a process shutdown stops the syncs routes started", () => {
     expect(signal.aborted).toBe(true);
   }, 20_000);
 
-  it("returns the move response immediately, then aborts the background reconciliation on shutdown", async () => {
+  it("returns the move response immediately, then aborts the move task's reconciliation on shutdown", async () => {
+    // The reconcile pass belongs to the move *task* now: the route commits the
+    // goal and one durable task and answers, and the runner kicks the pass after
+    // its last chunk. So this test walks the whole chain -- route, acceptance,
+    // scheduler, runner -- because the signal only reaches `syncAccount` if every
+    // link still passes it, and `app.ts` wiring `context.syncShutdownSignal` into
+    // the task layer is exactly the link the switch had to add (§0.4 十五).
     const response = await postJson("/api/messages/message-1/move", { target: "archive" });
 
     expect(response.statusCode).toBe(200);
-    expect(JSON.parse(response.body)).toMatchObject({ ok: true, refreshPending: true });
-    expect(syncAccount).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(response.body)).toMatchObject({ ok: true, destination: "Archive", refreshPending: true });
+
+    await vi.waitFor(() => expect(syncAccount).toHaveBeenCalledTimes(1), { timeout: 10_000 });
     const signal = syncAccount.mock.calls[0]?.[6] as AbortSignal;
     expect(signal).toBe(shutdownController.signal);
+    expect(signal.aborted).toBe(false);
 
     shutdownController.abort();
     await vi.waitFor(() => expect(abortedPasses).toContain(signal), { timeout: 10_000 });

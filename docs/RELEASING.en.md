@@ -49,7 +49,15 @@ GitHub Actions provides `GITHUB_TOKEN` temporarily to the release job. Do not cr
 
 ## Local Preflight
 
-Update the [changelog](../CHANGELOG.zh-CN.md) first and verify that user-visible copy, licensing, and the version number are correct. Run checks relevant to the release, then the complete baseline:
+Update the [changelog](../CHANGELOG.zh-CN.md) first and verify that user-visible copy, licensing, and the version number are correct.
+
+`package.json` is the single source of truth for the version; every other copy is either derived from it or checked against it. Make those copies agree before running the checks below:
+
+- `npm.cmd run sync:version` rewrites the copies that carry no release-specific prose: the hero badge in `site/index.html`, and the sample `namimail version` and `meta.version` output in `docs/cli/examples.*.md` and `docs/cli/output-schema.*.md`.
+- The copies it deliberately does not rewrite are the sentences written per release. Each README pins its release section with `<!-- whats-new: v<version> -->` on the line above the heading and links `docs/releases/v<version>.<lang>.md`; `docs/releases/README.<lang>.md` lists the release, and this guide names the current release notes. A script cannot invent that prose without labelling one release with another's notes, so update all of them by hand in the same commit as the version bump.
+- `npm.cmd run sync:version:check` fails instead of writing and runs in both the pull-request and release workflows, so a landing page left on the previous release cannot merge or be tagged. Release notes for the version being tagged must exist in both languages for it to pass. The release workflow additionally runs `node scripts/verify-release-notes.mjs`, which requires the paired `docs/releases/v<version>.md` body used as the GitHub Release text.
+
+Run checks relevant to the release, then the complete baseline:
 
 ```powershell
 npm.cmd ci

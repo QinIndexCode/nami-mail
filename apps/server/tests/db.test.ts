@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import Database from "better-sqlite3";
+import Database from "better-sqlite3-multiple-ciphers";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase, SCHEMA_VERSION } from "../src/db.js";
 
@@ -158,7 +158,12 @@ describe("database schema versioning", () => {
     `);
     newer.close();
 
-    expect(() => openDatabase(databasePath)).toThrow(/created by a newer application build \(schema v999 > v1\)/);
+    // The boundary is derived from SCHEMA_VERSION rather than spelled out: the
+    // bump to v2 is exactly the change this pin has to survive, and a literal
+    // would have made it fail for the right reason on the wrong day.
+    expect(() => openDatabase(databasePath)).toThrow(
+      new RegExp(`created by a newer application build \\(schema v999 > v${SCHEMA_VERSION}\\)`),
+    );
   });
 
   it("opens a pre-uid calendar database and backfills the column before indexing it", () => {
@@ -208,25 +213,31 @@ describe("database schema versioning", () => {
   });
 
   it("keeps schema-constant indexes off columns that only migrateDatabase adds", () => {
-    // Guards the whole class of defect above. db.exec(schema) runs before
-    // migrateDatabase, so every statement in the schema constant must survive
-    // being executed against a database whose tables predate the newest columns.
-    // IF NOT EXISTS does not help: an unknown column is a hard error, not a
-    // skipped statement. The audit cross-checks every index in the constant
-    // against the columns migrateDatabase adds, since those are exactly the
-    // ones a pre-migration database does not have yet.
-    const source = fs.readFileSync(new URL("../src/db.ts", import.meta.url), "utf8");
-    const schemaStart = source.indexOf("const schema = `");
+    // Guards the whole class of defect above. The fresh-database DDL lives in
+    // db-schema.ts and runs before migrateDatabase, so every statement in it must
+    // survive being executed against a database whose tables predate the newest
+    // columns. IF NOT EXISTS does not help: an unknown column is a hard error, not
+    // a skipped statement. The audit cross-checks every index in that DDL against
+    // the columns migrateDatabase adds, since those are exactly the ones a
+    // pre-migration database does not have yet — so it reads both files.
+    const schemaSource = fs.readFileSync(new URL("../src/db-schema.ts", import.meta.url), "utf8");
+    const schemaStart = schemaSource.indexOf("export const NAMI_MAIL_SCHEMA_SQL = `");
     expect(schemaStart).toBeGreaterThan(-1);
-    const schemaEnd = source.indexOf("\n`;", schemaStart);
+    const schemaEnd = schemaSource.indexOf("\n`;", schemaStart);
     expect(schemaEnd).toBeGreaterThan(schemaStart);
-    const schemaSql = source.slice(schemaStart, schemaEnd);
+    const schemaSql = schemaSource.slice(schemaStart, schemaEnd);
+    // The migration list moved out of db.ts into schema-migrations.ts (db.ts is
+    // at its max-lines ratchet). Read both, so the audit keeps tracking wherever
+    // the ALTERs actually are rather than a particular file's spelling.
+    const migrationSource = ["../src/db.ts", "../src/schema-migrations.ts"]
+      .map((relative) => fs.readFileSync(new URL(relative, import.meta.url), "utf8"))
+      .join("\n");
 
     // Columns each table gained after its original CREATE TABLE, i.e. the ones
     // only migrateDatabase can supply. Derived from migrateDatabase's ALTERs so
     // the audit tracks the real migration list instead of a hand-kept duplicate.
     const migratedColumns = new Map<string, Set<string>>();
-    for (const match of source.matchAll(/ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+"?(\w+)"?/g)) {
+    for (const match of migrationSource.matchAll(/ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+"?(\w+)"?/g)) {
       const [, table, column] = match;
       // Both groups are guaranteed by the regex itself (\w+ cannot be empty).
       const known = migratedColumns.get(table!) ?? new Set<string>();
@@ -264,103 +275,25 @@ describe("database schema versioning", () => {
     }
   });
 
-  it("rebuilds the flags-only batch job tables into the move-capable shape, keeping their rows", () => {
-    // The build before move jobs joined the durable records wrote this exact
-    // pair: batch_jobs admitted kind 'flags'/'undo' only, so a move job's INSERT
-    // hit the CHECK, and batch_job_messages had neither the undo origin nor the
-    // failed marker. SQLite cannot ALTER a CHECK, so the pair is rebuilt in
-    // place once. The child is dropped before its parent on purpose: dropping a
-    // parent whose child rows still reference it would cascade those rows away
-    // instead of copying them into the rebuilt child.
-    const databasePath = blankDatabasePath("batch-jobs-move-kind");
-    const legacy = new Database(databasePath);
-    legacy.exec(`
-      CREATE TABLE batch_jobs (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        kind TEXT NOT NULL CHECK (kind IN ('flags', 'undo')),
-        patch_json TEXT,
-        status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
-        total INTEGER NOT NULL,
-        updated INTEGER NOT NULL,
-        failed INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        completed_at INTEGER,
-        error TEXT,
-        undone INTEGER NOT NULL DEFAULT 0,
-        undo_window_ms INTEGER NOT NULL
-      );
-      CREATE INDEX idx_batch_jobs_completed_at ON batch_jobs(completed_at) WHERE completed_at IS NOT NULL;
-      CREATE TABLE batch_job_messages (
-        job_id TEXT NOT NULL REFERENCES batch_jobs(id) ON DELETE CASCADE,
-        message_id TEXT NOT NULL,
-        changed INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (job_id, message_id)
-      );
-      CREATE INDEX idx_batch_job_messages_message ON batch_job_messages(message_id);
-      INSERT INTO batch_jobs (id, parent_id, kind, patch_json, status, total, updated, failed, created_at, completed_at, error, undone, undo_window_ms)
-      VALUES ('job-flags-1', NULL, 'flags', '{"flags":{"read":true}}', 'completed', 2, 1, 1, 1000, 2000, 'one refused', 0, 300000);
-      INSERT INTO batch_job_messages (job_id, message_id, changed)
-      VALUES ('job-flags-1', 'message-1', 1), ('job-flags-1', 'message-2', 0);
-    `);
-    legacy.close();
-
-    const migrated = openDatabase(databasePath);
+  it("declares none of the legacy task stores in a fresh database", () => {
+    // Batch 4's schema half: the three legacy tables are no longer created, so a
+    // database this build makes from scratch has never held them. The other half
+    // -- dropping them from a database an older build wrote -- belongs to the 4b
+    // migration, and only there: this DDL runs on every open, *before* that
+    // migration reads the rows, so a DROP placed here would delete them unread.
+    const databasePath = blankDatabasePath("no-legacy-stores");
+    const db = openDatabase(databasePath);
     try {
-      // Rows survive verbatim; the move-only columns start empty for them.
-      expect(migrated.prepare(
-        "SELECT id, kind, patch_json, target, status, total, updated, failed, created_at, completed_at, error, undone, undo_window_ms "
-        + "FROM batch_jobs WHERE id = 'job-flags-1'",
-      ).get()).toEqual({
-        id: "job-flags-1",
-        kind: "flags",
-        patch_json: '{"flags":{"read":true}}',
-        target: null,
-        status: "completed",
-        total: 2,
-        updated: 1,
-        failed: 1,
-        created_at: 1000,
-        completed_at: 2000,
-        error: "one refused",
-        undone: 0,
-        undo_window_ms: 300000,
-      });
-      expect(migrated.prepare(
-        "SELECT job_id, message_id, changed, origin_mailbox, destination_mailbox, failed FROM batch_job_messages ORDER BY message_id",
-      ).all()).toEqual([
-        { job_id: "job-flags-1", message_id: "message-1", changed: 1, origin_mailbox: null, destination_mailbox: null, failed: 0 },
-        { job_id: "job-flags-1", message_id: "message-2", changed: 0, origin_mailbox: null, destination_mailbox: null, failed: 0 },
-      ]);
-
-      // A move job inserts now, and the child's cascade still points at the
-      // rebuilt parent rather than at the table that was dropped.
-      migrated.prepare(
-        "INSERT INTO batch_jobs (id, kind, target, status, total, updated, failed, created_at, undo_window_ms) "
-        + "VALUES ('job-move-1', 'move', 'trash', 'running', 1, 0, 0, 3000, 300000)",
-      ).run();
-      migrated.prepare(
-        "INSERT INTO batch_job_messages (job_id, message_id, changed, origin_mailbox) "
-        + "VALUES ('job-move-1', 'message-3', 1, 'INBOX')",
-      ).run();
-      migrated.prepare("DELETE FROM batch_jobs WHERE id = 'job-move-1'").run();
-      expect(migrated.prepare("SELECT COUNT(*) FROM batch_job_messages WHERE job_id = 'job-move-1'").pluck().get()).toBe(0);
-
-      // The widened CHECK still rejects a kind it does not list.
-      expect(() => migrated.prepare(
-        "INSERT INTO batch_jobs (id, kind, status, total, updated, failed, created_at, undo_window_ms) "
-        + "VALUES ('job-bad', 'archive', 'running', 1, 0, 0, 4000, 300000)",
-      ).run()).toThrow(/CHECK/);
-
-      // The schema constant created these before the rebuild, so dropping the
-      // old tables dropped them too; the migration has to put them back.
-      const indexes = migrated.prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name IN ('batch_jobs', 'batch_job_messages')",
+      const names = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        + "AND name IN ('operation_queue', 'batch_jobs', 'batch_job_messages')",
       ).pluck().all() as string[];
-      expect(indexes).toContain("idx_batch_jobs_completed_at");
-      expect(indexes).toContain("idx_batch_job_messages_message");
+      expect(names).toEqual([]);
+      // The replacement is present, so this is absence by deletion rather than a
+      // schema that failed to build half of itself.
+      expect(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").get()).toBeTruthy();
     } finally {
-      migrated.close();
+      db.close();
     }
   });
 });

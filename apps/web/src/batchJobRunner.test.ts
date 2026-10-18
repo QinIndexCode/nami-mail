@@ -146,6 +146,62 @@ describe("createBatchJobRunner", () => {
     }
   });
 
+  it("reports a batch that committed nothing from its own counts, without polling", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      const onSettled = vi.fn();
+      const runner = createBatchJobRunner(deps);
+      // The selection was already in the requested state, so the acceptance
+      // committed no task: the route answers a null id with its own counts.
+      apiMocks.batchJobCreate.mockResolvedValue({ jobId: null, updated: 7, failed: 0 });
+
+      runner.start(MOVE_PAYLOAD, { ...RUN_OPTS, onSettled });
+      await flush();
+
+      // Polling the null id would 404 and toast a job error for a batch that
+      // did exactly what was asked.
+      await vi.advanceTimersByTimeAsync(2400);
+      expect(apiMocks.batchJobStatus).not.toHaveBeenCalled();
+      // Two arguments, not three: no undo action, because the acceptance
+      // committed no task to open an undo window on.
+      expect(deps.showToast).toHaveBeenCalledWith("mail.selection.moved{\"count\":7}", "success");
+      expect(deps.exitSelectionMode).toHaveBeenCalledTimes(1);
+      expect(deps.onSnapshot).toHaveBeenLastCalledWith(null);
+      expect(deps.onBusy).toHaveBeenLastCalledWith(false);
+      expect(deps.reload).toHaveBeenCalledWith({ silent: true });
+      // "Committed nothing" is still a batch that settled: `onSettled` is what
+      // releases the pins into the refresh (see BatchJobRunOptions), so a batch
+      // that skipped it would leave them armed with nothing left to clear them.
+      expect(onSettled).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a zero-work batch's refusals as the partial failure they are", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      const runner = createBatchJobRunner(deps);
+      // Every id was blocked by an unconfirmed move: nothing to push, nothing
+      // committed, and the user still has to be told the batch did not apply.
+      apiMocks.batchJobCreate.mockResolvedValue({ jobId: null, updated: 0, failed: 4 });
+
+      runner.start(MOVE_PAYLOAD, RUN_OPTS);
+      await flush();
+
+      expect(apiMocks.batchJobStatus).not.toHaveBeenCalled();
+      expect(deps.showToast).toHaveBeenCalledWith("mail.selection.partialFailure{\"done\":0,\"failed\":4}", "error");
+      // Nothing applied, so the selection mode stays armed for the user to try
+      // again — the same rule the partial-failure path follows.
+      expect(deps.exitSelectionMode).not.toHaveBeenCalled();
+      expect(deps.reload).toHaveBeenCalledWith({ silent: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("arms the bar before the server names the job", async () => {
     vi.useFakeTimers();
     try {
@@ -233,7 +289,7 @@ describe("createBatchJobRunner", () => {
     }
   });
 
-  it("follows the inverse job before reloading, so the undo lands in the UI", async () => {
+  it("follows the inverse tasks before reloading, so the undo lands in the UI", async () => {
     vi.useFakeTimers();
     try {
       const showToast = vi.fn();
@@ -247,7 +303,7 @@ describe("createBatchJobRunner", () => {
       }));
       apiMocks.batchJobUndo.mockImplementation(async () => {
         setTimeout(() => { inverseFinished = true; }, 1500);
-        return { ok: true, jobId: "undo-9" };
+        return { ok: true, taskIds: ["undo-9"] };
       });
 
       runner.start(MOVE_PAYLOAD, RUN_OPTS);
@@ -257,13 +313,13 @@ describe("createBatchJobRunner", () => {
       const beforeUndo = reload.mock.calls.length;
 
       undo!.run();
-      // The POST only ACCEPTS the inverse job. Reloading here would snapshot
+      // The POST only ACCEPTS the inverse tasks. Reloading here would snapshot
       // the pre-undo list and the undo would look like it did nothing.
       await vi.advanceTimersByTimeAsync(600);
       expect(apiMocks.batchJobStatus).toHaveBeenCalledWith("undo-9");
       expect(reload.mock.calls.length, "the undo POST alone must not reconcile").toBe(beforeUndo);
 
-      // The inverse job finishes 1.5s in; the follow-up poll reconciles then.
+      // The inverse tasks finish 1.5s in; the follow-up poll reconciles then.
       await vi.advanceTimersByTimeAsync(1800);
       expect(reload.mock.calls.length).toBe(beforeUndo + 1);
     } finally {
@@ -271,7 +327,116 @@ describe("createBatchJobRunner", () => {
     }
   });
 
-  it("reconciles immediately when the undo answer carries no job id", async () => {
+  it("waits for every inverse task of a cross-account undo before reloading", async () => {
+    vi.useFakeTimers();
+    try {
+      const showToast = vi.fn();
+      const reload = vi.fn(async () => undefined);
+      const deps = makeDeps({ showToast, reload });
+      const runner = createBatchJobRunner(deps);
+      // Two accounts, so the reverse is two tasks and the answer names both
+      // (§4.7 A ⑨). The second settles a full poll later than the first: a
+      // follow-up that reloaded on the first would show one account reverted.
+      const settled = new Set<string>();
+      apiMocks.batchJobCreate.mockResolvedValue({ jobId: "j11" });
+      apiMocks.batchJobStatus.mockImplementation(async (id: string) => ({
+        job: job({ id, status: id === "j11" || settled.has(id) ? "completed" : "running", total: 2, updated: 2 }),
+      }));
+      apiMocks.batchJobUndo.mockImplementation(async () => {
+        setTimeout(() => settled.add("undo-a"), 600);
+        setTimeout(() => settled.add("undo-b"), 1200);
+        return { ok: true, taskIds: ["undo-a", "undo-b"] };
+      });
+
+      runner.start(MOVE_PAYLOAD, RUN_OPTS);
+      await vi.advanceTimersByTimeAsync(600);
+      const beforeUndo = reload.mock.calls.length;
+      showToast.mock.calls.find(([, kind]) => kind === "success")?.[2]!.run();
+      await flush();
+      expect(apiMocks.batchJobStatus).toHaveBeenCalledWith("undo-a");
+      expect(apiMocks.batchJobStatus).toHaveBeenCalledWith("undo-b");
+
+      // Past the first task's settlement but not the second's.
+      await vi.advanceTimersByTimeAsync(800);
+      expect(reload.mock.calls.length, "one of two inverse tasks is still running").toBe(beforeUndo);
+      await vi.advanceTimersByTimeAsync(1400);
+      expect(reload.mock.calls.length).toBe(beforeUndo + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats a single failed status read as a blip, not as the inverse task settling", async () => {
+    vi.useFakeTimers();
+    try {
+      const showToast = vi.fn();
+      const reload = vi.fn(async () => undefined);
+      const deps = makeDeps({ showToast, reload });
+      const runner = createBatchJobRunner(deps);
+      let inverseReads = 0;
+      apiMocks.batchJobCreate.mockResolvedValue({ jobId: "j14" });
+      apiMocks.batchJobStatus.mockImplementation(async (id: string) => {
+        if (id !== "j14") {
+          inverseReads += 1;
+          // A read can fail transiently -- a blip, a restart in progress. The
+          // first one fails and the next one answers.
+          if (inverseReads === 1) throw new Error("blip");
+        }
+        return { job: job({ id, status: id === "j14" || inverseReads > 1 ? "completed" : "running", total: 1, updated: 1 }) };
+      });
+      apiMocks.batchJobUndo.mockResolvedValue({ ok: true, taskIds: ["undo-blip"] });
+
+      runner.start(MOVE_PAYLOAD, RUN_OPTS);
+      await vi.advanceTimersByTimeAsync(600);
+      const beforeUndo = reload.mock.calls.length;
+      showToast.mock.calls.find(([, kind]) => kind === "success")?.[2]!.run();
+      // The first read has failed by now; the follow-up has rescheduled itself.
+      await flush();
+
+      // Giving up on the first failure would reload the pre-undo list, which is
+      // the "undo looks inert" symptom the tolerance exists to remove: the reverse
+      // is still running server-side at that point.
+      expect(reload.mock.calls.length, "a single failed read must not count as settled").toBe(beforeUndo);
+
+      // The next read answers, and that one does settle the follow-up.
+      await vi.advanceTimersByTimeAsync(1200);
+      expect(reload.mock.calls.length).toBe(beforeUndo + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops following an inverse task that never reports terminal, instead of following forever", async () => {
+    vi.useFakeTimers();
+    try {
+      const showToast = vi.fn();
+      const reload = vi.fn(async () => undefined);
+      const deps = makeDeps({ showToast, reload });
+      const runner = createBatchJobRunner(deps);
+      apiMocks.batchJobCreate.mockResolvedValue({ jobId: "j15" });
+      // The batch settles at once; its reverse never does.
+      apiMocks.batchJobStatus.mockImplementation(async (id: string) => ({
+        job: job({ id, status: id === "j15" ? "completed" : "running", total: 1, updated: 1 }),
+      }));
+      apiMocks.batchJobUndo.mockResolvedValue({ ok: true, taskIds: ["undo-stuck"] });
+
+      runner.start(MOVE_PAYLOAD, RUN_OPTS);
+      await vi.advanceTimersByTimeAsync(600);
+      const beforeUndo = reload.mock.calls.length;
+      showToast.mock.calls.find(([, kind]) => kind === "success")?.[2]!.run();
+      await flush();
+
+      // The follow-up has its own budget, and it is the only thing that ends a
+      // reverse whose task row is stuck in `running`: without it the view would
+      // keep the pre-undo list for as long as the page lives.
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1200);
+      expect(reload.mock.calls.length, "the stuck reverse must still reconcile, once").toBe(beforeUndo + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconciles immediately when the undo answer carries no task ids", async () => {
     vi.useFakeTimers();
     try {
       const showToast = vi.fn();

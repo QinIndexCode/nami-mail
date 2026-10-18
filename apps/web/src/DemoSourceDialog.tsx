@@ -30,6 +30,10 @@ export default function DemoSourceDialog({ message, onClose }: { message: Messag
         <IconButton label={t("common.close")} onClick={onClose}><X size={18} /></IconButton>
       </header>
       <div className="mail-people">
+        {/* The one call site that hard-codes the network sources off instead of reading
+            settings: a demo preview must not reach out. The bundled brand glyph is
+            always-on, which is why agent-demo-data.test.ts pins the demo senders off any
+            brand domain. */}
         <SenderAvatar name={message.from.name ?? ""} address={message.from.address} tone={accountTone(message.from.address)} gravatarEnabled={false} bimiEnabled={false} />
         <div className="mail-people-copy"><strong>{message.from.name || message.from.address}</strong><span style={{ color: "var(--text-faint)", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{message.from.address}</span></div>
         <time dateTime={message.sentAt}>{formatDate(message.sentAt)}</time>

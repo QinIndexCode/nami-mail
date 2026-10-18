@@ -5,146 +5,110 @@
 </p>
 
 <p align="center">
-  <strong>本地优先的多账户 Windows 桌面邮件客户端与嵌入式 AI 智能助手</strong><br />
-  <strong>Local-first multi-account email client & embedded AI assistant for Windows</strong>
+  <strong>Local-first, multi-account email for Windows, with an embedded AI assistant.</strong><br />
+  <sub>Your mail, your machine — credentials and message content never leave the device.</sub>
 </p>
 
 <p align="center">
-  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/github/v/release/QinIndexCode/nami-mail?label=Release&color=2563eb&style=flat-square" alt="Release" /></a>
-  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/badge/Platform-Windows%20x64-0284c7?style=flat-square" alt="Platform" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%E2%89%A524.21.0-16a34a?style=flat-square" alt="Node" /></a>
-  <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-43-4f46e5?style=flat-square" alt="Electron" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-059669?style=flat-square" alt="License" /></a>
-  <a href="https://qinindexcode.github.io/nami-mail/"><img src="https://img.shields.io/badge/Website-Live-7c3aed?style=flat-square" alt="Website" /></a>
+  <a href="README.en.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
 <p align="center">
-  <a href="README.zh-CN.md"><b>简体中文说明</b></a> &nbsp;•&nbsp;
-  <a href="README.en.md"><b>English Readme</b></a> &nbsp;•&nbsp;
-  <a href="https://qinindexcode.github.io/nami-mail/"><b>官网主页 / Website</b></a> &nbsp;•&nbsp;
-  <a href="https://github.com/QinIndexCode/nami-mail/releases"><b>下载安装 / Download</b></a>
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/github/v/release/QinIndexCode/nami-mail?label=Release&color=2563eb&style=flat" alt="Release" /></a>
+  <a href="https://github.com/QinIndexCode/nami-mail/releases"><img src="https://img.shields.io/badge/Platform-Windows%20x64-0284c7?style=flat" alt="Platform" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%E2%89%A524.21.0-16a34a?style=flat" alt="Node" /></a>
+  <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-43-4f46e5?style=flat" alt="Electron" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-059669?style=flat" alt="License" /></a>
+  <a href="https://qinindexcode.github.io/nami-mail/"><img src="https://img.shields.io/badge/Website-Live-7c3aed?style=flat" alt="Website" /></a>
 </p>
 
 ---
 
 <p align="center">
-  <img src="docs/nami-mail-inbox-zh.png" alt="Nami Mail 统一收件箱界面" width="960" />
+  <img src="docs/nami-mail-inbox-en.png" alt="Nami Mail — unified inbox across multiple accounts" width="960" />
 </p>
 <p align="center">
-  <em>多账户统一收件箱、文件夹导航与现代设计系统界面 · Unified Inbox & Modern Design System UI</em>
+  <em>Unified inbox across accounts, folder navigation, and a modern reading pane.</em>
 </p>
 
 <p align="center">
-  <img src="docs/nami-mail-agent-zh.png" alt="Nami Mail Agent 工作区" width="960" />
+  <img src="docs/nami-mail-agent-en.png" alt="Nami Mail Agent workspace" width="960" />
 </p>
 <p align="center">
-  <em>带来源引用的本地 AI Agent 与多模态附件 · Local-First AI Agent with Verified Citations & Multimodal Attachments</em>
+  <em>NamiMail Agent — local-first AI assistance with verifiable source citations.</em>
 </p>
 
 ---
 
-## 核心特性 / Key Features
+Nami Mail is a local-first, multi-account desktop mail client for Windows. Gmail, iCloud, Outlook/Hotmail, QQ, NetEase 163, Yahoo, Fastmail, and any other IMAP/SMTP account live in one inbox that runs on your own machine: common providers use app passwords or client authorization codes, and configured Google and Microsoft accounts can sign in with OAuth 2.0. There is no hosted service behind it — credentials, message bodies, and the local search index stay on the device.
 
-- **多账户统一收件箱 (Unified Multi-Account Inbox)**  
-  集中管理 Gmail、iCloud、Outlook/Hotmail、QQ 邮箱、网易 163、Yahoo、Fastmail 及所有标准 IMAP/SMTP 账户。支持 OAuth 2.0 授权与应用专用密码，首屏秒开。
-- **本地优先的 AI Agent (Embedded AI Assistant)**  
-  内置 30+ 领域工具（邮件检索、草稿管理、日历调度、通讯录、记忆沉淀与全网搜索）。支持多模态（图片/音频/视频/PDF），严谨溯源引用，关键写操作均由一次性不可变 GUI 确认卡片守卫。
-- **全栈本地日历与会议邀请 (Local Calendar & Meeting Invites)**  
-  内置月视图日历域；邮件 `.ics` 邀请横幅一键直达腾讯会议/Zoom/飞书/Teams/Meet；ICS 导入导出按 UID 原地去重；事件开始前 15 分钟应用内提醒。
-- **端到端本地安全与隐私 (Local-First Privacy & Security)**  
-  主密钥受 Windows DPAPI 硬件级保护，敏感数据使用 AES-256-GCM 本地加密落盘；无中心云端托管，凭据与邮件绝不出设备。
-- **标准 CLI 与 MCP 扩展生态 (Extensible CLI & MCP Ecosystem)**  
-  内置 Windows SID-DACL 安全管道 Broker，提供标准 MCP stdio 协议服务与命令行控制工具，安全接入外部脚本与 IDE 自动化。
+This page is the short tour. For installation, in-app updates, OAuth client setup, and the security model in depth, read the [full English README](README.en.md) or [简体中文说明](README.zh-CN.md).
 
----
+## Highlights
 
-## 0.5.0 最新动态 / What's New in 0.5.0
+- **Unified multi-account inbox** — Gmail, iCloud, Outlook/Hotmail, QQ, NetEase 163, Yahoo, Fastmail, and every standard IMAP/SMTP account in one window, with OAuth 2.0 or app passwords and an instant first paint.
+- **Embedded local-first AI agent** — 30+ domain tools (mail search, drafts, calendar, contacts, memory, web search), multimodal input (image, audio, video, PDF), answers with verifiable citations, and a one-time immutable confirmation card guarding every write.
+- **Built-in calendar and meeting invites** — month-view events with full CRUD, one-click join banners for Tencent Meeting, Zoom, Feishu, Teams, and Google Meet, ICS import/export deduplicated in place by UID, and 15-minute reminders.
+- **Privacy by construction** — the master key is protected by Windows DPAPI and sensitive data is encrypted at rest with AES-256-GCM. No central cloud, no telemetry tier: credentials and mail never leave the device.
+- **CLI and MCP ecosystem** — a Windows SID-DACL–secured broker exposes a standard MCP stdio server and command-line tooling, so external scripts and IDEs can integrate without weakening the local boundary.
 
-- **全栈本地日历与邮件会议邀请**：月视图日程 CRUD、邮件邀请横幅直达腾讯会议/Zoom/飞书/Teams/Meet、ICS 按 UID 原地去重、15分钟提醒。
-- **端到端多模态大模型接入**：模型配置支持独立开启图片、音频、视频与 PDF 附件；Composer 动态过滤并展示专属类别 Badge。
-- **全套 UI 设计系统与视觉体验重构**：恢复 8px/12px/20px 统一圆角 Token 与同心圆角法则；侧边栏隐藏原生滚动条；全宽 Markdown 表格排版；半透明磨砂骨架屏。
-- **账户同步状态实时感知**：侧边栏实时呈现正在同步脉冲状态点，强化文件夹切换与静默轮询的并发时序防护。
-- **Agent 鲁棒性与工程解耦**：畸形工具 JSON 自愈重试，上下文预算剪枝与多轮会话自动压缩，超大 App.tsx 拆分为 8 个领域 hooks。
+<!-- whats-new: v0.5.1 -->
+## What's New in 0.5.1
 
-> 详见 [Release Notes](docs/releases/v0.5.0.zh-CN.md) 与 [变更日志 / Changelog](CHANGELOG.zh-CN.md)。
+0.5.1 is a critical patch for the Windows in-app updater.
 
----
+- **Restart and update no longer exits silently** — the background helper is launched through `cmd.exe /d /s /c start` instead of a `detached` Node.js spawn, so it no longer dies with the exiting Electron parent before running any logic (Node.js issue #51018).
+- **In-app silent upgrades restored** — from 0.5.1 onward, later versions install in place and relaunch automatically.
+- **NSIS in-place upgrade arguments completed** — running processes are handled predictably and custom installation paths (a non-default drive, for example) are preserved.
+- **Relaunch drift and update loops fixed** — the relaunched app starts from its own directory, and a failed update purges its cached archive instead of prompting forever.
 
-## 快速体验 / Quick Start
+> **Already running 0.4.3 or 0.5.0?** In-app update cannot succeed from those builds, because the updater helper bundled inside them carries the flaw. Download `Nami-Mail-Setup-0.5.1.exe` from the [Release page](https://github.com/QinIndexCode/nami-mail/releases) and run it once, manually. Existing mail, accounts, settings, and encryption keys are preserved — no re-login or reconfiguration needed.
 
-### 桌面客户端使用 / For Users
-日常使用请直接从 [GitHub Releases](https://github.com/QinIndexCode/nami-mail/releases) 下载最新 Windows x64 `.exe` 安装包。
+See the [0.5.1 release notes](docs/releases/v0.5.1.en.md) and the [changelog](CHANGELOG.en.md) for the full detail.
 
-### 开发者本地运行 / For Developers
-环境要求：Node.js >= 24.21.0。
+## Quick Start
+
+### For users
+
+Download the latest Windows x64 `.exe` installer from [GitHub Releases](https://github.com/QinIndexCode/nami-mail/releases). The versioned `.zip` and `.json` assets are in-app update resources, not manual installers.
+
+### For developers
+
+Node.js 24.21.0 or newer is required — the same major as the runtime bundled with Electron 43.
 
 ```powershell
-# 克隆代码仓库
 git clone https://github.com/QinIndexCode/nami-mail.git
 cd nami-mail
 
-# 安装依赖并构建
-npm install
-npm run build
-
-# 启动本地服务与前端
-npm start
-
-# 或启动本地热重载开发环境
-npm run dev
+npm.cmd install
+npm.cmd run build
+npm.cmd start
 ```
 
----
+Open [http://127.0.0.1:3187](http://127.0.0.1:3187) in a browser. For hot-reload development use `npm.cmd run dev`; to run the desktop app from source use `npm.cmd run dev:desktop`.
 
-## 文档导航 / Documentation Directory
+## Documentation
 
-### 功能指南 / User Guides
-| 主题 / Topic | English | 简体中文 |
-| --- | --- | --- |
-| 安装与更新指南 / Installation & Updates | [INSTALLING.en.md](docs/INSTALLING.en.md) | [INSTALLING.zh-CN.md](docs/INSTALLING.zh-CN.md) |
-| 邮箱接入指南 / Email Provider Setup | [EMAIL-PROVIDERS.en.md](docs/EMAIL-PROVIDERS.en.md) | [EMAIL-PROVIDERS.zh-CN.md](docs/EMAIL-PROVIDERS.zh-CN.md) |
-| 日历与邮件邀请 / Calendar & Invites | [CALENDAR.en.md](docs/CALENDAR.en.md) | [CALENDAR.zh-CN.md](docs/CALENDAR.zh-CN.md) |
-| 自动回复 / Auto-Reply Pipeline | [AUTO-REPLY.en.md](docs/AUTO-REPLY.en.md) | [AUTO-REPLY.zh-CN.md](docs/AUTO-REPLY.zh-CN.md) |
-| 邮件正文翻译 / Message Translation | [TRANSLATION.en.md](docs/TRANSLATION.en.md) | [TRANSLATION.zh-CN.md](docs/TRANSLATION.zh-CN.md) |
+The complete set is indexed in [docs/README.en.md](docs/README.en.md), with a Chinese mirror at [docs/README.md](docs/README.md).
 
-### AI Agent 与扩展生态 / Agent & Ecosystem
-| 主题 / Topic | English | 简体中文 |
-| --- | --- | --- |
-| Agent 使用指南 / Agent Usage Guide | [agent/usage.en.md](docs/agent/usage.en.md) | [agent/usage.zh-CN.md](docs/agent/usage.zh-CN.md) |
-| Agent 模型提供商 / Model Providers | [agent/providers.en.md](docs/agent/providers.en.md) | [agent/providers.zh-CN.md](docs/agent/providers.zh-CN.md) |
-| Agent 工具目录 / Agent Tools Catalog | [agent/tools.en.md](docs/agent/tools.en.md) | [agent/tools.zh-CN.md](docs/agent/tools.zh-CN.md) |
-| Agent 架构与边界 / Agent Architecture | [agent/architecture.en.md](docs/agent/architecture.en.md) | [agent/architecture.zh-CN.md](docs/agent/architecture.zh-CN.md) |
-| 外部 MCP 接入 / External MCP Servers | [agent/mcp-servers.en.md](docs/agent/mcp-servers.en.md) | [agent/mcp-servers.zh-CN.md](docs/agent/mcp-servers.zh-CN.md) |
-| CLI 命令行参考 / CLI Reference | [cli/README.en.md](docs/cli/README.en.md) | [cli/README.zh-CN.md](docs/cli/README.zh-CN.md) |
-| MCP Server 协议 / MCP Server Setup | [mcp/README.en.md](docs/mcp/README.en.md) | [mcp/README.zh-CN.md](docs/mcp/README.zh-CN.md) |
-| 邮件 RAG 检索 / Mail RAG System | [rag/architecture.en.md](docs/rag/architecture.en.md) | [rag/architecture.zh-CN.md](docs/rag/architecture.zh-CN.md) |
+- **Using Nami Mail** — [installation and updates](docs/INSTALLING.en.md) · [email provider setup](docs/EMAIL-PROVIDERS.en.md) · [calendar and invites](docs/CALENDAR.en.md) · [auto-reply](docs/AUTO-REPLY.en.md) · [message translation](docs/TRANSLATION.en.md)
+- **NamiMail Agent** — [usage](docs/agent/usage.en.md) · [tools catalog](docs/agent/tools.en.md) · [model providers](docs/agent/providers.en.md) · [external MCP servers](docs/agent/mcp-servers.en.md) · [architecture](docs/agent/architecture.en.md)
+- **Automation and integration** — [CLI reference](docs/cli/README.en.md) · [MCP server](docs/mcp/README.en.md) · [external mail interface](docs/EXTERNAL-MAIL-INTERFACE.en.md) · [mail RAG](docs/rag/architecture.en.md)
+- **Engineering and security** — [privacy and local data](docs/PRIVACY.en.md) · [architecture and trust boundaries](docs/ARCHITECTURE.en.md) · [design system](docs/DESIGN-SYSTEM.en.md) · [local API contract](docs/LOCAL-API.en.md)
+- **Project** — [development guide](docs/DEVELOPMENT.en.md) · [contributing](CONTRIBUTING.en.md) · [localization](docs/LOCALIZATION.en.md) · [release guide](docs/RELEASING.en.md) · [security policy](SECURITY.en.md) · [support](SUPPORT.en.md)
 
-### 安全与工程架构 / Security & Engineering
-| 主题 / Topic | English | 简体中文 |
-| --- | --- | --- |
-| 隐私与本地数据 / Privacy & Local Data | [PRIVACY.en.md](docs/PRIVACY.en.md) | [PRIVACY.zh-CN.md](docs/PRIVACY.zh-CN.md) |
-| 架构与信任边界 / System Architecture | [ARCHITECTURE.en.md](docs/ARCHITECTURE.en.md) | [ARCHITECTURE.zh-CN.md](docs/ARCHITECTURE.zh-CN.md) |
-| UI 设计系统 / UI Design System | [DESIGN-SYSTEM.en.md](docs/DESIGN-SYSTEM.en.md) | [DESIGN-SYSTEM.zh-CN.md](docs/DESIGN-SYSTEM.zh-CN.md) |
-| 本地 API 契约 / Local API Contract | [LOCAL-API.en.md](docs/LOCAL-API.en.md) | [LOCAL-API.zh-CN.md](docs/LOCAL-API.zh-CN.md) |
-| 外部 Mail 接口 / External Mail Interface | [EXTERNAL-MAIL-INTERFACE.en.md](docs/EXTERNAL-MAIL-INTERFACE.en.md) | [EXTERNAL-MAIL-INTERFACE.zh-CN.md](docs/EXTERNAL-MAIL-INTERFACE.zh-CN.md) |
+## Privacy and Local Data
 
-### 项目与治理 / Project & Governance
-| 主题 / Topic | English | 简体中文 |
-| --- | --- | --- |
-| 开发说明 / Development Guide | [DEVELOPMENT.en.md](docs/DEVELOPMENT.en.md) | [DEVELOPMENT.zh-CN.md](docs/DEVELOPMENT.zh-CN.md) |
-| 贡献指南 / Contributing Guide | [CONTRIBUTING.en.md](CONTRIBUTING.en.md) | [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) |
-| 社区行为准则 / Code of Conduct | [CODE_OF_CONDUCT.en.md](CODE_OF_CONDUCT.en.md) | [CODE_OF_CONDUCT.zh-CN.md](CODE_OF_CONDUCT.zh-CN.md) |
-| Windows 发布指南 / Release Guide | [RELEASING.en.md](docs/RELEASING.en.md) | [RELEASING.zh-CN.md](docs/RELEASING.zh-CN.md) |
-| 版本发布说明 / Release Notes | [releases/README.en.md](docs/releases/README.en.md) | [releases/README.zh-CN.md](docs/releases/README.zh-CN.md) |
-| 变更日志 / Changelog | [CHANGELOG.en.md](CHANGELOG.en.md) | [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) |
-| 安全策略 / Security Policy | [SECURITY.en.md](SECURITY.en.md) | [SECURITY.zh-CN.md](SECURITY.zh-CN.md) |
-| 支持指南 / Support Guide | [SUPPORT.en.md](SUPPORT.en.md) | [SUPPORT.zh-CN.md](SUPPORT.zh-CN.md) |
+- Data lives in `data/nami-mail.db`; the desktop master key at `data/master.key.dpapi` is wrapped by DPAPI for the current Windows user and never enters a URL, an ordinary environment variable, IPC, or a log.
+- Credentials, OAuth refresh tokens, sensitive mail payloads, the outbound queue, and pending attachments are encrypted with AES-256-GCM. Mail HTML is sanitized before display, stripping remote images, scripts, and forms by default.
+- This is **not** whole-database encryption. Account addresses, folders, UIDs, timestamps, flags, sizes, and ordinary settings can remain plaintext metadata. DPAPI plus application-layer encryption raises the bar well above a plain SQLite file, but it is not the same guarantee as whole-file encryption.
+- The local service binds to `127.0.0.1` only. A backup must protect the entire data directory, because the wrapped key is bound to the current Windows user.
 
----
+Read more in [privacy and local data](docs/PRIVACY.en.md).
 
-## 贡献者 / Contributors
+## Contributors
 
-感谢以下贡献者 / Thanks to everyone who contributed (bots excluded):
+Thanks to everyone who has contributed to this project (bots excluded):
 
 <!-- contributors-start -->
 <table>
@@ -166,3 +130,9 @@ npm run dev
   </tr>
 </table>
 <!-- contributors-end -->
+
+Contributions are welcome — see the [contributing guide](CONTRIBUTING.en.md), the [code of conduct](CODE_OF_CONDUCT.en.md), and the [development guide](docs/DEVELOPMENT.en.md).
+
+## License
+
+Nami Mail is released under the [MIT License](LICENSE).

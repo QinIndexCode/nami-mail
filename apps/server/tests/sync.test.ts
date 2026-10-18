@@ -39,6 +39,32 @@ import {
   waitUntil,
 } from "../src/sync-locks.js";
 
+/**
+ * The unread badge of one folder, derived from `messages` the way the app now
+ * derives it. `folders.unseen` no longer exists and no write path nudges a
+ * counter (contract §3.6, I4), so the tests below ask the target state directly
+ * instead of reading the column the increment used to land on. The predicate is
+ * spelled out rather than imported so this stays a check on the target state and
+ * not a mirror of the code that reads it.
+ */
+function folderUnseen(db: DatabaseHandle, path: string, accountId = "account-1"): number {
+  return (db.prepare(
+    "SELECT COUNT(*) AS count FROM messages WHERE account_id = ? AND effective_mailbox = ? AND flags_json NOT LIKE '%\\Seen%'",
+  ).get(accountId, path) as { count: number }).count;
+}
+
+/** The message count of one folder, derived the same way. */
+function folderTotal(db: DatabaseHandle, path: string, accountId = "account-1"): number {
+  return (db.prepare(
+    "SELECT COUNT(*) AS count FROM messages WHERE account_id = ? AND effective_mailbox = ?",
+  ).get(accountId, path) as { count: number }).count;
+}
+
+/** Both badge numbers of one folder, in the shape the sidebar reports them. */
+function folderBadge(db: DatabaseHandle, path: string, accountId = "account-1") {
+  return { total: folderTotal(db, path, accountId), unseen: folderUnseen(db, path, accountId) };
+}
+
 describe("IMAP message flag updates", () => {
   let db: DatabaseHandle;
   const masterKey = Buffer.alloc(32, 7);
@@ -79,8 +105,8 @@ describe("IMAP message flag updates", () => {
         sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run("message-1", "account-1", "INBOX", 42, "Subject", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify(["\\Seen", "$Custom"]), 0, 0, now);
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "INBOX", "Inbox", "\\Inbox", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox");
   });
 
   afterEach(() => {
@@ -111,8 +137,7 @@ describe("IMAP message flag updates", () => {
     expect(client.logout).toHaveBeenCalledTimes(1);
     const row = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("message-1") as { flags_json: string };
     expect(JSON.parse(row.flags_json)).toEqual(["$Custom", "\\Flagged"]);
-    const folder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX") as { unseen: number };
-    expect(folder.unseen).toBe(1);
+    expect(folderUnseen(db, "INBOX")).toBe(1);
   });
 
   it("does not change the local cache when the IMAP flag mutation fails", async () => {
@@ -126,21 +151,20 @@ describe("IMAP message flag updates", () => {
     expect(client.logout).toHaveBeenCalledTimes(1);
   });
 
-  it("updates the folder unseen badge only after a confirmed IMAP seen transition and never below zero", async () => {
+  it("moves the folder's unread badge only with a confirmed IMAP seen transition", async () => {
     await updateMessageFlags(db, Buffer.alloc(32, 7), "message-1", { seen: false });
-    let folder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX") as { unseen: number };
-    expect(folder.unseen).toBe(1);
+    expect(folderUnseen(db, "INBOX")).toBe(1);
 
     await updateMessageFlags(db, Buffer.alloc(32, 7), "message-1", { seen: true });
-    folder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX") as { unseen: number };
-    expect(folder.unseen).toBe(0);
+    expect(folderUnseen(db, "INBOX")).toBe(0);
 
-    // A stale folder count must not become negative when an unread message is
-    // marked seen after a partial sync.
+    // The old shape of this test was about a counter that could drift and had to
+    // be clamped at zero. A derived count has no state to drift: it follows the
+    // row's flags, which is all this still asserts.
     db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run("[]", "message-1");
+    expect(folderUnseen(db, "INBOX")).toBe(1);
     await updateMessageFlags(db, Buffer.alloc(32, 7), "message-1", { seen: true });
-    folder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX") as { unseen: number };
-    expect(folder.unseen).toBe(0);
+    expect(folderUnseen(db, "INBOX")).toBe(0);
   });
 
   it("does not alter message flags or the folder unread count when IMAP returns no confirmed STORE result", async () => {
@@ -150,9 +174,8 @@ describe("IMAP message flag updates", () => {
       .rejects.toThrow("邮件服务器未确认状态更新，请稍后重试。");
 
     const message = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("message-1") as { flags_json: string };
-    const folder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX") as { unseen: number };
     expect(JSON.parse(message.flags_json)).toEqual(["\\Seen", "$Custom"]);
-    expect(folder.unseen).toBe(0);
+    expect(folderUnseen(db, "INBOX")).toBe(0);
   });
 
   it("applies a batch flag update with one connection and one STORE per flag group", async () => {
@@ -186,8 +209,7 @@ describe("IMAP message flag updates", () => {
       const row = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get(id) as { flags_json: string };
       expect(JSON.parse(row.flags_json)).toEqual(expect.arrayContaining(["\\Seen", "\\Flagged"]));
     }
-    const folder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX") as { unseen: number };
-    expect(folder.unseen).toBe(0);
+    expect(folderUnseen(db, "INBOX")).toBe(0);
   });
 
   it("reports missing and pending-move messages as failed without touching IMAP", async () => {
@@ -219,8 +241,8 @@ describe("IMAP message flag updates", () => {
 
   it("groups messages across mailboxes into separate STORE commands on a shared connection", async () => {
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
@@ -242,10 +264,8 @@ describe("IMAP message flag updates", () => {
     expect(client.messageFlagsAdd).toHaveBeenCalledTimes(1);
     expect(client.messageFlagsAdd).toHaveBeenCalledWith([99], ["\\Seen"], { uid: true });
     expect(client.messageFlagsRemove).toHaveBeenCalledTimes(0);
-    const inboxFolder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX") as { unseen: number };
-    const archiveFolder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Archive") as { unseen: number };
-    expect(inboxFolder.unseen).toBe(0);
-    expect(archiveFolder.unseen).toBe(0);
+    expect(folderUnseen(db, "INBOX")).toBe(0);
+    expect(folderUnseen(db, "Archive")).toBe(0);
   });
 
   it("emits a duplicate-destination tombstone from a read taken before the UIDPLUS delete", async () => {
@@ -256,8 +276,8 @@ describe("IMAP message flag updates", () => {
     // move path that swapped the two statements would still pass every
     // other test in this file.
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "[Gmail]/All Mail", "All Mail", "\\All", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "[Gmail]/All Mail", "All Mail", "\\All");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, remote_id_lookup, all_mail_archived, subject, from_name, from_address, to_json,
@@ -308,8 +328,8 @@ describe("IMAP message flag updates", () => {
     // where the duplicate is recognised by `remote_id_lookup` rather than by
     // the destination UID.
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, remote_id_lookup, subject, from_name, from_address, to_json,
@@ -343,8 +363,8 @@ describe("IMAP message flag updates", () => {
 
   it("preserves the encrypted source cache row when UIDPLUS maps an archive move into Gmail All Mail", async () => {
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "[Gmail]/All Mail", "All Mail", "\\All", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "[Gmail]/All Mail", "All Mail", "\\All");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, remote_id_lookup, all_mail_archived, subject, from_name, from_address, to_json,
@@ -373,81 +393,67 @@ describe("IMAP message flag updates", () => {
     expect(rows[0]!.encrypted_payload).toBe(before.encrypted_payload);
     expect(messagePayloadForRow(rows[0]!, masterKey)).toMatchObject({ subject: "Subject" });
     expect(db.prepare("SELECT id FROM messages WHERE id = ?").get("all-mail-copy")).toBeUndefined();
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
-      .toEqual({ total: 0, unseen: 0 });
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "[Gmail]/All Mail"))
-      .toEqual({ total: 1, unseen: 0 });
+    expect(folderBadge(db, "INBOX")).toEqual({ total: 0, unseen: 0 });
+    expect(folderBadge(db, "[Gmail]/All Mail")).toEqual({ total: 1, unseen: 0 });
   });
 
-  it("updates physical destination folder badges after a confirmed unread archive move", async () => {
+  it("moves both folders' derived badges with a confirmed unread archive move", async () => {
     db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run("[]", "message-1");
-    db.prepare("UPDATE folders SET unseen = ? WHERE account_id = ? AND path = ?").run(1, "account-1", "INBOX");
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Archive", uidMap: new Map([[42, 84]]) });
 
     await expect(moveMessage(db, masterKey, "message-1", "archive"))
       .resolves.toEqual({ accountId: "account-1", destination: "Archive", refreshPending: false, uid: 84 });
 
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
-      .toEqual({ total: 0, unseen: 0 });
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Archive"))
-      .toEqual({ total: 1, unseen: 1 });
+    expect(folderBadge(db, "INBOX")).toEqual({ total: 0, unseen: 0 });
+    expect(folderBadge(db, "Archive")).toEqual({ total: 1, unseen: 1 });
   });
 
-  it("updates physical trash folder badges after a confirmed unread move", async () => {
+  it("moves both folders' derived badges with a confirmed unread move to trash", async () => {
     db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run("[]", "message-1");
-    db.prepare("UPDATE folders SET unseen = ? WHERE account_id = ? AND path = ?").run(1, "account-1", "INBOX");
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Trash", "Trash", "\\Trash", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Trash", "Trash", "\\Trash");
     client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Trash", uidMap: new Map([[42, 84]]) });
 
     await expect(moveMessage(db, masterKey, "message-1", "trash"))
       .resolves.toEqual({ accountId: "account-1", destination: "Trash", refreshPending: false, uid: 84 });
 
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
-      .toEqual({ total: 0, unseen: 0 });
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Trash"))
-      .toEqual({ total: 1, unseen: 1 });
+    expect(folderBadge(db, "INBOX")).toEqual({ total: 0, unseen: 0 });
+    expect(folderBadge(db, "Trash")).toEqual({ total: 1, unseen: 1 });
   });
 
   it("moves a reported message into the SPECIAL-USE Junk folder", async () => {
     db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run("[]", "message-1");
-    db.prepare("UPDATE folders SET unseen = ? WHERE account_id = ? AND path = ?").run(1, "account-1", "INBOX");
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Junk", "Junk", "\\Junk", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Junk", "Junk", "\\Junk");
     client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Junk", uidMap: new Map([[42, 84]]) });
 
     await expect(moveMessage(db, masterKey, "message-1", "junk"))
       .resolves.toEqual({ accountId: "account-1", destination: "Junk", refreshPending: false, uid: 84 });
 
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
-      .toEqual({ total: 0, unseen: 0 });
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Junk"))
-      .toEqual({ total: 1, unseen: 1 });
+    expect(folderBadge(db, "INBOX")).toEqual({ total: 0, unseen: 0 });
+    expect(folderBadge(db, "Junk")).toEqual({ total: 1, unseen: 1 });
   });
 
   it("recovers a misclassified message from Junk back into INBOX", async () => {
     db.prepare("UPDATE messages SET mailbox = ?, flags_json = ? WHERE id = ?").run("Junk", "[]", "message-1");
-    db.prepare("UPDATE folders SET total = ?, unseen = ? WHERE account_id = ? AND path = ?").run(0, 0, "account-1", "INBOX");
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Junk", "Junk", "\\Junk", 1, 1);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Junk", "Junk", "\\Junk");
     client.messageMove.mockResolvedValueOnce({ path: "Junk", destination: "INBOX", uidMap: new Map([[42, 84]]) });
 
     await expect(moveMessage(db, masterKey, "message-1", "inbox"))
       .resolves.toEqual({ accountId: "account-1", destination: "INBOX", refreshPending: false, uid: 84 });
 
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Junk"))
-      .toEqual({ total: 0, unseen: 0 });
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
-      .toEqual({ total: 1, unseen: 1 });
+    expect(folderBadge(db, "Junk")).toEqual({ total: 0, unseen: 0 });
+    expect(folderBadge(db, "INBOX")).toEqual({ total: 1, unseen: 1 });
   });
 
   it("persists a source-preserving move intent before IMAP and clears it only after source membership is observed", async () => {
     const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
     const source = Buffer.from("Subject: Source still present\r\n\r\nBody");
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     client.messageMove.mockImplementationOnce(async () => {
       expect(db.prepare(`
         SELECT mailbox, uid, pending_move_destination, pending_move_state,
@@ -478,10 +484,8 @@ describe("IMAP message flag updates", () => {
       pending_move_candidate_uid: null,
       pending_move_special_use: "\\Archive",
     });
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
-      .toEqual({ total: 1, unseen: 0 });
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Archive"))
-      .toEqual({ total: 0, unseen: 0 });
+    expect(folderBadge(db, "INBOX")).toEqual({ total: 1, unseen: 0 });
+    expect(folderBadge(db, "Archive")).toEqual({ total: 0, unseen: 0 });
 
     const fetch = vi.fn(async function* (range: unknown, query: { source?: unknown }) {
       if (query.source) {
@@ -529,8 +533,8 @@ describe("IMAP message flag updates", () => {
   });
 
   it("retries a stale move intent when the source UID is still present", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     // A previous MOVE response was lost and the row still carries the intent.
     db.prepare(`
       UPDATE messages
@@ -562,8 +566,8 @@ describe("IMAP message flag updates", () => {
   });
 
   it("names the dispatching move instead of the pending-move state when the account is busy", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
 
     // Only account-level state is involved: this message has no pending move,
     // so the pending-move wording would send the user (and any later
@@ -581,8 +585,8 @@ describe("IMAP message flag updates", () => {
   });
 
   it("waits out a running sync pass instead of failing the user's action", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Archive", uidMap: new Map([[42, 84]]) });
 
     // Hold the pass open on connect so the move arrives while the account is
@@ -608,8 +612,8 @@ describe("IMAP message flag updates", () => {
   });
 
   it("reports a still-syncing account when the pass outlives the wait budget", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
 
     // A pass that does not release the account within the budget must surface
     // an accurate, retryable reason — not the pending-move message and not a
@@ -655,8 +659,8 @@ describe("IMAP message flag updates", () => {
   });
 
   it("keeps a stale move intent blocked when the source UID is absent", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     db.prepare(`
       UPDATE messages
       SET pending_move_destination = ?, pending_move_state = 'intent', pending_move_special_use = ?
@@ -680,8 +684,8 @@ describe("IMAP message flag updates", () => {
 
   it("moves a whole batch with one MOVE command and confirms each UIDPLUS result", async () => {
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
@@ -714,17 +718,17 @@ describe("IMAP message flag updates", () => {
 
   it("removes All Mail / Important mirror rows after a UIDPLUS-confirmed trash move", async () => {
     const now = new Date().toISOString();
-    for (const [path, name, specialUse, total] of [
-      ["Trash", "Trash", "\\Trash", 0],
-      ["[Gmail]/所有邮件", "All Mail", "\\All", 875],
+    for (const [path, name, specialUse] of [
+      ["Trash", "Trash", "\\Trash"],
+      ["[Gmail]/所有邮件", "All Mail", "\\All"],
       // Gmail does not expose \Important via LIST special-use; the folder
       // arrives with special_use NULL and must still be recognized as a
       // system view through the [Gmail]/ namespace prefix.
-      ["[Gmail]/重要", "Important", null, 373],
-      ["Projects", "Projects", null, 5],
-    ] as Array<[string, string, string | null, number]>) {
-      db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-        .run("account-1", path, name, specialUse, total, 0);
+      ["[Gmail]/重要", "Important", null],
+      ["Projects", "Projects", null],
+    ] as Array<[string, string, string | null]>) {
+      db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+        .run("account-1", path, name, specialUse);
     }
     const insert = (id: string, mailbox: string, uid: number, lookup: string | null) => {
       db.prepare(`
@@ -758,18 +762,22 @@ describe("IMAP message flag updates", () => {
     expect(db.prepare("SELECT 1 FROM messages WHERE id = ?").get("mirror-important")).toBeUndefined();
     // Custom-label folders keep their membership on trashed messages.
     expect(db.prepare("SELECT 1 FROM messages WHERE id = ?").get("mirror-projects")).toBeDefined();
-    const allMail = db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "[Gmail]/所有邮件") as { total: number };
-    expect(allMail.total).toBe(874);
-    const important = db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "[Gmail]/重要") as { total: number };
-    expect(important.total).toBe(372);
-    const projects = db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Projects") as { total: number };
-    expect(projects.total).toBe(5);
+    // The counts are derived, so the assertion is no longer "a counter was
+    // nudged by -1" but the stronger "the folder the app reports no longer
+    // contains rows that just disappeared" (contract §3.6, I4). Each folder
+    // held exactly its one mirror row, so a surviving row would read 1.
+    const folderTotal = (path: string): number =>
+      (db.prepare("SELECT COUNT(*) AS count FROM messages WHERE account_id = ? AND effective_mailbox = ?")
+        .get("account-1", path) as { count: number }).count;
+    expect(folderTotal("[Gmail]/所有邮件")).toBe(0);
+    expect(folderTotal("[Gmail]/重要")).toBe(0);
+    expect(folderTotal("Projects")).toBe(1);
   });
 
   it("keeps system-view mirror rows when the move target is not trash", async () => {
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "[Gmail]/所有邮件", "All Mail", "\\All", 875, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "[Gmail]/所有邮件", "All Mail", "\\All");
     for (const [id, mailbox, uid, lookup] of [
       ["mirror-all", "[Gmail]/所有邮件", 777, "lookup-1"],
     ] as Array<[string, string, number, string | null]>) {
@@ -792,30 +800,33 @@ describe("IMAP message flag updates", () => {
     expect(result.updated).toBe(1);
     expect(result.failed).toBe(0);
     expect(db.prepare("SELECT 1 FROM messages WHERE id = ?").get("mirror-all")).toBeDefined();
-    const allMail = db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "[Gmail]/所有邮件") as { total: number };
-    expect(allMail.total).toBe(875);
+    // The folder now reads two rows, and both are real placements: the surviving
+    // mirror row, and the moved message itself, which the confirm rebound to this
+    // destination. The fixture used to seed a fabricated 875 and assert it was not
+    // decremented -- the same claim about a number that no longer exists, and one
+    // that could not have told the two rows apart.
+    expect(folderTotal(db, "[Gmail]/所有邮件")).toBe(2);
   });
 
   it("treats a move into the folder the message already lives in as an idempotent no-op", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Trash", "Trash", "\\Trash", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Trash", "Trash", "\\Trash");
     db.prepare("UPDATE messages SET mailbox = ?, uid = ? WHERE id = ?").run("Trash", 84, "message-1");
 
     await expect(moveMessage(db, masterKey, "message-1", "trash"))
       .resolves.toEqual({ accountId: "account-1", destination: "Trash", refreshPending: false });
 
-    // No provider round-trip at all: the row and folder counts stay untouched.
+    // No provider round-trip at all, and the derived badges follow the row.
     expect(client.connect).not.toHaveBeenCalled();
     expect(client.messageMove).not.toHaveBeenCalled();
     expect(db.prepare("SELECT mailbox, uid FROM messages WHERE id = ?").get("message-1"))
       .toEqual({ mailbox: "Trash", uid: 84 });
-    expect(db.prepare("SELECT total FROM folders WHERE account_id = ? AND path = ?").get("account-1", "Trash"))
-      .toEqual({ total: 1 });
+    expect(folderBadge(db, "Trash")).toEqual({ total: 1, unseen: 0 });
   });
 
   it("counts a whole already-trashed batch as moved without touching the provider", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Trash", "Trash", "\\Trash", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Trash", "Trash", "\\Trash");
     db.prepare("UPDATE messages SET mailbox = ?, uid = ? WHERE id = ?").run("Trash", 84, "message-1");
     const now = new Date().toISOString();
     db.prepare(`
@@ -835,8 +846,8 @@ describe("IMAP message flag updates", () => {
   });
 
   it("clears claimed intents when the provider refuses the whole message set", async () => {    const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
@@ -863,8 +874,8 @@ describe("IMAP message flag updates", () => {
 
   it("keeps an entry blocked when its intent cannot be claimed and still moves the rest", async () => {
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
@@ -898,8 +909,8 @@ describe("IMAP message flag updates", () => {
   });
 
   it("falls back to pending reconciliation when the server lacks UIDPLUS", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Archive", uidMap: new Map() });
 
     const result = await batchMoveMessages(db, masterKey, ["message-1"], "archive");
@@ -1028,8 +1039,8 @@ describe("IMAP message flag updates", () => {
     await expect(syncAccount(db, masterKey, "account-1", 20)).resolves.toMatchObject({ folders: 1 });
     const sourceRow = db.prepare("SELECT * FROM messages WHERE account_id = ? AND mailbox = ? AND uid = ?")
       .get("account-1", "INBOX", 42) as MessageStorageRow;
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     const now = new Date().toISOString();
     db.prepare(`
       INSERT INTO messages (
@@ -1100,8 +1111,8 @@ describe("IMAP message flag updates", () => {
 
   it("keeps an encrypted source row durable and blocks old-UID actions when a server omits UIDPLUS", async () => {
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "[Gmail]/All Mail", "All Mail", "\\All", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "[Gmail]/All Mail", "All Mail", "\\All");
     db.prepare("UPDATE messages SET remote_id_lookup = ? WHERE id = ?").run("h1.same-message", "message-1");
     db.prepare(`
       INSERT INTO messages (
@@ -1133,10 +1144,8 @@ describe("IMAP message flag updates", () => {
     });
     expect(messagePayloadForRow(pending, masterKey)).toMatchObject({ subject: "Subject" });
     expect(db.prepare("SELECT id FROM messages WHERE id = ?").get("all-mail-copy")).toBeUndefined();
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
-      .toEqual({ total: 0, unseen: 0 });
-    expect(db.prepare("SELECT total, unseen FROM folders WHERE account_id = ? AND path = ?").get("account-1", "[Gmail]/All Mail"))
-      .toEqual({ total: 1, unseen: 0 });
+    expect(folderBadge(db, "INBOX")).toEqual({ total: 0, unseen: 0 });
+    expect(folderBadge(db, "[Gmail]/All Mail")).toEqual({ total: 1, unseen: 0 });
     await expect(updateMessageFlags(db, masterKey, "message-1", { flagged: true }))
       .rejects.toThrow("邮件正在同步移动后的新位置，请稍后重试。");
     await expect(moveMessage(db, masterKey, "message-1", "archive"))
@@ -1146,8 +1155,8 @@ describe("IMAP message flag updates", () => {
   });
 
   it("settles a confirmed no-UIDPLUS move without a stable provider ID as a read-only local snapshot", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     migrateMessageStorage(db, masterKey);
     client.messageMove.mockResolvedValueOnce({ path: "INBOX", destination: "Archive" });
 
@@ -1196,8 +1205,8 @@ describe("IMAP message flag updates", () => {
     await expect(syncAccount(db, masterKey, "account-1", 20)).resolves.toMatchObject({ folders: 1 });
     const sourceRow = db.prepare("SELECT * FROM messages WHERE account_id = ? AND mailbox = ? AND uid = ?")
       .get("account-1", "INBOX", 42) as MessageStorageRow;
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     const now = new Date().toISOString();
     db.prepare(`
       INSERT INTO messages (
@@ -1343,8 +1352,8 @@ describe("IMAP message flag updates", () => {
 
   it("allocates a collision-free pending UID after UIDVALIDITY reuse", async () => {
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive", 0, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
     // A stable provider identity keeps this MOVE eligible for later exact
     // reconciliation; the no-identity terminal state is covered separately.
     db.prepare("UPDATE messages SET remote_id_lookup = ? WHERE id = ?")
@@ -1853,12 +1862,12 @@ describe("IMAP message flag updates", () => {
     });
     const now = new Date().toISOString();
     db.prepare(`
-      INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity) VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO folders (account_id, path, name, special_use, remote_total, remote_unseen, uid_validity) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(account_id, path) DO UPDATE SET
         name = excluded.name,
         special_use = excluded.special_use,
-        total = excluded.total,
-        unseen = excluded.unseen,
+        remote_total = excluded.remote_total,
+        remote_unseen = excluded.remote_unseen,
         uid_validity = excluded.uid_validity
     `)
       .run("account-1", "INBOX", "Inbox", "\\Inbox", 2, 0, "100");
@@ -1919,12 +1928,12 @@ describe("IMAP message flag updates", () => {
 
   it("keeps the local cache when LIST returns no folders", async () => {
     db.prepare(`
-      INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity) VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO folders (account_id, path, name, special_use, remote_total, remote_unseen, uid_validity) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(account_id, path) DO UPDATE SET
         name = excluded.name,
         special_use = excluded.special_use,
-        total = excluded.total,
-        unseen = excluded.unseen,
+        remote_total = excluded.remote_total,
+        remote_unseen = excluded.remote_unseen,
         uid_validity = excluded.uid_validity
     `)
       .run("account-1", "INBOX", "Inbox", "\\Inbox", 2, 1, "100");
@@ -1938,20 +1947,20 @@ describe("IMAP message flag updates", () => {
     // survive until the next pass recovers.
     await expect(syncAccount(db, Buffer.alloc(32, 7), "account-1", 20)).resolves.toMatchObject({ synced: 0, folders: 0 });
 
-    expect(db.prepare("SELECT total, unseen, uid_validity FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
-      .toEqual({ total: 2, unseen: 1, uid_validity: "100" });
+    expect(db.prepare("SELECT remote_total, remote_unseen, uid_validity FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
+      .toEqual({ remote_total: 2, remote_unseen: 1, uid_validity: "100" });
     expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE account_id = ?").get("account-1"))
       .not.toEqual({ count: 0 });
   });
 
-  it("retains previous folder counts when STATUS is denied", async () => {
+  it("retains the last provider snapshot when STATUS is denied", async () => {
     db.prepare(`
-      INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity) VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO folders (account_id, path, name, special_use, remote_total, remote_unseen, uid_validity) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(account_id, path) DO UPDATE SET
         name = excluded.name,
         special_use = excluded.special_use,
-        total = excluded.total,
-        unseen = excluded.unseen,
+        remote_total = excluded.remote_total,
+        remote_unseen = excluded.remote_unseen,
         uid_validity = excluded.uid_validity
     `)
       .run("account-1", "INBOX", "Inbox", "\\Inbox", 7, 3, "100");
@@ -1969,10 +1978,12 @@ describe("IMAP message flag updates", () => {
 
     await expect(syncAccount(db, Buffer.alloc(32, 7), "account-1", 20)).resolves.toMatchObject({ synced: 0, folders: 1 });
 
-    // A failed STATUS must not clobber the last known counts into zero (which
-    // would trip unread badges) until the next successful STATUS.
-    expect(db.prepare("SELECT total, unseen, uid_validity FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
-      .toEqual({ total: 7, unseen: 3, uid_validity: "100" });
+    // A failed STATUS must not clobber the last provider observation into zero
+    // -- "0 of them are unread" is a claim sync is not entitled to make when it
+    // was just told it may not ask (contract D7). The badge counts are derived
+    // from `messages` and are unaffected either way.
+    expect(db.prepare("SELECT remote_total, remote_unseen, uid_validity FROM folders WHERE account_id = ? AND path = ?").get("account-1", "INBOX"))
+      .toEqual({ remote_total: 7, remote_unseen: 3, uid_validity: "100" });
   });
 });
 

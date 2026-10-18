@@ -981,8 +981,8 @@ export class AgentRagWorker {
         })
         .finally(() => {
           // A closed database handle (shutdown) makes every future pass fail
-          // the same way; stop the poll loop instead of retrying forever,
-          // like the operation-queue background driver does.
+          // the same way; stop the poll loop instead of retrying forever, as
+          // `tasks/scheduler.ts` does when its handle has closed.
           if (this.stopped || !this.options.db.open) return;
           this.schedule(this.pollIntervalMs);
         });

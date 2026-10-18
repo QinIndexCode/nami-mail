@@ -5,7 +5,7 @@ import { presentAttachment } from "./attachmentPresentation";
 import { summarizeComposeAttachments } from "./attachmentWorkflow";
 import { mailErrorMessage } from "./errorPresentation";
 import { applyTemplateToDraft } from "./mailTemplateInsert";
-import { pollSubmittingSubmission } from "./sendingStatus";
+import { pollSubmittingSubmission, submissionInFlight } from "./sendingStatus";
 import DatePicker from "./DatePicker";
 import ThemedSelect from "./ThemedSelect";
 import { useDialogFocus } from "./hooks/useDialogFocus";
@@ -484,7 +484,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
           return;
         }
         let submission = result.submission;
-        if (submission.deliveryStatus === "submitting") {
+        if (submissionInFlight(submission.deliveryStatus)) {
           try {
             submission = await pollSubmittingSubmission(
               submission,
@@ -495,7 +495,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             // window open so a transient local API failure cannot discard.
           }
           onSubmissionChanged();
-          if (submission.deliveryStatus === "submitting") {
+          if (submissionInFlight(submission.deliveryStatus)) {
             setDeliveryNotice(t("compose.delivery.waitingNotice"));
             onSent(t("compose.delivery.waitingToast"), "info");
             return;

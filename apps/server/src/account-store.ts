@@ -80,8 +80,22 @@ export function listAccountRows(db: DatabaseHandle): AccountRecord[] {
   return db.prepare("SELECT * FROM accounts ORDER BY created_at ASC").all() as AccountRecord[];
 }
 
-export function listFolderRows(db: DatabaseHandle): Array<Record<string, unknown>> {
-  return db.prepare("SELECT * FROM folders ORDER BY account_id, name").all() as Array<Record<string, unknown>>;
+export type FolderRow = {
+  account_id: string;
+  path: string;
+  name: string;
+  special_use: string | null;
+};
+
+/**
+ * Folder metadata for the sidebar, without counts: `folders` no longer stores
+ * them (contract §3.6). The two numbers the sidebar shows come from
+ * `folderCounts`, keyed on the same `path`.
+ */
+export function listFolderRows(db: DatabaseHandle): FolderRow[] {
+  return db
+    .prepare("SELECT account_id, path, name, special_use FROM folders ORDER BY account_id, name")
+    .all() as FolderRow[];
 }
 
 /** Returns the number of updated rows, so the caller can turn 0 into a 404. */

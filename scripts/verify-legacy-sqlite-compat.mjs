@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-import { assertWindowsSqlitePrebuild, projectRoot } from "./sqlite-native.mjs";
+import { assertWindowsSqlitePrebuild, projectRoot, sqliteModuleName } from "./sqlite-native.mjs";
 
 const require = createRequire(import.meta.url);
 const legacyRootFlag = "--legacy-root";
@@ -20,16 +20,25 @@ if (legacyRootIndex === -1 || legacyRootIndex + 1 >= args.length || args.length 
 const legacyRoot = path.resolve(args[legacyRootIndex + 1]);
 assert.notEqual(legacyRoot, projectRoot, "The legacy checkout must be different from the current checkout.");
 
+// The legacy checkout genuinely shipped plaintext better-sqlite3, so every
+// legacy-side path below keeps that name; only the current-side lookups follow
+// the app's driver (see sqlite-native.mjs).
 const legacySqliteManifestPath = path.join(legacyRoot, "node_modules", "better-sqlite3", "package.json");
 const legacyElectronExecutable = path.join(legacyRoot, "node_modules", "electron", "dist", "electron.exe");
-const currentSqliteManifest = require("better-sqlite3/package.json");
+const currentSqliteManifest = require(`${sqliteModuleName}/package.json`);
 const legacySqliteManifest = JSON.parse(await fs.readFile(legacySqliteManifestPath, "utf8"));
 const currentMajor = Number.parseInt(currentSqliteManifest.version.split(".")[0], 10);
 const legacyMajor = Number.parseInt(legacySqliteManifest.version.split(".")[0], 10);
 
-assert.ok(Number.isInteger(currentMajor), "The current better-sqlite3 version must have a numeric major version.");
+assert.ok(Number.isInteger(currentMajor), "The current SQLite driver version must have a numeric major version.");
 assert.ok(Number.isInteger(legacyMajor), "The legacy better-sqlite3 version must have a numeric major version.");
-assert.ok(legacyMajor < currentMajor, `Expected an older better-sqlite3 major than ${currentSqliteManifest.version}; received ${legacySqliteManifest.version}.`);
+// What this gate has to keep guaranteeing is that the current driver did not
+// move BACKWARD past a file an older release could have written. Adopting the
+// cipher fork put both sides on the 13.x line, which made the old strict
+// `legacyMajor < currentMajor` unsatisfiable; `<=` states the real requirement,
+// and the behavioral half below — read, write, checkpoint and re-read in both
+// directions — is what actually proves on-disk compatibility.
+assert.ok(legacyMajor <= currentMajor, `The current SQLite driver (${sqliteModuleName} ${currentSqliteManifest.version}) must not predate the legacy better-sqlite3 (${legacySqliteManifest.version}).`);
 
 async function assertLegacyElectronRuntime() {
   try {
@@ -207,7 +216,11 @@ try {
   const legacyReady = await legacyProbe.waitFor("ready");
   assert.equal(typeof legacyReady.sqliteVersion, "string", "The legacy SQLite probe did not report its SQLite version.");
 
-  const Database = require("better-sqlite3");
+  // The current-side handle is the app's shipped driver. The legacy-side probe
+  // above deliberately keeps plaintext better-sqlite3, because that is what the
+  // older release really shipped and what this gate exists to stay compatible
+  // with.
+  const Database = require(sqliteModuleName);
   currentDatabase = new Database(databasePath);
   const initialCount = currentDatabase.prepare("SELECT COUNT(*) AS count FROM compatibility_rows").get().count;
   assert.equal(initialCount, 1, "The current runtime could not read the legacy WAL row.");
@@ -240,7 +253,7 @@ try {
     legacyBetterSqlite3: legacySqliteManifest.version,
     legacySqlite: legacyReady.sqliteVersion,
     legacyElectronAbi: legacyElectronRuntime.modules,
-    currentBetterSqlite3: currentSqliteManifest.version,
+    currentSqliteDriver: `${sqliteModuleName}@${currentSqliteManifest.version}`,
     currentSqlite,
     walReadWriteCheckpointReopen: true,
   }));

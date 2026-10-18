@@ -108,15 +108,21 @@ type SenderAvatarProps = {
   gravatarEnabled: boolean;
   /** When true, tries the BIMI brand logo of the sender's domain before Gravatar. */
   bimiEnabled: boolean;
-  /** When true (default), tries the built-in official brand avatar before BIMI and Gravatar. */
-  brandAvatarEnabled?: boolean;
 };
 
 /**
- * Sender avatar: a locally configured picture wins, then built-in official
- * brand avatars (0ms local vector), then (when enabled) the BIMI brand logo
- * for the sender's domain, then (when enabled) Gravatar, then colored initials.
- * Locally stored and built-in brand avatars never leave the machine.
+ * Sender avatar: a locally configured picture wins, then a built-in official
+ * brand avatar (0ms local vector), then (when enabled) the BIMI brand logo for
+ * the sender's domain, then (when enabled) Gravatar, then colored initials.
+ *
+ * The built-in brand glyph has no toggle, by design: it resolves from a bundled
+ * table and makes no network request, so it is always-on exactly like the local
+ * custom avatar. The two network-backed sources (BIMI, Gravatar) are the ones
+ * that need an opt-in, because those requests leave the machine.
+ *
+ * Every branch renders the mark as decoration: the sender's identity is always
+ * in adjacent text, so the tiles are hidden from assistive tech rather than
+ * given a name that would only duplicate the text next to them.
  */
 export function SenderAvatar({
   name,
@@ -125,13 +131,12 @@ export function SenderAvatar({
   size,
   gravatarEnabled,
   bimiEnabled,
-  brandAvatarEnabled = true,
 }: SenderAvatarProps) {
   const [failed, setFailed] = useState(false);
   const email = address.trim().toLowerCase();
   const domain = email.split("@")[1] ?? "";
   const customAvatar = useCustomAvatar(email);
-  const brandAvatar = brandAvatarEnabled ? getBrandAvatar(email) : undefined;
+  const brandAvatar = getBrandAvatar(email);
   // An empty domain (feature off or already matched locally) keeps the store untouched: no request, no snapshot.
   const shouldFetchBimi = bimiEnabled && !customAvatar && !brandAvatar;
   const bimiLogo = useBimiLogo(shouldFetchBimi ? domain : "");
@@ -139,18 +144,19 @@ export function SenderAvatar({
   if (customAvatar) {
     return <span className={className}><img src={customAvatar} alt="" /></span>;
   }
+  // Every bundled glyph is a simple-icons 24x24 mark, so the viewBox and the glyph color
+  // are constants rather than per-brand data; the tile takes the brand's published color.
+  // The `brand-avatar` class carries no styles of its own - `.sender-avatar` sizes the tile
+  // and the inline style colors it - it exists so the DOM and the tests can tell apart which
+  // source resolved without re-deriving it from the rendered pixels.
   if (brandAvatar) {
     return (
       <span
         className={`sender-avatar brand-avatar${size ? ` ${size}` : ""}`}
-        style={{ backgroundColor: brandAvatar.color, color: brandAvatar.textColor ?? "#ffffff" }}
-        aria-label={brandAvatar.name}
+        aria-hidden="true"
+        style={{ backgroundColor: brandAvatar.color, color: "#ffffff" }}
       >
-        <svg
-          viewBox={brandAvatar.viewBox ?? "0 0 24 24"}
-          style={{ width: "56%", height: "56%", fill: "currentColor" }}
-          aria-hidden="true"
-        >
+        <svg viewBox="0 0 24 24" style={{ width: "56%", height: "56%", fill: "currentColor" }}>
           <path d={brandAvatar.svgPath} />
         </svg>
       </span>

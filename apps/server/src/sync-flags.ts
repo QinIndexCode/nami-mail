@@ -44,7 +44,7 @@ export async function updateMessageFlags(
     const { messages, blocked } = planFlagPatch(db, [messageId], patch);
     const prepared = messages[0];
     if (!prepared) throw new Error(blocked.get(messageId) ?? "Message not found.");
-    const { message, nextFlags, add, remove, seenChanged } = prepared;
+    const { message, nextFlags, add, remove } = prepared;
     // The requested state is already reflected in the last server-confirmed
     // cache. Avoid a redundant STORE command and, importantly, a second count
     // adjustment for an idempotent read/open action.
@@ -70,19 +70,11 @@ export async function updateMessageFlags(
       }
       db.transaction(() => {
         db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run(JSON.stringify([...nextFlags]), messageId);
-        if (seenChanged) {
-          // Keep the cached sidebar badge aligned with the successful remote
-          // STORE. The folder refresh remains authoritative, but it must not
-          // briefly restore an already-read message to the unread total.
-          db.prepare(`
-            UPDATE folders
-            SET unseen = CASE
-              WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
-              ELSE unseen + 1
-            END
-            WHERE account_id = ? AND path = ?
-          `).run(nextFlags.includes("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
-        }
+        // Flags are now the whole truth locally: the sidebar's unread number is
+        // a COUNT over this table (contract §3.6), so the successful STORE has
+        // nothing left to nudge. A folder refresh mid-flight can no longer
+        // restore an already-read message to a total, because there is no
+        // separate total to restore.
         if (agentEvents && agentLease) {
           agentEvents.messageUpsertedWithinTransaction(agentLease, messageId, {
             mailbox: message.mailbox,
@@ -111,7 +103,6 @@ type PreparedFlagMessage = {
   nextFlags: string[];
   add: string[];
   remove: string[];
-  seenChanged: boolean;
 };
 
 /** What a patch would do to a set of ids, with the reason for every id it
@@ -170,7 +161,6 @@ function planFlagPatch(db: DatabaseHandle, messageIds: readonly string[], patch:
       nextFlags: [...nextFlags],
       add,
       remove,
-      seenChanged: currentFlags.has("\\Seen") !== nextFlags.has("\\Seen"),
     });
   }
   return { messages, blocked };
@@ -285,16 +275,6 @@ export async function updateMessageFlagsBatch(
           // Only messages that actually changed state are undo candidates;
           // idempotent no-ops (already in the requested state) stay in `updated`.
           if (item.add.length || item.remove.length) changedIds.push(message.id);
-          if (item.seenChanged) {
-            db.prepare(`
-              UPDATE folders
-              SET unseen = CASE
-                WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
-                ELSE unseen + 1
-              END
-              WHERE account_id = ? AND path = ?
-            `).run(item.nextFlags.includes("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
-          }
           if (agentMailEvents && agentLease) {
             agentMailEvents.messageUpsertedWithinTransaction(agentLease, message.id, {
               mailbox: message.mailbox,
