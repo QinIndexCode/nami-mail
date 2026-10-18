@@ -12,7 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import type { ReactElement } from "react";
-import { useRealtimeSync, type RealtimeConnectionState, type RealtimeSyncHandle } from "./realtimeSync";
+import { useRealtimeSync, type RealtimeConnectionState, type RealtimeSyncHandle, type RealtimeSyncOptions } from "./realtimeSync";
+import { REALTIME_EVENT_NAMES } from "./realtimeEventNames";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -194,5 +195,101 @@ describe("useRealtimeSync connection state", () => {
     expect(states.at(-1)).toBe("live");
     unmount();
     container.remove();
+  });
+});
+
+function EventHarness(props: Pick<RealtimeSyncOptions, "onTaskProgress" | "onTaskSettled" | "onMailChanged">): null {
+  useRealtimeSync({
+    enabled: true,
+    pushEnabled: true,
+    refreshIntervalSeconds: 60,
+    isDesktop: false,
+    t: translate,
+    showToast: noop,
+    onRefresh: noop,
+    onSettingsChanged: noop,
+    onSyncProgress: noop,
+    ...props,
+  });
+  return null;
+}
+
+async function mountEvents(props: Parameters<typeof EventHarness>[0]): Promise<() => void> {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<EventHarness {...props} />);
+  });
+  return () => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  };
+}
+
+async function dispatch(name: string, payload: unknown): Promise<void> {
+  const listener = sources.at(-1)?.listeners.get(name)?.[0];
+  await act(async () => {
+    listener?.({ data: JSON.stringify(payload) } as MessageEvent<string>);
+  });
+}
+
+describe("useRealtimeSync event vocabulary", () => {
+  it("registers a listener for every name on the wire list (G12)", async () => {
+    const unmount = await mountEvents({});
+    expect([...sources[0]!.listeners.keys()].sort()).toEqual([...REALTIME_EVENT_NAMES].sort());
+    unmount();
+  });
+
+  it("hands a terminal settlement through and drops non-terminal frames", async () => {
+    const onTaskSettled = vi.fn();
+    const unmount = await mountEvents({ onTaskSettled });
+
+    await dispatch("task-settled", { type: "task-settled", payload: { accountId: "a1", taskId: "t1", status: "completed" } });
+    expect(onTaskSettled).toHaveBeenCalledTimes(1);
+    expect(onTaskSettled).toHaveBeenCalledWith({ accountId: "a1", taskId: "t1", status: "completed" });
+
+    // `running` is a valid TaskStatus but not a settlement: reconciling on it
+    // would settle the UI before the server has committed the provider write.
+    await dispatch("task-settled", { type: "task-settled", payload: { accountId: "a1", taskId: "t1", status: "running" } });
+    await dispatch("task-settled", { type: "task-settled", payload: { accountId: "a1", status: "completed" } });
+    await dispatch("task-settled", { type: "task-settled", payload: { accountId: "a1", taskId: "t1", status: "invented" } });
+    expect(onTaskSettled).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+
+  it("hands a well-formed task progress frame through and ignores the rest", async () => {
+    const onTaskProgress = vi.fn();
+    const unmount = await mountEvents({ onTaskProgress });
+
+    await dispatch("task-progress", { type: "task-progress", payload: { accountId: "a1", taskId: "t1", total: 10, updated: 4, failed: 1 } });
+    expect(onTaskProgress).toHaveBeenCalledTimes(1);
+    expect(onTaskProgress).toHaveBeenCalledWith({ accountId: "a1", taskId: "t1", total: 10, updated: 4, failed: 1 });
+
+    await dispatch("task-progress", { type: "task-progress", payload: { accountId: "a1", taskId: "t1", total: "10", updated: 4, failed: 1 } });
+    await dispatch("task-progress", { type: "task-progress", payload: null });
+    expect(onTaskProgress).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+
+  it("keeps mail-changed folders to strings and tolerates an empty list", async () => {
+    const onMailChanged = vi.fn();
+    const unmount = await mountEvents({ onMailChanged });
+
+    await dispatch("mail-changed", { type: "mail-changed", payload: { accountId: "a1", folders: ["INBOX", 7, null, "Archive"] } });
+    expect(onMailChanged).toHaveBeenLastCalledWith({ accountId: "a1", folders: ["INBOX", "Archive"] });
+
+    // An Agent write it could not attribute to a folder still has to refresh.
+    await dispatch("mail-changed", { type: "mail-changed", payload: { accountId: "a1", folders: [] } });
+    expect(onMailChanged).toHaveBeenLastCalledWith({ accountId: "a1", folders: [] });
+
+    await dispatch("mail-changed", { type: "mail-changed", payload: { folders: ["INBOX"] } });
+    expect(onMailChanged).toHaveBeenCalledTimes(2);
+
+    unmount();
   });
 });

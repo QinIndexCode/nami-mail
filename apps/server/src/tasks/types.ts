@@ -311,6 +311,14 @@ export type TaskRegistry = {
  * whose job is to undo what the task's acceptance promised.
  */
 export type TaskHooks = {
+  /**
+   * Fires after a runner's `report` has landed, with the row re-read so
+   * `updated`/`failed` are the stored numbers rather than the claim-time
+   * snapshot. The scheduler owns this call because `report` is its callback; the
+   * hook is the transport's seam (SSE today), so the scheduler stays unaware of
+   * who listens.
+   */
+  onTaskProgress?(task: TaskRow): void;
   onTaskSettled?(task: TaskRow, payload: unknown): void;
   onTaskPermanentFailure?(task: TaskRow, payload: unknown): void;
 };

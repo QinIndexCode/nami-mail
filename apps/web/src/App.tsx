@@ -1,4 +1,4 @@
-import { lazy, Profiler, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Profiler, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { computePosition, flip, offset, shift } from "@floating-ui/dom";
 import {
   Archive,
@@ -51,7 +51,8 @@ import { demoDataSnapshot, ensureDemoLoaded } from "./demo-loader";
 import { announceDemoReady, readDemoPresentation } from "./demoPresentation";
 import { mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
 import { AccountHealthBanner, accountShowsFreshness, accountStatusDotClass, useAccountHealth } from "./accountHealth";
-import { useRealtimeSync, type SyncProgressPayload } from "./realtimeSync";
+import { useAppRealtimeSync } from "./app/useAppRealtimeSync";
+import { useSyncProgressBanner } from "./app/useSyncProgressBanner";
 import { useCoalescedRefresh } from "./useCoalescedRefresh";
 import { resolveScrollAnchor, type ScrollAnchorRow } from "./scrollAnchor";
 import { buildForwardDraft, buildReplyDraft, isOwnSentMessage } from "./mailActions";
@@ -59,29 +60,14 @@ import { buildForwardDraft, buildReplyDraft, isOwnSentMessage } from "./mailActi
 import { sortMessages } from "./mailImportance";
 import { collapseDuplicateMembers, groupMessagesByThread, mergeThreadMembers, mergeThreadSnapshot, shouldCollapseThread, sortThreadByTimeline, type ThreadSnapshot } from "./threads";
 import {
-  applyMessageMove,
-  applyMessageMoveConfirmation,
-  applyMessageSeenChange,
-  applyPinnedUnseenCorrections,
-  appendMessageCursorChain,
   canLoadMoreMessagePage,
   isArchivedMessage,
   matchesServerMessageQuery,
-  mergePendingArchiveMoves,
-  mergePendingLocalState,
-  mergeUnreadViewSnapshot,
-  nextMessageTotalForMove,
-  nextMessageTotalForSnapshot,
-  nextUnreadViewRecentlyReadIds,
-  revertMessageMove,
   sidebarBadgeCounts,
+  nextUnreadViewRecentlyReadIds,
   type MessageListQuery,
   type MessageListSortOrder,
-  type MutablePendingLocalState,
   type PendingArchiveMove,
-  createPendingLocalState,
-  pinFlagOverride,
-  unpinFlagOverride,
 } from "./mailListState";
 import { beginSpan, markInterval, recordCommit } from "./perfTelemetry";
 import { providerDisplayName } from "./providerOnboarding";
@@ -91,12 +77,14 @@ import { getAccountDisplayName, hydrateAccountDisplayNames, useAccountDisplayNam
 import { loadFolderDisplayMode, saveFolderDisplayMode, type FolderDisplayMode } from "./folderDisplayMode";
 import { shouldShowLoading, type MailboxSelection } from "./folderNavigation";
 import { createSettingsLoadCoordinator } from "./settingsLoadCoordinator";
-import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type OutboundAttachment, type ProviderInfo, type Stats } from "./types";
+import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type OutboundAttachment, type ProviderInfo } from "./types";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import { dialogKeydownDecision, useDialogRouting } from "./dialogRouting";
 import { useBatchSelection } from "./app/useBatchSelection";
 import { useQuickMessageActions } from "./app/useQuickMessageActions";
+import { createMailStore, type ReconcileRunner } from "./app/mailStore";
+import { deriveDemoCounts } from "./app/demoCounts";
 import { resolveDraftBody } from "./app/draftBody";
 import { useAttachmentExports } from "./app/useAttachmentExports";
 import { useDesktopBridgeHandlers } from "./app/useDesktopBridgeHandlers";
@@ -201,17 +189,32 @@ export default function App() {
     // through ?background=<preset> instead of relying on a demo default.
     ...(demoBackgroundPreset ? { backgroundPreset: demoBackgroundPreset } : {}),
   }));
-  const [accounts, setAccounts] = useState<Account[]>([]);
+  // The mail list's rows, total, counters and pending overrides are one store
+  // (mailStore.ts), not five React states plus two shadowing refs. Writers say
+  // what changed about the messages; every derivation the UI reads follows.
+  // `reconcile` is a ref so it can point at the loaders declared below without
+  // rebuilding the store (which would drop the pending registry mid-operation).
+  const reconcileRunnerRef = useRef<ReconcileRunner>(async () => undefined);
+  const store = useMemo(() => createMailStore({
+    reconcile: (reason) => reconcileRunnerRef.current(reason),
+    // Only the demo fixture answers its own counts; a real session takes them
+    // from the server snapshot (contract §3.6 / I3).
+    deriveCounts: isDemo ? deriveDemoCounts : undefined,
+  }), []);
+  const mailState = useSyncExternalStore(store.subscribe, store.getState, store.getState);
+  const messages = mailState.messages;
+  const messageTotal = mailState.total;
+  const stats = mailState.stats;
+  const accounts = mailState.accounts;
+  const setAccounts = store.setAccounts;
+  const setMessages = store.setMessages;
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [messages, setMessages] = useState<Message[]>([]);
   const [pendingArchiveMoves, setPendingArchiveMoves] = useState<PendingArchiveMove[]>([]);
   const [pendingMoveVerifications, setPendingMoveVerifications] = useState<string[]>([]);
-  const [messageTotal, setMessageTotal] = useState(0);
   // Where the loaded window ends in the server's list order. null means the
   // list is exhausted — the server's own signal, not a comparison against a
   // total that grows with every arriving message.
   const [messageNextCursor, setMessageNextCursor] = useState<string | null>(null);
-  const [stats, setStats] = useState<Stats>({ accounts: 0, messages: 0, unread: 0 });
   const [unreadViewRecentlyReadIds, setUnreadViewRecentlyReadIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // The shell's modal/panel routing and the global keydown decisions live in
@@ -409,7 +412,6 @@ export default function App() {
   /** Anchors the collapsible header search box so an outside click closes it. */
   const searchWrapRef = useRef<HTMLDivElement>(null);
   const messageButtonRefs = useRef(new Map<string, HTMLButtonElement>());
-  const messagesRef = useRef<Message[]>([]);
   // Latest accounts for callbacks that must not re-run when a refresh swaps the
   // array identity (the delivery-verification poll below restarts, and resets
   // its attempt budget, on every identity change otherwise).
@@ -417,22 +419,6 @@ export default function App() {
   accountsRef.current = accounts;
   const pendingArchiveMovesRef = useRef<PendingArchiveMove[]>([]);
   const unreadViewRecentlyReadIdsRef = useRef<ReadonlySet<string>>(new Set());
-  // Every optimistic local change a server snapshot must not overwrite: flag
-  // edits from any path (row click, reader auto-read, batch selection, the
-  // select-all-matching job) and rows the user already moved away. One registry
-  // for all of them, consulted by every snapshot merge. The previous
-  // per-feature sets left gaps between them: a delete issued while another
-  // operation was reconciling came back on that operation's reload, because the
-  // move was in no set at all.
-  const pendingLocalStateRef = useRef<MutablePendingLocalState>(createPendingLocalState());
-  /** Holds a moved row out of every snapshot until the server reports it at `destination`. */
-  const pinMovedAway = useCallback((ids: Iterable<string>, destination: string): void => {
-    if (!destination) return;
-    for (const id of ids) pendingLocalStateRef.current.movedAway.set(id, destination);
-  }, []);
-  const unpinMovedAway = useCallback((ids: Iterable<string>): void => {
-    for (const id of ids) pendingLocalStateRef.current.movedAway.delete(id);
-  }, []);
   const viewRef = useRef<MailView>("inbox");
   const lastOpenedMessageIdRef = useRef<string | null>(null);
   const settingsLoadCoordinatorRef = useRef(createSettingsLoadCoordinator());
@@ -681,9 +667,6 @@ export default function App() {
     });
   }, [theme, settings.listDensity]);
   useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-  useEffect(() => {
     viewRef.current = view;
   }, [view]);
 
@@ -725,21 +708,25 @@ export default function App() {
           await new Promise((resolve) => window.setTimeout(resolve, 140));
         }
         const demo = await ensureDemoLoaded();
+        const demoAccounts = demo.createDemoAccounts(locale);
+        const demoItems = demoLoadedRef.current && store.getMessages().length ? store.getMessages() : demo.demoMessages;
         const demoTotal = demoMessageTotal(
-          demoLoadedRef.current && messagesRef.current.length ? messagesRef.current : demo.demoMessages,
-          demo.createDemoAccounts(locale),
+          demoItems,
+          demoAccounts,
           { accountId, folder, search, messageView, searchScope: scope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before },
         );
-        if (!demoLoadedRef.current) {
-          demoLoadedRef.current = true;
-          setAccounts(demo.createDemoAccounts(locale));
-          setProviders(demo.demoProviders);
-          setMessages(demo.demoMessages);
-          setMessageNextCursor(null);
-          setStats(demo.demoStats);
-        }
+        demoLoadedRef.current = true;
+        setProviders(demo.demoProviders);
+        store.adoptSnapshot(
+          { accounts: demoAccounts, stats: demo.demoStats, items: demoItems, total: demoTotal, nextCursor: null },
+          {
+            query: { accountId, folder, search, messageView, searchScope: scope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before },
+            view: messageView,
+            recentlyReadIds: unreadViewRecentlyReadIdsRef.current,
+            pendingArchiveMoves: pendingArchiveMovesRef.current,
+          },
+        );
         setListSnapshotKey((value) => value + 1);
-        setMessageTotal(demoTotal);
         // The demo dataset is handed to the list whole, so there is nothing left
         // to page: the chain starts already exhausted.
         setMessageNextCursor(null);
@@ -753,50 +740,29 @@ export default function App() {
           api.stats(),
         ]);
         if (requestId !== loadRequestRef.current) return;
-        // The merge+setState section is the suspected renderer jank point on
-        // large mailboxes: it rebuilds the whole row object tree and triggers a
-        // full list commit. Network time is covered separately (slow-api).
+        // The merge section is the suspected renderer jank point on large
+        // mailboxes: it rebuilds the whole row object tree and triggers a full
+        // list commit. Network time is covered separately (slow-api).
         const finishMerge = beginSpan("list.merge");
-        const pendingMerge = mergePendingArchiveMoves(
-          firstPage.items,
-          pendingArchiveMovesRef.current,
-          nextAccounts,
-          { accountId, folder, search, messageView, searchScope: scope },
+        hydrateAccountDisplayNames(nextAccounts);
+        store.adoptSnapshot(
+          { accounts: nextAccounts, stats: nextStats, items: firstPage.items, total: firstPage.total, nextCursor: firstPage.nextCursor },
+          {
+            query: { accountId, folder, search, messageView, searchScope: scope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before },
+            view: messageView,
+            recentlyReadIds: unreadViewRecentlyReadIdsRef.current,
+            pendingArchiveMoves: pendingArchiveMovesRef.current,
+          },
         );
-        const nextMessages = mergePendingLocalState(
-          mergeUnreadViewSnapshot(
-            pendingMerge.items,
-            messagesRef.current,
-            unreadViewRecentlyReadIdsRef.current,
-            messageView === "unread",
-          ),
-          messagesRef.current,
-          pendingLocalStateRef.current,
-        );
-        // The counts come from the same snapshot as the rows, so they need the
-        // same correction: a badge read before the local commit landed would
-        // otherwise flick back to the value the user just changed.
-        const counts = applyPinnedUnseenCorrections(
-          nextAccounts,
-          nextStats,
-          firstPage.items,
-          nextMessages,
-          pendingLocalStateRef.current,
-        );
-        hydrateAccountDisplayNames(counts.accounts);
-        setAccounts(counts.accounts);
+        const nextMessages = store.getMessages();
         setProviders(nextProviders);
-        messagesRef.current = nextMessages;
-        setMessages(nextMessages);
         // Same batch as the row swap: the viewport remounts here, and only
         // here, so the fade-in plays on the arriving rows.
         setListSnapshotKey((value) => value + 1);
         if (!silent) messageListRef.current?.scrollTo({ top: 0 });
-        setMessageTotal(nextMessageTotalForSnapshot(firstPage.total, pendingMerge.items.length, messageView === "unread"));
         // A full load restarts the chain at the head, so the cursor that
         // continues the list is the one this page handed out.
         setMessageNextCursor(firstPage.nextCursor);
-        setStats(counts.stats);
         setSelectedId((current) => {
           if (!current) return null;
           // A message opened from the conversation strip legitimately lives
@@ -807,12 +773,10 @@ export default function App() {
           return null;
         });
         finishMerge({ rows: nextMessages.length, silent });
-await refreshSubmissions(nextAccounts, { silent: true });
-        if (!isDemo) {
-          contactsCache.warm();
-          templatesCache.warm();
-          calendarCache.warm();
-        }
+        await refreshSubmissions(nextAccounts, { silent: true });
+        contactsCache.warm();
+        templatesCache.warm();
+        calendarCache.warm();
       }
     } catch (error) {
       if (requestId === loadRequestRef.current) {
@@ -833,7 +797,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         }
       }
     }
-  }, [applyDemoSubmissions, locale, selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, reportSubmissionsLoadFailure, searchScope, splashAgentDoneRef, splashAnimationDoneRef, splashDataDoneRef, splashDismissedRef, t, view, attachmentKindFilter, dateBounds.after, dateBounds.before]);
+  }, [applyDemoSubmissions, locale, selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, reportSubmissionsLoadFailure, searchScope, splashAgentDoneRef, splashAnimationDoneRef, splashDataDoneRef, splashDismissedRef, store, t, view, attachmentKindFilter, dateBounds.after, dateBounds.before]);
   // A batch job's poll loop keeps the closure it started with for the whole run,
   // so its final reconciliation reload would otherwise use the account/folder
   // the job started in — yanking the user back there when the job ends. Reading
@@ -908,6 +872,12 @@ await refreshSubmissions(nextAccounts, { silent: true });
   // immediate while a long list no longer blocks the input.
   const deferredQuery = useDeferredValue(query);
   const filterQuery = useMemo<ListQueryInput>(() => ({ ...serverQuery, search: deferredQuery }), [deferredQuery, serverQuery]);
+  // What "in this view" means for local inclusion edits: a move that takes a
+  // row out of the list must shift the total by the same predicate the list was
+  // loaded with. Kept in the store so the row set and the count agree.
+  useEffect(() => {
+    store.setQuery(serverQuery);
+  }, [serverQuery, store]);
 
   const silentRefresh = useCallback(async () => {
     if (isDemo) return;
@@ -927,47 +897,18 @@ await refreshSubmissions(nextAccounts, { silent: true });
       ]);
       if (requestId !== loadRequestRef.current) return;
       const finishMerge = beginSpan("list.merge");
-      const pendingMerge = mergePendingArchiveMoves(
-        firstPage.items,
-        pendingArchiveMovesRef.current,
-        nextAccounts,
-        serverQuery,
+      hydrateAccountDisplayNames(nextAccounts);
+      store.mergeSnapshot(
+        { accounts: nextAccounts, stats: nextStats, items: firstPage.items, total: firstPage.total, nextCursor: firstPage.nextCursor },
+        {
+          query: serverQuery,
+          view,
+          recentlyReadIds: unreadViewRecentlyReadIdsRef.current,
+          pendingArchiveMoves: pendingArchiveMovesRef.current,
+        },
       );
-      const current = messagesRef.current;
-      const currentIds = new Set(current.map((item) => item.id));
-      const freshById = new Map(pendingMerge.items.map((item) => [item.id, item]));
-      const additions = pendingMerge.items.filter((item) => !currentIds.has(item.id));
-      const merged = [
-        ...additions,
-        ...current.map((item) => freshById.get(item.id) ?? item),
-      ];
-      const nextMessages = mergeUnreadViewSnapshot(
-        merged,
-        current,
-        unreadViewRecentlyReadIdsRef.current,
-        view === "unread",
-      );
-      // Reads, stars and moves that are still being confirmed by the server
-      // must not be undone by a poll snapshot that raced the optimistic local
-      // update (see pendingLocalStateRef).
-      const withLocalPending = mergePendingLocalState(nextMessages, current, pendingLocalStateRef.current);
-      const settled = view === "unread" || firstPage.total >= withLocalPending.length
-        ? withLocalPending
-        : withLocalPending.slice(0, Math.max(0, firstPage.total));
-      const counts = applyPinnedUnseenCorrections(
-        nextAccounts,
-        nextStats,
-        firstPage.items,
-        settled,
-        pendingLocalStateRef.current,
-      );
-      hydrateAccountDisplayNames(counts.accounts);
-      setAccounts(counts.accounts);
+      const settled = store.getMessages();
       setProviders(nextProviders);
-      messagesRef.current = settled;
-      setMessages(settled);
-      setMessageTotal(nextMessageTotalForSnapshot(firstPage.total, Math.max(pendingMerge.items.length, settled.length), view === "unread"));
-      setStats(counts.stats);
       // Same strip-membership witness as the load merge: silent polls must
       // keep off-list conversation members selected too.
       setSelectedId((value) => value && (settled.some((item) => item.id === value) || threadStripMembersRef.current.has(value)) ? value : null);
@@ -979,7 +920,10 @@ await refreshSubmissions(nextAccounts, { silent: true });
     } catch {
       // Silent refresh must never disturb the current list; the next tick retries.
     }
-  }, [captureScrollAnchor, refreshSubmissions, serverQuery, view]);
+  }, [captureScrollAnchor, refreshSubmissions, serverQuery, store, view]);
+  // The store's reconcile entry point: a manual request is a full load (it
+  // resets paging and the view), every background trigger is the silent merge.
+  reconcileRunnerRef.current = (reason) => reason === "manual" ? load() : silentRefresh();
   // A batch job's acceptance commits locally long before its remote push
   // finishes, so the runner reconciles against the state on screen the moment
   // the job is accepted — and it has to be THIS refresh, not `load`. The job is
@@ -999,23 +943,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
   // of queued full reloads. Foreground bursts collapse onto a trailing pass.
   const requestRefresh = useCoalescedRefresh(silentRefresh);
 
-  // Live initial/full sync progress, fed by "sync.progress" SSE frames. It
-  // drives a lightweight "syncing history" banner; the banner auto-dismisses a
-  // short beat after the last frame so a busy multi-folder download stays
-  // visible but a finished one does not linger.
-  const [syncProgress, setSyncProgress] = useState<SyncProgressPayload | null>(null);
-  const syncProgressClearTimerRef = useRef<number | null>(null);
-  const handleSyncProgress = useCallback((next: SyncProgressPayload) => {
-    if (syncProgressClearTimerRef.current !== null) {
-      window.clearTimeout(syncProgressClearTimerRef.current);
-      syncProgressClearTimerRef.current = null;
-    }
-    setSyncProgress(next);
-    syncProgressClearTimerRef.current = window.setTimeout(() => setSyncProgress(null), 1_500);
-  }, []);
-  useEffect(() => () => {
-    if (syncProgressClearTimerRef.current !== null) window.clearTimeout(syncProgressClearTimerRef.current);
-  }, []);
+  const { syncProgress, handleSyncProgress } = useSyncProgressBanner();
 
   const loadSettings = useCallback(async () => {
     if (isDemo) return;
@@ -1097,7 +1025,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     const timer = window.setTimeout(() => setDebouncedQuery(query), 250);
     return () => window.clearTimeout(timer);
   }, [query]);
-  const { connectionState: realtimeConnectionState, reconnect: reconnectRealtime } = useRealtimeSync({
+  const { connectionState: realtimeConnectionState, reconnect: reconnectRealtime, threadRefreshTick } = useAppRealtimeSync({
     enabled: !isDemo,
     pushEnabled: settings.realtimePushEnabled,
     refreshIntervalSeconds: settings.refreshIntervalSeconds,
@@ -1107,18 +1035,15 @@ await refreshSubmissions(nextAccounts, { silent: true });
     onRefresh: requestRefresh,
     onSettingsChanged: loadSettings,
     onSyncProgress: handleSyncProgress,
+    store,
   });
   // Defensive: a read/unread toggle whose request hangs would otherwise leave
   // its id in the in-flight set, pinning the optimistic seen state on top of
   // every later poll. Dropping it on unmount means a fresh mount starts from
   // server truth.
-  useEffect(() => {
-    const pending = pendingLocalStateRef;
-    return () => {
-      pending.current.flagOverrides.clear();
-      pending.current.movedAway.clear();
-    };
-  }, []);
+  useEffect(() => () => {
+    store.clearPendingTargets();
+  }, [store]);
   useEffect(() => {
     if (isDemo || !pendingMoveVerificationKey) return undefined;
     const pendingIds = pendingMoveVerificationKey.split("|").filter(Boolean);
@@ -1357,9 +1282,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     showToast,
     sortOrder,
     filteredMessages,
-    messages,
-    accounts,
-    stats,
+    store,
     loadedServerMessageCount,
     currentMessageTotal,
     searchScope,
@@ -1373,20 +1296,11 @@ await refreshSubmissions(nextAccounts, { silent: true });
     loadRef,
     reconcileRef: silentRefreshRef,
     loadRequestRef,
-    messagesRef,
-    pendingLocalStateRef,
-    viewRef,
     selectAllPaged,
     setSelectAllPaged,
     setBatchJob,
     pendingBatchDelete,
     setPendingBatchDelete,
-    pinMovedAway,
-    unpinMovedAway,
-    setMessages,
-    setAccounts,
-    setStats,
-    setMessageTotal,
   });
   fullLoadResetRef.current = resetSelectionOnFullLoad;
 
@@ -1413,26 +1327,15 @@ await refreshSubmissions(nextAccounts, { silent: true });
       const nextQuery = buildMessageQuery({ ...serverQuery, cursor: messageNextCursor ?? undefined });
       const nextPage = await api.messages(nextQuery);
       if (requestId !== loadRequestRef.current) return;
-      const pendingMerge = mergePendingArchiveMoves(
-        nextPage.items,
-        pendingArchiveMovesRef.current,
-        accounts,
-        serverQuery,
-      );
-      setMessages((items) => {
-        // Paging is another place a server snapshot meets the local list, so it
-        // has to respect the same pending overrides: without this, scrolling
-        // could re-add a row the user just deleted or flip a row back to unread.
-        // The chain then appends by id, so a row the local merge put back into
-        // the window is not rendered twice.
-        const merged = mergePendingLocalState(pendingMerge.items, items, pendingLocalStateRef.current);
-        return appendMessageCursorChain(
-          { items, nextCursor: messageNextCursor },
-          { items: merged, nextCursor: nextPage.nextCursor },
-        ).items;
+      // Paging is another place a server snapshot meets the local list, so the
+      // store applies the same pending overrides and appends by id.
+      store.appendPage(nextPage, {
+        query: serverQuery,
+        view: viewRef.current,
+        recentlyReadIds: unreadViewRecentlyReadIdsRef.current,
+        pendingArchiveMoves: pendingArchiveMovesRef.current,
       });
       setMessageNextCursor(nextPage.nextCursor);
-      setMessageTotal(nextMessageTotalForSnapshot(nextPage.total, pendingMerge.items.length, viewRef.current === "unread"));
     } catch (error) {
       if (requestId === loadRequestRef.current) showToast(mailErrorToastMessage(error, undefined, t), "error");
     } finally {
@@ -1470,7 +1373,6 @@ await refreshSubmissions(nextAccounts, { silent: true });
   // this map as a final fallback, so any member the strip ever showed opens
   // even when the list window and the extras snapshot have both moved on.
   const threadStripMembersRef = useRef<ReadonlyMap<string, Message>>(new Map());
-  const [threadRefreshTick, setThreadRefreshTick] = useState(0);
   const selected = filteredMessages.find((message) => message.id === selectedId)
     ?? threadExtras?.members.find((message) => message.id === selectedId)
     ?? (selectedId ? threadStripMembersRef.current.get(selectedId) : undefined)
@@ -1674,16 +1576,8 @@ const emptyMessageList = useMemo(() => (query.trim()
     [readerTextSource, quotedExpanded],
   );
   const applyLocalSeenChange = useCallback((message: Message, nextSeen: boolean) => {
-    if (message.seen === nextSeen) return;
-    setMessages((items) => {
-      const next = applyMessageSeenChange(accounts, items, stats, message.id, nextSeen).messages;
-      messagesRef.current = next;
-      return next;
-    });
-    setAccounts((items) => applyMessageSeenChange(items, [message], stats, message.id, nextSeen).accounts);
-    setStats((current) => applyMessageSeenChange(accounts, [message], current, message.id, nextSeen).stats);
-    if (viewRef.current === "unread") setMessageTotal((total) => Math.max(0, total + (nextSeen ? -1 : 1)));
-  }, [accounts, stats]);
+    store.applySeen([message.id], nextSeen);
+  }, [store]);
 
   const openMessage = useCallback(async (message: Message) => {
     // The preview pane is rendered inside the reader, so it may only describe
@@ -1732,8 +1626,8 @@ const emptyMessageList = useMemo(() => (query.trim()
     setSelectedId(message.id);
     setRecipientDetailsOpen(false);
     setReaderMoreOpen(false);
-    if (!message.seen && !pendingLocalStateRef.current.flagOverrides.has(message.id)) {
-      pinFlagOverride(pendingLocalStateRef.current, message.id);
+    if (!message.seen && !store.getState().pendingTargets.flagOverrides.has(message.id)) {
+      store.pinFlags([message.id]);
       updateUnreadViewRecentlyRead(message, true);
       applyLocalSeenChange(message, true);
       // A message opened from the conversation strip may only exist in the
@@ -1744,7 +1638,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         : current);
       patchThreadExtrasSeen(true);
       if (isDemo) {
-        unpinFlagOverride(pendingLocalStateRef.current, message.id);
+        store.unpinFlags([message.id]);
         patchThreadExtrasSeen(true);
       } else {
         void api.markSeen(message.id, true).catch((error: unknown) => {
@@ -1754,11 +1648,11 @@ const emptyMessageList = useMemo(() => (query.trim()
           patchThreadExtrasSeen(false);
           showToast(t("mail.error.markRead", { message: mailErrorToastMessage(error, t("mail.error.markReadFallback"), t) }), "error");
         }).finally(() => {
-          unpinFlagOverride(pendingLocalStateRef.current, message.id);
+          store.unpinFlags([message.id]);
         });
       }
     }
-  }, [accounts, actions, applyLocalSeenChange, showToast, t, updateUnreadViewRecentlyRead]);
+  }, [accounts, actions, applyLocalSeenChange, showToast, store, t, updateUnreadViewRecentlyRead]);
   // Stable identity for the agent transcript's "open referenced message" handler:
   // it reaches memoised AgentMessageRow, where a per-render arrow re-parses every historic message.
   const openMessageRef = useRef(openMessage);
@@ -1773,7 +1667,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       return;
     }
     closeAgentWorkspace();
-    const known = messagesRef.current.find((item) => item.id === messageId);
+    const known = store.getMessages().find((item) => item.id === messageId);
     if (known) {
       if (isDemo) threadStripMembersRef.current = new Map([[known.id, known]]);
       void openMessageRef.current(known);
@@ -1791,7 +1685,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       return;
     }
     void api.message(messageId).then((fetched) => openMessageRef.current(fetched)).catch((error: unknown) => showToast(mailErrorToastMessage(error, t("mail.error.openNew"), t), "error"));
-  }, [closeAgentWorkspace, locale, showToast, t]);
+  }, [closeAgentWorkspace, locale, setMessages, showToast, store, t]);
 
   const closeReader = useCallback((restoreFocus = false) => {
     const messageId = lastOpenedMessageIdRef.current;
@@ -1968,53 +1862,26 @@ const emptyMessageList = useMemo(() => (query.trim()
     if (!isDemo) loadRequestRef.current += 1;
     const requestAtStart = loadRequestRef.current;
     setMessageAction(target);
-    let revert = (): void => undefined;
+    const destination = demoMoveDestination(accounts, selected.accountId, target);
+    // Hold the row out of every snapshot for the whole round-trip. Another
+    // operation finishing triggers a reload, and a server snapshot taken
+    // before this move commits still lists the row in its source mailbox —
+    // re-adding it is the "the deleted mail came back" bug.
+    store.pinMovedAway([selected.id], destination);
+    // A reload that landed mid-flight already holds server truth (the message
+    // restored at its source); walk the optimistic state back only while it is
+    // still in effect, and restore the total only while this request's epoch is
+    // the live one.
+    const revert = (): void => {
+      store.restoreMove(selected.id, selected, destination, { adjustTotal: loadRequestRef.current === requestAtStart });
+    };
     try {
-      const currentQuery: MessageListQuery = serverQuery;
-      const destination = demoMoveDestination(accounts, selected.accountId, target);
-      // Hold the row out of every snapshot for the whole round-trip. Another
-      // operation finishing triggers a reload, and a server snapshot taken
-      // before this move commits still lists the row in its source mailbox —
-      // re-adding it is the "the deleted mail came back" bug.
-      pinMovedAway([selected.id], destination);
       // Optimistic: predict the destination with the same folder resolution
-      // the server uses, then apply the move locally before the round-trip.
-      const optimisticSnapshot = destination && destination !== selected.mailbox
-        ? applyMessageMove(accounts, [selected], stats, selected.id, destination).messages[0]
-        : undefined;
-      const optimisticAccounts = optimisticSnapshot
-        ? applyMessageMove(accounts, [selected], stats, selected.id, destination).accounts
-        : null;
-      const optimisticStats = optimisticSnapshot
-        ? applyMessageMove(accounts, [selected], stats, selected.id, destination).stats
-        : null;
-      let wasIncluded = false;
-      let remainsIncluded = false;
-      if (optimisticSnapshot) {
-        wasIncluded = matchesServerMessageQuery(selected, accounts, currentQuery);
-        remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, currentQuery);
-        // Sync the ref synchronously (like load) so a fast failure can gate
-        // its rollback on the exact optimistic state it must reverse.
-        messagesRef.current = applyMessageMove(accounts, messagesRef.current, stats, selected.id, destination).messages;
-        setMessages(messagesRef.current);
-        setAccounts((items) => applyMessageMove(items, [selected], stats, selected.id, destination).accounts);
-        setStats((current) => applyMessageMove(accounts, [selected], current, selected.id, destination).stats);
-        setMessageTotal((total) => nextMessageTotalForMove(total, wasIncluded, remainsIncluded));
-      }
-      revert = () => {
-        if (!optimisticSnapshot || !optimisticAccounts || !optimisticStats) return;
-        // A reload that landed mid-flight already holds server truth (the
-        // message restored at its source); leave it alone in that case.
-        if (!messagesRef.current.some((item) => item.id === selected.id && item.mailbox === destination)) return;
-        const restored = revertMessageMove(optimisticAccounts, messagesRef.current, optimisticStats, selected, destination);
-        messagesRef.current = restored.messages;
-        setMessages(restored.messages);
-        setAccounts(restored.accounts);
-        setStats(restored.stats);
-        if (loadRequestRef.current === requestAtStart) {
-          setMessageTotal((total) => nextMessageTotalForMove(total, remainsIncluded, wasIncluded));
-        }
-      };
+      // the server uses, then apply the move locally before the round-trip. The
+      // store shifts the total by the rows whose membership in the current
+      // query actually changed.
+      const optimistic = Boolean(destination && destination !== selected.mailbox);
+      if (optimistic) store.applyMove([selected.id], destination);
       const move = isDemo
         ? { destination, uid: undefined, refreshPending: false, uncertain: false, ok: true, locationUnverified: false }
         : await api.moveMessage(selected.id, target);
@@ -2034,39 +1901,25 @@ const emptyMessageList = useMemo(() => (query.trim()
         showToast(t("mail.error.move"), "error");
         return;
       }
-      if (optimisticSnapshot && move.destination === destination) {
+      if (optimistic && move.destination === destination) {
         // Confirmed: refine the optimistic copy with the server's mapped UID
         // and any pending/location state.
-        const refined = applyMessageMoveConfirmation(messagesRef.current, selected.id, move.uid, move.refreshPending, move.locationUnverified);
-        messagesRef.current = refined;
-        setMessages(refined);
-      } else if (!optimisticSnapshot && move.destination && move.destination !== selected.mailbox) {
+        store.confirmMove(selected.id, {
+          mappedUid: move.uid,
+          movePending: move.refreshPending,
+          moveLocationUnverified: move.locationUnverified,
+        });
+      } else if (!optimistic && move.destination && move.destination !== selected.mailbox) {
         // No predictable destination (e.g. the provider exposes no archive
         // folder locally): apply the move only after the server confirms it.
-        setMessages((items) => {
-          const next = applyMessageMove(accounts, items, stats, selected.id, move.destination, move.uid, move.refreshPending, move.locationUnverified).messages;
-          messagesRef.current = next;
-          return next;
+        store.applyMove([selected.id], move.destination, {
+          mappedUid: move.uid,
+          movePending: move.refreshPending,
+          moveLocationUnverified: move.locationUnverified,
         });
-        setAccounts((items) => applyMessageMove(items, [selected], stats, selected.id, move.destination, move.uid, move.refreshPending, move.locationUnverified).accounts);
-        setStats((current) => applyMessageMove(accounts, [selected], current, selected.id, move.destination, move.uid, move.refreshPending, move.locationUnverified).stats);
       }
-      const movedSnapshot = optimisticSnapshot ?? applyMessageMove(
-        accounts,
-        [selected],
-        stats,
-        selected.id,
-        move.destination,
-        move.uid,
-        move.refreshPending,
-        move.locationUnverified,
-      ).messages[0];
+      const movedSnapshot = store.getMessages().find((item) => item.id === selected.id);
       if (movedSnapshot) {
-        if (!optimisticSnapshot) {
-          const fallbackWasIncluded = matchesServerMessageQuery(selected, accounts, currentQuery);
-          const fallbackRemainsIncluded = matchesServerMessageQuery(movedSnapshot, accounts, currentQuery);
-          setMessageTotal((total) => nextMessageTotalForMove(total, fallbackWasIncluded, fallbackRemainsIncluded));
-        }
         if (!isDemo && target === "archive" && move.refreshPending) {
           replacePendingArchiveMoves([
             ...pendingArchiveMovesRef.current.filter((pending) => pending.id !== selected.id),
@@ -2108,7 +1961,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       revert();
       showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
     } finally {
-      unpinMovedAway([selected.id]);
+      store.unpinMovedAway([selected.id]);
       setMessageAction(null);
     }
   };
@@ -2132,10 +1985,8 @@ const emptyMessageList = useMemo(() => (query.trim()
     const nextFlagged = !selected.flagged;
     setMessageFlagging(true);
     // Optimistic and pinned like every other flag edit: the star shows at once,
-    // and a refresh racing the round-trip cannot restore the old flags. This
-    // path previously did neither, so a star could flip back and leave
-    // messagesRef behind the rendered state.
-    pinFlagOverride(pendingLocalStateRef.current, selected.id);
+    // and a refresh racing the round-trip cannot restore the old flags.
+    store.pinFlags([selected.id]);
     applyBatchFlaggedChange([selected.id], nextFlagged);
     try {
       if (!isDemo) await api.updateMessageFlags(selected.id, { flagged: nextFlagged });
@@ -2145,15 +1996,15 @@ const emptyMessageList = useMemo(() => (query.trim()
       applyBatchFlaggedChange([selected.id], selected.flagged);
       showToast(mailErrorToastMessage(error, t("mail.error.updateStar"), t), "error");
     } finally {
-      unpinFlagOverride(pendingLocalStateRef.current, selected.id);
+      store.unpinFlags([selected.id]);
       setMessageFlagging(false);
     }
   };
 
   const toggleSelectedSeen = async () => {
-    if (!selected || selectedRemoteActionsBlocked || pendingLocalStateRef.current.flagOverrides.has(selected.id)) return;
+    if (!selected || selectedRemoteActionsBlocked || store.getState().pendingTargets.flagOverrides.has(selected.id)) return;
     const nextSeen = !selected.seen;
-    pinFlagOverride(pendingLocalStateRef.current, selected.id);
+    store.pinFlags([selected.id]);
     setMessageFlagging(true);
     updateUnreadViewRecentlyRead(selected, nextSeen);
     applyLocalSeenChange(selected, nextSeen);
@@ -2166,7 +2017,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       applyLocalSeenChange(changedMessage, selected.seen);
       showToast(mailErrorToastMessage(error, t("mail.error.updateRead"), t), "error");
     } finally {
-      unpinFlagOverride(pendingLocalStateRef.current, selected.id);
+      store.unpinFlags([selected.id]);
       setMessageFlagging(false);
     }
   };
@@ -2197,11 +2048,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     isDemo,
     t,
     showToast,
-    accounts,
-    messages,
-    stats,
-    filteredMessages,
-    filterQuery,
+    store,
     viewRef,
     messageFlagging,
     messageAction,
@@ -2209,16 +2056,8 @@ const emptyMessageList = useMemo(() => (query.trim()
     setMessageAction,
     batchBusy,
     applyBatchFlaggedChange,
-    pendingLocalStateRef,
-    messagesRef,
     loadRequestRef,
     load,
-    pinMovedAway,
-    unpinMovedAway,
-    setMessages,
-    setAccounts,
-    setStats,
-    setMessageTotal,
     applyLocalSeenChange,
     updateUnreadViewRecentlyRead,
     setSelectedId,
@@ -2254,29 +2093,19 @@ const emptyMessageList = useMemo(() => (query.trim()
   });
 
   const removeAccountFromView = useCallback((accountId: string) => {
-    const account = accounts.find((item) => item.id === accountId);
     const removesSelectedAccount = selectedAccount === accountId;
     const removesSelectedMessage = messages.some((message) => message.id === selectedId && message.accountId === accountId);
-    const inboxFolders = account?.folders.filter((folder) => folder.specialUse === "\\Inbox" || folder.path.toUpperCase() === "INBOX") ?? [];
-    const removedMessageCount = inboxFolders.reduce((total, folder) => total + folder.total, 0);
-    const removedUnreadCount = inboxFolders.reduce((total, folder) => total + folder.unseen, 0);
     const removedMessageIds = new Set(messages.filter((message) => message.accountId === accountId).map((message) => message.id));
     if (removedMessageIds.size) {
       const nextRecentlyRead = new Set([...unreadViewRecentlyReadIdsRef.current].filter((id) => !removedMessageIds.has(id)));
       unreadViewRecentlyReadIdsRef.current = nextRecentlyRead;
       setUnreadViewRecentlyReadIds(nextRecentlyRead);
     }
-    setAccounts((items) => items.filter((account) => account.id !== accountId));
-    setMessages((items) => items.filter((message) => message.accountId !== accountId));
-    setStats((value) => ({
-      accounts: Math.max(0, value.accounts - 1),
-      messages: Math.max(0, value.messages - removedMessageCount),
-      unread: Math.max(0, value.unread - removedUnreadCount),
-    }));
-    if (isDemo) {
-      const removedVisibleMessages = messages.filter((message) => message.accountId === accountId).length;
-      setMessageTotal((total) => Math.max(0, total - removedVisibleMessages));
-    } else {
+    // Account, its rows, and the snapshot counters that described it leave
+    // together; the store owns all three so no reader can see a half-removed
+    // account.
+    store.removeAccount(accountId);
+    if (!isDemo) {
       const nextAccountId = removesSelectedAccount ? "all" : selectedAccount;
       const nextFolder = removesSelectedAccount ? "" : selectedFolder;
       void load({ silent: true, accountId: nextAccountId, folder: nextFolder });
@@ -2289,14 +2118,14 @@ const emptyMessageList = useMemo(() => (query.trim()
       setSelectedId(null);
       setRecipientDetailsOpen(false);
     }
-  }, [accounts, load, messages, selectedAccount, selectedFolder, selectedId]);
+  }, [load, messages, selectedAccount, selectedFolder, selectedId, store]);
 
   const updateAccountSignatureInState = useCallback((accountId: string, signature: string) => {
     setAccounts((items) => items.map((account) => account.id === accountId ? { ...account, signature } : account));
-  }, []);
+  }, [setAccounts]);
   const updateAccountDisplayNameInState = useCallback((accountId: string, displayName: string | null) => {
     setAccounts((items) => items.map((account) => account.id === accountId ? { ...account, displayName } : account));
-  }, []);
+  }, [setAccounts]);
 
   const toggleTheme = () => {
     const nextTheme = theme === "light" ? "dark" : "light";
@@ -2378,7 +2207,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       showToast(mailErrorToastMessage(error, t("mail.error.openNew"), t), "error");
       void load({ silent: true });
     }
-  }, [load, openMessage, showToast, t]);
+  }, [load, openMessage, setMessages, showToast, t]);
 
   /**
    * Enter the loading phase for a sidebar navigation — but only when the target
@@ -2422,12 +2251,31 @@ const emptyMessageList = useMemo(() => (query.trim()
     if (!isDemo || !demoLoadedRef.current) return;
     void (async () => {
       const demo = await ensureDemoLoaded();
-      setAccounts(demo.createDemoAccounts(locale));
-      setMessages(demo.demoMessages);
-      setStats(demo.demoStats);
+      const demoAccounts = demo.createDemoAccounts(locale);
+      const currentQuery = store.getQuery();
+      const currentView = viewRef.current;
+      const demoTotal = demoMessageTotal(demo.demoMessages, demoAccounts, {
+        accountId: currentQuery.accountId,
+        folder: currentQuery.folder,
+        search: currentQuery.search,
+        messageView: currentView,
+        searchScope: currentQuery.searchScope ?? "view",
+        attachmentKind: currentQuery.attachmentKind,
+        after: currentQuery.after,
+        before: currentQuery.before,
+      });
+      store.adoptSnapshot(
+        { accounts: demoAccounts, stats: demo.demoStats, items: demo.demoMessages, total: demoTotal, nextCursor: null },
+        {
+          query: currentQuery,
+          view: currentView,
+          recentlyReadIds: unreadViewRecentlyReadIdsRef.current,
+          pendingArchiveMoves: pendingArchiveMovesRef.current,
+        },
+      );
       applyDemoSubmissions(sortSubmissions(demo.createDemoSubmissions(locale)));
     })();
-  }, [applyDemoSubmissions, locale]);
+  }, [applyDemoSubmissions, locale, store]);
 
   // Demo mode surfaces a realistic auto-reply confirmation so the product
   // preview shows the pending-draft review card without a live agent.
@@ -3070,7 +2918,6 @@ const emptyMessageList = useMemo(() => (query.trim()
         dismissToast={dismissToast}
         handleAccountAdded={handleAccountAdded}
         load={load}
-        setThreadRefreshTick={setThreadRefreshTick}
         setMessages={setMessages}
         setSelectedId={setSelectedId}
         applySettings={applySettings}

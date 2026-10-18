@@ -263,17 +263,13 @@ export default tseslint.config(
 
   // 巨型文件冻结：只允许瘦身，不允许继续增长。
   // 阈值 = **实测行数**（第 6 批·棘轮收口时逐条量取），与上方 monolithRatchets 同一
-  // 政策、同一原因——见那段注释。这四条原来写的是"当前行数 + 少量余量"（App.tsx 是
-  // 2026-09-28 那次抽取后的 4430→4360 留的 +20），改成实测值是**收紧**，不是换口径：
-  //   * App.tsx 的 4380 停在 4360 上，而批次 4·前端 store 又抽走了 ~1240 行
-  //     （~50 个 useState 与内联 handler 迁出），今天的空地是 1263 行——占文件 40%，
-  //     等于这三个月它没有在守任何东西；
-  //   * AgentWorkspace.tsx（2516→2462）与 agent-service.ts（1315→1308）同理，
-  //     各自瘦身后棘轮没回填。
+  // 政策、同一原因——见那段注释。App.tsx 的 3117 停在批次 4 抽取之前；前端 store
+  // （mailStore.ts）接手列表/计数/本地覆盖，SSE 后果与进度横幅各自抽成 hook 之后，
+  // 该文件降到 2964 行，上限同步降到实测值，不再留"下次可以悄悄长回去"的空地。
   // 需要 +1 行时的答案与别处一样：先删一行或拆文件，不要抬上限。
   {
     files: ["apps/web/src/App.tsx"],
-    rules: { "max-lines": ["error", { max: 3117, skipBlankLines: false, skipComments: false }] },
+    rules: { "max-lines": ["error", { max: 2964, skipBlankLines: false, skipComments: false }] },
   },
   {
     files: ["apps/server/src/agent-service.ts"],

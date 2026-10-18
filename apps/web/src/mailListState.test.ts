@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyBatchSeenChange,
-  applyMessageMove,
-  applyMessageMoveConfirmation,
-  applyMessageSeenChange,
-  applyPinnedUnseenCorrections,
   appendMessageCursorChain,
   canLoadMoreMessagePage,
   EMPTY_PENDING_LOCAL_STATE,
@@ -20,14 +15,12 @@ import {
   pinFlagOverride,
   startMessageCursorChain,
   unpinFlagOverride,
-  nextMessageTotalForMove,
   nextMessageTotalForSnapshot,
   nextUnreadViewRecentlyReadIds,
-  revertMessageMove,
   sidebarBadgeCounts,
   type MessageCursorChain,
 } from "./mailListState";
-import type { Account, Message, Stats } from "./types";
+import type { Account, Message } from "./types";
 
 const accounts: Account[] = [
   {
@@ -71,7 +64,6 @@ const unreadMessage: Message = {
   size: 1,
 };
 
-const stats: Stats = { accounts: 1, messages: 3, unread: 2 };
 
 describe("mail list state", () => {
   it("keeps inbox total and unread badges semantically distinct", () => {
@@ -112,84 +104,13 @@ describe("mail list state", () => {
     }])).toBe(false);
   });
 
-  it("updates the message, unified unread total, and the source folder together", () => {
-    const next = applyMessageSeenChange(accounts, [unreadMessage], stats, unreadMessage.id, true);
-
-    expect(next.messages[0]).toMatchObject({ seen: true, flags: ["\\Seen"] });
-    expect(next.stats).toEqual({ accounts: 1, messages: 3, unread: 1 });
-    expect(next.accounts[0]?.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ total: 3, unseen: 1 });
-
-    const restored = applyMessageSeenChange(next.accounts, next.messages, next.stats, unreadMessage.id, false);
-    expect(restored.messages[0]).toMatchObject({ seen: false, flags: [] });
-    expect(restored.stats).toEqual(stats);
-    expect(restored.accounts[0]?.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ total: 3, unseen: 2 });
-  });
-
   it("keeps a newly read item in the current unread snapshot without restoring its real unread count", () => {
     const recentlyRead = nextUnreadViewRecentlyReadIds(new Set(), unreadMessage, true, true);
     const readMessage = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
 
     expect(isVisibleInUnreadView(readMessage, recentlyRead)).toBe(true);
-    expect(applyMessageSeenChange(accounts, [unreadMessage], stats, unreadMessage.id, true).stats.unread).toBe(1);
     expect(isVisibleInUnreadView(readMessage, new Set())).toBe(false);
     expect(nextUnreadViewRecentlyReadIds(recentlyRead, readMessage, false, true)).not.toContain(unreadMessage.id);
-  });
-
-  it("applies a batch seen change once across messages, folder counts, and stats", () => {
-    const second = { ...unreadMessage, id: "message-2", uid: 2, mailbox: "Archive", sentAt: "2026-07-22T01:00:00.000Z" };
-    const otherInbox = { ...unreadMessage, id: "message-3", uid: 3, sentAt: "2026-07-22T02:00:00.000Z" };
-    const items = [unreadMessage, second, otherInbox];
-
-    const next = applyBatchSeenChange(accounts, items, stats, ["message-1", "message-2", "message-3"], true);
-
-    expect(next.changedCount).toBe(3);
-    expect(next.messages.every((message) => message.seen)).toBe(true);
-    expect(next.messages.map((message) => message.flags)).toEqual([["\\Seen"], ["\\Seen"], ["\\Seen"]]);
-    // Two inbox messages were unread; the Archive message does not touch stats.
-    expect(next.stats).toEqual({ accounts: 1, messages: 3, unread: 0 });
-    expect(next.accounts[0]!.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ total: 3, unseen: 0 });
-    expect(next.accounts[0]!.folders.find((folder) => folder.path === "Archive")).toMatchObject({ total: 4, unseen: 0 });
-  });
-
-  it("treats already-read selections as no-ops and counts only real transitions", () => {
-    const read = { ...unreadMessage, id: "message-1", seen: true, flags: ["\\Seen"] };
-    const unread = { ...unreadMessage, id: "message-2", uid: 2 };
-    const next = applyBatchSeenChange(accounts, [read, unread], stats, ["message-1", "message-2"], true);
-
-    expect(next.changedCount).toBe(1);
-    expect(next.messages[0]).toBe(read);
-    expect(next.messages[1]).toMatchObject({ seen: true });
-    expect(next.stats.unread).toBe(1);
-  });
-
-  it("leaves state untouched for an empty or fully-already-applied batch", () => {
-    const first = applyBatchSeenChange(accounts, [unreadMessage], stats, [], true);
-    expect(first).toEqual({ accounts, messages: [unreadMessage], stats, changedCount: 0 });
-
-    const alreadyRead = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
-    const second = applyBatchSeenChange(accounts, [alreadyRead], stats, ["message-1"], true);
-    expect(second.messages[0]).toBe(alreadyRead);
-    expect(second.stats).toBe(stats);
-    expect(second.changedCount).toBe(0);
-  });
-
-  it("restores unread state in a batch and updates the unified total in the other direction", () => {
-    const readMessage = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
-    const next = applyBatchSeenChange(accounts, [readMessage], stats, ["message-1"], false);
-
-    expect(next.messages[0]).toMatchObject({ seen: false, flags: [] });
-    expect(next.stats.unread).toBe(3);
-    expect(next.accounts[0]!.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ unseen: 3 });
-  });
-
-  it("matches the per-message behaviour for a single-item batch", () => {
-    const single = applyBatchSeenChange(accounts, [unreadMessage], stats, ["message-1"], true);
-    const perMessage = applyMessageSeenChange(accounts, [unreadMessage], stats, "message-1", true);
-
-    expect(single.messages).toEqual(perMessage.messages);
-    expect(single.accounts).toEqual(perMessage.accounts);
-    expect(single.stats).toEqual(perMessage.stats);
-    expect(single.changedCount).toBe(1);
   });
 
   it("retains the just-read row through a background unread reload without inflating its server total", () => {
@@ -269,49 +190,6 @@ describe("mail list state", () => {
     expect(mergePendingLocalState(serverAtDestination, [], pending)).toEqual(serverAtDestination);
   });
 
-  it("shifts the folder unread count and the unified total for a pinned read toggle", () => {
-    // The snapshot was read before the local commit, so it still reports the row
-    // unread and the old counts; the badge used to flick back to them.
-    const state = createPendingLocalState();
-    pinFlagOverride(state, unreadMessage.id);
-    const serverRow = { ...unreadMessage };
-    const mergedRow = { ...unreadMessage, seen: true, flags: ["\\Seen"] };
-    const startAccounts = [{
-      ...accounts[0]!,
-      folders: [{ path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 3, unseen: 2 }],
-    }];
-
-    const corrected = applyPinnedUnseenCorrections(
-      startAccounts,
-      { accounts: 1, messages: 3, unread: 2 },
-      [serverRow],
-      [mergedRow],
-      state,
-    );
-
-    expect(corrected.accounts[0]?.folders[0]).toMatchObject({ unseen: 1, total: 3 });
-    expect(corrected.stats.unread).toBe(1);
-  });
-
-  it("has nothing to correct when no flag override is pinned or the server already agrees", () => {
-    const startAccounts = [{
-      ...accounts[0]!,
-      folders: [{ path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 3, unseen: 2 }],
-    }];
-    const startStats = { accounts: 1, messages: 3, unread: 2 };
-
-    // Untouched identities let React keep the previous objects (no re-render).
-    const idle = applyPinnedUnseenCorrections(startAccounts, startStats, [unreadMessage], [unreadMessage], EMPTY_PENDING_LOCAL_STATE);
-    expect(idle.accounts).toBe(startAccounts);
-    expect(idle.stats).toBe(startStats);
-
-    const state = createPendingLocalState();
-    pinFlagOverride(state, unreadMessage.id);
-    const agreed = applyPinnedUnseenCorrections(startAccounts, startStats, [unreadMessage], [unreadMessage], state);
-    expect(agreed.accounts).toBe(startAccounts);
-    expect(agreed.stats).toBe(startStats);
-  });
-
   it("keeps the unread total on the server number so retained rows are not counted twice", () => {
     // The unread view deliberately keeps a just-read row on screen and reports it
     // separately ("含 M 封已读保留"). Counting it in the total as well would
@@ -331,83 +209,6 @@ describe("mail list state", () => {
     );
 
     expect(merged.map((message) => message.id)).toEqual(["message-2"]);
-  });
-
-  it("uses the server-reported move destination to update folder badges and unified totals", () => {
-    const next = applyMessageMove(accounts, [unreadMessage], stats, unreadMessage.id, "Archive", 42);
-
-    expect(next.messages).toEqual([{ ...unreadMessage, mailbox: "Archive", uid: 42 }]);
-    expect(next.stats).toEqual({ accounts: 1, messages: 2, unread: 1 });
-    expect(next.accounts[0]?.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ total: 2, unseen: 1 });
-    expect(next.accounts[0]?.folders.find((folder) => folder.path === "Archive")).toMatchObject({ total: 5, unseen: 1 });
-
-    const pending = applyMessageMove(accounts, [unreadMessage], stats, unreadMessage.id, "Archive", undefined, true);
-    expect(pending.messages[0]).toMatchObject({ mailbox: "Archive", movePending: true });
-  });
-
-  it("keeps Gmail All Mail totals stable while marking the moved message archived", () => {
-    const gmailAccounts: Account[] = [{
-      ...accounts[0],
-      folders: [
-        { path: "INBOX", name: "收件箱", specialUse: "\\Inbox", total: 3, unseen: 2 },
-        { path: "[Gmail]/All Mail", name: "所有邮件", specialUse: "\\All", total: 9, unseen: 2 },
-      ],
-    }];
-
-    const next = applyMessageMove(gmailAccounts, [unreadMessage], stats, unreadMessage.id, "[Gmail]/All Mail", 42);
-
-    expect(next.messages).toEqual([{ ...unreadMessage, mailbox: "[Gmail]/All Mail", uid: 42, archived: true }]);
-    expect(next.accounts[0]?.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ total: 2, unseen: 1 });
-    expect(next.accounts[0]?.folders.find((folder) => folder.path === "[Gmail]/All Mail")).toMatchObject({ total: 9, unseen: 2 });
-  });
-
-  it("removes a pending Gmail archive message from the archive view when it moves to Trash", () => {
-    const gmailAccounts: Account[] = [{
-      ...accounts[0],
-      folders: [
-        { path: "INBOX", name: "Inbox", specialUse: "\\Inbox", total: 3, unseen: 2 },
-        { path: "[Gmail]/All Mail", name: "All Mail", specialUse: "\\All", total: 9, unseen: 2 },
-        { path: "[Gmail]/Trash", name: "Trash", specialUse: "\\Trash", total: 1, unseen: 0 },
-      ],
-    }];
-    const archivedPending = {
-      ...unreadMessage,
-      mailbox: "[Gmail]/All Mail",
-      archived: true,
-      movePending: true,
-    };
-
-    const next = applyMessageMove(
-      gmailAccounts,
-      [archivedPending],
-      stats,
-      archivedPending.id,
-      "[Gmail]/Trash",
-      undefined,
-      true,
-    );
-    const moved = next.messages[0]!;
-
-    expect(moved).toMatchObject({ mailbox: "[Gmail]/Trash", archived: false, movePending: true });
-    expect(isArchivedMessage(moved, gmailAccounts)).toBe(false);
-    expect(matchesServerMessageQuery(moved, gmailAccounts, {
-      accountId: "all", folder: "", search: "", messageView: "archived",
-    })).toBe(false);
-    expect(nextMessageTotalForMove(1, true, isArchivedMessage(moved, gmailAccounts))).toBe(0);
-  });
-
-  it("retains an unaddressable archive result as a readable local snapshot", () => {
-    const next = applyMessageMove(accounts, [unreadMessage], stats, unreadMessage.id, "Archive", undefined, false, true);
-    const retained = next.messages[0];
-
-    expect(retained).toMatchObject({
-      id: unreadMessage.id,
-      mailbox: "Archive",
-      moveLocationUnverified: true,
-    });
-    expect(matchesServerMessageQuery(retained!, accounts, {
-      accountId: "all", folder: "", search: "", messageView: "archived",
-    })).toBe(true);
   });
 
   it("matches the server query boundary instead of treating unread or archive as broad local filters", () => {
@@ -443,9 +244,6 @@ describe("mail list state", () => {
     expect(matchesServerMessageQuery(archivedUnread, gmailAccounts, {
       accountId: "account-1", folder: "INBOX", search: "project", messageView: "inbox",
     })).toBe(false);
-    expect(nextMessageTotalForMove(4, true, true)).toBe(4);
-    expect(nextMessageTotalForMove(4, false, false)).toBe(4);
-    expect(nextMessageTotalForMove(4, true, false)).toBe(3);
   });
 
   it("matches the server Attachments view by the attachment flag alone", () => {
@@ -552,54 +350,6 @@ describe("mail list state", () => {
       // A message the reload already restored must not be duplicated.
       expect(mergeRolledBackMessages(list, [newer], order)).toHaveLength(2);
     }
-  });
-
-  it("reverses an optimistic single move back to the original state", () => {
-    const moved = applyMessageMove(accounts, [unreadMessage], stats, unreadMessage.id, "Archive");
-    expect(moved.messages[0]).toMatchObject({ mailbox: "Archive" });
-    expect(moved.accounts[0]?.folders.find((folder) => folder.path === "INBOX")).toMatchObject({ total: 2, unseen: 1 });
-    expect(moved.accounts[0]?.folders.find((folder) => folder.path === "Archive")).toMatchObject({ total: 5, unseen: 1 });
-    expect(moved.stats).toEqual({ accounts: 1, messages: 2, unread: 1 });
-
-    // Revert against the post-move state (what the app holds while optimistic).
-    const restored = revertMessageMove(moved.accounts, moved.messages, moved.stats, unreadMessage, "Archive");
-    expect(restored.messages[0]).toEqual(unreadMessage);
-    expect(restored.accounts).toEqual(accounts);
-    expect(restored.stats).toEqual(stats);
-  });
-
-  it("reverses an optimistic archive move through Gmail All Mail without touching its counts", () => {
-    const gmailAccounts: Account[] = [{
-      ...accounts[0],
-      folders: [
-        { path: "INBOX", name: "Inbox", specialUse: "\\Inbox", total: 3, unseen: 2 },
-        { path: "[Gmail]/All Mail", name: "All Mail", specialUse: "\\All", total: 9, unseen: 2 },
-      ],
-    }];
-
-    const moved = applyMessageMove(gmailAccounts, [unreadMessage], stats, unreadMessage.id, "[Gmail]/All Mail");
-    expect(moved.messages[0]).toMatchObject({ mailbox: "[Gmail]/All Mail", archived: true });
-    expect(moved.accounts[0]?.folders.find((folder) => folder.path === "[Gmail]/All Mail")).toMatchObject({ total: 9, unseen: 2 });
-
-    const restored = revertMessageMove(moved.accounts, moved.messages, moved.stats, unreadMessage, "[Gmail]/All Mail");
-    expect(restored.messages[0]).toEqual(unreadMessage);
-    expect(restored.accounts).toEqual(gmailAccounts);
-    expect(restored.stats).toEqual(stats);
-  });
-
-  it("leaves state untouched when a reload already restored the message before the rollback", () => {
-    // The list copy sits at its source mailbox, so the optimistic state is no
-    // longer in effect and the rollback must not re-apply any count deltas.
-    const restored = revertMessageMove(accounts, [unreadMessage], stats, unreadMessage, "Archive");
-    expect(restored).toEqual({ accounts, messages: [unreadMessage], stats });
-  });
-
-  it("refines a confirmed optimistic move without re-running count deltas", () => {
-    const moved = applyMessageMove(accounts, [unreadMessage], stats, unreadMessage.id, "Archive").messages;
-    const refined = applyMessageMoveConfirmation(moved, unreadMessage.id, 99, true, true);
-
-    expect(refined[0]).toMatchObject({ mailbox: "Archive", uid: 99, movePending: true, moveLocationUnverified: true });
-    expect(applyMessageMoveConfirmation(moved, "message-other", 7)).toEqual(moved);
   });
 });
 

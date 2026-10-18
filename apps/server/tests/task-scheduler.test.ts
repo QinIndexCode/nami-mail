@@ -36,6 +36,7 @@ type Harness = {
   registry: TaskRegistry;
   settled: Settled[];
   permanent: Array<{ id: string; status: string }>;
+  progress: Array<{ id: string; total: number; updated: number; failed: number }>;
   start(runner: TaskRunner<unknown>, options?: { dueTickMs?: number; retryBaseMs?: number }): ReturnType<typeof startTaskScheduler>;
 };
 
@@ -46,7 +47,16 @@ function harness(): Harness {
   const registry = createTaskRegistry();
   const settled: Settled[] = [];
   const permanent: Harness["permanent"] = [];
+  const progress: Harness["progress"] = [];
   const hooks = {
+    // The row, re-read by the scheduler after the write -- so these are the
+    // stored counters, which is the whole contract of the hook.
+    onTaskProgress: (task: TaskRow) => progress.push({
+      id: task.id,
+      total: task.total,
+      updated: task.updated,
+      failed: task.failed,
+    }),
     onTaskSettled: (task: TaskRow) => {
       // Recorded from the row the hook receives, never re-read: the hook's whole
       // contract is that it already carries the terminal status. Both error
@@ -66,6 +76,7 @@ function harness(): Harness {
     registry,
     settled,
     permanent,
+    progress,
     start(runner, options = {}) {
       registry.register("move", runner);
       // A long tick keeps the interval out of the picture: every test drives the
@@ -104,6 +115,9 @@ describe("task scheduler: settlement", () => {
     expect(seen).toEqual([{ id, payload: { target: "Archive" }, items: ["m1"] }]);
     expect(taskRow(h.db, id)).toMatchObject({ status: "completed", attempt_count: 1, updated: 1, completed_at: expect.any(Number) });
     expect(h.settled).toEqual([{ id, status: "completed" }]);
+    // Re-read, not the claim-time row: the runner's report is what makes this
+    // 1, and a hook handed the claimed snapshot would publish 0 to the stream.
+    expect(h.progress).toEqual([{ id, total: 1, updated: 1, failed: 0 }]);
     expect(h.permanent).toEqual([]);
     await scheduler.stop();
     h.db.close();

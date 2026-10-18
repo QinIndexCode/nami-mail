@@ -59,7 +59,6 @@ export interface AppDialogsProps {
   handleAccountAdded: ComponentProps<typeof AccountConnectionModal>["onAdded"];
   /** List load; awaited after compose-driven syncs so the list reflects the sent mail. */
   load: (options?: { silent?: boolean }) => Promise<void>;
-  setThreadRefreshTick: Dispatch<SetStateAction<number>>;
   setMessages: (updater: Message[] | ((items: Message[]) => Message[])) => void;
   setSelectedId: Dispatch<SetStateAction<string | null>>;
   applySettings: ComponentProps<typeof SettingsModal>["onSettingsChange"];
@@ -124,7 +123,6 @@ export function AppDialogs(props: AppDialogsProps) {
     dismissToast,
     handleAccountAdded,
     load,
-    setThreadRefreshTick,
     setMessages,
     setSelectedId,
     applySettings,
@@ -169,7 +167,7 @@ export function AppDialogs(props: AppDialogsProps) {
   return (
     <>
       {state.addOpen && <Suspense fallback={null}><AccountConnectionModal providers={providers} existingAccounts={accounts} onClose={() => actions.closeAddAccount()} onAdded={handleAccountAdded} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
-      {state.composeOpen && <Suspense fallback={null}><ComposeModal accounts={accounts} draft={state.composeDraft} onClose={() => actions.closeCompose()} onSent={(message, kind, undoDraft, sentAccountId) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), icon: "undo", run: () => { window.setTimeout(() => { actions.openCompose(undoDraft); }, 0); } }); else showToast(message, kind); if (sentAccountId && !isDemo) { void api.sync(sentAccountId).then(() => load({ silent: true })).catch(() => undefined).finally(() => setThreadRefreshTick((value) => value + 1)); } }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
+      {state.composeOpen && <Suspense fallback={null}><ComposeModal accounts={accounts} draft={state.composeDraft} onClose={() => actions.closeCompose()} onSent={(message, kind, undoDraft, _sentAccountId) => { if (undoDraft) showToast(message, kind, { label: t("compose.undo"), icon: "undo", run: () => { window.setTimeout(() => { actions.openCompose(undoDraft); }, 0); } }); else showToast(message, kind); }} onDraftSaved={(accountId) => { if (!isDemo) void api.sync(accountId).then(() => load({ silent: true })).catch(() => undefined); }} onDraftDiscarded={(messageId) => { setMessages((items) => items.filter((message) => message.id !== messageId)); setSelectedId((current) => current === messageId ? null : current); }} onSubmissionChanged={() => void refreshSubmissions(accounts, { silent: true })} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.settingsOpen && <Suspense fallback={null}><SettingsModal settings={settings} accounts={accounts} onClose={() => actions.closeSettings()} onSettingsChange={applySettings} onTestNotification={testDesktopNotification} onTestSound={testNotificationSound} onTranslationConfigurationChanged={refreshTranslationAvailability} agentProviderSeed={agentProviderSnapshot ?? preloadedAgentBootstrap ?? undefined} categoryRequest={state.settingsCategoryRequest} onAgentProviderListChanged={(snapshot) => { setAgentProviderSnapshot({ providers: snapshot.items, defaultProviderId: snapshot.defaultProviderId }); setPreloadedAgentBootstrap((current) => current && { ...current, providers: snapshot.items, defaultProviderId: snapshot.defaultProviderId, configured: snapshot.items.some((provider) => provider.configured) }); setAgentProviderListVersion((version) => version + 1); }} fallbackFocusRef={mobileMenuButtonRef} demoMode={isDemo} /></Suspense>}
       {state.contactsOpen && <Suspense fallback={null}><ManagementDialogs demoMode={isDemo} onClose={() => actions.closeContacts()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}
       {state.templatesOpen && <Suspense fallback={null}><TemplatesDialog demoMode={isDemo} onClose={() => actions.closeTemplates()} fallbackFocusRef={mobileMenuButtonRef} /></Suspense>}

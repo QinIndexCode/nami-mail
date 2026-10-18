@@ -1,6 +1,6 @@
 import type { AgentMailEventSink } from "../agent/mail-state-events.js";
 import type { DatabaseHandle } from "../db.js";
-import type { ServerEventBus } from "../events.js";
+import { emitTaskProgress, emitTaskSettled, type ServerEventBus } from "../events.js";
 import type { AccountAccessTokenProvider } from "../mail.js";
 import { retractPendingSentRow } from "../pending-sent.js";
 import { createFlagsRunner } from "./kinds/flags.js";
@@ -109,6 +109,12 @@ export type TaskHookDeps = {
   db: DatabaseHandle;
   /** Injectable so a test can pin what the remainder report is written with. */
   now?: () => number;
+  /**
+   * The push transport. Optional because the hooks are also constructed directly
+   * by tests and by embedders with no SSE endpoint; an absent bus makes both
+   * emissions no-ops rather than changing what the hooks owe the task.
+   */
+  serverEvents?: ServerEventBus;
 };
 
 /**
@@ -140,17 +146,30 @@ export type TaskHookDeps = {
  * (contract §4.7 B2/B3).
  */
 export function createTaskHooks(deps: TaskHookDeps): TaskHooks {
-  const { db } = deps;
+  const { db, serverEvents } = deps;
   const now = deps.now ?? (() => Date.now());
   return {
+    onTaskProgress(task) {
+      // The scheduler hands over a row it has just re-read, so these are the
+      // stored counters rather than the claim-time snapshot (`scheduler.ts`).
+      emitTaskProgress(serverEvents, {
+        accountId: task.account_id,
+        taskId: task.id,
+        total: task.total,
+        updated: task.updated,
+        failed: task.failed,
+      });
+    },
     onTaskSettled(task, payload) {
-      if (task.kind === "send") {
-        if (task.status !== "completed") retirePendingSentRow(db, task, now());
-        return;
+      // The event is the settlement's announcement, so it must survive a failing
+      // obligation: the scheduler's own catch would otherwise swallow the
+      // transport notification along with the rollback error, leaving a renderer
+      // waiting for a task that is already terminal on disk.
+      try {
+        settleTaskObligations(db, now, task, payload);
+      } finally {
+        emitTaskSettled(serverEvents, { accountId: task.account_id, taskId: task.id, status: task.status });
       }
-      if (task.kind !== "flags") return;
-      if (task.status !== "completed") revertRefusedFlagsTargets(db, payload, task.id);
-      clearConfirmedFlagsMarkers(db, frozenFlagsMessageIds(payload), task.id);
     },
     onTaskPermanentFailure(task) {
       if (task.kind === "move") {
@@ -173,6 +192,30 @@ export function createTaskHooks(deps: TaskHookDeps): TaskHooks {
       }
     },
   };
+}
+
+/**
+ * What a settlement owes the task's own kind: the send placeholder / flags
+ * rollback / marker clearing.
+ *
+ * Split out of `createTaskHooks` so the SSE announcement can sit in a `finally`
+ * around it. Its early returns are per kind, so folding the emission into this
+ * body would have made it conditional on the kind -- exactly the silent-drop
+ * failure G12 exists to prevent.
+ */
+function settleTaskObligations(
+  db: DatabaseHandle,
+  now: () => number,
+  task: TaskRow,
+  payload: unknown,
+): void {
+  if (task.kind === "send") {
+    if (task.status !== "completed") retirePendingSentRow(db, task, now());
+    return;
+  }
+  if (task.kind !== "flags") return;
+  if (task.status !== "completed") revertRefusedFlagsTargets(db, payload, task.id);
+  clearConfirmedFlagsMarkers(db, frozenFlagsMessageIds(payload), task.id);
 }
 
 export type TaskRunnerDeps = {
@@ -277,7 +320,11 @@ export type TaskExecutionDeps = Omit<TaskRunnerDeps, "starter"> & {
  */
 export function createTaskExecution(deps: TaskExecutionDeps): TaskScheduler {
   const registry = createTaskRegistry();
-  const hooks = createTaskHooks({ db: deps.db, ...(deps.now ? { now: deps.now } : {}) });
+  const hooks = createTaskHooks({
+    db: deps.db,
+    ...(deps.now ? { now: deps.now } : {}),
+    ...(deps.serverEvents ? { serverEvents: deps.serverEvents } : {}),
+  });
   const scheduler = startTaskScheduler({
     db: deps.db,
     masterKey: deps.masterKey,

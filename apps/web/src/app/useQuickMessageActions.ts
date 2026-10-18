@@ -2,22 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type MoveTarget } from "../api";
 import { usePopupExitTransition } from "../hooks/usePopupExitTransition";
 import { mailErrorToastMessage } from "../errorPresentation";
-import {
-  applyMessageMove,
-  isSnoozedMessage,
-  isInboxMessage,
-  matchesServerMessageQuery,
-  nextMessageTotalForMove,
-  revertMessageMove,
-  pinFlagOverride,
-  unpinFlagOverride,
-  type MessageListQuery,
-  type MutablePendingLocalState,
-} from "../mailListState";
+import { isSnoozedMessage, type MessageListQuery } from "../mailListState";
 import { demoMoveDestination, moveActionKey } from "./app-utils";
+import type { MailStore } from "./mailStore";
 import type { useToastQueue } from "../notifications/useToastQueue";
 import type { Translate } from "../i18n";
-import type { Account, Message, Stats } from "../types";
+import type { Message } from "../types";
 
 type ShowToast = ReturnType<typeof useToastQueue>["showToast"];
 type MailView = MessageListQuery["messageView"];
@@ -32,11 +22,7 @@ export interface QuickMessageActionsOptions {
   isDemo: boolean;
   t: Translate;
   showToast: ShowToast;
-  accounts: Account[];
-  messages: Message[];
-  stats: Stats;
-  filteredMessages: Message[];
-  filterQuery: MessageListQuery;
+  store: MailStore;
   viewRef: { current: MailView };
   /** Reader-domain busy flags stay in App; quick actions just flip them. */
   messageFlagging: boolean;
@@ -45,16 +31,8 @@ export interface QuickMessageActionsOptions {
   setMessageAction: (action: MoveTarget | null) => void;
   batchBusy: boolean;
   applyBatchFlaggedChange: (ids: readonly string[], flagged: boolean) => void;
-  pendingLocalStateRef: { current: MutablePendingLocalState };
-  messagesRef: { current: Message[] };
   loadRequestRef: { current: number };
   load: (options?: QuickActionsLoadOptions) => Promise<void>;
-  pinMovedAway: (ids: Iterable<string>, destination: string) => void;
-  unpinMovedAway: (ids: Iterable<string>) => void;
-  setMessages: (updater: Message[] | ((items: Message[]) => Message[])) => void;
-  setAccounts: (updater: Account[] | ((items: Account[]) => Account[])) => void;
-  setStats: (updater: Stats | ((current: Stats) => Stats)) => void;
-  setMessageTotal: (updater: number | ((total: number) => number)) => void;
   applyLocalSeenChange: (message: Message, nextSeen: boolean) => void;
   updateUnreadViewRecentlyRead: (message: Pick<Message, "id" | "seen">, nextSeen: boolean) => void;
   setSelectedId: (id: string | null) => void;
@@ -85,11 +63,7 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
     isDemo,
     t,
     showToast,
-    accounts,
-    messages,
-    stats,
-    filteredMessages,
-    filterQuery,
+    store,
     viewRef,
     messageFlagging,
     messageAction,
@@ -97,16 +71,8 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
     setMessageAction,
     batchBusy,
     applyBatchFlaggedChange,
-    pendingLocalStateRef,
-    messagesRef,
     loadRequestRef,
     load,
-    pinMovedAway,
-    unpinMovedAway,
-    setMessages,
-    setAccounts,
-    setStats,
-    setMessageTotal,
     applyLocalSeenChange,
     updateUnreadViewRecentlyRead,
     setSelectedId,
@@ -117,7 +83,7 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
     if (messageFlagging || messageAction) showToast(t("mail.action.queued"), "info");
     const nextFlagged = !message.flagged;
     setMessageFlagging(true);
-    pinFlagOverride(pendingLocalStateRef.current, message.id);
+    store.pinFlags([message.id]);
     applyBatchFlaggedChange([message.id], nextFlagged);
     try {
       if (!isDemo) await api.updateMessageFlags(message.id, { flagged: nextFlagged });
@@ -126,19 +92,19 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
       applyBatchFlaggedChange([message.id], message.flagged);
       showToast(mailErrorToastMessage(error, t("mail.error.updateStar"), t), "error");
     } finally {
-      unpinFlagOverride(pendingLocalStateRef.current, message.id);
+      store.unpinFlags([message.id]);
       setMessageFlagging(false);
     }
-  }, [applyBatchFlaggedChange, isDemo, messageAction, messageFlagging, pendingLocalStateRef, selectedRemoteActionsBlocked, setMessageFlagging, showToast, t]);
+  }, [applyBatchFlaggedChange, isDemo, messageAction, messageFlagging, selectedRemoteActionsBlocked, setMessageFlagging, showToast, store, t]);
 
   const quickToggleSeen = useCallback(async (message: Message) => {
     if (selectedRemoteActionsBlocked) return;
     // The seen queue allows one in-flight mutation per message; a second
     // click on the same row while the first is still pending is ignored.
-    if (pendingLocalStateRef.current.flagOverrides.has(message.id)) return;
+    if (store.getState().pendingTargets.flagOverrides.has(message.id)) return;
     if (messageFlagging || messageAction) showToast(t("mail.action.queued"), "info");
     const nextSeen = !message.seen;
-    pinFlagOverride(pendingLocalStateRef.current, message.id);
+    store.pinFlags([message.id]);
     updateUnreadViewRecentlyRead(message, nextSeen);
     applyLocalSeenChange(message, nextSeen);
     try {
@@ -150,9 +116,9 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
       applyLocalSeenChange(changedMessage, message.seen);
       showToast(mailErrorToastMessage(error, t("mail.error.updateRead"), t), "error");
     } finally {
-      unpinFlagOverride(pendingLocalStateRef.current, message.id);
+      store.unpinFlags([message.id]);
     }
-  }, [applyLocalSeenChange, isDemo, messageAction, messageFlagging, pendingLocalStateRef, selectedRemoteActionsBlocked, showToast, t, updateUnreadViewRecentlyRead]);
+  }, [applyLocalSeenChange, isDemo, messageAction, messageFlagging, selectedRemoteActionsBlocked, showToast, store, t, updateUnreadViewRecentlyRead]);
 
   const quickMoveMessage = useCallback(async (message: Message, target: MoveTarget) => {
     // The server queues a second write behind the in-flight one; surface that
@@ -166,76 +132,23 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
     // Same hold as the reader path: without it, a refresh triggered by a
     // *different* operation finishing re-adds this row from pre-move server
     // state even though it was already removed optimistically.
-    pinMovedAway([message.id], demoMoveDestination(accounts, message.accountId, target));
+    const destination = demoMoveDestination(store.getState().accounts, message.accountId, target);
+    store.pinMovedAway([message.id], destination);
     try {
       if (isDemo) {
-        const destination = demoMoveDestination(accounts, message.accountId, target);
-        setMessages((items) => {
-          const next = applyMessageMove(accounts, items, stats, message.id, destination).messages;
-          messagesRef.current = next;
-          return next;
-        });
-        setAccounts((items) => {
-          const current = messages.find((item) => item.id === message.id);
-          if (!current) return items;
-          const destination2 = demoMoveDestination(items, current.accountId, target);
-          return applyMessageMove(items, [current], stats, message.id, destination2).accounts;
-        });
-        setStats((current) => {
-          const msg = messages.find((item) => item.id === message.id);
-          if (!msg) return current;
-          const destination3 = demoMoveDestination(accounts, msg.accountId, target);
-          return applyMessageMove(accounts, [msg], current, message.id, destination3).stats;
-        });
+        store.applyMove([message.id], destination);
       } else {
-        const destination = demoMoveDestination(accounts, message.accountId, target);
         // Optimistic: map the row to its destination before the provider
-        // round-trip; a failure restores the original snapshot and counts.
-        const optimisticSnapshot = destination && destination !== message.mailbox
-          ? applyMessageMove(accounts, [message], stats, message.id, destination).messages[0]
-          : undefined;
-        const optimisticAccounts = optimisticSnapshot
-          ? applyMessageMove(accounts, [message], stats, message.id, destination).accounts
-          : null;
-        const optimisticStats = optimisticSnapshot
-          ? applyMessageMove(accounts, [message], stats, message.id, destination).stats
-          : null;
-        if (optimisticSnapshot) {
-          const wasIncluded = filteredMessages.some((item) => item.id === message.id);
-          const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, filterQuery);
-          if (wasIncluded !== remainsIncluded) {
-            setMessageTotal((total) => nextMessageTotalForMove(total, wasIncluded, remainsIncluded));
-          }
-          // Sync the ref synchronously (like load) so a fast failure can gate
-          // its rollback on the exact optimistic state it must reverse.
-          messagesRef.current = applyMessageMove(accounts, messagesRef.current, stats, message.id, destination).messages;
-          setMessages(messagesRef.current);
-          setAccounts((items) => applyMessageMove(items, [message], stats, message.id, destination).accounts);
-          setStats((current) => applyMessageMove(accounts, [message], current, message.id, destination).stats);
-        }
+        // round-trip; a failure restores the original row and the total.
+        if (destination && destination !== message.mailbox) store.applyMove([message.id], destination);
         try {
           const result = await api.moveMessage(message.id, target);
           if (!result.ok) throw new Error(t("mail.error.move"));
           void load({ silent: true });
         } catch (error) {
-          if (optimisticSnapshot && optimisticAccounts && optimisticStats) {
-            // A reload that landed mid-flight already holds server truth (the
-            // message restored at its source); leave it alone in that case.
-            if (messagesRef.current.some((item) => item.id === message.id && item.mailbox === destination)) {
-              const restored = revertMessageMove(optimisticAccounts, messagesRef.current, optimisticStats, message, destination);
-              messagesRef.current = restored.messages;
-              setMessages(restored.messages);
-              setAccounts(restored.accounts);
-              setStats(restored.stats);
-            }
-          }
-          if (loadRequestRef.current === requestAtStart && optimisticSnapshot) {
-            const wasIncluded = filteredMessages.some((item) => item.id === message.id);
-            const remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, filterQuery);
-            if (wasIncluded !== remainsIncluded) {
-              setMessageTotal((total) => nextMessageTotalForMove(total, remainsIncluded, wasIncluded));
-            }
-          }
+          // A reload that landed mid-flight already owns the authoritative
+          // total; restore the optimistic decrement only while it is still live.
+          store.restoreMove(message.id, message, destination, { adjustTotal: loadRequestRef.current === requestAtStart });
           showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
           return;
         }
@@ -245,10 +158,10 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
       void load({ silent: true });
       showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
     } finally {
-      unpinMovedAway([message.id]);
+      store.unpinMovedAway([message.id]);
       setMessageAction(null);
     }
-  }, [accounts, batchBusy, filteredMessages, filterQuery, isDemo, load, loadRequestRef, messageAction, messageFlagging, messages, messagesRef, pinMovedAway, setMessageAction, setMessageTotal, setMessages, setAccounts, setStats, showToast, stats, t, unpinMovedAway]);
+  }, [batchBusy, isDemo, load, loadRequestRef, messageAction, messageFlagging, setMessageAction, showToast, store, t]);
 
   // Snooze popup: the open flag, the custom datetime draft, and the popup's
   // exit transition all live here with the actions that close them.
@@ -296,27 +209,13 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
     };
   }, [snoozeOpen, beginSnoozeClose]);
 
-  const applyLocalSnooze = useCallback((messageId: string, until: string | null, previousUntil: string | null) => {
-    const wasSnoozed = Boolean(previousUntil && new Date(previousUntil).getTime() > Date.now());
-    const willBeSnoozed = Boolean(until && new Date(until).getTime() > Date.now());
-    const current = messagesRef.current.find((item) => item.id === messageId);
-    if (!current) return;
-    setMessages((items) => {
-      const next = items.map((item) => item.id === messageId ? { ...item, snoozedUntil: until } : item);
-      messagesRef.current = next;
-      return next;
-    });
-    if (wasSnoozed === willBeSnoozed || !isInboxMessage(current, accounts)) return;
-    // Leaving the inbox for a snooze, or returning from one, adjusts the
-    // unified inbox counts exactly like an archive move.
-    const isSnoozing = !wasSnoozed && willBeSnoozed;
-    const unseenDelta = current.seen ? 0 : isSnoozing ? -1 : 1;
-    setStats((currentStats) => ({
-      ...currentStats,
-      messages: Math.max(0, currentStats.messages + (isSnoozing ? -1 : 1)),
-      unread: Math.max(0, currentStats.unread + unseenDelta),
-    }));
-  }, [accounts, messagesRef, setMessages, setStats]);
+  // The row's snooze timestamp is local target state. The inbox counters that
+  // follow from it (the Snoozed badge, the unified inbox pair) are derived from
+  // that state — by the server in a real session, by the fixture in demo — so
+  // this only ever shifts the row.
+  const applyLocalSnooze = useCallback((messageId: string, until: string | null) => {
+    store.applySnooze(messageId, until);
+  }, [store]);
 
   const setSelectedSnoozed = async (untilIso: string) => {
     if (!selected || selectedRemoteActionsBlocked) return;
@@ -324,13 +223,13 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
     setSnoozeOpen(false);
     setSnoozeCustomUntil("");
     // Optimistic: apply the local snooze before the provider round-trip; a
-    // failure restores the previous state and counts.
-    applyLocalSnooze(selected.id, untilIso, previousUntil);
+    // failure restores the previous state.
+    applyLocalSnooze(selected.id, untilIso);
     try {
       if (!isDemo) await api.snoozeMessage(selected.id, untilIso);
       showToast(t("mail.snooze.scheduled"));
     } catch (error) {
-      applyLocalSnooze(selected.id, previousUntil, untilIso);
+      applyLocalSnooze(selected.id, previousUntil);
       showToast(mailErrorToastMessage(error, t("mail.error.snooze"), t), "error");
     }
   };
@@ -342,12 +241,12 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
     // Optimistic: the row leaves the snoozed view (and the reader closes)
     // immediately; a failure restores both.
     if (viewRef.current === "snoozed") setSelectedId(null);
-    applyLocalSnooze(selected.id, null, previousUntil);
+    applyLocalSnooze(selected.id, null);
     try {
       if (!isDemo) await api.clearMessageSnooze(selected.id);
       showToast(t("mail.snooze.cleared"));
     } catch (error) {
-      applyLocalSnooze(selected.id, previousUntil, null);
+      applyLocalSnooze(selected.id, previousUntil);
       if (viewRef.current === "snoozed") setSelectedId(selected.id);
       showToast(mailErrorToastMessage(error, t("mail.error.snooze"), t), "error");
     }

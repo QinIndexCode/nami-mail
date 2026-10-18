@@ -16,6 +16,7 @@ import { EncryptedAgentMemoryStore } from "./agent/memory.js";
 import { EncryptedAutoReplyDecisionStore } from "./agent/auto-reply-decisions.js";
 import { AutoReplyEngine, registerAutoReplyEngine, type AutoReplyUiEvent } from "./agent/auto-reply.js";
 import { AccountLifecycleStore } from "./agent/lifecycle.js";
+import { AgentMailChangeBridge } from "./agent/mail-change-bridge.js";
 import { AgentMailStateEvents } from "./agent/mail-state-events.js";
 import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
 import { closeActiveEventStreams } from "./routes/events.js";
@@ -405,12 +406,17 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     const agentLifecycle = new AccountLifecycleStore(database, runtimeMasterKey);
     const agentSourceEvents = new AgentSourceEventOutbox(database, runtimeMasterKey, agentLifecycle);
     const agentMailEvents = new AgentMailStateEvents(runtimeMasterKey, agentLifecycle, agentSourceEvents);
+    // An Agent write commits mail rows on behalf of a client that is not the
+    // browser, so the browser has no local optimistic state to show and no way
+    // to hear about it before the next poll. The bridge forwards the sink calls
+    // unchanged and emits a coalesced `mail-changed` after the commit.
+    const agentMailChanges = new AgentMailChangeBridge(agentMailEvents, serverEvents);
     const oauthService = new OAuthService(database, runtimeMasterKey);
     const mailApplication = new SqliteMailApplicationService({
       db: database,
       masterKey: runtimeMasterKey,
       oauthService,
-      agentMailEvents,
+      agentMailEvents: agentMailChanges,
       syncMessageLimit: getSyncMessageLimit(database),
       outboundAttachmentDirectory: outboundAttachmentDirectory({}),
     });

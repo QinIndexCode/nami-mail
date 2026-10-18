@@ -1,5 +1,6 @@
 import type { DatabaseHandle } from "./db.js";
 import type { NewInboxMessage } from "./sync.js";
+import type { TaskStatus } from "./tasks/types.js";
 
 /**
  * Server-originated events pushed to connected clients over the
@@ -37,11 +38,71 @@ export type SyncProgressEvent = {
   totalEstimate: number;
 };
 
+/** A runner's own progress report for one durable task. */
+export type TaskProgressEvent = {
+  accountId: string;
+  taskId: string;
+  total: number;
+  updated: number;
+  failed: number;
+};
+
+/**
+ * A task reached a terminal state.
+ *
+ * The status is the task layer's own vocabulary, `cancelled` and
+ * `unknown_delivery` included. The HTTP alias collapses the last two to
+ * `failed`, which is the same *settled* claim (contract §8 G11/G12): the two
+ * surfaces may spell the outcome differently, but neither may leave a task
+ * looking unfinished.
+ */
+export type TaskSettledEvent = {
+  accountId: string;
+  taskId: string;
+  status: TaskStatus;
+};
+
+/**
+ * A message's row changed outside the requesting renderer — today that means an
+ * Agent write (tool call or Agent-triggered sync).
+ *
+ * `folders` names the mailboxes the change touched, empty when the writer could
+ * not name one; an empty list means "refresh what you show" rather than "nothing
+ * changed", because the frame is only emitted for an actual write.
+ */
+export type MailChangedEvent = {
+  accountId: string;
+  folders: string[];
+};
+
 export type ServerEvent =
   | { type: "mail.received"; payload: MailReceivedEvent }
   | { type: "mail.synced"; payload: MailSyncedEvent }
   | { type: "settings.changed"; payload: SettingsChangedEvent }
-  | { type: "sync.progress"; payload: SyncProgressEvent };
+  | { type: "sync.progress"; payload: SyncProgressEvent }
+  | { type: "task-progress"; payload: TaskProgressEvent }
+  | { type: "task-settled"; payload: TaskSettledEvent }
+  | { type: "mail-changed"; payload: MailChangedEvent };
+
+/**
+ * Every event name the server can emit.
+ *
+ * Not a second source of truth for the union above -- it is the wire manifest
+ * the client's listener registry is checked against (contract §8 G12): a name
+ * added to the union but not here would be emitted into a void, and
+ * `sse-contract.test.ts` pins the two lists against each other (including a
+ * compile-time `Record<ServerEvent["type"], true>` that fails if a union member
+ * is missing from the test's copy).
+ */
+export const SERVER_EVENT_TYPES = [
+  "mail.received",
+  "mail.synced",
+  "settings.changed",
+  "sync.progress",
+  "task-progress",
+  "task-settled",
+  "mail-changed",
+] as const satisfies readonly ServerEvent["type"][];
 
 export type ServerEventListener = (event: ServerEvent, serialized: string | null) => void;
 
@@ -124,4 +185,25 @@ export function emitSettingsChanged(bus: ServerEventBus | undefined): void {
 export function emitSyncProgress(bus: ServerEventBus | undefined, accountId: string, folder: string, processed: number, totalEstimate: number): void {
   if (!bus) return;
   bus.emit({ type: "sync.progress", payload: { accountId, folder, processed, totalEstimate } });
+}
+
+/** Broadcasts a task's own progress report, so a renderer that did not start the
+ * task (the Agent did, or a batch is still running after a reload) can follow it
+ * without polling. */
+export function emitTaskProgress(bus: ServerEventBus | undefined, progress: TaskProgressEvent): void {
+  if (!bus) return;
+  bus.emit({ type: "task-progress", payload: progress });
+}
+
+/** Broadcasts a task's terminal state. Renderers treat this as the signal to
+ * reconcile; unlike progress it is emitted exactly once per task. */
+export function emitTaskSettled(bus: ServerEventBus | undefined, settled: TaskSettledEvent): void {
+  if (!bus) return;
+  bus.emit({ type: "task-settled", payload: settled });
+}
+
+/** Broadcasts that a writer other than this renderer changed mail rows. */
+export function emitMailChanged(bus: ServerEventBus | undefined, changed: MailChangedEvent): void {
+  if (!bus) return;
+  bus.emit({ type: "mail-changed", payload: changed });
 }

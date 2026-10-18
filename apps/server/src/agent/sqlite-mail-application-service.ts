@@ -35,7 +35,7 @@ import {
 } from "../message-flag-indexes.js";
 import { redactUrls } from "../message-links.js";
 import type { AccountRecord } from "../types.js";
-import type { AgentMailStateEvents } from "./mail-state-events.js";
+import type { AgentMailStateEventSink } from "./mail-state-events.js";
 import type {
   DraftMutation,
   DraftView,
@@ -65,7 +65,7 @@ export type SqliteMailApplicationServiceOptions = {
   db: DatabaseHandle;
   masterKey: Buffer;
   oauthService?: AccountAccessTokenProvider;
-  agentMailEvents?: AgentMailStateEvents;
+  agentMailEvents?: AgentMailStateEventSink;
   syncMessageLimit: number;
   /** Directory where uploaded outbound attachment files are stored. */
   outboundAttachmentDirectory: string;

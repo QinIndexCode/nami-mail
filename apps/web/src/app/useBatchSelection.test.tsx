@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { act, useCallback, useRef, useState } from "react";
+import { act, useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { applyPinnedUnseenCorrections, createPendingLocalState, mergePendingLocalState, type MutablePendingLocalState } from "../mailListState";
+import type { PendingLocalState } from "../mailListState";
 import type * as apiModule from "../api";
 import type { BatchJobSnapshot } from "../api";
 import type { Account, Message, Stats } from "../types";
+import { createMailStore, type MailStore, type SnapshotContext } from "./mailStore";
 import { useBatchSelection, type BatchSelection } from "./useBatchSelection";
 
 const mocks = vi.hoisted(() => ({ flags: vi.fn(), move: vi.fn(), create: vi.fn(), status: vi.fn() }));
@@ -43,12 +44,14 @@ let host: HTMLDivElement;
 let current: BatchSelection;
 let displayed: Message[];
 let displayedStats: Stats;
+/** The store the harness renders from; re-created when a test swaps mailbox. */
+let store: MailStore;
 /** The rows the harness seeds itself with. It is read once, on the first render,
  *  so a test that needs a selection past the server's id cap has to swap it in
  *  and remount before it acts. */
 let mailbox: Message[];
 /** What the server would answer on the next reload — the authority the pins
- * are meant to shield, and the truth a failed write must fall back to. */
+ *  are meant to shield, and the truth a failed write must fall back to. */
 let server: Message[];
 const toast = vi.fn();
 /** Every value the hook hands to `setBatchJob`, in order. */
@@ -57,15 +60,38 @@ const jobWrites: Array<BatchJobSnapshot | null> = [];
 const pagedWrites: boolean[] = [];
 /** The hook's pending-local-state registry, so a test can observe its pins
  *  (the rows a snapshot must keep out of the list until the server agrees). */
-let pending: MutablePendingLocalState;
+let pending: PendingLocalState;
 /** Drives `currentMessageTotal`, i.e. how many rows a predicate-wide selection
  *  would cover. A page shorter than this is what arms "select all matching". */
 let setMatchingTotalState: (value: number) => void = () => undefined;
 
+const snapshotContext = (): SnapshotContext => ({
+  query: store.getQuery(),
+  view: "inbox",
+  recentlyReadIds: new Set(),
+  pendingArchiveMoves: [],
+});
+
+/** Seeds a store with a mailbox the way `load` seeds the real one. */
+function seedStore(messages: Message[]): MailStore {
+  const seeded = createMailStore({ reconcile: async () => undefined });
+  seeded.adoptSnapshot({
+    accounts: initialAccounts,
+    stats: { accounts: 1, messages: messages.length, unread: messages.filter((message) => !message.seen).length },
+    items: messages,
+    total: messages.length,
+    nextCursor: null,
+  }, snapshotContextFor(seeded));
+  return seeded;
+}
+
+/** `snapshotContext` reads the module-level store; seeding needs its own. */
+function snapshotContextFor(target: MailStore): SnapshotContext {
+  return { query: target.getQuery(), view: "inbox", recentlyReadIds: new Set(), pendingArchiveMoves: [] };
+}
+
 function Harness() {
-  const [messages, setMessages] = useState(() => mailbox);
-  const [accounts, setAccounts] = useState(initialAccounts);
-  const [stats, setStats] = useState<Stats>({ accounts: 1, messages: 1, unread: 1 });
+  const state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
   const [selectAllPaged, setSelectAllPagedState] = useState(false);
   const [matchingTotal, setMatchingTotal] = useState(mailbox.length);
   const setSelectAllPaged = useCallback((value: boolean) => {
@@ -75,44 +101,36 @@ function Harness() {
   setMatchingTotalState = setMatchingTotal;
   const [pendingBatchDelete, setPendingBatchDelete] = useState(false);
   const [, setBatchJob] = useState<BatchJobSnapshot | null>(null);
-  const [, setTotal] = useState(1);
-  const messagesRef = useRef(messages);
-  const pendingRef = useRef(createPendingLocalState());
-  pending = pendingRef.current;
   const loadRequestRef = useRef(0);
-  const viewRef = useRef("inbox" as const);
+  const ref = useRef(store);
+  ref.current = store;
+  pending = state.pendingTargets;
   const load = async () => {
     loadRequestRef.current += 1;
-    const merged = mergePendingLocalState(server, messagesRef.current, pendingRef.current);
-    const corrected = applyPinnedUnseenCorrections(
-      initialAccounts,
-      { accounts: 1, messages: 1, unread: server.filter((message) => !message.seen).length },
-      server,
-      merged,
-      pendingRef.current,
-    );
-    messagesRef.current = merged;
-    setMessages(merged);
-    setAccounts(corrected.accounts);
-    setStats(corrected.stats);
+    // What the server answers on a reload: the authority the pins shield, and
+    // the truth a failed write falls back to.
+    ref.current.mergeSnapshot({
+      accounts: initialAccounts,
+      stats: { accounts: 1, messages: server.length, unread: server.filter((message) => !message.seen).length },
+      items: server,
+      total: server.length,
+      nextCursor: null,
+    }, snapshotContext());
   };
   const loadRef = useRef(load);
   loadRef.current = load;
   current = useBatchSelection({
     isDemo: false, t: ((key: string) => key) as never, showToast: toast,
-    sortOrder: "newest", filteredMessages: messages, messages, accounts, stats,
+    sortOrder: "newest", filteredMessages: state.messages, store,
     loadedServerMessageCount: mailbox.length, currentMessageTotal: matchingTotal, searchScope: "view", debouncedQuery: "",
     selectedAccount: "all", selectedFolder: "", view: "inbox", attachmentKindFilter: undefined,
     dateBounds: { after: undefined, before: undefined }, load, loadRef,
     reconcileRef: { current: () => undefined }, loadRequestRef,
-    messagesRef, pendingLocalStateRef: pendingRef, viewRef, selectAllPaged, setSelectAllPaged,
+    selectAllPaged, setSelectAllPaged,
     setBatchJob: ((job: BatchJobSnapshot | null) => { jobWrites.push(job); setBatchJob(job); }) as never, pendingBatchDelete, setPendingBatchDelete,
-    pinMovedAway: (ids, destination) => { for (const id of ids) pendingRef.current.movedAway.set(id, destination); },
-    unpinMovedAway: (ids) => { for (const id of ids) pendingRef.current.movedAway.delete(id); },
-    setMessages, setAccounts, setStats, setMessageTotal: setTotal,
   });
-  displayed = messages;
-  displayedStats = stats;
+  displayed = state.messages;
+  displayedStats = state.stats;
   return null;
 }
 
@@ -123,6 +141,7 @@ beforeEach(async () => {
   pagedWrites.length = 0;
   mailbox = [original];
   server = [original];
+  store = seedStore(mailbox);
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -250,6 +269,7 @@ async function remountWithMailbox(messages: Message[]) {
   host.remove();
   mailbox = messages;
   server = messages;
+  store = seedStore(mailbox);
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);

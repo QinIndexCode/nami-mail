@@ -8,6 +8,27 @@ const MAX_JOB_DURATION_MS = 10 * 60_000;
 const MAX_STATUS_READ_FAILURES = 3;
 
 /**
+ * The statuses that end a job — an explicit whitelist, never `!== "running"`.
+ *
+ * The old default ("anything not running is finished") turned an unrecognised
+ * status into a success toast with an undo button (contract K5). The alias maps
+ * `pending`/`running` to `running` and `cancelled`/`unknown_delivery` to
+ * `failed`, so three values reach this file today; the last two are listed
+ * anyway because they are the server's vocabulary and a future alias that
+ * forwards them must settle rather than poll to the ten-minute deadline.
+ */
+const SETTLED_JOB_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "unknown_delivery",
+]);
+
+function isSettledJobStatus(status: string): boolean {
+  return SETTLED_JOB_STATUSES.has(status);
+}
+
+/**
  * Best-effort reconcile: a refresh that fails (or throws synchronously) has
  * nothing to add, and must never reach the job's own state machine — the
  * settlement reload remains the authority on what the server holds.
@@ -111,7 +132,7 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
       }
       let settled = false;
       try {
-        settled = (await api.batchJobStatus(jobId)).job.status !== "running";
+        settled = isSettledJobStatus((await api.batchJobStatus(jobId)).job.status);
         consecutiveReadFailures = 0;
       } catch {
         consecutiveReadFailures += 1;
@@ -168,12 +189,12 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
       }
       try {
         const { job } = await api.batchJobStatus(jobId);
-        if (job.status === "running") {
+        if (!isSettledJobStatus(job.status)) {
           onSnapshot(job);
           setTimeout(() => void next(), POLL_INTERVAL_MS);
           return;
         }
-        if (job.status === "failed") {
+        if (job.status !== "completed") {
           runDeadlines.delete(jobId);
           onSnapshot(null);
           showToast(job.error ?? t("mail.selection.jobError"), "error");

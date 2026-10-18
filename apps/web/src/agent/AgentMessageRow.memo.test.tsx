@@ -174,7 +174,10 @@ describe("App hands the agent transcript a stable open-referenced-message handle
     // (silentRefresh replaces the accounts array it closes over), so listing it
     // would re-create this handler on every refresh and defeat AgentMessageRow.
     // Locale changes rebuild sample source copy; mailbox refreshes still do not.
-    expect(deps.split(",").map((dep) => dep.trim())).toEqual(["closeAgentWorkspace", "locale", "showToast", "t"]);
+    // The store identity is stable for the session's lifetime, and `setMessages`
+    // is a bound method of that same store, so listing both is safe even though
+    // the handler reads them.
+    expect(deps.split(",").map((dep) => dep.trim())).toEqual(["closeAgentWorkspace", "locale", "setMessages", "showToast", "store", "t"]);
     expect(source).toMatch(/const openMessageRef = useRef\(openMessage\);\r?\n {2}openMessageRef\.current = openMessage;/);
     expect(block![0]).toContain("openMessageRef.current(");
   });

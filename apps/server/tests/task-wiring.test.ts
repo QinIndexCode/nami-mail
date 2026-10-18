@@ -53,6 +53,7 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 
 import { accountById } from "../src/account-store.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
+import { ServerEventBus, type ServerEvent } from "../src/events.js";
 import { prepareSubmission } from "../src/outbox.js";
 import { writePendingSentRow } from "../src/pending-sent.js";
 import { acceptFlagsTask } from "../src/tasks/kinds/flags.js";
@@ -598,6 +599,59 @@ describe("task wiring: a real scheduler", () => {
     expect(flagState(db, "msg-1")).toEqual({ flags_json: "[]", pending_flags_push: 0, pending_flags_base_json: null });
     expect(flagState(db, "msg-2")).toEqual({ flags_json: "[]", pending_flags_push: 0, pending_flags_base_json: null });
     expect(folderUnseen(db)).toBe(2);
+  });
+
+  it("announces a settlement on the bus exactly once, with the terminal status", async () => {
+    const world = fixture(2);
+    db = world.db;
+    const taskId = acceptFlags(db, world.ids);
+    const bus = new ServerEventBus();
+    const events: ServerEvent[] = [];
+    bus.subscribe((event) => events.push(event));
+
+    const scheduler = createTaskExecution({
+      db,
+      masterKey: MASTER_KEY,
+      outboundAttachmentDirectory: "",
+      scheduleSentVerification: () => undefined,
+      serverEvents: bus,
+      dueTickMs: 60_000,
+      retryBaseMs: 1,
+      retryMaxMs: 1,
+    });
+    scheduler.start(taskId);
+    await scheduler.drain();
+    await scheduler.stop();
+
+    // One settlement, one frame. The status is the row's terminal one, not a
+    // claim-time `pending` -- a renderer treats this frame as "go read", so a
+    // wrong status is a reconcile it never makes.
+    expect(events.filter((event) => event.type === "task-settled")).toEqual([{
+      type: "task-settled",
+      payload: { accountId: ACCOUNT, taskId, status: "failed" },
+    }]);
+    // Progress frames are not settlement frames: the refused push reported
+    // nothing of its own, and the hook's remainder report is ledger arithmetic,
+    // not a runner progress report.
+    expect(events.filter((event) => event.type === "task-progress")).toEqual([]);
+  });
+
+  it("publishes a progress frame from the stored counters, not the claim-time row", () => {
+    const world = fixture(1);
+    db = world.db;
+    const taskId = acceptFlags(db, world.ids);
+    const bus = new ServerEventBus();
+    const events: ServerEvent[] = [];
+    bus.subscribe((event) => events.push(event));
+    const hooks = createTaskHooks({ db, serverEvents: bus });
+
+    reportTaskProgress(db, taskId, { updated: 1 }, FIXED_NOW);
+    hooks.onTaskProgress!(taskRow(db, taskId) as TaskRow);
+
+    expect(events).toEqual([{
+      type: "task-progress",
+      payload: { accountId: ACCOUNT, taskId, total: 1, updated: 1, failed: 0 },
+    }]);
   });
 
   it("fires each hook exactly once for one give-up", async () => {

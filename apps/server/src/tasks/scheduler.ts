@@ -121,6 +121,22 @@ export function startTaskScheduler(deps: SchedulerDeps): TaskScheduler {
     }
   }
 
+  /**
+   * One runner progress report. The row is re-read after the write, because the
+   * claim-time row the runner was handed still carries the old counters -- a
+   * listener that reported those would publish a frame that is already stale.
+   */
+  function notifyProgress(taskId: string): void {
+    if (!hooks.onTaskProgress) return;
+    const current = taskRow(db, taskId);
+    if (!current) return;
+    try {
+      hooks.onTaskProgress(current);
+    } catch (hookError) {
+      serverLog.warn({ taskId, kind: current.kind }, "Task progress hook threw", hookError);
+    }
+  }
+
   /** Fires once, only for a task the scheduler gave up on -- the hook that undoes
    * what the task's acceptance promised (a move goal, a flag push marker). */
   function notifyPermanentFailure(row: TaskRow, payload: unknown, error: { code?: string; message?: string } | null): void {
@@ -165,7 +181,10 @@ export function startTaskScheduler(deps: SchedulerDeps): TaskScheduler {
             task: row,
             payload: payload as unknown,
             items: taskItems(db, row.id),
-            report: (delta) => reportTaskProgress(db, row.id, delta, now()),
+            report: (delta) => {
+              reportTaskProgress(db, row.id, delta, now());
+              notifyProgress(row.id);
+            },
           });
         }),
         TASK_RUN_TIMEOUT_MS,

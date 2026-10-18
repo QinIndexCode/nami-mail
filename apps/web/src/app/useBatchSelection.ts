@@ -6,20 +6,15 @@ import { useDismissTransition } from "../hooks/useDismissTransition";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { mailErrorToastMessage } from "../errorPresentation";
 import {
-  applyBatchSeenChange as applyBatchSeenChangeState,
-  mergeRolledBackMessages,
-  applyMessageMove,
-  pinFlagOverride,
-  unpinFlagOverride,
   type MessageListQuery,
   type MessageListSortOrder,
-  type MutablePendingLocalState,
 } from "../mailListState";
 import { demoMoveDestination, moveActionKey } from "./app-utils";
+import type { MailStore } from "./mailStore";
 import type { useToastQueue } from "../notifications/useToastQueue";
 import type { Translate } from "../i18n";
 import type { AttachmentKind } from "../attachmentPresentation";
-import type { Account, Message, Stats } from "../types";
+import type { Message } from "../types";
 
 type ShowToast = ReturnType<typeof useToastQueue>["showToast"];
 type MailView = MessageListQuery["messageView"];
@@ -46,9 +41,7 @@ export interface BatchSelectionOptions {
   showToast: ShowToast;
   sortOrder: MessageListSortOrder;
   filteredMessages: Message[];
-  messages: Message[];
-  accounts: Account[];
-  stats: Stats;
+  store: MailStore;
   loadedServerMessageCount: number;
   currentMessageTotal: number;
   searchScope: "view" | "all";
@@ -70,10 +63,6 @@ export interface BatchSelectionOptions {
   reconcileRef: { current: () => Promise<void> | void };
   /** Monotonic epoch of list loads; bumped to invalidate in-flight refreshes. */
   loadRequestRef: { current: number };
-  messagesRef: { current: Message[] };
-  pendingLocalStateRef: { current: MutablePendingLocalState };
-  /** Live view, read through a ref for the unread-view badge correction. */
-  viewRef: { current: MailView };
   /**
    * Predicate-wide selection and the batch banner state live in App because
    * `load` (declared earlier) resets both on every full switch.
@@ -84,12 +73,6 @@ export interface BatchSelectionOptions {
   /** Delete-confirmation dialog flag lives in App ahead of useDialogRouting. */
   pendingBatchDelete: boolean;
   setPendingBatchDelete: (value: boolean) => void;
-  pinMovedAway: (ids: Iterable<string>, destination: string) => void;
-  unpinMovedAway: (ids: Iterable<string>) => void;
-  setMessages: (updater: Message[] | ((items: Message[]) => Message[])) => void;
-  setAccounts: (updater: Account[] | ((items: Account[]) => Account[])) => void;
-  setStats: (updater: Stats | ((current: Stats) => Stats)) => void;
-  setMessageTotal: (updater: number | ((total: number) => number)) => void;
 }
 
 export interface BatchSelection {
@@ -130,9 +113,7 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     showToast,
     sortOrder,
     filteredMessages,
-    messages,
-    accounts,
-    stats,
+    store,
     loadedServerMessageCount,
     currentMessageTotal,
     searchScope,
@@ -146,20 +127,11 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     loadRef,
     reconcileRef,
     loadRequestRef,
-    messagesRef,
-    pendingLocalStateRef,
-    viewRef,
     selectAllPaged,
     setSelectAllPaged,
     setBatchJob,
     pendingBatchDelete,
     setPendingBatchDelete,
-    pinMovedAway,
-    unpinMovedAway,
-    setMessages,
-    setAccounts,
-    setStats,
-    setMessageTotal,
   } = options;
 
   const [selectionMode, setSelectionMode] = useState(false);
@@ -315,30 +287,12 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
   }, [batchJobRunner]);
 
   const applyBatchSeenChange = useCallback((ids: readonly string[], seen: boolean) => {
-    const result = applyBatchSeenChangeState(accounts, messages, stats, ids, seen);
-    messagesRef.current = result.messages;
-    setMessages(result.messages);
-    setAccounts(result.accounts);
-    setStats(result.stats);
-    if (viewRef.current === "unread" && result.changedCount) {
-      setMessageTotal((total) => Math.max(0, total + (seen ? -result.changedCount : result.changedCount)));
-    }
-  }, [accounts, messages, messagesRef, setAccounts, setMessageTotal, setMessages, setStats, stats, viewRef]);
+    store.applySeen(ids, seen);
+  }, [store]);
 
   const applyBatchFlaggedChange = useCallback((ids: readonly string[], flagged: boolean) => {
-    setMessages((items) => {
-      const selected = new Set(ids);
-      const next = items.map((item) => {
-        if (!selected.has(item.id) || item.flagged === flagged) return item;
-        const flags = new Set(item.flags);
-        if (flagged) flags.add("\\Flagged");
-        else flags.delete("\\Flagged");
-        return { ...item, flagged, flags: [...flags] };
-      });
-      messagesRef.current = next;
-      return next;
-    });
-  }, [messagesRef, setMessages]);
+    store.applyFlag(ids, flagged);
+  }, [store]);
 
   const batchUpdateFlags = async (patch: { seen?: boolean; flagged?: boolean }, successKey: string) => {
     const ids = [...selectedMessageIds];
@@ -356,14 +310,14 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     const held = new Set<string>();
     const pin = (list: readonly string[]) => {
       for (const id of list) {
-        pinFlagOverride(pendingLocalStateRef.current, id);
+        store.pinFlags([id]);
         held.add(id);
       }
     };
     const unpin = (list: readonly string[]) => {
       for (const id of list) {
         if (!held.delete(id)) continue;
-        unpinFlagOverride(pendingLocalStateRef.current, id);
+        store.unpinFlags([id]);
       }
     };
     // Predicate scope: the server resolves every matching id behind a job (the
@@ -476,18 +430,15 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     // create resolves.
     if (selectionJobQuery) {
       const movedIds = filteredMessages.map((message) => message.id);
-      const movedSet = new Set(movedIds);
       // Invalidate any in-flight reload so it cannot resurrect the removed rows
       // from pre-acceptance server state, and hold them out of every snapshot
       // that starts afterwards too — a background refresh or a poll tick lands
       // between this click and the acceptance.
       loadRequestRef.current += 1;
-      messagesRef.current = messagesRef.current.filter((item) => !movedSet.has(item.id));
-      setMessages(messagesRef.current);
       for (const message of filteredMessages) {
-        pinMovedAway([message.id], demoMoveDestination(accounts, message.accountId, target));
+        store.pinMovedAway([message.id], demoMoveDestination(store.getState().accounts, message.accountId, target));
       }
-      if (movedIds.length) setMessageTotal((total) => Math.max(0, total - movedIds.length));
+      store.removeMessages(movedIds);
       // A pin may outlive the acceptance, never the settlement: the messages the
       // server gave back are reported in the source folder again, and a pin still
       // holding them would hide exactly the rows a partial-failure toast tells
@@ -495,11 +446,11 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
       // the snapshot callback fires before the job's reconciling reload (the one
       // that must see the restored rows), while `onSettled` is the backstop for
       // the paths that end without one.
-      releaseMovePinsRef.current = () => unpinMovedAway(movedIds);
+      releaseMovePinsRef.current = () => store.unpinMovedAway(movedIds);
       startBatchJob({ kind: "move", target, query: selectionJobQuery }, {
         successKey: moveActionKey(target, true),
         exitOnSuccess: true,
-        onSettled: () => unpinMovedAway(movedIds),
+        onSettled: () => store.unpinMovedAway(movedIds),
       });
       return;
     }
@@ -513,61 +464,33 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     let settleFailed = false;
     try {
       if (isDemo) {
-        setMessages((items) => {
-          let next = items;
-          for (const id of ids) {
-            const current = next.find((item) => item.id === id);
-            if (!current) continue;
-            const destination = demoMoveDestination(accounts, current.accountId, target);
-            next = applyMessageMove(accounts, next, stats, id, destination).messages;
-          }
-          messagesRef.current = next;
-          return next;
-        });
-        setAccounts((items) => {
-          let next = items;
-          for (const id of ids) {
-            const current = messages.find((item) => item.id === id);
-            if (!current) continue;
-            const destination = demoMoveDestination(accounts, current.accountId, target);
-            next = applyMessageMove(next, [current], stats, id, destination).accounts;
-          }
-          return next;
-        });
-        setStats((current) => {
-          let next = current;
-          for (const id of ids) {
-            const msg = messages.find((item) => item.id === id);
-            if (!msg) continue;
-            const destination = demoMoveDestination(accounts, msg.accountId, target);
-            next = applyMessageMove(accounts, [msg], next, id, destination).stats;
-          }
-          return next;
-        });
+        for (const id of ids) {
+          const current = store.getMessages().find((item) => item.id === id);
+          if (!current) continue;
+          const destination = demoMoveDestination(store.getState().accounts, current.accountId, target);
+          store.applyMove([id], destination);
+        }
       } else {
         // Optimistic: drop the selection from the list immediately; whatever
         // the server cannot move is rolled back into the list at its sorted
         // position, re-selected, and explained in the toast.
         const selectedSet = new Set(ids);
-        const snapshots = messagesRef.current.filter((item) => selectedSet.has(item.id));
+        const snapshots = store.getMessages().filter((item) => selectedSet.has(item.id));
         const snapshotById = new Map<string, Message>(snapshots.map((item) => [item.id, item]));
-        const inViewById = new Map<string, boolean>(ids.map((id) => [id, filteredMessages.some((item) => item.id === id)]));
-        const inViewCount = ids.reduce((count, id) => count + (inViewById.get(id) ? 1 : 0), 0);
         // Invalidate any in-flight reload so it cannot resurrect the removed
         // rows from pre-move server state.
         loadRequestRef.current += 1;
         const requestAtStart = loadRequestRef.current;
-        messagesRef.current = messagesRef.current.filter((item) => !selectedSet.has(item.id));
-        setMessages(messagesRef.current);
+        const currentAccounts = store.getState().accounts;
+        store.removeMessages(ids);
         // The epoch bump only discards requests that were already in flight.
         // Hold the rows out of every snapshot that starts afterwards too — a
         // reload triggered by another operation finishing, or a poll tick —
         // until the server reports them at the destination.
         for (const id of ids) {
           const snapshot = snapshotById.get(id);
-          if (snapshot) pinMovedAway([id], demoMoveDestination(accounts, snapshot.accountId, target));
+          if (snapshot) store.pinMovedAway([id], demoMoveDestination(currentAccounts, snapshot.accountId, target));
         }
-        if (inViewCount) setMessageTotal((total) => Math.max(0, total - inViewCount));
 
         const rollback = (failedIds: ReadonlySet<string>) => {
           const failed = ids
@@ -575,18 +498,10 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
             .map((id) => snapshotById.get(id))
             .filter((message): message is Message => Boolean(message));
           if (failed.length) {
-            setMessages((items) => {
-              const next = mergeRolledBackMessages(items, failed, sortOrder);
-              messagesRef.current = next;
-              return next;
-            });
-          }
-          // A reload that landed mid-flight already owns the authoritative
-          // total (which still includes the failed messages); only restore
-          // the optimistic decrement when it is still the live value.
-          if (loadRequestRef.current === requestAtStart) {
-            const restoredInView = ids.reduce((count, id) => count + (failedIds.has(id) && inViewById.get(id) ? 1 : 0), 0);
-            if (restoredInView) setMessageTotal((total) => total + restoredInView);
+            // A reload that landed mid-flight already owns the authoritative
+            // total (which still includes the failed messages); only restore
+            // the optimistic decrement when it is still the live value.
+            store.restoreMessages(failed, sortOrder, { adjustTotal: loadRequestRef.current === requestAtStart });
           }
           if (failed.length) {
             // Re-arming the failed rows is this batch's own business: an older
@@ -651,7 +566,7 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
           // BEFORE the reconciling reload: a pinned id is dropped from any
           // snapshot that still reports it at the old mailbox, so reloading
           // first would re-remove the very rows this rollback restored.
-          unpinMovedAway([...unreconciled]);
+          store.unpinMovedAway([...unreconciled]);
           await load({ silent: true });
           showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
         }
@@ -660,7 +575,7 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     } catch (error) {
       showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
     } finally {
-      unpinMovedAway(ids);
+      store.unpinMovedAway(ids);
       // Only the newest batch retires the busy flag; an older move finishing
       // must not report a newer action as done.
       if (batchOperationRef.current === operationId) setBatchBusy(false);

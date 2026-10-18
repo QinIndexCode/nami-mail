@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { createDemoAccounts, createDemoSourceMessages, createDemoSubmissions, demoMessageTranslation, demoMessages, demoStats } from "./demo";
 import { createDemoConversation } from "./agent/agent-demo-data";
 import { findVerificationCodes } from "./verificationCode";
-import { applyMessageMove, isArchivedMessage, isInboxMessage } from "./mailListState";
+import { createMailStore } from "./app/mailStore";
+import { isArchivedMessage, isInboxMessage } from "./mailListState";
 
 describe("demo mailbox data", () => {
   const demoAccounts = createDemoAccounts("zh-CN");
@@ -48,12 +49,22 @@ describe("demo mailbox data", () => {
     expect(personalMessage).toBeDefined();
     expect(workMessage).toBeDefined();
 
-    const moved = applyMessageMove(demoAccounts, [personalMessage!], demoStats, personalMessage!.id, icloudArchive!.path, 9001);
-    expect(moved.messages).toEqual([expect.objectContaining({ mailbox: icloudArchive!.path, uid: 9001 })]);
-    expect(isArchivedMessage(moved.messages[0]!, moved.accounts)).toBe(true);
+    // The store owns the optimistic move now; the demo fixture validation is
+    // that its destination classification still lands the row in "archived".
+    const store = createMailStore({ reconcile: async () => undefined });
+    store.adoptSnapshot(
+      { accounts: demoAccounts, stats: demoStats, items: demoMessages, total: demoMessages.length, nextCursor: null },
+      { query: store.getQuery(), view: "inbox", recentlyReadIds: new Set(), pendingArchiveMoves: [] },
+    );
 
-    const gmailMoved = applyMessageMove(demoAccounts, [workMessage!], demoStats, workMessage!.id, gmailAllMail!.path, 9002);
-    expect(isArchivedMessage(gmailMoved.messages[0]!, gmailMoved.accounts)).toBe(true);
+    store.applyMove([personalMessage!.id], icloudArchive!.path, { mappedUid: 9001 });
+    const moved = store.getMessages().find((message) => message.id === personalMessage!.id)!;
+    expect(moved).toMatchObject({ mailbox: icloudArchive!.path, uid: 9001 });
+    expect(isArchivedMessage(moved, store.getState().accounts)).toBe(true);
+
+    store.applyMove([workMessage!.id], gmailAllMail!.path, { mappedUid: 9002 });
+    const gmailMoved = store.getMessages().find((message) => message.id === workMessage!.id)!;
+    expect(isArchivedMessage(gmailMoved, store.getState().accounts)).toBe(true);
   });
 
   it("provides deterministic local translation previews without a network request", () => {

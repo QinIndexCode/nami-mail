@@ -5,6 +5,7 @@ import Fastify, { type FastifyError, type FastifyInstance, type FastifyRequest }
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import { AgentService } from "./agent-service.js";
+import { AgentMailChangeBridge } from "./agent/mail-change-bridge.js";
 import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
 import { EncryptedAgentMemoryStore } from "./agent/memory.js";
 import { registerAgentRoutes } from "./routes/agent.js";
@@ -216,12 +217,19 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     serverLog.warn({ ...normalizedTimes }, "Found unparseable scheduled times during UTC normalization");
   }
   notePhase("build:message-migrations");
+  // The Agent service this function owns (when the runtime did not supply one)
+  // writes through the same sink as the runtime's. Wrapping it here is what lets
+  // a browser see an Agent write without waiting for the poll; a context with no
+  // bus keeps the raw sink, because the wrapper's only job is transport.
+  const ownedAgentMailEvents = context.agentMailEvents && context.serverEvents
+    ? new AgentMailChangeBridge(context.agentMailEvents, context.serverEvents)
+    : context.agentMailEvents;
   const ownedAgentMailApplication = !context.agentService && context.agentLifecycle && context.agentSourceEvents
     ? new SqliteMailApplicationService({
       db: context.db,
       masterKey: context.masterKey,
       oauthService: context.oauthService,
-      agentMailEvents: context.agentMailEvents,
+      agentMailEvents: ownedAgentMailEvents,
       syncMessageLimit: getSyncMessageLimit(context.db),
       outboundAttachmentDirectory: outboundAttachmentDirectory(context),
     })

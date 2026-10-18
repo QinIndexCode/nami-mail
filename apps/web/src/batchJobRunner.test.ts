@@ -83,13 +83,36 @@ describe("createBatchJobRunner", () => {
       expect(deps.reload).not.toHaveBeenCalled();
 
       // Second poll sees the settled job and reconciles.
-      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j1", status: "done", total: 3, done: 3, updated: 3 }) });
+      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j1", status: "completed", total: 3, done: 3, updated: 3 }) });
       await vi.advanceTimersByTimeAsync(600);
 
       expect(deps.onSnapshot).toHaveBeenLastCalledWith(null);
       expect(deps.exitSelectionMode).toHaveBeenCalledTimes(1);
       expect(deps.showToast).toHaveBeenCalledWith("mail.selection.moved{\"count\":3}", "success", expect.objectContaining({ label: "mail.selection.undo" }));
       expect(deps.reload).toHaveBeenCalledWith({ silent: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not settle a job the server still calls pending (G11: never settle early)", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      const runner = createBatchJobRunner(deps);
+      apiMocks.batchJobCreate.mockResolvedValue({ jobId: "j1" });
+      // The alias decides the wire vocabulary, but this runner's own branch must
+      // be an explicit settled list -- the old `status !== "running"` read would
+      // call this a success and offer an undo for work nobody did (K5).
+      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j1", status: "pending" }) });
+
+      runner.start(MOVE_PAYLOAD, RUN_OPTS);
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(deps.onSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ id: "j1", status: "pending" }));
+      expect(deps.showToast).not.toHaveBeenCalled();
+      expect(deps.reload).not.toHaveBeenCalled();
+      expect(deps.exitSelectionMode).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -241,7 +264,7 @@ describe("createBatchJobRunner", () => {
       const deps = makeDeps({ reconcile: vi.fn().mockRejectedValue(new Error("offline")) });
       const runner = createBatchJobRunner(deps);
       apiMocks.batchJobCreate.mockResolvedValue({ jobId: "j1" });
-      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j1", status: "done", total: 2, done: 2, updated: 2 }) });
+      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j1", status: "completed", total: 2, done: 2, updated: 2 }) });
 
       runner.start(MOVE_PAYLOAD, RUN_OPTS);
       await flush();
@@ -271,7 +294,7 @@ describe("createBatchJobRunner", () => {
       const runner = createBatchJobRunner(deps);
       apiMocks.batchJobCreate.mockResolvedValue({ jobId: "j2" });
       apiMocks.batchJobUndo.mockResolvedValue(undefined);
-      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j2", status: "done", total: 2, done: 2, updated: 2 }) });
+      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j2", status: "completed", total: 2, done: 2, updated: 2 }) });
 
       runner.start(MOVE_PAYLOAD, { ...RUN_OPTS, exitOnSuccess: false });
       await vi.advanceTimersByTimeAsync(600);
@@ -468,7 +491,7 @@ describe("createBatchJobRunner", () => {
       const deps = makeDeps();
       const runner = createBatchJobRunner(deps);
       apiMocks.batchJobCreate.mockResolvedValue({ jobId: "j3" });
-      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j3", status: "done", total: 5, done: 5, updated: 3, failed: 2 }) });
+      apiMocks.batchJobStatus.mockResolvedValue({ job: job({ id: "j3", status: "completed", total: 5, done: 5, updated: 3, failed: 2 }) });
 
       runner.start(MOVE_PAYLOAD, RUN_OPTS);
       await vi.advanceTimersByTimeAsync(600);
