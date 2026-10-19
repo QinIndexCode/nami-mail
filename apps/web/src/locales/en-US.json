@@ -868,6 +868,7 @@
     "sending.timeUnknown": "Time unknown",
     "sending.notice.incomplete": "Sending not completed",
     "sending.notice.unknownDelivery": "Delivery needs confirmation",
+    "sending.notice.unknownDeliveryDetail": "Delivery needs confirmation. The message may already have been sent; check Sent before sending again.",
     "sending.notice.postSubmitIncomplete": "Post-submission verification did not finish",
     "sending.modal.eyebrow": "Delivery verification",
     "sending.modal.title": "Sending status",

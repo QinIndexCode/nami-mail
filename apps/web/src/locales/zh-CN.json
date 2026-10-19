@@ -868,6 +868,7 @@
     "sending.timeUnknown": "时间未知",
     "sending.notice.incomplete": "发送未完成",
     "sending.notice.unknownDelivery": "投递状态待确认",
+    "sending.notice.unknownDeliveryDetail": "投递状态待确认。邮件可能已经发出，请先核对发件箱（Sent）再决定是否重发。",
     "sending.notice.postSubmitIncomplete": "提交后的核对未完成",
     "sending.modal.eyebrow": "投递核对",
     "sending.modal.title": "发送状态",
