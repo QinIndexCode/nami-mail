@@ -265,6 +265,44 @@ export type TaskProgress = {
 };
 
 /**
+ * One row of the delivery panel's list (`GET /api/tasks`): an outstanding cloud
+ * write, or a recent one that ended without delivering.
+ *
+ * `TaskProgress` plus the two things the panel needs to render a row on its own
+ * -- the account, and the timestamp that lets it say "waiting until" -- and minus
+ * the undo window, which only a caller holding one job id has any use for. Kept
+ * apart from `TaskProgress` rather than widened into it because the two answer
+ * different questions ("how is this task doing" versus "what is in flight at
+ * all"), and the answer to the second should not carry the first's extras.
+ */
+export type DeliveryTask = {
+  id: string;
+  accountId: string;
+  /** The account's address, or null if its row is already gone (see the join). */
+  accountEmail: string | null;
+  kind: TaskKind;
+  scope: TaskScope;
+  status: TaskStatus;
+  total: number;
+  updated: number;
+  failed: number;
+  createdAt: number;
+  /** Set once the task is terminal; null while it is outstanding. */
+  completedAt: number | null;
+  /** When a not-yet-due task becomes claimable (a snooze); null means "now". */
+  dueAt: number | null;
+  error?: { code?: string; message?: string };
+};
+
+/** The two halves of the delivery panel, in the order it renders them. */
+export type DeliveryTaskList = {
+  /** Non-terminal rows, oldest first. */
+  syncing: DeliveryTask[];
+  /** Terminal rows from the retention window that did not deliver. */
+  attention: DeliveryTask[];
+};
+
+/**
  * A registered executor.
  *
  * The runtime context is bound by closure where the runner is registered, not

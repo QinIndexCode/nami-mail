@@ -96,8 +96,26 @@ describe("styles.css size ratchet", () => {
   // overflow:hidden 与两个滚动容器，absolute 无法逃出），一律 portal 到
   // body 并由 useDialogFocus 的 portal 注册表承认，规则连同其 4 行说明一并移除。
   // 实测聚合 17_662 行（-8），阈值取实测 +12 行缓冲。
+  // 2026-10-18 有记录的一次上调（17_674 → 17_822）：右侧图标栏新增「云端同步」
+  // 面板——紧贴按钮左侧的小型状态浮层，列出仍在投递到邮件服务器的任务与近期
+  // 失败（提交/投递分离后，投递阶段在工具栏上不可见，这是它唯一的出口）。
+  // 实测聚合 17_810 行（+143），阈值取实测 +12 行缓冲。本轮 +143 行的来源
+  // （均为一个新的用户界面所必需，无 gold-plating）：
+  //   features/mail.css +138：.rail-item 定位上下文（7，含 3 行说明为何只加
+  //     position:relative——列的 align-items:center 已把盒子收成 40px 按钮）；
+  //     .cloud-sync-panel（26，含 6 行说明为何用 absolute 而非 fixed、为何不设
+  //     遮罩、为何 z-index 取 20）；面板头/标题/关闭键及悬停（29，面板内的关闭
+  //     键不能复用 .icon-button——.icon-rail 的后代选择器会把它撑到 40px）；
+  //     失败提示与重试键（25）、两个分区的容器与列表（15，分区标题复用既有
+  //     .eyebrow，未新增规则）、任务行及其三段文字（36，其中 account/detail/note
+  //     已合并为一条共用规则，行内邮箱用省略号收口）；
+  //   overlays/popups.css +5：.cloud-sync-panel.closing 的退场动画与
+  //     pointer-events:none（退场规则按惯例集中在该文件）。
+  // 下一轮 CSS 瘦身时应优先收回：先看这个旁路面板能否与发件箱状态浮层共用一套
+  // 外壳规则（两者都是「按钮左侧的列表浮层」），再合并 .cloud-sync-close 与
+  // 其他自绘的小图标键。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 17_674;
+  const FROZEN_AGGREGATED_MAX_LINES = 17_822;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

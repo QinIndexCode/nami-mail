@@ -22,9 +22,9 @@ export type SyncProgressPayload = {
 };
 
 /**
- * A durable task's own progress report. The shell has no per-task UI today, so
- * this is the hook other panels (a future task list) will read; receiving it
- * still keeps the stream's stall detector fresh.
+ * A durable task's own progress report. The cloud-sync panel patches the row it
+ * already holds with it, and treats one for a task it has never seen as a reason
+ * to re-read the list; receiving it also keeps the stream's stall detector fresh.
  */
 export type TaskProgressPayload = {
   accountId: string;
@@ -193,10 +193,10 @@ export function useRealtimeSync({
         // Malformed frame — ignore, the next one carries the same state.
       }
     };
-    // A runner's own progress. Nothing in the shell renders a per-task bar yet
-    // (the batch toolbar still polls the compatibility alias), but the frame
-    // still proves the stream is alive -- lastSseEventAt is what suppresses a
-    // redundant poll tick.
+    // A runner's own progress: the cloud-sync panel patches the row it already
+    // holds, and a frame for a task no read has returned yet is what makes it
+    // re-read the list. The frame also proves the stream is alive -- lastSseEventAt
+    // is what suppresses a redundant poll tick.
     sseHandlersRef.current.taskProgress = (event: MessageEvent<string>) => {
       lastSseEventAtRef.current = Date.now();
       if (!onTaskProgress) return;

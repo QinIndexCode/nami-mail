@@ -47,6 +47,7 @@ export {
   TASK_TERMINAL_ROW_TTL_MS,
   claimNextTask,
   commitTask,
+  deliveryTaskList,
   openTaskPayload,
   recordTask,
   reportTaskProgress,

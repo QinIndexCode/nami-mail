@@ -118,10 +118,10 @@ export type BatchMessageOperationResult = {
 export type MessageFlagWriteResult = { ok: boolean; taskId?: string; status?: "pending" };
 
 // The batch-job shapes moved to `batchJobTypes.ts`: the ratchet wants this file
-// smaller, and the poll runner, the toolbar and `App.tsx` read them without
-// needing the request layer. Re-exported so `import … from "./api"` still works.
-import type { BatchJobQuery, BatchJobSnapshot } from "./batchJobTypes";
-export type { BatchJobQuery, BatchJobSnapshot };
+// smaller, and the delivery watcher, the panel and `App.tsx` read them without
+// the request layer. Re-exported so `import … from "./api"` still works.
+import type { BatchJobQuery, BatchJobSnapshot, DeliveryTaskList } from "./batchJobTypes";
+export type { BatchJobQuery, BatchJobSnapshot, DeliveryTaskList };
 
 export type BatchJobCreatePayload =
   | { kind: "flags"; patch: { seen?: boolean; flagged?: boolean }; query: BatchJobQuery }
@@ -195,11 +195,8 @@ function emlFilenameFromDisposition(disposition: string | null): string {
   if (markerIndex < 0) return "message.eml";
   const encoded = header.slice(markerIndex + marker.length).split(";")[0];
   if (!encoded) return "message.eml";
-  try {
-    return decodeURIComponent(encoded) || "message.eml";
-  } catch {
-    return "message.eml";
-  }
+  // Compact because this file is on its line ratchet and `GET /api/tasks` needed the room.
+  try { return decodeURIComponent(encoded) || "message.eml"; } catch { return "message.eml"; }
 }
 
 function calendarIcsPath(range?: { after?: string; before?: string }): string { // shared by exportCalendarIcsUrl + downloadCalendarIcs
@@ -662,6 +659,9 @@ export const api = {
     ),
   discardDraft: (id: string) =>
     request<{ ok: boolean }>(`/api/messages/${encodeURIComponent(id)}/draft`, { method: "DELETE" }),
+  // The cloud-sync panel's list: what is still owing a provider write, plus the
+  // recent failures. Names no job — it is the whole in-flight set (§二十六).
+  taskList: () => request<DeliveryTaskList>("/api/tasks"),
   submissions: (accountId: string, limit?: number) => {
     const query = new URLSearchParams({ accountId });
     if (limit) query.set("limit", String(limit));

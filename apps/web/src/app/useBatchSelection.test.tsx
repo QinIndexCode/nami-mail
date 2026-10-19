@@ -4,7 +4,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PendingLocalState } from "../mailListState";
 import type * as apiModule from "../api";
-import type { BatchJobSnapshot } from "../api";
 import type { Account, Message, Stats } from "../types";
 import { createMailStore, type MailStore, type SnapshotContext } from "./mailStore";
 import { useBatchSelection, type BatchSelection } from "./useBatchSelection";
@@ -54,8 +53,6 @@ let mailbox: Message[];
  *  are meant to shield, and the truth a failed write must fall back to. */
 let server: Message[];
 const toast = vi.fn();
-/** Every value the hook hands to `setBatchJob`, in order. */
-const jobWrites: Array<BatchJobSnapshot | null> = [];
 /** Every value the hook hands to `setSelectAllPaged`, in order. */
 const pagedWrites: boolean[] = [];
 /** The hook's pending-local-state registry, so a test can observe its pins
@@ -100,7 +97,6 @@ function Harness() {
   }, []);
   setMatchingTotalState = setMatchingTotal;
   const [pendingBatchDelete, setPendingBatchDelete] = useState(false);
-  const [, setBatchJob] = useState<BatchJobSnapshot | null>(null);
   const loadRequestRef = useRef(0);
   const ref = useRef(store);
   ref.current = store;
@@ -126,8 +122,7 @@ function Harness() {
     selectedAccount: "all", selectedFolder: "", view: "inbox", attachmentKindFilter: undefined,
     dateBounds: { after: undefined, before: undefined }, load, loadRef,
     reconcileRef: { current: () => undefined }, loadRequestRef,
-    selectAllPaged, setSelectAllPaged,
-    setBatchJob: ((job: BatchJobSnapshot | null) => { jobWrites.push(job); setBatchJob(job); }) as never, pendingBatchDelete, setPendingBatchDelete,
+    selectAllPaged, setSelectAllPaged, pendingBatchDelete, setPendingBatchDelete,
   });
   displayed = state.messages;
   displayedStats = state.stats;
@@ -137,7 +132,6 @@ function Harness() {
 beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.resetAllMocks();
-  jobWrites.length = 0;
   pagedWrites.length = 0;
   mailbox = [original];
   server = [original];
@@ -297,44 +291,44 @@ it("splits an explicit selection at the server's id cap instead of sending a req
 });
 
 /** Arms a predicate-wide selection ("select all matching", over a page smaller
- *  than the matching total) and asks for the batch job it implies. The create
- *  never settles, so the job sits exactly where the bar is most exposed: in
- *  flight, with only the placeholder snapshot holding the actions back. Returns
- *  the snapshot the hook was handed for that job. */
-async function startPredicateJob(): Promise<BatchJobSnapshot | null> {
+ *  than the matching total) and starts the batch it implies. The create never
+ *  settles, so the hook sits exactly where the bar is most exposed: inside the
+ *  create round trip, the only window that holds the actions back. */
+async function startPredicateBatch(): Promise<void> {
   await act(async () => { setMatchingTotalState(mailbox.length + 9); });
   await act(async () => { current.selectAllVisibleMessages(); });
   mocks.create.mockImplementation(() => new Promise(() => {}));
   await act(async () => { await current.batchUpdateFlags({ seen: true }, "success"); });
-  return jobWrites.at(-1) ?? null;
 }
 
-it("closes the bar without disarming a job that is still running", async () => {
-  // The job snapshot is the only thing keeping the bar's actions inert, and a job
-  // does not stop when the user closes the bar. Clearing it here would re-arm the
-  // actions — a second batch over the rows the job is still working through — so
-  // the poll loop, which clears it on every terminal path, owns its lifetime.
-  const armed = await startPredicateJob();
-  expect(armed, "a predicate selection starts a job, and the bar is inert for it").not.toBeNull();
+it("keeps the create round trip armed when the bar is closed", async () => {
+  // The in-flight create is the one thing keeping the bar's actions inert, and
+  // closing the bar does not end it. Clearing the busy flag here would re-arm
+  // the actions the moment the user selects a row again — a second batch over
+  // rows the server is still resolving. The runner, which clears it on every
+  // terminal path, owns its lifetime.
+  await startPredicateBatch();
+  expect(current.batchBusy, "a predicate selection starts a create, and the bar is inert for it").toBe(true);
 
   await act(async () => { current.exitSelectionMode(); });
 
   expect(current.selectionMode).toBe(false);
-  expect(jobWrites.at(-1), "closing the bar must not clear the running job").toBe(armed);
+  expect(current.batchBusy, "closing the bar must not release the create").toBe(true);
 });
 
-it("drops the predicate selection on a full load without disarming the running job", async () => {
+it("drops the predicate selection on a full load without releasing the create", async () => {
   // A full load (folder/account switch, a sync, an account change) replaces the
   // list wholesale. The predicate selection was scoped to the view that just
-  // went away, while the job it started keeps running — so the reset takes the
-  // selection and must leave the bar inert. `load` calls exactly this policy.
-  const armed = await startPredicateJob();
+  // went away, while the create it started is still in flight — so the reset
+  // takes the selection and must leave the bar inert. `load` calls exactly this
+  // policy.
+  await startPredicateBatch();
   expect(pagedWrites.at(-1), "the predicate selection is armed").toBe(true);
 
   await act(async () => { current.resetSelectionOnFullLoad(); });
 
   expect(pagedWrites.at(-1), "the selection of the replaced view is gone").toBe(false);
-  expect(jobWrites.at(-1), "a full load must not clear the running job").toBe(armed);
+  expect(current.batchBusy, "a full load must not release the create").toBe(true);
 });
 
 it("takes a predicate move's rows out of the view at acceptance, not at settlement", async () => {

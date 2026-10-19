@@ -1,5 +1,5 @@
 import { Archive, Mail, MailOpen, ShieldCheck, Star, Trash2 } from "lucide-react";
-import type { BatchJobSnapshot, MoveTarget } from "./api";
+import type { MoveTarget } from "./api";
 import { useI18n } from "./i18n";
 import { IconButton } from "./mailUi";
 
@@ -12,8 +12,8 @@ export type SelectionToolbarProps = {
   selectableCount: number;
   /** Rows matching the query server-side, which a predicate selection covers. */
   matchingCount: number;
-  /** The running batch job, while one owns the selection. */
-  job: BatchJobSnapshot | null;
+  /** A batch request is in flight (the create round trip), so nothing may start
+   * a second one over the same rows. */
   busy: boolean;
   onSelectAll: () => void;
   onSetSeen: (seen: boolean) => void;
@@ -26,13 +26,18 @@ export type SelectionToolbarProps = {
 /**
  * The multi-select action bar.
  *
- * Its actions go inert while a batch job owns the selection. A job is driven by
- * a poll loop and the remote push behind it can take tens of seconds, so the bar
- * stays on screen and fully clickable for that whole window; a second click
- * would have the server accept a whole second job over the same rows, with
- * nothing in the UI having said a job was already running. Selecting rows and
- * leaving multi-select stay available — only the actions that start a batch are
- * held back.
+ * Its actions go inert only for the length of the create round trip. That is the
+ * one window where a second click — a double click is enough — would have the
+ * server accept a whole second batch over the same rows, with nothing in the UI
+ * having said a batch was already under way. Once the server accepts, the local
+ * commit has landed and the remote push runs on in the background (contract
+ * §二十六), so the bar comes back: the user's next action is a new batch, not a
+ * wait for the mail server, and its progress is reported by the cloud-sync panel
+ * in the rail rather than by a frozen count in here.
+ *
+ * Selecting rows and leaving multi-select stay available throughout — only the
+ * actions that start a batch are ever held back, plus the Done button for the
+ * same round trip (its pre-existing rule).
  *
  * Extracted from App.tsx so the disabled wiring has a render test; App owns the
  * handlers and the state behind them.
@@ -43,7 +48,6 @@ export function SelectionToolbar({
   selectedCount,
   selectableCount,
   matchingCount,
-  job,
   busy,
   onSelectAll,
   onSetSeen,
@@ -53,9 +57,7 @@ export function SelectionToolbar({
   onDone,
 }: SelectionToolbarProps) {
   const { t } = useI18n();
-  // One job at a time: while it runs, every action that would enqueue another
-  // batch is disabled, matching the count line that is reporting its progress.
-  const actionsDisabled = job !== null || selectedCount === 0;
+  const actionsDisabled = busy || selectedCount === 0;
 
   return (
     <div className="list-toolbar selection-toolbar" aria-hidden={!visible}>
@@ -63,11 +65,9 @@ export function SelectionToolbar({
         {selectAllPaged ? t("mail.selection.selectAllMatching", { count: matchingCount }) : t("mail.selection.selectAll")}
       </button>
       <span className="selection-count">
-        {job
-          ? t("mail.selection.batchProcessing", { done: job.done, total: job.total || matchingCount })
-          : busy
-            ? t("mail.selection.busy")
-            : t("mail.selection.count", { count: selectAllPaged ? matchingCount : selectedCount })}
+        {busy
+          ? t("mail.selection.busy")
+          : t("mail.selection.count", { count: selectAllPaged ? matchingCount : selectedCount })}
       </span>
       <div className="selection-actions">
         <IconButton label={t("mail.action.markRead")} className="selection-action" onClick={() => onSetSeen(true)} disabled={actionsDisabled}><MailOpen size={15} /></IconButton>
@@ -82,9 +82,9 @@ export function SelectionToolbar({
           className="selection-action selection-action-danger"
           onClick={onTrash}
           // Trash opens a confirmation dialog rather than starting the batch
-          // itself, so it follows the selection directly — but a running job
-          // still owns the rows the dialog would act on.
-          disabled={job !== null || (!selectedCount && !selectAllPaged)}
+          // itself, so it follows the selection directly — but the create round
+          // trip still owns the rows the dialog would act on.
+          disabled={busy || (!selectedCount && !selectAllPaged)}
         >
           <Trash2 size={15} />
         </IconButton>

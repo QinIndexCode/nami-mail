@@ -38,7 +38,7 @@ import {
 import { AgentMark } from "./AgentMark";
 import { CustomAvatar, SenderAvatar, accountTone } from "./SenderAvatar";
 import { WindowBar } from "./WindowBar";
-import { api, type BatchJobSnapshot, type MoveTarget } from "./api";
+import { api, type MoveTarget } from "./api";
 import { calendarCache, contactsCache, templatesCache } from "./dialogPrefetch";
 import DatePicker from "./DatePicker";
 import { attachmentKinds, type AttachmentKind } from "./attachmentPresentation";
@@ -92,6 +92,7 @@ import { resolveLocale, useI18n } from "./i18n";
 import type { AgentBootstrap } from "./agentTypes";
 import type { ReaderAiLaunchIntent } from "./readerAiActions";
 import { AppDialogs } from "./AppDialogs";
+import { CloudSyncRailItem } from "./CloudSyncRailItem";
 import { SelectionToolbar } from "./SelectionToolbar";
 import { MailReader } from "./MailReader";
 import MessageList from "./MessageList";
@@ -340,7 +341,6 @@ export default function App() {
   // The message the last shift+J/K expansion radiated from; plain J/K
   // navigation clears it so the next expansion starts from the opened row.
   const keyboardSelectionAnchorIdRef = useRef<string | null>(null);
-  const [batchJob, setBatchJob] = useState<BatchJobSnapshot | null>(null);
   const [attachmentKindFilter, setAttachmentKindFilter] = useState<AttachmentKind | undefined>(undefined);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -924,14 +924,12 @@ export default function App() {
   // The store's reconcile entry point: a manual request is a full load (it
   // resets paging and the view), every background trigger is the silent merge.
   reconcileRunnerRef.current = (reason) => reason === "manual" ? load() : silentRefresh();
-  // A batch job's acceptance commits locally long before its remote push
-  // finishes, so the runner reconciles against the state on screen the moment
-  // the job is accepted — and it has to be THIS refresh, not `load`. The job is
-  // still running: a full reload would collapse the loaded pages back to the
-  // first one under the user, and clear the predicate selection the bar is
-  // describing while the job it started is still working through it. Reading the
-  // refresh through a ref keeps the runner from being rebuilt whenever the view
-  // underneath it changes.
+  // A batch's acceptance commits locally long before its remote push finishes,
+  // so the runner reconciles the moment it is accepted — and it has to be THIS
+  // refresh, not `load`: a full reload would collapse the loaded pages back to
+  // the first one under the user, and clear the predicate selection the bar is
+  // describing. Reading it through a ref keeps the runner from being rebuilt
+  // whenever the view underneath it changes.
   const silentRefreshRef = useRef(silentRefresh);
   silentRefreshRef.current = silentRefresh;
 
@@ -1025,18 +1023,20 @@ export default function App() {
     const timer = window.setTimeout(() => setDebouncedQuery(query), 250);
     return () => window.clearTimeout(timer);
   }, [query]);
-  const { connectionState: realtimeConnectionState, reconnect: reconnectRealtime, threadRefreshTick } = useAppRealtimeSync({
-    enabled: !isDemo,
-    pushEnabled: settings.realtimePushEnabled,
-    refreshIntervalSeconds: settings.refreshIntervalSeconds,
-    isDesktop: Boolean(desktopBridge()),
-    t,
-    showToast,
-    onRefresh: requestRefresh,
-    onSettingsChanged: loadSettings,
-    onSyncProgress: handleSyncProgress,
-    store,
-  });
+  // The rail's cloud-sync panel reads from this same subscription.
+  const { connectionState: realtimeConnectionState, reconnect: reconnectRealtime, threadRefreshTick, cloudSync } =
+    useAppRealtimeSync({
+      enabled: !isDemo,
+      pushEnabled: settings.realtimePushEnabled,
+      refreshIntervalSeconds: settings.refreshIntervalSeconds,
+      isDesktop: Boolean(desktopBridge()),
+      t,
+      showToast,
+      onRefresh: requestRefresh,
+      onSettingsChanged: loadSettings,
+      onSyncProgress: handleSyncProgress,
+      store,
+    });
   // Defensive: a read/unread toggle whose request hangs would otherwise leave
   // its id in the in-flight set, pinning the optimistic seen state on top of
   // every later poll. Dropping it on unmount means a fresh mount starts from
@@ -1255,10 +1255,8 @@ export default function App() {
         : t("mail.recentlySynced");
 
   // Multi-select + bulk operations live in useBatchSelection. The predicate-wide
-  // selection flag, the job snapshot and the delete-confirmation flag stay up
-  // here because `load` (which reads the predicate flag) and useDialogRouting
-  // precede this call; what a full load does to them is the hook's policy
-  // (resetSelectionOnFullLoad), reached from `load` through a ref.
+  // selection flag and the delete-confirmation flag stay up here because `load`
+  // (which reads the predicate flag) and useDialogRouting precede this call.
   const {
     selectionMode,
     selectedMessageIds,
@@ -1298,7 +1296,6 @@ export default function App() {
     loadRequestRef,
     selectAllPaged,
     setSelectAllPaged,
-    setBatchJob,
     pendingBatchDelete,
     setPendingBatchDelete,
   });
@@ -2752,7 +2749,6 @@ const emptyMessageList = useMemo(() => (query.trim()
               selectedCount={selectedMessageIds.size}
               selectableCount={filteredMessages.length}
               matchingCount={currentMessageTotal}
-              job={batchJob}
               busy={batchBusy}
               onSelectAll={selectAllVisibleMessages}
               onSetSeen={(seen) => void batchUpdateFlags({ seen }, seen ? "mail.selection.markedRead" : "mail.selection.markedUnread")}
@@ -2894,6 +2890,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         <aside className="icon-rail" aria-label={t("navigation.management")}>
           <IconButton label={t("settings.title")} onClick={() => { actions.closeMobileSidebar(); actions.openSettings(); }}><Settings size={18} /></IconButton>
           <IconButton label={t("sending.title")} className={submissionAttentionCount ? "attention" : ""} onClick={() => { actions.closeMobileSidebar(); actions.openSendingStatus(); void refreshSubmissions(accounts, { silent: true }); }}><ListChecks size={18} />{submissionOutstandingCount > 0 && <span className="rail-badge" aria-hidden="true">{submissionOutstandingCount}</span>}</IconButton>
+          <CloudSyncRailItem tasks={cloudSync} t={t} locale={locale} />
           <span className="icon-rail-divider" aria-hidden="true" />
           <IconButton label={t("calendar.title")} onClick={() => { actions.closeMobileSidebar(); actions.openCalendar(); if (!isDemo) calendarCache.warm(); }}><Calendar size={18} /></IconButton>
           <IconButton label={t("settings.contacts.title")} onClick={() => { actions.closeMobileSidebar(); actions.openContacts(); if (!isDemo) contactsCache.warm(); }}><Users size={18} /></IconButton>

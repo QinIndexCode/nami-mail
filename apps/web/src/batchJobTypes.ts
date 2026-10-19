@@ -1,11 +1,18 @@
 /**
- * The batch-job wire shapes, as their own module.
+ * The two halves of the batch/task wire surface, as their own module.
  *
  * They lived in `api.ts` until that file hit the monolith ratchet: the shapes
- * are read by the poll runner (`batchJobRunner.ts`), the toolbar and `App.tsx`,
- * and none of them needs the request layer to know what a job looks like.
- * `api.ts` still re-exports both names, so this is a file move rather than a
- * migration for its callers.
+ * are read by the delivery watcher (`batchJobRunner.ts`), the cloud-sync panel
+ * and `App.tsx`, and none of them needs the request layer to know what a job
+ * looks like. `api.ts` still re-exports the two names it did before, so for its
+ * callers this is a file move rather than a migration.
+ *
+ * The halves answer different questions and are deliberately not merged:
+ * `BatchJobSnapshot` is "how is the job I just accepted doing", which a caller
+ * holding one id can ask; `DeliveryTaskList` is "what is in flight at all",
+ * which is what the rail panel asks. The acceptance of a job commits exactly
+ * the tasks the second one lists, so they describe the same work at different
+ * widths rather than two kinds of work.
  */
 
 /**
@@ -58,4 +65,54 @@ export type BatchJobSnapshot = {
   error?: string;
   undone?: boolean;
   undoWindowMs?: number;
+};
+
+/**
+ * The task vocabulary, mirrored from the server's `tasks` layer.
+ *
+ * Mirrored rather than imported: the server's copy is `as const` over an array
+ * that shares a file with its DDL, and the renderer has no build path to it.
+ * The unions are what the panel switches on, so a kind added on the server
+ * *without* a label here is a visible gap (`cloudSync.kind.*` falls back to the
+ * raw name) instead of a compile error — which is the right way round, since the
+ * server may legitimately be newer than the bundle that is running.
+ */
+export type DeliveryTaskKind = "move" | "flags" | "undo" | "send" | "draft-discard" | "snooze" | "filter" | "agent-apply";
+export type DeliveryTaskScope = "single" | "batch";
+export type DeliveryTaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled" | "unknown_delivery";
+
+/**
+ * One row of the cloud-sync panel — the exact shape of `GET /api/tasks`.
+ *
+ * This is `TaskProgress` plus the two things a row needs to render on its own
+ * (the account, and `dueAt`, which is what "waiting until" reads) and minus the
+ * undo window, which is only meaningful to a caller holding one job id. The
+ * server builds it from a join, so `accountEmail` is null when the account row
+ * is already gone; the panel falls back to the id rather than dropping the row,
+ * because a task in flight for a removed account is still in flight.
+ */
+export type DeliveryTask = {
+  id: string;
+  accountId: string;
+  accountEmail: string | null;
+  kind: DeliveryTaskKind;
+  scope: DeliveryTaskScope;
+  status: DeliveryTaskStatus;
+  total: number;
+  updated: number;
+  failed: number;
+  createdAt: number;
+  /** Set once the task is terminal; null while it is outstanding. */
+  completedAt: number | null;
+  /** When a not-yet-due task becomes claimable (a snooze); null means "now". */
+  dueAt: number | null;
+  error?: { code?: string; message?: string };
+};
+
+/** The panel's two halves, in the order it renders them. */
+export type DeliveryTaskList = {
+  /** Non-terminal rows, oldest first. */
+  syncing: DeliveryTask[];
+  /** Recent terminal rows that did not deliver, newest first. */
+  attention: DeliveryTask[];
 };

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type BatchJobCreatePayload, type BatchJobQuery, type BatchJobSnapshot, type MoveTarget } from "../api";
+import { api, type BatchJobCreatePayload, type BatchJobQuery, type MoveTarget } from "../api";
 import { createBatchJobRunner, type BatchJobRunOptions } from "../batchJobRunner";
 import { beginSpan } from "../perfTelemetry";
 import { useDismissTransition } from "../hooks/useDismissTransition";
@@ -69,7 +69,6 @@ export interface BatchSelectionOptions {
    */
   selectAllPaged: boolean;
   setSelectAllPaged: (value: boolean) => void;
-  setBatchJob: (job: BatchJobSnapshot | null) => void;
   /** Delete-confirmation dialog flag lives in App ahead of useDialogRouting. */
   pendingBatchDelete: boolean;
   setPendingBatchDelete: (value: boolean) => void;
@@ -93,12 +92,12 @@ export interface BatchSelection {
    * sync, an account being added). The predicate-wide selection was scoped to
    * the view that just went away, so it goes with it.
    *
-   * The job snapshot deliberately does NOT go with it. A job does not stop when
-   * the list reloads, and that snapshot is the only thing keeping the bar's
-   * actions inert (see exitSelectionMode); clearing it here re-armed every
-   * action, and let a second job start over the same rows, for the rest of the
-   * run — the full reload came from the user, so nothing else was going to
-   * repair it before the next 600 ms poll tick.
+   * A batch's own state deliberately does NOT go with it: a delivery does not
+   * stop when the list reloads, and the runner owns its deadlines and pins. The
+   * only thing a full load used to disturb was the snapshot that kept the bar's
+   * actions inert, which the commit-first rule removed (contract §二十六) — the
+   * create round trip is what guards against a second batch now, and it is over
+   * long before a load could land inside it.
    */
   resetSelectionOnFullLoad: () => void;
   applyBatchFlaggedChange: (ids: readonly string[], flagged: boolean) => void;
@@ -129,7 +128,6 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     loadRequestRef,
     selectAllPaged,
     setSelectAllPaged,
-    setBatchJob,
     pendingBatchDelete,
     setPendingBatchDelete,
   } = options;
@@ -204,20 +202,12 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     setSelectionMode(false);
     setSelectedMessageIds(new Set());
     setSelectAllPaged(false);
-    // The job snapshot is deliberately left alone: it is what keeps the bar's
-    // actions inert, and a job does not stop when the user closes the bar. The
-    // poll loop owns its lifetime and every terminal path clears it, so it
-    // cannot outlive the job; clearing it here would re-arm the actions — and a
-    // second batch over the same rows — for the rest of the run.
     setPendingBatchDelete(false);
   }, [setPendingBatchDelete, setSelectAllPaged]);
 
   const resetSelectionOnFullLoad = useCallback(() => {
     // The predicate selection was scoped to the view that is being replaced.
     setSelectAllPaged(false);
-    // The job snapshot is deliberately left alone, exactly as in
-    // exitSelectionMode above: a full load does not stop the job, and the
-    // snapshot is the bar's only guard while the poll loop still owns it.
   }, [setSelectAllPaged]);
 
   // The current view expressed as a server-side filter scope for predicate
@@ -253,34 +243,36 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
   }, [attachmentKindFilter, dateBounds, debouncedQuery, isDemo, searchScope, selectAllPaged, selectedAccount, selectedFolder, view]);
 
   /**
-   * Releases the destination pins of a running move job. The runner's first
-   * terminal snapshot is the last moment that is still BEFORE its reconciling
-   * reload, which is where the pins have to go: the reload is what brings the
-   * rows the server refused back into the list, and a pin still holding them
-   * would hide exactly the messages a partial-failure toast is about. Clearing
-   * them in `onSettled` instead would be one reload too late.
+   * Releases the destination pins of a batch's move. The runner calls it when the
+   * batch's delivery ends, which is the last moment that is still BEFORE its
+   * reconciling reload: the reload is what brings the rows the server refused
+   * back into the list, and a pin still holding them would hide exactly the
+   * messages a partial-failure toast is about. Clearing them in `onSettled`
+   * instead would be one reload too late.
+   *
+   * The local commit is not what ends a batch any more (contract §二十六) — it is
+   * what ends the user's wait, and the pins deliberately outlive it: the rows a
+   * refused push leaves behind must not be held against the refresh that reports
+   * them.
    */
   const releaseMovePinsRef = useRef<(() => void) | null>(null);
-  const handleJobSnapshot = useCallback((job: BatchJobSnapshot | null) => {
-    if (!job) {
-      releaseMovePinsRef.current?.();
-      releaseMovePinsRef.current = null;
-    }
-    setBatchJob(job);
-  }, [setBatchJob]);
+  const handleDeliverySettled = useCallback(() => {
+    releaseMovePinsRef.current?.();
+    releaseMovePinsRef.current = null;
+  }, []);
 
   // Batch job state machine lives in batchJobRunner.ts (unit-tested there);
-  // the caller wires the React-side callbacks: snapshot/busy state, toasts,
-  // reload, and the acceptance-time reconcile.
+  // the caller wires the React-side callbacks: busy state, toasts, reload, the
+  // acceptance-time reconcile and the delivery release.
   const batchJobRunner = useMemo(() => createBatchJobRunner({
     showToast,
     t,
     reload: (opts) => loadRef.current(opts),
     reconcile: () => reconcileRef.current(),
     exitSelectionMode,
-    onSnapshot: handleJobSnapshot,
+    onDeliverySettled: handleDeliverySettled,
     onBusy: setBatchBusy,
-  }), [exitSelectionMode, handleJobSnapshot, loadRef, reconcileRef, showToast, t]);
+  }), [exitSelectionMode, handleDeliverySettled, loadRef, reconcileRef, showToast, t]);
 
   const startBatchJob = useCallback((payload: BatchJobCreatePayload, opts: BatchJobRunOptions) => {
     batchJobRunner.start(payload, opts);
@@ -439,13 +431,13 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
         store.pinMovedAway([message.id], demoMoveDestination(store.getState().accounts, message.accountId, target));
       }
       store.removeMessages(movedIds);
-      // A pin may outlive the acceptance, never the settlement: the messages the
-      // server gave back are reported in the source folder again, and a pin still
-      // holding them would hide exactly the rows a partial-failure toast tells
-      // the user to look for. Both hooks below release, and both are needed —
-      // the snapshot callback fires before the job's reconciling reload (the one
-      // that must see the restored rows), while `onSettled` is the backstop for
-      // the paths that end without one.
+      // A pin may outlive the acceptance and the local commit, never the
+      // delivery: the messages the server gave back are reported in the source
+      // folder again, and a pin still holding them would hide exactly the rows a
+      // partial-failure toast tells the user to look for. Both hooks below
+      // release, and both are needed — the delivery release fires before the
+      // job's reconciling reload (the one that must see the restored rows), while
+      // `onSettled` is the backstop for the paths that end without one.
       releaseMovePinsRef.current = () => store.unpinMovedAway(movedIds);
       startBatchJob({ kind: "move", target, query: selectionJobQuery }, {
         successKey: moveActionKey(target, true),

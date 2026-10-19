@@ -17,10 +17,6 @@ const ACTION_KEYS = [
   "mail.action.moveToTrash",
 ];
 
-const RUNNING_JOB: NonNullable<SelectionToolbarProps["job"]> = {
-  id: "j1", kind: "flags", status: "running", total: 12, done: 3, updated: 0, failed: 0, createdAt: 1,
-};
-
 /** The opening tag of a button, so `disabled` is read where it is decided
  *  rather than anywhere else in the markup. */
 function openingTag(markup: string, at: number): string {
@@ -46,7 +42,6 @@ function renderToolbar(overrides: Partial<SelectionToolbarProps> = {}): string {
     selectedCount: 3,
     selectableCount: 3,
     matchingCount: 3,
-    job: null,
     busy: false,
     onSelectAll: vi.fn(),
     onSetSeen: vi.fn(),
@@ -64,18 +59,29 @@ function renderToolbar(overrides: Partial<SelectionToolbarProps> = {}): string {
 }
 
 describe("SelectionToolbar", () => {
-  it("makes every batch action inert while a job owns the selection", () => {
-    const markup = renderToolbar({ job: RUNNING_JOB });
+  it("holds the batch actions only while a request is in flight, not for a delivery", () => {
+    // The bar has exactly one inert state now: the create round trip. A
+    // delivery that is still running is not one — under the commit-first rule
+    // the acceptance IS the commit, so the bar comes back the moment the server
+    // answers, tens of seconds before the push finishes (§二十六). Holding it
+    // for the push is what used to freeze the toolbar on a large selection.
+    const inFlight = renderToolbar({ busy: true });
 
     for (const key of ACTION_KEYS) {
-      expect(disabled(markup, key), `${key} could start a second batch over the same rows`).toBe(true);
+      expect(disabled(inFlight, key), `${key} could start a second batch over the same rows`).toBe(true);
     }
-    // The count line reports the job instead of the selection, so the bar does
-    // say why the actions are inert.
-    expect(markup).toContain(zh("mail.selection.batchProcessing", { done: 3, total: 12 }));
-    // Leaving multi-select stays available: the job keeps running server-side,
-    // and there is nothing else the user can do about it from here.
-    expect(disabled(markup, { classNamePrefix: "selection-done" })).toBe(false);
+    // Leaving multi-select is held for the same round trip only (the pre-existing
+    // rule); it comes back with the commit, like every other control.
+    expect(disabled(inFlight, { classNamePrefix: "selection-done" })).toBe(true);
+    expect(inFlight).toContain(zh("mail.selection.busy"));
+
+    // Accepted: the state on screen is committed, so every action is live again
+    // — including over a predicate selection whose push is still running.
+    const committed = renderToolbar({ busy: false, selectAllPaged: true, matchingCount: 40 });
+    for (const key of ACTION_KEYS) {
+      expect(disabled(committed, key), `${key} is released with the commit`).toBe(false);
+    }
+    expect(committed).toContain(zh("mail.selection.count", { count: 40 }));
   });
 
   it("leaves the batch actions available when no job owns the selection", () => {

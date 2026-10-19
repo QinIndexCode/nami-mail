@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseHandle } from "../db.js";
 import { PAYLOAD_ENVELOPE_VERSION, openPayload, sealPayload } from "./envelope.js";
 import {
+  TASK_TERMINAL_STATUSES,
   isTaskKind,
+  type DeliveryTask,
+  type DeliveryTaskList,
   type TaskItemRow,
   type TaskItemSpec,
   type TaskKind,
@@ -227,6 +230,125 @@ export function taskProgress(db: DatabaseHandle, taskId: string): TaskProgress |
       : {}),
     ...(row.parent_id ? { parentId: row.parent_id } : {}),
   };
+}
+
+/**
+ * How many rows each half of `deliveryTaskList` returns.
+ *
+ * The panel is a glance, not a ledger: the outstanding half is bounded by what a
+ * scheduler can have in flight (one chain per account), and the problem half by
+ * how many failures a person will read. A truncated list is still an honest one
+ * -- the counts are of what is in flight, not of everything since boot -- and
+ * both numbers sit far below the point where a bigger scan would need the index
+ * `tasks` deliberately does not carry (contract §二十六 D).
+ */
+const DELIVERY_SYNCING_LIMIT = 50;
+const DELIVERY_ATTENTION_LIMIT = 20;
+
+/** The columns both halves read, spelled once. Values are bound at the call. */
+const DELIVERY_TASK_SELECT = `
+  SELECT t.id, t.account_id, a.email AS account_email, t.kind, t.scope, t.status,
+         t.total, t.updated, t.failed, t.created_at, t.completed_at, t.due_at,
+         t.error_code, t.error_message
+    FROM tasks t
+    -- LEFT, not INNER: this join can only miss while an account is being
+    -- deleted, and a task still in flight must not vanish from the panel
+    -- because its address became unreadable for a moment.
+    LEFT JOIN accounts a ON a.id = t.account_id`;
+
+type DeliveryTaskRow = {
+  id: string;
+  account_id: string;
+  account_email: string | null;
+  kind: string;
+  scope: string;
+  status: string;
+  total: number;
+  updated: number;
+  failed: number;
+  created_at: number;
+  completed_at: number | null;
+  due_at: number | null;
+  error_code: string | null;
+  error_message: string | null;
+};
+
+function toDeliveryTask(row: DeliveryTaskRow): DeliveryTask {
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    accountEmail: row.account_email,
+    // Cast rather than validated, like every other read of this row: a kind
+    // written by a newer build is forwarded verbatim and the panel renders it as
+    // an unnamed action, which is a better answer than hiding the task.
+    kind: row.kind as TaskKind,
+    scope: row.scope as TaskScope,
+    status: row.status as TaskStatus,
+    total: row.total,
+    updated: row.updated,
+    failed: row.failed,
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
+    dueAt: row.due_at,
+    ...(row.error_code || row.error_message
+      ? { error: { ...(row.error_code ? { code: row.error_code } : {}), ...(row.error_message ? { message: row.error_message } : {}) } }
+      : {}),
+  };
+}
+
+/**
+ * What the delivery panel shows: the tasks still owing a provider write, and the
+ * recent ones that ended without delivering.
+ *
+ * Two reads rather than one because they are two questions with two orders --
+ * outstanding work reads oldest-first, which is the order the scheduler's
+ * per-account FIFO chain will drain it in, while a problem report reads
+ * newest-first because only its head is still actionable -- and one mixed
+ * ORDER BY would leave the caller re-splitting what SQL already knew.
+ *
+ * The terminal half is bounded by the same retention the pruner uses, so a row
+ * that is still here is one the panel may still show. `completed_at IS NULL`
+ * cannot happen for a terminal status (every settlement writes it), but the
+ * comparison is written so that such a row is excluded rather than shown forever.
+ *
+ * `cancelled` is deliberately NOT part of the attention half: it is a stop
+ * somebody asked for (the user, or a shutdown), not a delivery that went wrong,
+ * and a panel that reports every cancelled snooze as a problem is a panel people
+ * learn to ignore. `completed` is out for the plainer reason that it delivered.
+ * A terminal status this build has never heard of therefore lands in `attention`
+ * by default -- the fail-loud direction, since an unaccounted-for ending is
+ * likelier to want a human than to want hiding.
+ *
+ * Both status tests come from `TASK_TERMINAL_STATUSES` rather than being spelled
+ * out here: this project has already paid once for a status list copied into a
+ * second place (the legacy prune that never learned about `cancelled`). What the
+ * template composes is the *arity* of the `IN`, which is a property of the
+ * vocabulary; every value -- statuses, the cutoff, both limits -- is bound.
+ */
+export function deliveryTaskList(db: DatabaseHandle, now: number = Date.now()): DeliveryTaskList {
+  const terminal = TASK_TERMINAL_STATUSES;
+  // Typed as the union, so a name that leaves the vocabulary stops compiling
+  // here instead of silently excluding nothing.
+  const nonProblems: ReadonlySet<TaskTerminalStatus> = new Set(["completed", "cancelled"]);
+  const problems = terminal.filter((status) => !nonProblems.has(status));
+  const placeholders = (count: number) => Array.from({ length: count }, () => "?").join(", ");
+
+  const syncing = db
+    .prepare(`${DELIVERY_TASK_SELECT}
+       WHERE t.status NOT IN (${placeholders(terminal.length)})
+       ORDER BY t.created_at ASC, t.rowid ASC
+       LIMIT ?`)
+    .all(...terminal, DELIVERY_SYNCING_LIMIT) as DeliveryTaskRow[];
+  const attention = db
+    .prepare(`${DELIVERY_TASK_SELECT}
+       WHERE t.status IN (${placeholders(problems.length)})
+         AND t.completed_at IS NOT NULL
+         AND t.completed_at >= ?
+       ORDER BY t.completed_at DESC, t.rowid DESC
+       LIMIT ?`)
+    .all(...problems, now - TASK_TERMINAL_ROW_TTL_MS, DELIVERY_ATTENTION_LIMIT) as DeliveryTaskRow[];
+
+  return { syncing: syncing.map(toDeliveryTask), attention: attention.map(toDeliveryTask) };
 }
 
 /**
