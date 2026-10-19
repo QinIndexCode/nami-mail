@@ -264,8 +264,11 @@ export type TaskRunnerDeps = {
  * four) what the migration can produce. The migration never produces `snooze`:
  * the old build wrote the column with no task behind it, so those rows are
  * reconciled by `releaseDueSnoozedMessages` at startup and in the sync pass,
- * not by a runner. `draft-discard`/`filter`/`agent-apply` arrive with later
- * batches. An unregistered kind is not a retryable miss: the scheduler settles
+ * not by a runner. `draft-discard` and `filter` are reserved but deliberately
+ * unproduced: drafts and filter rules stay synchronous (contract §2.1, v41).
+ * `agent-apply` is likewise unproduced -- Agent writes reuse `send`/`flags`/
+ * `move` through their injected seams (`agent/mail-write-seams.ts`). An
+ * unregistered kind is not a retryable miss: the scheduler settles
  * it `failed` with `no_runner` on the first sighting, having never run anything
  * (`scheduler.ts`). `tests/task-wiring.test.ts` asserts the floor at runtime.
  *
