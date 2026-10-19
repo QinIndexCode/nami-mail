@@ -540,7 +540,7 @@ describe("task wiring: the send settlement", () => {
 });
 
 describe("task wiring: the registry", () => {
-  it("holds the four kinds this layer implements, and snooze is still a hole", () => {
+  it("holds every kind this layer implements, snooze included", () => {
     const world = fixture(1);
     db = world.db;
     const registry = createTaskRegistry();
@@ -558,13 +558,14 @@ describe("task wiring: the registry", () => {
     // unregistered kind settles `failed` with `no_runner` having never run
     // anything (`scheduler.ts:141-152`), so a lost registration is silent to
     // every other test in this file.
-    for (const kind of ["move", "flags", "undo", "send"] as const) {
+    //
+    // `snooze` was the tripwire here until v40: its routes existed with no
+    // runner, and the assertion said so. It is a positive assertion now that
+    // `tasks/kinds/snooze.ts` supplies one -- a new kind added without a runner
+    // still turns this red, which is what the list is for.
+    for (const kind of ["move", "flags", "undo", "send", "snooze"] as const) {
       expect(registry.get(kind), `${kind} must be registered`).toBeDefined();
     }
-    // The tripwire. `snooze` has routes (`routes/messages.ts:731`) and no runner,
-    // so a snoozed message is a task that fails on sight. This assertion is meant
-    // to go red when that changes: update it and §4.7 C ① in the same change.
-    expect(registry.get("snooze"), "snooze still has no runner -- see contract §4.7 C ① and W4").toBeUndefined();
   });
 });
 

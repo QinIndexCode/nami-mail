@@ -89,7 +89,7 @@ export function registerBatchJobRoutes(app: FastifyInstance, deps: BatchJobRoute
     } else {
       const accepted = acceptMoveTask(taskDeps, {
         messageIds: resolveMessageIds(context.db, materialisedSelection(parsed.data.query)),
-        target: parsed.data.target,
+        destination: { target: parsed.data.target },
         jobId,
         undoWindowMs: TASK_UNDO_WINDOW_MS,
       });

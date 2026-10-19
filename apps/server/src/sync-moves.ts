@@ -1,10 +1,11 @@
 /**
  * Message move operations extracted from sync.ts.
  *
- * This module contains every public and private function related to moving
- * messages between IMAP folders: single-message moves, batch moves via
- * aggregated IMAP MOVE commands, and the UIDPLUS / pending-reconciliation
- * persistence helpers shared by both paths.
+ * This module contains the moving itself: single-message moves, batch moves
+ * via aggregated IMAP MOVE commands, and the UIDPLUS / pending-reconciliation
+ * persistence helpers shared by both paths. What a target names and how a name
+ * or path resolves to a provider folder lives in `move-destinations.ts`, which
+ * the task layer also asks without issuing a move.
  *
  * The module imports write-lock infrastructure and account state accessors
  * from sync.ts but does not depend on syncAccount itself, keeping the
@@ -13,6 +14,13 @@
 import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import type { DatabaseHandle } from "./db.js";
 import { moveErrorMessage, type BatchMessageMoveOutcome } from "./batch-move-outcome.js";
+import {
+  MOVE_FOLDER_UNAVAILABLE_ERROR,
+  moveTargets,
+  resolveFolderDestination,
+  resolveMoveDestination,
+  type MessageMoveTarget,
+} from "./move-destinations.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import { safeLogout } from "./imap-logout.js";
 import {
@@ -39,42 +47,6 @@ import {
   type MoveDestination,
   type MoveDuplicateRow,
 } from "./sync-move-statements.js";
-
-// ---------------------------------------------------------------------------
-// Move-target definitions
-// ---------------------------------------------------------------------------
-
-export type MessageMoveTarget = "archive" | "trash" | "junk" | "inbox";
-
-/** Exported for the refused-move vocabulary: `batch-move-outcome.ts` reads its wording. */
-export const moveTargets: Record<MessageMoveTarget, { specialUses: string[]; unavailableMessage: string }> = {
-  archive: {
-    // Some providers expose their archive view as \All. MOVE removes the source
-    // mailbox membership and is therefore the provider-supported archive action.
-    specialUses: ["\\Archive", "\\All"],
-    unavailableMessage: "这个邮箱没有提供可用的归档文件夹。",
-  },
-  trash: {
-    specialUses: ["\\Trash"],
-    unavailableMessage: "这个邮箱没有提供可用的废纸篓文件夹。",
-  },
-  junk: {
-    // The provider's canonical spam folder; some providers expose it under a
-    // localized path, so resolve by SPECIAL-USE only.
-    specialUses: ["\\Junk"],
-    unavailableMessage: "这个邮箱没有提供可用的垃圾邮件文件夹。",
-  },
-  inbox: {
-    // The "not spam" recovery path restores a misclassified message to the
-    // real INBOX regardless of the account's folder naming.
-    specialUses: ["\\Inbox"],
-    unavailableMessage: "这个邮箱没有提供可用的收件箱。",
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Public move result types
-// ---------------------------------------------------------------------------
 
 export type MessageMoveResult = {
   accountId: string;
@@ -111,10 +83,8 @@ export async function moveMessageToFolder(
   const moveBlockedError = moveActionBlockedError(message);
   if (moveBlockedError && !isRecoverableStaleMove(message)) throw new Error(moveBlockedError);
   if (message.mailbox === folderPath) throw new Error("邮件已经在该文件夹中。");
-  const folder = db.prepare(`
-    SELECT path, special_use FROM folders WHERE account_id = ? AND path = ?
-  `).get(message.account_id, folderPath) as MoveDestination | undefined;
-  if (!folder) throw new Error("目标文件夹不存在或不可用。");
+  const folder = resolveFolderDestination(db, message.account_id, folderPath);
+  if (!folder) throw new Error(MOVE_FOLDER_UNAVAILABLE_ERROR);
   return moveMessageCore(db, masterKey, messageId, folder, accessTokenProvider, agentEvents, options);
 }
 
@@ -207,6 +177,29 @@ export async function moveMessage(
   );
 }
 
+/**
+ * Runs a move on a destination the caller has already resolved. The batch
+ * fallback uses it so an explicit folder and a named target share one path, and
+ * so a row carrying the batch's own acceptance-time goal reaches
+ * `moveMessageCore`, which is where that goal is claimed. The public single-
+ * message entries keep their own pre-checks: a reconciling move must be
+ * reported before the destination lookup can fail for an unrelated reason.
+ */
+async function moveEntryToDestination(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+  messageId: string,
+  accountId: string,
+  destination: MoveDestination,
+  accessTokenProvider?: AccountAccessTokenProvider,
+  agentEvents?: AgentMailEventSink,
+  options?: MoveMessageOptions,
+): Promise<MessageMoveResult> {
+  return withAccountWriteLocks([accountId], () =>
+    moveMessageCore(db, masterKey, messageId, destination, accessTokenProvider, agentEvents, options),
+  );
+}
+
 type MoveMessageFields = {
   account_id: string;
   mailbox: string;
@@ -216,29 +209,6 @@ type MoveMessageFields = {
   pending_move_destination: string | null;
   pending_move_state: string | null;
 };
-
-/**
- * Resolves the provider folder a move target maps to, or null when the
- * account has no usable folder for the target. A message that already lives
- * in the resolved folder is handled as an idempotent no-op by the callers.
- * Exported for batch-job undo, which must know the job's target folder to
- * avoid dragging manually re-moved messages back.
- */
-export function resolveMoveDestination(
-  db: DatabaseHandle,
-  accountId: string,
-  target: MessageMoveTarget,
-): MoveDestination | null {
-  const specialUses = moveTargets[target].specialUses;
-  // Only the `?` count varies in this statement, so it is compiled once per
-  // width per connection (see `moveStatements`). The special-use names stay
-  // bound, the precedence and the `IN` order are the SQL the uncached path
-  // issued, and `.get()` still reads the folders row *now* — only the compile
-  // is shared, never the result.
-  const destination = moveStatements(db).destinationBySpecialUseCount(specialUses.length)
-    .get(accountId, ...specialUses) as MoveDestination | undefined;
-  return destination ?? null;
-}
 
 /**
  * Persists the UIDPLUS-confirmed outcome of a provider MOVE: the row is
@@ -673,6 +643,11 @@ async function moveMessagesInOneCommand(
  * intent/UIDPLUS semantics are unchanged; failures are reported individually
  * instead of being swallowed.
  *
+ * A selection is either a named target or an explicit folder path. Both are
+ * resolved once per group, and the path form is validated against each group's
+ * own account, so one selection can span accounts without leaking a folder
+ * name across them.
+ *
  * A caller running many batches in a row passes the `connections` cache it
  * owns, paying one connect per account for the whole run instead of per batch.
  */
@@ -680,7 +655,7 @@ export async function batchMoveMessages(
   db: DatabaseHandle,
   masterKey: Buffer,
   ids: string[],
-  target: MessageMoveTarget,
+  selection: MessageMoveTarget | { folderPath: string },
   accessTokenProvider?: AccountAccessTokenProvider,
   agentEvents?: AgentMailEventSink,
   connections?: Map<string, Awaited<ReturnType<typeof imapClientForAccount>>>,
@@ -716,6 +691,10 @@ export async function batchMoveMessages(
   try {
     for (const group of groups.values()) {
       const accountId = group[0]!.account_id;
+      // Resolved before the guarded block and kept for the per-entry fallback:
+      // a group-level failure after resolution still knows where each entry was
+      // headed. Only a failure during resolution itself leaves it null.
+      let destination: MoveDestination | null = null;
       try {
         const account = accountById(db, accountId);
         if (!account) {
@@ -725,16 +704,23 @@ export async function batchMoveMessages(
           }
           continue;
         }
-        const destination = resolveMoveDestination(db, accountId, target);
+        destination = typeof selection === "string"
+          ? resolveMoveDestination(db, accountId, selection)
+          : resolveFolderDestination(db, accountId, selection.folderPath);
         if (!destination) {
-          const unavailable = moveTargets[target].unavailableMessage;
+          const unavailable = typeof selection === "string"
+            ? moveTargets[selection].unavailableMessage
+            : MOVE_FOLDER_UNAVAILABLE_ERROR;
           for (const entry of group) {
             outcome.failed += 1;
             outcome.failures.push({ id: entry.id, message: unavailable });
           }
           continue;
         }
-        if (destination.path === group[0]!.mailbox) {
+        // A local binding after the guard: the callback below is a closure, and
+        // a closure does not preserve the narrowing of the outer `let`.
+        const resolved = destination;
+        if (resolved.path === group[0]!.mailbox) {
           // Idempotent no-op: the whole group already lives in the target
           // folder (e.g. a second delete from the Trash view). Count every
           // entry as moved so the renderer clears them from the view.
@@ -754,18 +740,36 @@ export async function batchMoveMessages(
         // already in flight on the same account instead of failing the whole
         // group with a busy error.
         const groupOutcome = await withAccountWriteLocks([accountId], () =>
-          moveMessagesInOneCommand(db, masterKey, group, destination, accessTokenProvider, agentEvents, client),
+          moveMessagesInOneCommand(db, masterKey, group, resolved, accessTokenProvider, agentEvents, client),
         );
         outcome.updated += groupOutcome.updated;
         outcome.failed += groupOutcome.failures.length;
         outcome.failures.push(...groupOutcome.failures);
         for (const pending of groupOutcome.pendingAccounts) outcome.pendingAccounts.add(pending);
-      } catch {
+      } catch (error) {
         // Fall back to per-message moves so a group-level failure (e.g. a
-        // guard error) keeps the previous per-message granularity.
+        // guard error) keeps the previous per-message granularity. A failure
+        // before the destination was resolved has nothing to fall back to, so
+        // its error is the only thing to report per entry.
+        if (!destination) {
+          for (const entry of group) {
+            outcome.failed += 1;
+            outcome.failures.push({ id: entry.id, message: moveErrorMessage(error) });
+          }
+          continue;
+        }
         for (const entry of group) {
           try {
-            const result = await moveMessage(db, masterKey, entry.id, target, accessTokenProvider, agentEvents, { client: clientsByAccount.get(accountId) });
+            const result = await moveEntryToDestination(
+              db,
+              masterKey,
+              entry.id,
+              accountId,
+              destination,
+              accessTokenProvider,
+              agentEvents,
+              { client: clientsByAccount.get(accountId) },
+            );
             outcome.updated += 1;
             if (result.refreshPending) outcome.pendingAccounts.add(accountId);
           } catch (entryError) {

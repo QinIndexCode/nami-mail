@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { MOVE_LOCATION_UNVERIFIED_ERROR } from "../src/message-storage.js";
 import { acceptMoveTask, pendingMoveItemIds, type AcceptMoveInput } from "../src/tasks/kinds/move.js";
-import { taskItems, taskRow } from "../src/tasks/store.js";
+import { openTaskPayload, taskItems, taskRow } from "../src/tasks/store.js";
 import type { TaskItemRow } from "../src/tasks/types.js";
 
 /**
@@ -147,7 +147,7 @@ const claimed = (items: TaskItemRow[]): string[] =>
 describe("move acceptance: local target state and the task that converges it", () => {
   it("commits the goal, the departure, the task and its selection as one, and hands the runner exactly those ids", () => {
     const { db, ids } = fixture(3);
-    const { scheduler, accepted } = accept(db, { target: "archive", messageIds: ids });
+    const { scheduler, accepted } = accept(db, { destination: { target: "archive" }, messageIds: ids });
 
     expect(accepted.updated).toBe(3);
     expect(accepted.delivering).toBe(3);
@@ -189,7 +189,7 @@ describe("move acceptance: local target state and the task that converges it", (
     // an All Mail view, where the folder is not what the action targets.
     db.prepare("UPDATE messages SET mailbox = ? WHERE id = ?").run(DESTINATION, at(ids, 0));
 
-    const { accepted } = accept(db, { target: "archive", messageIds: ids });
+    const { accepted } = accept(db, { destination: { target: "archive" }, messageIds: ids });
 
     expect(accepted.updated).toBe(1);
     // Nothing to deliver -- and this is the count the single route reads for
@@ -219,15 +219,15 @@ describe("move acceptance: local target state and the task that converges it", (
 
   it("carries the undo window the caller passes and none when it passes nothing", () => {
     const { db, ids } = fixture(2);
-    const withWindow = accept(db, { target: "archive", messageIds: [at(ids, 0)], undoWindowMs: 300_000 });
+    const withWindow = accept(db, { destination: { target: "archive" }, messageIds: [at(ids, 0)], undoWindowMs: 300_000 });
     expect(taskRow(db, at(withWindow.accepted.handles, 0).id)!.undo_window_ms).toBe(300_000);
-    const without = accept(db, { target: "archive", messageIds: [at(ids, 1)] });
+    const without = accept(db, { destination: { target: "archive" }, messageIds: [at(ids, 1)] });
     expect(taskRow(db, at(without.accepted.handles, 0).id)!.undo_window_ms).toBeNull();
   });
 
   it("materializes a repeated id once, so the task's total is reachable", () => {
     const { db, ids } = fixture(1);
-    const { accepted } = accept(db, { target: "archive", messageIds: [at(ids, 0), at(ids, 0)] });
+    const { accepted } = accept(db, { destination: { target: "archive" }, messageIds: [at(ids, 0), at(ids, 0)] });
 
     expect(accepted.updated).toBe(1);
     const row = taskRow(db, at(accepted.handles, 0).id)!;
@@ -257,7 +257,7 @@ describe("move acceptance: what it refuses, and in whose words", () => {
     db.prepare("UPDATE messages SET mailbox = ?, pending_move_destination = ?, pending_move_state = 'confirmed', remote_id_lookup = NULL WHERE id = ?")
       .run(DESTINATION, DESTINATION, at(ids, 0));
 
-    const { accepted } = accept(db, { target: "archive", messageIds: ids });
+    const { accepted } = accept(db, { destination: { target: "archive" }, messageIds: ids });
 
     expect(accepted.updated).toBe(1);
     expect(accepted.refusals).toEqual([]);
@@ -277,7 +277,7 @@ describe("move acceptance: what it refuses, and in whose words", () => {
     const { db, ids } = fixture(1);
     db.prepare("UPDATE messages SET pending_move_destination = ?, pending_move_state = NULL WHERE id = ?").run("Trash", at(ids, 0));
 
-    const { accepted } = accept(db, { target: "archive", messageIds: ids });
+    const { accepted } = accept(db, { destination: { target: "archive" }, messageIds: ids });
 
     expect(accepted.updated).toBe(0);
     expect(accepted.refusals).toEqual([{ id: at(ids, 0), reason: "reconciling" }]);
@@ -303,7 +303,7 @@ describe("move acceptance: what it refuses, and in whose words", () => {
     db.prepare("UPDATE messages SET pending_move_destination = ?, pending_move_state = 'confirmed', remote_id_lookup = NULL WHERE id = ?")
       .run(DESTINATION, at(ids, 0));
 
-    const { accepted } = accept(db, { target: "archive", messageIds: ids });
+    const { accepted } = accept(db, { destination: { target: "archive" }, messageIds: ids });
 
     expect(accepted.refusals).toEqual([{ id: at(ids, 0), reason: "location_unverified" }]);
     expect(MOVE_LOCATION_UNVERIFIED_ERROR).toMatch(/未提供可验证的新位置/);
@@ -313,7 +313,7 @@ describe("move acceptance: what it refuses, and in whose words", () => {
     const { db, ids } = fixture(2);
     db.prepare("DELETE FROM folders WHERE account_id = ? AND path = ?").run(ACCOUNT, DESTINATION);
 
-    const { accepted } = accept(db, { target: "archive", messageIds: ids });
+    const { accepted } = accept(db, { destination: { target: "archive" }, messageIds: ids });
 
     expect(accepted.refusals).toEqual([
       { id: at(ids, 0), reason: "unavailable" },
@@ -331,7 +331,7 @@ describe("move acceptance: what it refuses, and in whose words", () => {
 
   it("refuses an id with no cached row, and counts it in no task", () => {
     const { db, ids } = fixture(1);
-    const { accepted } = accept(db, { target: "archive", messageIds: [at(ids, 0), "ghost"] });
+    const { accepted } = accept(db, { destination: { target: "archive" }, messageIds: [at(ids, 0), "ghost"] });
 
     expect(accepted.updated).toBe(1);
     expect(accepted.refusals).toEqual([{ id: "ghost", reason: "not_found" }]);
@@ -351,7 +351,7 @@ describe("move acceptance: what it refuses, and in whose words", () => {
     const { db, ids } = fixture(1);
     db.prepare("UPDATE messages SET pending_move_destination = NULL, pending_move_state = 'confirmed' WHERE id = ?").run(at(ids, 0));
 
-    const { accepted } = accept(db, { target: "archive", messageIds: ids });
+    const { accepted } = accept(db, { destination: { target: "archive" }, messageIds: ids });
 
     expect(accepted.updated).toBe(0);
     expect(accepted.refusals).toEqual([{ id: at(ids, 0), reason: "claimed" }]);
@@ -368,7 +368,7 @@ describe("move acceptance: what it refuses, and in whose words", () => {
 describe("move acceptance: one task per account, named so the job alias can find them", () => {
   it("uses the bare job id when one account owns the selection", () => {
     const { db, ids } = fixture(2);
-    const { accepted } = accept(db, { target: "archive", messageIds: ids, jobId: "job-1" });
+    const { accepted } = accept(db, { destination: { target: "archive" }, messageIds: ids, jobId: "job-1" });
 
     expect(accepted.jobId).toBe("job-1");
     expect(accepted.handles.map((handle) => handle.id)).toEqual(["job-1"]);
@@ -386,7 +386,7 @@ describe("move acceptance: one task per account, named so the job alias can find
     const other = `${OTHER_ACCOUNT}-msg-1`;
     insertMessage(db, OTHER_ACCOUNT, other, SOURCE, 1);
 
-    const { scheduler, accepted } = accept(db, { target: "archive", messageIds: [at(ids, 0), other], jobId: "job-1" });
+    const { scheduler, accepted } = accept(db, { destination: { target: "archive" }, messageIds: [at(ids, 0), other], jobId: "job-1" });
 
     expect(accepted.handles.map((handle) => handle.id)).toEqual(["job-1:acc-1", "job-1:acc-2"]);
     expect(scheduler.started).toEqual(["job-1:acc-1", "job-1:acc-2"]);
@@ -407,7 +407,7 @@ describe("move acceptance: one task per account, named so the job alias can find
 
   it("leaves the ids unnamed when no caller supplied a job", () => {
     const { db, ids } = fixture(1);
-    const { accepted } = accept(db, { target: "archive", messageIds: ids });
+    const { accepted } = accept(db, { destination: { target: "archive" }, messageIds: ids });
 
     expect(accepted.jobId).toBeNull();
     expect(at(accepted.handles, 0).id).toMatch(/^[0-9a-f-]{36}$/);
@@ -421,9 +421,38 @@ describe("move acceptance: one task per account, named so the job alias can find
     // string is the root, and it is refused before any row exists -- `/api/batch-jobs`
     // never takes a job id from the wire, so no caller reaches it by accident.
     const { db, ids } = fixture(1);
-    expect(() => accept(db, { target: "archive", messageIds: ids, jobId: "job-1:acc-2" }))
+    expect(() => accept(db, { destination: { target: "archive" }, messageIds: ids, jobId: "job-1:acc-2" }))
       .toThrow(/colon-free/);
-    expect(() => accept(db, { target: "archive", messageIds: ids, jobId: "" })).toThrow(/colon-free/);
+    expect(() => accept(db, { destination: { target: "archive" }, messageIds: ids, jobId: "" })).toThrow(/colon-free/);
     expect(db.prepare("SELECT COUNT(*) FROM tasks").pluck().get()).toBe(0);
+  });
+});
+
+/**
+ * The folder form exists for the Agent's explicit-folder move. It commits the
+ * same local state as a named target -- the row leaves its source view -- and
+ * differs only in how the destination is resolved and remembered, so the tests
+ * that matter are: the payload the runner reads, and the refusal of an account
+ * that does not have the folder (which must not leave a goal behind).
+ */
+describe("move acceptance: an explicit folder selection", () => {
+  it("writes the goal and the task, with the folder path in the payload", () => {
+    const { db, ids } = fixture(2);
+    const { accepted } = accept(db, { destination: { folderPath: DESTINATION }, messageIds: ids });
+
+    expect(accepted.updated).toBe(2);
+    expect(accepted.destinations.get(ACCOUNT)).toBe(DESTINATION);
+    for (const id of ids) expect(goal(db, id)).toEqual({ destination: DESTINATION, state: null });
+    const task = taskRow(db, at(accepted.handles, 0).id)!;
+    expect(openTaskPayload(MASTER_KEY, task)).toEqual({ folderPath: DESTINATION });
+  });
+
+  it("refuses an id whose account does not have the folder, without a goal", () => {
+    const { db, ids } = fixture(1);
+    const { accepted } = accept(db, { destination: { folderPath: "Nowhere" }, messageIds: ids });
+
+    expect(accepted.updated).toBe(0);
+    expect(accepted.refusals).toEqual([{ id: at(ids, 0), reason: "unavailable" }]);
+    expect(goal(db, at(ids, 0))).toEqual({ destination: null, state: null });
   });
 });

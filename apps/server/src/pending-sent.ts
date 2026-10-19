@@ -203,6 +203,20 @@ export function writePendingSentRow(
 }
 
 /**
+ * Whether a submission already has its optimistic Sent row.
+ *
+ * The acceptance that prepares and accepts in one call (`acceptSendTask`) writes
+ * the row only on the branch that created the ledger row, so it never needs this
+ * question. The Agent path is the other shape: it prepares in one request and
+ * accepts in a second, and a retry of the second must not append a second
+ * placeholder for the same submission. The predicate is the row's own marker,
+ * which is the same one `retractPendingSentRow` deletes by.
+ */
+export function hasPendingSentRow(db: DatabaseHandle, submissionId: string): boolean {
+  return db.prepare("SELECT 1 FROM messages WHERE pending_send = ? LIMIT 1").get(submissionId) !== undefined;
+}
+
+/**
  * Removes the placeholder a submission stands for, and reports how many rows
  * that was (0 or 1).
  *

@@ -10,6 +10,7 @@ import type { AppSettings } from "./settings.js";
 import type { ServerEventBus } from "./events.js";
 import type { ProviderFactory } from "./provider/types.js";
 import type { AccountWire, ExternalPairingSummary } from "@nami/agent-contracts";
+import type { NewInboxMessage } from "./sync.js";
 
 /**
  * Structured translation service interface shared by external HTTP endpoints
@@ -115,6 +116,10 @@ export type RuntimeContext = {
   onRealtimePushChanged?: (enabled: boolean) => void;
   // Called immediately after an account is deleted so live background watchers (such as IDLE) terminate immediately.
   onAccountDeleted?: (accountId: string) => Promise<void> | void;
+  // Called once per message the scheduler's `snooze` runner releases, so a host
+  // can put it back in the same notification pipeline a freshly synced message
+  // takes. The runtime supplies this; embedders may omit it.
+  onSnoozeReleased?: (message: NewInboxMessage) => void | Promise<void>;
 };
 
 /** Serializes an account row for the wire. Shape authority: `AccountWire` in @nami/agent-contracts.

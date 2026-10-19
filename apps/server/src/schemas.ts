@@ -109,9 +109,9 @@ export const submissionsQuerySchema = z.object({
  * Spelling it out per schema let the job copy fall two members short of the
  * others, and the renderer's report-spam action — `junk`, as `inbox` is the
  * recovery path — built a payload `POST /api/batch-jobs` rejected outright
- * before a job was ever created. `MessageMoveTarget` in sync-moves.ts is the
- * engine-side twin of this set; the engine resolves each member's destination
- * by SPECIAL-USE.
+ * before a job was ever created. `MessageMoveTarget` in move-destinations.ts is
+ * the engine-side twin of this set; the engine resolves each member's
+ * destination by SPECIAL-USE.
  */
 const moveTargetSchema = z.enum(["archive", "trash", "junk", "inbox"]);
 

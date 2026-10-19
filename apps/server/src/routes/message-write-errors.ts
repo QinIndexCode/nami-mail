@@ -18,40 +18,17 @@ import {
   MOVE_LOCATION_UNVERIFIED_ERROR,
   PENDING_MOVE_RECONCILIATION_ERROR,
 } from "../message-storage.js";
-import { moveTargets, type MessageMoveTarget } from "../sync-moves.js";
+import { moveRefusalMessage, type MoveRefusalSelection } from "../move-refusals.js";
+import { MOVE_FOLDER_UNAVAILABLE_ERROR } from "../move-destinations.js";
 import type { MoveRefusalReason } from "../tasks/index.js";
+
+// Re-exported rather than moved out of every importer's reach: the routes read
+// their failure vocabulary from this module, and the Agent service reads the
+// same mapping from `move-refusals.ts`.
+export { moveRefusalMessage };
 
 function failureMessage(error: unknown): string {
   return error instanceof Error ? error.message : "";
-}
-
-/**
- * Why a move acceptance refused one id, in the words that refusal has always
- * been answered in.
- *
- * The acceptance carries the reason and no text (`kinds/move.ts`): the wording is
- * the routes' business because the two entries answer the same reason
- * differently -- this one throws it, the explicit batch route reports one entry
- * per id -- and because a task row per message in five locales is not a thing.
- * One mapping, two readers ({@link moveRefusalError}, {@link moveRefusalMessage}),
- * so the two entries cannot drift into telling the user different stories about
- * the same refusal.
- *
- * Three of the five sentences come straight from constants rather than being
- * retyped, and the fourth from the target table, so this file owns no move
- * wording of its own. `claimed` deliberately shares `reconciling`'s sentence: to
- * the reader both mean "another move owns this message, wait for the reconcile",
- * and the difference between them (who restores it) is internal. Contract §0.4
- * 十五 W3.
- */
-export function moveRefusalMessage(reason: MoveRefusalReason, target: MessageMoveTarget): string {
-  switch (reason) {
-    case "not_found": return "Message not found.";
-    case "unavailable": return moveTargets[target].unavailableMessage;
-    case "reconciling": return PENDING_MOVE_RECONCILIATION_ERROR;
-    case "location_unverified": return MOVE_LOCATION_UNVERIFIED_ERROR;
-    case "claimed": return PENDING_MOVE_RECONCILIATION_ERROR;
-  }
 }
 
 /**
@@ -62,8 +39,8 @@ export function moveRefusalMessage(reason: MoveRefusalReason, target: MessageMov
  * refusal to 422 with the message intact -- the exact path this route took before
  * the acceptance existed, so nothing about the answer changes for the renderer.
  */
-export function moveRefusalError(reason: MoveRefusalReason, target: MessageMoveTarget): Error {
-  return new Error(moveRefusalMessage(reason, target));
+export function moveRefusalError(reason: MoveRefusalReason, selection: MoveRefusalSelection): Error {
+  return new Error(moveRefusalMessage(reason, selection));
 }
 
 export function moveActionErrorMessage(error: unknown): string {
@@ -74,6 +51,7 @@ export function moveActionErrorMessage(error: unknown): string {
     "邮件服务器未确认移动操作，请稍后重试。",
     "这个邮箱没有提供可用的归档文件夹。",
     "这个邮箱没有提供可用的废纸篓文件夹。",
+    MOVE_FOLDER_UNAVAILABLE_ERROR,
     MAILBOX_SYNCING_ERROR,
     MAIL_MOVE_IN_FLIGHT_ERROR,
     PENDING_MOVE_RECONCILIATION_ERROR,

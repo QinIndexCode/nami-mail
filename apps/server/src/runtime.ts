@@ -68,6 +68,8 @@ import { hasStoredCustomBackground } from "./background-image.js";
 import { getAppSettings, getSyncMessageLimit, updateAppSettings, type AppSettings, type AppSettingsPatch } from "./settings.js";
 import { restoreScheduledSubmissionAttachments } from "./scheduled-send.js";
 import { releaseDueSnoozedMessages } from "./snooze.js";
+import { acceptFlagsTask, acceptMoveTask, acceptPreparedSendTask, type CommitTaskDeps, type MoveTaskDestination } from "./tasks/index.js";
+import type { MessageFlagsPatch } from "./message-flags.js";
 import { syncAccount, type NewInboxMessage } from "./sync.js";
 import { clearAccountSyncState } from "./sync-locks.js";
 import type { AccountRecord, RuntimeContext } from "./types.js";
@@ -412,6 +414,11 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     // unchanged and emits a coalesced `mail-changed` after the commit.
     const agentMailChanges = new AgentMailChangeBridge(agentMailEvents, serverEvents);
     const oauthService = new OAuthService(database, runtimeMasterKey);
+    // `buildApp` constructs the scheduler, which is after this service because
+    // the Agent needs its mail application at construction time. The closure is
+    // the seam: it reads the deps once `onTaskSchedulerReady` has handed them
+    // over, and refuses before that instead of falling back to inline SMTP.
+    let taskDeps: CommitTaskDeps | undefined;
     const mailApplication = new SqliteMailApplicationService({
       db: database,
       masterKey: runtimeMasterKey,
@@ -419,6 +426,26 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       agentMailEvents: agentMailChanges,
       syncMessageLimit: getSyncMessageLimit(database),
       outboundAttachmentDirectory: outboundAttachmentDirectory({}),
+      acceptPreparedSend: (input) => {
+        if (!taskDeps) throw new Error("Agent submissions cannot be accepted before the task scheduler is built.");
+        return acceptPreparedSendTask(taskDeps, input);
+      },
+      acceptFlags: (input: { messageIds: readonly string[]; patch: MessageFlagsPatch }) => {
+        if (!taskDeps) throw new Error("Agent flag writes cannot be accepted before the task scheduler is built.");
+        return acceptFlagsTask(
+          {
+            db: taskDeps.db,
+            masterKey: taskDeps.masterKey,
+            scheduler: taskDeps.scheduler,
+            agentEvents: agentMailChanges,
+          },
+          input,
+        );
+      },
+      acceptMove: (input: { messageIds: readonly string[]; destination: MoveTaskDestination }) => {
+        if (!taskDeps) throw new Error("Agent moves cannot be accepted before the task scheduler is built.");
+        return acceptMoveTask(taskDeps, input);
+      },
     });
     noteStartupPhase("server:mail-application");
     agentService = new AgentService({
@@ -588,6 +615,19 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
         if (enabled) void idleWatcher?.ensureAccounts();
         else void idleWatcher?.close();
       },
+      // The scheduler's `snooze` runner releases a message the same way the sync
+      // pass's reconciliation does; sharing `broadcastNewInboxMessages` keeps the
+      // renderer's toast/badge path identical for both.
+      onSnoozeReleased: async (message: NewInboxMessage) => {
+        if (options.onNewInboxMessages) {
+          try {
+            await options.onNewInboxMessages([message]);
+          } catch (error) {
+            serverLog.warn({ accountId: message.accountId }, "Snooze release notification failed", error);
+          }
+        }
+        broadcastNewInboxMessages([message]);
+      },
       ...(options.listExternalPairings ? { listExternalPairings: options.listExternalPairings } : {}),
       ...(options.revokeExternalPairing ? { revokeExternalPairing: options.revokeExternalPairing } : {}),
       ...(options.providers ? { providers: options.providers } : {}),
@@ -596,6 +636,9 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       localApiAccessToken: options.localApiAccessToken?.trim() || config.localApiAccessToken || undefined,
       translationAbortSignal: translationAbortController.signal,
       onStartupTiming: options.onStartupTiming,
+      onTaskSchedulerReady: (scheduler) => {
+        taskDeps = { db: database, masterKey: runtimeMasterKey, scheduler };
+      },
     });
     app = fastify;
     // Background modules log through the facade; from here on their lines carry

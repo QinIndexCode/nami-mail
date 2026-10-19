@@ -62,8 +62,7 @@ import {
   submissionRequestForId,
   type OutboundSubmission,
 } from "../outbox.js";
-import { clearMessageSnooze, setMessageSnoozed } from "../snooze.js";
-import { acceptMoveTask, acceptFlagsTask, acceptSendTask, cancelScheduledSend, type CommitTaskDeps, type FlagsTaskDeps, type TaskStarter } from "../tasks/index.js";
+import { acceptMoveTask, acceptFlagsTask, acceptSendTask, acceptSnoozeTask, cancelSnoozeTask, cancelScheduledSend, type CommitTaskDeps, type FlagsTaskDeps, type TaskStarter } from "../tasks/index.js";
 import { accountById } from "../account-store.js";
 import {
   accountRowForMessage,
@@ -216,24 +215,12 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
   };
 
   /**
-   * The move writes commit through the same layer, and need nothing but the
-   * commit itself: the runner dials the provider, reconciles its own account and
-   * publishes the `mail.synced` the renderer's move confirmation rides, so
-   * neither route below kicks a sync any more.
+   * Every write in this file commits through the same layer and needs nothing
+   * beyond the commit itself: the acceptances make no provider call, and the
+   * runners dial, reconcile and publish on their own. What differs between them
+   * is only which target state the acceptance commits beside the task.
    */
-  const moveTaskDeps: CommitTaskDeps = {
-    db: context.db,
-    masterKey: context.masterKey,
-    scheduler,
-  };
-
-  /**
-   * The send write commits through the same layer and needs nothing else, because
-   * the acceptance makes no provider call: the ledger row, its uploads' links, the
-   * optimistic Sent row and the dispatch task are one commit, and the provider is
-   * the task's business.
-   */
-  const sendTaskDeps: CommitTaskDeps = {
+  const taskDeps: CommitTaskDeps = {
     db: context.db,
     masterKey: context.masterKey,
     scheduler,
@@ -601,7 +588,10 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
       // kicks a sync: the runner owns the reconciliation now, and it is the
       // runner that publishes the `mail.synced` the renderer's confirmation
       // rides.
-      const accepted = acceptMoveTask(moveTaskDeps, { target: parsed.data.target, messageIds: parsed.data.ids });
+      const accepted = acceptMoveTask(taskDeps, {
+        destination: { target: parsed.data.target },
+        messageIds: parsed.data.ids,
+      });
       const failures = accepted.refusals.map((refusal) => ({
         id: refusal.id,
         message: moveRefusalMessage(refusal.reason, parsed.data.target),
@@ -655,8 +645,8 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
       // in one transaction with one durable task, and the task performs the
       // MOVE, retries it, and reconciles the account afterwards. Waiting here
       // for the provider is what made a delete queue behind a running sync.
-      const accepted = acceptMoveTask(moveTaskDeps, {
-        target: parsed.data.target,
+      const accepted = acceptMoveTask(taskDeps, {
+        destination: { target: parsed.data.target },
         messageIds: [request.params.id],
       });
       // One id in, so at most one refusal out, and it is the answer this route
@@ -696,9 +686,12 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const existing = messageExists(context.db, request.params.id);
     if (!existing) return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "邮件不存在。" });
     try {
-      // The reply carries the normalized UTC form that was actually stored.
-      const snoozedUntil = setMessageSnoozed(context.db, request.params.id, parsed.data.until);
-      return { ok: true, snoozedUntil };
+      // The reply carries the normalized UTC form that was actually stored. The
+      // message is already hidden by the time this returns, and the task the
+      // acceptance parks on the same instant only owes the *release* -- which is
+      // why no `taskId` is reported: there is no pending provider work to poll.
+      const accepted = acceptSnoozeTask(taskDeps, { messageId: request.params.id, until: parsed.data.until });
+      return { ok: true, snoozedUntil: accepted.snoozedUntil };
     } catch (error) {
       const failure = mailFailure(error);
       return reply.code(failure.statusCode).send(withErrorCode(mailFailureBody(failure, error instanceof Error ? error.message : "无法稍后处理这封邮件。"), failure.statusCode));
@@ -709,7 +702,9 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const existing = messageExists(context.db, request.params.id);
     if (!existing) return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "邮件不存在。" });
     try {
-      clearMessageSnooze(context.db, request.params.id);
+      // Clearing the column and withdrawing the release task are one commit; a
+      // runner that already claimed the task sees the guard fail and does nothing.
+      cancelSnoozeTask(context.db, request.params.id);
       return { ok: true };
     } catch (error) {
       const failure = mailFailure(error);
@@ -765,7 +760,7 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
       // ledger's `send_at` and the task is parked on the same instant as its
       // `due_at` (`acceptSendTask`), so the mail leaves when the user asked rather
       // than during this call's drain.
-      const accepted = acceptSendTask(sendTaskDeps, {
+      const accepted = acceptSendTask(taskDeps, {
         account,
         request: submissionRequest,
         ...(idempotencyKey ? { idempotencyKey } : {}),

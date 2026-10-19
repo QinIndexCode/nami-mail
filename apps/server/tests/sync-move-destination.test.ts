@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import { resolveMoveDestination, type MessageMoveTarget } from "../src/sync-moves.js";
+import { resolveMoveDestination, type MessageMoveTarget } from "../src/move-destinations.js";
 import { accountById, accountExists } from "../src/account-store.js";
 
 /**

@@ -26,7 +26,7 @@ import {
   type OutboundSubmission,
   type OutboundSubmissionRequest,
 } from "../../outbox.js";
-import { writePendingSentRow } from "../../pending-sent.js";
+import { hasPendingSentRow, writePendingSentRow } from "../../pending-sent.js";
 import { detectProvider } from "../../providers.js";
 import type { AccountRecord } from "../../types.js";
 import { isoToEpochMs } from "../../utc-time.js";
@@ -171,6 +171,13 @@ export type AcceptSendInput = {
   sendAt?: string;
 };
 
+export type AcceptPreparedSendInput = {
+  /** The account the caller has already authorized this submission under. */
+  account: AccountRecord;
+  /** The ledger row `prepareSubmission` returned. */
+  submissionId: string;
+};
+
 export type SendAcceptance = {
   submission: OutboundSubmission;
   /**
@@ -300,6 +307,91 @@ export function acceptSendTask(deps: CommitTaskDeps, input: AcceptSendInput): Se
     submission: accepted.prepared.submission,
     taskId: accepted.taskId,
     created: accepted.prepared.created,
+  };
+}
+
+/**
+ * Accepts a submission the caller has already persisted with `prepareSubmission`.
+ *
+ * This is the Agent path's second half (contract §0.4 (h) ①). The Agent prepares in
+ * one request and submits in a second, so by the time it asks for the send the
+ * ledger row, its idempotency key and its exact RFC Message-ID already exist.
+ * `acceptSendTask` would answer that shape as a replay and commit nothing -- which
+ * is right for the interactive route, whose replay means "the first acceptance
+ * already owns this", but wrong here, because no first acceptance ever ran.
+ *
+ * So this commits only what the row does not have yet:
+ *
+ *   1. the uploads' links, which `prepareSubmission` may have written already
+ *      (`linkOutboundAttachmentsToSubmission` is `INSERT OR IGNORE`);
+ *   2. the optimistic Sent row, **only when the submission has none** -- a retry
+ *      of this call must not append a second placeholder for one submission
+ *      (`hasPendingSentRow`);
+ *   3. the `send` task, keyed by the submission id exactly as `acceptSendTask`
+ *      keys it, so the two entries cannot produce two dispatches for one row.
+ *
+ * `pending` and `failed` are accepted, matching `startSubmission`'s own retry
+ * table (`outbox.ts:590-613`): a definitive SMTP refusal left the ledger `failed`
+ * and is exactly what a retry is for. Every other status commits nothing and is
+ * reported as it stands -- `submitting` is owned by an attempt, `submitted` and
+ * `confirmed` mean the mail is already out, and `unknown_delivery` must never be
+ * retried automatically. A task that still exists is returned as-is rather than
+ * replaced: its attempt owns the outcome, and replacing it would double-dispatch.
+ *
+ * The ledger read and both writes share one transaction, and `start()` runs after
+ * the commit, for the same reasons as `acceptSendTask`.
+ */
+export function acceptPreparedSendTask(deps: CommitTaskDeps, input: AcceptPreparedSendInput): SendAcceptance {
+  const { db, masterKey } = deps;
+  const accepted = db.transaction(() => {
+    const submission = submissionForId(db, masterKey, input.submissionId);
+    if (!submission) throw new Error(`No outbound submission "${input.submissionId}".`);
+    if (submission.accountId !== input.account.id) {
+      throw new Error(`Outbound submission "${input.submissionId}" belongs to another account.`);
+    }
+    const existingTaskId = taskIdForSubmission(db, input.submissionId);
+    if (submission.deliveryStatus !== "pending" && submission.deliveryStatus !== "failed") {
+      return { submission, taskId: existingTaskId ?? null, created: false, handle: null };
+    }
+    if (existingTaskId) {
+      // An attempt already stands for this row. Waiting for it is right: it will
+      // read the same ledger status this call just did, and starting a second
+      // task would be the double-send this key exists to prevent.
+      return { submission, taskId: existingTaskId, created: false, handle: null };
+    }
+    const request = submissionRequestForId(db, masterKey, input.submissionId);
+    if (!request) throw new Error(`Outbound submission "${input.submissionId}" has no readable request.`);
+    const attachments = validateOutboundAttachmentSet(db, masterKey, input.account.id, request.attachmentTokens);
+    linkOutboundAttachmentsToSubmission(db, input.account.id, input.submissionId, request.attachmentTokens);
+    const dueAt = scheduledDueAt(submission);
+    if (dueAt === undefined && !hasPendingSentRow(db, input.submissionId)) {
+      writePendingSentRow(db, masterKey, {
+        account: input.account,
+        submissionId: input.submissionId,
+        rfcMessageId: submission.messageId,
+        request,
+        attachments,
+      });
+    }
+    const handle = commitTask(deps, {
+      id: input.submissionId,
+      accountId: input.account.id,
+      kind: "send",
+      scope: "single",
+      // No `idempotencyKey`: the ledger's key is not part of the public
+      // submission shape, and the task's primary key is the submission id --
+      // the collision that key would guard against cannot happen here.
+      submissionId: input.submissionId,
+      total: 1,
+      ...(dueAt === undefined ? {} : { dueAt }),
+    });
+    return { submission, taskId: handle.id, created: true, handle };
+  })();
+  accepted.handle?.start();
+  return {
+    submission: accepted.submission,
+    taskId: accepted.taskId,
+    created: accepted.created,
   };
 }
 

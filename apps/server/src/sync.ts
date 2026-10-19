@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ListResponse } from "imapflow";
-import { simpleParser, type AddressObject } from "mailparser";
+import { simpleParser } from "mailparser";
 import { attachmentMetadataFromParsedMail } from "./attachments.js";
 import { attachmentKindsJson } from "./attachment-kind.js";
 import type { AgentMailEventSink } from "./agent/mail-state-events.js";
@@ -14,7 +14,9 @@ import {
 } from "./message-storage.js";
 import { autoCollectSender } from "./contacts.js";
 import { indexMessageFts } from "./message-search.js";
+import { flagsJsonFromRemoteSql, NO_FLAGS_INTENT_SQL } from "./message-flag-indexes.js";
 import { redactUrls } from "./message-links.js";
+import { addressValues, htmlToSnippetText, messageIdValues, snippet } from "./sync-message-text.js";
 import { serverLog } from "./logging.js";
 import {
   confirmSubmissionsInSent,
@@ -78,63 +80,6 @@ export type SyncProgress = {
 function autoReplyActiveForAccount(db: DatabaseHandle, accountId: string): boolean {
   const autoReply = getAppSettings(db).autoReply;
   return autoReply.enabled && autoReply.accountIds.includes(accountId);
-}
-
-function addressValues(address: AddressObject | AddressObject[] | undefined): Array<{ name: string; address: string }> {
-  if (!address) return [];
-  return (Array.isArray(address) ? address : [address]).flatMap((item) =>
-    item.value.map((entry) => ({ name: entry.name ?? "", address: entry.address ?? "" })),
-  );
-}
-
-const messageIdPattern = /<[^<>\r\n]{1,998}>/g;
-
-function messageIdValues(value: string | string[] | undefined): string[] {
-  const values = Array.isArray(value) ? value : value ? [value] : [];
-  const ids = values.flatMap((item) => item.match(messageIdPattern) ?? []);
-  return [...new Set(ids)].slice(-50);
-}
-
-const SNIPPET_MAX_LENGTH = 150;
-
-const htmlEntityMap: Record<string, string> = {
-  amp: "&",
-  apos: "'",
-  gt: ">",
-  lt: "<",
-  nbsp: " ",
-  quot: "\"",
-};
-
-function decodeHtmlEntities(value: string): string {
-  return value.replace(/&(?:#(x[0-9a-fA-F]+|\d+)|([a-zA-Z]+));/g, (whole, numeric: string | undefined, name: string | undefined) => {
-    if (numeric) {
-      const codePoint = numeric.startsWith("x") || numeric.startsWith("X")
-        ? Number.parseInt(numeric.slice(1), 16)
-        : Number.parseInt(numeric, 10);
-      if (!Number.isSafeInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return whole;
-      try { return String.fromCodePoint(codePoint); } catch { return whole; }
-    }
-    return name && htmlEntityMap[name.toLowerCase()] !== undefined ? htmlEntityMap[name.toLowerCase()]! : whole;
-  });
-}
-
-function htmlToSnippetText(html: string): string {
-  let text = html;
-  // Strip non-visible blocks first so their content doesn't leak into the snippet.
-  text = text.replace(/<(script|style|head|noscript|svg)[^>]*>[\s\S]*?<\/\1\s*>/gi, " ");
-  // Strip all remaining HTML tags.
-  text = text.replace(/<[^>]+>/g, " ");
-  // Decode HTML entities and collapse whitespace.
-  text = decodeHtmlEntities(text).replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
-  return text;
-}
-
-function snippet(value: string): string {
-  // Redact URLs up front so raw links never land in the stored snippet; the
-  // neutral sentinel is rendered as a localized label by the consumer.
-  const compact = redactUrls(value.replace(/\s+/g, " ").trim());
-  return compact.length <= SNIPPET_MAX_LENGTH ? compact : `${compact.slice(0, SNIPPET_MAX_LENGTH).trimEnd()}…`;
 }
 
 const SNIPPET_REDACT_MIGRATION_ID = "message-snippet-redact-v1";
@@ -411,7 +356,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         snippet = excluded.snippet,
         text_body = excluded.text_body,
         html_body = excluded.html_body,
-        flags_json = excluded.flags_json,
+        flags_json = ${flagsJsonFromRemoteSql("excluded.flags_json")},
         has_attachments = excluded.has_attachments,
         attachments_json = excluded.attachments_json,
         attachment_kinds_json = excluded.attachment_kinds_json,
@@ -429,7 +374,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           remote_id_lookup = COALESCE(?, remote_id_lookup),
           all_mail_archived = COALESCE(?, all_mail_archived)
       WHERE account_id = ? AND mailbox = ? AND uid = ?
-        AND pending_flags_push IS NOT 1
+        AND ${NO_FLAGS_INTENT_SQL}
     `);
     const findPendingMoves = db.prepare(`
       SELECT * FROM messages
@@ -450,7 +395,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       UPDATE messages
       SET mailbox = ?,
           uid = ?,
-          flags_json = ?,
+          flags_json = ${flagsJsonFromRemoteSql("?")},
           remote_id_lookup = ?,
           all_mail_archived = ?,
           pending_move_destination = NULL,
@@ -677,7 +622,15 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         // sufficient to classify an All Mail intent as archived when labels
         // are not observable from this provider.
         ?? (pendingWasIntent ? 1 : null);
-      const flagsJson = JSON.stringify([...(message.flags ?? [])]);
+      const remoteFlagsJson = JSON.stringify([...(message.flags ?? [])]);
+      // Confirming the destination position is the reconciler's whole job; it is
+      // not evidence that the provider's flags superseded a local write. While a
+      // `flags` task still holds this row, `flags_json` is the user's target, so
+      // the update below keeps it and the event mirrors the value actually
+      // stored rather than the one the provider just reported.
+      const flagsJson = pending.pending_flags_push === 1 && typeof pending.flags_json === "string"
+        ? pending.flags_json
+        : remoteFlagsJson;
       db.transaction(() => {
         const duplicateDestinationRows = listDestinationCopies.all(
           accountId,
@@ -689,7 +642,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         const reconciled = reconcilePendingMove.run(
           folder.path,
           message.uid,
-          flagsJson,
+          remoteFlagsJson,
           remoteLookup,
           reconciledAllMailState,
           pending.id,

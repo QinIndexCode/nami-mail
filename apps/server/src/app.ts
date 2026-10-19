@@ -24,7 +24,18 @@ import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerOutboundAttachmentRoutes } from "./routes/outbound-attachments.js";
 import { registerBatchJobRoutes } from "./routes/batch-jobs.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
-import { clearOrphanedFlagsMarkers, createTaskExecution, sealMigratedTaskPayloads } from "./tasks/index.js";
+import {
+  acceptFlagsTask,
+  acceptMoveTask,
+  acceptPreparedSendTask,
+  clearOrphanedFlagsMarkers,
+  createTaskExecution,
+  sealMigratedTaskPayloads,
+  type CommitTaskDeps,
+  type MoveTaskDestination,
+  type TaskScheduler,
+} from "./tasks/index.js";
+import type { MessageFlagsPatch } from "./message-flags.js";
 import { scheduleSentSubmissionVerification } from "./sync-sent-verify.js";
 import {
   mailFailure,
@@ -59,7 +70,7 @@ import { seedBuiltinTemplates } from "./templates.js";
 import {
   getSyncMessageLimit,
 } from "./settings.js";
-import { type RuntimeContext, type TranslationServiceLike } from "./types.js";
+import { type AccountRecord, type RuntimeContext, type TranslationServiceLike } from "./types.js";
 
 // Re-exported from helpers.ts for backward compatibility (used by tests).
 import { MAX_BACKGROUND_UPLOAD_BYTES } from "./helpers.js";
@@ -108,6 +119,16 @@ export type BuildAppOptions = {
   // internal phases (migrations, service construction, route registration,
   // static file serving) so a slow boot can be attributed precisely.
   onStartupTiming?: (stage: string, elapsedMs: number) => void;
+  /**
+   * Called once, with the scheduler this app built, before any route can accept
+   * work.
+   *
+   * The runtime constructs its Agent mail service before it calls `buildApp`
+   * (the Agent service needs it), while the scheduler only exists inside this
+   * function. This is the seam that lets the already-built service accept sends
+   * through the task layer without either owner reaching into the other.
+   */
+  onTaskSchedulerReady?: (scheduler: TaskScheduler) => void;
 };
 
 const localApiAccessHeader = "x-nami-api-token";
@@ -224,6 +245,39 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   const ownedAgentMailEvents = context.agentMailEvents && context.serverEvents
     ? new AgentMailChangeBridge(context.agentMailEvents, context.serverEvents)
     : context.agentMailEvents;
+  // The scheduler is built further down, but the Agent service that sends on its
+  // behalf is built here. This holds the acceptance seam open for the service: a
+  // closure over a variable assigned once the scheduler exists, rather than a
+  // scheduler handed over before it does. Reaching it earlier is impossible in
+  // practice (no route is mounted yet) and is an error rather than a fallback
+  // because the fallback would be the inlined SMTP this replaced.
+  const taskDepsRef: { current?: CommitTaskDeps } = {};
+  const acceptPreparedSend = (input: { account: AccountRecord; submissionId: string }) => {
+    const taskDeps = taskDepsRef.current;
+    if (!taskDeps) throw new Error("Agent submissions cannot be accepted before the task scheduler is built.");
+    return acceptPreparedSendTask(taskDeps, input);
+  };
+  // The other two Agent writes, through the same seam. The flag half carries the
+  // Agent event sink so the push task announces its arrival the way every other
+  // flags task does; the move half needs nothing beyond the commit.
+  const acceptFlags = (input: { messageIds: readonly string[]; patch: MessageFlagsPatch }) => {
+    const taskDeps = taskDepsRef.current;
+    if (!taskDeps) throw new Error("Agent flag writes cannot be accepted before the task scheduler is built.");
+    return acceptFlagsTask(
+      {
+        db: taskDeps.db,
+        masterKey: taskDeps.masterKey,
+        scheduler: taskDeps.scheduler,
+        ...(ownedAgentMailEvents ? { agentEvents: ownedAgentMailEvents } : {}),
+      },
+      input,
+    );
+  };
+  const acceptMove = (input: { messageIds: readonly string[]; destination: MoveTaskDestination }) => {
+    const taskDeps = taskDepsRef.current;
+    if (!taskDeps) throw new Error("Agent moves cannot be accepted before the task scheduler is built.");
+    return acceptMoveTask(taskDeps, input);
+  };
   const ownedAgentMailApplication = !context.agentService && context.agentLifecycle && context.agentSourceEvents
     ? new SqliteMailApplicationService({
       db: context.db,
@@ -232,6 +286,9 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       agentMailEvents: ownedAgentMailEvents,
       syncMessageLimit: getSyncMessageLimit(context.db),
       outboundAttachmentDirectory: outboundAttachmentDirectory(context),
+      acceptPreparedSend,
+      acceptFlags,
+      acceptMove,
     })
     : undefined;
   const ownedAgentService = !context.agentService && context.agentLifecycle && context.agentSourceEvents
@@ -365,7 +422,13 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     // that pass.
     ...(context.serverEvents ? { serverEvents: context.serverEvents } : {}),
     ...(context.syncShutdownSignal ? { syncAbortSignal: context.syncShutdownSignal } : {}),
+    ...(context.onSnoozeReleased ? { onSnoozeReleased: context.onSnoozeReleased } : {}),
   });
+  // The runtime's Agent service was built before this one, so it cannot have
+  // received a scheduler by constructor injection either; this callback is how
+  // it gets one. The holder above is the same answer for the service built above.
+  taskDepsRef.current = { db: context.db, masterKey: context.masterKey, scheduler };
+  options.onTaskSchedulerReady?.(scheduler);
   app.addHook("onClose", async () => {
     await scheduler.stop();
   });

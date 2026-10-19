@@ -29,12 +29,14 @@
  * hooks are `wiring.ts` -- which is itself exported because assembling the three
  * pieces is `buildApp`'s job, not the layer's.
  *
- * Four kinds are implemented -- `move`, `flags`, `send` and `undo` -- and each
- * exports the runners `buildApp`'s registry construction registers: `flags`' and
- * `move`'s acceptances (the two flags routes and the two batch paths call them),
- * `move`'s settlement (the app's task hook), `send`'s runner (whose submission id
- * comes from the task, not from a due-time query), and `undo`'s acceptance (what
- * the batch-jobs undo endpoint reaches through `commitJobUndo`, in place of the
+ * Five kinds are implemented -- `move`, `flags`, `send`, `snooze` and `undo` -- and
+ * each exports the runners `buildApp`'s registry construction registers: `flags`'
+ * and `move`'s acceptances (the two flags routes and the two batch paths call
+ * them), `move`'s settlement (the app's task hook), `send`'s runner (whose
+ * submission id comes from the task, not from a due-time query), `snooze`'s two
+ * acceptances and its release runner (the two routes that used to write
+ * `messages.snoozed_until` directly), and `undo`'s acceptance (what the
+ * batch-jobs undo endpoint reaches through `commitJobUndo`, in place of the
  * deleted `undoBatchJob`). The layer's own tests import the kinds directly
  * (`./kinds/move.js`) rather than through here, because a test that pins a runner
  * wants its declaration, not the surface.
@@ -89,6 +91,7 @@ export {
   type MoveRefusalReason,
   type MoveRunnerDeps,
   type MoveTaskAcceptance,
+  type MoveTaskDestination,
   type MoveTaskPayload,
   type RevertedMoveFailures,
 } from "./kinds/move.js";
@@ -123,9 +126,11 @@ export {
 // not exported, so no caller can run one without the other, which the routes layer
 // could otherwise do by opening its own transaction around them.
 export {
+  acceptPreparedSendTask,
   acceptSendTask,
   cancelScheduledSend,
   createSendRunner,
+  type AcceptPreparedSendInput,
   type AcceptSendInput,
   type SendAcceptance,
   type SendTaskDeps,
@@ -142,6 +147,20 @@ export {
 // `settleUndoItem`, whose only callers are inside this layer. `undoRefusal` in
 // particular is not a convenience for the route: the route reports the reason it
 // is handed, it does not re-derive one.
+// The snooze kind: the one pure-local write, and the one task whose goal state
+// is already committed by the acceptance. Its three names are the two routes'
+// acceptances and the release runner; the equality guard that makes re-snoozing
+// safe stays inside the file, because neither route may reason about it.
+export {
+  acceptSnoozeTask,
+  cancelSnoozeTask,
+  createSnoozeRunner,
+  type AcceptSnoozeInput,
+  type SnoozeAcceptance,
+  type SnoozeRunnerDeps,
+  type SnoozeTaskDeps,
+  type SnoozeTaskPayload,
+} from "./kinds/snooze.js";
 export {
   commitUndoTask,
   createUndoRunner,

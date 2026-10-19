@@ -260,16 +260,6 @@ export function accountRowForMessage(db: DatabaseHandle, messageId: string): Acc
     .get(messageId) as AccountRecord | undefined;
 }
 
-/** Accounts owning each of the given message ids, so a batch can be grouped per account. */
-export function messageAccountIds(
-  db: DatabaseHandle,
-  ids: readonly string[],
-): Array<{ id: string; account_id: string }> {
-  return db
-    .prepare(`SELECT id, account_id FROM messages WHERE id IN (${ids.map(() => "?").join(", ")})`)
-    .all(...ids) as Array<{ id: string; account_id: string }>;
-}
-
 export function messageAccountId(db: DatabaseHandle, id: string): string | undefined {
   const row = db.prepare("SELECT account_id FROM messages WHERE id = ?").get(id) as
     | { account_id: string }

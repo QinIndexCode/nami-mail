@@ -9,7 +9,7 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 });
 
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import { updateMessageFlags, updateMessageFlagsBatch } from "../src/sync-flags.js";
+import { updateMessageFlags } from "../src/sync-flags.js";
 import { acquireAccountWriteSlots } from "../src/sync-locks.js";
 
 const masterKey = Buffer.alloc(32, 7);
@@ -97,23 +97,6 @@ describe("flag updates under the account write lock", () => {
     expect(unread.unseen).toBe(0);
   });
 
-  it("keeps both batches' flags when two batch updates race on the same message", async () => {
-    const seen = updateMessageFlagsBatch(db, masterKey, ["message-1"], { seen: true });
-    const flagged = updateMessageFlagsBatch(db, masterKey, ["message-1"], { flagged: true });
-    await Promise.all([seen, flagged]);
-
-    expect(flagsOf("message-1")).toEqual(["\\Flagged", "\\Seen"]);
-  });
-
-  it("keeps a batch update and a single update racing on the same message", async () => {
-    const batch = updateMessageFlagsBatch(db, masterKey, ["message-1"], { seen: true });
-    const single = updateMessageFlags(db, masterKey, "message-1", { flagged: true });
-    const [result] = await Promise.all([batch, single]);
-
-    expect(result).toEqual({ updated: 1, failed: 0, changedIds: ["message-1"] });
-    expect(flagsOf("message-1")).toEqual(["\\Flagged", "\\Seen"]);
-  });
-
   it("reads the flags snapshot only after the account write slot is held", async () => {
     const recorded = recordingDb(db);
     const releases = await acquireAccountWriteSlots(["account-1"]);
@@ -134,24 +117,5 @@ describe("flag updates under the account write lock", () => {
     }
   });
 
-  it("reads the batch snapshot only after the account write slot is held", async () => {
-    const recorded = recordingDb(db);
-    const releases = await acquireAccountWriteSlots(["account-1"]);
-    try {
-      const batch = updateMessageFlagsBatch(recorded.db, masterKey, ["message-1"], { seen: true });
-      await Promise.resolve();
-      // Only the id -> account routing may be read out here; it names the lock.
-      expect(flagSnapshotReads(recorded.statements)).toEqual([]);
-
-      for (const release of [...releases].reverse()) release();
-      const result = await batch;
-
-      expect(result).toEqual({ updated: 1, failed: 0, changedIds: ["message-1"] });
-      expect(flagSnapshotReads(recorded.statements)).toHaveLength(1);
-      expect(flagsOf("message-1")).toEqual(["\\Seen"]);
-    } finally {
-      for (const release of [...releases].reverse()) release();
-    }
-  });
 });
 

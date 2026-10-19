@@ -6,6 +6,7 @@ import { retractPendingSentRow } from "../pending-sent.js";
 import { createFlagsRunner } from "./kinds/flags.js";
 import { createMoveRunner, pendingMoveItemIds, revertMoveFailures } from "./kinds/move.js";
 import { createSendRunner } from "./kinds/send.js";
+import { createSnoozeRunner, type SnoozeRunnerDeps } from "./kinds/snooze.js";
 import { createUndoRunner } from "./kinds/undo.js";
 import { createTaskRegistry } from "./registry.js";
 import { startTaskScheduler } from "./scheduler.js";
@@ -246,18 +247,26 @@ export type TaskRunnerDeps = {
    */
   serverEvents?: ServerEventBus;
   syncAbortSignal?: AbortSignal;
+  /**
+   * The runtime's new-mail notification pipeline, for `snooze` (a released
+   * message joins the same toast/badge path as a freshly synced one). Optional
+   * because the runner's durable obligation is the column; a host without a
+   * pipeline still gets the message back.
+   */
+  onSnoozeReleased?: SnoozeRunnerDeps["onSnoozeReleased"];
 };
 
 /**
  * Fills a registry with the kinds this layer implements: `move`, `flags`,
- * `undo`, `send`.
+ * `undo`, `send`, `snooze`.
  *
- * Those four are exactly what the migration can produce (`migrate.ts`), plus what
- * the app's own write paths produce -- which is why the set is a floor and not a
- * ceiling: `snooze` has routes (`routes/messages.ts:731`) and no runner yet, and
- * `draft-discard`/`filter`/`agent-apply` arrive with later batches. An
- * unregistered kind is not a retryable miss: the scheduler settles it `failed`
- * with `no_runner` on the first sighting, having never run anything
+ * Those five are what the app's own write paths produce, plus (for the first
+ * four) what the migration can produce. The migration never produces `snooze`:
+ * the old build wrote the column with no task behind it, so those rows are
+ * reconciled by `releaseDueSnoozedMessages` at startup and in the sync pass,
+ * not by a runner. `draft-discard`/`filter`/`agent-apply` arrive with later
+ * batches. An unregistered kind is not a retryable miss: the scheduler settles
+ * it `failed` with `no_runner` on the first sighting, having never run anything
  * (`scheduler.ts`). `tests/task-wiring.test.ts` asserts the floor at runtime.
  *
  * The optional deps are spread conditionally rather than passed as `undefined`
@@ -292,6 +301,11 @@ export function registerTaskRunners(registry: TaskRegistry, deps: TaskRunnerDeps
     scheduleSentVerification: deps.scheduleSentVerification,
     ...(deps.accessTokenProvider ? { accessTokenProvider: deps.accessTokenProvider } : {}),
     ...(agentMailEvents ? { agentEvents: agentMailEvents } : {}),
+  }));
+  registry.register("snooze", createSnoozeRunner({
+    db,
+    masterKey,
+    ...(deps.onSnoozeReleased ? { onSnoozeReleased: deps.onSnoozeReleased } : {}),
   }));
 }
 
@@ -345,6 +359,7 @@ export function createTaskExecution(deps: TaskExecutionDeps): TaskScheduler {
     ...(deps.agentMailEvents ? { agentMailEvents: deps.agentMailEvents } : {}),
     ...(deps.serverEvents ? { serverEvents: deps.serverEvents } : {}),
     ...(deps.syncAbortSignal ? { syncAbortSignal: deps.syncAbortSignal } : {}),
+    ...(deps.onSnoozeReleased ? { onSnoozeReleased: deps.onSnoozeReleased } : {}),
   });
   return scheduler;
 }

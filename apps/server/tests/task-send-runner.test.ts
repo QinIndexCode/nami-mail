@@ -25,11 +25,12 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { createOutboundAttachment } from "../src/outbound-attachments.js";
 import { prepareSubmission, submissionForId } from "../src/outbox.js";
-import { createSendRunner, type SendTaskDeps } from "../src/tasks/kinds/send.js";
+import { createSendRunner, acceptPreparedSendTask, type SendTaskDeps } from "../src/tasks/kinds/send.js";
 import { createTaskRegistry } from "../src/tasks/registry.js";
 import { startTaskScheduler } from "../src/tasks/scheduler.js";
 import { openTaskPayload, recordTask, reportTaskProgress, taskItems, taskRow } from "../src/tasks/store.js";
 import type { TaskRow, TaskSpec } from "../src/tasks/types.js";
+import type { AccountRecord } from "../src/types.js";
 
 /**
  * The `send` kind: what the runner decides from the ledger's status, what each
@@ -656,5 +657,140 @@ describe("task send runner: rows it cannot execute", () => {
     // only safe answer is to stop and let the recording bug surface.
     expect(sendMail).not.toHaveBeenCalled();
     expect(ledgerStatus(db, world.submissionId)).toBe("pending");
+  });
+});
+
+describe("task send acceptance from an already-prepared submission", () => {
+  const acceptDeps = (target: DatabaseHandle) => ({
+    db: target,
+    masterKey: MASTER_KEY,
+    scheduler: { start: () => undefined },
+  });
+
+  const account = (target: DatabaseHandle): AccountRecord =>
+    target.prepare("SELECT * FROM accounts WHERE id = ?").get(ACCOUNT) as AccountRecord;
+
+  const pendingSentRows = (target: DatabaseHandle, submissionId: string): number =>
+    (target.prepare("SELECT COUNT(*) AS n FROM messages WHERE pending_send = ?").get(submissionId) as { n: number }).n;
+
+  const taskCount = (target: DatabaseHandle, submissionId: string): number =>
+    (target.prepare("SELECT COUNT(*) AS n FROM tasks WHERE submission_id = ?").get(submissionId) as { n: number }).n;
+
+  /** `writePendingSentRow` no-ops without a Sent mailbox, so every row assertion needs one. */
+  const addSentFolder = (target: DatabaseHandle): void => {
+    target.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run(ACCOUNT, "Sent", "Sent", "\\Sent");
+  };
+
+  it("commits the optimistic Sent row and a task keyed by the submission, then sends it", async () => {
+    const world = fixture();
+    db = world.db;
+    addSentFolder(db);
+
+    const accepted = acceptPreparedSendTask(acceptDeps(db), { account: account(db), submissionId: world.submissionId });
+
+    expect(accepted).toMatchObject({ created: true, taskId: world.submissionId });
+    // The key is the submission id, so this lane and the interactive route's
+    // cannot produce two dispatches for one ledger row.
+    expect(taskRow(db, world.submissionId)).toMatchObject({ kind: "send", status: "pending", due_at: null, total: 1 });
+    expect(pendingSentRows(db, world.submissionId)).toBe(1);
+    // Nothing has touched the socket: this is the acceptance's whole promise.
+    expect(sendMail).not.toHaveBeenCalled();
+
+    expect(await drain(depsFor(db), world.submissionId)).toEqual([{ id: world.submissionId, status: "completed" }]);
+
+    expect(sendMail).toHaveBeenCalledTimes(1);
+    expect(ledgerStatus(db, world.submissionId)).toBe("submitted");
+  });
+
+  it("answers a replay without committing a second task or Sent row", () => {
+    const world = fixture();
+    db = world.db;
+    addSentFolder(db);
+
+    const first = acceptPreparedSendTask(acceptDeps(db), { account: account(db), submissionId: world.submissionId });
+    const second = acceptPreparedSendTask(acceptDeps(db), { account: account(db), submissionId: world.submissionId });
+
+    expect(second).toMatchObject({ created: false, taskId: first.taskId });
+    expect(taskCount(db, world.submissionId)).toBe(1);
+    expect(pendingSentRows(db, world.submissionId)).toBe(1);
+  });
+
+  it("commits nothing once the ledger has reached a terminal status", () => {
+    for (const status of ["submitted", "confirmed", "unknown_delivery", "submitting"]) {
+      const world = fixture();
+      db = world.db;
+      addSentFolder(db);
+      setLedger(db, world.submissionId, status);
+
+      const accepted = acceptPreparedSendTask(acceptDeps(db), { account: account(db), submissionId: world.submissionId });
+
+      expect(accepted).toMatchObject({ created: false, taskId: null });
+      expect(taskCount(db, world.submissionId)).toBe(0);
+      expect(pendingSentRows(db, world.submissionId)).toBe(0);
+      db.close();
+      vi.clearAllMocks();
+      sendMail.mockResolvedValue({ messageId: "<provider-id@example.com>" });
+    }
+  });
+
+  it("accepts a definitively failed submission, because that is what a retry is for", async () => {
+    const world = fixture();
+    db = world.db;
+    setLedger(db, world.submissionId, "failed", "smtp_auth_failed");
+
+    const accepted = acceptPreparedSendTask(acceptDeps(db), { account: account(db), submissionId: world.submissionId });
+    expect(accepted.created).toBe(true);
+
+    expect(await drain(depsFor(db), world.submissionId)).toEqual([{ id: world.submissionId, status: "completed" }]);
+    expect(sendMail).toHaveBeenCalledTimes(1);
+    expect(ledgerStatus(db, world.submissionId)).toBe("submitted");
+  });
+
+  it("parks a scheduled submission without an optimistic Sent row", () => {
+    const db2 = openDatabase(":memory:");
+    db = db2;
+    insertAccount(db2);
+    addSentFolder(db2);
+    const sendAt = new Date(Date.now() + 60_000).toISOString();
+    const { submission } = prepareSubmission(db2, MASTER_KEY, {
+      accountId: ACCOUNT,
+      accountEmail: ACCOUNT_EMAIL,
+      request: { to: ["friend@example.com"], subject: "Later", text: "Body", attachmentTokens: [] },
+      sendAt,
+    });
+
+    acceptPreparedSendTask(acceptDeps(db2), { account: account(db2), submissionId: submission.id });
+
+    expect(taskRow(db2, submission.id)?.due_at).toBe(Date.parse(sendAt));
+    // The mail has not left, so a Sent row now would be a false claim.
+    expect(pendingSentRows(db2, submission.id)).toBe(0);
+  });
+
+  it("does not append a second Sent row when one already stands for the submission", () => {
+    const world = fixture();
+    db = world.db;
+    addSentFolder(db);
+    acceptPreparedSendTask(acceptDeps(db), { account: account(db), submissionId: world.submissionId });
+    // The task is gone (pruned, or a database written before this acceptance
+    // existed) but its Sent row is still the claim the user was shown.
+    db.prepare("DELETE FROM tasks WHERE submission_id = ?").run(world.submissionId);
+
+    const accepted = acceptPreparedSendTask(acceptDeps(db), { account: account(db), submissionId: world.submissionId });
+
+    expect(accepted.created).toBe(true);
+    expect(pendingSentRows(db, world.submissionId)).toBe(1);
+  });
+
+  it("refuses a submission that belongs to another account", () => {
+    const world = fixture();
+    db = world.db;
+    insertAccount(db, "acc-2", "second@example.com");
+
+    expect(() => acceptPreparedSendTask(acceptDeps(db), { account: account(db), submissionId: "missing" }))
+      .toThrow('No outbound submission "missing".');
+    expect(() => acceptPreparedSendTask(acceptDeps(db), { account: { ...account(db), id: "acc-2" }, submissionId: world.submissionId }))
+      .toThrow("belongs to another account");
+    expect(taskCount(db, world.submissionId)).toBe(0);
   });
 });

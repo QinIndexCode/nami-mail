@@ -49,6 +49,22 @@ export const FLAGGED_PREDICATE_SQL = `flags_json LIKE '%${FLAGGED_FLAG_TEXT}%'`;
 export const UNSEEN_PREDICATE_SQL = `flags_json NOT LIKE '%${SEEN_FLAG_TEXT}%'`;
 
 /**
+ * The marker that makes `flags_json` the user's target: a `flags` task exists
+ * and has not settled.
+ *
+ * It is written by the local-first commit (`tasks/kinds/flags.ts`) in the same
+ * transaction as the durable task, and cleared only by that task's settlement
+ * (`tasks/settlement.ts`) once no newer push holds the row. That is why it is
+ * the task model's whole answer to "may the provider overwrite this row?" —
+ * reading `task_items` on the sync hot path would answer the same question with
+ * a join; the bit is maintained by the same commitment and costs nothing.
+ */
+export const FLAGS_INTENT_MARKER_SQL = `pending_flags_push = 1`;
+
+/** The same predicate for a write that must leave a pending target alone. */
+export const NO_FLAGS_INTENT_SQL = `pending_flags_push IS NOT 1`;
+
+/**
  * The flag text the server is known to hold, for a row whose local value may be
  * an unconfirmed optimistic write.
  *
@@ -59,7 +75,27 @@ export const UNSEEN_PREDICATE_SQL = `flags_json NOT LIKE '%${SEEN_FLAG_TEXT}%'`;
  * cannot diverge — the settlement hook only clears it after the push behind the
  * row has finished — so both spellings select the same rows for a settled row.
  */
-export const CONFIRMED_FLAGS_SQL = `(CASE WHEN pending_flags_push = 1 THEN COALESCE(pending_flags_base_json, flags_json) ELSE flags_json END)`;
+export const CONFIRMED_FLAGS_SQL = `(CASE WHEN ${FLAGS_INTENT_MARKER_SQL} THEN COALESCE(pending_flags_base_json, flags_json) ELSE flags_json END)`;
+
+/**
+ * The value a reconciler may write over `flags_json` when the provider reports
+ * its own flag set.
+ *
+ * Every sync write of provider flags goes through this, so the one rule — an
+ * unconfirmed local write outranks the remote until its task settles — is
+ * spelled once. The sync's metadata refresh uses {@link NO_FLAGS_INTENT_SQL} in
+ * its `WHERE` instead, because there the changed-row count is itself the signal
+ * (an agent event must not claim a flags change the guard suppressed); every
+ * other reconciler (a move's position confirmation, the sent-placeholder
+ * upsert) needs the assignment to succeed without replacing the target, which
+ * is what this `CASE` does.
+ *
+ * @param remoteSql a SQL expression for the provider's flag text, usually `?`
+ *   or `excluded.flags_json`.
+ */
+export function flagsJsonFromRemoteSql(remoteSql: string): string {
+  return `CASE WHEN ${FLAGS_INTENT_MARKER_SQL} THEN flags_json ELSE ${remoteSql} END`;
+}
 
 /**
  * The view under EITHER reading — the user's target or the server's state.

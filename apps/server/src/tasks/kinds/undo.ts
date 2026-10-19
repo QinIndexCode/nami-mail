@@ -3,7 +3,8 @@ import type { AccountAccessTokenProvider } from "../../mail.js";
 import type { AgentMailEventSink } from "../../agent/mail-state-events.js";
 import { MOVE_LOCATION_UNVERIFIED_ERROR, PENDING_MOVE_RECONCILIATION_ERROR } from "../../message-storage.js";
 import { messageFlagNames, type MessageFlagsPatch } from "../../message-flags.js";
-import { moveMessageToFolder, resolveMoveDestination, type MessageMoveTarget } from "../../sync-moves.js";
+import { moveMessageToFolder } from "../../sync-moves.js";
+import { resolveMoveDestination, type MessageMoveTarget } from "../../move-destinations.js";
 import type { FlagsPushEntry } from "../../flags-outbox.js";
 import type { TaskKind, TaskItemSpec, TaskRow, TaskRunner } from "../types.js";
 import { TASK_UNDO_WINDOW_MS } from "../types.js";
@@ -157,7 +158,10 @@ function planFlagsUndo(masterKey: Buffer, parent: TaskRow): { groups: FlagsRever
  * target-less parent is a real shape rather than an error.
  */
 function moveUndoTarget(masterKey: Buffer, parent: TaskRow): MessageMoveTarget | undefined {
-  return openTaskPayload<MoveTaskPayload>(masterKey, parent)?.target;
+  const payload = openTaskPayload<MoveTaskPayload>(masterKey, parent);
+  // A folder move has no symbolic target to reverse to: the undo restores each
+  // message to the folder it left, which is what `origin_mailbox` already holds.
+  return payload && "target" in payload ? payload.target : undefined;
 }
 
 /**

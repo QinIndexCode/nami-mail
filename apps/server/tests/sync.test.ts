@@ -22,6 +22,7 @@ import {
   type MessageStorageRow,
 } from "../src/message-storage.js";
 import { markSubmissionSubmitted, prepareSubmission, submissionForId } from "../src/outbox.js";
+import { remoteIdLookup } from "../src/message-remote-id.js";
 import {
   MAX_STORED_HTML_BODY_BYTES,
   MAX_STORED_TEXT_BODY_BYTES,
@@ -30,7 +31,7 @@ import {
 import { syncAccount } from "../src/sync.js";
 import { scheduleSentSubmissionVerification, verifySubmissionInSentMailbox } from "../src/sync-sent-verify.js";
 import { batchMoveMessages, moveMessage } from "../src/sync-moves.js";
-import { updateMessageFlags, updateMessageFlagsBatch } from "../src/sync-flags.js";
+import { updateMessageFlags } from "../src/sync-flags.js";
 import {
   ACCOUNT_SYNC_WAIT_MS,
   markAccountMoving,
@@ -176,96 +177,6 @@ describe("IMAP message flag updates", () => {
     const message = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("message-1") as { flags_json: string };
     expect(JSON.parse(message.flags_json)).toEqual(["\\Seen", "$Custom"]);
     expect(folderUnseen(db, "INBOX")).toBe(0);
-  });
-
-  it("applies a batch flag update with one connection and one STORE per flag group", async () => {
-    const now = new Date().toISOString();
-    for (const [id, uid, flags] of [
-      ["message-2", 43, ["\\Seen"]],
-      ["message-3", 44, ["\\Seen", "$Custom"]],
-    ] as const) {
-      db.prepare(`
-        INSERT INTO messages (
-          id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
-          sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(id, "account-1", "INBOX", uid, "Subject", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([...flags]), 0, 0, now);
-    }
-
-    const result = await updateMessageFlagsBatch(
-      db, Buffer.alloc(32, 7), ["message-1", "message-2", "message-3"], { seen: true, flagged: true },
-    );
-
-    expect(result).toEqual({ updated: 3, failed: 0, changedIds: ["message-1", "message-2", "message-3"] });
-    expect(client.connect).toHaveBeenCalledTimes(1);
-    expect(client.getMailboxLock).toHaveBeenCalledTimes(1);
-    // \\Seen already present on all three; only \\Flagged needs a STORE, in one call with all UIDs.
-    expect(client.messageFlagsAdd).toHaveBeenCalledTimes(1);
-    expect(client.messageFlagsAdd).toHaveBeenCalledWith([42, 43, 44], ["\\Flagged"], { uid: true });
-    expect(client.messageFlagsRemove).toHaveBeenCalledTimes(0);
-    expect(lock.release).toHaveBeenCalledTimes(1);
-    expect(client.logout).toHaveBeenCalledTimes(1);
-    for (const id of ["message-1", "message-2", "message-3"]) {
-      const row = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get(id) as { flags_json: string };
-      expect(JSON.parse(row.flags_json)).toEqual(expect.arrayContaining(["\\Seen", "\\Flagged"]));
-    }
-    expect(folderUnseen(db, "INBOX")).toBe(0);
-  });
-
-  it("reports missing and pending-move messages as failed without touching IMAP", async () => {
-    await updateMessageFlags(db, Buffer.alloc(32, 7), "message-1", { seen: false });
-
-    const result = await updateMessageFlagsBatch(
-      db, Buffer.alloc(32, 7), ["message-1", "message-missing"], { seen: true },
-    );
-
-    expect(result).toEqual({ updated: 1, failed: 1, changedIds: ["message-1"] });
-    expect(client.messageFlagsAdd).toHaveBeenCalledTimes(1);
-    expect(client.messageFlagsAdd).toHaveBeenCalledWith([42], ["\\Seen"], { uid: true });
-    const row = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("message-1") as { flags_json: string };
-    expect(JSON.parse(row.flags_json)).toContain("\\Seen");
-  });
-
-  it("does not persist any local changes when the remote batch STORE fails", async () => {
-    client.messageFlagsAdd.mockRejectedValueOnce(new Error("IMAP rejected batch flag update"));
-
-    const result = await updateMessageFlagsBatch(
-      db, Buffer.alloc(32, 7), ["message-1"], { flagged: true },
-    );
-
-    expect(result).toEqual({ updated: 0, failed: 1, changedIds: [] });
-    const row = db.prepare("SELECT flags_json FROM messages WHERE id = ?").get("message-1") as { flags_json: string };
-    expect(JSON.parse(row.flags_json)).toEqual(["\\Seen", "$Custom"]);
-    expect(client.logout).toHaveBeenCalledTimes(1);
-  });
-
-  it("groups messages across mailboxes into separate STORE commands on a shared connection", async () => {
-    const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
-      .run("account-1", "Archive", "Archive", "\\Archive");
-    db.prepare(`
-      INSERT INTO messages (
-        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
-        sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run("message-4", "account-1", "Archive", 99, "Archived", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
-
-    const result = await updateMessageFlagsBatch(
-      db, Buffer.alloc(32, 7), ["message-1", "message-4"], { seen: true },
-    );
-
-    expect(result).toEqual({ updated: 2, failed: 0, changedIds: ["message-4"] });
-    expect(client.connect).toHaveBeenCalledTimes(1);
-    expect(client.getMailboxLock).toHaveBeenCalledTimes(2);
-    expect(client.getMailboxLock).toHaveBeenNthCalledWith(1, "INBOX");
-    expect(client.getMailboxLock).toHaveBeenNthCalledWith(2, "Archive");
-    // Only the Archive message actually needs a STORE; the INBOX message was
-    // already seen, so its mailbox contributes no STORE command.
-    expect(client.messageFlagsAdd).toHaveBeenCalledTimes(1);
-    expect(client.messageFlagsAdd).toHaveBeenCalledWith([99], ["\\Seen"], { uid: true });
-    expect(client.messageFlagsRemove).toHaveBeenCalledTimes(0);
-    expect(folderUnseen(db, "INBOX")).toBe(0);
-    expect(folderUnseen(db, "Archive")).toBe(0);
   });
 
   it("emits a duplicate-destination tombstone from a read taken before the UIDPLUS delete", async () => {
@@ -1252,6 +1163,65 @@ describe("IMAP message flag updates", () => {
     expect(destinationFetch).toHaveBeenCalledWith([1], expect.objectContaining({ uid: true, flags: true }), { uid: true });
   });
 
+  it("confirms a move's destination position without overwriting a pending flags target", async () => {
+    const archive = { path: "Archive", name: "Archive", listed: true, flags: new Set<string>(), specialUse: "\\Archive" };
+    const lookup = remoteIdLookup(masterKey, "account-1", "move-and-flag-id");
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Archive", "Archive", "\\Archive");
+    // The two local intents one message can hold at once: a move UIDPLUS already
+    // confirmed (waiting for the destination copy to be observed), and a read
+    // whose push has not settled. The target is `\Seen`; the provider still
+    // reports the flags from before that write.
+    db.prepare(`
+      UPDATE messages
+      SET remote_id_lookup = ?,
+          payload_metadata_ready = 1,
+          pending_move_destination = 'Archive',
+          pending_move_state = 'confirmed',
+          pending_move_candidate_uid = 84,
+          pending_move_special_use = '\\Archive',
+          flags_json = ?,
+          pending_flags_push = 1,
+          pending_flags_base_json = ?
+      WHERE id = 'message-1'
+    `).run(lookup, JSON.stringify(["\\Seen"]), JSON.stringify([]));
+    const fetch = vi.fn(async function* (range: unknown, query: { source?: unknown }) {
+      if (Array.isArray(range) && range.includes(84)) {
+        yield { uid: 84, emailId: "move-and-flag-id", flags: new Set<string>() };
+        return;
+      }
+      if (query.source) return;
+      // Both the candidate probe and the rolling window see the newest UID.
+      yield { uid: 84, emailId: "move-and-flag-id", flags: new Set<string>() };
+    });
+    Object.assign(client, {
+      mailbox: { exists: 1, uidValidity: 1n },
+      list: vi.fn(async () => [archive]),
+      status: vi.fn(async () => ({ messages: 1, unseen: 0 })),
+      fetch,
+    });
+
+    await expect(syncAccount(db, masterKey, "account-1", 20)).resolves.toMatchObject({ folders: 1, failedFolders: 0 });
+
+    // The move half lands — mailbox, uid and the cleared goal — while every
+    // column of the flags intent survives: `flags_json` is still the target, the
+    // marker still says so, and the baseline is still there for a refused push
+    // to roll back to.
+    expect(db.prepare(`
+      SELECT mailbox, uid, pending_move_destination, pending_move_state,
+             flags_json, pending_flags_push, pending_flags_base_json
+      FROM messages WHERE id = 'message-1'
+    `).get()).toEqual({
+      mailbox: "Archive",
+      uid: 84,
+      pending_move_destination: null,
+      pending_move_state: null,
+      flags_json: JSON.stringify(["\\Seen"]),
+      pending_flags_push: 1,
+      pending_flags_base_json: JSON.stringify([]),
+    });
+  });
+
   it("reconciles a pending move only after an exact opaque remote identity and preserves payload AAD", async () => {
     const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
     const archive = { path: "[Gmail]/All Mail", name: "All Mail", listed: true, flags: new Set<string>(), specialUse: "\\All" };
@@ -1790,6 +1760,64 @@ describe("IMAP message flag updates", () => {
     expect(second).toMatchObject({ synced: 0, folders: 1, failedFolders: 0 });
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch.mock.calls.every(([, query]) => !(query as { source?: unknown }).source)).toBe(true);
+  });
+
+  it("keeps a pending flags target when a metadata refresh rewrites the row with the provider's flags", async () => {
+    const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
+    const source = Buffer.from([
+      "From: Alice <alice@example.com>",
+      "To: Demo <demo@example.com>",
+      "Message-ID: <flagged@example.com>",
+      "Subject: Flagged row",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Body",
+    ].join("\r\n"));
+    // A row whose flags a push has not settled yet, and whose payload metadata
+    // is still missing: the one state in which sync both skips the flags (the
+    // metadata UPDATE's guard) and rewrites the row (`upsert`'s conflict arm).
+    db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, sent_at, flags_json,
+        pending_flags_push, pending_flags_base_json, has_attachments, size, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("flagged-1", "account-1", "INBOX", 99, new Date().toISOString(),
+      JSON.stringify(["\\Seen"]), 1, "[]", 0, 0, new Date().toISOString());
+    const fetch = vi.fn(async function* (_range: unknown, query: { source?: boolean }) {
+      if (query.source) {
+        yield {
+          uid: 99,
+          flags: new Set<string>(),
+          internalDate: new Date("2026-07-20T03:04:05.000Z"),
+          size: source.length,
+          source,
+        };
+        return;
+      }
+      yield { uid: 99, flags: new Set<string>() };
+    });
+    Object.assign(client, {
+      mailbox: { exists: 100 },
+      list: vi.fn(async () => [inbox]),
+      status: vi.fn(async () => ({ messages: 100, unseen: 0 })),
+      fetch,
+    });
+
+    await syncAccount(db, masterKey, "account-1", 20);
+
+    // The hydration half ran (the provider's payload replaced the local one),
+    // but the flags half of the same upsert kept the unconfirmed target. Without
+    // the guard `flags_json` would read `[]`, and `CONFIRMED_FLAGS_SQL` would
+    // report the message as unread for the rest of the push's life.
+    expect(db.prepare(`
+      SELECT flags_json, pending_flags_push, pending_flags_base_json, payload_metadata_ready
+      FROM messages WHERE id = ?
+    `).get("flagged-1")).toEqual({
+      flags_json: JSON.stringify(["\\Seen"]),
+      pending_flags_push: 1,
+      pending_flags_base_json: "[]",
+      payload_metadata_ready: 1,
+    });
   });
 
   it("skips the metadata refresh pass for rows written with complete metadata", async () => {

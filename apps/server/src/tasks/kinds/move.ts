@@ -11,7 +11,8 @@ import {
   MOVE_LOCATION_UNVERIFIED_ERROR,
   moveActionBlockedError,
 } from "../../message-storage.js";
-import { batchMoveMessages, resolveMoveDestination, type MessageMoveTarget } from "../../sync-moves.js";
+import { batchMoveMessages } from "../../sync-moves.js";
+import { resolveFolderDestination, resolveMoveDestination, type MessageMoveTarget } from "../../move-destinations.js";
 import { moveStatements, type MoveDestination } from "../../sync-move-statements.js";
 import type { AgentMailEventSink } from "../../agent/mail-state-events.js";
 import { emitAccountSynced, type ServerEventBus } from "../../events.js";
@@ -276,8 +277,25 @@ export type MoveRefusalReason =
 
 export type MoveRefusal = { id: string; reason: MoveRefusalReason };
 
+/**
+ * Where a move is headed. A named target is resolved through SPECIAL-USE once
+ * per account, which is why the same selection can span accounts whose folders
+ * are named differently; a folder path names one folder inside each message's
+ * own account, and an account that does not have it refuses its slice.
+ *
+ * The two shapes are exclusive by construction, mirroring
+ * `MailMessageDestination` on the Agent side so neither layer can express
+ * "archive, and also this folder".
+ */
+export type MoveTaskDestination = { target: MessageMoveTarget } | { folderPath: string };
+
 export type AcceptMoveInput = {
-  target: MessageMoveTarget;
+  /**
+   * Where the selection goes: one named target, or one explicit folder of each
+   * message's own account. A folder selection is what the Agent's `moveMessage`
+   * carries; the routes only ever name a target.
+   */
+  destination: MoveTaskDestination;
   messageIds: readonly string[];
   /**
    * Caller-chosen job id, for the batch-job entry only.
@@ -415,7 +433,9 @@ export function acceptMoveTask(deps: CommitTaskDeps, input: AcceptMoveInput): Mo
     if (!resolved.has(accountId)) {
       let destination: MoveDestination | null = null;
       try {
-        destination = resolveMoveDestination(deps.db, accountId, input.target);
+        destination = "target" in input.destination
+          ? resolveMoveDestination(deps.db, accountId, input.destination.target)
+          : resolveFolderDestination(deps.db, accountId, input.destination.folderPath);
       } catch {
         // An account without a target folder (or one mid-teardown) cannot take
         // this move; its messages are refused rather than queued forever.
@@ -525,7 +545,9 @@ export function acceptMoveTask(deps: CommitTaskDeps, input: AcceptMoveInput): Mo
         total: plan.items.length,
         undoWindowMs: input.undoWindowMs,
         items: plan.items,
-        payload: { target: input.target },
+        payload: "target" in input.destination
+          ? { target: input.destination.target }
+          : { folderPath: input.destination.folderPath },
         now,
       });
       // The opening counters, written in the acceptance's own transaction. Only
@@ -681,9 +703,10 @@ export function createAccountConnections(db: DatabaseHandle, masterKey: Buffer, 
   };
 }
 
-/** What a move task's sealed payload carries. `migrate.ts:409-411` rebuilds it
- * from a legacy job's `target`. */
-export type MoveTaskPayload = { target: MessageMoveTarget };
+/** What a move task's sealed payload carries. `migrate.ts:390-394` rebuilds the
+ * target form from a legacy job's `target`; a folder form only ever comes from
+ * an Agent move, which has no legacy job to migrate. */
+export type MoveTaskPayload = MoveTaskDestination;
 
 /**
  * What the runner needs from the built app.
@@ -766,7 +789,16 @@ export type MoveRunnerDeps = {
  */
 export function createMoveRunner(deps: MoveRunnerDeps): TaskRunner<MoveTaskPayload> {
   return async ({ task, payload, report }) => {
-    if (!payload?.target) {
+    // One of the two shapes, or nothing to deliver. The payload is sealed at
+    // acceptance, so an absent/unknown shape means the row predates or outlived
+    // its descriptor.
+    let selection: MessageMoveTarget | { folderPath: string } | null = null;
+    if (payload) {
+      selection = "target" in payload
+        ? payload.target
+        : payload.folderPath ? { folderPath: payload.folderPath } : null;
+    }
+    if (!selection) {
       // Not a retryable failure: a payload that is missing or unreadable now will
       // be just as missing on the eighth attempt, and the backoff rounds in
       // between are pure delay. Settling `failed` also fires the
@@ -790,7 +822,7 @@ export function createMoveRunner(deps: MoveRunnerDeps): TaskRunner<MoveTaskPaylo
           deps.db,
           deps.masterKey,
           ids.slice(offset, offset + MOVE_CHUNK_SIZE),
-          payload.target,
+          selection,
           deps.accessTokenProvider,
           deps.agentMailEvents,
           connections.cache,

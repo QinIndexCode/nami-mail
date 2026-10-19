@@ -266,13 +266,18 @@ type Deltas = Array<{ updated?: number; failed?: number }>;
  * attempts that matter most are the ones that throw -- and what they reported
  * before throwing has to survive the exception.
  */
-async function attempt(db: DatabaseHandle, taskId: string, deltas: Deltas = []): Promise<void> {
+async function attempt(
+  db: DatabaseHandle,
+  taskId: string,
+  deltas: Deltas = [],
+  payload: MoveTaskPayload = { target: "archive" },
+): Promise<void> {
   const runner = createMoveRunner({ db, masterKey: MASTER_KEY });
   const task = taskRow(db, taskId);
   expect(task, `${taskId} must exist`).toBeDefined();
   await runner({
     task: task as TaskRow,
-    payload: { target: "archive" },
+    payload,
     items: taskItems(db, taskId),
     report: (delta) => {
       deltas.push(delta);
@@ -348,6 +353,23 @@ describe("task move runner: the happy path through the real scheduler", () => {
     expect(folderCounts(db, SOURCE)).toEqual({ total: 0, unseen: 0 });
     expect(folderCounts(db, DESTINATION)).toEqual({ total: 3, unseen: 3 });
     expect(moveCalls).toEqual([[1, 2, 3]]);
+  });
+
+  it("delivers a folder selection to the path its payload names", async () => {
+    const world = fixture(2);
+    db = world.db;
+    // The acceptance writes the folder form; the runner is handed the same
+    // payload the scheduler unseals from the row. The socket is the only fake.
+    const taskId = acceptMove(db, world.ids, { folderPath: DESTINATION });
+    const deltas: Deltas = [];
+
+    await attempt(db, taskId, deltas, { folderPath: DESTINATION });
+
+    expect(moveCalls).toEqual([[1, 2]]);
+    expect(deltas).toEqual([{ updated: 2, failed: 0 }]);
+    for (const id of world.ids) {
+      expect(messageState(db, id)).toEqual({ mailbox: DESTINATION, pending_move_destination: null, pending_move_state: null });
+    }
   });
 });
 

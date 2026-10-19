@@ -1,7 +1,6 @@
 import type { DatabaseHandle } from "./db.js";
 import { messagePayloadForRow, type MessageStorageRow } from "./message-storage.js";
 import type { NewInboxMessage } from "./sync.js";
-import { toUtcIsoTimestamp } from "./utc-time.js";
 
 export function snoozedUntilValue(db: DatabaseHandle, messageId: string): string | null {
   const row = db.prepare("SELECT snoozed_until FROM messages WHERE id = ?").get(messageId) as
@@ -11,24 +10,12 @@ export function snoozedUntilValue(db: DatabaseHandle, messageId: string): string
 }
 
 /**
- * Marks a message as snoozed until the given ISO time. R05: the stored value
- * is the UTC ("Z") form of the same instant — the snoozed view and the due
- * release compare snoozed_until as a STRING, and an offset form sorts
- * wrongly. Returns the normalized value for the API reply.
+ * The writes that set or clear a snooze live in `tasks/kinds/snooze.ts` now.
+ * They commit `messages.snoozed_until` and the task that releases it in one
+ * transaction, so a caller that wrote the column here could hide a message with
+ * nothing left to bring it back. What remains in this module is the read side,
+ * plus the reconciliation pass below.
  */
-export function setMessageSnoozed(db: DatabaseHandle, messageId: string, untilIso: string): string {
-  const normalized = toUtcIsoTimestamp(untilIso);
-  if (!normalized) throw new Error("稍后处理时间无效。");
-  const result = db.prepare("UPDATE messages SET snoozed_until = ? WHERE id = ?").run(normalized, messageId);
-  if (result.changes !== 1) throw new Error("邮件不存在。");
-  return normalized;
-}
-
-/** Cancels the snooze so the message is visible again immediately. */
-export function clearMessageSnooze(db: DatabaseHandle, messageId: string): void {
-  const result = db.prepare("UPDATE messages SET snoozed_until = NULL WHERE id = ?").run(messageId);
-  if (result.changes !== 1) throw new Error("邮件不存在。");
-}
 
 /** Rows for the "Snoozed" view: messages whose snooze has not fired yet. */
 export function listSnoozedMessages(db: DatabaseHandle, nowIso = new Date().toISOString()): MessageStorageRow[] {
@@ -44,6 +31,13 @@ export function listSnoozedMessages(db: DatabaseHandle, nowIso = new Date().toIS
 /**
  * Releases snoozed messages whose time has arrived, returning them for the
  * new-mail notification pipeline so the Inbox re-displays them and alerts.
+ *
+ * The scheduler's `snooze` runner is the normal path now, and it clears the
+ * column at the instant the acceptance stored. This pass remains the
+ * reconciliation half: rows written by a build that had no task behind them (or
+ * whose task was lost) would otherwise stay hidden forever. It is deliberately
+ * unconditional -- clearing a row the runner already cleared is a no-op -- so the
+ * two writers cannot disagree.
  */
 export function releaseDueSnoozedMessages(
   db: DatabaseHandle,
