@@ -722,6 +722,9 @@ export function markSubmissionUnknownDelivery(
   errorCode: string,
   errorMessage: string,
 ): OutboundSubmission {
+  const current = submissionById(db, id);
+  // A later write knows less: `submitted` may have committed while its read-back threw.
+  if (current?.status === "submitted" || current?.status === "confirmed") return publicSubmission(current, masterKey);
   return updateSubmission(db, masterKey, id, { status: "unknown_delivery", errorCode, errorMessage });
 }
 
@@ -765,12 +768,8 @@ function isKnownPreAcceptanceFailure(code: MailErrorCode, error: unknown): boole
   // intentionally excluded: socket timeout/reset errors may be reported with
   // that command even when the final delivery response was lost.
   const command = smtpCommand(error);
-  return command === "EHLO"
-    || command === "HELO"
-    || command === "AUTH"
-    || command === "MAIL FROM"
-    || command === "RCPT TO"
-    || command === "DATA";
+  return command === "EHLO" || command === "HELO" || command === "AUTH"
+    || command === "MAIL FROM" || command === "RCPT TO" || command === "DATA";
 }
 
 export function deliveryFailureStatus(error: unknown): "failed" | "unknown_delivery" {

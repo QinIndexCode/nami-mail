@@ -8,6 +8,7 @@ import {
   SubmissionConflictError,
   confirmSubmissionsInSent,
   deliveryFailureStatus,
+  markSubmissionConfirmed,
   markSubmissionSubmitted,
   markSubmissionUnknownDelivery,
   migrateOutboundSubmissionStorage,
@@ -108,6 +109,25 @@ describe("durable outbound submissions", () => {
     Object.assign(new Error("Mailbox unavailable"), { responseCode: 550, command: "RCPT TO" }),
   ])("keeps an explicit pre-acceptance failure safely retryable", (error) => {
     expect(deliveryFailureStatus(error)).toBe("failed");
+  });
+
+  it("never lets an unknown-delivery write downgrade a submitted or confirmed row", () => {
+    const { submission } = prepareSubmission(db, masterKey, {
+      accountId: "account-1",
+      accountEmail: "sender@example.com",
+      request,
+    });
+    markSubmissionSubmitted(db, masterKey, submission.id, "<sent-1@example.com>");
+
+    // The record-failed path is the reachable case: `markSubmissionSubmitted`
+    // commits before it re-reads, so a read-back failure lands in the fallback
+    // even though the mailbox already says "sent".
+    const afterFailure = markSubmissionUnknownDelivery(db, masterKey, submission.id, "submission_record_failed", "record write failed");
+    expect(afterFailure.deliveryStatus).toBe("submitted");
+
+    markSubmissionConfirmed(db, masterKey, submission.id);
+    const afterConfirm = markSubmissionUnknownDelivery(db, masterKey, submission.id, "smtp_attempt_unconfirmed", "still unknown");
+    expect(afterConfirm.deliveryStatus).toBe("confirmed");
   });
 
   it("reuses one RFC Message-ID for an idempotent request and never restarts an unknown delivery", () => {

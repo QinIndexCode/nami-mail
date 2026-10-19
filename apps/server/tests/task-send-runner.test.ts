@@ -380,6 +380,56 @@ describe("task send runner: the ledger status is the judgement table", () => {
     }
   });
 
+  it("settles its own verdict while the scheduler is still waiting, not after it gives up", async () => {
+    vi.useFakeTimers();
+    try {
+      const world = fixture();
+      db = world.db;
+      const taskId = sendTask(db, world.submissionId);
+      sendMail.mockImplementation(() => new Promise(() => {}));
+
+      // The real scheduler owns this run, so its 300s abandonment timer is live
+      // too. The runner's deadline sits inside that budget; if the internal
+      // timeout were removed (or placed past 300s), the scheduler would abandon
+      // attempt one and the task would settle on a retry instead of on the
+      // runner's own verdict. The size of the 10s reserve is not observable here
+      // -- both timers writing at the same instant still leave one attempt --
+      // so this pins the ordering, not the margin.
+      const pending = drain(depsFor(db), taskId);
+      await vi.advanceTimersByTimeAsync(TASK_RUN_TIMEOUT_MS);
+
+      expect(await pending).toEqual([{ id: taskId, status: "unknown_delivery" }]);
+      expect(sendMail).toHaveBeenCalledTimes(1);
+      expect(ledgerStatus(db, world.submissionId)).toBe("unknown_delivery");
+      // One attempt: the runner settled the row itself rather than letting the
+      // scheduler's timeout turn this into a retry.
+      expect(taskRow(db, taskId)).toMatchObject({ status: "unknown_delivery", attempt_count: 1, total: 1, updated: 0, failed: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses a second executor while the first owns the claim", async () => {
+    const world = fixture();
+    db = world.db;
+    const taskId = sendTask(db, world.submissionId);
+    let finish: (result: { messageId: string }) => void = () => undefined;
+    sendMail.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+
+    // The first attempt is suspended inside the socket, so the ledger reads
+    // `submitting`. The second one must back off and touch nothing: the live
+    // owner is the only attempt allowed to decide this mail's outcome.
+    const first = attempt(depsFor(db), taskId, []);
+    const second = await attempt(depsFor(db), taskId, []);
+    expect(second).toMatchObject({ message: expect.stringContaining("already owned by another attempt") });
+    expect(ledgerStatus(db, world.submissionId)).toBe("submitting");
+
+    finish({ messageId: "<provider-id@example.com>" });
+    expect(await first).toBeUndefined();
+    expect(sendMail).toHaveBeenCalledTimes(1);
+    expect(ledgerStatus(db, world.submissionId)).toBe("submitted");
+  });
+
   it("ends an unknown_delivery submission terminally, without touching the socket", async () => {
     const world = fixture();
     db = world.db;
@@ -620,11 +670,12 @@ describe("task send runner: what each failure means", () => {
     expect(await drain(depsFor(db), taskId)).toEqual([{ id: taskId, status: "completed" }]);
 
     // Exactly one SMTP call. The mail went out, so the task must not end `failed`:
-    // the settle hook retracts the optimistic Sent row for every non-completed
-    // status, which would hide a message the transport accepted. The ledger is
-    // moved to `unknown_delivery` instead -- the confirmable, non-retryable state
-    // -- so verification can still find the mail and no automatic retry resends
-    // it. If that write fails too, startup recovery converts the `submitting` row.
+    // `failed` is the one terminal status that asks the settle hook to put things
+    // back, and that hook retracts the optimistic Sent row -- the version of this
+    // failure that hides a message the transport accepted. The ledger is moved to
+    // `unknown_delivery` instead -- the confirmable, non-retryable state -- so
+    // verification can still find the mail and no automatic retry resends it. If
+    // that write fails too, startup recovery converts the `submitting` row.
     expect(sendMail).toHaveBeenCalledTimes(1);
     expect(ledgerStatus(db, world.submissionId)).toBe("unknown_delivery");
     expect(ledgerError(db, world.submissionId).error_code).toBe("submission_record_failed");
