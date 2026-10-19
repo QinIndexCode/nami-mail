@@ -1,0 +1,22 @@
+{
+  // Runtime config for the dev server, which `scripts/run-server-node.mjs
+  // --watch` starts through tsx.
+  //
+  // The base config carries a `paths` alias on the SQLite driver's package name
+  // so that `tsc` can see the declarations the package ships: it publishes an
+  // `exports` map with no `types` condition, and nothing else makes them
+  // resolvable. That alias exists for the type checker alone, but tsx applies
+  // tsconfig `paths` to *runtime* resolution too, so importing the driver by its
+  // package name loads `index.d.ts` — a declaration file, whose `export =
+  // Database` is erased before it runs — and the server dies at startup with
+  // `ReferenceError: Database is not defined`. Emptying `paths` here keeps the
+  // alias out of every runtime resolution while `tsc -p tsconfig.json` keeps
+  // using it.
+  //
+  // Everything else is inherited, so this file tracks the base config instead of
+  // restating it. See src/native-sqlite.ts for the seam that consumes the driver.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {}
+  }
+}
