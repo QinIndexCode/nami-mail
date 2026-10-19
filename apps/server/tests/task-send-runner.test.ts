@@ -27,7 +27,7 @@ import { createOutboundAttachment } from "../src/outbound-attachments.js";
 import { prepareSubmission, submissionForId } from "../src/outbox.js";
 import { createSendRunner, acceptPreparedSendTask, type SendTaskDeps } from "../src/tasks/kinds/send.js";
 import { createTaskRegistry } from "../src/tasks/registry.js";
-import { startTaskScheduler } from "../src/tasks/scheduler.js";
+import { startTaskScheduler, TASK_RUN_TIMEOUT_MS } from "../src/tasks/scheduler.js";
 import { openTaskPayload, recordTask, reportTaskProgress, taskItems, taskRow } from "../src/tasks/store.js";
 import type { TaskRow, TaskSpec } from "../src/tasks/types.js";
 import type { AccountRecord } from "../src/types.js";
@@ -45,8 +45,10 @@ import type { AccountRecord } from "../src/types.js";
  *      retry depends on;
  *   3. `submitted` and `confirmed` are idempotent: the double-dispatch net, where
  *      a second claim must not become a second email;
- *   4. `submitting` is a retryable wait, never an SMTP attempt, because
- *      `submitting` claims an attempt and this attempt did not happen;
+ *   4. `submitting` is never an SMTP attempt: a fresh claim waits out a live
+ *      owner, while a claim older than the scheduler's run timeout is converted
+ *      to `unknown_delivery` rather than left to exhaust the ladder into
+ *      `failed`;
  *   5. `unknown_delivery` is terminal with no socket, because a retry could
  *      deliver the mail twice;
  *
@@ -306,7 +308,7 @@ describe("task send runner: the ledger status is the judgement table", () => {
     }
   });
 
-  it("waits out a submitting submission instead of starting a second SMTP attempt", async () => {
+  it("waits out a fresh submitting submission instead of starting a second SMTP attempt", async () => {
     const world = fixture();
     db = world.db;
     const taskId = sendTask(db, world.submissionId);
@@ -323,9 +325,59 @@ describe("task send runner: the ledger status is the judgement table", () => {
     expect(ledgerStatus(db, world.submissionId)).toBe("submitting");
 
     // Spelled out through the ladder: with the attempt budget spent it ends
-    // failed, still without ever touching the socket.
+    // failed, still without ever touching the socket. That is acceptable here
+    // because the claim is fresh -- its owner is the one that will record the
+    // outcome -- so the task's failure is not the mail's last word.
     expect(await drain(depsFor(db), taskId, { maxAttempts: 1 })).toEqual([{ id: taskId, status: "failed" }]);
     expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it("converts a stale submitting claim to unknown_delivery instead of failing the task", async () => {
+    const world = fixture();
+    db = world.db;
+    const taskId = sendTask(db, world.submissionId);
+    // Older than the scheduler's run timeout plus the retry ceiling: no live
+    // executor can still own this claim, so waiting cannot learn anything new.
+    db.prepare("UPDATE outbound_submissions SET status = 'submitting', updated_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 10 * 60_000).toISOString(), world.submissionId);
+
+    expect(await drain(depsFor(db), taskId)).toEqual([{ id: taskId, status: "unknown_delivery" }]);
+
+    // The truthful verdict: the attempt vanished without recording an outcome,
+    // and the mail may have left. `failed` would invite a resend.
+    expect(sendMail).not.toHaveBeenCalled();
+    expect(ledgerStatus(db, world.submissionId)).toBe("unknown_delivery");
+    expect(ledgerError(db, world.submissionId).error_code).toBe("submission_interrupted");
+    expect(taskRow(db, taskId)).toMatchObject({ status: "unknown_delivery", total: 1, updated: 0, failed: 1 });
+  });
+
+  it("turns its own SMTP timeout into unknown_delivery before the scheduler abandons the run", async () => {
+    vi.useFakeTimers();
+    try {
+      const world = fixture();
+      db = world.db;
+      const taskId = sendTask(db, world.submissionId);
+      // A socket that never answers. The runner must not wait for the scheduler's
+      // timeout, because the scheduler leaves the ledger `submitting` when it gives
+      // up on a runner it cannot cancel.
+      sendMail.mockImplementation(() => new Promise(() => {}));
+
+      const deltas: Deltas = [];
+      const pending = attempt(depsFor(db), taskId, deltas);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(TASK_RUN_TIMEOUT_MS);
+
+      const thrown = await pending;
+      expect(thrown).toMatchObject({ name: "TaskAbortError", status: "unknown_delivery", code: "smtp_attempt_unconfirmed" });
+      expect(deltas).toEqual([{ failed: 1 }]);
+      expect(sendMail).toHaveBeenCalledTimes(1);
+      expect(ledgerStatus(db, world.submissionId)).toBe("unknown_delivery");
+      // Not a code the renderer classifies as a retryable timeout: the mail may
+      // already be out, so the advice must be "check Sent", not "try again".
+      expect(ledgerError(db, world.submissionId).error_code).toBe("smtp_attempt_unconfirmed");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ends an unknown_delivery submission terminally, without touching the socket", async () => {
@@ -556,7 +608,7 @@ describe("task send runner: what each failure means", () => {
     expect(sendMail).not.toHaveBeenCalled();
   });
 
-  it("does not send a second copy when recording the send fails", async () => {
+  it("keeps a sent mail's task completed when recording the send fails", async () => {
     const world = fixture();
     db = world.db;
     const taskId = sendTask(db, world.submissionId);
@@ -565,21 +617,18 @@ describe("task send runner: what each failure means", () => {
     // and the ledger saying so.
     db.prepare("CREATE TRIGGER zz_refuse_submitted BEFORE UPDATE OF status ON outbound_submissions WHEN NEW.status = 'submitted' BEGIN SELECT RAISE(ABORT, 'ledger write refused'); END").run();
 
-    expect(await drain(depsFor(db), taskId)).toEqual([{ id: taskId, status: "failed" }]);
+    expect(await drain(depsFor(db), taskId)).toEqual([{ id: taskId, status: "completed" }]);
 
-    // Exactly one SMTP call across the whole ladder. The mail went out on the
-    // first attempt, and because the tail of the runner sits outside the SMTP
-    // catch, the ledger is left `submitting` -- which is true, an attempt was in
-    // flight and its outcome could not be recorded -- so every later attempt waits
-    // on that claim instead of sending again. Sending twice is the one outcome
-    // this runner exists to make impossible, and this is the window where it is
-    // hardest to avoid.
+    // Exactly one SMTP call. The mail went out, so the task must not end `failed`:
+    // the settle hook retracts the optimistic Sent row for every non-completed
+    // status, which would hide a message the transport accepted. The ledger is
+    // moved to `unknown_delivery` instead -- the confirmable, non-retryable state
+    // -- so verification can still find the mail and no automatic retry resends
+    // it. If that write fails too, startup recovery converts the `submitting` row.
     expect(sendMail).toHaveBeenCalledTimes(1);
-    expect(ledgerStatus(db, world.submissionId)).toBe("submitting");
-    // The retryable attempts reported nothing, so the row is short of its unit;
-    // closing that remainder is the permanent-failure hook's obligation (contract
-    // §4.7 D), and the ledger's `submitting` is the startup recovery's business.
-    expect(taskRow(db, taskId)).toMatchObject({ status: "failed", attempt_count: 8 });
+    expect(ledgerStatus(db, world.submissionId)).toBe("unknown_delivery");
+    expect(ledgerError(db, world.submissionId).error_code).toBe("submission_record_failed");
+    expect(taskRow(db, taskId)).toMatchObject({ status: "completed", attempt_count: 1, total: 1, updated: 1, failed: 0 });
   });
 });
 

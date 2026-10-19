@@ -12,6 +12,14 @@ import { updateMessageFlags } from "./sync-flags.js";
  * reused flag/move operations can open their own IMAP session. Each message is
  * handled by at most the first matching rule (in rule position order); a failed
  * action stops that rule's remaining actions but never fails the sync itself.
+ *
+ * These writes stay synchronous, and the exemption covers moves as well as flags
+ * (contract §4.7 B1, v41). A rule is a sequence of actions performed in order on
+ * one message; routing some through `commitTask` and leaving others inline would
+ * let `archive` land after a later `mark_seen` targets the pre-move row, so the
+ * rule would act on a copy that no longer holds it. The pass is also server-driven
+ * maintenance inside sync, with no user waiting on any one message, so a task per
+ * action would be a task storm for no observable immediacy.
  */
 export async function applyFilterRulesToNewMessages(
   db: DatabaseHandle,

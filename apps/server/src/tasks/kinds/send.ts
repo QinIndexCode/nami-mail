@@ -28,9 +28,10 @@ import {
 } from "../../outbox.js";
 import { hasPendingSentRow, writePendingSentRow } from "../../pending-sent.js";
 import { detectProvider } from "../../providers.js";
+import { withTimeout } from "../../sync-locks.js";
 import type { AccountRecord } from "../../types.js";
 import { isoToEpochMs } from "../../utc-time.js";
-import { TaskAbortError } from "../scheduler.js";
+import { TASK_RUN_TIMEOUT_MS, TaskAbortError } from "../scheduler.js";
 import { commitTask, taskIdForSubmission, type CommitTaskDeps } from "../store.js";
 import type { TaskRunner } from "../types.js";
 
@@ -457,6 +458,42 @@ function discardPendingSendTask(db: DatabaseHandle, submissionId: string): numbe
   return result.changes;
 }
 
+/** Reserved after the SMTP race for the ledger write that records the verdict. */
+const SMTP_POST_SEND_RESERVE_MS = 10_000;
+
+/** Below this there is no time to finish a claimed attempt, so none is claimed. */
+const SMTP_ATTEMPT_MIN_MS = 30_000;
+
+/**
+ * How long a `submitting` claim may be trusted as live.
+ *
+ * The scheduler abandons any runner after `TASK_RUN_TIMEOUT_MS`, and the next
+ * attempt can wait at most its default maximum backoff (30s). One minute of
+ * slack on top of both bounds means a row older than this cannot belong to a
+ * live scheduler run: its owner either finished (and the status would have
+ * moved on) or was abandoned.
+ */
+const SUBMITTING_CLAIM_STALE_MS = TASK_RUN_TIMEOUT_MS + 60_000;
+
+// Spelled without "timeout"/"timed out": the web layer's classifier turns those
+// words into a retryable connection error (`errorPresentation.ts:145`), which is
+// the wrong advice for a mail that may already have left. This code is meant to
+// fall through to the localized "delivery unconfirmed" notice.
+const SMTP_ATTEMPT_TIMEOUT_CODE = "smtp_attempt_unconfirmed";
+const SMTP_ATTEMPT_TIMEOUT_MESSAGE = "The SMTP attempt did not finish in time, so delivery is unconfirmed. Check Sent before sending again.";
+const INTERRUPTED_CLAIM_CODE = "submission_interrupted";
+const INTERRUPTED_CLAIM_MESSAGE = "The previous SMTP attempt was interrupted before delivery could be confirmed. Check Sent before sending again.";
+const SUBMISSION_RECORD_FAILED_CODE = "submission_record_failed";
+const SUBMISSION_RECORD_FAILED_MESSAGE = "The message was sent, but its delivery record could not be updated; it should appear in Sent.";
+
+/** Distinguishes the race's own timeout from every error the transport throws. */
+class SmtpAttemptTimeoutError extends Error {
+  constructor() {
+    super(SMTP_ATTEMPT_TIMEOUT_MESSAGE);
+    this.name = "SmtpAttemptTimeoutError";
+  }
+}
+
 /**
  * The `send` executor.
  *
@@ -466,11 +503,11 @@ function discardPendingSendTask(db: DatabaseHandle, submissionId: string): numbe
  *   - `pending` / `failed` -> claim and send. `startSubmission` names exactly
  *     these two as attemptable, and `failed` being attemptable is what the
  *     interactive route's manual retry relies on (`routes/messages.ts:853`).
- *   - `submitting` -> a retryable throw, no SMTP. Under the task layer this can
- *     only be a stale claim left by a dead process, and the startup
- *     `recoverInterruptedSubmissions` pass is what converts those to
- *     `unknown_delivery`; this branch is the defensive answer for the window
- *     before it runs, or for two executors racing on one row.
+ *   - `submitting` -> no SMTP. A fresh claim may still be owned by a live
+ *     executor, so this attempt waits; a claim older than the scheduler's run
+ *     timeout cannot belong to a live run, so it is converted to
+ *     `unknown_delivery` here. Waiting on the startup recovery alone is what
+ *     let a possibly-delivered mail end as `failed` after the ladder ran out.
  *   - `unknown_delivery` -> terminal, no SMTP. Retrying could deliver the mail a
  *     second time, which is the whole reason `startSubmission` refuses to retry
  *     this state automatically.
@@ -523,6 +560,10 @@ function discardPendingSendTask(db: DatabaseHandle, submissionId: string): numbe
  */
 export function createSendRunner(deps: SendTaskDeps): TaskRunner<undefined> {
   return async ({ task, report }) => {
+    // The scheduler's timeout is the outer bound; this one reserves enough of it
+    // to record the outcome. A timeout here is the runner's own verdict, so it
+    // cannot leave the row `submitting` for the startup recovery to guess at.
+    const smtpDeadline = Date.now() + TASK_RUN_TIMEOUT_MS - SMTP_POST_SEND_RESERVE_MS;
     // The count is the row's remainder, not a delta: `report` adds, so a resumed
     // task must never be able to add the same unit twice. `task` is the claimed
     // row, and this runner is the only writer of these two columns for it.
@@ -581,6 +622,21 @@ export function createSendRunner(deps: SendTaskDeps): TaskRunner<undefined> {
       return;
     }
     if (status === "submitting") {
+      // A fresh claim belongs to an attempt that may still be in flight, and
+      // taking it over would risk a second SMTP conversation. A stale claim has
+      // no live owner left, so waiting is pointless: the truthful terminal is
+      // "the mail may have left". Converting here is what keeps the ladder from
+      // exhausting into `failed`, which would invite a resend of a mail that was
+      // possibly delivered.
+      const claimedAt = isoToEpochMs(submission.updatedAt);
+      // An unreadable timestamp must not make a claim look fresh forever: no
+      // live executor can be proven from it, so it is treated as stale.
+      const claimAge = claimedAt === undefined ? Number.POSITIVE_INFINITY : Date.now() - claimedAt;
+      if (claimAge >= SUBMITTING_CLAIM_STALE_MS) {
+        markSubmissionUnknownDelivery(deps.db, deps.masterKey, submissionId, INTERRUPTED_CLAIM_CODE, INTERRUPTED_CLAIM_MESSAGE);
+        countFailed();
+        throw new TaskAbortError("unknown_delivery", INTERRUPTED_CLAIM_MESSAGE, INTERRUPTED_CLAIM_CODE);
+      }
       throw new Error(`Outbound submission "${submissionId}" is already owned by another attempt.`);
     }
     if (status === "unknown_delivery") {
@@ -639,6 +695,14 @@ export function createSendRunner(deps: SendTaskDeps): TaskRunner<undefined> {
         request.attachmentTokens,
       );
       linkOutboundAttachmentsToSubmission(deps.db, account.id, submissionId, request.attachmentTokens);
+      // Claiming is what says "an SMTP attempt owns this row", so it must not
+      // happen when the attempt has too little of the scheduler's budget left to
+      // finish. Thrown retryable and before `startSubmission`: no claim is made,
+      // so the next attempt reads a `pending` row rather than waiting out a
+      // `submitting` one this process could never resolve.
+      if (smtpDeadline - Date.now() < SMTP_ATTEMPT_MIN_MS) {
+        throw new Error(`No time left to finish the SMTP attempt for "${submissionId}"; retrying.`);
+      }
       attempt = startSubmission(deps.db, deps.masterKey, submissionId);
     } catch (error) {
       if (!(error instanceof OutboundAttachmentError)) {
@@ -670,7 +734,13 @@ export function createSendRunner(deps: SendTaskDeps): TaskRunner<undefined> {
     // accepted just before the connection went away.
     let result: { messageId: string };
     try {
-      result = await sendMail(account, deps.masterKey, {
+      // The race is bounded here rather than left to the scheduler: the scheduler
+      // abandons a runner without cancelling the transport, which would leave the
+      // ledger `submitting` until startup recovery -- and the retry ladder, which
+      // is much shorter than that recovery's trigger, could exhaust into `failed`
+      // first. Timing out ourselves turns the same uncertainty into the correct
+      // terminal verdict, with enough of the run budget left to write it.
+      const smtp = sendMail(account, deps.masterKey, {
         to: request.to,
         cc: request.cc,
         messageId: attempt.submission.messageId,
@@ -680,7 +750,22 @@ export function createSendRunner(deps: SendTaskDeps): TaskRunner<undefined> {
         html: request.html,
         attachments,
       }, deps.accessTokenProvider);
+      result = await withTimeout(
+        smtp,
+        Math.max(1, smtpDeadline - Date.now()),
+        SMTP_ATTEMPT_TIMEOUT_MESSAGE,
+        new SmtpAttemptTimeoutError(),
+      );
     } catch (error) {
+      if (error instanceof SmtpAttemptTimeoutError) {
+        // The transport may still be talking to the server when this fires; the
+        // wrapper does not cancel it. That is exactly why the verdict is
+        // "unknown" and not "failed": the send may complete after we stop
+        // listening, and a retry could deliver it twice.
+        markSubmissionUnknownDelivery(deps.db, deps.masterKey, submissionId, SMTP_ATTEMPT_TIMEOUT_CODE, SMTP_ATTEMPT_TIMEOUT_MESSAGE);
+        countFailed();
+        throw new TaskAbortError("unknown_delivery", SMTP_ATTEMPT_TIMEOUT_MESSAGE, SMTP_ATTEMPT_TIMEOUT_CODE);
+      }
       // Both arms below record what the user will read, so both record the SAFE
       // text: `safeMailError` derives `{code, message}` from the code alone, and
       // the ledger's `errorMessage` is rendered by the outbox and by
@@ -711,13 +796,33 @@ export function createSendRunner(deps: SendTaskDeps): TaskRunner<undefined> {
     }
 
     // The mail is out. Recording that is deliberately NOT classified as a delivery
-    // verdict: if this write fails, the ledger stays `submitting`, which is exactly
-    // true -- an attempt was in flight and its outcome could not be recorded -- and
-    // the next attempt waits it out while the startup recovery converts it to
-    // `unknown_delivery`. Writing `unknown_delivery` from here would be a guess,
-    // and the mail already went out.
-    const submitted = markSubmissionSubmitted(deps.db, deps.masterKey, submissionId, result.messageId);
-    deps.scheduleSentVerification(submitted.id);
+    // verdict, and a failure to record it must not turn the task into a failure:
+    // the scheduler's `failed` hook would retract the optimistic Sent row for a
+    // mail that did leave, which is the worst of both answers. So the record write
+    // is separated from the send's outcome, and the task still ends `completed`.
+    try {
+      markSubmissionSubmitted(deps.db, deps.masterKey, submissionId, result.messageId);
+    } catch {
+      // The ledger still says `submitting`, which is true -- the outcome could not
+      // be written -- but it is not what later passes act on: `submitted` and
+      // `unknown_delivery` are the confirmable states, so a best-effort
+      // `unknown_delivery` at least makes the mail visible to verification. If
+      // even that write fails, startup recovery converts the row.
+      try {
+        markSubmissionUnknownDelivery(deps.db, deps.masterKey, submissionId, SUBMISSION_RECORD_FAILED_CODE, SUBMISSION_RECORD_FAILED_MESSAGE);
+      } catch {
+        // Nothing else in this process can write the ledger; recovery owns it.
+      }
+    }
+    try {
+      // The id is the same either way, so the verification pass runs whether the
+      // ledger ended `submitted` or was downgraded above; what it does with the
+      // row is its own decision. A failed schedule must not retroactively
+      // un-send a message the transport accepted -- sync drives the same pass.
+      deps.scheduleSentVerification(submissionId);
+    } catch {
+      // Best effort: the outcome is already recorded as far as it can be.
+    }
 
     if (request.discardDraftId) {
       try {
