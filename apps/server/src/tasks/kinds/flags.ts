@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from "../../db.js";
+import { preparedStatement } from "../../db.js";
 import type { AccountAccessTokenProvider } from "../../mail.js";
 import type { AgentMailEventSink } from "../../agent/mail-state-events.js";
 import {
@@ -151,16 +152,21 @@ function applyPreparedFlagsLocally(
 ): string[] {
   const changedIds: string[] = [];
   const leases = new Map<string, ReturnType<NonNullable<AgentMailEventSink>["acquireLease"]>>();
-  for (const item of prepared) {
-    const { message } = item;
-    if (!item.add.length && !item.remove.length) continue;
-    db.prepare(`
-      UPDATE messages
+  // Compiled once for the whole batch: the flags push is otherwise the only
+  // writer in this loop, and a selection of n rows used to pay n compilations
+  // of the same UPDATE.
+  const applyFlags = preparedStatement(
+    db,
+    `UPDATE messages
       SET flags_json = ?,
           pending_flags_push = 1,
           pending_flags_base_json = CASE WHEN pending_flags_push = 1 THEN pending_flags_base_json ELSE flags_json END
-      WHERE id = ?
-    `).run(JSON.stringify(item.nextFlags), message.id);
+      WHERE id = ?`,
+  );
+  for (const item of prepared) {
+    const { message } = item;
+    if (!item.add.length && !item.remove.length) continue;
+    applyFlags.run(JSON.stringify(item.nextFlags), message.id);
     changedIds.push(message.id);
     if (agentEvents) {
       const lease = leases.get(message.account_id) ?? agentEvents.acquireLease(message.account_id);
@@ -203,7 +209,7 @@ export function acceptFlagsTaskInTransaction(deps: FlagsTaskDeps, input: AcceptF
   // of `prepared`, so `ids.length - prepared.length` already counts blocked and
   // missing together (the formula the deleted `commitLocalFlags` used for `failed`).
   const { prepared } = prepareLocalFlags(deps.db, ids, input.patch);
-  const changedIds = applyPreparedFlagsLocally(deps.db, prepared, deps.agentEvents);
+  const appliedIds = applyPreparedFlagsLocally(deps.db, prepared, deps.agentEvents);
 
   const entriesByAccount = new Map<string, FlagsPushEntry[]>();
   for (const item of prepared) {
@@ -271,7 +277,7 @@ export function acceptFlagsTaskInTransaction(deps: FlagsTaskDeps, input: AcceptF
     // this selection is done". Contract §4.7 B3.
     updated: prepared.length,
     failed: ids.length - prepared.length,
-    changedIds: ids.filter((id) => changedIds.includes(id)),
+    changedIds: ids.filter((id) => appliedIds.includes(id)),
   };
 }
 

@@ -44,3 +44,32 @@ border:1px solid var(--line-strong);
 background:var(--panel-muted);
 color:var(--text-soft)
 }
+.copy-button.copied>svg
+{
+color:var(--success);
+animation:copy-icon-in .18s cubic-bezier(.2,.8,.2,1)
+}
+.secondary-button.copy-button.copied{color:color-mix(in srgb, var(--success) 85%, var(--text));border-color:color-mix(in srgb, var(--success) 36%, var(--line));transition:color .16s,border-color .16s}
+@keyframes copy-icon-in
+{
+0%
+{
+opacity:0;
+transform:scale(.5)
+}
+60%
+{
+transform:scale(1.15)
+}
+to
+{
+transform:scale(1)
+}
+}
+@media (prefers-reduced-motion:reduce)
+{
+.copy-button.copied>svg
+{
+animation:none
+}
+}

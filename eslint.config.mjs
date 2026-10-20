@@ -251,8 +251,8 @@ export default tseslint.config(
   // 两条豁免都是实测出来的，不是"看起来没事"：
   //   * routes 自己在上一条里已经带上同一份 legacyLayerImportBans（flat config 里同一条规则的
   //     后匹配会整条覆盖前一条，所以这里必须把它排除，否则会把 db.js 的黑名单顶掉）。
-  //   * scripts/ 只剩 scripts/export-legacy-store-fixture.mts，它导入的正是本批删掉的模块，
-  //     因此**加载即失败**，比 lint 报错更响；且该文件未跟踪，删或留由用户决定（契约 §十八 H）。
+  //   * scripts/ 只剩 scripts/export-legacy-store-fixture.mts（已入库），它导入的正是本批删掉的
+  //     模块，因此**加载即失败**，比 lint 报错更响；保留它是刻意留下的迁移取证脚本。
   {
     files: ["**/*.{ts,tsx,mts,cts}"],
     ignores: ["apps/server/src/routes/**/*.ts", "scripts/**"],

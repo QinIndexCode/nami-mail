@@ -8,7 +8,6 @@ import {
   ChevronDown,
   CircleAlert,
   Clock,
-  Copy,
   Download,
   Eye,
   FileText,
@@ -31,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
+import CopyButton from "./CopyButton";
 import { MailTextBody } from "./MailTextBody";
 import { CustomAvatar, SenderAvatar, accountTone } from "./SenderAvatar";
 import DatePicker from "./DatePicker";
@@ -387,7 +387,15 @@ export function MailReader(props: MailReaderProps) {
                     return (
                       <section className={`verification-code-panel ${isPrimaryVerificationCode ? "primary" : "candidate"}`} key={`${candidate.code}:${candidate.source}`} aria-label={isPrimaryVerificationCode ? t("mail.verification.detected") : t("mail.verification.otherCandidate")}>
                         <div><span>{isPrimaryVerificationCode ? t("mail.verification.label", { source: sourceLabel }) : t("mail.verification.otherLabel", { source: sourceLabel })}</span><strong>{candidate.code}</strong></div>
-                        <button className="secondary-button verification-code-copy" type="button" onClick={() => void copyDetectedVerificationCode(candidate.code)} aria-label={t("mail.verification.copyAria", { code: candidate.code })} data-tooltip={t("mail.verification.copyTooltip")}><Copy size={15} />{isPrimaryVerificationCode ? t("mail.verification.copy") : t("common.copy")}</button>
+                        <CopyButton
+                          className="secondary-button verification-code-copy"
+                          text={candidate.code}
+                          copy={copyDetectedVerificationCode}
+                          ariaLabel={t("mail.verification.copyAria", { code: candidate.code })}
+                          tooltip={t("mail.verification.copyTooltip")}
+                          label={isPrimaryVerificationCode ? t("mail.verification.copy") : t("common.copy")}
+                          size={15}
+                        />
                       </section>
                     );
                   })}

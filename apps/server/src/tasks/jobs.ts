@@ -172,10 +172,10 @@ export type JobAliasStatus = "running" | "completed" | "failed";
  * counterpart is `batchJobTypes.ts:49-61`):
  * progress numbers only, no id list, and the optional three only when they mean
  * something. `undone` is per member on the task side and is reported as true when
- * any of them was undone. Nothing on the wire reads it today -- `batchJobRunner`
- * checks neither it nor `undoWindowMs`, so a spent job still offers undo and the
- * 409 that comes back wears the generic "批量任务失败" text -- but it is carried
- * because the alias is the only place the fact survives and the shape had it.
+ * any of them was undone. The renderer does not branch on it -- a click after the
+ * window or after a successful undo gets the refusal's own `reason` and says what
+ * happened (`batchJobRunner.ts`'s refusal mapping) -- but it is carried because the
+ * alias is the only place the fact survives and the shape had it.
  */
 export type JobAliasSnapshot = {
   id: string;
@@ -428,8 +428,9 @@ export function jobSnapshot(db: DatabaseHandle, jobId: string): JobAliasSnapshot
  *
  * What that guard cannot cover is a *race*: another caller claiming a member
  * between the two loops. Expiry is not one of them, because both loops take this
- * call's single `now`; and a member that was `completed` in the first loop cannot
- * stop being completed, since every claim carries `AND status = 'completed'`. So
+ * call's single `now`; and a member that was terminal in the first loop cannot stop
+ * being terminal, since every claim carries the same terminal status list
+ * (`CLAIM_UNDO_SQL` in `kinds/undo.ts`). So
  * only one race serves the user's intent -- `already_undone`, i.e. someone else is
  * undoing this same job -- and that one is carried on with rather than reported,
  * while any other is reported as itself. The reason the single-member path reports

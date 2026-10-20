@@ -7,7 +7,7 @@ import { createFlagsRunner } from "./kinds/flags.js";
 import { createMoveRunner, pendingMoveItemIds, revertMoveFailures } from "./kinds/move.js";
 import { createSendRunner } from "./kinds/send.js";
 import { createSnoozeRunner, type SnoozeRunnerDeps } from "./kinds/snooze.js";
-import { createUndoRunner } from "./kinds/undo.js";
+import { createUndoRunner, failPendingUndoItems } from "./kinds/undo.js";
 import { createTaskRegistry } from "./registry.js";
 import { startTaskScheduler } from "./scheduler.js";
 import { clearConfirmedFlagsMarkers, frozenFlagsMessageIds, revertRefusedFlagsTargets } from "./settlement.js";
@@ -178,6 +178,18 @@ export function createTaskHooks(deps: TaskHookDeps): TaskHooks {
         if (latched) reportTaskProgress(db, task.id, { failed: latched }, now());
         return;
       }
+      if (task.kind === "undo") {
+        // The undo's answer to `revertMoveFailures`: it has nothing to give back
+        // (a restore owns no move goal), only the arithmetic to close. The
+        // runner deliberately counts a retryable refusal as nothing, so a task
+        // the scheduler gives up on still owes `updated + failed < total`; this
+        // latches exactly those rows and reports the number it latched. The
+        // helper's predicate is the same one the runner reads, so a second call
+        // (the settlement hook may have run first) latches 0 and reports 0.
+        const latched = failPendingUndoItems(db, task);
+        if (latched) reportTaskProgress(db, task.id, { failed: latched }, now());
+        return;
+      }
       if (task.kind === "flags") {
         // Read, not taken from the row the hook was handed: that row is the
         // *claim-time* snapshot plus a terminal status (`scheduler.ts:107-118`),
@@ -197,7 +209,7 @@ export function createTaskHooks(deps: TaskHookDeps): TaskHooks {
 
 /**
  * What a settlement owes the task's own kind: the send placeholder / flags
- * rollback / marker clearing.
+ * rollback / marker clearing / the undo's book-keeping.
  *
  * Split out of `createTaskHooks` so the SSE announcement can sit in a `finally`
  * around it. Its early returns are per kind, so folding the emission into this
@@ -212,6 +224,19 @@ function settleTaskObligations(
 ): void {
   if (task.kind === "send") {
     if (task.status !== "completed") retirePendingSentRow(db, task, now());
+    return;
+  }
+  if (task.kind === "undo") {
+    // A `completed` undo has settled every row it owns (the runner settles
+    // provider failures as it goes); latching anything then would invent
+    // failures. Every other terminal status means the reverse stopped with
+    // rows it could not send -- `cancelled` and *the give-up* both arrive here,
+    // and the give-up also reaches `onTaskPermanentFailure`; the latch is
+    // idempotent so whichever runs second reports 0.
+    if (task.status !== "completed") {
+      const latched = failPendingUndoItems(db, task);
+      if (latched) reportTaskProgress(db, task.id, { failed: latched }, now());
+    }
     return;
   }
   if (task.kind !== "flags") return;

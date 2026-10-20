@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Check, ChevronLeft, ChevronRight, Copy, LoaderCircle, Mail, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, LoaderCircle, Mail, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { api } from "./api";
+import CopyButton from "./CopyButton";
 import { accountHealthIssue, mailErrorMessage } from "./errorPresentation";
 import { accountStatusDotClass } from "./accountHealth";
 import { useI18n, type Translate } from "./i18n";
@@ -13,7 +14,6 @@ import { ManagementDialogShell } from "./ManagementDialogs";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { useStablePagedListHeight } from "./hooks/useStablePagedListHeight";
-import { copyTextToClipboard } from "./settings/settings-utils";
 import { FormNotice, type Notice } from "./FormNotice";
 
 /** Accounts past this count unlock the search / pagination / bulk toolbar. */
@@ -54,9 +54,6 @@ export default function AccountsDialog({
   const accountDisplayNameVersion = useAccountDisplayNames();
   const { locale, t } = useI18n();
   const [notice, setNotice] = useState<Notice>(null);
-  const [copiedAccountId, setCopiedAccountId] = useState<string | null>(null);
-  const [copyAnnouncement, setCopyAnnouncement] = useState("");
-  const copyResetTimer = useRef<number | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [pendingAccountRemoval, setPendingAccountRemoval] = useState<string | null>(null);
   const [pendingBulkRemoval, setPendingBulkRemoval] = useState(false);
@@ -75,10 +72,6 @@ export default function AccountsDialog({
   const confirmationDialog = useRef<HTMLElement>(null);
   const pendingRemovalAccount = accounts.find((account) => account.id === pendingAccountRemoval) ?? null;
   const controlsBusy = Boolean(busyAction);
-
-  useEffect(() => () => {
-    if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current);
-  }, []);
 
   // The search / pagination / bulk toolbar only appears once there are more
   // accounts than one page can hold.
@@ -264,19 +257,6 @@ export default function AccountsDialog({
     }
   };
 
-  const copyAccountAddress = async (account: Account) => {
-    const copied = await copyTextToClipboard(account.email);
-    if (!copied) {
-      setNotice({ kind: "error", message: t("settings.account.addressCopyFailed") });
-      return;
-    }
-    setNotice(null);
-    setCopiedAccountId(account.id);
-    setCopyAnnouncement(t("settings.account.addressCopied", { email: account.email }));
-    if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current);
-    copyResetTimer.current = window.setTimeout(() => setCopiedAccountId(null), 1_500);
-  };
-
   const toggleSelect = (accountId: string) => {
     setSelectedIds((previous) => {
       const next = new Set(previous);
@@ -385,7 +365,6 @@ export default function AccountsDialog({
         }
       >
         <section className="settings-section settings-accounts">
-          <span className="visually-hidden" role="status" aria-live="polite">{copyAnnouncement}</span>
           <FormNotice notice={notice} onDismiss={() => setNotice(null)} />
           {accounts.length === 0 ? (
             <div className="settings-empty-card accounts-empty-card">
@@ -489,9 +468,14 @@ export default function AccountsDialog({
                             <div className="accounts-row-copy">
                               <div className="accounts-row-copy-heading">
                                 <strong>{account.email}</strong>
-                                <button className="icon-button accounts-copy-address" type="button" aria-label={t("settings.account.copyAddressAriaLabel", { email: account.email })} onClick={() => void copyAccountAddress(account)}>
-                                  {copiedAccountId === account.id ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
-                                </button>
+                                <CopyButton
+                                  className="icon-button accounts-copy-address"
+                                  text={account.email}
+                                  ariaLabel={t("settings.account.copyAddressAriaLabel", { email: account.email })}
+                                  announcement={t("settings.account.addressCopied", { email: account.email })}
+                                  onCopied={() => setNotice(null)}
+                                  onFailed={() => setNotice({ kind: "error", message: t("settings.account.addressCopyFailed") })}
+                                />
                               </div>
                               <small className={issue ? (issue.severity === "warning" ? "account-warning" : "account-error") : ""}>{issue ? `${providerName} · ${issue.title}` : providerName}</small>
                               {issue && <small className="account-error-guidance">{issue.guidance}</small>}

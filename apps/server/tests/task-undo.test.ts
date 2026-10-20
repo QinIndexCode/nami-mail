@@ -185,17 +185,17 @@ describe("task undo acceptance: the refusal vocabulary", () => {
     ));
     expect(commitUndoTask(deps, migratedUndo, now)).toEqual({ ok: false, reason: "unsupported_parent" });
 
-    // `not_completed` covers all four non-`completed` statuses, and it is checked
+    // `not_completed` covers both non-terminal statuses, and it is checked
     // before the window: a pending parent with no window reports the status, not
     // `no_window` (§4.7 A (v18)②). The other order would send a user looking for a
-    // missing window on a task that has not finished yet.
+    // missing window on a task that has not finished yet. A failed or cancelled
+    // parent is *terminal* and accepted -- the next test owns that reading -- so
+    // only the two in-flight statuses are left to refuse here.
     const pending = track(recordTask(db, MASTER_KEY, { accountId: ACCOUNT, kind: "move", items: [{ messageId: "msg-1", changed: true, originMailbox: INBOX }] }));
     expect(commitUndoTask(deps, pending, now)).toEqual({ ok: false, reason: "not_completed" });
-    // A `failed` parent is the case that made the word "terminal" wrong: it is
-    // terminal, and it still has nothing to undo.
-    const failed = track(recordTask(db, MASTER_KEY, { accountId: ACCOUNT, kind: "move", undoWindowMs: TASK_UNDO_WINDOW_MS, items: [{ messageId: "msg-1", changed: true, originMailbox: INBOX }] }));
-    settleTask(db, failed, "failed", { code: "boom", message: "boom" }, now - 1_000);
-    expect(commitUndoTask(deps, failed, now)).toEqual({ ok: false, reason: "not_completed" });
+    const running = track(recordTask(db, MASTER_KEY, { accountId: ACCOUNT, kind: "move", undoWindowMs: TASK_UNDO_WINDOW_MS, items: [{ messageId: "msg-1", changed: true, originMailbox: INBOX }] }));
+    db.prepare("UPDATE tasks SET status = 'running' WHERE id = ?").run(running);
+    expect(commitUndoTask(deps, running, now)).toEqual({ ok: false, reason: "not_completed" });
 
     // `already_undone` beats the window: the mark is the one-undo guarantee, and a
     // second undo of a task that was already undone is not "expired". The parent's
@@ -226,7 +226,51 @@ describe("task undo acceptance: the refusal vocabulary", () => {
     // The mark is asserted for the two rows that carry one, so `committedNothing`
     // cannot pass by comparing rows nobody claimed.
     expect(undoneOf(taken)).toBe(1);
-    for (const id of [sent, pending, failed, single, timeless, stale]) expect(undoneOf(id)).toBe(0);
+    for (const id of [sent, pending, running, single, timeless, stale]) expect(undoneOf(id)).toBe(0);
+  });
+
+  it("accepts a parent that ended failed or cancelled, and measures the window from then", () => {
+    const now = 1_000_000;
+    insertMessage(db, "msg-1", 1, INBOX, []);
+    const { deps, started } = undoDeps();
+    const failedMove = (): string => {
+      const id = recordTask(db, MASTER_KEY, {
+        accountId: ACCOUNT,
+        kind: "move",
+        undoWindowMs: TASK_UNDO_WINDOW_MS,
+        items: [{ messageId: "msg-1", changed: true, originMailbox: INBOX }],
+      });
+      settleTask(db, id, "failed", { code: "boom", message: "boom" }, now - 1_000);
+      return id;
+    };
+
+    // The local target state was committed at acceptance, so a push that ended
+    // without delivering still has rows to reverse. Requiring `completed` used to
+    // refuse exactly the shape the renderer offers an undo for: a job's members are
+    // per account, so one account's expired credentials end a job with one member
+    // `completed` and another `failed`, which `jobSnapshot` reports as a completed
+    // job with both counts.
+    const failed = failedMove();
+    const outcome = commitUndoTask(deps, failed, now);
+    expect(outcome).toMatchObject({ ok: true });
+    expect(outcome.ok && outcome.taskIds).toHaveLength(1);
+    expect(started).toEqual(outcome.ok ? outcome.taskIds : []);
+    expect(undoneOf(failed)).toBe(1);
+
+    // `cancelled` is the other terminal status a user action can leave behind, and
+    // the window is measured from the settlement whatever the status was.
+    const cancelled = failedMove();
+    db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(cancelled);
+    expect(commitUndoTask(deps, cancelled, now)).toMatchObject({ ok: true });
+    expect(undoneOf(cancelled)).toBe(1);
+
+    // The window still binds: a failed push that ended more than five minutes ago is
+    // as un-undoable as a completed one, and the refusal is the window's word, not
+    // the status's.
+    const stale = failedMove();
+    db.prepare("UPDATE tasks SET completed_at = ? WHERE id = ?").run(now - TASK_UNDO_WINDOW_MS - 1, stale);
+    expect(commitUndoTask(deps, stale, now)).toEqual({ ok: false, reason: "expired" });
+    expect(undoneOf(stale)).toBe(0);
   });
 
   it("accepts a request landing exactly on the deadline", () => {

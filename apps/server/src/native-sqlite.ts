@@ -30,3 +30,12 @@ export function loadDatabaseConstructor(): typeof BetterSqlite3 {
 
 /** Row and statement types of whichever driver `SQLITE_MODULE_NAME` resolves to. */
 export type Database = BetterSqlite3.Database;
+
+/**
+ * A compiled statement. `ReturnType<Database["prepare"]>` collapses the driver's
+ * conditional statement type to a one-parameter form, which types `run(...)` as
+ * a single argument; naming the driver's own `Statement` at its defaults keeps
+ * the call sites' arity intact. Every caller here binds positionally, which is
+ * what that default already means.
+ */
+export type SqliteStatement = BetterSqlite3.Statement;

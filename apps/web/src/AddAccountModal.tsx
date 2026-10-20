@@ -5,7 +5,6 @@ import {
   ChevronRight,
   CircleAlert,
   CircleHelp,
-  Copy,
   ExternalLink,
   Eye,
   EyeOff,
@@ -17,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
+import CopyButton from "./CopyButton";
 import { desktopBridge } from "./desktop";
 import { mailErrorMessage, presentMailError } from "./errorPresentation";
 import { type Translate, useI18n } from "./i18n";
@@ -251,36 +251,6 @@ function resultForDemo(email: string, fallback: ProviderDiscovery | undefined, t
   return { ok: true, provider, ...(oauthProvider ? { oauthProvider, oauthAvailable: true } : { oauthAvailable: false }) };
 }
 
-async function copySetupTextToClipboard(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // The short-lived selection fallback keeps the web build usable when
-    // clipboard permissions are unavailable for a local session.
-  }
-
-  const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "");
-  textarea.setAttribute("aria-hidden", "true");
-  textarea.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none;";
-  document.body.appendChild(textarea);
-  try {
-    textarea.focus({ preventScroll: true });
-    textarea.select();
-    return document.execCommand("copy");
-  } catch {
-    return false;
-  } finally {
-    textarea.remove();
-    activeElement?.focus({ preventScroll: true });
-  }
-}
-
 export default function AddAccountModal({ providers, existingAccounts, onClose, onAdded, fallbackFocusRef, demoMode = false }: AddAccountModalProps) {
   const { locale, t } = useI18n();
   const [email, setEmail] = useState("");
@@ -299,7 +269,6 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
   const [status, setStatus] = useState<FormStatus>({ kind: "idle", message: "" });
   const [accountAdded, setAccountAdded] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
-  const [serverConfigurationCopied, setServerConfigurationCopied] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   const statusRef = useRef<HTMLDivElement>(null);
   const emailRef = useRef<HTMLInputElement>(null);
@@ -310,7 +279,6 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
   const oauthPollTimerRef = useRef<number | null>(null);
   const oauthPopupRef = useRef<Window | null>(null);
   const activeOAuthAttemptRef = useRef<string | null>(null);
-  const serverConfigurationCopyTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
   const emailValueRef = useRef("");
   const emailComposingRef = useRef(false);
@@ -454,7 +422,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
         return {
           icon,
           monogram,
-          name: "QQ 邮箱 / Foxmail",
+          name: t("account.provider.name.qq"),
           badge: t("account.provider.badge.authCode"),
           summary: t("account.actionCard.qq.summary"),
           actionHref: "https://mail.qq.com",
@@ -466,7 +434,7 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
         return {
           icon: icon || providerIconUrl("netease-163"),
           monogram: monogram || "163",
-          name: guideProviderName || "网易邮箱",
+          name: guideProviderName || t("account.provider.name.netease"),
           badge: t("account.provider.badge.neteaseCode"),
           summary: t("account.actionCard.netease.summary"),
           actionHref: neteasePortalUrl(domain),
@@ -571,7 +539,6 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
       activeOAuthAttemptRef.current = null;
       oauthPopupRef.current?.close();
       if (autoCloseTimerRef.current !== null) window.clearTimeout(autoCloseTimerRef.current);
-      if (serverConfigurationCopyTimerRef.current !== null) window.clearTimeout(serverConfigurationCopyTimerRef.current);
     };
   }, [clearOAuthPolling]);
 
@@ -634,9 +601,6 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
     setOauthAttemptId(null);
     setOauthUrl(null);
     activeOAuthAttemptRef.current = null;
-    if (serverConfigurationCopyTimerRef.current !== null) window.clearTimeout(serverConfigurationCopyTimerRef.current);
-    serverConfigurationCopyTimerRef.current = null;
-    setServerConfigurationCopied(false);
     setSelectedProviderId((current) => {
       const domain = emailDomain(next);
       if (!domain) {
@@ -670,9 +634,6 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
     setProviderCatalogOpen(false);
     setManualOpen(false);
     setExplicitAuthMode(null);
-    if (serverConfigurationCopyTimerRef.current !== null) window.clearTimeout(serverConfigurationCopyTimerRef.current);
-    serverConfigurationCopyTimerRef.current = null;
-    setServerConfigurationCopied(false);
     setStatus({ kind: "idle", message: "" });
 
     const provider = providers.find((item) => item.id === providerId);
@@ -1054,22 +1015,6 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
   const displayIsOAuthWaiting = isFlowActive ? isOAuthWaiting : Boolean(activeSnapshot?.isOAuthWaiting);
   const displayCredentialDetails = isFlowActive ? credentialDetails : (activeSnapshot?.credentialDetails ?? credentialDetails);
   const displayManualOpen = isFlowActive ? manualOpen : Boolean(activeSnapshot?.manualOpen);
-
-  const copyServerConfiguration = async () => {
-    if (!serverConfiguration) return;
-    const copied = await copySetupTextToClipboard(serverConfiguration);
-    if (!mountedRef.current) return;
-    if (!copied) {
-      setStatus({ kind: "warning", message: t("account.status.copy_server_settings_failed") });
-      return;
-    }
-    if (serverConfigurationCopyTimerRef.current !== null) window.clearTimeout(serverConfigurationCopyTimerRef.current);
-    setServerConfigurationCopied(true);
-    serverConfigurationCopyTimerRef.current = window.setTimeout(() => {
-      serverConfigurationCopyTimerRef.current = null;
-      if (mountedRef.current) setServerConfigurationCopied(false);
-    }, 2_500);
-  };
 
   return (
     <div className={`modal-backdrop account-modal-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
@@ -1861,17 +1806,16 @@ export default function AddAccountModal({ providers, existingAccounts, onClose, 
                           <div><dt>IMAP</dt><dd>{serverEndpointLabel(guideProvider.imap, t)}</dd></div>
                           <div><dt>SMTP</dt><dd>{serverEndpointLabel(guideProvider.smtp, t)}</dd></div>
                         </dl>
-                        <button
-                          className={`setup-guide-copy${serverConfigurationCopied ? " copied" : ""}`}
-                          type="button"
-                          onClick={() => void copyServerConfiguration()}
-                          aria-label={serverConfigurationCopied
-                            ? t("account.server.copied_aria")
-                            : t("account.server.copy_aria", { provider: guideProviderName })}
-                        >
-                          {serverConfigurationCopied ? <Check size={14} /> : <Copy size={14} />}
-                          <span>{serverConfigurationCopied ? t("account.server.copied") : t("account.server.copy")}</span>
-                        </button>
+                        <CopyButton
+                          className="setup-guide-copy"
+                          text={serverConfiguration}
+                          ariaLabel={t("account.server.copy_aria", { provider: guideProviderName })}
+                          copiedAriaLabel={t("account.server.copied_aria")}
+                          label={t("account.server.copy")}
+                          copiedLabel={t("account.server.copied")}
+                          onFailed={() => setStatus({ kind: "warning", message: t("account.status.copy_server_settings_failed") })}
+                          size={14}
+                        />
                         <small className="setup-guide-copy-note">{t("account.server.copy_note")}</small>
                       </div>
                     )}

@@ -14,10 +14,21 @@ import { recordApiTiming } from "./perfTelemetry";
 
 export class ApiError extends Error {
   readonly llmAvailable?: boolean;
-  constructor(message: string, readonly code?: string, readonly status?: number, llmAvailable?: boolean) {
+  /**
+   * The machine-readable refusal a route sends beside its text, when it sends one.
+   *
+   * The batch-job undo is the caller that needs it: the route answers 409 with
+   * `reason: "expired" | "already_undone" | …`, and a client that only had `code`
+   * (the HTTP-level word) could not tell those apart. Kept a plain string so this
+   * transport module does not have to know any endpoint's vocabulary; the caller
+   * narrows it.
+   */
+  readonly reason?: string;
+  constructor(message: string, readonly code?: string, readonly status?: number, llmAvailable?: boolean, reason?: string) {
     super(message);
     this.name = "ApiError";
     if (llmAvailable) this.llmAvailable = llmAvailable;
+    if (reason) this.reason = reason;
   }
 }
 
@@ -25,6 +36,7 @@ type ErrorResponse = {
   message?: string;
   code?: string;
   llmAvailable?: boolean;
+  reason?: string;
 };
 
 /** One user-facing string per transport failure, shared by the JSON and the
@@ -34,7 +46,13 @@ export const LOCAL_SERVICE_TIMEOUT_MESSAGE = "The Nami Mail local service did no
 
 export async function apiError(response: Response): Promise<ApiError> {
   const body = (await response.json().catch(() => ({}))) as ErrorResponse;
-  return new ApiError(body.message || "The request failed. Please try again later.", body.code, response.status, body.llmAvailable);
+  return new ApiError(
+    body.message || "The request failed. Please try again later.",
+    body.code,
+    response.status,
+    body.llmAvailable,
+    typeof body.reason === "string" ? body.reason : undefined,
+  );
 }
 
 export async function requestResponse(path: string, init?: RequestInit): Promise<Response> {

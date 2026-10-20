@@ -19,7 +19,9 @@ import {
 } from "../src/message-storage.js";
 
 const now = "2026-07-18T00:00:00.000Z";
-const messageId = "6f2b1f1c-0d0e-4a6c-9a5c-2b1c9a1f0e11";
+// Production shape (32 hex characters); the uuid spelling is exercised by the
+// EML suite's unknown-id case and by the schema unit test.
+const messageId = "6f2b1f1c0d0e4a6c9a5c2b1c9a1f0e11";
 const inlineUrl = `/api/messages/${messageId}/inline/1.1`;
 const inlineHtml = '<p>Chart below</p><img alt="chart" src="cid:inline1">';
 
@@ -214,6 +216,51 @@ describe("inline cid images", () => {
     expect(Buffer.from(image.rawPayload)).toEqual(pngBytes);
     expect(image.headers["content-type"]).toContain("image/png");
     expect(image.headers["content-disposition"]).toBe("inline");
+  });
+
+  it("hands a non-image part back as a download instead of rendering it same-origin", async () => {
+    const htmlBytes = Buffer.from("<html><body><script>alert(1)</script></body></html>");
+    const lock = { release: vi.fn() };
+    imapClientForAccount.mockReturnValue({
+      usable: true,
+      connect: vi.fn(async () => undefined),
+      getMailboxLock: vi.fn(async () => lock),
+      fetchOne: vi.fn(async () => ({
+        uid: 1,
+        bodyStructure: { type: "multipart/mixed", childNodes: [{ part: "1.2", type: "text/html", disposition: "inline" }] },
+      })),
+      download: vi.fn(async () => ({
+        meta: { contentType: "text/html", expectedSize: htmlBytes.length, filename: "note.html" },
+        content: Readable.from([htmlBytes]),
+      })),
+      logout: vi.fn(async () => undefined),
+    });
+    insertEncryptedMessage(db, masterKey);
+    db.prepare("UPDATE messages SET encrypted_payload = ? WHERE id = ?").run(
+      encryptMessagePayload(masterKey, messageId, "account-1", {
+        ...inlinePayload,
+        attachments: [{
+          partId: "1.2",
+          filename: "note.html",
+          contentType: "text/html",
+          size: htmlBytes.length,
+          related: true,
+          disposition: "inline",
+          contentId: "note",
+        }],
+      }),
+      messageId,
+    );
+    app = await buildApp({ db, masterKey });
+
+    // The inline endpoint shares the app's origin. Rendering an attachment that
+    // declares itself HTML would let it run as a same-origin document, so the
+    // allowlist demotes everything that is not a raster image to a download.
+    const response = await app.inject({ method: "GET", url: `/api/messages/${messageId}/inline/1.2` });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/octet-stream");
+    expect(response.headers["content-disposition"]).toBe("attachment; filename*=UTF-8''note.html");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
   });
 });
 

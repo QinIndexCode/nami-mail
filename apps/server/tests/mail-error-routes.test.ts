@@ -219,7 +219,7 @@ describe("mail transport error API responses", () => {
     });
     const attachmentResponse = await app.inject({
       method: "GET",
-      url: "/api/messages/message-1/attachments/part-1",
+      url: "/api/messages/2f1c6a3e4b7d4c8e9f101a2b3c4d5e6f/attachments/part-1",
     });
 
     expect(draftResponse.statusCode).toBe(503);

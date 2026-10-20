@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   useRealtimeSync,
   type RealtimeConnectionState,
@@ -45,11 +45,33 @@ export function useAppRealtimeSync(options: AppRealtimeSyncOptions): {
   const onTaskProgress = useCallback((progress: TaskProgressPayload) => {
     applyProgress(progress);
   }, [applyProgress]);
+  // A batch settles as one frame per task. Reconciling on each would read the
+  // same list N times for one user action, so an in-flight reconcile absorbs
+  // the bursts that arrive meanwhile and runs exactly once more afterwards.
+  const reconcileInFlightRef = useRef(false);
+  const reconcileQueuedRef = useRef(false);
+  const reconcileFromEvents = useCallback(() => {
+    if (reconcileInFlightRef.current) {
+      reconcileQueuedRef.current = true;
+      return;
+    }
+    reconcileInFlightRef.current = true;
+    void (async () => {
+      try {
+        do {
+          reconcileQueuedRef.current = false;
+          await store.reconcile("event").catch(() => undefined);
+        } while (reconcileQueuedRef.current);
+      } finally {
+        reconcileInFlightRef.current = false;
+      }
+    })();
+  }, [store]);
   const onTaskSettled = useCallback((settled: TaskSettledPayload) => {
     bumpThreadRefresh();
-    void store.reconcile("event").catch(() => undefined);
+    reconcileFromEvents();
     applySettled(settled);
-  }, [bumpThreadRefresh, store, applySettled]);
+  }, [bumpThreadRefresh, reconcileFromEvents, applySettled]);
   const onMailChanged = useCallback(() => {
     bumpThreadRefresh();
     onRefresh();

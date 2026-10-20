@@ -17,6 +17,10 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 });
 
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
+import { AccountLifecycleStore } from "../src/agent/lifecycle.js";
+import { AgentMailStateEvents } from "../src/agent/mail-state-events.js";
+import { applyAgentStoreSchema } from "../src/agent/schema.js";
+import { AgentSourceEventOutbox } from "../src/agent/source-events.js";
 import {
   acceptFlagsTask,
   createFlagsRunner,
@@ -387,6 +391,45 @@ describe("task flags acceptance: the local commit is the whole promise", () => {
     expect(accepted.handles).toHaveLength(2);
     expect(accepted.handles.map((handle) => (taskRow(db, handle.id) as TaskRow).total)).toEqual([1000, 1]);
     expect(accepted.changedIds).toHaveLength(1001);
+  });
+
+  it("compiles the same statements for a selection of 200 as for one of 20", () => {
+    // The acceptance reported here is the toolbar's release and the toast's
+    // trigger, so its cost is what the user reads as "did the button work". It
+    // used to compile ~90 statements per message: each agent-event write goes
+    // through `assertAgentStoreReadable` (five times per message), and that
+    // checked ~18 table shapes with `db.prepare("PRAGMA table_info(...)")`.
+    // A 1300-row selection paid that per row and took 3.8s on the fixture.
+    //
+    // Counting compilations rather than milliseconds keeps the guard honest: the
+    // invariant is "this does not scale with the selection", and a wall-clock
+    // bound would only pin the machine it ran on.
+    const compilationsFor = (rows: number): number => {
+      const world = fixture(rows);
+      applyAgentStoreSchema(world.db);
+      const lifecycle = new AccountLifecycleStore(world.db, MASTER_KEY);
+      const agentEvents = new AgentMailStateEvents(
+        MASTER_KEY,
+        lifecycle,
+        new AgentSourceEventOutbox(world.db, MASTER_KEY, lifecycle),
+      );
+      const prepared = vi.spyOn(world.db, "prepare");
+      try {
+        const accepted = acceptFlagsTask(
+          { db: world.db, masterKey: MASTER_KEY, scheduler: { start: () => undefined }, agentEvents },
+          { messageIds: world.ids, patch: { seen: true } },
+        );
+        // The whole selection changed, so every row did take the per-row path --
+        // an acceptance that skipped the work would pass the count trivially.
+        expect(accepted.changedIds).toHaveLength(rows);
+        return prepared.mock.calls.length;
+      } finally {
+        prepared.mockRestore();
+        world.db.close();
+      }
+    };
+
+    expect(compilationsFor(200)).toBe(compilationsFor(20));
   });
 
   it("names a lone member with the bare job id, which is the shape a route advertises", async () => {

@@ -7,7 +7,7 @@ import { moveMessageToFolder } from "../../sync-moves.js";
 import { resolveMoveDestination, type MessageMoveTarget } from "../../move-destinations.js";
 import type { FlagsPushEntry } from "../../flags-outbox.js";
 import type { TaskKind, TaskItemSpec, TaskRow, TaskRunner } from "../types.js";
-import { TASK_UNDO_WINDOW_MS } from "../types.js";
+import { TASK_TERMINAL_STATUSES, TASK_UNDO_WINDOW_MS } from "../types.js";
 import { commitTask, openTaskPayload, taskRow, type TaskHandle } from "../store.js";
 import { acceptFlagsTaskInTransaction, type FlagsTaskDeps, type FlagsTaskPayload } from "./flags.js";
 import { createAccountConnections, isMoveWaitRefusal, type MoveTaskPayload } from "./move.js";
@@ -60,23 +60,48 @@ const UNDOABLE_PARENT_KINDS: ReadonlySet<TaskKind> = new Set<TaskKind>(["move", 
 /**
  * The parent-side guard, in the order the reason vocabulary is declared.
  *
- * `status !== "completed"` and the completion basis are both taken from the
- * deleted `undoGuard` (`batch-jobs.ts:1006-1015`) verbatim, including the judgement
- * that a parent with no completion timestamp reads as expired -- which is what makes
- * a migrated **flags** record (`jobTaskCompletedAt` nulls it on purpose,
- * `migrate.ts:462-465`) refuse an undo instead of finding its window still open.
- * A migrated `kind='undo'` record never reaches that clause: the kind test above
- * refuses it as `unsupported_parent` first.
+ * The status clause asks for **terminal**, not `completed`. What an undo reverses
+ * is the local target state the acceptance committed, and that state exists before
+ * the push runs -- a `failed` or `cancelled` push leaves the same rows behind, with
+ * the settlement hook's best effort applied (`revertMoveFailures`, the flags
+ * reverts). Requiring `completed` refused exactly the set the UI offers an undo for:
+ * a job's members are per account, so one account's expired credentials routinely
+ * end a job with one member `completed` and another `failed`, and `jobSnapshot`
+ * reports that mix as a completed job with both counts
+ * (`jobs.ts`, "The status vocabulary is exhaustive"). Pending and running are still
+ * refused: their write is still moving, and a reverse would race it.
+ *
+ * The completion basis is taken from the deleted `undoGuard`
+ * (`batch-jobs.ts:1006-1015`) verbatim, including the judgement that a parent with
+ * no completion timestamp reads as expired -- which is what makes a migrated
+ * **flags** record (`jobTaskCompletedAt` nulls it on purpose, `migrate.ts:462-465`)
+ * refuse an undo instead of finding its window still open. A migrated `kind='undo'`
+ * record never reaches that clause: the kind test above refuses it as
+ * `unsupported_parent` first. `settleTask` writes `completed_at` for every terminal
+ * status, so the window is measured from the moment the push stopped, whatever its
+ * outcome.
  */
 export function undoRefusal(parent: TaskRow, now: number): UndoRefusalReason | null {
   if (!UNDOABLE_PARENT_KINDS.has(parent.kind)) return "unsupported_parent";
-  if (parent.status !== "completed") return "not_completed";
+  if (!(TASK_TERMINAL_STATUSES as readonly string[]).includes(parent.status)) return "not_completed";
   if (parent.undone !== 0) return "already_undone";
   if (parent.undo_window_ms === null) return "no_window";
   if (parent.completed_at === null) return "expired";
   if (now - parent.completed_at > parent.undo_window_ms) return "expired";
   return null;
 }
+
+/**
+ * The claim, with its status list generated from the vocabulary the guard reads.
+ *
+ * `AND status IN (...)` re-verifies what a concurrent settlement could have changed;
+ * a hand-written list beside `TASK_TERMINAL_STATUSES` would be a second definition
+ * of "terminal" and could disagree with the guard, turning a race loser into
+ * `already_undone` (the claim returning 0 changes) instead of the status it really
+ * is. The window cannot change under the claim, because `completed_at` is already
+ * written.
+ */
+const CLAIM_UNDO_SQL = `UPDATE tasks SET undone = 1 WHERE id = ? AND undone = 0 AND status IN (${TASK_TERMINAL_STATUSES.map(() => "?").join(", ")})`;
 
 /** One reverse write: the ids that share an inverse delta, and that delta. */
 type FlagsReverseGroup = { messageIds: string[]; patch: MessageFlagsPatch };
@@ -245,9 +270,9 @@ function undoItemSpecs(db: DatabaseHandle, parentTaskId: string): TaskItemSpec[]
  * The claim and the reverse commits are one transaction, so a crash or a throw
  * between them leaves the parent unclaimed and the undo retryable -- the property
  * `acceptFlagsJob`'s comment spells out (a lost mark would consume the one undo
- * without leaving the reverse behind). The claim's own `AND status = 'completed'`
- * re-verifies the two facts that a concurrent undo could have changed; the window
- * cannot change under it, because `completed_at` is already written.
+ * without leaving the reverse behind). The claim's own status test re-verifies the
+ * fact a concurrent undo could have changed (`CLAIM_UNDO_SQL`; the window cannot,
+ * because `completed_at` is already written).
  *
  * The deps are the flags acceptance's, and that is not a naming accident: the
  * flags branch of this function *is* a flags acceptance, so it needs exactly the
@@ -269,8 +294,8 @@ export function commitUndoTask(deps: FlagsTaskDeps, parentTaskId: string, now: n
 
   const handles = deps.db.transaction((): TaskHandle[] | null => {
     const claimed = deps.db
-      .prepare("UPDATE tasks SET undone = 1 WHERE id = ? AND undone = 0 AND status = 'completed'")
-      .run(parent.id).changes;
+      .prepare(CLAIM_UNDO_SQL)
+      .run(parent.id, ...TASK_TERMINAL_STATUSES).changes;
     if (claimed !== 1) return null;
     if (flagsPlan) {
       const created: TaskHandle[] = [];

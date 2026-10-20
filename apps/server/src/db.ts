@@ -1,11 +1,49 @@
 import fs from "node:fs";
 import path from "node:path";
 import { databaseKeyLiteral } from "./database-encryption.js";
-import { loadDatabaseConstructor, type Database } from "./native-sqlite.js";
+import { loadDatabaseConstructor, type Database, type SqliteStatement } from "./native-sqlite.js";
 import { MESSAGES_FTS_AFTER_DELETE_TRIGGER_SQL, NAMI_MAIL_SCHEMA_SQL } from "./db-schema.js";
 import { migrateDatabase } from "./schema-migrations.js";
 
 export type DatabaseHandle = Database;
+
+/**
+ * Compiled statements, keyed by connection and then by SQL text.
+ *
+ * SQLite compiles every statement it is handed: `db.prepare` is not a memo in
+ * better-sqlite3, and the wrapper rebuilds the bind-parameter metadata on each
+ * call. That is invisible in a per-request query and dominates a per-row loop --
+ * a 1300-message flags acceptance compiled two statements per message and spent
+ * seconds of its acceptance doing it.
+ *
+ * The two properties the account store's own cache relies on hold here too:
+ *
+ * * Scope: the `DatabaseHandle` is the outer `WeakMap` key, so a statement can
+ *   only be handed back to the connection it was compiled against, and the whole
+ *   subtree dies with that handle.
+ * * Reads are untouched. Only *when* the SQL is compiled changes, never what it
+ *   returns: `.get()`/`.all()`/`.run()` execute against current state, and inside
+ *   a transaction a cached statement is enrolled in it like any other.
+ *
+ * Callers must pass a fixed SQL string. A statement whose text is assembled per
+ * call (an interpolated IN-list) would grow the map without bound and defeat the
+ * point; bind parameters instead. SQLite re-compiles a cached statement by itself
+ * when its schema changes, so a migration needs no invalidation here.
+ */
+const preparedStatements = new WeakMap<DatabaseHandle, Map<string, SqliteStatement>>();
+
+export function preparedStatement(db: DatabaseHandle, sql: string): SqliteStatement {
+  let perHandle = preparedStatements.get(db);
+  if (!perHandle) {
+    perHandle = new Map();
+    preparedStatements.set(db, perHandle);
+  }
+  const cached = perHandle.get(sql);
+  if (cached) return cached;
+  const statement = db.prepare(sql);
+  perHandle.set(sql, statement);
+  return statement;
+}
 
 const SqliteDatabase = loadDatabaseConstructor();
 

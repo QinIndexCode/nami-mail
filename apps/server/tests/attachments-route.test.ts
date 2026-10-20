@@ -14,6 +14,10 @@ import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 
 const now = "2026-07-18T00:00:00.000Z";
+// The shape sync derives (`sha256(accountId\0mailbox\0uid)`, first 32 hex
+// characters). This fixture was a uuid, which the route used to require -- the
+// reason the suite stayed green while every real message answered 400.
+const messageId = "2f1c6a3e4b7d4c8e9f101a2b3c4d5e6f";
 const attachmentsJson = JSON.stringify([
   {
     partId: "2.4",
@@ -55,7 +59,7 @@ function insertAccountAndMessage(db: DatabaseHandle): void {
       attachments_json, size, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    "message-1",
+    messageId,
     "account-1",
     "INBOX",
     42,
@@ -111,12 +115,12 @@ describe("attachment download API", () => {
   });
 
   it("exposes sanitized metadata and streams the exact stored MIME part with download-safe headers", async () => {
-    const message = await app.inject({ method: "GET", url: "/api/messages/message-1" });
-    const response = await app.inject({ method: "GET", url: "/api/messages/message-1/attachments/2.4" });
+    const message = await app.inject({ method: "GET", url: `/api/messages/${messageId}` });
+    const response = await app.inject({ method: "GET", url: `/api/messages/${messageId}/attachments/2.4` });
 
     expect(message.statusCode).toBe(200);
     expect(message.json()).toMatchObject({
-      id: "message-1",
+      id: messageId,
       attachments: JSON.parse(attachmentsJson),
     });
     expect(response.statusCode).toBe(200);
@@ -131,13 +135,21 @@ describe("attachment download API", () => {
   });
 
   it("rejects invalid and unregistered parts before creating an IMAP connection", async () => {
-    const invalid = await app.inject({ method: "GET", url: "/api/messages/message-1/attachments/2.4%3Bdrop" });
-    const missing = await app.inject({ method: "GET", url: "/api/messages/message-1/attachments/3" });
+    const invalid = await app.inject({ method: "GET", url: `/api/messages/${messageId}/attachments/2.4%3Bdrop` });
+    const missing = await app.inject({ method: "GET", url: `/api/messages/${messageId}/attachments/3` });
 
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json()).toEqual({ ok: false, code: "invalid_argument", message: "Attachment part is invalid." });
     expect(missing.statusCode).toBe(404);
     expect(missing.json()).toEqual({ ok: false, code: "not_found", message: "Attachment not found. Sync this message again." });
+    expect(client.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects a message identifier that is neither hex digest nor uuid before touching the mailbox", async () => {
+    const response = await app.inject({ method: "GET", url: "/api/messages/message-1/attachments/2.4" });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, code: "invalid_argument", message: "邮件标识无效。" });
     expect(client.connect).not.toHaveBeenCalled();
   });
 });

@@ -88,9 +88,15 @@ export interface BatchSelection {
   selectAllVisibleMessages: () => void;
   exitSelectionMode: () => void;
   /**
-   * A full list load replaces the view wholesale (folder/account switch, a
-   * sync, an account being added). The predicate-wide selection was scoped to
-   * the view that just went away, so it goes with it.
+   * A non-silent list load. `scopeChanged` says whether the load is for a
+   * different list (folder/account/view/search/filter) or a refresh of the one
+   * on screen. A different list invalidates the whole selection: the ids were
+   * chosen in a view that is gone, and leaving them armed would let the next
+   * batch act on rows the user can no longer see. A same-list refresh keeps the
+   * explicit ids -- a manual refresh must not cost the user a selection -- and
+   * drops only the predicate, which is scoped to the result set being replaced.
+   *
+   * Silent loads never call this at all: they cannot change what the list is.
    *
    * A batch's own state deliberately does NOT go with it: a delivery does not
    * stop when the list reloads, and the runner owns its deadlines and pins. The
@@ -99,7 +105,7 @@ export interface BatchSelection {
    * create round trip is what guards against a second batch now, and it is over
    * long before a load could land inside it.
    */
-  resetSelectionOnFullLoad: () => void;
+  resetSelectionOnFullLoad: (scopeChanged: boolean) => void;
   applyBatchFlaggedChange: (ids: readonly string[], flagged: boolean) => void;
   batchUpdateFlags: (patch: { seen?: boolean; flagged?: boolean }, successKey: string) => Promise<void>;
   batchMoveMessages: (target: MoveTarget) => Promise<void>;
@@ -205,10 +211,14 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     setPendingBatchDelete(false);
   }, [setPendingBatchDelete, setSelectAllPaged]);
 
-  const resetSelectionOnFullLoad = useCallback(() => {
-    // The predicate selection was scoped to the view that is being replaced.
+  const resetSelectionOnFullLoad = useCallback((scopeChanged: boolean) => {
+    // The predicate selection was scoped to the result set being replaced.
     setSelectAllPaged(false);
-  }, [setSelectAllPaged]);
+    // A different list is a different selection domain. Keeping ids chosen in
+    // the old view would leave them armed for a batch that acts on rows the
+    // user can no longer see.
+    if (scopeChanged) exitSelectionMode();
+  }, [exitSelectionMode, setSelectAllPaged]);
 
   // The current view expressed as a server-side filter scope for predicate
   // batch operations. Mirrors buildMessageQuery so the job touches exactly
@@ -242,37 +252,19 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     };
   }, [attachmentKindFilter, dateBounds, debouncedQuery, isDemo, searchScope, selectAllPaged, selectedAccount, selectedFolder, view]);
 
-  /**
-   * Releases the destination pins of a batch's move. The runner calls it when the
-   * batch's delivery ends, which is the last moment that is still BEFORE its
-   * reconciling reload: the reload is what brings the rows the server refused
-   * back into the list, and a pin still holding them would hide exactly the
-   * messages a partial-failure toast is about. Clearing them in `onSettled`
-   * instead would be one reload too late.
-   *
-   * The local commit is not what ends a batch any more (contract §二十六) — it is
-   * what ends the user's wait, and the pins deliberately outlive it: the rows a
-   * refused push leaves behind must not be held against the refresh that reports
-   * them.
-   */
-  const releaseMovePinsRef = useRef<(() => void) | null>(null);
-  const handleDeliverySettled = useCallback(() => {
-    releaseMovePinsRef.current?.();
-    releaseMovePinsRef.current = null;
-  }, []);
-
   // Batch job state machine lives in batchJobRunner.ts (unit-tested there);
-  // the caller wires the React-side callbacks: busy state, toasts, reload, the
-  // acceptance-time reconcile and the delivery release.
+  // the caller wires the React-side callbacks: busy state, toasts, reload and
+  // the acceptance-time reconcile. Each batch carries its own release callback
+  // because batches overlap — a runner-level slot would let one batch's
+  // settlement consume another batch's pins.
   const batchJobRunner = useMemo(() => createBatchJobRunner({
     showToast,
     t,
     reload: (opts) => loadRef.current(opts),
     reconcile: () => reconcileRef.current(),
     exitSelectionMode,
-    onDeliverySettled: handleDeliverySettled,
     onBusy: setBatchBusy,
-  }), [exitSelectionMode, handleDeliverySettled, loadRef, reconcileRef, showToast, t]);
+  }), [exitSelectionMode, loadRef, reconcileRef, showToast, t]);
 
   const startBatchJob = useCallback((payload: BatchJobCreatePayload, opts: BatchJobRunOptions) => {
     batchJobRunner.start(payload, opts);
@@ -323,7 +315,11 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
         // The action is done, so the selection has no further purpose; leaving
         // it armed means the next click on any row fires another batch.
         exitOnSuccess: true,
-        onSettled: () => unpin(affectedIds),
+        // Before the settling reload, not after it: the reload must be free to
+        // show the server's rollback for rows whose push was refused. `unpin`
+        // is holder-counted and idempotent, so an overlapping batch that still
+        // holds the same ids keeps its share.
+        onDeliverySettled: () => unpin(affectedIds),
       });
       return;
     }
@@ -434,15 +430,13 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
       // A pin may outlive the acceptance and the local commit, never the
       // delivery: the messages the server gave back are reported in the source
       // folder again, and a pin still holding them would hide exactly the rows a
-      // partial-failure toast tells the user to look for. Both hooks below
-      // release, and both are needed — the delivery release fires before the
-      // job's reconciling reload (the one that must see the restored rows), while
-      // `onSettled` is the backstop for the paths that end without one.
-      releaseMovePinsRef.current = () => store.unpinMovedAway(movedIds);
+      // partial-failure toast tells the user to look for. This batch's own
+      // callback is what releases them, immediately before its reconciling
+      // reload — the reload that must see the restored rows.
       startBatchJob({ kind: "move", target, query: selectionJobQuery }, {
         successKey: moveActionKey(target, true),
         exitOnSuccess: true,
-        onSettled: () => store.unpinMovedAway(movedIds),
+        onDeliverySettled: () => store.unpinMovedAway(movedIds),
       });
       return;
     }

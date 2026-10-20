@@ -55,6 +55,29 @@ export function sanitizeAttachmentContentType(value: unknown): string {
   return safeMimeTypePattern.test(contentType) ? contentType : "application/octet-stream";
 }
 
+/**
+ * Content types the inline endpoint is willing to let the renderer load as a
+ * document subresource. Everything else (HTML, SVG, PDF, unknown) is handed
+ * back as a download instead: the renderer and the API share one origin, so an
+ * attachment served inline can otherwise act with the app's origin.
+ */
+const INLINE_IMAGE_TYPES: ReadonlySet<string> = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/avif",
+  "image/x-icon",
+  "image/vnd.microsoft.icon",
+]);
+
+/** The normalized essence when it is one of the renderable image types, else null. */
+export function inlineImageType(contentType: string): string | null {
+  const essence = contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return INLINE_IMAGE_TYPES.has(essence) ? essence : null;
+}
+
 function safeSize(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }

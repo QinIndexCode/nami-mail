@@ -39,6 +39,19 @@ describe("api transport errors", () => {
     await expect(api.accounts()).rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("carries the server's refusal reason onto ApiError", async () => {
+    // The undo route answers six of its seven refusals with 409, so the reason
+    // word in the body is the only way the renderer can pick the right sentence.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({ message: "Undo refused.", code: "conflict", reason: "expired" }),
+      { status: 409, headers: { "content-type": "application/json" } },
+    )));
+
+    const error: unknown = await api.accounts().catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 409, code: "conflict", reason: "expired" });
+  });
+
   it("keeps renderer API requests free of a desktop token (injected by the main process)", async () => {
     vi.stubGlobal("window", {});
     const fetchMock = vi.fn().mockResolvedValue(new Response("[]", {

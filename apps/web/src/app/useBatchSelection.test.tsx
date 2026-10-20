@@ -316,19 +316,40 @@ it("keeps the create round trip armed when the bar is closed", async () => {
   expect(current.batchBusy, "closing the bar must not release the create").toBe(true);
 });
 
-it("drops the predicate selection on a full load without releasing the create", async () => {
-  // A full load (folder/account switch, a sync, an account change) replaces the
-  // list wholesale. The predicate selection was scoped to the view that just
-  // went away, while the create it started is still in flight — so the reset
-  // takes the selection and must leave the bar inert. `load` calls exactly this
-  // policy.
+it("drops the selection on a load for a different list without releasing the create", async () => {
+  // A navigation (folder/account/view/search change) replaces the list
+  // wholesale. The ids were chosen in a view that just went away, while the
+  // create they started is still in flight — so the reset takes the selection
+  // and must leave the bar inert.
   await startPredicateBatch();
   expect(pagedWrites.at(-1), "the predicate selection is armed").toBe(true);
 
-  await act(async () => { current.resetSelectionOnFullLoad(); });
+  await act(async () => { current.resetSelectionOnFullLoad(true); });
 
   expect(pagedWrites.at(-1), "the selection of the replaced view is gone").toBe(false);
   expect(current.batchBusy, "a full load must not release the create").toBe(true);
+});
+
+it("keeps an explicit selection across a refresh of the same list", async () => {
+  // A manual refresh reloads the same query. The rows are still on screen and
+  // still mean the same thing, so the selection must survive; only the
+  // predicate (scoped to the result set being replaced) is dropped.
+  expect(current.selectionMode, "the harness starts with one row selected").toBe(true);
+  expect(current.selectedMessageIds.has("m1")).toBe(true);
+
+  await act(async () => { current.resetSelectionOnFullLoad(false); });
+
+  expect(current.selectionMode, "a same-list refresh leaves multi-select armed").toBe(true);
+  expect(current.selectedMessageIds.has("m1"), "the chosen row is still chosen").toBe(true);
+});
+
+it("drops explicit ids as well when the list itself changes", async () => {
+  expect(current.selectionMode).toBe(true);
+
+  await act(async () => { current.resetSelectionOnFullLoad(true); });
+
+  expect(current.selectionMode).toBe(false);
+  expect(current.selectedMessageIds.size).toBe(0);
 });
 
 it("takes a predicate move's rows out of the view at acceptance, not at settlement", async () => {
@@ -372,6 +393,51 @@ it("releases a predicate move's pin before the reload that must restore the refu
   // leave this list empty: the reload would have merged the row through a pin
   // that still expected it in Trash, and nothing re-reads it afterwards.
   expect(displayed.map((message) => message.id)).toEqual(["m1"]);
+});
+
+it("shows a predicate unread batch on the loaded rows before the create answers", async () => {
+  // The unified inbox's own scenario: everything is read, select all, mark
+  // unread. The rows on screen must go unread the moment the action is taken —
+  // the create round trip is the server's, and the user's own state cannot wait
+  // for it. The create never settles here, so nothing but the optimistic apply
+  // can have changed what is on screen.
+  await remountWithMailbox(mailboxOf(3).map((message) => ({ ...message, seen: true, flags: ["\\Seen"] })));
+  await act(async () => { setMatchingTotalState(mailbox.length + 9); });
+  await act(async () => { current.selectAllVisibleMessages(); });
+  mocks.create.mockImplementation(() => new Promise(() => {}));
+
+  await act(async () => { await current.batchUpdateFlags({ seen: false }, "unread"); });
+
+  expect(displayed.map((message) => message.seen)).toEqual([false, false, false]);
+  expect(pending.flagOverrides.size, "and the values are pinned against a racing refresh").toBe(3);
+});
+
+it("releases a predicate flag batch's pin before the reload that must show the rollback", async () => {
+  // The push was refused: the server rolled its flags back and reports the row
+  // unread. The acceptance applied the target optimistically, so the pin is the
+  // only thing keeping that value on screen — and it has to be gone before the
+  // job's reconciling reload, or the merge re-applies the optimistic value over
+  // the rollback and nothing re-reads the row afterwards.
+  await act(async () => { setMatchingTotalState(mailbox.length + 9); });
+  await act(async () => { current.selectAllVisibleMessages(); });
+  mocks.create.mockResolvedValue({ ok: true, jobId: "jf" });
+  // Hold the first status read so the optimistic state and the rollback are
+  // observed separately, in the order a real push produces them.
+  let settleStatus!: (value: unknown) => void;
+  mocks.status.mockImplementation(() => new Promise<unknown>((resolve) => { settleStatus = resolve; }));
+
+  await act(async () => { await current.batchUpdateFlags({ seen: true }, "success"); });
+  expect(displayed[0].seen, "the acceptance applied the target at once").toBe(true);
+
+  await act(async () => {
+    settleStatus({
+      job: { id: "jf", kind: "flags", status: "failed", total: 1, done: 0, updated: 0, failed: 1, createdAt: 0 },
+    });
+  });
+  await act(async () => {
+    await vi.waitFor(() => expect(pending.flagOverrides.size).toBe(0));
+  });
+  expect(displayed[0].seen, "the rolled-back row must come back unread").toBe(false);
 });
 
 it("forwards a predicate move's target as asked, junk included", async () => {

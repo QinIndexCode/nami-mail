@@ -209,6 +209,18 @@ function recordMoveTask(db: DatabaseHandle, ids: readonly string[], payload: { t
   return taskId;
 }
 
+/** An `undo` task the way an acceptance commits one: one selection row per id,
+ * with an origin and no destination (a restore owns no goal to claim). */
+function recordUndoTask(db: DatabaseHandle, ids: readonly string[]): string {
+  return recordTask(db, MASTER_KEY, {
+    accountId: ACCOUNT,
+    kind: "undo",
+    scope: "batch",
+    total: ids.length,
+    items: ids.map((messageId) => ({ messageId, changed: true, originMailbox: INBOX })),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Driving the hooks
 // ---------------------------------------------------------------------------
@@ -697,5 +709,65 @@ describe("task wiring: a real scheduler", () => {
     expect(moveGoalOf(db, "msg-1")).toEqual({ destination: null, state: null });
     expect(moveGoalOf(db, "msg-2")).toEqual({ destination: null, state: null });
     expect(taskItems(db, taskId).map((row) => row.failed)).toEqual([1, 1]);
+  });
+
+  it("hands an undo task's give-up to the undo latch", async () => {
+    const world = fixture(2);
+    db = world.db;
+    // An in-flight move owns where each row is, so the runner refuses every
+    // entry without touching the socket: the ladder ends in a give-up with both
+    // rows still owed -- exactly the remainder nothing used to close.
+    db.prepare("UPDATE messages SET pending_move_state = 'intent'").run();
+    const taskId = recordUndoTask(db, world.ids);
+    const { hooks, counts } = countedHooks(db);
+    const scheduler = wired(db, hooks);
+
+    scheduler.start(taskId);
+    await scheduler.drain();
+    await scheduler.stop();
+
+    // Both hooks fire for one give-up, and the arithmetic must be exact: the
+    // settlement hook latches the remainder and the permanent-failure hook finds
+    // nothing left, so a second report cannot double the count.
+    expect(counts).toEqual({ settled: 1, permanent: 1 });
+    expect(taskRow(db, taskId)).toMatchObject({ status: "failed", total: 2, failed: 2 });
+    expect(taskItems(db, taskId).map((row) => row.failed)).toEqual([1, 1]);
+  });
+
+  it("latches an undo's remainder when the give-up hook runs on its own", () => {
+    const world = fixture(2);
+    db = world.db;
+    const taskId = recordUndoTask(db, world.ids);
+
+    // No settlement first: the give-up itself owes the ledger the rows the
+    // runner never counted. Without this the earlier test would still pass when
+    // the undo branch of onTaskPermanentFailure was deleted, because the
+    // settlement hook latches the same rows.
+    giveUp(db, taskId);
+
+    expect(taskRow(db, taskId)).toMatchObject({ total: 2, failed: 2 });
+    expect(taskItems(db, taskId).map((row) => row.failed)).toEqual([1, 1]);
+  });
+
+  it("latches an undo's remainder when the settlement is not completed", () => {
+    const world = fixture(2);
+    db = world.db;
+    const taskId = recordUndoTask(db, world.ids);
+
+    settle(db, taskId, "cancelled");
+
+    expect(taskRow(db, taskId)).toMatchObject({ total: 2, failed: 2 });
+    expect(taskItems(db, taskId).map((row) => row.failed)).toEqual([1, 1]);
+  });
+
+  it("invents no failures for a completed undo", () => {
+    const world = fixture(2);
+    db = world.db;
+    const taskId = recordUndoTask(db, world.ids);
+
+    settle(db, taskId, "completed");
+
+    expect(taskRow(db, taskId)).toMatchObject({ total: 2, failed: 0 });
+    expect(taskItems(db, taskId).map((row) => row.failed)).toEqual([0, 0]);
   });
 });

@@ -6,10 +6,10 @@
  * tail.
  */
 import { memo, useEffect, useRef, useState } from "react";
-import { Check, Copy, Undo2 } from "lucide-react";
+import { Undo2 } from "lucide-react";
 import { useI18n } from "../i18n";
 import { AgentMarkdown, AgentMarkdownSettled, splitStreamingMarkdown } from "../AgentMarkdown";
-import { copyToClipboard } from "./agent-utils";
+import CopyButton from "../CopyButton";
 
 // Owns its own 1 s tick so the countdown does not re-render the workspace.
 export function RevokeNotice({ until, onExpire }: { until: number; onExpire: () => void }) {
@@ -97,29 +97,17 @@ export const AgentScrubberBar = memo(function AgentScrubberBarInner({
   );
 });
 
-/** Copy button with a transient checkmark: copies, shows a check, then returns
- *  to the copy icon so repeated copies stay possible. The row keeps rendering
+/** Copy button with the shared transient checkmark. The row keeps rendering
  *  only this tiny control, isolated from the memoised message row. */
 export function CopyMessageButton({ content, label }: { content: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  const timerRef = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(timerRef.current), []);
-  const handleCopy = () => {
-    void copyToClipboard(content);
-    setCopied(true);
-    window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => setCopied(false), 1200);
-  };
   return (
-    <button
-      type="button"
-      className={`agent-corner-button copy${copied ? " copied" : ""}`}
-      onClick={handleCopy}
-      aria-label={label}
-      data-tooltip={label}
-    >
-      {copied ? <Check size={12} /> : <Copy size={12} />}
-    </button>
+    <CopyButton
+      text={content}
+      ariaLabel={label}
+      tooltip={label}
+      size={12}
+      className="agent-corner-button copy"
+    />
   );
 }
 

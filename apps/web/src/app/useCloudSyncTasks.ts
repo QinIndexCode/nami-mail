@@ -131,14 +131,27 @@ export function useCloudSyncTasks(enabled: boolean): CloudSyncTasks {
 
   const applySettled = useCallback((settled: TaskSettledPayload): void => {
     if (!leavesThePanel(settled.status)) {
+      // The row stays until a read can put it in `attention` with the error the
+      // server recorded. That read must not be overtaken by one that started
+      // before the settlement and still reports the task as running: the epoch
+      // turns the older read into a snapshot of a question already answered,
+      // and the scheduled read replaces it with one taken after the frame.
+      epochRef.current += 1;
       scheduleRead();
       return;
     }
+    // A read already in flight may have snapshotted this task before it settled;
+    // landing after this frame it would put the row back. The epoch turns that
+    // read into a snapshot of a question already answered, and the scheduled
+    // read replaces it with one taken after the settlement (which also refills
+    // any row this frame did not mention).
+    epochRef.current += 1;
     knownIdsRef.current.delete(settled.taskId);
     setList((current) => ({
       syncing: current.syncing.filter((task) => task.id !== settled.taskId),
       attention: current.attention.filter((task) => task.id !== settled.taskId),
     }));
+    scheduleRead();
   }, [scheduleRead]);
 
   useEffect(() => {
@@ -152,12 +165,21 @@ export function useCloudSyncTasks(enabled: boolean): CloudSyncTasks {
       setFailed(false);
       return undefined;
     }
+    // Re-enabling starts from an empty list, so the spinner has to come back
+    // with it: the list was cleared while disabled and the previous session's
+    // failure banner has nothing left to describe.
+    setLoading(true);
+    setFailed(false);
     void read();
     return () => {
       if (coalesceRef.current) {
         window.clearTimeout(coalesceRef.current);
         coalesceRef.current = 0;
       }
+      // A read that was already in flight when this effect tore down must not
+      // land: its answer describes the mode/list the hook has just left. Bumping
+      // the epoch makes the landing check at the top of `read` reject it.
+      epochRef.current += 1;
     };
   }, [enabled, read]);
 

@@ -1,5 +1,6 @@
-import { Check, CircleHelp, Copy, Minimize2, Monitor, Moon, Power, ShieldCheck, Sun } from "lucide-react";
+import { CircleHelp, Minimize2, Monitor, Moon, Power, ShieldCheck, Sun } from "lucide-react";
 import { useI18n } from "../i18n";
+import CopyButton from "../CopyButton";
 import type { AppTheme, CloseBehavior } from "../types";
 
 /**
@@ -16,11 +17,9 @@ export function ExternalGuideBlock(props: {
   label: string;
   hint: string;
   code: string;
-  copiedId: string | null;
   onCopy: (text: string, id: string) => void;
 }) {
   const { t } = useI18n();
-  const copied = props.copiedId === props.id;
   return (
     <div className="external-guide-block">
       <div className="external-guide-block-head">
@@ -28,15 +27,16 @@ export function ExternalGuideBlock(props: {
           <strong>{props.label}</strong>
           <small>{props.hint}</small>
         </span>
-        <button
-          className={`secondary-button settings-copy-btn${copied ? " copied" : ""}`}
-          type="button"
-          aria-label={copied ? t("settings.agent.externalGuide.copied") : `${t("settings.agent.externalGuide.copy")} ${props.label}`}
-          onClick={() => props.onCopy(props.code, props.id)}
-        >
-          {copied ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
-          <span>{copied ? t("settings.agent.externalGuide.copied") : t("settings.agent.externalGuide.copy")}</span>
-        </button>
+        <CopyButton
+          className="secondary-button settings-copy-btn"
+          text={props.code}
+          ariaLabel={`${t("settings.agent.externalGuide.copy")} ${props.label}`}
+          copiedAriaLabel={t("settings.agent.externalGuide.copied")}
+          label={t("settings.agent.externalGuide.copy")}
+          copiedLabel={t("settings.agent.externalGuide.copied")}
+          onCopied={() => props.onCopy(props.code, props.id)}
+          size={12}
+        />
       </div>
       <pre className="external-guide-code"><code>{props.code}</code></pre>
     </div>

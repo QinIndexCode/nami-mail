@@ -49,7 +49,8 @@ import {
   moveRefusalError,
   moveRefusalMessage,
 } from "./message-write-errors.js";
-import { downloadMessageAttachment } from "../attachments.js";
+import { downloadMessageAttachment, inlineImageType } from "../attachments.js";
+import { messageIdSchema } from "../message-id.js";
 import { downloadMessageSource } from "../mail-source.js";
 import { proxyImage } from "../image-proxy.js";
 import { detectProvider } from "../providers.js";
@@ -447,8 +448,10 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
   });
 
   app.get<{ Params: { id: string; partId: string } }>("/api/messages/:id/attachments/:partId", async (request, reply) => {
+    const messageId = messageIdSchema.safeParse(request.params.id);
+    if (!messageId.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "邮件标识无效。" });
     try {
-      const download = await downloadMessageAttachment(context.db, context.masterKey, request.params.id, request.params.partId, context.oauthService);
+      const download = await downloadMessageAttachment(context.db, context.masterKey, messageId.data, request.params.partId, context.oauthService);
       reply
         .type(download.attachment.contentType)
         .header("Content-Disposition", `attachment; filename*=UTF-8''${contentDispositionFilename(download.attachment.filename)}`)
@@ -465,15 +468,15 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
   // ---- CID inline images (cid:xxx references in email HTML) -----------------
 
   app.get<{ Params: { id: string; partId: string } }>("/api/messages/:id/inline/:partId", async (request, reply) => {
-    const messageId = z.string().uuid().safeParse(request.params.id);
+    const messageId = messageIdSchema.safeParse(request.params.id);
     if (!messageId.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "邮件标识无效。" });
     try {
       const download = await downloadMessageAttachment(context.db, context.masterKey, messageId.data, request.params.partId, context.oauthService);
+      const inlineType = inlineImageType(download.attachment.contentType);
       reply
-        .type(download.attachment.contentType)
-        .header("Content-Disposition", "inline")
-        .header("X-Content-Type-Options", "nosniff")
-        .header("Cache-Control", "public, max-age=604800, immutable");
+        .type(inlineType ?? "application/octet-stream")
+        .header("Content-Disposition", inlineType ? "inline" : `attachment; filename*=UTF-8''${contentDispositionFilename(download.attachment.filename)}`)
+        .header("X-Content-Type-Options", "nosniff");
       return reply.send(download.content);
     } catch (error) {
       const failure = mailFailure(error);
@@ -502,7 +505,7 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
   });
 
   app.get<{ Params: { id: string } }>("/api/messages/:id/eml", async (request, reply) => {
-    const messageId = z.string().uuid().safeParse(request.params.id);
+    const messageId = messageIdSchema.safeParse(request.params.id);
     if (!messageId.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "邮件标识无效。" });
     try {
       const download = await downloadMessageSource(context.db, context.masterKey, messageId.data, context.oauthService);

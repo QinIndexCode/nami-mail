@@ -93,6 +93,15 @@ function pruneStartupRequestLog(logPath: string): void {
   }
 }
 
+/**
+ * `frame-src blob:` rather than `'none'`: the attachment preview renders a PDF
+ * from an object URL inside an iframe (`AttachmentPreviewModal`), and a blob:
+ * URL inherits the creating origin, so the framed document stays same-origin
+ * and gains no privileges. `frame-ancestors 'none'` is the direction that
+ * protects this app from being framed. Without this exception the preview works
+ * under Vite (which serves the document with no CSP) and silently fails in every
+ * packaged build, where this header is the document's policy.
+ */
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'none'",
@@ -103,7 +112,7 @@ const contentSecurityPolicy = [
   "font-src 'self' data:",
   "connect-src 'self'",
   "media-src 'self'",
-  "frame-src 'none'",
+  "frame-src blob:",
   "form-action 'none'",
   "frame-ancestors 'none'",
 ].join("; ");

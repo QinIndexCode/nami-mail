@@ -84,6 +84,7 @@ import { dialogKeydownDecision, useDialogRouting } from "./dialogRouting";
 import { useBatchSelection } from "./app/useBatchSelection";
 import { useQuickMessageActions } from "./app/useQuickMessageActions";
 import { createMailStore, type ReconcileRunner } from "./app/mailStore";
+import { mailListScopeKey } from "./app/mailListScope";
 import { deriveDemoCounts } from "./app/demoCounts";
 import { resolveDraftBody } from "./app/draftBody";
 import { useAttachmentExports } from "./app/useAttachmentExports";
@@ -115,11 +116,9 @@ import {
   splitQuotedMailText,
   textFromSanitizedMailHtml,
   replyBody,
-  SWITCH_FADE_MS,
-  MAIL_FADE_STAGGER_MS,
-  AGENT_FADE_STAGGER_MS,
   localizeMessageLinks,
 } from "./app/app-utils";
+import { useAgentWorkspaceTransition, type AgentPhase } from "./app/useAgentWorkspaceTransition";
 import { ensureFullMessage, mergeMessageDetail, useMessageBody } from "./app/useMessageBody";
 import { useMailTranslation } from "./app/useMailTranslation";
 import { useSplashDismiss } from "./app/useSplashDismiss";
@@ -131,17 +130,8 @@ const DemoSourceDialog = lazy(() => import("./DemoSourceDialog"));
 
 type MailView = MessageListQuery["messageView"];
 
-// Interface-switch ("fade hand-off") phases between the mail workspace and the
-// Agent workspace. Each interface fades out/in in two layers — the mail
-// sidebar and workspace leave first, then the Agent's conversation rail and
-// main panel enter (and vice versa on close). These phases only drive class
-// names; the motion itself lives in styles.css. `idle` is the settled state in
-// either direction.
-type AgentPhase = "idle" | "mail-leaving" | "agent-entering" | "agent-leaving" | "mail-entering";
-const MAIL_SWITCH_TOTAL_MS = SWITCH_FADE_MS + MAIL_FADE_STAGGER_MS;
 /** Sidebar spinner grace period: faster loads show no spinner at all. */
 const SIDEBAR_LOADING_SPINNER_DELAY_MS = 250;
-const AGENT_SWITCH_TOTAL_MS = SWITCH_FADE_MS + AGENT_FADE_STAGGER_MS;
 
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 const demoPresentation = readDemoPresentation(window.location.search);
@@ -452,84 +442,17 @@ export default function App() {
   const sidebarCounts = useMemo(() => sidebarBadgeCounts(stats), [stats]);
   useDialogFocus(state.mobileSidebar, sidebarRef);
 
-  // Block-assembly switch between the mail workspace and the Agent workspace.
-  // Opening: mail blocks leave in order, then the Agent workspace mounts and
-  // its blocks enter. Closing mirrors it. A shared ref makes the sequence
-  // re-entrant (rapid open/close cancels the previous timers) so the phase
-  // always lands on `idle` with the workspace in the requested state.
-  const agentSwitchTimersRef = useRef<number[]>([]);
-  // Mirrors `agentPhase` for the open/close controllers so they can read the
-  // current phase synchronously without being recreated on every phase change.
-  const agentPhaseRef = useRef<AgentPhase>("idle");
-  // Scroll position across the Agent round-trip: the mail column is
-  // display:none while the workspace is open, which resets the virtualized
-  // list's scroller. The offset is captured before hiding and re-applied once
-  // the column is laid out again.
-  const agentReturnScrollTopRef = useRef<number | null>(null);
   const [agentLaunchIntent, setAgentLaunchIntent] = useState<ReaderAiLaunchIntent | null>(null);
-  const clearAgentSwitchTimers = () => {
-    for (const timer of agentSwitchTimersRef.current) window.clearTimeout(timer);
-    agentSwitchTimersRef.current = [];
-  };
-  const queueAgentTimer = (run: () => void, delay: number) => {
-    agentSwitchTimersRef.current.push(window.setTimeout(run, delay));
-  };
-
-  const openAgentWorkspace = useCallback((intent?: ReaderAiLaunchIntent) => {
-    if (demoPresentation) return;
-    setAgentLaunchIntent(intent ?? null);
-    clearAgentSwitchTimers();
-    if (agentPhaseRef.current === "mail-leaving" || agentPhaseRef.current === "agent-entering") return;
-    agentReturnScrollTopRef.current = messageListRef.current?.scrollTop ?? null;
-    agentPhaseRef.current = "mail-leaving";
-    setAgentPhase("mail-leaving");
-    // Warm the lazy chunk while the mail layers fade out so the workspace is
-    // ready the moment it takes over (no Suspense spinner in the hand-off).
-    void import("./AgentWorkspace").catch(() => undefined);
-    queueAgentTimer(() => {
-      setAgentOpen(true);
-      agentPhaseRef.current = "agent-entering";
-      setAgentPhase("agent-entering");
-    }, MAIL_SWITCH_TOTAL_MS);
-    queueAgentTimer(() => {
-      agentPhaseRef.current = "idle";
-      setAgentPhase("idle");
-    }, MAIL_SWITCH_TOTAL_MS + AGENT_SWITCH_TOTAL_MS);
-  }, []);
-
-  const closeAgentWorkspace = useCallback(() => {
-    if (demoPresentation) return;
-    setAgentLaunchIntent(null);
-    clearAgentSwitchTimers();
-    if (agentPhaseRef.current === "agent-leaving" || agentPhaseRef.current === "mail-entering") return;
-    agentPhaseRef.current = "agent-leaving";
-    setAgentPhase("agent-leaving");
-    queueAgentTimer(() => {
-      setAgentOpen(false);
-      agentPhaseRef.current = "mail-entering";
-      setAgentPhase("mail-entering");
-      const savedTop = agentReturnScrollTopRef.current;
-      agentReturnScrollTopRef.current = null;
-      if (savedTop == null) return;
-      // The scroller was display:none while the Agent workspace was open, so
-      // its offset was lost. Restore once the column is laid out again (double
-      // rAF: one frame for display, one for the virtualizer's re-measure) so
-      // the user lands exactly where they left. A quick re-entry into the
-      // workspace (phase back to "mail-leaving") cancels the restore.
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          if (agentPhaseRef.current === "mail-leaving") return;
-          const viewport = messageListRef.current;
-          if (!viewport) return;
-          viewport.scrollTop = savedTop;
-        });
-      });
-    }, AGENT_SWITCH_TOTAL_MS);
-    queueAgentTimer(() => {
-      agentPhaseRef.current = "idle";
-      setAgentPhase("idle");
-    }, AGENT_SWITCH_TOTAL_MS + MAIL_SWITCH_TOTAL_MS);
-  }, []);
+  // Opening fades the mail blocks out, mounts the Agent workspace and fades its
+  // blocks in; closing mirrors it. The hook also owns the mid-transition
+  // interruption rule and the mail list's scroll restore.
+  const { openAgentWorkspace, closeAgentWorkspace } = useAgentWorkspaceTransition({
+    demoPresentation: Boolean(demoPresentation),
+    setAgentPhase,
+    setAgentOpen,
+    setAgentLaunchIntent,
+    messageListRef,
+  });
   const applySettings = useCallback((nextSettings: AppSettings) => {
     const normalizedSettings = { ...nextSettings, locale: resolveLocale(nextSettings.locale) };
     settingsLoadCoordinatorRef.current.recordSettingsChange();
@@ -675,12 +598,15 @@ export default function App() {
     setPendingArchiveMoves(next);
   }, []);
 
-  // What a full list load invalidates. The policy lives with the batch
+  // What a non-silent list load invalidates. The policy lives with the batch
   // selection state machine, which is the only place that knows a job may be
   // running (it must not be disarmed by a reload — see
   // useBatchSelection.resetSelectionOnFullLoad). `load` is declared before that
-  // hook, so it reaches the policy through a ref.
-  const fullLoadResetRef = useRef<() => void>(() => {});
+  // hook, so it reaches the policy through a ref. The scope key tells a
+  // navigation (a different list, where the old ids no longer mean anything)
+  // from a refresh of the same list (where the selection must survive).
+  const loadedListScopeRef = useRef("");
+  const fullLoadResetRef = useRef<(scopeChanged: boolean) => void>(() => {});
 
   const load = useCallback(async ({
     silent = false,
@@ -698,7 +624,24 @@ export default function App() {
     scope?: "view" | "all";
   } = {}) => {
     const requestId = ++loadRequestRef.current;
-    fullLoadResetRef.current();
+    // Which list this load is for, and whether it differs from the one the UI is
+    // currently showing. Both are decided here but *committed* only once the
+    // snapshot is adopted: a request that fails or is superseded never becomes
+    // the list, so recording its scope would make the retry of that same scope
+    // look like a refresh and keep the previous list's selection.
+    const scopeKey = mailListScopeKey({
+      accountId, folder, search, messageView, scope, attachmentKind: attachmentKindFilter,
+      after: dateBounds.after, before: dateBounds.before,
+    });
+    const scopeChanged = loadedListScopeRef.current !== scopeKey;
+    const commitScope = () => {
+      // Silent loads (background reconcile, sync, pending-move verification)
+      // never change what the list is, so they must not touch the selection:
+      // doing so silently disarmed a predicate selection on every refresh.
+      if (silent) return;
+      loadedListScopeRef.current = scopeKey;
+      fullLoadResetRef.current(scopeChanged);
+    };
     try {
       if (!silent) setLoading(true);
       setFatalError(null);
@@ -731,6 +674,7 @@ export default function App() {
         // to page: the chain starts already exhausted.
         setMessageNextCursor(null);
         applyDemoSubmissions(sortSubmissions(demo.createDemoSubmissions(locale)), true);
+        commitScope();
       } else {
         const messageQuery = buildMessageQuery({ accountId, folder, search, messageView, searchScope: scope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before });
         const [nextAccounts, nextProviders, firstPage, nextStats] = await Promise.all([
@@ -754,6 +698,7 @@ export default function App() {
             pendingArchiveMoves: pendingArchiveMovesRef.current,
           },
         );
+        commitScope();
         const nextMessages = store.getMessages();
         setProviders(nextProviders);
         // Same batch as the row swap: the viewport remounts here, and only

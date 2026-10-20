@@ -6,7 +6,6 @@ import {
   Check,
   CircleAlert,
   ClipboardList,
-  Copy,
   Eye,
   FileDown,
   FileText,
@@ -18,7 +17,6 @@ import {
   PanelLeftClose,
   Pencil,
   Plus,
-  Quote,
   Reply,
   Search,
   SquareCheck,
@@ -37,6 +35,7 @@ import {
   Zap,
 } from "lucide-react";
 import { api, ApiError } from "./api";
+import { mergeConversationList } from "./agent/conversationListMerge";
 
 import { type AgentSlashCommand, type AgentSlashSubcommand } from "@nami/agent-contracts";
 import { buildSlashMenu, slashCompletionText, slashKeepsMenuOpen, slashMenuActiveIndex } from "./slashMenu";
@@ -61,6 +60,7 @@ import { announceDemoReady, readDemoPresentation } from "./demoPresentation";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { configuredProviderId, resolveConversationProvider } from "./agent/agent-utils";
 import { AgentMessageRow } from "./agent/AgentMessageRow";
+import AgentTranscriptContextMenu from "./agent/AgentTranscriptContextMenu";
 
 import { AgentConfirmationCard } from "./agent/AgentConfirmationCard";
 import { AgentScrubberBar, RevokeNotice } from "./agent/AgentSmallComponents";
@@ -91,7 +91,6 @@ import {
   applyRevokedMarks,
   purgeStaleErrors,
   sourceLabel,
-  copyToClipboard,
   dedupeCitations,
   truncateForPreview,
   truncateForContext,
@@ -388,50 +387,35 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
   // dropped out of the sidebar (the "conversation flashes away" bug). This set
   // exempts exactly those locally-created rows from being dropped.
   const createdThisSessionRef = useRef<Set<string>>(new Set());
+  // Monotonic token for sidebar refreshes: a response that started before a
+  // newer one must not apply, or a slow snapshot can overwrite fresher titles.
+  const conversationsRequestRef = useRef(0);
 
   const refreshConversations = useCallback(async (query = "") => {
     if (demoMode) {
       setConversations([]);
       return;
     }
-    const response = await api.agentConversations(query ? new URLSearchParams({ query }).toString() : "");
-    setConversations((current) => {
-      // When searching, the server result is authoritative for that scope — but
-      // it must still not surface a row whose delete is in flight.
-      if (query) return response.items.filter((item) => !pendingDeleteIdsRef.current.has(item.id));
-      // Otherwise merge instead of blindly replacing: a profile may have just
-      // been created / its turn may still be mid-write, so a server snapshot
-      // can momentarily omit it and replacing wholesale would flash a
-      // disappearing sidebar row. Adopt server rows, but only keep a
-      // local-only row when it is at least as fresh as the newest server row
-      // (a brand-new / in-flight profile). Anything older — e.g. one deleted
-      // here or on another device — is left to the server's authoritative
-      // result so it can never resurrect.
-      //
-      // A locally-deleted row is the one exception to "adopt server rows": the
-      // server delete may not have committed yet, so its snapshot can still
-      // carry the row. Filter those out so an optimistic delete cannot flicker
-      // back into view until the server confirms the removal.
-      const pending = pendingDeleteIdsRef.current;
-      const newestServer = response.items[0]?.updatedAt ?? "";
-      const serverById = new Map(response.items
-        .filter((item) => !pending.has(item.id))
-        .map((item) => [item.id, item]));
-      const merged = [...serverById.values()];
-      for (const item of current) {
-        if (pending.has(item.id)) continue;
-        if (!serverById.has(item.id)) {
-          // A row the server snapshot does not (yet) carry. Keep it when it was
-          // created this session OR it is at least as fresh as the newest server
-          // row; drop it otherwise so an old row deleted on another device
-          // cannot resurrect.
-          const newThisSession = createdThisSessionRef.current.has(item.id);
-          const freshEnough = (item.updatedAt ?? "").localeCompare(newestServer) >= 0;
-          if (newThisSession || freshEnough) merged.push(item);
-        }
-      }
-      return merged.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
-    });
+    const request = ++conversationsRequestRef.current;
+    let response: Awaited<ReturnType<typeof api.agentConversations>>;
+    try {
+      response = await api.agentConversations(query ? new URLSearchParams({ query }).toString() : "");
+    } catch {
+      // Sidebar refresh is background housekeeping. A failed list read must not
+      // escape to its caller: the stream path awaits this inside its own try,
+      // where a rejection would be reported as an Agent turn failure (and, for
+      // a background run, persisted as a bogus error row). The next poll or
+      // settlement retries; the list keeps what it had.
+      return;
+    }
+    if (request !== conversationsRequestRef.current) return;
+    setConversations((current) => mergeConversationList({
+      current,
+      serverItems: response.items,
+      pendingDeleteIds: pendingDeleteIdsRef.current,
+      createdThisSession: createdThisSessionRef.current,
+      query,
+    }));
   }, [demoMode]);
 
   // Streaming conversation state machine (session lifecycle + stream pipeline +
@@ -1963,10 +1947,12 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
           )}
           <div ref={messagesEndRef} />
           {contextMenu && (
-            <div className="agent-context-menu" ref={contextMenuRef} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onClick={(e) => e.stopPropagation()}>
-              <button type="button" role="menuitem" onClick={() => { void copyToClipboard(contextMenu.text); setContextMenu(null); }}><Copy size={14} /><span>{t("agent.message.copy")}</span></button>
-              <button type="button" role="menuitem" onClick={() => { setQuoteContext(contextMenu.text); setContextMenu(null); window.requestAnimationFrame(() => composerRef.current?.focus()); }}><Quote size={14} /><span>{t("agent.message.followUp")}</span></button>
-            </div>
+            <AgentTranscriptContextMenu
+              menu={contextMenu}
+              menuRef={contextMenuRef}
+              onDismiss={(menu) => setContextMenu((current) => (current === menu ? null : current))}
+              onFollowUp={(text) => { setQuoteContext(text); setContextMenu(null); window.requestAnimationFrame(() => composerRef.current?.focus()); }}
+            />
           )}
         </div>
         {userMessages.length > 0 && (

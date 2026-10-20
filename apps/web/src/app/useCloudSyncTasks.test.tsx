@@ -156,6 +156,7 @@ describe("useCloudSyncTasks", () => {
   });
 
   it("drops a delivered row on its settle frame without waiting for a read", async () => {
+    vi.useFakeTimers();
     mocks.taskList.mockResolvedValue(list([task()]));
     await mount();
 
@@ -167,6 +168,38 @@ describe("useCloudSyncTasks", () => {
     // projection keeps out of both halves, so the row is done with the panel.
     expect(current.syncing).toEqual([]);
     expect(mocks.taskList).toHaveBeenCalledTimes(1);
+
+    // The read that follows is for the rest of the list, not for this row: the
+    // settled task is out of both halves on the server too.
+    mocks.taskList.mockResolvedValue(list([]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(mocks.taskList).toHaveBeenCalledTimes(2);
+    expect(current.syncing).toEqual([]);
+  });
+
+  it("cannot be resurrected by a read that snapshotted it before it settled", async () => {
+    vi.useFakeTimers();
+    mocks.taskList.mockResolvedValueOnce(list([task()]));
+    await mount();
+
+    // A manual read is in flight and has already snapshotted the row as
+    // syncing. The task settles before that answer lands — which is exactly the
+    // ordering a slow request and a fast frame produce.
+    const stale = deferred<DeliveryTaskList>();
+    mocks.taskList.mockReturnValueOnce(stale.promise);
+    await act(async () => { current.refresh(); });
+    await act(async () => {
+      current.applySettled({ accountId: "acct-1", taskId: "t1", status: "completed" });
+    });
+    expect(current.syncing).toEqual([]);
+
+    mocks.taskList.mockResolvedValue(list([]));
+    await act(async () => { stale.resolve(list([task()])); });
+    // The late answer describes a question already answered.
+    expect(current.syncing, "a stale snapshot must not put the row back").toEqual([]);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(current.syncing).toEqual([]);
   });
 
   it("asks the server for a failed row instead of inventing one", async () => {
@@ -223,6 +256,23 @@ describe("useCloudSyncTasks", () => {
     mocks.taskList.mockResolvedValue(list([task()]));
     await act(async () => root.render(<Harness enabled />));
     expect(mocks.taskList).toHaveBeenCalledTimes(1);
+    expect(current.syncing).toHaveLength(1);
+  });
+
+  it("shows the spinner again when re-enabled, whose list was cleared while off", async () => {
+    await mount(false);
+    expect(current.loading).toBe(false);
+
+    const pending = deferred<DeliveryTaskList>();
+    mocks.taskList.mockReturnValueOnce(pending.promise);
+    await act(async () => root.render(<Harness enabled />));
+
+    // The disabled state emptied the list, so an empty panel with no spinner
+    // would claim "nothing is syncing" before anything had been read.
+    expect(current.loading).toBe(true);
+
+    await act(async () => { pending.resolve(list([task()])); });
+    expect(current.loading).toBe(false);
     expect(current.syncing).toHaveLength(1);
   });
 });

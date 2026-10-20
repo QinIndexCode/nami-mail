@@ -222,7 +222,6 @@ export function useAgentSession({
   // ---------------------------------------------------------------------------
   // Run bookkeeping refs
   // ---------------------------------------------------------------------------
-  const abortRef = useRef<AbortController | null>(null);
   // Failures of background runs (the user left the conversation while it ran).
   // The server persists most failure turns itself, but requests rejected before
   // any record is written leave the conversation with neither a row nor an
@@ -736,8 +735,8 @@ export function useAgentSession({
   }, [ghostConversationId, active?.id, pollLastMessageId]);
 
   // Interrupt-to-send: sending a new message folds a live reply to
-  // "interrupted" and cancels that run (via its own controller, not the shared
-  // abortRef) first. Only the on-screen conversation is affected.
+  // "interrupted" and cancels that run (via its own per-conversation
+  // controller) first. Only the on-screen conversation is affected.
   const prepareInterruptToSend = useCallback(() => {
     const activeSession = sessionStreamsRef.current.get(active?.id ?? "");
     if (activeSession && !activeSession.done) {
@@ -977,7 +976,6 @@ export function useAgentSession({
       // Only the latest run may clear shared run state, and a background-
       // completed run clears nothing: the flag belongs to whatever is on screen.
       if (isCurrentRun()) {
-        if (abortRef.current === controller) abortRef.current = null;
         if (activeIdRef.current === conversation.id) {
           setStreaming(false);
           setStreamStatus(null);

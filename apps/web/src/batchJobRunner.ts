@@ -1,4 +1,4 @@
-import { api, type BatchJobCreatePayload, type BatchJobSnapshot } from "./api";
+import { api, ApiError, type BatchJobCreatePayload, type BatchJobSnapshot } from "./api";
 import { mailErrorToastMessage } from "./errorPresentation";
 import type { Translate } from "./i18n";
 
@@ -47,8 +47,28 @@ function reconcileQuietly(reconcile: () => Promise<void> | void): void {
   }
 }
 
-export type BatchJobToastKind = "success" | "error" | "info";
+/**
+ * Runs one of the caller's callbacks without letting it interrupt the runner's
+ * own reporting. A throw from a toast or a release is the caller's problem; the
+ * delivery still has to be recorded and the remaining callbacks still have to
+ * run.
+ */
+function quietly(callback: (() => void) | undefined): void {
+  try {
+    callback?.();
+  } catch {
+    // Deliberately swallowed: see above.
+  }
+}
+
+export type BatchJobToastKind = "success" | "error" | "info" | "warning";
 export type BatchJobToastAction = { label: string; run: () => void };
+/**
+ * A toast that reports on the batch rather than offering an action on it.
+ * `feedback` makes it replace an actionable toast instead of queueing behind
+ * it: the undo the action toast offered is exactly what this result follows.
+ */
+export type BatchJobToastOptions = { feedback?: boolean };
 
 /**
  * How a delivery ended, as the thing the doer of an undo needs to know.
@@ -60,7 +80,12 @@ export type BatchJobToastAction = { label: string; run: () => void };
 export type DeliveryOutcome = "completed" | "failed" | "unknown";
 
 export type BatchJobRunnerDeps = {
-  showToast: (message: string, kind: BatchJobToastKind, action?: BatchJobToastAction) => void;
+  showToast: (
+    message: string,
+    kind: BatchJobToastKind,
+    action?: BatchJobToastAction,
+    options?: BatchJobToastOptions,
+  ) => void;
   reload: (opts: { silent: boolean }) => Promise<void> | void;
   /**
    * Pulls the server's *already committed* local state into the UI the moment a
@@ -94,18 +119,6 @@ export type BatchJobRunnerDeps = {
   reconcile: () => Promise<void> | void;
   exitSelectionMode: () => void;
   t: Translate;
-  /**
-   * The delivery of an *accepted* batch reached a terminal state: delivered,
-   * refused, or no longer being watched. Named for what it reports rather than
-   * for a piece of UI state, because its one use is releasing the pins that hold
-   * an optimistic row against a refresh (see `useBatchSelection`).
-   *
-   * It fires exactly once per accepted batch, and always before that batch's
-   * settling reload: a pin left armed through the refresh would keep a refused
-   * row looking applied, which is the whole reason the release is ordered this
-   * way. A batch the server refused never gets here — there is no delivery.
-   */
-  onDeliverySettled: () => void;
   onBusy: (busy: boolean) => void;
   /** Injectable clock for tests; defaults to Date.now. */
   now?: () => number;
@@ -114,10 +127,23 @@ export type BatchJobRunnerDeps = {
 export type BatchJobRunOptions = {
   successKey: string;
   exitOnSuccess: boolean;
-  /** Runs after the batch's delivery is over and its reconciling reload has
-   * landed — pins must be cleared only here, or a refresh racing the job would
-   * still clobber. */
-  onSettled?: () => void;
+  /**
+   * This batch's delivery ended — delivered, refused to start, or no longer
+   * being watched. Its one use is releasing the pins that hold an optimistic
+   * row against a refresh (see `useBatchSelection`).
+   *
+   * CARRIED BY THE BATCH, not by the runner: batches overlap (the toolbar
+   * releases at acceptance), so a single runner-level callback would have every
+   * batch consume whichever release was installed last and leave the other
+   * batch's pins either armed too long or dropped too early.
+   *
+   * It fires exactly once per batch, on every terminal path, and always before
+   * that batch's settling reload: a pin left armed through the refresh would
+   * keep a refused row looking applied, which is the whole reason the release
+   * is ordered this way. That includes a create the server refused and a batch
+   * that committed nothing — both had optimistic state to give back.
+   */
+  onDeliverySettled?: () => void;
 };
 
 /** A per-job delivery outcome, so an undo click can wait for one. */
@@ -150,7 +176,12 @@ type Delivery = {
  * the React-side callbacks (busy state, toasts, reload).
  */
 export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
-  const { showToast, t, reload, reconcile, exitSelectionMode, onDeliverySettled, onBusy } = deps;
+  const { showToast, t, reload, reconcile, exitSelectionMode, onBusy } = deps;
+  // Reports about an action the user just took must not hide behind the next
+  // actionable toast, so they replace it instead of queueing.
+  const showFeedback = (message: string, kind: BatchJobToastKind) => {
+    showToast(message, kind, undefined, { feedback: true });
+  };
   const now = deps.now ?? Date.now;
   /** Per-batch polling deadlines, keyed by job id. */
   const runDeadlines = new Map<string, number>();
@@ -212,13 +243,17 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
     deliveries.get(jobId)?.promise ?? Promise.resolve<DeliveryOutcome>("unknown");
 
   /**
-   * Follows an already-accepted job to its terminal state without touching the
-   * UI's progress state, then reports. The undo POST only *accepts* the inverse
-   * job — the reverse itself runs server-side afterwards — so reloading when
-   * the POST returns would snapshot the pre-undo list and the undo would look
-   * like it did nothing.
+   * Follows an already-accepted job to its terminal state, then reports it.
+   *
+   * The undo POST only *accepts* the inverse job — the reverse itself runs
+   * server-side afterwards — so reloading when the POST returns would snapshot
+   * the pre-undo list and the undo would look like it did nothing. What makes the
+   * undo visible is following each reverse task to its end, and `null` is the
+   * answer for a follow-up that could not reach one: the job may well have
+   * finished, but this caller has no snapshot to describe, and "unknown" is not
+   * the same claim as "done".
    */
-  const followToSettled = (jobId: string, onSettled: () => void): void => {
+  const followToSettled = (jobId: string, onSettled: (job: BatchJobSnapshot | null) => void): void => {
     const startedFollowingAt = now();
     // A status read can fail transiently (a blip, a restart in progress). One
     // failed read used to end the follow-up on the spot, which is exactly the
@@ -227,19 +262,19 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
     let consecutiveReadFailures = 0;
     const next = async (): Promise<void> => {
       if (now() - startedFollowingAt > MAX_JOB_DURATION_MS) {
-        onSettled();
+        onSettled(null);
         return;
       }
-      let settled = false;
+      let settled: BatchJobSnapshot | null = null;
       try {
-        settled = isSettledJobStatus((await api.batchJobStatus(jobId)).job.status);
+        const { job } = await api.batchJobStatus(jobId);
         consecutiveReadFailures = 0;
+        if (isSettledJobStatus(job.status)) settled = job;
       } catch {
         consecutiveReadFailures += 1;
-        settled = consecutiveReadFailures >= MAX_STATUS_READ_FAILURES;
       }
-      if (settled) {
-        onSettled();
+      if (settled || consecutiveReadFailures >= MAX_STATUS_READ_FAILURES) {
+        onSettled(settled);
         return;
       }
       setTimeout(() => void next(), POLL_INTERVAL_MS);
@@ -248,30 +283,135 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
   };
 
   /**
-   * Follows every id the undo committed, and reports once all of them have
+   * Follows every id the undo committed, and reports all of them once they have
    * settled.
    *
    * A list rather than one id because the reverse is one undoable task per
    * account (contract §4.7 A ⑨): a selection spanning three accounts commits
    * three, and no single root groups them — the response is the only place the
-   * caller learns them. Reporting on the first to settle would reload while the
+   * caller learns them. Reporting on the first to settle would reconcile while the
    * others are still running, which is the "undo looks inert" symptom the
-   * single-id follow-up was written to remove. An empty list settles
-   * immediately, so a refused undo (`reason`) reconciles now instead of never.
+   * single-id follow-up was written to remove. An empty list settles immediately
+   * and vacuously: the server answers no ids for a reverse with no work left to do
+   * (the state is already what the undo asked for), which is a success rather than
+   * a silence to report as unknown.
    */
-  const followAllToSettled = (ids: readonly string[], onSettled: () => void): void => {
+  const followAllToSettled = (ids: readonly string[], onSettled: (jobs: readonly (BatchJobSnapshot | null)[]) => void): void => {
     if (!ids.length) {
-      onSettled();
+      onSettled([]);
       return;
     }
+    // Reported in the order the server named them, so a caller reading the
+    // snapshots sees the same job order the undo answered with.
+    const results: (BatchJobSnapshot | null)[] = ids.map(() => null);
     let remaining = ids.length;
-    for (const id of ids) {
-      followToSettled(id, () => {
+    ids.forEach((id, index) => {
+      followToSettled(id, (job) => {
+        results[index] = job;
         remaining -= 1;
-        if (remaining === 0) onSettled();
+        if (remaining === 0) onSettled(results);
       });
-    }
+    });
   };
+
+  /** What to say when the server refused the undo, one sentence per word.
+   *
+   * The refusal arrives as a rejected 404/409, so the only place the reason
+   * survives is `ApiError.reason` (`BatchJobUndoReason`). Collapsing the words into
+   * one generic sentence — what the old code did with `mail.selection.jobError` —
+   * told a user whose window had closed the same thing as one whose job the server
+   * could not find. An unknown word falls back to that generic sentence: a newer
+   * server is allowed to refuse for a reason this bundle predates.
+   */
+  const UNDO_REFUSAL_KEYS: Record<string, string> = {
+    not_found: "mail.selection.undoNotFound",
+    // Two server words, one user-facing fact: `unsupported_parent` is a kind whose
+    // actions never offer an undo, `no_window` is an action of an undoable kind
+    // that offered none (a single move). Neither can be acted on.
+    unsupported_parent: "mail.selection.undoUnsupported",
+    no_window: "mail.selection.undoUnsupported",
+    not_completed: "mail.selection.undoUnavailable",
+    already_undone: "mail.selection.undoAlreadyDone",
+    expired: "mail.selection.undoExpired",
+    inverse_unavailable: "mail.selection.undoInverseUnavailable",
+  };
+
+  const undoRefusalMessage = (error: unknown): string | null => {
+    if (!(error instanceof ApiError) || !error.reason) return null;
+    const key = UNDO_REFUSAL_KEYS[error.reason];
+    return key ? t(key) : null;
+  };
+
+  /**
+   * What to say once the reverse has settled.
+   *
+   * The POST only answered "the inverse is committed"; whether the messages are
+   * actually back is decided by the reverse tasks, and by the time they finish the
+   * acceptance toast is long gone. A member's `failed` counts the entries the
+   * reverse could not restore, so their sum is the honest "M 封没有撤销" number.
+   *
+   * A settled member with `failed: 0` and a failed status is *not* that number: the
+   * reverse never ran (an account it could not reach, a payload that would not
+   * open), so nothing was counted and nothing can be promised — "we do not know" is
+   * the answer rather than "done". The same goes for a follow-up that never reached
+   * a snapshot at all.
+   */
+  const reportUndo = (results: readonly (BatchJobSnapshot | null)[]): void => {
+    const known = results.filter((job): job is BatchJobSnapshot => job !== null);
+    const unrestored = known.reduce((count, job) => count + Math.max(0, job.failed), 0);
+    if (unrestored > 0) {
+      showFeedback(t("mail.selection.undoPartialFailure", { count: unrestored }), "error");
+      return;
+    }
+    if (known.length !== results.length || known.some((job) => job.status !== "completed")) {
+      showFeedback(t("mail.selection.undoUnknown"), "warning");
+      return;
+    }
+    showFeedback(t("mail.selection.undoDone"), "success");
+  };
+
+  /**
+   * The undo offered by the acceptance toast.
+   *
+   * It waits for the delivery's outcome before it POSTs, because the server
+   * refuses to undo work that has not finished (`undoRefusal` answers
+   * `not_completed`) — see `deliveries` above. The wait is unconditional: a push
+   * that ended `failed` or `cancelled` is undone exactly like a completed one,
+   * because the local target state was committed at acceptance and the alias
+   * reports a partly failed job as `completed` (so the button is offered for that
+   * set on purpose). An outcome this runner stopped watching (`unknown`) is not
+   * filtered out either: the POST is the only way to learn whether the task ever
+   * finished, and the server's `not_completed` is a better answer than a guess.
+   *
+   * Once the POST is accepted the reverse is followed to its end and reported
+   * (`reportUndo`); the click has no other feedback, since the acceptance toast it
+   * came from is dismissed by the click itself.
+   */
+  const undoActionFor = (jobId: string): BatchJobToastAction => ({
+    label: t("mail.selection.undo"),
+    run: () => {
+      showFeedback(t("mail.selection.undoStarted"), "info");
+      void deliveryOutcome(jobId).then(() => {
+        void api.batchJobUndo(jobId).then((result) => {
+          followAllToSettled(result?.taskIds ?? [], (jobs) => {
+            reportUndo(jobs);
+            // `reconcile`, not `reload`: the undo restores rows the list is already
+            // showing, and the full load would collapse the pagination and the
+            // scroll position the user is reading them at. The reverse's own
+            // settlement is the authority on what the server holds, so this read
+            // only has to bring the visible page up to date.
+            reconcileQuietly(reconcile);
+          });
+        }).catch((error: unknown) => {
+          showToast(undoRefusalMessage(error) ?? t("mail.selection.jobError"), "error");
+          // A refused undo is still a read worth taking: another account's member
+          // may have been reversed before the refusal was met, and a background
+          // write may have moved the rows the user is looking at.
+          reconcileQuietly(reconcile);
+        });
+      });
+    },
+  });
 
   /**
    * What to say when the push was refused.
@@ -290,38 +430,6 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
     // it is what says which half of the batch the refusal belongs to.
     return job.error ? `${summary} ${job.error}` : summary;
   };
-
-  /**
-   * The undo offered by the acceptance toast.
-   *
-   * It waits for the delivery's outcome before it POSTs, because the server
-   * refuses to undo work that has not finished (`undoRefusal`) — see
-   * `deliveries` above. A delivery that failed gets a refusal of its own kind
-   * (`mail.selection.undoUnavailable`), which is the same answer the old code
-   * gave by not offering the button at all; the difference is that the offer
-   * cannot be withdrawn once it is on screen, so the click has to explain
-   * itself.
-   */
-  const undoActionFor = (jobId: string): BatchJobToastAction => ({
-    label: t("mail.selection.undo"),
-    run: () => {
-      showToast(t("mail.selection.undoStarted"), "info");
-      void deliveryOutcome(jobId).then((outcome) => {
-        if (outcome !== "completed") {
-          showToast(t("mail.selection.undoUnavailable"), "error");
-          return;
-        }
-        void api.batchJobUndo(jobId).then((result) => {
-          // An empty list means the server either refused the undo or answered
-          // without ids; `followAllToSettled` reconciles now for exactly that
-          // case.
-          followAllToSettled(result?.taskIds ?? [], () => void reload({ silent: true }));
-        }).catch(() => {
-          showToast(t("mail.selection.jobError"), "error");
-        });
-      });
-    },
-  });
 
   /**
    * Watches an accepted batch's delivery until it ends, then reports the remote
@@ -358,20 +466,11 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
       // The three callbacks are the UI's, and none of them may stop the others:
       // a throw from a toast or a refresh has to leave the buttons available and
       // the delivery recorded, whatever the next background refresh does with it.
-      try {
-        onDeliverySettled();
-      } catch {
-        // The caller's own callback; the delivery is already recorded.
-      }
+      quietly(opts.onDeliverySettled);
       try {
         await report();
       } catch {
         // A refresh that failed is the next background refresh's problem.
-      }
-      try {
-        opts.onSettled?.();
-      } catch {
-        // Same.
       }
     };
 
@@ -435,15 +534,23 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
       // remote push earlier.
       onBusy(false);
       sweepDeliveries();
-      const undoAction = jobId && updated > 0 ? undoActionFor(jobId) : undefined;
-      if (failed) {
-        showToast(t("mail.selection.partialFailure", { done: updated, failed }), "error", undoAction);
-      } else {
-        showToast(t(opts.successKey, { count: updated }), "success", undoAction);
+      // Reporting must not be able to strand the delivery: a throw from a toast
+      // or a selection update would otherwise skip the watch below, leaving the
+      // pins armed and the batch unundoable. The counts are already committed;
+      // losing one sentence of the report is the smaller failure.
+      try {
+        const undoAction = jobId && updated > 0 ? undoActionFor(jobId) : undefined;
+        if (failed) {
+          showToast(t("mail.selection.partialFailure", { done: updated, failed }), "error", undoAction);
+        } else {
+          showToast(t(opts.successKey, { count: updated }), "success", undoAction);
+        }
+        // The action is done once its local effect is committed, and this
+        // acceptance was the commit.
+        if (updated > 0 && opts.exitOnSuccess) exitSelectionMode();
+      } catch {
+        // See above.
       }
-      // The action is done once its local effect is committed, and this
-      // acceptance was the commit.
-      if (updated > 0 && opts.exitOnSuccess) exitSelectionMode();
       if (jobId) {
         // The commit landed with the acceptance, so the state on screen can be
         // brought up to date now rather than when the remote push finishes.
@@ -459,15 +566,14 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
       // message. The route sends its own counts for exactly this case. There is
       // still a batch to settle, though, and the pins come off BEFORE the
       // refresh: these rows were refused, so the refresh is what puts them back.
-      onDeliverySettled();
+      quietly(opts.onDeliverySettled);
       try {
         await reload({ silent: true });
       } catch {
         // The batch is over; a refresh that failed is the next background
         // refresh's problem, not a reason to leave the toolbar armed.
       }
-      opts.onSettled?.();
-    }, (error: unknown) => {
+    }, async (error: unknown) => {
       // The refusal handler is `.then`'s SECOND argument, not a chained
       // `.catch`: a chained catch also receives whatever the accepted path
       // throws, and would then toast a batch failure over a batch the server had
@@ -475,14 +581,33 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
       // server refused to start this" versus "reporting an accepted batch went
       // wrong" — and only the first one is something the user must be told.
       onBusy(false);
-      // A refused create committed nothing and started no delivery, so the
-      // release happens here and not through `onDeliverySettled`'s usual path. A
-      // response lost on the way back is indistinguishable from a refusal here
-      // and is deliberately not reconciled either: the next background refresh
-      // is what corrects a commit whose acknowledgement never arrived.
-      onDeliverySettled();
-      opts.onSettled?.();
-      showToast(mailErrorToastMessage(error, t(payload.kind === "flags" ? "mail.error.batchUpdate" : "mail.error.move"), t), "error");
+      // A refused create committed nothing the caller can see, so the pins come
+      // off here rather than through the watch's usual path — and they come off
+      // BEFORE the read below, or the read would keep showing the optimistic
+      // value this batch is being told never landed.
+      quietly(opts.onDeliverySettled);
+      // The toast comes first: it is the user's only answer, and it must not
+      // wait on a read that may itself be the thing that failed.
+      quietly(() => showToast(
+        mailErrorToastMessage(error, t(payload.kind === "flags" ? "mail.error.batchUpdate" : "mail.error.move"), t),
+        "error",
+      ));
+      // A response lost on the way back is indistinguishable from a refusal at
+      // this point, and the two leave opposite states on screen: the caller
+      // applied an optimistic patch / removed moved rows before it asked. One
+      // read settles which happened — it reports the commit if the request did
+      // land, and the pre-batch truth if it did not.
+      //
+      // It has to be a full `reload`, not the pagination-preserving `reconcile`:
+      // the latter reads the first page only, so a patch applied to rows on
+      // later pages would keep the refused value until the next full load. The
+      // page collapse is the price the push-failure path already pays for the
+      // same correctness.
+      try {
+        await reload({ silent: true });
+      } catch {
+        // A refresh that failed is the next background refresh's problem.
+      }
     });
   };
 

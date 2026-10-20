@@ -169,8 +169,36 @@ describe("CloudSyncRailItem", () => {
     // A failed read with nothing to show must not also claim all-clear.
     expect(panel()!.textContent).not.toContain(t("cloudSync.allClear"));
 
+    expect(value.refresh, "opening asks the server once").toHaveBeenCalledTimes(1);
     act(() => note.querySelector<HTMLButtonElement>(".cloud-sync-retry")!.click());
-    expect(value.refresh).toHaveBeenCalledTimes(1);
+    expect(value.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-reads on open and keeps reading while it stays open", async () => {
+    vi.useFakeTimers();
+    try {
+      const value = mount();
+      openPanel();
+      // Opening is a read, not a guess: the panel can be opened long after the
+      // last frame, and a session with the stream down has had no frame at all.
+      expect(value.refresh).toHaveBeenCalledTimes(1);
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(value.refresh, "the open panel polls").toHaveBeenCalledTimes(2);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(value.refresh).toHaveBeenCalledTimes(3);
+
+      // A closed panel costs nothing: the poll dies with the open state. The
+      // exit transition keeps the panel mounted for a moment, so let it finish
+      // before measuring what the closed state does.
+      act(() => { trigger().click(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      const afterClose = vi.mocked(value.refresh).mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(value.refresh, "a closed panel stops polling").toHaveBeenCalledTimes(afterClose);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("closes on Escape, keeping the press from anything behind it", async () => {

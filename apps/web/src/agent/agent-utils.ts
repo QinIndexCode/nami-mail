@@ -316,23 +316,6 @@ export function sourceLabel(citation: AgentCitation): string {
   return citation.sender ? `${citation.sender} · ${citation.subject}` : citation.subject;
 }
 
-/** Copies text to the clipboard, falling back to a hidden textarea + execCommand
- *  when the async Clipboard API is unavailable (non-secure contexts). */
-export async function copyToClipboard(content: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(content);
-  } catch {
-    const input = document.createElement("textarea");
-    input.value = content;
-    input.style.position = "fixed";
-    input.style.opacity = "0";
-    document.body.append(input);
-    input.select();
-    document.execCommand("copy");
-    input.remove();
-  }
-}
-
 /**
  * Deduplicate citations by `messageId` (falling back to the citation id) so the
  * same mail can never appear twice.

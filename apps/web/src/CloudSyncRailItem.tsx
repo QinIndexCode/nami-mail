@@ -8,6 +8,17 @@ import type { Translate } from "./i18n";
 import { IconButton } from "./mailUi";
 
 /**
+ * How often an open panel re-reads the server.
+ *
+ * The push frames are the fast path, but they are not guaranteed: this renderer
+ * can run with the stream down (or fall back to polling), and then an open
+ * panel would show whatever the last read happened to say. While the panel is
+ * open — and only then — a slow read keeps the progress counters and the row
+ * set honest, at a cost a closed panel never pays.
+ */
+const PANEL_REFRESH_MS = 5000;
+
+/**
  * The right rail's cloud-sync button, with its status panel hanging to its left.
  *
  * A panel rather than a dialog: the question it answers ("is anything still
@@ -68,6 +79,20 @@ export function CloudSyncRailItem({ tasks, t, locale }: { tasks: CloudSyncTasks;
     window.addEventListener("keydown", claimEscape, true);
     return () => window.removeEventListener("keydown", claimEscape, true);
   }, [open, closing, beginClose]);
+
+  // Opening asks the server once: the panel can be opened minutes after mount,
+  // and a session whose push stream is down has had no frame to keep this list
+  // current. The slow poll keeps it current while it stays open, and skips a
+  // hidden window the same way the mail poll does — nobody is reading it.
+  const { refresh } = tasks;
+  useEffect(() => {
+    if (!open) return undefined;
+    refresh();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, PANEL_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [open, refresh]);
 
   // Opening moves focus into the panel, so a keyboard user reaches the retry
   // button by tabbing on from the trigger.

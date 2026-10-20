@@ -1119,31 +1119,6 @@ white-space:nowrap
 {
 overflow:hidden
 }
-.agent-corner-button.copy svg
-{
-transition:transform .18s cubic-bezier(.2,.8,.2,1),opacity .18s
-}
-.agent-corner-button.copy.copied svg
-{
-color:var(--success);
-animation:.18s agent-copy-check
-}
-@keyframes agent-copy-check
-{
-0%
-{
-transform:scale(.5)
-}
-60%
-{
-transform:scale(1.15)
-}
-to
-{
-transform:scale(1)
-}
-
-}
 .agent-message-content
 {
 color:var(--text);

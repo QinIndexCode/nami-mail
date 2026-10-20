@@ -114,8 +114,24 @@ describe("styles.css size ratchet", () => {
   // 下一轮 CSS 瘦身时应优先收回：先看这个旁路面板能否与发件箱状态浮层共用一套
   // 外壳规则（两者都是「按钮左侧的列表浮层」），再合并 .cloud-sync-close 与
   // 其他自绘的小图标键。
+  // 2026-10-20 有记录的一次下调（17_822 → 17_812）：统一全站复制按钮的反馈动画。
+  // 复制图标（账号地址、连接设置 6 处、添加账号服务配置、验证码、Agent 消息与
+  // 右键菜单）此前各自复制了一份「换成勾再换回来」的状态与动画；现收敛到
+  // components/CopyButton.tsx 与 buttons.css 的一条 .copy-button.copied 规则。
+  // 实测聚合 17_800 行，阈值取实测 +12 行缓冲。按文件计：
+  //   buttons.css +29：共享 .copy-button.copied>svg 的绿色勾与 scale-in 动画、
+  //     keyframes 与 reduced-motion 关闭（只有勾出现时动画，普通复制图标挂载
+  //     时不闪）；另含一条通用的 .secondary-button.copy-button.copied 颜色/边框
+  //     规则——选择器不限于某个页面，故与共享规则同处，而不是留在 connections.css；
+  //   accounts.css -12：删除 .accounts-copy-address svg 与 account-copy-icon-in；
+  //   agent.css -25：删除 .agent-corner-button.copy svg 的 transition、.copied 规则
+  //     与重复的 agent-copy-check keyframes（保留 overflow:hidden）；
+  //   connections.css -2：删除 :is(...) 的动画行与 .copied 颜色/边框规则（前者由
+  //     共享规则提供，后者迁入 buttons.css）。
+  // 下一轮 CSS 瘦身时应优先收回：.setup-guide-copy.copied 与共享 .copied 的绿色
+  // 处理可以合并，两者只是颜色来源不同。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 17_822;
+  const FROZEN_AGGREGATED_MAX_LINES = 17_812;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

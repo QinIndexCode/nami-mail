@@ -68,6 +68,25 @@ export type BatchJobSnapshot = {
 };
 
 /**
+ * Why the server refused an undo, in the order `kinds/undo.ts` checks it: the
+ * kind, whether the parent is still running, the one-shot claim, the window, and
+ * finally whether the parent's payload reads back into a reverse.
+ *
+ * Mirrored for the same reason as the task vocabulary below: the renderer turns
+ * each word into its own sentence, so a word missing here is a gap worth seeing.
+ * The HTTP status cannot carry this — six of the seven share 409, which is why
+ * the route puts the word in the body (`ApiError.reason`).
+ */
+export type BatchJobUndoReason =
+  | "not_found"
+  | "unsupported_parent"
+  | "not_completed"
+  | "already_undone"
+  | "no_window"
+  | "expired"
+  | "inverse_unavailable";
+
+/**
  * The task vocabulary, mirrored from the server's `tasks` layer.
  *
  * Mirrored rather than imported: the server's copy is `as const` over an array

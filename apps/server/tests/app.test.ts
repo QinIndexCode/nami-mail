@@ -137,6 +137,18 @@ describe("local API", () => {
     expect(response.headers["content-security-policy"]).toContain("default-src 'self'");
   });
 
+  it("frames the attachment preview's blob URL but still forbids being framed", async () => {
+    const response = await app.inject({ method: "GET", url: "/api/health" });
+    const policy = String(response.headers["content-security-policy"]);
+    // The PDF preview is an iframe over a blob: object URL
+    // (`AttachmentPreviewModal`). `frame-src 'none'` broke it in every packaged
+    // build, where this header is the document's policy; `frame-ancestors` is
+    // the directive that protects the app itself.
+    expect(policy).toContain("frame-src blob:");
+    expect(policy).not.toContain("frame-src 'none'");
+    expect(policy).toContain("frame-ancestors 'none'");
+  });
+
   it("rejects confirmation decisions without the auto-reply engine", async () => {
     const unavailable = await app.inject({
       method: "POST",

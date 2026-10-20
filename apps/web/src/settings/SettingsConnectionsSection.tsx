@@ -1,14 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertCircle,
   Cable,
-  Check,
   CheckCircle2,
   ChevronDown,
   CircleHelp,
   Code2,
-  Copy,
   Download,
   Laptop,
   LoaderCircle,
@@ -30,7 +28,8 @@ import type {
 import type { ExternalPairingSummary } from "../agentTypes";
 import type { Translate } from "../i18n";
 import ThemedSelect from "../ThemedSelect";
-import { agentAccessLevelOptions, copyTextToClipboard } from "./settings-utils";
+import CopyButton from "../CopyButton";
+import { agentAccessLevelOptions } from "./settings-utils";
 
 export type SettingsConnectionsSectionProps = {
   t: Translate;
@@ -232,7 +231,6 @@ export default function SettingsConnectionsSection({
   const [activeTab, setActiveTab] = useState<"mcp" | "cli" | "pairings">("mcp");
   const [selectedIde, setSelectedIde] = useState<IdePreset>("claude");
   const [selectedShell, setSelectedShell] = useState<ShellKind>("powershell");
-  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // Pairings State
   const [pairings, setPairings] = useState<ExternalPairingSummary[] | null>(null);
@@ -275,25 +273,6 @@ export default function SettingsConnectionsSection({
     onBusyChange?.(isBusy);
     return () => onBusyChange?.(false);
   }, [isBusy, onBusyChange]);
-
-  const copyResetTimer = useRef<number | null>(null);
-  const [copyAnnouncement, setCopyAnnouncement] = useState("");
-
-  useEffect(() => {
-    return () => {
-      if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current);
-    };
-  }, []);
-
-  const handleCopy = (id: string, text: string, announcement?: string) => {
-    void copyTextToClipboard(text).then((copied) => {
-      if (!copied) return;
-      setCopiedId(id);
-      if (announcement) setCopyAnnouncement(announcement);
-      if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current);
-      copyResetTimer.current = window.setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1_500);
-    });
-  };
 
   const handleDownloadConfig = (preset: IdePreset) => {
     triggerBlobDownload(new Blob([IDE_CONFIGS[preset].json], { type: "application/json;charset=utf-8" }), IDE_CONFIGS[preset].filename);
@@ -346,7 +325,6 @@ export default function SettingsConnectionsSection({
           </span>
         </div>
       </div>
-      <span className="visually-hidden" role="status" aria-live="polite">{copyAnnouncement}</span>
 
       {feedbackNotice && (
         <div className={`form-status ${feedbackNotice.kind}`} role="alert" style={{ marginBottom: 12 }}>
@@ -453,16 +431,15 @@ export default function SettingsConnectionsSection({
                     <CircleHelp size={11} aria-hidden="true" />
                   </span>
                 </span>
-                <button
-                  type="button"
-                  className={`secondary-button connections-inline-copy settings-copy-btn${copiedId === "step-pair" ? " copied" : ""}`}
-                  onClick={() => handleCopy("step-pair", "namimail pair", t("settings.connections.mcp.copiedCommand"))}
-                  title={t("settings.connections.mcp.copyCommand")}
-                  aria-label={t("settings.connections.mcp.copyCommand")}
-                >
-                  <code>namimail pair</code>
-                  {copiedId === "step-pair" ? <Check size={10} aria-hidden="true" /> : <Copy size={10} aria-hidden="true" />}
-                </button>
+                <CopyButton
+                  className="secondary-button connections-inline-copy settings-copy-btn"
+                  text="namimail pair"
+                  label={<code>namimail pair</code>}
+                  ariaLabel={t("settings.connections.mcp.copyCommand")}
+                  tooltip={t("settings.connections.mcp.copyCommand")}
+                  announcement={t("settings.connections.mcp.copiedCommand")}
+                  size={10}
+                />
               </div>
 
               <div className="connections-step-pill">
@@ -536,24 +513,26 @@ export default function SettingsConnectionsSection({
                 <code>{IDE_CONFIGS[selectedIde].pathHint}</code>
               </span>
               <div className="connections-code-actions">
-                <button
-                  type="button"
-                  className={`secondary-button settings-copy-btn${copiedId === `path-${selectedIde}` ? " copied" : ""}`}
-                  onClick={() => handleCopy(`path-${selectedIde}`, IDE_CONFIGS[selectedIde].pathHint, t("settings.connections.mcp.copiedPath"))}
-                  aria-label={copiedId === `path-${selectedIde}` ? t("settings.connections.mcp.copiedPath") : t("settings.connections.mcp.copyPath")}
-                >
-                  {copiedId === `path-${selectedIde}` ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
-                  <span>{copiedId === `path-${selectedIde}` ? t("settings.connections.mcp.copiedPath") : t("settings.connections.mcp.copyPath")}</span>
-                </button>
-                <button
-                  type="button"
-                  className={`secondary-button settings-copy-btn${copiedId === `json-${selectedIde}` ? " copied" : ""}`}
-                  onClick={() => handleCopy(`json-${selectedIde}`, IDE_CONFIGS[selectedIde].json, t("settings.connections.mcp.copiedJson"))}
-                  aria-label={copiedId === `json-${selectedIde}` ? t("settings.connections.mcp.copiedJson") : t("settings.connections.mcp.copyJson")}
-                >
-                  {copiedId === `json-${selectedIde}` ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
-                  <span>{copiedId === `json-${selectedIde}` ? t("settings.connections.mcp.copiedJson") : t("settings.connections.mcp.copyJson")}</span>
-                </button>
+                <CopyButton
+                  className="secondary-button settings-copy-btn"
+                  text={IDE_CONFIGS[selectedIde].pathHint}
+                  ariaLabel={t("settings.connections.mcp.copyPath")}
+                  copiedAriaLabel={t("settings.connections.mcp.copiedPath")}
+                  label={t("settings.connections.mcp.copyPath")}
+                  copiedLabel={t("settings.connections.mcp.copiedPath")}
+                  announcement={t("settings.connections.mcp.copiedPath")}
+                  size={12}
+                />
+                <CopyButton
+                  className="secondary-button settings-copy-btn"
+                  text={IDE_CONFIGS[selectedIde].json}
+                  ariaLabel={t("settings.connections.mcp.copyJson")}
+                  copiedAriaLabel={t("settings.connections.mcp.copiedJson")}
+                  label={t("settings.connections.mcp.copyJson")}
+                  copiedLabel={t("settings.connections.mcp.copiedJson")}
+                  announcement={t("settings.connections.mcp.copiedJson")}
+                  size={12}
+                />
                 <button
                   type="button"
                   className="secondary-button"
@@ -669,15 +648,16 @@ export default function SettingsConnectionsSection({
             </div>
           </div>
           <div className="connections-shell-wrap">
-            <button
-              type="button"
-              className={`secondary-button connections-shell-copy-btn settings-copy-btn${copiedId === `shell-${selectedShell}` ? " copied" : ""}`}
-              onClick={() => handleCopy(`shell-${selectedShell}`, SHELL_SCRIPTS[selectedShell], t("settings.connections.cli.copiedScript"))}
-              aria-label={copiedId === `shell-${selectedShell}` ? t("settings.connections.cli.copiedScript") : t("settings.connections.cli.copyScript")}
-            >
-              {copiedId === `shell-${selectedShell}` ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
-              <span>{copiedId === `shell-${selectedShell}` ? t("settings.connections.cli.copiedScript") : t("settings.connections.cli.copyScript")}</span>
-            </button>
+            <CopyButton
+              className="secondary-button connections-shell-copy-btn settings-copy-btn"
+              text={SHELL_SCRIPTS[selectedShell]}
+              ariaLabel={t("settings.connections.cli.copyScript")}
+              copiedAriaLabel={t("settings.connections.cli.copiedScript")}
+              label={t("settings.connections.cli.copyScript")}
+              copiedLabel={t("settings.connections.cli.copiedScript")}
+              announcement={t("settings.connections.cli.copiedScript")}
+              size={12}
+            />
             <pre className="connections-code-block">
               <code>{SHELL_SCRIPTS[selectedShell]}</code>
             </pre>
@@ -710,16 +690,15 @@ export default function SettingsConnectionsSection({
                       <code className="connections-cmd-code">{item.cmd}</code>
                       <span className="connections-cmd-desc">{isZh ? item.descZh : item.descEn}</span>
                     </div>
-                    <button
-                      type="button"
-                      className={`secondary-button settings-copy-btn${copiedId === item.cmd ? " copied" : ""}`}
+                    <CopyButton
+                      className="secondary-button settings-copy-btn"
+                      text={item.cmd}
+                      ariaLabel={t("settings.connections.mcp.copyCommand")}
+                      tooltip={t("settings.connections.mcp.copyCommand")}
+                      announcement={t("settings.connections.mcp.copiedCommand")}
                       style={{ minHeight: 26, padding: "2px 8px" }}
-                      title={t("settings.connections.mcp.copyCommand")}
-                      aria-label={t("settings.connections.mcp.copyCommand")}
-                      onClick={() => handleCopy(item.cmd, item.cmd, t("settings.connections.mcp.copiedCommand"))}
-                    >
-                      {copiedId === item.cmd ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
-                    </button>
+                      size={12}
+                    />
                   </div>
                 ))}
               </div>
@@ -792,16 +771,17 @@ export default function SettingsConnectionsSection({
               <strong>{t("settings.connections.pairings.empty")}</strong>
               <div className="connections-step-cmd" style={{ marginTop: 6 }}>
                 <code>namimail pair</code>
-                <button
-                  type="button"
-                  className={`secondary-button settings-copy-btn${copiedId === "empty-pair" ? " copied" : ""}`}
+                <CopyButton
+                  className="secondary-button settings-copy-btn"
+                  text="namimail pair"
+                  ariaLabel={t("settings.connections.mcp.copyCommand")}
+                  copiedAriaLabel={t("settings.connections.mcp.copiedCommand")}
+                  label={t("settings.connections.mcp.copyCommand")}
+                  copiedLabel={t("settings.connections.mcp.copiedCommand")}
+                  announcement={t("settings.connections.mcp.copiedCommand")}
                   style={{ minHeight: 24, padding: "2px 8px", fontSize: 11 }}
-                  onClick={() => handleCopy("empty-pair", "namimail pair", t("settings.connections.mcp.copiedCommand"))}
-                  aria-label={copiedId === "empty-pair" ? t("settings.connections.mcp.copiedCommand") : t("settings.connections.mcp.copyCommand")}
-                >
-                  {copiedId === "empty-pair" ? <Check size={11} aria-hidden="true" /> : <Copy size={11} aria-hidden="true" />}
-                  <span>{copiedId === "empty-pair" ? t("settings.connections.mcp.copiedCommand") : t("settings.connections.mcp.copyCommand")}</span>
-                </button>
+                  size={11}
+                />
               </div>
             </div>
           ) : (

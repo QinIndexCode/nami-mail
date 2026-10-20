@@ -504,6 +504,35 @@ describe("undoing a job through the alias", () => {
     expect(jobSnapshot(db, "job-1:acc-2")?.undone).toBe(true);
   });
 
+  it("undoes a job whose members ended mixed, which is the shape the renderer offers it for", () => {
+    const now = 1_000_000;
+    const first = member("job-1", ACCOUNT, selection("a", 2));
+    const second = member("job-1:acc-2", ACCOUNT_2, selection("b", 2));
+    advance(first, { updated: 2 });
+    advance(second, { failed: 2 });
+    settleTask(db, first, "completed", null, now - 1_000);
+    settleTask(db, second, "failed", { code: "auth", message: "IMAP said no" }, now - 1_000);
+
+    // The alias reports this set as `completed` with both counts, which is what
+    // makes the renderer offer the undo in the first place. Requiring every member to
+    // be `completed` therefore refused exactly the click the UI invites: the local
+    // target state the undo reverses was committed at acceptance, whatever the push
+    // ended as.
+    expect(jobSnapshot(db, "job-1")).toMatchObject({ status: "completed", updated: 2, failed: 2 });
+
+    const { deps, started } = undoDeps();
+    const outcome = commitJobUndo(deps, "job-1", now);
+
+    expect(outcome.ok).toBe(true);
+    const created = outcome.ok ? outcome.taskIds : [];
+    expect(created).toHaveLength(2);
+    expect(started).toEqual(created);
+    expect(undoneOf(first)).toBe(1);
+    expect(undoneOf(second)).toBe(1);
+    expect(itemIds(created[0]!)).toEqual(selection("a", 2));
+    expect(itemIds(created[1]!)).toEqual(selection("b", 2));
+  });
+
   it("claims nothing at all when one member cannot be undone", () => {
     const now = 1_000_000;
     const first = member("job-1", ACCOUNT, selection("a", 2));

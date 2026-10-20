@@ -4,8 +4,9 @@ import { durableGet, durableSet } from "../durablePreferences";
 import { desktopBridge } from "../desktop";
 import type { CalendarEvent } from "../types";
 import type { ToastAction, ToastKind, ToastOptions } from "../notifications/useToastQueue";
+import { translate } from "../i18n";
 import { formatEventTimeSpan } from "./calendarUtils";
-import { detectMeetingLink } from "./meetingLinks";
+import { detectMeetingLink, MEETING_LABEL_KEYS } from "./meetingLinks";
 
 const STORAGE_KEY = "nami-mail.calendar-reminded-events";
 // Pre-durable-layer key (the desktop's ephemeral origin wiped it anyway);
@@ -122,8 +123,7 @@ export function useCalendarReminders({
 
           const meeting = detectMeetingLink(`${event.location || ""} ${event.description || ""}`);
           const timeSpan = formatEventTimeSpan(event.startAt, event.endAt, event.allDay, locale);
-          const isZh = locale.toLowerCase().startsWith("zh");
-          const desktopTitle = isZh ? `[日程提醒] ${event.title}` : `[Calendar] ${event.title}`;
+          const desktopTitle = translate(locale, "calendar.reminder.desktopTitle", { title: event.title });
           const locationSuffix = event.location && (!meeting || !event.location.includes(meeting.url)) ? ` · ${event.location}` : "";
           const desktopBody = `${timeSpan}${locationSuffix}`.trim();
 
@@ -142,14 +142,14 @@ export function useCalendarReminders({
           // 2. In-App Actionable Toast
           const toastAction: ToastAction = meeting
             ? {
-              label: meeting.label,
+              label: translate(locale, MEETING_LABEL_KEYS[meeting.platform]),
               icon: "video",
               run: () => {
                 window.open(meeting.url, "_blank");
               },
             }
             : {
-              label: isZh ? "查看日历" : "View Calendar",
+              label: translate(locale, "calendar.reminder.viewCalendar"),
               icon: "calendar",
               run: onOpenCalendar,
             };

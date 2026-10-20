@@ -120,8 +120,8 @@ export type MessageFlagWriteResult = { ok: boolean; taskId?: string; status?: "p
 // The batch-job shapes moved to `batchJobTypes.ts`: the ratchet wants this file
 // smaller, and the delivery watcher, the panel and `App.tsx` read them without
 // the request layer. Re-exported so `import … from "./api"` still works.
-import type { BatchJobQuery, BatchJobSnapshot, DeliveryTaskList } from "./batchJobTypes";
-export type { BatchJobQuery, BatchJobSnapshot, DeliveryTaskList };
+import type { BatchJobQuery, BatchJobSnapshot, BatchJobUndoReason, DeliveryTaskList } from "./batchJobTypes";
+export type { BatchJobQuery, BatchJobSnapshot, BatchJobUndoReason, DeliveryTaskList };
 
 export type BatchJobCreatePayload =
   | { kind: "flags"; patch: { seen?: boolean; flagged?: boolean }; query: BatchJobQuery }
@@ -532,8 +532,6 @@ export const api = {
     if (!response.ok) throw await apiError(response);
     return readSseTranslation(response, targetLocale, (partial) => onChunk(partial));
   },
-  attachmentDownloadUrl: (messageId: string, partId: string) =>
-    `/api/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(partId)}`,
   draftOutboundAttachments: (messageId: string) =>
     request<{ items: OutboundAttachment[] }>(`/api/messages/${encodeURIComponent(messageId)}/outbound-attachments`),
   importDraftOutboundAttachments: (messageId: string) =>
@@ -652,8 +650,8 @@ export const api = {
     // committed, which is what the caller follows to settlement. A list, not a
     // single id: the reverse is one undoable task per account, so a selection
     // spanning accounts has several and no single root groups them (§4.7 A ⑨).
-    // Absent when the undo was refused — `reason` then says why.
-    request<{ ok: boolean; taskIds?: string[]; reason?: "not_found" | "not_completed" | "already_undone" | "expired" }>(
+    // Absent on a refusal, which arrives as a 404/409 `ApiError` carrying `reason`.
+    request<{ ok: boolean; taskIds?: string[]; reason?: BatchJobUndoReason }>(
       `/api/batch-jobs/${encodeURIComponent(jobId)}/undo`,
       { method: "POST", body: "{}" },
     ),
