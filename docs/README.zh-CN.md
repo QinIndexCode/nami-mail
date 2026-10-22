@@ -39,6 +39,7 @@ Nami Mail 当前发布 Windows x64 桌面版。本页按任务整理公开文档
 - [交互约定](INTERACTION.zh-CN.md)：多选收尾、乐观更新、即时反馈与快照合并的跨模块规则。
 - [大文件拆分计划（已归档）](development/REFACTORING-PLAN.archive.zh-CN.md)：2026-09 的接缝测绘快照，行号与规模数字已作废，仅保留拆分方法论。
 - [已知限制与取舍](development/known-limitations.zh-CN.md)：已核实的能力边界、刻意不做的取舍和未完成项的唯一清单。
+- [决策记录](development/decisions/README.zh-CN.md)：已生效的结构性取舍——当时的问题、选了哪条路、放弃了什么。
 
 ## 语言与版本
 
