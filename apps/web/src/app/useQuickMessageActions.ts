@@ -33,6 +33,13 @@ export interface QuickMessageActionsOptions {
   applyBatchFlaggedChange: (ids: readonly string[], flagged: boolean) => void;
   loadRequestRef: { current: number };
   load: (options?: QuickActionsLoadOptions) => Promise<void>;
+  /**
+   * The pagination-preserving silent refresh. A successful write reconciles
+   * through this instead of a full list load: `load` replaces the window with
+   * the first page and resets the cursor, which drops the pages the user has
+   * already scrolled in and jumps the list under them.
+   */
+  reconcile: () => Promise<void> | void;
   applyLocalSeenChange: (message: Message, nextSeen: boolean) => void;
   updateUnreadViewRecentlyRead: (message: Pick<Message, "id" | "seen">, nextSeen: boolean) => void;
   setSelectedId: (id: string | null) => void;
@@ -73,6 +80,7 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
     applyBatchFlaggedChange,
     loadRequestRef,
     load,
+    reconcile,
     applyLocalSeenChange,
     updateUnreadViewRecentlyRead,
     setSelectedId,
@@ -80,8 +88,18 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
 
   const quickToggleStar = useCallback(async (message: Message) => {
     if (selectedRemoteActionsBlocked) return;
+    // One in-flight mutation per row, exactly like quickToggleSeen: without this
+    // guard a second click starts a second PATCH, and whichever request fails
+    // last writes its own rollback over the other's optimistic value. The row
+    // count lives in the pending registry, so a batch's overlapping flag write
+    // also blocks a click here instead of being clobbered by it.
+    if (store.getState().pendingTargets.flagOverrides.has(message.id)) return;
     if (messageFlagging || messageAction) showToast(t("mail.action.queued"), "info");
-    const nextFlagged = !message.flagged;
+    // The rollback baseline is the row's current value, not the caller's
+    // captured copy: `message` may predate another write accepted between the
+    // click and the request, and reverting to it would undo that newer state.
+    const previousFlagged = store.getMessages().find((item) => item.id === message.id)?.flagged ?? message.flagged;
+    const nextFlagged = !previousFlagged;
     setMessageFlagging(true);
     store.pinFlags([message.id]);
     applyBatchFlaggedChange([message.id], nextFlagged);
@@ -89,7 +107,7 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
       if (!isDemo) await api.updateMessageFlags(message.id, { flagged: nextFlagged });
       showToast(nextFlagged ? t("mail.action.starred") : t("mail.action.unstarred"));
     } catch (error) {
-      applyBatchFlaggedChange([message.id], message.flagged);
+      applyBatchFlaggedChange([message.id], previousFlagged);
       showToast(mailErrorToastMessage(error, t("mail.error.updateStar"), t), "error");
     } finally {
       store.unpinFlags([message.id]);
@@ -144,7 +162,11 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
         try {
           const result = await api.moveMessage(message.id, target);
           if (!result.ok) throw new Error(t("mail.error.move"));
-          void load({ silent: true });
+          // The route already committed the destination locally, so the row is
+          // settled where it is; reconcile merges the server's first page and
+          // counters without replacing the loaded window, while a full `load`
+          // would reset the pages and the scroll position under the user.
+          void reconcile();
         } catch (error) {
           // A reload that landed mid-flight already owns the authoritative
           // total; restore the optimistic decrement only while it is still live.
@@ -161,7 +183,7 @@ export function useQuickMessageActions(options: QuickMessageActionsOptions): Qui
       store.unpinMovedAway([message.id]);
       setMessageAction(null);
     }
-  }, [batchBusy, isDemo, load, loadRequestRef, messageAction, messageFlagging, setMessageAction, showToast, store, t]);
+  }, [batchBusy, isDemo, load, loadRequestRef, messageAction, messageFlagging, reconcile, setMessageAction, showToast, store, t]);
 
   // Snooze popup: the open flag, the custom datetime draft, and the popup's
   // exit transition all live here with the actions that close them.

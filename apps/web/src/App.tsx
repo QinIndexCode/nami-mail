@@ -2003,6 +2003,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     applyBatchFlaggedChange,
     loadRequestRef,
     load,
+    reconcile: () => silentRefreshRef.current(),
     applyLocalSeenChange,
     updateUnreadViewRecentlyRead,
     setSelectedId,

@@ -52,6 +52,16 @@ let mailbox: Message[];
 /** What the server would answer on the next reload — the authority the pins
  *  are meant to shield, and the truth a failed write must fall back to. */
 let server: Message[];
+/** How many full (`adoptSnapshot`) loads the hook ran. A successful batch must
+ *  never take this path: it replaces the window with the first page. */
+let loadCalls = 0;
+/** How many pagination-preserving reconciles the hook ran. */
+let reconcileCalls = 0;
+/** The cursor the harness's simulated App keeps. A full load resets it to the
+ *  first page's cursor; a reconcile leaves it where the user paged to. */
+let loadedCursor: string | null = null;
+/** What a freshly mounted harness seeds its cursor with (null = one page). */
+let initialCursor: string | null = null;
 const toast = vi.fn();
 /** Every value the hook hands to `setSelectAllPaged`, in order. */
 const pagedWrites: boolean[] = [];
@@ -101,27 +111,48 @@ function Harness() {
   const ref = useRef(store);
   ref.current = store;
   pending = state.pendingTargets;
-  const load = async () => {
+  // A full load, shaped like App.load: it adopts the first page wholesale and
+  // resets the cursor, so whatever pages the user had loaded are gone. A
+  // successful batch must never use this path.
+  const fullLoad = async () => {
+    loadCalls += 1;
     loadRequestRef.current += 1;
-    // What the server answers on a reload: the authority the pins shield, and
-    // the truth a failed write falls back to.
-    ref.current.mergeSnapshot({
+    ref.current.adoptSnapshot({
       accounts: initialAccounts,
       stats: { accounts: 1, messages: server.length, unread: server.filter((message) => !message.seen).length },
       items: server,
       total: server.length,
       nextCursor: null,
     }, snapshotContext());
+    loadedCursor = null;
   };
-  const loadRef = useRef(load);
-  loadRef.current = load;
+  const loadRef = useRef(fullLoad);
+  loadRef.current = fullLoad;
+  // The pagination-preserving reconcile, shaped like App.silentRefresh: merge
+  // the server's first page into the loaded window and leave the cursor alone.
+  // `total` is the server's count for the whole view (not the first page's row
+  // count), which is what keeps the merge from slicing the loaded pages away.
+  const reconcile = async () => {
+    reconcileCalls += 1;
+    ref.current.mergeSnapshot({
+      accounts: initialAccounts,
+      stats: { accounts: 1, messages: mailbox.length, unread: server.filter((message) => !message.seen).length },
+      items: server,
+      total: mailbox.length,
+      nextCursor: initialCursor,
+    }, snapshotContext());
+  };
+  const cursorRef = useRef(initialCursor);
+  loadedCursor = cursorRef.current;
+  const reconcileRef = useRef(reconcile);
+  reconcileRef.current = reconcile;
   current = useBatchSelection({
     isDemo: false, t: ((key: string) => key) as never, showToast: toast,
     sortOrder: "newest", filteredMessages: state.messages, store,
     loadedServerMessageCount: mailbox.length, currentMessageTotal: matchingTotal, searchScope: "view", debouncedQuery: "",
     selectedAccount: "all", selectedFolder: "", view: "inbox", attachmentKindFilter: undefined,
-    dateBounds: { after: undefined, before: undefined }, load, loadRef,
-    reconcileRef: { current: () => undefined }, loadRequestRef,
+    dateBounds: { after: undefined, before: undefined }, load: fullLoad, loadRef,
+    reconcileRef, loadRequestRef,
     selectAllPaged, setSelectAllPaged, pendingBatchDelete, setPendingBatchDelete,
   });
   displayed = state.messages;
@@ -133,6 +164,10 @@ beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.resetAllMocks();
   pagedWrites.length = 0;
+  loadCalls = 0;
+  reconcileCalls = 0;
+  loadedCursor = null;
+  initialCursor = null;
   mailbox = [original];
   server = [original];
   store = seedStore(mailbox);
@@ -269,6 +304,75 @@ async function remountWithMailbox(messages: Message[]) {
   root = createRoot(host);
   await act(async () => { root.render(<Harness />); });
 }
+
+/**
+ * Mounts the harness on a list the user already paged into: page one is the
+ * server's first page, page two is loaded behind `cursor` and is only reachable
+ * through the cursor chain. A full load (`adoptSnapshot`) drops page two and
+ * resets the cursor; a reconcile (`mergeSnapshot`) must leave both alone.
+ */
+async function remountWithPages(first: Message[], second: Message[], cursor: string) {
+  await act(async () => { root.unmount(); });
+  host.remove();
+  mailbox = [...first, ...second];
+  server = first;
+  initialCursor = cursor;
+  store = createMailStore({ reconcile: async () => undefined });
+  store.adoptSnapshot({
+    accounts: initialAccounts,
+    stats: { accounts: 1, messages: mailbox.length, unread: mailbox.filter((message) => !message.seen).length },
+    items: first,
+    total: mailbox.length,
+    nextCursor: cursor,
+  }, snapshotContextFor(store));
+  store.appendPage({
+    items: second,
+    total: mailbox.length,
+    nextCursor: null,
+  }, snapshotContextFor(store));
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => { root.render(<Harness />); });
+  await act(async () => { current.toggleMessageSelected(first[0]!.id); });
+}
+
+function loadedIds(): string[] {
+  return displayed.map((message) => message.id);
+}
+
+it("keeps the loaded pages and the cursor after a successful flag batch", async () => {
+  const firstPage = mailboxOf(2);
+  const secondPage: Message[] = [{ ...original, id: "m3", uid: 3 }];
+  await remountWithPages(firstPage, secondPage, "cursor-page-2");
+  expect(loadedIds(), "the harness starts with both pages loaded").toEqual(["m1", "m2", "m3"]);
+  mocks.flags.mockResolvedValue({ ok: true, updated: 1, failed: 0 });
+
+  await act(async () => { await current.batchUpdateFlags({ seen: true }, "success"); });
+
+  expect(loadCalls, "a successful batch must not run the full, page-resetting load").toBe(0);
+  expect(reconcileCalls, "it reconciles the loaded window instead").toBe(1);
+  expect(loadedIds(), "page two survives the reconcile").toEqual(["m1", "m2", "m3"]);
+  expect(loadedCursor, "the cursor still points at page two").toBe("cursor-page-2");
+  expect(displayed[0]!.seen, "the committed flag is on screen").toBe(true);
+});
+
+it("keeps the loaded pages and the cursor after a successful explicit move", async () => {
+  const firstPage = mailboxOf(2);
+  const secondPage: Message[] = [{ ...original, id: "m3", uid: 3 }];
+  await remountWithPages(firstPage, secondPage, "cursor-page-2");
+  // The route commits the destination before answering, so the server's next
+  // first page no longer holds the moved row.
+  server = [firstPage[1]!];
+  mocks.move.mockResolvedValue({ ok: true, updated: 1, failed: 0 });
+
+  await act(async () => { await current.batchMoveMessages("trash"); });
+
+  expect(loadCalls, "a successful move must not run the full, page-resetting load").toBe(0);
+  expect(reconcileCalls, "it reconciles the loaded window instead").toBe(1);
+  expect(loadedIds(), "the moved row is gone and page two survives").toEqual(["m2", "m3"]);
+  expect(loadedCursor, "the cursor still points at page two").toBe("cursor-page-2");
+});
 
 it("splits an explicit selection at the server's id cap instead of sending a request it refuses", async () => {
   const rows = mailboxOf(SERVER_BATCH_ID_LIMIT + 1);

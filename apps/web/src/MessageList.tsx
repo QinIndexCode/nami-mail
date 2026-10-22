@@ -172,15 +172,20 @@ export const MessageListRow = memo(function MessageListRow(props: MessageListRow
   // honest for a row whose metadata predates a flag correction.
   const rowHasAttachments = hasVisibleAttachments(message.attachments);
   const rowPerson = ownSent && message.to[0] ? message.to[0] : message.from;
+  // A blank or whitespace-only subject is a real (and common) server value, so
+  // the row must render a localized placeholder instead of an empty line — and
+  // the screen-reader label needs the same text, or it announces a subjectless
+  // selection with a dangling gap.
+  const subjectLabel = message.subject.trim() ? message.subject : t("mail.message.noSubject");
   return (
     <div className="message-list-row" role="listitem" style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualStart}px)` }}>
       <button tabIndex={tabbable ? 0 : -1} data-index={index} data-message-id={message.id} ref={buttonRefCallback} className={className} aria-pressed={selectionMode ? multiSelected : undefined} aria-haspopup="menu" onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
-        <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: rowHasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
+        <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: subjectLabel }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: rowHasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
         {selectionMode && <span className={`selection-checkbox ${multiSelected ? "checked" : ""}`} aria-hidden="true" />}
         <SenderAvatar name={rowPerson.name} address={rowPerson.address} tone={accountTone(rowPerson.address)} gravatarEnabled={gravatarEnabled} bimiEnabled={bimiEnabled} />
         <span className="message-copy">
           <span className="message-meta"><strong>{ownSent && message.to[0] ? t("mail.reader.toRecipient", { recipient: rowPerson.name || rowPerson.address }) : (rowPerson.name || rowPerson.address)}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
-          <span className="message-subject">{message.subject}</span>
+          <span className="message-subject">{subjectLabel}</span>
           <span className="message-snippet">{localizeMessageLinks(message.snippet, locale)}</span>
           <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{rowHasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
         </span>

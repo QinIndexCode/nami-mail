@@ -203,4 +203,21 @@ describe("MessageListRow", () => {
     renderRow(makeMessage({ mailbox: "Sent", from: { name: "Me", address: "me@example.com" }, to: [] }));
     expect(container.querySelector(".message-meta strong")?.textContent).toBe("Me");
   });
+
+  it("renders the localized placeholder instead of a blank line for a missing subject", () => {
+    // An empty subject is a real server value (including for locally saved
+    // drafts), and a whitespace-only one must not slip through either.
+    renderRow(makeMessage({ subject: "" }));
+    expect(container.querySelector(".message-subject")?.textContent).toBe("无主题");
+    renderRow(makeMessage({ subject: "   " }));
+    expect(container.querySelector(".message-subject")?.textContent).toBe("无主题");
+    // A real subject is shown untouched.
+    renderRow(makeMessage({ subject: "Quarterly report" }));
+    expect(container.querySelector(".message-subject")?.textContent).toBe("Quarterly report");
+  });
+
+  it("puts the same placeholder into the selection announcement", () => {
+    renderRow(makeMessage({ subject: "  " }), { selectionMode: true });
+    expect(container.querySelector(".visually-hidden")?.textContent).toContain("无主题");
+  });
 });

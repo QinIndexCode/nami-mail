@@ -51,7 +51,11 @@ export interface BatchSelectionOptions {
   view: MailView;
   attachmentKindFilter: AttachmentKind | undefined;
   dateBounds: { after: string | undefined; before: string | undefined };
-  /** List load; awaited as the reconciliation barrier after a batch lands. */
+  /**
+   * List load. Still the barrier after a FAILED batch (the server's rollback
+   * may live on pages the incremental merge never re-reads); a successful one
+   * reconciles instead, so it cannot reset paging.
+   */
   load: (options?: BatchSelectionLoadOptions) => Promise<void>;
   /** Latest `load`, read through a ref so a running job reloads the list on screen. */
   loadRef: { current: (options?: BatchSelectionLoadOptions) => Promise<void> };
@@ -379,18 +383,20 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
       showToast(mailErrorToastMessage(error, t("mail.error.batchUpdate"), t), "error");
     } finally {
       finishBatch({ count: ids.length });
-      // The reconciling reload doubles as the pin barrier, but which side of it
-      // the pins drop on depends on whether the write landed. On success they
-      // must outlive the reload: an in-flight refresh that started before the
-      // local commit would otherwise land after it and flip the rows back. On
-      // failure there is no commit to protect, and pins that outlive the reload
-      // would pin the optimistic value over the server's authoritative one —
-      // the rejected write would look like it succeeded.
+      // Which refresh follows depends on whether the write landed. On success
+      // the local values ARE the committed truth, so the pagination-preserving
+      // reconcile is enough: it merges the server's first page and counters into
+      // the loaded window, while a full `load` would replace the window with the
+      // first page and reset the cursor, dropping the pages the user scrolled in.
+      // On failure the server owns the authoritative flags (and may have refused
+      // rows on pages this merge never re-reads), so the full reload stays — it
+      // is also the pin barrier: a rejected write must not outlive it.
       if (!applied) unpin(ids);
       try {
-        await load({ silent: true });
+        if (applied) await reconcileRef.current();
+        else await load({ silent: true });
       } catch {
-        // load handles its own errors; the pins still clear below.
+        // The refresh handles its own errors; the pins still clear below.
       }
       unpin(ids);
       // The action landed and the list is reconciled, so the selection is spent:
@@ -534,12 +540,14 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
             showToast(`${t("mail.selection.partialFailure", { done: updated, failed })}${detail}`, "error");
             return;
           }
-          // The list already reflects the move; reload to reconcile the
-          // server-side truth (mapped UIDs, folder counts). Await it: the pins
-          // are released in the `finally` below, and dropping them before this
-          // snapshot lands would let an older in-flight refresh re-add the rows
-          // — the same barrier order batchUpdateFlags uses.
-          await load({ silent: true });
+          // The list already reflects the move, and the route committed it
+          // locally before answering; reconcile merges the server's first page
+          // (mapped UIDs, folder counts) into the loaded window. Await it: the
+          // pins are released in the `finally` below, and dropping them before
+          // this snapshot lands would let an older in-flight refresh re-add the
+          // rows — the same barrier order batchUpdateFlags uses. A full `load`
+          // here would also collapse the paging the user already scrolled in.
+          await reconcileRef.current();
         } catch (error) {
           // A mid-stream failure leaves earlier chunks moved server-side; roll
           // back only the unprocessed remainder plus any recorded failures,
