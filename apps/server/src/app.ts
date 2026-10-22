@@ -66,6 +66,7 @@ import { defaultProviderFactory, setProviderFactory } from "./provider/index.js"
 import { providerPresets } from "./providers.js";
 import { TranslationConfigurationStore } from "./translation-configuration.js";
 import { buildTranslationService } from "./routes/translation.js";
+import { contentSecurityPolicy } from "./security/csp.js";
 import { seedBuiltinTemplates } from "./templates.js";
 import {
   getSyncMessageLimit,
@@ -92,30 +93,6 @@ function pruneStartupRequestLog(logPath: string): void {
     // Best-effort instrumentation; a read-only data dir must not break boot.
   }
 }
-
-/**
- * `frame-src blob:` rather than `'none'`: the attachment preview renders a PDF
- * from an object URL inside an iframe (`AttachmentPreviewModal`), and a blob:
- * URL inherits the creating origin, so the framed document stays same-origin
- * and gains no privileges. `frame-ancestors 'none'` is the direction that
- * protects this app from being framed. Without this exception the preview works
- * under Vite (which serves the document with no CSP) and silently fails in every
- * packaged build, where this header is the document's policy.
- */
-const contentSecurityPolicy = [
-  "default-src 'self'",
-  "base-uri 'none'",
-  "object-src 'none'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https: http:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
-  "media-src 'self'",
-  "frame-src blob:",
-  "form-action 'none'",
-  "frame-ancestors 'none'",
-].join("; ");
 
 export type BuildAppOptions = {
   // Empty in browser-only development. The desktop host passes a fresh token

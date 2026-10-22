@@ -29,6 +29,9 @@
   ],
   "scripts": {
     "postinstall": "node scripts/ensure-electron-runtime.mjs && node scripts/apply-nsis-registry-patch.mjs",
+    "assets:pdfjs": "node scripts/copy-pdfjs-assets.mjs",
+    "assets:pdfjs:check": "node scripts/copy-pdfjs-assets.mjs --check",
+    "predev": "node scripts/copy-pdfjs-assets.mjs --ensure",
     "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:server:watch\" \"npm:dev:web\"",
     "dev:server": "npm --workspace @nami/server run dev",
     "dev:server:watch": "node scripts/dev-server-watch.mjs",
@@ -44,7 +47,7 @@
     "sync:demo": "node scripts/sync-site-demo.mjs",
     "screenshots:round": "node scripts/round-screenshots.mjs",
     "screenshots:site": "node scripts/capture-site-screenshots.mjs",
-    "build": "npm run build:brand && npm --workspace @nami/agent-contracts run build && npm --workspace @nami/agent-core run build && npm --workspace @nami/web run build && npm --workspace @nami/server run build && npm --workspace @nami/desktop run build",
+    "build": "npm run assets:pdfjs && npm run build:brand && npm --workspace @nami/agent-contracts run build && npm --workspace @nami/agent-core run build && npm --workspace @nami/web run build && npm --workspace @nami/server run build && npm --workspace @nami/desktop run build",
     "start": "npm --workspace @nami/server run start",
     "styles:measure": "node scripts/measure-styles.mjs",
     "test": "npm --workspace @nami/agent-contracts run test && npm --workspace @nami/agent-core run test && npm --workspace @nami/server run test && npm --workspace @nami/web run test && npm --workspace @nami/desktop run test",

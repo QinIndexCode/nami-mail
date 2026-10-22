@@ -5,8 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173",
+    "predev": "node ../../scripts/copy-pdfjs-assets.mjs --ensure",
+    "prebuild": "node ../../scripts/copy-pdfjs-assets.mjs --ensure",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
+    "pretest": "node ../../scripts/copy-pdfjs-assets.mjs --ensure",
     "test": "vitest run",
     "sync:brand-icons": "node scripts/sync-brand-icons.mjs"
   },

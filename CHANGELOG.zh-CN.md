@@ -2,6 +2,7 @@
 
 ### 新增
 
+- **附件在线预览·基线（S0）**：新增 `scripts/copy-pdfjs-assets.mjs`，在 `predev`/`prebuild`/`pretest` 前把 pdf.js 的 `cmaps`、`standard_fonts`、`iccs`、`wasm` 资产（200 个文件）复制到 `apps/web/public/pdfjs/`，并生成含安装版本、逐文件 sha256 与字节数的 `manifest.json`；`npm run assets:pdfjs:check` 无需构建即可校验，`apps/web/vite.config.ts` 的 `nami-pdfjs-assets-guard` 兜住绕过 npm 脚本的直接 `vite build`。同时把 CSP 的 12 条指令与桌面端“权限默认拒绝、只允许本应用源导航”的加固策略分别抽成可单测的 `apps/server/src/security/csp.ts` 与 `apps/desktop/src/window-hardening.mts`，行为零变化。维护者感受：预览重构的第一批地基可独立验证，缺 pdf.js 资产会在构建时而不是线上预览时暴露。
 - **统一任务层接管批量操作与写路径**：新增 `apps/server/src/tasks/`，把批量移动、标记、撤销、发信与稍后提醒统一为可持久化任务（`move`/`flags`/`undo`/`send`/`snooze`）；受理时在同一事务内固定选择集并提交本地目标态，后台负责投递、重试、结算与撤销，`GET /api/tasks/:id` 提供任务进度；旧的 `operation_queue`、`batch_jobs` 与 `batch_job_messages` 随之删除，文件夹计数改为派生查询，主库 `SCHEMA_VERSION` 随迁移升至 3。用户感受：批量操作点击即生效、重启不丢，撤销会跟随逆向任务到结算而不是只刷新一次。
 - **发信立即返回并在本地先可见**：`POST /api/messages/send` 改为立即返回 `202` 并把 SMTP 投递交给后台 `send` 任务；同一事务写入本地乐观 Sent 行（`pending_send`），同步抓回服务商 Sent 副本时按 HMAC `remote_id_lookup` 认领该行而不是插入重复行。用户感受：点发送后界面立刻响应，已发送里马上能看到这封信，不必等一次全量同步。
 - **整库静态加密**：SQLite 驱动切换为 `better-sqlite3-multiple-ciphers`，启动时用 DPAPI 解封的主密钥执行 `PRAGMA key`（默认 ChaCha20-Poly1305），已有明文库经 checkpoint → 副本 `rekey` → 校验 → 换位完成升级；图片缓存、缓存索引与自定义背景图改为逐文件密封，缓存文件名改为 HMAC 不透明名。用户感受：拿到数据库或缓存目录副本不再能直接读出邮件正文、主题或远程图片地址。

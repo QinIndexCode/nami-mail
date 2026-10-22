@@ -97,6 +97,10 @@ export default tseslint.config(
       "**/coverage/**",
       "**/playwright-report/**",
       "**/test-results/**",
+      // Generated pdf.js runtime assets (gitignored, copied by
+      // scripts/copy-pdfjs-assets.mjs). They are vendored third-party JS with
+      // minified one-letter identifiers; lint has nothing to say about them.
+      "apps/web/public/pdfjs/**",
       "apps/web/src/locales/*.generated.ts",
       "apps/desktop/src/native-locale-catalog.generated.mts",
     ],
@@ -277,7 +281,7 @@ export default tseslint.config(
   },
   {
     files: ["apps/desktop/src/main.mts"],
-    rules: { "max-lines": ["error", { max: 2137, skipBlankLines: false, skipComments: false }] },
+    rules: { "max-lines": ["error", { max: 2122, skipBlankLines: false, skipComments: false }] },
   },
   {
     // 反思轮发现：把代码搬进未冻结的文件即可绕过上述棘轮（App.tsx 的反弹路径）。

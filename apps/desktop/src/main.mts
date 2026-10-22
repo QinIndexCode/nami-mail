@@ -31,7 +31,8 @@ import { createTrayController, loadDesktopIcon } from "./tray.mjs";
 import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
 import { DesktopDiagnostics, serializeRuntimeError } from "./desktop-diagnostics.mjs";
 import { installDesktopRuntimeDiagnostics } from "./desktop-runtime-diagnostics.mjs";
-import { openInBrowser as openExternalUrl, isHttpUrl } from "./desktop-external-open.mjs";
+import { openInBrowser as openExternalUrl } from "./desktop-external-open.mjs";
+import { installNavigationGuards, installRendererPermissionPolicy } from "./window-hardening.mjs";
 import { isCustomNotificationSound, playCustomNotificationSound, warmUpNotificationSoundPlayer } from "./desktop-notification-sound.mjs";
 import {
   getClosePromptSmokeSession,
@@ -807,24 +808,6 @@ function isCurrentRenderer(event: Electron.IpcMainEvent | Electron.IpcMainInvoke
   );
 }
 
-// The renderer is a trusted local UI, but an unhandled permission request
-// defaults to granted in Electron. Deny everything outside this short
-// allowlist so compromised or misbehaving content cannot reach cameras,
-// microphones, geolocation or other device surfaces through the session.
-// clipboard-sanitized-write backs the "copy" affordances in the UI;
-// notifications lets the web-side notification path request permission, while
-// the mail client itself uses the native main-process Notification API.
-const rendererPermissionAllowlist = new Set(["clipboard-sanitized-write", "notifications"]);
-
-function installRendererPermissionPolicy(): void {
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(rendererPermissionAllowlist.has(permission));
-  });
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
-    return rendererPermissionAllowlist.has(permission);
-  });
-}
-
 function checkForUpdatesAfterExternalTrigger(): void {
   void desktopUpdater?.checkAfterExternalTrigger();
 }
@@ -1105,14 +1088,16 @@ async function createMainWindowShell(): Promise<void> {
     if (!smokeResultPath || !["warning", "error"].includes(event.level)) return;
     noteDesktopSmokeDiagnostic(`Renderer ${event.level}: ${event.message}`);
   });
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isHttpUrl(url)) void openInBrowser(url);
-    return { action: "deny" };
-  });
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (isLocalAppUrl(url)) return;
-    event.preventDefault();
-    if (isHttpUrl(url)) void openInBrowser(url);
+  // The renderer is a trusted local UI, but navigation is still an escape
+  // hatch: window.open, redirects and cross-origin navigation must not turn the
+  // shell into a browser for arbitrary content. The policy lives in
+  // window-hardening.mjs so it is unit-tested without an Electron runtime; this
+  // call wires it to the window. The origin is resolved lazily because the shell
+  // is created before the local service, and `undefined` (origin not known yet)
+  // makes the guards fail closed.
+  installNavigationGuards(mainWindow.webContents, {
+    openInBrowser,
+    appOrigin: () => (localServer ? new URL(localServer.url).origin : undefined),
   });
   mainWindow.once("ready-to-show", () => {
     // Purely diagnostic since the shell shows itself at creation: the
@@ -1520,7 +1505,7 @@ async function boot(): Promise<void> {
   await writeDesktopSmokeProgress("waiting-for-electron-ready");
   await app.whenReady();
   desktopDiagnostics.recordStartupTiming("electron-ready");
-  installRendererPermissionPolicy();
+  installRendererPermissionPolicy(session.defaultSession);
   // Prime the notification-sound pipeline early: generate the WAV files and
   // pre-start the OS player so the first real notification does not pay a
   // multi-second player cold start (and any tmp-dir failure shows up in the
