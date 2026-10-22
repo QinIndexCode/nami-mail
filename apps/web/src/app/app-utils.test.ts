@@ -1,9 +1,20 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { collapseQuotedMailHtml, IMAGE_PROXY_PATH, rewriteRemoteImagesToProxy, sanitizeMailHtml, splitBodyLinks, splitQuotedMailText } from "./app-utils";
+import { collapseQuotedMailHtml, IMAGE_PROXY_PATH, messageQueryAccountScope, rewriteRemoteImagesToProxy, sanitizeMailHtml, splitBodyLinks, splitQuotedMailText } from "./app-utils";
 
 /** The exact shape the reader must emit for a remote image. */
 const proxyUrl = (remote: string) => `/api/images/proxy?url=${encodeURIComponent(remote)}`;
+
+describe("messageQueryAccountScope", () => {
+  it("matches the account scope buildMessageQuery puts on the wire", () => {
+    expect(messageQueryAccountScope("all", "", "view")).toBeUndefined();
+    expect(messageQueryAccountScope("acct-1", "", "view")).toBe("acct-1");
+    expect(messageQueryAccountScope("acct-1", "", "all")).toBe("acct-1");
+    // A global search spans every account, so its badges must too.
+    expect(messageQueryAccountScope("acct-1", "invoice", "all")).toBeUndefined();
+    expect(messageQueryAccountScope("acct-1", "   ", "all")).toBe("acct-1");
+  });
+});
 
 describe("collapseQuotedMailHtml", () => {
   it("folds a top-level blockquote into a details toggle", () => {

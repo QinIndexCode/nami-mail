@@ -1,10 +1,14 @@
 import {
   awaitAbortable,
+  createProviderToolNames,
   endpointUrl,
   hasUnsafeToolArguments,
   linesFrom,
   maximumSseLineBytes,
+  maximumToolArgumentsBytes,
+  providerErrorFromResponse,
   providerRequest,
+  ProviderReportedError,
   safeMessage,
   statusError,
   streamCompletionEvents,
@@ -12,6 +16,7 @@ import {
   unsafeToolArgumentsError,
   asRecord,
   type ProviderResponseLease,
+  type ProviderToolNames,
 } from "./provider-common.js";
 import {
   createAgentError,
@@ -24,8 +29,6 @@ import {
   type ProviderTokenUsage,
   type ToolCall,
 } from "@nami/agent-contracts";
-
-const maximumToolArgumentsBytes = 200 * 1024;
 
 export type OpenAiResponsesProviderOptions = {
   id: string;
@@ -49,42 +52,37 @@ type PendingFunctionCall = {
 
 /**
  * Converts the unified chat history into OpenAI Responses API input items:
- * system prompts become the top-level `instructions` field, tool results become
- * `function_call_output` content, and assistant tool calls become `function_call`
- * items. Unlike the chat-completions API, the input array accepts any sequence
- * of items, so no adjacent-turn merging is required.
+ * system prompts become the top-level `instructions` field, tool results and
+ * assistant tool calls become top-level `function_call_output` /
+ * `function_call` items. Those two are members of `ResponseInputItem`, not of
+ * a message's `content` — `content` only accepts
+ * `input_text`/`input_image`/`input_file`, so nesting them would make the
+ * request after the first tool call invalid.
  */
-function responsesInput(request: ProviderChatRequest): unknown[] {
+function responsesInput(request: ProviderChatRequest, names: ProviderToolNames): unknown[] {
   const items: unknown[] = [];
   for (const message of request.messages) {
     if (message.role === "system") continue;
     if (message.role === "tool") {
       items.push({
-        role: "user",
-        content: [
-          {
-            type: "function_call_output",
-            call_id: message.toolCallId ?? `call-${items.length}`,
-            output: message.content || " ",
-          },
-        ],
+        type: "function_call_output",
+        call_id: message.toolCallId ?? `call-${items.length}`,
+        output: message.content || " ",
       });
     } else if (message.role === "assistant") {
-      const content: unknown[] = [];
-      if (message.content) {
-        const text = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
-        content.push({ type: "output_text", text });
-      }
+      const text = message.content
+        ? typeof message.content === "string" ? message.content : JSON.stringify(message.content)
+        : "";
+      if (text) items.push({ role: "assistant", content: text });
       for (const call of message.toolCalls ?? []) {
-        content.push({
+        items.push({
           type: "function_call",
           call_id: call.id,
-          name: call.toolName,
+          name: names.toWire(call.toolName),
           arguments: JSON.stringify(call.input),
         });
       }
-      if (!content.length) content.push({ type: "output_text", text: " " });
-      items.push({ role: "assistant", content });
+      if (!text && !message.toolCalls?.length) items.push({ role: "assistant", content: " " });
     } else {
       const content: unknown[] = [];
       if (typeof message.content === "string") {
@@ -107,10 +105,10 @@ function responsesInput(request: ProviderChatRequest): unknown[] {
   return items;
 }
 
-function responsesTools(tools: readonly AgentToolDescriptor[]): unknown[] {
+function responsesTools(tools: readonly AgentToolDescriptor[], names: ProviderToolNames): unknown[] {
   return tools.map((tool) => ({
     type: "function",
-    name: tool.name,
+    name: names.toWire(tool.name),
     description: tool.description,
     ...(tool.parametersSchema ? { parameters: tool.parametersSchema } : { strict: false }),
   }));
@@ -207,6 +205,9 @@ export class OpenAiResponsesProvider implements LlmProvider {
       return;
     }
     const pending = new Map<string, PendingFunctionCall>();
+    // Wire names are remapped per request: providers reject the canonical
+    // dotted ids, and the mapping also has to cover replayed tool calls.
+    const names = createProviderToolNames(request.tools.map((tool) => tool.name));
     let nextOrder = 0;
     let finishReason: ProviderFinishReason = "stop";
     let terminalUsage: ProviderTokenUsage | undefined;
@@ -220,12 +221,12 @@ export class OpenAiResponsesProvider implements LlmProvider {
         .join("\n");
       const body: Record<string, unknown> = {
         model: request.model,
-        input: responsesInput(request),
+        input: responsesInput(request, names),
         stream: true,
         ...(instructions ? { instructions } : {}),
         ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
         ...(request.maxOutputTokens !== undefined ? { max_output_tokens: request.maxOutputTokens } : {}),
-        ...(request.allowToolCalls && request.tools.length ? { tools: responsesTools(request.tools), tool_choice: "auto" } : {}),
+        ...(request.allowToolCalls && request.tools.length ? { tools: responsesTools(request.tools, names), tool_choice: "auto" } : {}),
         ...(request.responseFormat === "json" ? { text: { format: { type: "json_object" } } } : {}),
       };
       lease = await providerRequest(
@@ -242,7 +243,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
       );
       const response = lease.response;
       if (!response.ok) {
-        yield { type: "error", error: statusError(response.status) };
+        yield { type: "error", error: await providerErrorFromResponse(response, lease.signal) };
         yield { type: "completed", finishReason: "content-filter" };
         return;
       }
@@ -325,10 +326,10 @@ export class OpenAiResponsesProvider implements LlmProvider {
             } else if (type === "response.failed") {
               const responseValue = asRecord(event.response);
               const error = asRecord(responseValue?.error);
-              throw new Error(typeof error?.message === "string" ? error.message : "The provider returned a failed response.");
+              throw new ProviderReportedError(typeof error?.message === "string" ? error.message : "The provider returned a failed response.");
             } else if (type === "error") {
               const error = asRecord(event.error);
-              throw new Error(typeof error?.message === "string" ? error.message : "The provider returned an error event.");
+              throw new ProviderReportedError(typeof error?.message === "string" ? error.message : "The provider returned an error event.");
             }
           }
           if (chunk.done || sawDone) break;
@@ -352,12 +353,12 @@ export class OpenAiResponsesProvider implements LlmProvider {
           if (rawArgs.length > maximumToolArgumentsBytes) {
             throw new Error("Tool call arguments exceeded the provider safety limit.");
           }
-          completedCalls.push({ id: callId, toolName: name, input: parseToolArguments(rawArgs), requestedAt: new Date().toISOString() });
+          completedCalls.push({ id: callId, toolName: names.fromWire(name), input: parseToolArguments(rawArgs), requestedAt: new Date().toISOString() });
         }
       } else {
         for (const call of [...pending.values()].sort((left, right) => left.order - right.order)) {
           if (!call.name) continue;
-          completedCalls.push({ id: call.id, toolName: call.name, input: parseToolArguments(call.arguments), requestedAt: new Date().toISOString() });
+          completedCalls.push({ id: call.id, toolName: names.fromWire(call.name), input: parseToolArguments(call.arguments), requestedAt: new Date().toISOString() });
         }
       }
       yield* streamCompletionEvents(completedCalls, finishReason, completedCalls.length > 0, terminalUsage);

@@ -17,6 +17,7 @@ import {
   type PendingLocalState,
   type SidebarBadgeCounts,
 } from "../mailListState";
+import { hasVisibleAttachments } from "@nami/agent-contracts";
 import type { Account, Message, Stats } from "../types";
 
 /**
@@ -519,7 +520,7 @@ export function createMailStore(options: MailStoreOptions): MailStore {
         loaded += 1;
         if (!message.seen) unread += 1;
         if (message.flagged) starred += 1;
-        if (message.hasAttachments) withAttachments += 1;
+        if (hasVisibleAttachments(message.attachments)) withAttachments += 1;
       }
       return { selected: selected.size, loaded, unread, starred, withAttachments };
     },

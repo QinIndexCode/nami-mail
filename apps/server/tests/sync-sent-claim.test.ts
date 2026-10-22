@@ -100,18 +100,22 @@ describe("sync claims the optimistic Sent row for a provider copy", () => {
 
   /** The provider's stored copy of a sent mail, as the ENVELOPE and body pass report it. */
   function providerCopy(messageId: string, subject = "Provider copy subject", text = "PROVIDER-BODY-BYTES"): unknown {
+    // `confirmSubmissionsInSent` bounds its Sent scan to the submission's
+    // creation time minus a week. A fixed calendar date silently falls out of
+    // that window as time passes, so the copy is dated just before "now" --
+    // which is when the provider would really have stored it.
+    const date = new Date(Date.now() - 60_000);
     const raw = [
       `Message-ID: ${messageId}`,
       "From: Demo <demo@example.test>",
       "To: recipient@example.test",
       `Subject: ${subject}`,
-      "Date: Tue, 14 Oct 2026 09:00:00 +0000",
+      `Date: ${date.toUTCString()}`,
       "MIME-Version: 1.0",
       "Content-Type: text/plain; charset=utf-8",
       "",
       text,
     ].join("\r\n");
-    const date = new Date("2026-10-14T09:00:00Z");
     return {
       uid: SENT_UID,
       flags: new Set(["\\Seen"]),

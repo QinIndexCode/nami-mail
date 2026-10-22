@@ -1,4 +1,5 @@
 import { lazy, Profiler, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { hasVisibleAttachments, visibleAttachments as visibleAttachmentParts } from "@nami/agent-contracts";
 import { computePosition, flip, offset, shift } from "@floating-ui/dom";
 import {
   Archive,
@@ -103,6 +104,7 @@ import {
   formatSyncFreshness,
   isCompactMailLayout,
   buildMessageQuery,
+  messageQueryAccountScope,
   demoMessageTotal,
 
   moveActionKey,
@@ -681,7 +683,8 @@ export default function App() {
           api.accounts(),
           api.providers(),
           api.messages(messageQuery),
-          api.stats(),
+          // The badge and the rows beneath it must describe one mailbox.
+          api.stats(messageQueryAccountScope(accountId, search, scope)),
         ]);
         if (requestId !== loadRequestRef.current) return;
         // The merge section is the suspected renderer jank point on large
@@ -838,7 +841,7 @@ export default function App() {
         api.accounts(),
         api.providers(),
         api.messages(messageQuery),
-        api.stats(),
+        api.stats(messageQueryAccountScope(serverQuery.accountId, serverQuery.search, serverQuery.searchScope)),
       ]);
       if (requestId !== loadRequestRef.current) return;
       const finishMerge = beginSpan("list.merge");
@@ -1118,7 +1121,7 @@ export default function App() {
       accounts,
       filterQuery,
       unreadViewRecentlyReadIds,
-    ) && (!filterAttachments || message.hasAttachments));
+    ) && (!filterAttachments || hasVisibleAttachments(message.attachments)));
     return sortMessages(base, sortOrder, {
       messages: base,
       accountEmails: new Set(accounts.map((account) => account.email.toLowerCase())),
@@ -1392,7 +1395,7 @@ export default function App() {
       ? (selectedReplyTarget.name || selectedReplyTarget.address)
       : selectedReplyTargetAddress ?? (selected.from.name || selected.from.address)
     : "";
-  const visibleAttachments = selected?.attachments.filter((attachment) => !attachment.related) ?? [];
+  const visibleAttachments = selected ? visibleAttachmentParts(selected.attachments) : [];
   const selectedAccountRecord = accounts.find((account) => account.id === selectedAccount);
   const localizedProviderName = (account: Pick<Account, "provider" | "providerName">) => providerDisplayName({ id: account.provider, name: account.providerName }, locale, t);
   const sentFolder = selectedAccountRecord?.folders.find((folder) => folder.specialUse === "\\Sent");
@@ -2826,7 +2829,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           openAttachmentPreview={openAttachmentPreview}
         />
         </div>
-        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} initialPrompt={agentLaunchIntent?.prompt} initialAutoSend={agentLaunchIntent?.autoSend} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} overlayOpen={state.settingsOpen || Boolean(demoSource)} providerListVersion={agentProviderListVersion} onOpenModelSettings={() => actions.openSettingsTo("models")} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
+        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} initialPrompt={agentLaunchIntent?.prompt} initialAutoSend={agentLaunchIntent?.autoSend} initialNewConversation={Boolean(agentLaunchIntent)} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} overlayOpen={state.settingsOpen || Boolean(demoSource)} providerListVersion={agentProviderListVersion} onOpenModelSettings={() => actions.openSettingsTo("models")} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
           closeAgentWorkspace();
           // Refresh so the translation panel picks up provider changes made in the workspace.
           if (!isDemo) void api.agentBootstrap().then((value) => { const capped: AgentBootstrap = { ...value, conversations: value.conversations.slice(0, 50) }; setPreloadedAgentBootstrap(capped); setAgentProviderSnapshot(capped); }).catch(() => undefined);

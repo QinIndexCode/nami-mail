@@ -36,9 +36,12 @@ export type CopyButtonProps = {
 };
 
 /**
- * A copy control with the app-wide feedback: the icon swaps to a checkmark,
- * scales in, then returns to the copy icon, so a second copy is still possible.
- * The copied state is local to the button and resets when `text` changes.
+ * A copy control with the app-wide feedback: the icon cross-fades to a
+ * checkmark, holds, then cross-fades back, so a second copy is still possible.
+ * Both glyphs stay mounted and are toggled by `.copied` in CSS; mounting one at
+ * a time would replace it instantly and leave the return to the copy glyph with
+ * no transition. The copied state is local to the button and resets when `text`
+ * changes.
  */
 export default function CopyButton({
   text,
@@ -111,7 +114,10 @@ export default function CopyButton({
         disabled={disabled}
       >
         {labelPosition === "start" && shownLabel !== undefined && <span>{shownLabel}</span>}
-        {copied ? <Check size={size} aria-hidden="true" /> : <Copy size={size} aria-hidden="true" />}
+        <span className="copy-button-icon" aria-hidden="true">
+          <Copy size={size} />
+          <Check size={size} />
+        </span>
         {labelPosition === "end" && shownLabel !== undefined && <span>{shownLabel}</span>}
       </button>
       {announcement && (

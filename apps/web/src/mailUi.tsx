@@ -1,5 +1,6 @@
 import { type ReactNode, type RefObject } from "react";
-import { Archive, FileArchive, FileAudio, FileCode2, FileImage, FilePenLine, FileSpreadsheet, FileText, Flag, Folder, Inbox, Layers, SendHorizontal, ShieldAlert, Star, Trash2 } from "lucide-react";
+import { Archive, FilePenLine, Flag, Folder, Inbox, Layers, SendHorizontal, ShieldAlert, Star, Trash2 } from "lucide-react";
+import { FileIcon, defaultStyles, type FileIconProps } from "react-file-icon";
 import type { AttachmentKind } from "./attachmentPresentation";
 import type { OutboundAttachment } from "./types";
 
@@ -53,19 +54,33 @@ export function IconButton({ label, children, onClick, className = "", disabled 
   );
 }
 
-export function AttachmentFileIcon({ kind }: { kind: AttachmentKind }) {
-  const icon = kind === "archive"
-    ? <FileArchive size={19} />
-    : kind === "image"
-      ? <FileImage size={19} />
-      : kind === "spreadsheet"
-        ? <FileSpreadsheet size={19} />
-        : kind === "code"
-          ? <FileCode2 size={19} />
-          : kind === "media"
-            ? <FileAudio size={19} />
-            : <FileText size={19} />;
-  return <span className={`attachment-file-icon kind-${kind}`} aria-hidden="true">{icon}</span>;
+const videoExtensions = new Set(["3gp", "avi", "flv", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "ogv", "webm", "wmv"]);
+
+/** Fallbacks for extensions the icon set does not know, so a `.tsx` or an
+ * extensionless file still gets a meaningful page icon instead of a blank one. */
+const fallbackFileStyles: Record<AttachmentKind, FileIconProps> = {
+  archive: { type: "compressed", labelColor: "#B7791F" },
+  code: { type: "code", labelColor: "#2563EB" },
+  document: { type: "document", labelColor: "#2C5898" },
+  image: { type: "image", labelColor: "#7C3AED" },
+  media: { type: "audio", labelColor: "#DB2777" },
+  other: { type: "binary", labelColor: "#64748B" },
+  pdf: { type: "acrobat", labelColor: "#D93831" },
+  spreadsheet: { type: "spreadsheet", labelColor: "#1A754C" },
+  text: { type: "document", labelColor: "#475569" },
+};
+
+export function AttachmentFileIcon({ kind, filename }: { kind: AttachmentKind; filename: string }) {
+  const extension = filename.trim().toLowerCase().match(/\.([a-z0-9]{1,8})$/)?.[1] ?? "";
+  const fallback = kind === "media" && videoExtensions.has(extension)
+    ? { ...fallbackFileStyles.media, type: "video" as const }
+    : fallbackFileStyles[kind];
+  const style = defaultStyles[extension] ?? fallback;
+  return (
+    <span className={`attachment-file-icon kind-${kind}`} aria-hidden="true">
+      <FileIcon extension={extension ? extension.slice(0, 4) : undefined} labelUppercase {...style} />
+    </span>
+  );
 }
 
 export function FolderNavigationIcon({ specialUse, name }: { specialUse: string | null; name?: string }) {

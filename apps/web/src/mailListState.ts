@@ -1,4 +1,5 @@
 import type { Account, Message, Stats } from "./types";
+import { hasVisibleAttachments, visibleAttachments } from "@nami/agent-contracts";
 import { presentAttachment, type AttachmentKind } from "./attachmentPresentation";
 
 export type SidebarBadgeCounts = {
@@ -188,8 +189,8 @@ export function matchesServerMessageQuery(
       if (!isSnoozedMessage(message)) return false;
     } else if (query.messageView === "attachments") {
       // The Attachments view crosses every folder (like starred); only the
-      // message's own attachment flag decides, mirrored from the server.
-      if (!message.hasAttachments) return false;
+      // message's own visible attachments decide, mirrored from the server.
+      if (!hasVisibleAttachments(message.attachments)) return false;
     } else if (!isInboxMessage(message, accounts)) {
       return false;
     } else if (query.messageView === "inbox" && isSnoozedMessage(message)) {
@@ -210,7 +211,7 @@ export function matchesServerMessageQuery(
   // kind is re-derived from the attachment metadata with the same rules the
   // server used at sync time, so local snapshots agree with the server page.
   if (query.attachmentKind
-    && !message.attachments.some((attachment) => presentAttachment(attachment.filename, attachment.contentType).kind === query.attachmentKind)) {
+    && !visibleAttachments(message.attachments).some((attachment) => presentAttachment(attachment.filename, attachment.contentType).kind === query.attachmentKind)) {
     return false;
   }
   if (query.after || query.before) {

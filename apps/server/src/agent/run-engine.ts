@@ -29,7 +29,6 @@ import {
   type AgentError,
   type AgentToolActivity,
   type AgentUiStreamEvent,
-  type ConfirmationRequest,
   type ProviderChatMessage,
   type ProviderChatRequest,
   type ToolCall,
@@ -55,15 +54,33 @@ import { messagePayloadForRow, type MessagePayload, type MessageStorageRow } fro
 import type { EncryptedAgentAuditStore } from "./audit.js";
 import { EncryptedConversationStore, type ConversationDescriptor, type DecryptedConversationRecord } from "./conversations.js";
 import { AccountLifecycleError, type AccountGenerationLease, type AccountLifecycleStore, type AccountTask } from "./lifecycle.js";
-import { buildMemoryContextLines, type EncryptedAgentMemoryStore } from "./memory.js";
+import { autoReplyLedgerKinds, buildMemoryContextLines, type EncryptedAgentMemoryStore } from "./memory.js";
 import type { AgentRagSearchResult, AgentRagWorker } from "../agent-rag-worker.js";
 import type { AgentMcpServerManager } from "./mcp-server-manager.js";
 import type { AgentConfirmationLifecycle } from "./confirmation-lifecycle.js";
 import { extractMemorySuggestions, filterMemorySuggestionChunk, stripMemorySuggestions } from "./memory-suggestions.js";
-import { canonicalAgentJson } from "./store-crypto.js";
+import {
+  confirmationView,
+  messageForRag,
+  modelToolError,
+  searchQueryDetail,
+  searchResultCount,
+  shortPreview,
+  stableUserFacingError,
+  toolResultMessage,
+  type AgentMessageError,
+} from "./turn-payloads.js";
 import { agentT, type AgentMessageKey } from "./agent-messages.js";
 import { supportedLocale, type SupportedLocale } from "../localization.js";
 import { compressContextHistory, estimateMessagesTokens, estimateTokens, pruneToolOutput } from "./context-budget.js";
+import {
+  conversationTitleInstruction,
+  createConversationTitleProbe,
+  deriveConversationTitle,
+  feedConversationTitleProbe,
+  finishConversationTitleProbe,
+  maximumConversationTitleLength,
+} from "./conversation-title.js";
 
 export type AgentConversationScope = {
   mode: "all_accounts" | "selected_account" | "current_message";
@@ -193,44 +210,9 @@ export type ConversationState = {
   messages: Array<AgentMessage & { mailContextIncluded: boolean }>;
 };
 
-export const maximumConversationTitleLength = 120;
-
-function shortPreview(value: string): string {
-  const compact = value.replace(/\s+/g, " ").trim();
-  return compact.length <= 120 ? compact : `${compact.slice(0, 117).trimEnd()}...`;
-}
-
 type AgentCompletionReason = Extract<AgentUiStreamEvent, { type: "completed" }>["reason"];
-type AgentMessageError = NonNullable<AgentMessage["error"]>;
 
 const maximumMessageLength = 16_000;
-
-/** The query a search-class tool was invoked with, defensively extracted from
- *  the model-provided tool input (arrives as unknown). */
-function searchQueryDetail(input: unknown): string | undefined {
-  if (typeof input === "string" && input.trim() !== "") return shortPreview(input.trim());
-  const record = (input && typeof input === "object") ? (input as Record<string, unknown>) : undefined;
-  const query = record?.query ?? record?.keyword ?? record?.q ?? record?.text ?? record?.subject ?? record?.searchTerm;
-  return typeof query === "string" && query.trim() !== "" ? shortPreview(query.trim()) : undefined;
-}
-
-/** The result count a search tool reported, defensively extracted from the
- *  tool output (arrives as unknown). */
-function searchResultCount(output: unknown): number | undefined {
-  const total = (output as { total?: unknown } | null | undefined)?.total;
-  return typeof total === "number" && Number.isFinite(total) ? total : undefined;
-}
-
-function titleForMessage(value: string): string {
-  const title = value.replace(/\s+/g, " ").trim();
-  return title.length <= maximumConversationTitleLength ? title : `${title.slice(0, maximumConversationTitleLength - 3).trimEnd()}...`;
-}
-
-// Unified cap for tool results fed back to the model on the next turn. Built-in
-// mail tools and MCP tools already bound their own outputs; this is a final
-// safety net so any tool (or future tool) can never push an unbounded payload
-// into the provider conversation context.
-const maximumToolResultCharacters = 64 * 1024;
 
 // Model request retry policy: entries are the backoff delay before each
 // re-attempt, and the number of entries is the maximum number of retries.
@@ -291,59 +273,6 @@ async function awaitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Pro
   });
 }
 
-function toolResultMessage(ok: boolean, value: unknown): string {
-  const serialized = canonicalAgentJson(ok ? { ok: true, data: value } : { ok: false, error: value });
-  if (serialized.length <= maximumToolResultCharacters) return serialized;
-  return canonicalAgentJson({
-    ok,
-    ...(ok
-      ? { data: { truncated: true, message: `The tool result exceeded the ${maximumToolResultCharacters} character safety limit and was truncated.` } }
-      : { error: value }),
-  });
-}
-
-function messageForRag(result: AgentRagSearchResult): AgentCitation {
-  return {
-    id: result.citation.id,
-    messageId: result.citation.messageId,
-    accountId: result.citation.accountId,
-    subject: result.citation.subject ?? "",
-    sender: result.citation.sender ?? "",
-    sentAt: result.citation.sentAt ?? "",
-    excerpt: result.citation.excerpt ?? "",
-    ...(result.citation.confidence !== undefined ? { confidence: result.citation.confidence } : {}),
-  };
-}
-
-function stableUserFacingError(error: AgentError): AgentMessageError {
-  return {
-    code: error.code,
-    message: error.message,
-    ...(error.suggestion ? { suggestion: error.suggestion } : {}),
-    retryable: error.retryable,
-  };
-}
-
-function confirmationView(request: ConfirmationRequest, state: AgentConfirmation["state"]): AgentConfirmation {
-  return {
-    id: request.id,
-    title: request.preview.title,
-    summary: request.preview.summary,
-    fields: request.preview.fields.map((field) => ({ label: field.label, value: field.value })),
-    expiresAt: request.expiresAt,
-    state,
-  };
-}
-
-/**
- * Tool errors are fed back to the model as canonical JSON. Keep that payload
- * deliberately small: `details` may contain arbitrary provider values, while
- * canonical persistence rejects undefined or otherwise unstable values.
- */
-function modelToolError(error: AgentError): AgentMessageError {
-  return stableUserFacingError(error);
-}
-
 /** Connect upstream cancellation to a per-run controller and return its cleanup. */
 export function linkAbortSignals(controller: AbortController, signals: readonly (AbortSignal | undefined)[]): () => void {
   const uniqueSignals = [...new Set(signals.filter((signal): signal is AbortSignal => Boolean(signal)))];
@@ -399,13 +328,6 @@ type AgentRunEngineDeps = {
   memory: EncryptedAgentMemoryStore;
   /** Must be the instance AgentService constructed (ToolCall identity keying). */
   confirmationLifecycle: AgentConfirmationLifecycle;
-  /** First-turn concise title generation: a provider-domain concern that stays
-   *  on AgentService; the engine awaits it in streamMessage's finally block. */
-  generateConversationTitle: (
-    configuration: ProviderConfiguration,
-    userContent: string,
-    locale: SupportedLocale,
-  ) => Promise<string | undefined>;
   runDeadlineMs?: number;
   modelRetryBackoffMs?: readonly number[];
 };
@@ -428,11 +350,6 @@ export class AgentRunEngine {
   private readonly mcpManager: AgentMcpServerManager;
   private readonly memory: EncryptedAgentMemoryStore;
   private readonly confirmationLifecycle: AgentConfirmationLifecycle;
-  private readonly generateConversationTitle: (
-    configuration: ProviderConfiguration,
-    userContent: string,
-    locale: SupportedLocale,
-  ) => Promise<string | undefined>;
   private readonly runDeadlineMs: number | undefined;
   private readonly modelRetryBackoffMs: readonly number[] | undefined;
   private readonly conversations: EncryptedConversationStore;
@@ -458,7 +375,6 @@ export class AgentRunEngine {
     this.mcpManager = deps.mcpManager;
     this.memory = deps.memory;
     this.confirmationLifecycle = deps.confirmationLifecycle;
-    this.generateConversationTitle = deps.generateConversationTitle;
     this.runDeadlineMs = deps.runDeadlineMs;
     this.modelRetryBackoffMs = deps.modelRetryBackoffMs;
     this.conversations = new EncryptedConversationStore(deps.db, deps.lifecycle);
@@ -553,7 +469,7 @@ export class AgentRunEngine {
       messageIds: [],
     });
     const leases = scope.accountIds.map((accountId) => this.lifecycle.acquireLease(accountId));
-    const title = input.title?.trim() ? requiredText(input.title, "会话名称", maximumConversationTitleLength) : "新对话";
+    const title = input.title?.trim() ? requiredText(input.title, "会话名称", maximumConversationTitleLength) : "";
     const providers = this.providerService.list();
     const providerId = input.providerId?.trim() || providers.defaultProviderId || "";
     const descriptor = this.conversations.create(leases, {
@@ -579,6 +495,32 @@ export class AgentRunEngine {
     const view = this.getConversation(id);
     this.updateSummaryEntry(id, { title: view.title, updatedAt: view.updatedAt });
     return { id: view.id, title: view.title, preview: view.preview, updatedAt: view.updatedAt };
+  }
+
+  /**
+   * Persists the title emitted by the model's own response. The run's `state`
+   * is a snapshot from before the turn, so a manual rename that landed while
+   * the reply was streaming is detected by re-reading the record: only the
+   * provisional title this run wrote (or the still-empty initial title) may be
+   * replaced.
+   */
+  private acceptGeneratedConversationTitle(
+    conversationId: string,
+    title: string,
+    provisionalTitle: string,
+    state: ConversationState,
+  ): string | undefined {
+    let currentTitle: string;
+    try {
+      currentTitle = this.readConversation(conversationId).metadata.title;
+    } catch {
+      return undefined;
+    }
+    if (currentTitle !== provisionalTitle || currentTitle === title) return undefined;
+    this.conversations.append(conversationId, state.leases, "metadata", { type: "conversation-rename", title } satisfies ConversationRename);
+    state.metadata.title = title;
+    this.updateSummaryEntry(conversationId, { title, updatedAt: now() });
+    return title;
   }
 
   setConversationProvider(id: string, providerId: string): AgentConversationSummary {
@@ -725,7 +667,9 @@ export class AgentRunEngine {
       if (value.type === "conversation-metadata" && typeof value.title === "string" && typeof value.providerId === "string" && value.scope) {
         metadata = {
           type: "conversation-metadata",
-          title: requiredText(value.title, "会话名称", maximumConversationTitleLength),
+          // A conversation is untitled until its first turn derives a title.
+          // Rename records stay non-empty; only the initial record may omit it.
+          title: value.title.trim() ? requiredText(value.title, "会话名称", maximumConversationTitleLength) : "",
           providerId: value.providerId,
           scope: this.normalizeStoredScope(value.scope),
         };
@@ -866,7 +810,6 @@ export class AgentRunEngine {
       : null;
     let providerContent = input.content.trim();
     let commandConstraints: readonly string[] = [];
-    let commandTitle: string | undefined;
     if (commandMatch) {
       const command = commandMatch.command;
       const args = commandMatch.args;
@@ -885,7 +828,6 @@ export class AgentRunEngine {
       }
       commandConstraints = command.constraint ? [command.constraint] : [];
       providerContent = command.id === "help" ? buildAgentSlashHelpPrompt() : expandAgentSlashCommand(command, args);
-      commandTitle = `${command.name}${args ? ` ${args}` : ""}`;
     } else {
       // Attachments carry their extracted text separately; reassemble the
       // model-facing content while the persisted message stays clean.
@@ -976,13 +918,16 @@ export class AgentRunEngine {
         ...(assistantError ? { error: assistantError } : {}),
       };
     };
-    // Resolved inside the main try; captured here so the finally block can run
-    // the separate title-generation call for a first turn.
-    let configuration: ProviderConfiguration | undefined;
-    // True when this turn is the conversation's first user message. Its title
-    // starts as the raw first message; a concise title replaces it after the
-    // first reply via a separate provider call (see the finally block).
-    const isFirstTurn = state.messages.filter((message) => message.role === "user").length === 0 && state.metadata.title === "新对话";
+    // A conversation stays untitled until a turn names it. That turn writes a
+    // deterministic fallback title (when the message names a topic) and asks
+    // the model, in the same system prompt as the answer, to prefix its final
+    // reply with a `TITLE:` line. A greeting-only message leaves the title
+    // empty on purpose: the next turn with a real task asks again, instead of
+    // freezing the conversation as "下午好". A conversation created with an
+    // explicit title is left alone.
+    const titleGenerationEnabled = state.metadata.title.trim() === "";
+    let provisionalTitle: string | undefined;
+    let generatedTitle: string | undefined;
     try {
       this.assertRunCurrent(lifecycleTasks, controller.signal);
       this.conversations.append(conversationId, state.leases, "turn", {
@@ -996,19 +941,30 @@ export class AgentRunEngine {
       // an in-progress assistant row.
       syncInFlight();
       const userTimestamp = now();
-      if (isFirstTurn) {
-        const title = titleForMessage(commandTitle ?? userMessage.content);
-        this.conversations.append(conversationId, state.leases, "metadata", {
-          type: "conversation-rename",
-          title,
-        } satisfies ConversationRename);
-        state.metadata.title = title;
-        this.updateSummaryEntry(conversationId, { title: state.metadata.title, preview: shortPreview(userMessage.content), updatedAt: userTimestamp });
-      } else {
-        this.updateSummaryEntry(conversationId, { preview: shortPreview(userMessage.content), updatedAt: userTimestamp });
+      if (titleGenerationEnabled) {
+        provisionalTitle = deriveConversationTitle({
+          content: userMessage.content,
+          command: commandMatch ? { name: commandMatch.command.name, args: commandMatch.args } : undefined,
+          references: input.references,
+        }) || undefined;
+        if (provisionalTitle) {
+          this.conversations.append(conversationId, state.leases, "metadata", {
+            type: "conversation-rename",
+            title: provisionalTitle,
+          } satisfies ConversationRename);
+          state.metadata.title = provisionalTitle;
+        }
       }
+      this.updateSummaryEntry(conversationId, {
+        ...(provisionalTitle ? { title: provisionalTitle } : {}),
+        preview: shortPreview(userMessage.content),
+        updatedAt: userTimestamp,
+      });
+      // The fallback is worth showing immediately; the model's title, when it
+      // arrives, is a refinement rather than the first usable value.
+      if (provisionalTitle) yield { type: "title", title: provisionalTitle };
       yield { type: "status", message: t("status.preparing_context") };
-      configuration = this.requireProvider(input.providerId || state.metadata.providerId);
+      const configuration = this.requireProvider(input.providerId || state.metadata.providerId);
       const summary = providerSummary(configuration);
       const canUseMailContext = !summary.cloud || summary.cloudContentConsent;
       const ragResults: AgentRagSearchResult[] = [];
@@ -1136,7 +1092,10 @@ export class AgentRunEngine {
           (Array.isArray(message.references) ? message.references : []).map((reference) => reference.id)),
       ];
       const resolvedReferences = new Map(this.resolveMessageReferences(referencedIds).map((reference) => [reference.id, reference]));
-      const providerMessages = this.providerMessages(state, userMessage, providerContent, commandConstraints, ragResults, canUseMailContext, locale, input.mode, toolRoundLimit, agentAccessLevel, visibleTools.map((tool) => tool.name), input.attachments ?? [], resolvedReferences);
+      const promptConstraints = titleGenerationEnabled
+        ? [...commandConstraints, conversationTitleInstruction]
+        : commandConstraints;
+      const providerMessages = this.providerMessages(state, userMessage, providerContent, promptConstraints, ragResults, canUseMailContext, locale, input.mode, toolRoundLimit, agentAccessLevel, visibleTools.map((tool) => tool.name), input.attachments ?? [], resolvedReferences);
       const caller = {
         callerId: "desktop-ui",
         kind: "desktop-ui" as const,
@@ -1218,6 +1177,27 @@ export class AgentRunEngine {
         for (let providerAttempt = 0; ; providerAttempt += 1) {
           let sawModelOutput = false;
           let attemptError: AgentMessageError | undefined;
+          // One probe per provider round: a tool-first round may legitimately
+          // emit no title, while the final answer after the tool results may
+          // start with one. Once a title has been accepted there is nothing
+          // left to probe.
+          const titleProbe = titleGenerationEnabled && !generatedTitle
+            ? createConversationTitleProbe()
+            : undefined;
+          const acceptVisibleText = (raw: string): string | undefined => {
+            if (!raw) return undefined;
+            turnContent += raw;
+            assistantContent += raw;
+            const filtered = filterMemorySuggestionChunk(raw, markerCarry);
+            markerCarry = filtered.carry;
+            return filtered.text || undefined;
+          };
+          const acceptTitle = (candidate: string | undefined): string | undefined => {
+            if (!candidate) return undefined;
+            const accepted = this.acceptGeneratedConversationTitle(conversationId, candidate, provisionalTitle ?? "", state);
+            if (accepted) generatedTitle = accepted;
+            return accepted;
+          };
           if (providerAttempt > 0) {
             yield { type: "status", message: t("status.model_retry", { attempt: providerAttempt, max: modelRetryBackoffMs.length }) };
             await delayWithSignal(modelRetryBackoffMs[providerAttempt - 1] ?? 1_000, controller.signal);
@@ -1229,12 +1209,16 @@ export class AgentRunEngine {
               // Any model output means the request was delivered and consumed;
               // a failed attempt that produced output must never be re-sent.
               sawModelOutput = true;
-              turnContent += event.delta;
-              assistantContent += event.delta;
-              const filtered = filterMemorySuggestionChunk(event.delta, markerCarry);
-              markerCarry = filtered.carry;
-              if (filtered.text) {
-                yield { type: "text_delta", delta: filtered.text };
+              let delta = event.delta;
+              if (titleProbe) {
+                const probed = feedConversationTitleProbe(titleProbe, delta);
+                delta = probed.text;
+                const accepted = acceptTitle(probed.title);
+                if (accepted) yield { type: "title", title: accepted };
+              }
+              const visible = acceptVisibleText(delta);
+              if (visible) {
+                yield { type: "text_delta", delta: visible };
                 syncInFlight();
               }
               continue;
@@ -1262,7 +1246,32 @@ export class AgentRunEngine {
               attemptError = stableUserFacingError(event.error);
               continue;
             }
-            if (event.type === "completed") turnCompleted = event.reason;
+            if (event.type === "completed") {
+              if (titleProbe) {
+                const flushed = finishConversationTitleProbe(titleProbe);
+                const accepted = acceptTitle(flushed.title);
+                if (accepted) yield { type: "title", title: accepted };
+                const visible = acceptVisibleText(flushed.text);
+                if (visible) {
+                  yield { type: "text_delta", delta: visible };
+                  syncInFlight();
+                }
+              }
+              turnCompleted = event.reason;
+            }
+          }
+          // A provider that ends without a completion event may still be
+          // holding a title line in the probe; flush it before judging the
+          // attempt.
+          if (titleProbe) {
+            const flushed = finishConversationTitleProbe(titleProbe);
+            const accepted = acceptTitle(flushed.title);
+            if (accepted) yield { type: "title", title: accepted };
+            const visible = acceptVisibleText(flushed.text);
+            if (visible) {
+              yield { type: "text_delta", delta: visible };
+              syncInFlight();
+            }
           }
           if (attemptError) {
             if (attemptError.retryable === true
@@ -1574,16 +1583,15 @@ export class AgentRunEngine {
         }
       }
       // Release the conversation slot as soon as the turn is persisted. The
-      // best-effort tail below (memory suggestions, the first-turn title
-      // generation) can await a full provider request timeout on a slow or
-      // broken provider; holding the slot through it refused every resend in
+      // best-effort memory-suggestion tail below can still be drained by a
+      // slow consumer; holding the slot through it refused every resend in
       // this window with CONFLICT, so the client's optimistic user message was
       // never persisted and a revoke seconds later 404'd ("消息不存在").
       // Revoke's in-flight cascade and getConversation's in-flight append both
       // degrade gracefully without the run registered: the persisted transcript
       // is already complete at this point.
       if (this.activeRuns.get(conversationId)?.controller === controller) this.activeRuns.delete(conversationId);
-      // Cleanup runs first, ahead of the best-effort tail below, because an
+      // Cleanup runs first, ahead of the suggestion tail below, because an
       // async generator suspends at the first `yield` its finally reaches: a
       // consumer that abandons the stream (a `break` in the caller's
       // for-await, an early `.return()`) resumes this generator with a return
@@ -1592,9 +1600,9 @@ export class AgentRunEngine {
       // leaked a live watchdog timer, AccountTasks still registered against
       // their account generation, and abort listeners still wired to the
       // request signal — all of them invisible to a caller that stops reading.
-      // Neither tail event depends on them: the title request runs on the
-      // provider's own stream, and a released task only unregisters its abort
-      // controller (the lease's generation is re-checked against the store).
+      // A released task only unregisters its abort controller (the lease's
+      // generation is re-checked against the store), so it is safe to do this
+      // before the remaining yields.
       unlinkAbortSignals();
       for (const task of lifecycleTasks) task.release();
       clearTimeout(deadlineTimer);
@@ -1605,27 +1613,6 @@ export class AgentRunEngine {
           // The consumer may close the stream before the final events are
           // drained; the suggestion is a best-effort UI hint.
           break;
-        }
-      }
-      // A first turn whose reply actually produced content gets a concise title
-      // from a separate provider call. This runs after the completed event
-      // ordering, never mutates the conversation message history (preserving
-      // provider prompt-cache prefixes), and any failure keeps the provisional
-      // title silently.
-      if (isFirstTurn && configuration && assistantContent.trim() && state.metadata.title !== "新对话") {
-        try {
-          const generated = await this.generateConversationTitle(configuration, commandTitle ?? userMessage.content, locale);
-          if (generated && generated !== state.metadata.title) {
-            this.conversations.append(conversationId, state.leases, "metadata", {
-              type: "conversation-rename",
-              title: generated,
-            } satisfies ConversationRename);
-            state.metadata.title = generated;
-            this.updateSummaryEntry(conversationId, { title: generated, updatedAt: now() });
-            yield { type: "title", title: generated };
-          }
-        } catch {
-          // Best-effort: a failed title generation must not fail the turn.
         }
       }
     }
@@ -1745,7 +1732,7 @@ export class AgentRunEngine {
     // echoes are excluded: they are device-side bookkeeping, not user facts.
     const memorySummaries = buildMemoryContextLines(this.memory, {
       limit: 5,
-      excludeKinds: ["auto-reply-sent", "auto-reply-ignored"],
+      excludeKinds: autoReplyLedgerKinds,
     });
     const permissionLevelKeys: Record<AgentAccessLevel, AgentMessageKey> = {
       "read-only": "permission.level.read_only",

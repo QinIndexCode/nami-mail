@@ -1,4 +1,5 @@
 import DOMPurify from "dompurify";
+import { hasVisibleAttachments, visibleAttachments } from "@nami/agent-contracts";
 import type { MoveTarget } from "../api";
 import type { AttachmentKind } from "../attachmentPresentation";
 import { presentAttachment } from "../attachmentPresentation";
@@ -129,6 +130,21 @@ export function buildMessageQuery({
   return query.toString();
 }
 
+/**
+ * The account scope `/api/stats` must use to describe the list
+ * {@link buildMessageQuery} loads. "all" is the whole mailbox, and a global
+ * search spans every account even when one account row is selected, so its
+ * badges do too.
+ */
+export function messageQueryAccountScope(
+  accountId: string,
+  search: string,
+  searchScope: "view" | "all",
+): string | undefined {
+  if (accountId === "all") return undefined;
+  return searchScope === "all" && search.trim() !== "" ? undefined : accountId;
+}
+
 export function demoMessageTotal(messages: readonly Message[], accounts: readonly Account[], {
   accountId,
   folder,
@@ -158,10 +174,10 @@ export function demoMessageTotal(messages: readonly Message[], accounts: readonl
       if (messageView === "starred" && !message.flagged) return false;
       if (messageView === "archived" && !isArchivedMessage(message, accounts)) return false;
       if (messageView === "snoozed" && !isSnoozedMessage(message)) return false;
-      if (messageView === "attachments" && !message.hasAttachments) return false;
+      if (messageView === "attachments" && !hasVisibleAttachments(message.attachments)) return false;
     }
     if (attachmentKind
-      && !message.attachments.some((item) => presentAttachment(item.filename, item.contentType).kind === attachmentKind)) {
+      && !visibleAttachments(message.attachments).some((item) => presentAttachment(item.filename, item.contentType).kind === attachmentKind)) {
       return false;
     }
     if (after || before) {

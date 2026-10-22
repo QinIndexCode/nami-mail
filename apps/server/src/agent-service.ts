@@ -71,7 +71,6 @@ import type { AutoReplyEvaluationInput, AutoReplyEvaluationResult } from "./agen
 import { collectAuxiliaryChatText } from "./agent/auxiliary-chat.js";
 import { polishDraftWithProvider, type PolishDraftInput, type PolishDraftResult } from "./agent/writing-polish.js";
 import { sanitizeLinksForScreening } from "./agent/auto-reply-screening.js";
-import type { SupportedLocale } from "./localization.js";
 // 会话/运行域已抽至 agent/run-engine.ts；类型在此再导出以保持公共面不变。
 export type {
   AgentConversationScope,
@@ -86,7 +85,6 @@ export type {
 } from "./agent/run-engine.js";
 import {
   AgentRunEngine,
-  maximumConversationTitleLength,
   type AgentConversation,
   type AgentConversationScope,
   type AgentConversationSummary,
@@ -414,10 +412,6 @@ export class AgentService {
       mcpManager: this.mcpManager,
       memory: this.memory,
       confirmationLifecycle: this.confirmationLifecycle,
-      // First-turn concise title generation stays a provider-domain concern on
-      // AgentService; the engine awaits it in streamMessage's finally block.
-      generateConversationTitle: (configuration, userContent, locale) =>
-        this.generateConversationTitle(configuration, userContent, locale),
       runDeadlineMs: options.runDeadlineMs,
       modelRetryBackoffMs: options.modelRetryBackoffMs,
     });
@@ -1016,52 +1010,6 @@ export class AgentService {
   /** Language-only polish of a compose body. The prompt, the consent boundary and the size cap all live in agent/writing-polish.ts. */
   polishDraft(input: PolishDraftInput, options: { signal?: AbortSignal } = {}): Promise<PolishDraftResult> {
     return polishDraftWithProvider({ runtime: this.runtime, providerService: this.providerService, ...input, ...options });
-  }
-
-  /**
-   * Generates a concise conversation title from the user's first message via a
-   * SEPARATE, non-streamed provider call that never touches the conversation
-   * history, so the main turn's message list (and therefore any provider-side
-   * prompt-cache prefix) is unchanged. Best-effort: any failure leaves the
-   * provisional title in place and is swallowed by the caller.
-   *
-   * The call goes through the runtime seam like every other provider chat, so a
-   * test that stubs `runtime.streamChat` intercepts this tail call too instead
-   * of discovering it as an unmocked outbound request.
-   */
-  private async generateConversationTitle(
-    configuration: ProviderConfiguration,
-    userContent: string,
-    locale: SupportedLocale,
-  ): Promise<string | undefined> {
-    const titleLength = maximumConversationTitleLength;
-    const chat: ProviderChatRequest = {
-      requestId: `title-${randomUUID()}`,
-      providerId: configuration.id,
-      model: configuration.model,
-      messages: [
-        {
-          role: "system",
-          content: [
-            "Generate a concise conversation title for the user's first message in a mail assistant.",
-            "Rules:",
-            "1. Output ONLY the title text — no quotes, no markdown, no explanations.",
-            "2. Keep it short (at most 24 characters when possible) and specific, not generic like \"question\".",
-            `3. Reply in the same language as the user's message (locale ${locale}).`,
-          ].join(" "),
-        },
-        { role: "user", content: userContent.slice(0, 4_000) },
-      ],
-      tools: [],
-      allowToolCalls: false,
-      responseFormat: "text",
-      temperature: 0.2,
-    };
-    const outcome = await collectAuxiliaryChatText({ runtime: this.runtime, requestId: chat.requestId, chat });
-    if (outcome.status === "error") return undefined;
-    const normalized = outcome.text.replace(/\s+/g, " ").trim().replace(/^["“”']+|["“”']+$/g, "");
-    if (!normalized) return undefined;
-    return normalized.length <= titleLength ? normalized : `${normalized.slice(0, titleLength - 3).trimEnd()}...`;
   }
 
   /** Offline auto-reply review used by the auto-reply pipeline. A single

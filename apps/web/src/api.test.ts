@@ -529,3 +529,23 @@ describe("agent stream seam validation", () => {
     expect(received).toEqual(["text_delta", "tool"]);
   });
 });
+
+describe("api.stats", () => {
+  it("asks for the same account scope the list query names", async () => {
+    const fetchMock = vi.fn(async (_url: string) => new Response(
+      JSON.stringify({ accounts: 1, messages: 2, unread: 1 }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.stats();
+    await api.stats("acct-1");
+    await api.stats("acct x");
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/stats",
+      "/api/stats?accountId=acct-1",
+      "/api/stats?accountId=acct%20x",
+    ]);
+  });
+});

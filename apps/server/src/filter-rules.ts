@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   filterRuleCreateSchema,
   filterRuleUpdateSchema,
+  hasVisibleAttachments,
   type FilterRule,
   type FilterRuleAction,
   type FilterRuleCondition,
@@ -152,8 +153,7 @@ export function matchesFilterRuleConditions(conditions: FilterRuleCondition[], p
       case "subject":
         return asciiFold(payload.subject).includes(asciiFold(condition.value));
       case "has_attachments": {
-        const hasAttachments = (payload.attachments?.length ?? 0) > 0;
-        return hasAttachments === condition.value;
+        return hasVisibleAttachments(payload.attachments) === condition.value;
       }
     }
   });

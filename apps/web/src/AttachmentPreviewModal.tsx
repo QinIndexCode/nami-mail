@@ -1,5 +1,5 @@
 import { FileText, LoaderCircle, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { api, type BinaryRequestOptions } from "./api";
 import {
   attachmentPreviewKind,
@@ -10,6 +10,7 @@ import {
 } from "./attachmentPreview";
 import { mailErrorMessage } from "./errorPresentation";
 import { useI18n } from "./i18n";
+import { IconButton } from "./mailUi";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 
 export type PreviewAttachment = {
@@ -31,6 +32,35 @@ type PreviewPhase = "loading" | "ready" | "error";
 
 const tooLargeMarker = "__too-large__";
 
+const previewWidthStorageKey = "nami.attachment-preview-width";
+const defaultPreviewWidth = 480;
+const minPreviewWidth = 320;
+const previewWidthStep = 24;
+// Leave the message pane at least ~18% of the window so the drawer never
+// swallows the letter the user is reading.
+const maxPreviewWidthRatio = 0.82;
+
+function previewWidthBounds(): { min: number; max: number } {
+  const viewport = typeof window === "undefined" ? 1440 : window.innerWidth;
+  const max = Math.max(minPreviewWidth, Math.round(viewport * maxPreviewWidthRatio));
+  return { min: minPreviewWidth, max };
+}
+
+function clampPreviewWidth(value: number): number {
+  const { min, max } = previewWidthBounds();
+  return Math.min(Math.max(Math.round(value), min), max);
+}
+
+function storedPreviewWidth(): number {
+  if (typeof window === "undefined") return defaultPreviewWidth;
+  try {
+    const stored = Number(window.localStorage.getItem(previewWidthStorageKey));
+    return Number.isFinite(stored) && stored > 0 ? clampPreviewWidth(stored) : defaultPreviewWidth;
+  } catch {
+    return defaultPreviewWidth;
+  }
+}
+
 export default function AttachmentPreviewModal({
   messageId,
   attachment,
@@ -43,6 +73,64 @@ export default function AttachmentPreviewModal({
   const [phase, setPhase] = useState<PreviewPhase>("loading");
   const [text, setText] = useState<{ text: string; truncated: boolean } | null>(null);
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
+  const [previewWidth, setPreviewWidth] = useState(storedPreviewWidth);
+  const dragStateRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
+
+  const persistPreviewWidth = (value: number) => {
+    try {
+      window.localStorage.setItem(previewWidthStorageKey, String(value));
+    } catch {
+      // Storage can be unavailable (private mode, disabled backend): the width
+      // still applies for this session, it just will not be remembered.
+    }
+  };
+
+  const commitPreviewWidth = (value: number) => {
+    const next = clampPreviewWidth(value);
+    setPreviewWidth(next);
+    persistPreviewWidth(next);
+  };
+
+  const beginResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    dragStateRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: previewWidth };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    document.body.classList.add("is-resizing-attachment-preview");
+  };
+
+  const resizeTo = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    // The handle sits on the drawer's left edge, so dragging left widens it.
+    setPreviewWidth(clampPreviewWidth(drag.startWidth + drag.startX - event.clientX));
+  };
+
+  const endResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragStateRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    document.body.classList.remove("is-resizing-attachment-preview");
+    persistPreviewWidth(clampPreviewWidth(previewWidth));
+  };
+
+  useEffect(() => () => {
+    document.body.classList.remove("is-resizing-attachment-preview");
+  }, []);
+
+  const resizeByKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const { min, max } = previewWidthBounds();
+    const step = event.shiftKey ? previewWidthStep * 3 : previewWidthStep;
+    let next: number | null = null;
+    if (event.key === "ArrowLeft") next = previewWidth + step;
+    else if (event.key === "ArrowRight") next = previewWidth - step;
+    else if (event.key === "Home") next = min;
+    else if (event.key === "End") next = max;
+    if (next === null) return;
+    event.preventDefault();
+    commitPreviewWidth(next);
+  };
 
   const kind: AttachmentPreviewKind | null = useMemo(
     () => (attachment ? attachmentPreviewKind(attachment.filename, attachment.contentType) : null),
@@ -140,17 +228,36 @@ export default function AttachmentPreviewModal({
   if (!attachment) return null;
 
   const objectUrl = objectUrlRef.current;
+  const widthBounds = previewWidthBounds();
 
   return (
-    <section ref={dialogRef} className={`attachment-preview-drawer${closing ? " closing" : ""}`} role="dialog" aria-modal="false" aria-labelledby="attachment-preview-title" tabIndex={-1}>
+    <section ref={dialogRef} className={`attachment-preview-drawer${closing ? " closing" : ""}`} style={{ "--attachment-preview-width": `${previewWidth}px` } as CSSProperties} role="dialog" aria-modal="false" aria-labelledby="attachment-preview-title" tabIndex={-1}>
+        <div
+          className="attachment-preview-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("mail.attachment.previewResize")}
+          aria-valuemin={widthBounds.min}
+          aria-valuemax={widthBounds.max}
+          aria-valuenow={previewWidth}
+          tabIndex={0}
+          onPointerDown={beginResize}
+          onPointerMove={resizeTo}
+          onPointerUp={endResize}
+          onPointerCancel={endResize}
+          onKeyDown={resizeByKeyboard}
+          onDoubleClick={() => commitPreviewWidth(defaultPreviewWidth)}
+        />
         <header className="modal-heading attachment-preview-heading">
           <div className="attachment-preview-title-copy">
             <h2 id="attachment-preview-title">{t("mail.attachment.previewTitle")}</h2>
             <small className="truncated-tooltip" data-tooltip={attachment.filename}><span>{attachment.filename}</span></small>
           </div>
-          <button className="icon-button" type="button" aria-label={t("common.close")} data-tooltip={t("common.close")} onClick={requestClose}>
-            <X size={18} />
-          </button>
+          <div className="attachment-preview-heading-actions">
+            <IconButton label={t("common.close")} onClick={requestClose}>
+              <X size={18} />
+            </IconButton>
+          </div>
         </header>
         <div className="attachment-preview-body">
           {kind === "unsupported" ? (

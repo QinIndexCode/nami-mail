@@ -130,6 +130,10 @@ describe("styles.css size ratchet", () => {
   //     共享规则提供，后者迁入 buttons.css）。
   // 下一轮 CSS 瘦身时应优先收回：.setup-guide-copy.copied 与共享 .copied 的绿色
   // 处理可以合并，两者只是颜色来源不同。
+  // 同日补充：复制反馈改成双向交叉过渡——复制图标与勾同时挂载，由 .copied 切换
+  // opacity/scale，勾淡出、复制图标淡入也有过渡（原实现只给勾做了入场动画，
+  // 返回时图标瞬间替换）。buttons.css 由 29 行增至 34 行（+5），实测聚合
+  // 17_805 行，余量 7，未上调阈值。
   const FROZEN_ROOT_MAX_LINES = 40;
   const FROZEN_AGGREGATED_MAX_LINES = 17_812;
   const STALENESS_WINDOW = 900;

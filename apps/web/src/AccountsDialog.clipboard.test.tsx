@@ -69,7 +69,8 @@ describe("account address copy button", () => {
     await act(async () => button?.click());
 
     expect(writeText).toHaveBeenCalledWith(account.email);
-    expect(button?.querySelector("svg")?.classList.contains("lucide-check")).toBe(true);
+    expect(button?.classList.contains("copied")).toBe(true);
+    expect(button?.querySelector(".lucide-check")).not.toBeNull();
     expect(container.querySelector('[role="status"]')?.textContent).toBe(translate("zh-CN", "settings.account.addressCopied", { email: account.email }));
   });
 

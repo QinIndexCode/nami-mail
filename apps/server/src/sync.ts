@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isVisibleAttachment } from "@nami/agent-contracts";
 import type { ListResponse } from "imapflow";
 import { simpleParser } from "mailparser";
 import { attachmentMetadataFromParsedMail } from "./attachments.js";
@@ -1013,7 +1014,6 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           const allMailArchived = allMailArchivedValue(folder, message.labels);
           const flagsJson = JSON.stringify(flags);
           const sentAtIso = sentAt.toISOString();
-          const hasAttachments = parsed?.attachments?.length ? 1 : 0;
           const size = message.size ?? message.source?.length ?? 0;
           db.transaction(() => {
             upsert.run({
@@ -1026,8 +1026,8 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
               ...protectedColumns,
               sentAt: sentAtIso,
               flagsJson,
-              hasAttachments,
-              attachmentKindsJson: attachmentKindsJson(attachments),
+              hasAttachments: attachments.some(isVisibleAttachment) ? 1 : 0,
+              attachmentKindsJson: attachmentKindsJson(attachments.filter(isVisibleAttachment)),
               size,
               payloadMetadataReady: 1,
               createdAt: new Date().toISOString(),

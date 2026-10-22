@@ -61,6 +61,19 @@ export function ftsLikeEscape(value: string): string {
   return value.replace(/[\\%_]/g, (character) => `\\${character}`);
 }
 
+/**
+ * The one FTS-driven FROM clause. The match is the narrow side, so it must
+ * drive: CROSS JOIN pins that order. Left alone, SQLite can walk `messages`
+ * (in sort order) and re-run the entire FTS scan once per candidate, costing
+ * O(messages x fts_rows) instead of O(fts_rows). Measured on 4 000 rows at
+ * 2% / 15% / 50% / 100% match density: 33 925->37ms, 4 351->56ms,
+ * 943->93ms, 234->164ms; the returned id sequence is unchanged.
+ *
+ * Shared by the user list search and the Agent search so a plan fix lands in
+ * one place. MATCH's left operand must still be the table name, not `fts`.
+ */
+export const MESSAGE_FTS_CROSS_JOIN = `FROM ${MESSAGE_FTS_TABLE} fts CROSS JOIN messages m ON m.id = fts.message_id`;
+
 const deleteStatement = (db: DatabaseHandle) => db.prepare(`DELETE FROM ${MESSAGE_FTS_TABLE} WHERE message_id = ?`);
 const insertStatement = (db: DatabaseHandle) => db.prepare(`
   INSERT INTO ${MESSAGE_FTS_TABLE} (message_id, subject, from_name, from_address, "to", "cc", "attachment", body)

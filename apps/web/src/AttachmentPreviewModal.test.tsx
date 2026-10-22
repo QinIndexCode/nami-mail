@@ -2,8 +2,7 @@
 import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot, type Root } from "react-dom/client";
-import { describe, expect, it, vi } from "vitest";
-import type { BinaryRequestOptions } from "./api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";import type { BinaryRequestOptions } from "./api";
 import AttachmentPreviewModal from "./AttachmentPreviewModal";
 import { I18nProvider, translate } from "./i18n";
 
@@ -160,6 +159,110 @@ describe("attachment preview transfer cancellation", () => {
       await act(async () => { root.unmount(); });
       // Closing the drawer stops the last transfer too.
       expect(signals[1].aborted).toBe(true);
+      container.remove();
+      document.body.innerHTML = "";
+    }
+  });
+});
+
+/**
+ * The drawer width is a real splitter, not a fixed CSS breakpoint: it must be
+ * operable without a pointer (WCAG 2.1.1) and must survive reopening, which is
+ * why the value is written to storage on every committed change.
+ */
+describe("attachment preview resizing", () => {
+  const pdf = { partId: "part-1", filename: "report.pdf", contentType: "application/pdf", size: 1024 };
+  const storage = new Map<string, string>();
+
+  beforeEach(() => {
+    storage.clear();
+    // jsdom's localStorage is an opaque-origin stub without the Storage API in
+    // this setup, so the drawer would silently fall back to its default width.
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => { storage.set(key, value); },
+      removeItem: (key: string) => { storage.delete(key); },
+      clear: () => storage.clear(),
+      key: (index: number) => [...storage.keys()][index] ?? null,
+      get length() { return storage.size; },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function mountDrawer() {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root: Root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <AttachmentPreviewModal
+            messageId="message-1"
+            attachment={pdf}
+            onClose={() => undefined}
+            fetchBlob={async () => new Blob(["pdf"], { type: "application/pdf" })}
+          />
+        </I18nProvider>,
+      );
+    });
+    return { container, root };
+  }
+
+  async function press(target: HTMLElement, key: string) {
+    await act(async () => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    });
+  }
+
+  it("resizes from the keyboard and remembers the width", async () => {
+    const { container, root } = await mountDrawer();
+    try {
+      const drawer = container.querySelector<HTMLElement>(".attachment-preview-drawer");
+      const separator = container.querySelector<HTMLElement>("[role='separator']");
+      expect(drawer).not.toBeNull();
+      expect(separator).not.toBeNull();
+      expect(separator!.getAttribute("aria-orientation")).toBe("vertical");
+      expect(separator!.getAttribute("aria-valuenow")).toBe("480");
+
+      await press(separator!, "ArrowLeft");
+      expect(drawer!.style.getPropertyValue("--attachment-preview-width")).toBe("504px");
+      expect(separator!.getAttribute("aria-valuenow")).toBe("504");
+      expect(storage.get("nami.attachment-preview-width")).toBe("504");
+
+      await press(separator!, "ArrowRight");
+      expect(drawer!.style.getPropertyValue("--attachment-preview-width")).toBe("480px");
+
+      // Home/End jump to the same bounds advertised to assistive technology.
+      await press(separator!, "End");
+      expect(separator!.getAttribute("aria-valuenow")).toBe(String(Math.round(window.innerWidth * 0.82)));
+      await press(separator!, "Home");
+      expect(separator!.getAttribute("aria-valuenow")).toBe(separator!.getAttribute("aria-valuemin"));
+    } finally {
+      await act(async () => { root.unmount(); });
+      container.remove();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("restores the default width on double click", async () => {
+    const { container, root } = await mountDrawer();
+    try {
+      const drawer = container.querySelector<HTMLElement>(".attachment-preview-drawer");
+      const separator = container.querySelector<HTMLElement>("[role='separator']");
+      await press(separator!, "ArrowLeft");
+      expect(drawer!.style.getPropertyValue("--attachment-preview-width")).toBe("504px");
+
+      await act(async () => {
+        separator!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+      });
+      expect(drawer!.style.getPropertyValue("--attachment-preview-width")).toBe("480px");
+      expect(storage.get("nami.attachment-preview-width")).toBe("480");
+    } finally {
+      await act(async () => { root.unmount(); });
       container.remove();
       document.body.innerHTML = "";
     }

@@ -28,16 +28,16 @@ const monolithRatchets = [
   ["apps/server/src/agent/run-engine.ts", 1927],
   ["apps/server/src/agent-rag-worker.ts", 1486],
   ["apps/server/src/sync.ts", 1196],
-  ["apps/server/src/agent/mail-tools.ts", 1096],
+  ["apps/server/src/agent/mail-tools.ts", 1093],
   ["apps/server/src/sync-moves.ts", 789],
   ["apps/server/src/routes/messages.ts", 929],
   ["apps/server/src/agent/auto-reply.ts", 851],
-  ["apps/server/src/db.ts", 414],
-  ["apps/server/src/agent/schema.ts", 778],
+  ["apps/server/src/db.ts", 188],
+  ["apps/server/src/agent/schema.ts", 649],
   ["apps/server/src/agent/sqlite-mail-application-service.ts", 762],
   ["apps/server/src/outbox.ts", 830],
-  ["apps/server/src/agent/openai-compatible-provider.ts", 612],
-  ["apps/web/src/AddAccountModal.tsx", 1924],
+  ["apps/server/src/agent/openai-compatible-provider.ts", 476],
+  ["apps/web/src/AddAccountModal.tsx", 1868],
   ["apps/web/src/SettingsModal.tsx", 1329],
   ["apps/web/src/demoProviderCatalog.ts", 1103],
   ["apps/web/src/agent/useAgentSession.ts", 1040],
@@ -265,11 +265,11 @@ export default tseslint.config(
   // 阈值 = **实测行数**（第 6 批·棘轮收口时逐条量取），与上方 monolithRatchets 同一
   // 政策、同一原因——见那段注释。App.tsx 的 3117 停在批次 4 抽取之前；前端 store
   // （mailStore.ts）接手列表/计数/本地覆盖，SSE 后果与进度横幅各自抽成 hook 之后，
-  // 该文件降到 2964 行，上限同步降到实测值，不再留"下次可以悄悄长回去"的空地。
+  // 该文件降到 2910 行，上限同步降到实测值，不再留"下次可以悄悄长回去"的空地。
   // 需要 +1 行时的答案与别处一样：先删一行或拆文件，不要抬上限。
   {
     files: ["apps/web/src/App.tsx"],
-    rules: { "max-lines": ["error", { max: 2964, skipBlankLines: false, skipComments: false }] },
+    rules: { "max-lines": ["error", { max: 2910, skipBlankLines: false, skipComments: false }] },
   },
   {
     files: ["apps/server/src/agent-service.ts"],
@@ -284,7 +284,7 @@ export default tseslint.config(
     // 补齐剩余巨型 TS 文件。styles.css 无法由 eslint 解析，其棘轮见
     // apps/web/src/styles-size.test.ts（与 designTokens.test.ts 同一读取模式）。
     files: ["apps/web/src/AgentWorkspace.tsx"],
-    rules: { "max-lines": ["error", { max: 2462, skipBlankLines: false, skipComments: false }] },
+    rules: { "max-lines": ["error", { max: 2448, skipBlankLines: false, skipComments: false }] },
   },
 
   ...monolithRatchetConfigs,

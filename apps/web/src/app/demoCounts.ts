@@ -1,3 +1,4 @@
+import { hasVisibleAttachments } from "@nami/agent-contracts";
 import type { Account, Message, Stats } from "../types";
 import { isInboxMessage, isSnoozedMessage } from "../mailListState";
 
@@ -34,7 +35,7 @@ export function deriveDemoCounts(
       unread: inbox.filter((message) => !message.seen).length,
       starred: inbox.filter((message) => message.flagged).length,
       snoozed: inbox.filter((message) => isSnoozedMessage(message)).length,
-      attachments: inbox.filter((message) => message.hasAttachments).length,
+      attachments: inbox.filter((message) => hasVisibleAttachments(message.attachments)).length,
     },
   };
 }

@@ -157,9 +157,11 @@ const h = vi.hoisted(() => {
 vi.mock("./api", () => ({
   ApiError: class ApiError extends Error {
     code?: string;
-    constructor(message: string, code?: string) {
+    status?: number;
+    constructor(message: string, code?: string, status?: number) {
       super(message);
       this.code = code;
+      this.status = status;
     }
   },
   api: {
@@ -343,6 +345,7 @@ describe("AgentWorkspace conversation switching", () => {
     accounts: Account[] = [],
     initialPrompt?: string,
     initialAutoSend?: boolean,
+    initialNewConversation?: boolean,
   ) => {
     await act(async () => {
       root.render(
@@ -353,6 +356,7 @@ describe("AgentWorkspace conversation switching", () => {
             currentMessage={currentMessage}
             initialPrompt={initialPrompt}
             initialAutoSend={initialAutoSend}
+            initialNewConversation={initialNewConversation}
             onClose={() => undefined}
             onOpenMessage={h.onOpenMessage}
             demoMode={false}
@@ -956,6 +960,37 @@ describe("AgentWorkspace conversation switching", () => {
     expect(container.querySelector(".agent-send-button.stop")).not.toBeNull();
   });
 
+  it("renders the conversation list while the initial transcript restore is pending", async () => {
+    // A re-entry during a busy run: the bootstrap list is in hand, but the
+    // last-active conversation request can sit behind the server for a whole
+    // timeout. The history list must not wait for it.
+    (api as unknown as { agentConversation: unknown }).agentConversation = vi.fn(
+      () => new Promise<AgentConversation>(() => undefined),
+    );
+    await renderWorkspace();
+
+    expect(container.querySelectorAll(".agent-conversation-row")).toHaveLength(2);
+    expect(container.querySelector(".agent-transcript-loading")).not.toBeNull();
+    expect(container.querySelector(".agent-empty-state")).toBeNull();
+  });
+
+  it("falls back to the newest remaining conversation when the last-active one is gone", async () => {
+    // The last-active id can be deleted from another window between the
+    // bootstrap snapshot and the restore request. A 404 must fall through to
+    // the next conversation instead of leaving a blank transcript.
+    (api as unknown as { agentConversation: unknown }).agentConversation = vi.fn(async (id: string) => {
+      if (id === "conv-a") throw new ApiError("gone", undefined, 404);
+      return h.convB;
+    });
+    await renderWorkspace();
+    await flush();
+
+    expect(api.agentConversation).toHaveBeenCalledWith("conv-a");
+    expect(api.agentConversation).toHaveBeenCalledWith("conv-b");
+    expect(headingFor()).toContain("Conversation B");
+    expect(container.querySelector(".agent-error-panel")).toBeNull();
+  });
+
   it("optimistic switch: the UI jumps immediately and renders the record once the fetch lands", async () => {
     await renderWorkspace();
     expect(headingFor()).toContain("Conversation A");
@@ -1393,6 +1428,54 @@ describe("AgentWorkspace conversation switching", () => {
         content: "/summary",
         references: [{ id: "msg-ref-1", subject: "Reference email subject" }],
       }),
+      expect.any(Function),
+      expect.any(Object),
+    );
+  });
+
+  it("waits for an in-flight restore before auto-sending a resumed conversation's prompt", async () => {
+    let resolveRestore!: (conversation: AgentConversation) => void;
+    (api as unknown as { agentConversation: unknown }).agentConversation = vi.fn(
+      () => new Promise<AgentConversation>((resolve) => { resolveRestore = resolve; }),
+    );
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo], "/summary", true);
+
+    // The restore is still in flight: an auto-send here would see no active
+    // conversation, create a new one, and discard the restore.
+    expect(api.createAgentConversation).not.toHaveBeenCalled();
+    expect(api.streamAgentMessage).not.toHaveBeenCalled();
+
+    act(() => {
+      // The reader entry pins the scope to this message's account, so the
+      // restored conversation must match it for the send to continue it.
+      resolveRestore({ ...h.convA, scope: { mode: "selected_account", accountIds: ["account-1"], messageIds: [] } });
+    });
+    await flush();
+    await flush();
+
+    expect(api.createAgentConversation).not.toHaveBeenCalled();
+    expect(api.streamAgentMessage).toHaveBeenCalledWith(
+      "conv-a",
+      expect.objectContaining({ content: "/summary" }),
+      expect.any(Function),
+      expect.any(Object),
+    );
+  });
+
+  it("starts a fresh conversation for a reader action instead of continuing the last active one", async () => {
+    await renderWorkspace(h.bootstrap, referenceMessage, [accountOne, accountTwo], "/summary", true, true);
+
+    // The last active conversation is not fetched at all: a reader action is
+    // about this mail, so there is no transcript to restore and no run of an
+    // unrelated conversation to interrupt.
+    expect(api.agentConversation).not.toHaveBeenCalled();
+    expect(api.createAgentConversation).toHaveBeenCalledWith({
+      providerId: "provider-1",
+      scope: { mode: "selected_account", accountIds: ["account-1"], messageIds: [] },
+    });
+    expect(api.streamAgentMessage).toHaveBeenCalledWith(
+      "conv-b",
+      expect.objectContaining({ content: "/summary" }),
       expect.any(Function),
       expect.any(Object),
     );

@@ -21,7 +21,7 @@ import {
 import { syncAccount } from "../sync.js";
 import { moveActionBlockedError } from "../message-storage.js";
 import { moveRefusalMessage } from "../move-refusals.js";
-import { ftsLikeEscape, MESSAGE_FTS_TABLE } from "../message-search.js";
+import { ftsLikeEscape, MESSAGE_FTS_CROSS_JOIN, MESSAGE_FTS_TABLE } from "../message-search.js";
 import type { MessageFlagsPatch } from "../message-flags.js";
 import {
   FLAGGED_PREDICATE_SQL,
@@ -342,21 +342,20 @@ export class SqliteMailApplicationService implements MailApplicationService {
       // candidate row on the main process. LIKE keeps the historical
       // substring semantics for any query length (a MATCH phrase would
       // silently drop 1-2 character filters below the trigram floor) and
-      // stays ASCII-case-insensitive like the rest of the search paths. This
-      // assumes the FTS row always exists for a message row — the same
-      // invariant the user search already relies on (message-fts-v2 rebuild).
+      // stays ASCII-case-insensitive like the rest of the search paths. The
+      // CROSS JOIN below keeps this single-pass (a correlated EXISTS re-scans
+      // the index per message). This assumes the FTS row always exists for a
+      // message row — the same invariant the user search relies on.
       const pattern = `%${ftsLikeEscape(senderQuery)}%`;
-      where.push(`EXISTS (
-        SELECT 1 FROM ${MESSAGE_FTS_TABLE} fts
-        WHERE fts.message_id = m.id
-          AND (fts.from_address LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\')
-      )`);
+      where.push(`(fts.from_address LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\')`);
       params.push(pattern, pattern);
     }
 
+    const fromClause = senderQuery ? MESSAGE_FTS_CROSS_JOIN : "FROM messages m";
     const rows = this.options.db.prepare(`
       SELECT m.*, a.email AS account_email, a.provider_name
-      FROM messages m JOIN accounts a ON a.id = m.account_id
+      ${fromClause}
+      JOIN accounts a ON a.id = m.account_id
       WHERE ${where.join(" AND ")}
       ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id
       LIMIT ? OFFSET ?
@@ -380,19 +379,18 @@ export class SqliteMailApplicationService implements MailApplicationService {
     // 报销, 账单). Those fall back to a LIKE scan over the same indexed columns,
     // which keeps the substring semantics the tokenizer gives longer queries.
     if ([...keyword].length < 3) {
+      // Below the trigram floor, so MATCH cannot see it; LIKE on the outer FTS
+      // alias keeps substring semantics. The CROSS JOIN below pins the scan to
+      // one pass over the index instead of a correlated re-scan per message.
       const pattern = `%${ftsLikeEscape(keyword)}%`;
-      where.push(`EXISTS (
-        SELECT 1 FROM ${MESSAGE_FTS_TABLE} fts
-        WHERE fts.message_id = m.id
-          AND (fts.subject LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\' OR fts.from_address LIKE ? ESCAPE '\\'
-            OR fts."to" LIKE ? ESCAPE '\\' OR fts."cc" LIKE ? ESCAPE '\\' OR fts.attachment LIKE ? ESCAPE '\\' OR fts.body LIKE ? ESCAPE '\\')
-      )`);
+      where.push(`(fts.subject LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\' OR fts.from_address LIKE ? ESCAPE '\\'
+        OR fts."to" LIKE ? ESCAPE '\\' OR fts."cc" LIKE ? ESCAPE '\\' OR fts.attachment LIKE ? ESCAPE '\\' OR fts.body LIKE ? ESCAPE '\\')`);
       params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern);
     } else {
-      // The alias is required, not cosmetic: the optional filters below add
-      // EXISTS subqueries over the same FTS table, and a bare table name in
-      // MATCH would become ambiguous once another reference is in scope.
-      where.push("f MATCH ?");
+      // MATCH's left operand is the FTS table itself; an alias (`f MATCH ?`)
+      // is a syntax error in SQLite ("no such column: f"). The name is
+      // unambiguous while the table appears once in FROM.
+      where.push(`${MESSAGE_FTS_TABLE} MATCH ?`);
       params.push(ftsPhraseQuery(keyword));
     }
     if (messageIds !== undefined) {
@@ -408,12 +406,9 @@ export class SqliteMailApplicationService implements MailApplicationService {
     if (subject) {
       // subject is encrypted at rest but mirrored into the FTS index, so the
       // filter runs on the index instead of decrypting candidate rows. LIKE
-      // keeps substring semantics for any query length.
+      // keeps substring semantics; on the outer alias it stays single-pass.
       const pattern = `%${ftsLikeEscape(subject.toLocaleLowerCase())}%`;
-      where.push(`EXISTS (
-        SELECT 1 FROM ${MESSAGE_FTS_TABLE} fts
-        WHERE fts.message_id = m.id AND fts.subject LIKE ? ESCAPE '\\'
-      )`);
+      where.push(`fts.subject LIKE ? ESCAPE '\\'`);
       params.push(pattern);
     }
     if (query.hasAttachments !== undefined) {
@@ -445,16 +440,17 @@ export class SqliteMailApplicationService implements MailApplicationService {
     const offset = Number.parseInt(query.cursor ?? "0", 10);
     const safeOffset = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
     const whereSql = where.join(" AND ");
+    // The shared join pins the FTS scan as the driving side; see
+    // MESSAGE_FTS_CROSS_JOIN for the plan and measurements.
+    const fromClause = MESSAGE_FTS_CROSS_JOIN;
     const total = Number((this.options.db.prepare(`
       SELECT COUNT(*) AS count
-      FROM ${MESSAGE_FTS_TABLE} f
-      JOIN messages m ON m.id = f.message_id
+      ${fromClause}
       WHERE ${whereSql}
     `).get(...params) as { count: number }).count);
     const rows = this.options.db.prepare(`
       SELECT m.*, a.email AS account_email, a.provider_name
-      FROM ${MESSAGE_FTS_TABLE} f
-      JOIN messages m ON m.id = f.message_id
+      ${fromClause}
       JOIN accounts a ON a.id = m.account_id
       WHERE ${whereSql}
       ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id

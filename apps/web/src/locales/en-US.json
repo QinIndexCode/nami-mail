@@ -810,6 +810,7 @@
     "mail.attachment.downloadStarted": "Started downloading {filename}",
     "mail.attachment.demoUnavailable": "Attachment downloads are unavailable in demo mode.",
     "mail.attachment.previewTitle": "Attachment preview",
+    "mail.attachment.previewResize": "Resize preview panel",
     "mail.attachment.preview": "Preview {filename}",
     "mail.attachment.previewLoading": "Loading preview…",
     "mail.attachment.previewFailed": "This attachment couldn't be previewed.",

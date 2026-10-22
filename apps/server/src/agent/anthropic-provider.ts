@@ -1,10 +1,14 @@
 import {
   awaitAbortable,
+  createProviderToolNames,
   endpointUrl,
   hasUnsafeToolArguments,
   linesFrom,
   maximumSseLineBytes,
+  maximumToolArgumentsBytes,
+  providerErrorFromResponse,
   providerRequest,
+  ProviderReportedError,
   safeMessage,
   statusError,
   streamCompletionEvents,
@@ -12,6 +16,7 @@ import {
   unsafeToolArgumentsError,
   asRecord,
   type ProviderResponseLease,
+  type ProviderToolNames,
 } from "./provider-common.js";
 import {
   createAgentError,
@@ -28,7 +33,6 @@ import {
 } from "@nami/agent-contracts";
 
 const anthropicVersion = "2023-06-01";
-const maximumToolArgumentsBytes = 200 * 1024;
 
 export type AnthropicMessagesProviderOptions = {
   id: string;
@@ -56,7 +60,7 @@ type PendingToolUse = {
  * `tool_use` content blocks. Adjacent messages with the same role are merged
  * because the Anthropic API rejects consecutive assistant turns.
  */
-function anthropicMessages(request: ProviderChatRequest): { system?: string; messages: unknown[] } {
+function anthropicMessages(request: ProviderChatRequest, names: ProviderToolNames): { system?: string; messages: unknown[] } {
   const systemParts: string[] = [];
   const rest: ProviderChatMessage[] = [];
   for (const message of request.messages) {
@@ -132,7 +136,7 @@ function anthropicMessages(request: ProviderChatRequest): { system?: string; mes
         content.push({ type: "text", text });
       }
       for (const call of message.toolCalls ?? []) {
-        content.push({ type: "tool_use", id: call.id, name: call.toolName, input: call.input });
+        content.push({ type: "tool_use", id: call.id, name: names.toWire(call.toolName), input: call.input });
       }
       if (!content.length) content.push({ type: "text", text: " " });
       converted.push({ role: "assistant", content });
@@ -158,9 +162,9 @@ function anthropicMessages(request: ProviderChatRequest): { system?: string; mes
   };
 }
 
-function anthropicTools(tools: readonly AgentToolDescriptor[]): unknown[] {
+function anthropicTools(tools: readonly AgentToolDescriptor[], names: ProviderToolNames): unknown[] {
   return tools.map((tool) => ({
-    name: tool.name,
+    name: names.toWire(tool.name),
     description: tool.description,
     input_schema: tool.parametersSchema ?? { type: "object", additionalProperties: true },
   }));
@@ -229,12 +233,15 @@ export class AnthropicMessagesProvider implements LlmProvider {
       return;
     }
     const toolUses = new Map<number, PendingToolUse>();
+    // Wire names are remapped per request: providers reject the canonical
+    // dotted ids, and the mapping also has to cover replayed tool calls.
+    const names = createProviderToolNames(request.tools.map((tool) => tool.name));
     let finishReason: ProviderFinishReason = "stop";
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
     let lease: ProviderResponseLease | undefined;
     try {
-      const { system, messages } = anthropicMessages(request);
+      const { system, messages } = anthropicMessages(request, names);
       const body: Record<string, unknown> = {
         model: request.model,
         max_tokens: request.maxOutputTokens ?? 4096,
@@ -242,7 +249,7 @@ export class AnthropicMessagesProvider implements LlmProvider {
         messages,
         ...(system !== undefined ? { system } : {}),
         ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-        ...(request.allowToolCalls && request.tools.length ? { tools: anthropicTools(request.tools), tool_choice: { type: "auto" } } : {}),
+        ...(request.allowToolCalls && request.tools.length ? { tools: anthropicTools(request.tools, names), tool_choice: { type: "auto" } } : {}),
       };
       lease = await providerRequest(
         this.endpoint,
@@ -258,7 +265,7 @@ export class AnthropicMessagesProvider implements LlmProvider {
       );
       const response = lease.response;
       if (!response.ok) {
-        yield { type: "error", error: statusError(response.status) };
+        yield { type: "error", error: await providerErrorFromResponse(response, lease.signal) };
         yield { type: "completed", finishReason: "content-filter" };
         return;
       }
@@ -356,7 +363,7 @@ export class AnthropicMessagesProvider implements LlmProvider {
               sawStop = true;
             } else if (type === "error") {
               const error = asRecord(event.error);
-              throw new Error(typeof error?.message === "string" ? error.message : "The provider returned an error event.");
+              throw new ProviderReportedError(typeof error?.message === "string" ? error.message : "The provider returned an error event.");
             }
           }
           if (chunk.done || sawStop) break;
@@ -374,7 +381,7 @@ export class AnthropicMessagesProvider implements LlmProvider {
         } catch {
           // The model emitted malformed tool JSON; keep an empty payload.
         }
-        completedCalls.push({ id: pending.id, toolName: pending.name, input, requestedAt: new Date().toISOString() });
+        completedCalls.push({ id: pending.id, toolName: names.fromWire(pending.name), input, requestedAt: new Date().toISOString() });
       }
       const usage: ProviderTokenUsage = {
         ...(inputTokens !== undefined ? { inputTokens } : {}),

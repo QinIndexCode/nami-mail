@@ -122,7 +122,10 @@ describe("IMAP draft saving", () => {
       account_id: account.id,
       mailbox: "Drafts",
       uid: 55,
-      has_attachments: 1,
+      // The row stores no attachment metadata until the appended copy syncs
+      // (APPEND assigns the MIME part ids), so the flag stays 0: a marker the
+      // reader cannot back with an attachment card is the reported mismatch.
+      has_attachments: 0,
     });
     expect(stored?.payload).toMatchObject({
       messageId: result.messageId,

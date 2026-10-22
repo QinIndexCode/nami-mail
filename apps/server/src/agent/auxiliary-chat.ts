@@ -37,8 +37,8 @@ export type AuxiliaryChatOutcome =
  * Runs one auxiliary chat to completion and reduces the runtime's event stream
  * to what the caller cares about. The first `error` event wins; the text
  * accumulated up to that point rides along in the outcome so each caller
- * decides what an error means for it — the title generator drops it, the
- * retrieval expander salvages the terms that arrived before the abort.
+ * decides what an error means for it — the retrieval expander salvages the
+ * terms that arrived before the abort.
  *
  * The optional knobs exist because the host's auxiliary calls are not all the
  * same shape, and none of them may reach for the provider adapter to get their

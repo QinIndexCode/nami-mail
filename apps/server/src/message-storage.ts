@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from "./db.js";
+import { isVisibleAttachment } from "@nami/agent-contracts";
 import { decryptTextEnvelope, deriveEncryptionKey, encryptTextEnvelope } from "./crypto.js";
 import { attachmentKindsJson } from "./attachment-kind.js";
 
@@ -21,7 +22,7 @@ export const MAILBOX_SYNCING_ERROR = "邮箱正在同步，请稍后重试。";
 export const MAIL_MOVE_IN_FLIGHT_ERROR = "上一条移动操作仍在处理中，请稍后重试。";
 
 const MESSAGE_MIGRATION_ID = "message-payload-v1";
-const ATTACHMENT_KINDS_MIGRATION_ID = "attachment-kinds-v1";
+const ATTACHMENT_METADATA_MIGRATION_ID = "attachment-metadata-v1";
 const messageKeyPurpose = "message-payload-v1";
 
 export type StoredAddress = { name: string; address: string };
@@ -550,17 +551,25 @@ export function migrateMessageStorage(db: DatabaseHandle, masterKey: Buffer): { 
 }
 
 /**
- * Backfills the attachment-kind search column for rows written before the
- * column existed. Rows inserted after this migration carry the kinds via the
- * sync/draft paths, so this pass is a one-time decrypt sweep (the same cost
- * profile as the FTS rebuild). Runs after `migrateMessageStorage`, which
- * guarantees every row holds a decryptable payload.
+ * Recomputes both derived attachment columns for rows written before the
+ * visible-attachment rule existed: `has_attachments` used to count every part
+ * the parser listed, including `multipart/related` inline images, so a message
+ * whose only "attachment" was a signature logo or tracking pixel carried a
+ * paperclip that the reader — which lists only non-related parts — could not
+ * explain. `attachment_kinds_json` had the same bias: its kinds could name an
+ * attachment the reader never shows.
+ *
+ * One decrypt sweep for both columns (the same cost profile as the FTS
+ * rebuild). Runs after `migrateMessageStorage`, which guarantees every row
+ * holds a decryptable payload. A row whose payload cannot be read keeps its
+ * previous values: nothing can be derived from it, and inventing zeros would
+ * trade one inconsistency for another.
  */
-export function ensureAttachmentKinds(db: DatabaseHandle, masterKey: Buffer): { backfilled: number } {
-  const marker = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?").get(ATTACHMENT_KINDS_MIGRATION_ID);
+export function ensureAttachmentMetadata(db: DatabaseHandle, masterKey: Buffer): { backfilled: number } {
+  const marker = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?").get(ATTACHMENT_METADATA_MIGRATION_ID);
   if (marker) return { backfilled: 0 };
   const rows = db.prepare("SELECT * FROM messages").all() as MessageStorageRow[];
-  const update = db.prepare("UPDATE messages SET attachment_kinds_json = ? WHERE id = ?");
+  const update = db.prepare("UPDATE messages SET has_attachments = ?, attachment_kinds_json = ? WHERE id = ?");
   let backfilled = 0;
   db.transaction(() => {
     for (const row of rows) {
@@ -570,13 +579,14 @@ export function ensureAttachmentKinds(db: DatabaseHandle, masterKey: Buffer): { 
       } catch {
         continue; // Unreadable payloads cannot be classified either.
       }
-      update.run(attachmentKindsJson(payload.attachments ?? []), row.id);
+      const visible = (payload.attachments ?? []).filter(isVisibleAttachment);
+      update.run(visible.length ? 1 : 0, attachmentKindsJson(visible), row.id);
       backfilled += 1;
     }
     db.prepare(`
       INSERT INTO data_migrations (id, completed_at) VALUES (?, ?)
       ON CONFLICT(id) DO UPDATE SET completed_at = excluded.completed_at
-    `).run(ATTACHMENT_KINDS_MIGRATION_ID, new Date().toISOString());
+    `).run(ATTACHMENT_METADATA_MIGRATION_ID, new Date().toISOString());
   })();
   return { backfilled };
 }

@@ -46,6 +46,7 @@ The desktop window enables `contextIsolation`, disables `nodeIntegration`, and u
 - The Windows desktop main key is protected for the current Windows user by Electron `safeStorage` using DPAPI. The main process passes the unwrapped key to the server only in memory while starting the local runtime.
 - The server uses application-layer AES-256-GCM encryption for credentials, OAuth refresh tokens, sensitive mail payloads, the send queue, and outbound attachments. This is not whole-database SQLite encryption; see [Privacy and Local Data](PRIVACY.en.md) for plaintext metadata and threat boundaries.
 - Mail content, attachment names, server responses, and OAuth callbacks are untrusted input. Changes to parsing, HTML display, attachment downloads, or callbacks must retain existing validation, sanitization, and size limits.
+- Attachment visibility has exactly one definition: a `multipart/related` inline part (`related: true` — an embedded body image, signature logo, or tracking pixel) is a body resource, not an attachment. `messages.has_attachments`, `attachment_kinds_json`, the Attachments view and sidebar count, filter rules, and the list paperclip must all derive from the same non-related metadata; the reader's attachment list is the reference implementation.
 - Electron uses a single-instance lock. Opening the application again restores and focuses the existing window instead of starting another local service, database, or sync task.
 
 ## Updates and Closing

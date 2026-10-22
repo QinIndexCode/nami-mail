@@ -164,9 +164,9 @@ export function migrateDatabase(db: DatabaseHandle, options: MigrationOptions): 
   // SQLite only supports additive migrations here. Keeping legacy rows NULL
   // lets the next sync refresh them once instead of pretending metadata exists.
   addMessageColumn("attachments_json", "attachments_json TEXT");
-  // Deduplicated attachment-kind set as JSON text, kept in sync with the
-  // stored metadata (see ensureAttachmentKinds). Default '[]' keeps the
-  // column indexable for every row, including drafts and legacy rows.
+  // Deduplicated attachment-kind set as JSON text, derived from the visible
+  // (non-related) attachments (see ensureAttachmentMetadata). Default '[]'
+  // keeps the column indexable for every row, including drafts and legacy rows.
   addMessageColumn("attachment_kinds_json", "attachment_kinds_json TEXT NOT NULL DEFAULT '[]'");
   // Legacy rows keep NULL so the next sync hydrates their missing metadata
   // exactly once, matching the pre-column decrypt-and-check behavior.

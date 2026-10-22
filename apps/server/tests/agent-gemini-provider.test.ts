@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "vitest";
+import { z } from "zod";
 import { maxJsonDepth, type ProviderChatRequest } from "@nami/agent-contracts";
 import { GeminiProvider } from "../src/agent/gemini-provider.js";
 
@@ -85,9 +86,12 @@ it("Gemini provider converts history to GenerateContent format and streams text,
   assert.deepEqual(body.contents, [{ role: "user", parts: [{ text: "Find invoices" }] }]);
   assert.deepEqual(body.tools, [{
     functionDeclarations: [{
-      name: "messages.search",
+      name: "messages_search",
       description: "Search indexed mail.",
-      parameters: { type: "object", additionalProperties: true },
+      // Without a registry-supplied schema the adapter sends the smallest
+      // legal Gemini Schema object — never `additionalProperties`, which the
+      // `parameters` proto does not define.
+      parameters: { type: "object" },
     }],
   }]);
 
@@ -106,6 +110,39 @@ it("Gemini provider converts history to GenerateContent format and streams text,
     usage: { inputTokens: 10, outputTokens: 6, totalTokens: 16, cachedInputTokens: 2 },
   });
   assert.deepEqual(events.at(-1), { type: "completed", finishReason: "tool-calls" });
+});
+
+it("Gemini provider sends registry JSON Schema through parametersJsonSchema", async () => {
+  const requests: CapturedRequest[] = [];
+  const provider = new GeminiProvider({
+    id: "gemini-test",
+    endpoint: "https://generativelanguage.googleapis.com/v1beta",
+    apiKey: TEST_API_KEY,
+    fetchImpl: async (input, init) => {
+      captureRequest(requests, input, init);
+      return sseResponse(['data: {"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}', "data: [DONE]"]);
+    },
+  });
+  // The exact shape ToolRegistry.list() supplies: Zod 4 emits `$schema` and
+  // `additionalProperties`, neither of which Gemini's `parameters` accepts.
+  const parametersSchema = z.toJSONSchema(z.object({
+    query: z.string(),
+    limit: z.number().int().optional(),
+  }).strict());
+  const events = [];
+  for await (const event of provider.streamChat(chatRequest({
+    tools: [{ ...searchTool, parametersSchema }],
+  }))) events.push(event);
+
+  const body = JSON.parse(String(requests[0]!.body)) as {
+    tools: Array<{ functionDeclarations: Array<Record<string, unknown>> }>;
+  };
+  const declaration = body.tools[0]!.functionDeclarations[0]!;
+  assert.equal(declaration.parameters, undefined);
+  assert.deepEqual(declaration.parametersJsonSchema, parametersSchema);
+  assert.equal((parametersSchema as Record<string, unknown>).$schema, "https://json-schema.org/draft/2020-12/schema");
+  assert.equal((parametersSchema as Record<string, unknown>).additionalProperties, false);
+  assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
 });
 
 it("Gemini provider extracts system instructions, function responses, and merges adjacent turns", async () => {
@@ -136,11 +173,11 @@ it("Gemini provider extracts system instructions, function responses, and merges
   assert.deepEqual(body.contents, [
     {
       role: "model",
-      parts: [{ functionCall: { name: "messages.search", args: { query: "x" } } }],
+      parts: [{ functionCall: { name: "messages_search", args: { query: "x" } } }],
     },
     {
       role: "user",
-      parts: [{ functionResponse: { name: "messages.search", response: { count: 1 } } }],
+      parts: [{ functionResponse: { name: "messages_search", response: { count: 1 } } }],
     },
     {
       role: "model",

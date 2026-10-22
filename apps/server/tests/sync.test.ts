@@ -1623,6 +1623,89 @@ describe("IMAP message flag updates", () => {
     expect(payload.cc).toEqual([{ name: "Carol", address: "carol@example.com" }]);
   });
 
+  it("counts only visible attachments, not multipart/related body images", async () => {
+    const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
+    // The reported bug: a newsletter whose only non-text part is its wordmark.
+    // mailparser lists that part as an attachment (related: true), and the old
+    // flag counted it, so the list showed a paperclip the reader could not
+    // explain — the reader lists only non-related parts.
+    const inlineSource = Buffer.from([
+      "From: News <news@example.com>",
+      "To: Demo <demo@example.com>",
+      "Message-ID: <inline-only@example.com>",
+      "Subject: Inline only",
+      "Date: Mon, 20 Jul 2026 04:05:06 +0000",
+      "MIME-Version: 1.0",
+      'Content-Type: multipart/related; boundary="rel"',
+      "",
+      "--rel",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      '<p><img src="cid:logo@example.com"></p>',
+      "--rel",
+      'Content-Type: image/png; name="wordmark.png"',
+      'Content-Disposition: inline; filename="wordmark.png"',
+      "Content-Transfer-Encoding: base64",
+      "Content-ID: <logo@example.com>",
+      "",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lK3Q6wAAAABJRU5ErkJggg==",
+      "--rel--",
+      "",
+    ].join("\r\n"));
+    const attachedSource = Buffer.from([
+      "From: Accounts <billing@example.com>",
+      "To: Demo <demo@example.com>",
+      "Message-ID: <invoice@example.com>",
+      "Subject: Invoice",
+      "Date: Mon, 20 Jul 2026 04:06:07 +0000",
+      "MIME-Version: 1.0",
+      'Content-Type: multipart/mixed; boundary="mix"',
+      "",
+      "--mix",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Attached.",
+      "--mix",
+      'Content-Type: application/pdf; name="invoice.pdf"',
+      'Content-Disposition: attachment; filename="invoice.pdf"',
+      "Content-Transfer-Encoding: base64",
+      "",
+      "JVBERi0xLjQK",
+      "--mix--",
+      "",
+    ].join("\r\n"));
+    const fetch = vi.fn(async function* (_range: unknown, query: { source?: boolean }) {
+      if (query.source) {
+        yield { uid: 1, flags: new Set(["\\Seen"]), internalDate: new Date("2026-07-20T04:05:06.000Z"), size: inlineSource.length, source: inlineSource };
+        yield { uid: 2, flags: new Set(["\\Seen"]), internalDate: new Date("2026-07-20T04:06:07.000Z"), size: attachedSource.length, source: attachedSource };
+        return;
+      }
+      yield { uid: 1, flags: new Set(["\\Seen"]) };
+      yield { uid: 2, flags: new Set(["\\Seen"]) };
+    });
+    Object.assign(client, {
+      mailbox: { exists: 2 },
+      list: vi.fn(async () => [inbox]),
+      status: vi.fn(async () => ({ messages: 2, unseen: 0 })),
+      fetch,
+    });
+
+    await expect(syncAccount(db, masterKey, "account-1", 20)).resolves.toMatchObject({ synced: 2, folders: 1 });
+
+    const rows = db.prepare(`
+      SELECT * FROM messages WHERE account_id = ? AND mailbox = ? AND uid IN (1, 2) ORDER BY uid
+    `).all("account-1", "INBOX") as MessageStorageRow[];
+    expect(rows.map((row) => [row.uid, row.has_attachments, row.attachment_kinds_json])).toEqual([
+      [1, 0, "[]"],
+      [2, 1, '["pdf"]'],
+    ]);
+    // The inline part is still stored: the reader's cid: rewrite needs it.
+    const inlinePayload = messagePayloadForRow(rows[0]!, masterKey);
+    expect(inlinePayload.attachments).toEqual([
+      expect.objectContaining({ filename: "wordmark.png", related: true, contentType: "image/png" }),
+    ]);
+  });
+
   it("truncates an oversized body at sync time and keeps the message's metadata", async () => {
     const inbox = { path: "INBOX", name: "Inbox", listed: true, flags: new Set<string>(), specialUse: "\\Inbox" };
     // A hostile sender puts the payload in the body itself: an inline `data:`

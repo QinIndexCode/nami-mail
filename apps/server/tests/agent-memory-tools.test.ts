@@ -97,6 +97,31 @@ describe("memory tools", () => {
     expect(registry.get("memory.list")!.outputSchema.safeParse((all as { value: unknown }).value).success).toBe(true);
   });
 
+  it("excludes auto-reply ledger records from the note listing", async () => {
+    const { registry, context, store } = fixture();
+    store.create({ kind: "note", summary: "User prefers English replies" });
+    store.create({
+      kind: "auto-reply-sent",
+      accountId: "acct-1",
+      summary: "Re: invoice",
+      detail: "Full auto-reply text",
+    });
+    store.create({
+      kind: "auto-reply-ignored",
+      accountId: "acct-1",
+      summary: "Newsletter",
+      detail: "Screened out",
+    });
+
+    const listed = await registry.get("memory.list")!.execute(context, {});
+
+    expect(listed.ok).toBe(true);
+    const items = (listed as { value: { items: Array<{ kind: string }> } }).value.items;
+    expect(items.map((item) => item.kind)).toEqual(["note"]);
+    expect(JSON.stringify(listed)).not.toContain("Full auto-reply text");
+    expect(JSON.stringify(listed)).not.toContain("Screened out");
+  });
+
   it("updates the summary, the detail, or both on an existing note", async () => {
     const { registry, context, store } = fixture();
     const record = store.create({ kind: "note", summary: "User prefers English replies", detail: "Old context" });

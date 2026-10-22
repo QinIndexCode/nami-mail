@@ -105,7 +105,7 @@ export const AgentMessageRow = memo(function AgentMessageRowInner({
                     onClick={() => onOpenAttachment(attachment.path)}
                     data-tooltip={attachment.path ?? attachment.name}
                   >
-                    <AttachmentFileIcon kind={presentation.kind} />
+                    <AttachmentFileIcon kind={presentation.kind} filename={attachment.name} />
                     <span>{attachment.name}</span>
                   </button>
                 );

@@ -14,13 +14,29 @@ import {
   type ProviderTokenUsage,
   type ToolCall,
 } from "@nami/agent-contracts";
-import { asRecord, hasUnsafeToolArguments, linesFrom, streamCompletionEvents, streamFailureEvents, unsafeToolArgumentsError } from "./provider-common.js";
+import {
+  asRecord,
+  awaitAbortable,
+  createProviderToolNames,
+  endpointUrl,
+  hasUnsafeToolArguments,
+  linesFrom,
+  maximumSseLineBytes,
+  maximumToolArgumentsBytes,
+  providerErrorFromResponse,
+  providerRequest,
+  safeMessage,
+  statusError,
+  streamCompletionEvents,
+  streamFailureEvents,
+  unsafeToolArgumentsError,
+  type ProviderFinishReason,
+  type ProviderResponseLease,
+  type ProviderToolNames,
+} from "./provider-common.js";
 import { InlineToolCallExtractor } from "./openai-compatible-inline-extractor.js";
-import { isLoopbackHostname } from "../endpoint-guard.js";
+import { formatOpenAiContent } from "./openai-compatible-content.js";
 import { detectVendorAdapter } from "./vendor-adapters.js";
-
-const maximumSseLineBytes = 512 * 1024;
-const maximumToolArgumentsBytes = 200 * 1024;
 
 export type OpenAiCompatibleProviderOptions = {
   id: string;
@@ -40,103 +56,6 @@ type PendingToolCall = {
   arguments: string;
 };
 
-type ProviderFinishReason = "stop" | "length" | "tool-calls" | "content-filter" | "cancelled";
-
-type ProviderResponseLease = {
-  response: Response;
-  signal: AbortSignal;
-  timedOut(): boolean;
-  release(): void;
-};
-
-class ProviderTimeoutError extends Error {
-  constructor() {
-    super("The provider request timed out.");
-    this.name = "ProviderTimeoutError";
-  }
-}
-
-function abortReason(signal: AbortSignal): unknown {
-  return signal.reason ?? new DOMException("The provider request was cancelled.", "AbortError");
-}
-
-/**
- * Fetch implementations are expected to observe AbortSignal, but the timeout
- * is a reliability boundary and must also settle a non-conforming response
- * body. This races the operation with the owned signal without leaking an
- * abort listener after either path completes.
- */
-function awaitAbortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(abortReason(signal));
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
-    const settle = (callback: () => void) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      callback();
-    };
-    const onAbort = () => settle(() => reject(abortReason(signal)));
-    signal.addEventListener("abort", onAbort, { once: true });
-    operation.then(
-      (value) => settle(() => resolve(value)),
-      (error) => settle(() => reject(error)),
-    );
-  });
-}
-
-
-function endpointUrl(value: string): URL {
-  let endpoint: URL;
-  try {
-    endpoint = new URL(value);
-  } catch {
-    throw new Error("The provider endpoint is invalid.");
-  }
-  if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && isLoopbackHostname(endpoint.hostname))) {
-    throw new Error("The provider endpoint must use HTTPS or local loopback HTTP.");
-  }
-  if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
-    throw new Error("The provider endpoint must not contain credentials, a query, or a fragment.");
-  }
-  if (!endpoint.pathname.endsWith("/")) endpoint.pathname = `${endpoint.pathname}/`;
-  return endpoint;
-}
-
-function safeMessage(
-  error: unknown,
-  options: { signal?: AbortSignal; timedOut?: boolean } = {},
-): AgentError {
-  if (options.timedOut || error instanceof ProviderTimeoutError) {
-    return createAgentError({ code: "PROVIDER_TIMEOUT", message: "The provider did not respond before the request timed out.", retryable: true });
-  }
-  if (options.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) {
-    return createAgentError({ code: "CANCELLED", message: "The provider request was cancelled.", retryable: true });
-  }
-  const detail = error instanceof Error ? `${error.name} ${error.message} ${(error as Error & { cause?: unknown }).cause ?? ""}`.toLowerCase() : "";
-  if (/timeout|timed out|abort/.test(detail)) {
-    return createAgentError({ code: "PROVIDER_TIMEOUT", message: "The provider did not respond before the request timed out.", retryable: true });
-  }
-  if (/cert|certificate|tls|ssl|econn|enotfound|eai_again|network|fetch failed/.test(detail)) {
-    return createAgentError({ code: "PROVIDER_UNAVAILABLE", message: "Nami Mail could not reach the configured provider.", retryable: true });
-  }
-  return createAgentError({ code: "PROVIDER_ERROR", message: "The provider request could not complete.", retryable: true });
-}
-
-function statusError(status: number): AgentError {
-  if (status === 401 || status === 403 || status === 407) {
-    return createAgentError({ code: "PROVIDER_AUTH_FAILED", message: "The provider rejected the configured credentials.", retryable: false });
-  }
-  if (status === 429) {
-    return createAgentError({ code: "PROVIDER_RATE_LIMITED", message: "The provider is rate limiting requests.", retryable: true });
-  }
-  if (status >= 500) {
-    return createAgentError({ code: "PROVIDER_UNAVAILABLE", message: "The provider is temporarily unavailable.", retryable: true });
-  }
-  return createAgentError({ code: "PROVIDER_ERROR", message: "The provider rejected this request.", retryable: false });
-}
-
 /** Detects an already-mapped agent error object (not an Error subclass). */
 function isAgentErrorShape(value: unknown): value is AgentError {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -144,11 +63,11 @@ function isAgentErrorShape(value: unknown): value is AgentError {
   return typeof entry.code === "string" && typeof entry.message === "string" && typeof entry.retryable === "boolean";
 }
 
-function toolDefinitions(tools: readonly AgentToolDescriptor[]): unknown[] {
+function toolDefinitions(tools: readonly AgentToolDescriptor[], names: ProviderToolNames): unknown[] {
   return tools.map((tool) => ({
     type: "function",
     function: {
-      name: tool.name,
+      name: names.toWire(tool.name),
       description: tool.description,
       // Send the actual JSON schema when available so the LLM knows the exact
       // parameter shape. Fall back to a permissive schema for older callers.
@@ -157,37 +76,7 @@ function toolDefinitions(tools: readonly AgentToolDescriptor[]): unknown[] {
   }));
 }
 
-function formatOpenAiContent(content: ProviderChatRequest["messages"][number]["content"]): unknown {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content.map((part) => {
-      if (part.type === "text") {
-        return { type: "text", text: part.text };
-      }
-      if (part.type === "image_url") {
-        return {
-          type: "image_url",
-          image_url: {
-            url: part.imageUrl.url,
-            ...(part.imageUrl.detail ? { detail: part.imageUrl.detail } : {}),
-          },
-        };
-      }
-      if (part.type === "document") {
-        return {
-          type: "image_url",
-          image_url: {
-            url: part.document.url,
-          },
-        };
-      }
-      return part;
-    });
-  }
-  return content;
-}
-
-function providerMessages(request: ProviderChatRequest): unknown[] {
+function providerMessages(request: ProviderChatRequest, names: ProviderToolNames): unknown[] {
   return request.messages.map((message) => {
     const content = formatOpenAiContent(message.content);
     if (message.role === "tool") {
@@ -208,7 +97,7 @@ function providerMessages(request: ProviderChatRequest): unknown[] {
           id: call.id,
           type: "function",
           function: {
-            name: call.toolName,
+            name: names.toWire(call.toolName),
             arguments: JSON.stringify(call.input),
           },
         })),
@@ -287,7 +176,7 @@ function parseToolArguments(raw: string): unknown {
   }
 }
 
-function completedToolCalls(calls: Map<number, PendingToolCall>): ToolCall[] {
+function completedToolCalls(calls: Map<number, PendingToolCall>, names: ProviderToolNames): ToolCall[] {
   const completed: ToolCall[] = [];
   for (const call of [...calls.values()].sort((left, right) => left.index - right.index)) {
     // A call without id/name cannot be answered (the engine replies through
@@ -301,7 +190,7 @@ function completedToolCalls(calls: Map<number, PendingToolCall>): ToolCall[] {
     const input = call.arguments ? parseToolArguments(call.arguments) : {};
     completed.push({
       id: call.id,
-      toolName: call.name,
+      toolName: names.fromWire(call.name),
       input,
       requestedAt: new Date().toISOString(),
     } satisfies ToolCall);
@@ -435,6 +324,9 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
       return;
     }
     const calls = new Map<number, PendingToolCall>();
+    // Wire names are remapped per request: providers reject the canonical
+    // dotted ids, and the mapping also has to cover replayed tool calls.
+    const names = createProviderToolNames(request.tools.map((tool) => tool.name));
     let sawCompleted = false;
     let sawDone = false;
     let responseLease: ProviderResponseLease | undefined;
@@ -443,12 +335,12 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
     try {
       const requestBody = adapter.transformRequestBody({
         model: request.model,
-        messages: providerMessages(request),
+        messages: providerMessages(request, names),
         stream: true,
         stream_options: { include_usage: true },
         ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
         ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
-        ...(request.allowToolCalls && request.tools.length ? { tools: toolDefinitions(request.tools), tool_choice: "auto" } : {}),
+        ...(request.allowToolCalls && request.tools.length ? { tools: toolDefinitions(request.tools, names), tool_choice: "auto" } : {}),
       });
       responseLease = await this.request("chat/completions", {
         method: "POST",
@@ -457,7 +349,7 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
       }, options.signal, options.timeoutMs);
       const response = responseLease.response;
       if (!response.ok) {
-        yield { type: "error", error: statusError(response.status) };
+        yield { type: "error", error: await providerErrorFromResponse(response, responseLease.signal) };
         yield { type: "completed", finishReason: "content-filter" };
         return;
       }
@@ -547,9 +439,9 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
       const inlineCalls = inlineExtractor?.extractToolCalls() ?? [];
       for (const call of inlineCalls) {
         hasInlineToolCalls = true;
-        yield { type: "tool_call", call };
+        yield { type: "tool_call", call: { ...call, toolName: names.fromWire(call.toolName) } };
       }
-      yield* streamCompletionEvents(completedToolCalls(calls), finishReason, calls.size > 0 || hasInlineToolCalls);
+      yield* streamCompletionEvents(completedToolCalls(calls, names), finishReason, calls.size > 0 || hasInlineToolCalls);
       sawCompleted = true;
     } catch (error) {
       yield* streamFailureEvents(error, { signal: options.signal, timedOut: responseLease?.timedOut() });
@@ -562,51 +454,23 @@ export class OpenAiCompatibleProvider implements LlmProvider, EmbeddingProvider 
     }
   }
 
-  private async request(
+  /**
+   * Adds this adapter's accept/auth headers and delegates timing, abort and
+   * redirect policy to the shared provider wrapper.
+   */
+  private request(
     pathname: string,
     init: RequestInit,
     signal?: AbortSignal,
     requestedTimeoutMs?: number,
   ): Promise<ProviderResponseLease> {
-    const controller = new AbortController();
-    const timeoutError = new ProviderTimeoutError();
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      controller.abort(timeoutError);
-    }, Math.min(120_000, Math.max(1_000, requestedTimeoutMs ?? this.timeoutMs)));
-    const abort = () => controller.abort(abortReason(signal!));
-    signal?.addEventListener("abort", abort, { once: true });
-    let released = false;
-    const release = () => {
-      if (released) return;
-      released = true;
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", abort);
-    };
-    try {
-      const url = new URL(pathname, this.endpoint);
-      const headers = new Headers(init.headers);
-      headers.set("accept", "text/event-stream, application/json");
-      if (this.apiKey) headers.set("authorization", `Bearer ${this.apiKey}`);
-      // Provider configuration authorizes only the configured origin. Do not
-      // allow a provider response to forward mail-bearing requests elsewhere.
-      const response = await awaitAbortable(this.fetchImpl(url, {
-        ...init,
-        headers,
-        signal: controller.signal,
-        redirect: "error",
-      }), controller.signal);
-      return {
-        response,
-        signal: controller.signal,
-        timedOut: () => timedOut,
-        release,
-      };
-    } catch (error) {
-      release();
-      if (timedOut) throw timeoutError;
-      throw error;
-    }
+    const headers = new Headers(init.headers);
+    headers.set("accept", "text/event-stream, application/json");
+    if (this.apiKey) headers.set("authorization", `Bearer ${this.apiKey}`);
+    return providerRequest(this.endpoint, pathname, {
+      ...init,
+      headers,
+      timeoutMs: requestedTimeoutMs ?? this.timeoutMs,
+    }, signal, this.fetchImpl);
   }
 }

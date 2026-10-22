@@ -365,6 +365,38 @@ describe("Agent mail tools", () => {
     );
   });
 
+  it("reports summary truncation from the cursor instead of the item count", async () => {
+    const fake = fakeMailApplication();
+    // listMessages always caps items at the limit, so the item count can never
+    // prove that more rows exist; the cursor is the only signal.
+    fake.listMessages.mockResolvedValue({ items: [mailMessage("message-1")], nextCursor: "1" });
+    fake.getMessage.mockResolvedValue(mailDetail("message-1"));
+    const registry = createToolRegistry(createMailTools(fake.service));
+    const tool = registry.get("mail.summarize");
+    expect(tool).toBeDefined();
+
+    const page = await tool!.execute(context(["account-1"]), { limit: 1 });
+    expect(page).toMatchObject({ ok: true, value: { truncated: true, nextCursor: "1" } });
+
+    // The cursor handed back must pass this tool's own strict input schema,
+    // otherwise a truncated digest cannot be paged.
+    const paged = registry.resolve(call("mail.summarize", { limit: 1, cursor: "1" }));
+    expect(paged).toMatchObject({ ok: true });
+    if (paged.ok) {
+      const pagedResult = await registry.executeResolved(paged, context(["account-1"]));
+      expect(pagedResult.status).toBe("succeeded");
+      expect(fake.listMessages).toHaveBeenLastCalledWith(
+        expect.objectContaining({ accountIds: ["account-1"] }),
+        expect.objectContaining({ cursor: "1", limit: 1 }),
+      );
+    }
+
+    fake.listMessages.mockResolvedValue({ items: [mailMessage("message-1")] });
+    const lastPage = await tool!.execute(context(["account-1"]), { limit: 1 });
+    expect(lastPage).toMatchObject({ ok: true, value: { truncated: false } });
+    expect((lastPage as { value: Record<string, unknown> }).value.nextCursor).toBeUndefined();
+  });
+
   it("rejects direct reads outside an exact message scope before calling the facade", async () => {
     const fake = fakeMailApplication();
     const registry = createToolRegistry(createMailTools(fake.service));

@@ -1,4 +1,4 @@
-import { ftsLikeEscape } from "./message-search.js";
+import { ftsLikeEscape, MESSAGE_FTS_CROSS_JOIN } from "./message-search.js";
 import {
   EITHER_FLAGGED_PREDICATE_SQL,
   EITHER_UNSEEN_PREDICATE_SQL,
@@ -199,25 +199,7 @@ export function buildMessageListSql(query: MessageListFilterQuery, options: Mess
     const where = filters.length ? `${ftsMatch} AND (${filters.join(" AND ")})` : ftsMatch;
     return {
       where: `WHERE ${where}`,
-      // CROSS JOIN, not JOIN: it is the same inner join, but it also pins the
-      // join order, and the order is the whole point. Left to itself SQLite
-      // drives the search from `messages` — it can then walk
-      // idx_messages_account_sort_key in (sort_key DESC, id DESC) order and
-      // skip the sorter — but that makes it re-run the *entire* FTS scan once
-      // per candidate message, so the page costs
-      // O(messages_in_account x fts_rows) instead of O(fts_rows). The
-      // selectivity is the other way round: the FTS match is the narrow side
-      // (measured on 4 000 rows: 80 matches against 4 000 messages), so the FTS
-      // scan has to drive and `messages` is probed by primary key.
-      //
-      // The sorter this brings back is not a regression: it now sorts only the
-      // rows that matched, and `messages.id` lookups it then does are the same
-      // ones the old plan performed. Measured on 4 000 rows x 48KB payload,
-      // page time by match density — 2%: 33 925ms -> 37ms, 15%: 4 351ms ->
-      // 56ms, 50%: 943ms -> 93ms, 100% (every row matches): 234ms -> 164ms, so
-      // it wins at every density including the degenerate one. The id sequence
-      // returned is byte-identical to the old plan's at every density.
-      join: "FROM messages_fts fts CROSS JOIN messages m ON m.id = fts.message_id",
+      join: MESSAGE_FTS_CROSS_JOIN,
       params: [...ftsParams, ...params],
     };
   }

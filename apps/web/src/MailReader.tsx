@@ -432,6 +432,7 @@ export function MailReader(props: MailReaderProps) {
               {visibleAttachments.length > 0 && (
                 <section className="attachment-list" aria-label={t("mail.attachment.aria", { count: visibleAttachments.length })}>
                   <div className="attachment-list-heading"><Paperclip size={15} /><span>{t("compose.attachments")}</span><small>{t("mail.attachment.fileCount", { count: visibleAttachments.length })}</small><span className="attachment-heading-actions"><IconButton label={t("mail.attachment.downloadAllZip")} disabled={zipAllPhase === "zipping" || selectedMovePending || selected.movePending || selected.moveLocationUnverified} onClick={() => void zipAllAttachments()}>{zipAllPhase === "zipping" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}</IconButton></span></div>
+                  <div className="attachment-grid">
                   {visibleAttachments.map((attachment) => {
                     const presentation = presentAttachment(attachment.filename, attachment.contentType, t);
                     const downloadKey = `${selected.id}:${attachment.partId}`;
@@ -446,7 +447,7 @@ export function MailReader(props: MailReaderProps) {
                           : t("mail.attachment.detail", { type: presentation.label, size: formatFileSize(attachment.size) });
                     return (
                       <div className={`attachment-card${download?.phase ? ` is-${download.phase}` : ""}`} key={attachment.partId}>
-                        <AttachmentFileIcon kind={presentation.kind} />
+                        <AttachmentFileIcon kind={presentation.kind} filename={attachment.filename} />
                         <span><strong className="truncated-tooltip" data-tooltip={attachment.filename}><span>{attachment.filename}</span></strong><small className="truncated-tooltip" aria-live="polite" data-tooltip={download?.detail}><span>{downloadDetail}</span></small></span>
                         <div className="attachment-actions">
                           {canPreviewAttachment(attachment.filename, attachment.contentType) && (
@@ -460,6 +461,7 @@ export function MailReader(props: MailReaderProps) {
                       </div>
                     );
                   })}
+                  </div>
                 </section>
               )}
               <footer className="quick-reply"><CustomAvatar name={selected.accountEmail} address={selected.accountEmail} tone={accountTone(selected.accountEmail)} size="small" /><button onClick={openReply}>{t("mail.reader.replyTo", { sender: quickReplySender })}</button></footer>

@@ -7,6 +7,7 @@ import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import {
   MAX_ENCRYPTED_SEARCH_CANDIDATES,
   encryptMessagePayload,
+  ensureAttachmentMetadata,
   messagePayloadForRow,
   messagePayloadMatchesQuery,
   migrateMessageStorage,
@@ -98,6 +99,49 @@ describe("encrypted message storage", () => {
     expect(migrateMessageStorage(db, key)).toEqual({ migrated: 0, vacuumed: false });
     db.prepare("DELETE FROM data_migrations WHERE id = 'message-payload-v1'").run();
     expect(migrateMessageStorage(db, key)).toEqual({ migrated: 0, vacuumed: true });
+    db.close();
+  });
+
+  it("backfills the attachment flag and kinds from visible attachments only", () => {
+    const db = openDatabase(":memory:");
+    const key = randomBytes(32);
+    insertAccount(db);
+    const insert = db.prepare(`
+      INSERT INTO messages (
+        id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+        cc_json, in_reply_to, references_json, sent_at, snippet, text_body, html_body,
+        flags_json, has_attachments, attachments_json, size, created_at
+      ) VALUES (?, 'account-1', 'INBOX', ?, '', 'Alice', 'alice@example.com', '[]',
+        '[]', NULL, '[]', '2026-07-20T00:00:00.000Z', '', '', '', '[]', ?, ?, 1,
+        '2026-07-20T00:00:00.000Z')
+    `);
+    // The bug's shape: a newsletter whose only part mailparser calls an
+    // attachment is its inline wordmark. The old writer counted it, so the list
+    // showed a paperclip for a message that opens with no attachment section.
+    insert.run("inline-only", 1, 1, JSON.stringify([
+      { partId: "2.2", filename: "wordmark.png", contentType: "image/png", size: 915, related: true, disposition: "inline" },
+    ]));
+    insert.run("real-file", 2, 1, JSON.stringify([
+      { partId: "2", filename: "invoice.pdf", contentType: "application/pdf", size: 7, related: false, disposition: "attachment" },
+    ]));
+    // The inverse: a row that never got the flag although it has a real file.
+    insert.run("missed-flag", 3, 0, JSON.stringify([
+      { partId: "2", filename: "photo.jpg", contentType: "image/jpeg", size: 9, related: false, disposition: "attachment" },
+    ]));
+
+    migrateMessageStorage(db, key);
+    expect(ensureAttachmentMetadata(db, key)).toEqual({ backfilled: 3 });
+
+    expect(db.prepare("SELECT id, has_attachments, attachment_kinds_json FROM messages ORDER BY id").all()).toEqual([
+      { id: "inline-only", has_attachments: 0, attachment_kinds_json: "[]" },
+      { id: "missed-flag", has_attachments: 1, attachment_kinds_json: '["image"]' },
+      { id: "real-file", has_attachments: 1, attachment_kinds_json: '["pdf"]' },
+    ]);
+
+    // The marker makes the sweep one-time; clearing it re-runs the same result.
+    expect(ensureAttachmentMetadata(db, key)).toEqual({ backfilled: 0 });
+    db.prepare("DELETE FROM data_migrations WHERE id = 'attachment-metadata-v1'").run();
+    expect(ensureAttachmentMetadata(db, key)).toEqual({ backfilled: 3 });
     db.close();
   });
 

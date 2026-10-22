@@ -47,7 +47,7 @@ import { serverLog } from "./logging.js";
 import { config, isLoopbackRemoteAddress } from "./config.js";
 import {
   migrateMessageStorage,
-  ensureAttachmentKinds,
+  ensureAttachmentMetadata,
 } from "./message-storage.js";
 import { ensureMessageFtsIndex } from "./message-search.js";
 import { backfillRedactMessageSnippets } from "./sync.js";
@@ -223,7 +223,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   // one gets the real factory back instead of silently keeping the fake.
   setProviderFactory(context.providers ?? defaultProviderFactory);
   migrateMessageStorage(context.db, context.masterKey);
-  ensureAttachmentKinds(context.db, context.masterKey);
+  ensureAttachmentMetadata(context.db, context.masterKey);
   ensureMessageFtsIndex(context.db, context.masterKey);
   backfillRedactMessageSnippets(context.db);
   migrateOutboundAttachments(context.db, outboundAttachmentDirectory(context), context.masterKey);

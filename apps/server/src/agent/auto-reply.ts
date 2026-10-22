@@ -17,7 +17,7 @@ import { getAppSettings } from "../settings.js";
 import { contactFromRow, type ContactRow } from "../contacts.js";
 import { serverLog } from "../logging.js";
 import type { EncryptedAgentAuditStore } from "./audit.js";
-import { buildMemoryContextLines, type EncryptedAgentMemoryStore } from "./memory.js";
+import { autoReplyLedgerKinds, buildMemoryContextLines, type EncryptedAgentMemoryStore } from "./memory.js";
 import type { ImmutableGuiConfirmationStore } from "./confirmations.js";
 import { canonicalAgentJson } from "./store-crypto.js";
 import type { MailApplicationContext, MailApplicationService } from "./mail-application-service.js";
@@ -390,7 +390,7 @@ export class AutoReplyEngine {
         memoryContext = buildMemoryContextLines(this.options.memory, {
           query: payload.subject,
           limit: 6,
-          excludeKinds: ["auto-reply-sent", "auto-reply-ignored"],
+          excludeKinds: autoReplyLedgerKinds,
         }).join("\n");
       } catch {
         // Recall is best-effort.

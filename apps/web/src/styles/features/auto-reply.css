@@ -881,6 +881,18 @@ animation:.3s cubic-bezier(.2,.8,.2,1) both drawer-mobile-in
 {
 animation:.26s cubic-bezier(.2,.8,.2,1) both drawer-mobile-out
 }
+.attachment-preview-resizer
+{
+display:none
+}
+.attachment-grid
+{
+grid-template-columns:1fr
+}
+.attachment-card
+{
+width:auto
+}
 }
 .confirmation-backdrop.closing
 {

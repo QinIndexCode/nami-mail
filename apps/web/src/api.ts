@@ -388,7 +388,8 @@ function autoReplyConfigFromSettings(settings: AppSettings): AppSettings {
 export const api = {
   accounts: () => request<Account[]>("/api/accounts"),
   providers: () => request<ProviderInfo[]>("/api/providers"),
-  stats: () => request<Stats>("/api/stats"),
+  // Scoped like the list query; omitting it keeps the whole-mailbox reading.
+  stats: (accountId?: string) => request<Stats>(accountId ? `/api/stats?accountId=${encodeURIComponent(accountId)}` : "/api/stats"),
   // Every settings response runs through the single auto-reply wire→web seam
   // (see autoReplyConfigFromWire) so scope dates are always present.
   settings: async () => autoReplyConfigFromSettings(await request<AppSettings>("/api/settings")),

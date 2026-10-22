@@ -810,6 +810,7 @@
     "mail.attachment.downloadStarted": "已开始下载 {filename}",
     "mail.attachment.demoUnavailable": "演示模式不提供附件下载。",
     "mail.attachment.previewTitle": "附件预览",
+    "mail.attachment.previewResize": "调整预览宽度",
     "mail.attachment.preview": "预览 {filename}",
     "mail.attachment.previewLoading": "正在加载预览…",
     "mail.attachment.previewFailed": "无法预览该附件。",

@@ -11,14 +11,18 @@ import type { ProviderChatRequest } from "@nami/agent-contracts";
 const PROVIDER_SECRET_CANARY = ["provider", "secret", "canary"].join("-");
 
 /**
- * The first-turn title generator and the auto-reply reviewer are provider calls
- * the host makes on its own behalf, outside any conversation turn. They used to
- * dial the provider adapter directly, so a suite that stubbed the one global
- * seam (`service.runtime.streamChat`) and let a reply produce text still paid a
- * real outbound request — bounded only by DNS latency, which is how a hermetic
- * file started timing out under full-suite parallel load. These cases pin the
- * seam shut: the call must be observable through the stub, and the provider
- * adapter must never be reached.
+ * The auto-reply reviewer and the translator are provider calls the host makes
+ * on its own behalf, outside any conversation turn. They used to dial the
+ * provider adapter directly, so a suite that stubbed the one global seam
+ * (`service.runtime.streamChat`) and let a reply produce text still paid a real
+ * outbound request — bounded only by DNS latency, which is how a hermetic file
+ * started timing out under full-suite parallel load. These cases pin the seam
+ * shut: the call must be observable through the stub, and the provider adapter
+ * must never be reached.
+ *
+ * A conversation title is deliberately NOT such a call: the first turn's own
+ * model response carries it, so the title cases below assert that the provider
+ * is asked exactly once.
  *
  * The file-level fetch tripwire stays even though the seam is now real: it is
  * the backstop for a *future* call added next to these that forgets the seam.
@@ -57,6 +61,25 @@ function insertMessage(db: DatabaseHandle, accountId: string, id = "message-1"):
     )
   `).run(id, accountId, timestamp, timestamp);
 }
+
+/**
+ * A complete citation. `messageForRag` reads every identity field, and a
+ * persisted turn carrying `undefined` would be rejected by the record encoder,
+ * so a partial fixture would silently lose the assistant message.
+ */
+const ragHit = {
+  citation: {
+    id: "citation-1",
+    messageId: "message-1",
+    accountId: "account-1",
+    subject: "Quarterly project report",
+    sender: "ada@example.test",
+    sentAt: timestamp,
+    excerpt: "The project report is ready.",
+  },
+  content: "hit",
+  score: 1,
+};
 
 type RuntimeChatRequest = { requestId: string; signal?: AbortSignal; chat: ProviderChatRequest };
 
@@ -118,24 +141,19 @@ async function streamTurn(
   return events;
 }
 
-describe("Agent service auxiliary provider calls ride the runtime seam", () => {
-  it("generates the first-turn title through runtime.streamChat and never builds a provider", async () => {
+describe("Conversation titles ride the first turn's own response", () => {
+  it("strips the TITLE line from the answer and calls the provider exactly once", async () => {
     const { db, masterKey, service, provider, conversation } = fixture();
     const internals = internalRuntime(service);
-    // A lexical hit keeps the second retrieval arm idle, so the only provider
-    // call under test is the title generator itself.
-    vi.spyOn(internals.rag, "search").mockResolvedValue([{ citation: {}, content: "hit", score: 1 }]);
+    vi.spyOn(internals.rag, "search").mockResolvedValue([ragHit]);
     const requests: RuntimeChatRequest[] = [];
     const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request) {
       requests.push(request);
-      if (request.requestId.startsWith("title-")) {
-        // Quoted and padded on purpose: the normalization the generator applies
-        // to raw model output must survive the move onto the seam.
-        yield { type: "text_delta", delta: '  "Q3 report  review"  ' };
-        yield { type: "completed", reason: "stop" };
-        return;
-      }
-      yield { type: "text_delta", delta: "The review is scheduled for Friday." };
+      // Split inside the marker on purpose: the probe holds only text that can
+      // still become `TITLE:` and must recognize a marker delivered in pieces.
+      yield { type: "text_delta", delta: "TIT" };
+      yield { type: "text_delta", delta: 'LE: "Q3 report review"' };
+      yield { type: "text_delta", delta: "\n\nThe review is scheduled for Friday." };
       yield { type: "completed", reason: "stop" };
     });
     // Belt and braces: constructing a provider is the step that precedes any
@@ -144,92 +162,144 @@ describe("Agent service auxiliary provider calls ride the runtime seam", () => {
 
     const events = await streamTurn(service, conversation, provider.id, "Summarize this message");
 
-    const titleRequest = requests.find((request) => request.requestId.startsWith("title-"));
-    expect(titleRequest).toBeDefined();
-    // The request shape is the whole contract of this call: one system turn
-    // that states the rules, one user turn carrying the question, no tools, and
-    // the low temperature that keeps the answer to the title text.
-    expect(titleRequest!.chat).toMatchObject({
-      providerId: provider.id,
-      model: "test-model",
-      tools: [],
-      allowToolCalls: false,
-      responseFormat: "text",
-      temperature: 0.2,
-    });
-    expect(titleRequest!.chat.messages).toHaveLength(2);
-    expect(titleRequest!.chat.messages[0]).toMatchObject({
-      role: "system",
-      content: expect.stringContaining("Generate a concise conversation title"),
-    });
-    expect(titleRequest!.chat.messages[1]).toEqual({ role: "user", content: "Summarize this message" });
-    // The title the model "produced" reached the conversation, which is only
-    // possible if the stub served the call.
-    expect(events).toContainEqual({ type: "title", title: "Q3 report review" });
+    // One provider round. A title request of its own is exactly what produced
+    // the bad greeting this protocol replaced, so a second call fails here.
+    expect(streamChat).toHaveBeenCalledTimes(1);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.chat.messages[0]?.content).toContain("TITLE:");
+
+    // The derived fallback is announced immediately so the sidebar never waits
+    // on the model; the model's line then refines it.
+    const titles = events.filter((event) => event.type === "title").map((event) => event.title);
+    expect(titles).toEqual(["Summarize this message", "Q3 report review"]);
     expect(service.getConversation(conversation.id).title).toBe("Q3 report review");
+
+    // Protocol text reaches neither the live stream nor the transcript.
+    const streamed = events.filter((event) => event.type === "text_delta").map((event) => event.delta).join("");
+    expect(streamed).toBe("The review is scheduled for Friday.");
+    const assistant = service.getConversation(conversation.id).messages.find((message) => message.role === "assistant");
+    expect(assistant?.content).toBe("The review is scheduled for Friday.");
     expect(providerFactory).not.toHaveBeenCalled();
-    expect(streamChat).toHaveBeenCalledTimes(2);
     await service.close();
     masterKey.fill(0);
     db.close();
   });
 
-  it("truncates an over-long first message to 4,000 characters for the title prompt", async () => {
+  it("consumes a malformed marker instead of leaking it, and keeps the derived title", async () => {
     const { db, masterKey, service, provider, conversation } = fixture();
     const internals = internalRuntime(service);
-    vi.spyOn(internals.rag, "search").mockResolvedValue([{ citation: {}, content: "hit", score: 1 }]);
-    const userContents: string[] = [];
-    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request) {
-      if (request.requestId.startsWith("title-")) {
-        userContents.push(String(request.chat.messages[1]?.content ?? ""));
-        yield { type: "text_delta", delta: "Truncated" };
-        yield { type: "completed", reason: "stop" };
-        return;
-      }
-      yield { type: "text_delta", delta: "Answered." };
-      yield { type: "completed", reason: "stop" };
-    });
-    const longQuestion = "q".repeat(4_500);
-
-    await streamTurn(service, conversation, provider.id, longQuestion);
-
-    expect(userContents).toHaveLength(1);
-    expect(userContents[0]).toHaveLength(4_000);
-    await service.close();
-    masterKey.fill(0);
-    db.close();
-  });
-
-  it("leaves the provisional title in place when the model call errors", async () => {
-    const { db, masterKey, service, provider, conversation } = fixture();
-    const internals = internalRuntime(service);
-    vi.spyOn(internals.rag, "search").mockResolvedValue([{ citation: {}, content: "hit", score: 1 }]);
-    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request) {
-      if (request.requestId.startsWith("title-")) {
-        yield { type: "error", error: { code: "PROVIDER_ERROR", message: "model refused", retryable: true } };
-        yield { type: "completed", reason: "error" };
-        return;
-      }
-      yield { type: "text_delta", delta: "Answered anyway." };
+    vi.spyOn(internals.rag, "search").mockResolvedValue([ragHit]);
+    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+      // 60 characters is past the label limit: a format violation, not a title.
+      yield { type: "text_delta", delta: `TITLE: ${"x".repeat(60)}\n\nBody text.` };
       yield { type: "completed", reason: "stop" };
     });
 
     const events = await streamTurn(service, conversation, provider.id, "Summarize this message");
 
-    expect(events).not.toContainEqual(expect.objectContaining({ type: "title" }));
-    // The run's provisional title (the first user message) is left untouched.
+    // The line is still consumed: leaving `TITLE:` in the answer would expose
+    // the protocol and be worse than the missing title.
+    expect(events.filter((event) => event.type === "title").map((event) => event.title))
+      .toEqual(["Summarize this message"]);
+    const streamed = events.filter((event) => event.type === "text_delta").map((event) => event.delta).join("");
+    expect(streamed).toBe("Body text.");
     expect(service.getConversation(conversation.id).title).toBe("Summarize this message");
     await service.close();
     masterKey.fill(0);
     db.close();
   });
 
-  /**
-   * End-to-end proof of the original failure: a first turn with no explicit
-   * title, a reply that produces text, and not one outbound request. Before the
-   * seam existed, the title generator dialed `api.example.test` here and the
-   * case cost a DNS lookup whose latency is unbounded under parallel load.
-   */
+  it("releases an ordinary answer without buffering it to the line ending", async () => {
+    const { db, masterKey, service, provider, conversation } = fixture();
+    const internals = internalRuntime(service);
+    vi.spyOn(internals.rag, "search").mockResolvedValue([ragHit]);
+    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+      yield { type: "text_delta", delta: "The review" };
+      yield { type: "text_delta", delta: " is Friday." };
+      yield { type: "completed", reason: "stop" };
+    });
+
+    const events = await streamTurn(service, conversation, provider.id, "Summarize this message");
+
+    // "The review" disproves the marker prefix, so the first chunk is visible.
+    expect(events.filter((event) => event.type === "text_delta").map((event) => event.delta)).toEqual(["The review", " is Friday."]);
+    expect(events.filter((event) => event.type === "title").map((event) => event.title))
+      .toEqual(["Summarize this message"]);
+    expect(service.getConversation(conversation.id).title).toBe("Summarize this message");
+    await service.close();
+    masterKey.fill(0);
+    db.close();
+  });
+
+  it("keeps a manual rename that lands while the reply is still streaming", async () => {
+    const { db, masterKey, service, provider, conversation } = fixture();
+    const internals = internalRuntime(service);
+    vi.spyOn(internals.rag, "search").mockResolvedValue([ragHit]);
+    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+      yield { type: "text_delta", delta: "TIT" };
+      // The user renames before the model's first line is complete, so the
+      // provisional title this run wrote is already gone when the title is
+      // parsed. The generated value must not overwrite the manual one.
+      service.renameConversation(conversation.id, "My title");
+      yield { type: "text_delta", delta: "LE: Model title\n\nAnswer." };
+      yield { type: "completed", reason: "stop" };
+    });
+
+    const events = await streamTurn(service, conversation, provider.id, "Summarize this message");
+
+    expect(events.filter((event) => event.type === "title").map((event) => event.title))
+      .toEqual(["Summarize this message"]);
+    expect(service.getConversation(conversation.id).title).toBe("My title");
+    expect(events.filter((event) => event.type === "text_delta").map((event) => event.delta).join("")).toBe("Answer.");
+    await service.close();
+    masterKey.fill(0);
+    db.close();
+  });
+
+  it("keeps a greeting-only conversation untitled and names it on the next turn", async () => {
+    const { db, masterKey, service, provider, conversation } = fixture();
+    const internals = internalRuntime(service);
+    vi.spyOn(internals.rag, "search").mockResolvedValue([ragHit]);
+    const systemPrompts: string[] = [];
+    let turn = 0;
+    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request) {
+      systemPrompts.push(String(request.chat.messages[0]?.content));
+      turn += 1;
+      yield {
+        type: "text_delta",
+        delta: turn === 1
+          ? "TITLE: NONE\n\n下午好！有什么可以帮你？"
+          : "TITLE: 未读邮件总结\n\n今天的未读邮件有三封。",
+      };
+      yield { type: "completed", reason: "stop" };
+    });
+
+    const greeting = await streamTurn(service, conversation, provider.id, "下午好");
+
+    // A greeting names no topic. Neither the fallback nor the model may turn it
+    // into a title: the conversation stays untitled so the client shows its
+    // localized placeholder instead of freezing "下午好" forever.
+    expect(greeting.filter((event) => event.type === "title")).toEqual([]);
+    expect(service.getConversation(conversation.id).title).toBe("");
+    const greetingText = greeting.filter((event) => event.type === "text_delta").map((event) => event.delta).join("");
+    expect(greetingText).toBe("下午好！有什么可以帮你？");
+
+    // The next turn has a real task, so it names the conversation.
+    const task = await streamTurn(service, conversation, provider.id, "帮我总结今天的未读邮件");
+
+    expect(task.filter((event) => event.type === "title").map((event) => event.title))
+      .toEqual(["帮我总结今天的未读邮件", "未读邮件总结"]);
+    expect(service.getConversation(conversation.id).title).toBe("未读邮件总结");
+    // The instruction is not tied to the first turn; that is what lets an
+    // untitled conversation be named once it has something to name.
+    expect(systemPrompts).toHaveLength(2);
+    expect(systemPrompts[0]).toContain("TITLE:");
+    expect(systemPrompts[1]).toContain("TITLE:");
+    await service.close();
+    masterKey.fill(0);
+    db.close();
+  });
+
   it("issues no outbound request when a first turn produces text", async () => {
     const outbound: string[] = [];
     vi.stubGlobal("fetch", (input: unknown) => {
@@ -238,27 +308,24 @@ describe("Agent service auxiliary provider calls ride the runtime seam", () => {
     });
     const { db, masterKey, service, provider, conversation } = fixture();
     const internals = internalRuntime(service);
-    vi.spyOn(internals.rag, "search").mockResolvedValue([{ citation: {}, content: "hit", score: 1 }]);
-    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request) {
-      if (request.requestId.startsWith("title-")) {
-        yield { type: "text_delta", delta: "Project review" };
-        yield { type: "completed", reason: "stop" };
-        return;
-      }
-      yield { type: "text_delta", delta: "Answered." };
+    vi.spyOn(internals.rag, "search").mockResolvedValue([ragHit]);
+    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+      yield { type: "text_delta", delta: "TITLE: Project review\n\nAnswered." };
       yield { type: "completed", reason: "stop" };
     });
 
     const events = await streamTurn(service, conversation, provider.id, "Summarize this message");
 
     expect(events).toContainEqual({ type: "title", title: "Project review" });
-    expect(streamChat).toHaveBeenCalledTimes(2);
+    expect(streamChat).toHaveBeenCalledTimes(1);
     expect(outbound).toEqual([]);
     await service.close();
     masterKey.fill(0);
     db.close();
   });
+});
 
+describe("Agent service auxiliary provider calls ride the runtime seam", () => {
   it("reviews an auto-reply through the seam and returns the parsed decision", async () => {
     const { db, masterKey, service, provider } = fixture();
     const internals = internalRuntime(service);

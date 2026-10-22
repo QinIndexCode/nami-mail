@@ -58,7 +58,7 @@ describe("settings connections copy buttons", () => {
     expect(pairBtn).not.toBeNull();
     expect(pairBtn?.classList.contains("settings-copy-btn")).toBe(true);
     expect(pairBtn?.classList.contains("copied")).toBe(false);
-    expect(pairBtn?.querySelector("svg")?.classList.contains("lucide-copy")).toBe(true);
+    expect(pairBtn?.querySelector(".lucide-copy")).not.toBeNull();
 
     await act(async () => {
       pairBtn?.click();
@@ -66,7 +66,7 @@ describe("settings connections copy buttons", () => {
 
     expect(writeText).toHaveBeenCalledWith("namimail pair");
     expect(pairBtn?.classList.contains("copied")).toBe(true);
-    expect(pairBtn?.querySelector("svg")?.classList.contains("lucide-check")).toBe(true);
+    expect(pairBtn?.querySelector(".lucide-check")).not.toBeNull();
     expect(container.querySelector('[role="status"]')?.textContent).toBe(translate("zh-CN", "settings.connections.mcp.copiedCommand"));
 
     // Advance 1400ms: still copied
@@ -74,14 +74,14 @@ describe("settings connections copy buttons", () => {
       vi.advanceTimersByTime(1400);
     });
     expect(pairBtn?.classList.contains("copied")).toBe(true);
-    expect(pairBtn?.querySelector("svg")?.classList.contains("lucide-check")).toBe(true);
+    expect(pairBtn?.querySelector(".lucide-check")).not.toBeNull();
 
     // Advance another 200ms (total 1600ms >= 1500ms): reverts back to copy
     act(() => {
       vi.advanceTimersByTime(200);
     });
     expect(pairBtn?.classList.contains("copied")).toBe(false);
-    expect(pairBtn?.querySelector("svg")?.classList.contains("lucide-copy")).toBe(true);
+    expect(pairBtn?.querySelector(".lucide-copy")).not.toBeNull();
     vi.useRealTimers();
   });
 
@@ -100,14 +100,14 @@ describe("settings connections copy buttons", () => {
     });
 
     expect(pathBtn.classList.contains("copied")).toBe(true);
-    expect(pathBtn.querySelector("svg")?.classList.contains("lucide-check")).toBe(true);
+    expect(pathBtn.querySelector(".lucide-check")).not.toBeNull();
     expect(pathBtn.textContent).toContain(translate("zh-CN", "settings.connections.mcp.copiedPath"));
 
     act(() => {
       vi.advanceTimersByTime(1600);
     });
     expect(pathBtn.classList.contains("copied")).toBe(false);
-    expect(pathBtn.querySelector("svg")?.classList.contains("lucide-copy")).toBe(true);
+    expect(pathBtn.querySelector(".lucide-copy")).not.toBeNull();
     expect(pathBtn.textContent).toContain(translate("zh-CN", "settings.connections.mcp.copyPath"));
     vi.useRealTimers();
   });

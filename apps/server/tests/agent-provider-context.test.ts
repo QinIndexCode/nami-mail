@@ -110,12 +110,6 @@ it("keeps the provider conversation user-led even after a long history", async (
     vi.spyOn(internals.rag, "search").mockResolvedValue([]);
     const providerRequests: ProviderChatRequest[] = [];
     vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-      // The first-turn title generator shares this seam. What this case records
-      // is the eight conversation turns, so the tail is answered with nothing.
-      if (request.requestId.startsWith("title-")) {
-        yield { type: "completed", reason: "stop" };
-        return;
-      }
       providerRequests.push(request.chat);
       yield { type: "text_delta", delta: "ok" };
       yield { type: "completed", reason: "stop" };
@@ -198,11 +192,7 @@ it("refuses to send when the tool schemas alone exceed the window", async () => 
       const internals = internalRuntime(value.service);
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       let providerRequests = 0;
-      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
-        if (request.requestId.startsWith("title-")) {
-          yield { type: "completed", reason: "stop" };
-          return;
-        }
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
         providerRequests += 1;
         yield { type: "text_delta", delta: "ok" };
         yield { type: "completed", reason: "stop" };
@@ -240,11 +230,7 @@ it("still completes a normal run on the same small window in chat mode (no tools
       const internals = internalRuntime(value.service);
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       let providerRequests = 0;
-      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
-        if (request.requestId.startsWith("title-")) {
-          yield { type: "completed", reason: "stop" };
-          return;
-        }
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
         providerRequests += 1;
         yield { type: "text_delta", delta: "ok" };
         yield { type: "completed", reason: "stop" };

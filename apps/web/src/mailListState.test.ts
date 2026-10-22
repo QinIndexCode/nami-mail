@@ -246,8 +246,21 @@ describe("mail list state", () => {
     })).toBe(false);
   });
 
-  it("matches the server Attachments view by the attachment flag alone", () => {
-    const withAttachment = { ...unreadMessage, hasAttachments: true };
+  it("matches the server Attachments view by the visible attachment metadata", () => {
+    // The view asks the same question the reader answers: is there an
+    // attachment card to show? A stale flag with no visible part must not make
+    // the message appear here.
+    const withAttachment = {
+      ...unreadMessage,
+      hasAttachments: true,
+      attachments: [{ partId: "a1", filename: "report.pdf", contentType: "application/pdf", size: 100, related: false, disposition: "attachment" as const }],
+    };
+    const inlineOnly = {
+      ...unreadMessage,
+      id: "message-inline",
+      hasAttachments: true,
+      attachments: [{ partId: "a2", filename: "wordmark.png", contentType: "image/png", size: 100, related: true, disposition: "inline" as const }],
+    };
 
     expect(matchesServerMessageQuery(withAttachment, accounts, {
       accountId: "all", folder: "", search: "", messageView: "attachments",
@@ -271,6 +284,13 @@ describe("mail list state", () => {
     expect(matchesServerMessageQuery(withAttachment, accounts, {
       accountId: "all", folder: "", search: "", messageView: "unread",
     })).toBe(true);
+
+    // Neither a related body image nor a flag with no metadata is an attachment.
+    for (const message of [inlineOnly, { ...unreadMessage, hasAttachments: true }]) {
+      expect(matchesServerMessageQuery(message, accounts, {
+        accountId: "all", folder: "", search: "", messageView: "attachments",
+      })).toBe(false);
+    }
   });
 
   it("retains a pending archive move through an empty response and replaces its display snapshot only with the same local record", () => {
@@ -403,6 +423,20 @@ describe("kind and date refinements mirror the server filters", () => {
     expect(matchesServerMessageQuery(blobMail, accounts, {
       accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", attachmentKind: "pdf",
     })).toBe(true);
+  });
+
+  it("ignores related body images when refining by kind", () => {
+    const inlineOnlyMail = {
+      ...unreadMessage,
+      id: "message-inline",
+      hasAttachments: true,
+      attachments: [{ partId: "a6", filename: "wordmark.png", contentType: "image/png", size: 100, related: true, disposition: "inline" as const }],
+    };
+    for (const attachmentKind of ["image", "pdf"] as const) {
+      expect(matchesServerMessageQuery(inlineOnlyMail, accounts, {
+        accountId: "account-1", folder: "INBOX", search: "", messageView: "inbox", attachmentKind,
+      })).toBe(false);
+    }
   });
 
   it("applies after inclusively and before exclusively", () => {

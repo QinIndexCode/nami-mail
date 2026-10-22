@@ -260,7 +260,7 @@ export function lastMessageIsStreaming(conversation: AgentConversation): boolean
   return Boolean(last && last.role === "assistant" && last.state === "streaming");
 }
 
-export function applyRevokedMarks(conversation: AgentConversation): AgentConversation {
+function applyRevokedMarks(conversation: AgentConversation): AgentConversation {
   return mergeRevokedMarks(conversation, readRevokedIds(conversation.id));
 }
 
@@ -295,7 +295,7 @@ export function mergeRevokedMarks(
  * that was followed by a successful assistant turn is outdated and is no longer
  * shown.
  */
-export function purgeStaleErrors(conversation: AgentConversation): AgentConversation {
+function purgeStaleErrors(conversation: AgentConversation): AgentConversation {
   const messages = conversation.messages;
   return {
     ...conversation,
@@ -306,6 +306,17 @@ export function purgeStaleErrors(conversation: AgentConversation): AgentConversa
       return message.content === "" ? [] : [{ ...message, error: undefined }];
     }),
   };
+}
+
+/**
+ * The view every fetched snapshot is adopted through. Stale failure rows are
+ * dropped first (otherwise an outdated error resurfaces next to a successful
+ * reply), then revoked marks are merged (otherwise a revoked row reappears).
+ * Adoption paths must not compose those two steps themselves: leaving one out
+ * is exactly how both bugs came back before.
+ */
+export function conversationView(conversation: AgentConversation): AgentConversation {
+  return applyRevokedMarks(purgeStaleErrors(conversation));
 }
 
 // ---------------------------------------------------------------------------

@@ -37,15 +37,18 @@ describe("CopyButton", () => {
     expect(button.classList.contains("copy-button")).toBe(true);
     expect(button.classList.contains("copied")).toBe(false);
     // The icon leads the label (the order every pre-refactor copy control had).
-    expect(button.firstElementChild?.tagName).toBe("svg");
+    // Both glyphs are mounted so CSS can cross-fade between them in either
+    // direction; `.copied` selects which one is visible.
+    const icon = button.firstElementChild!;
+    expect(icon.classList.contains("copy-button-icon")).toBe(true);
+    expect(icon.querySelector(".lucide-copy")).not.toBeNull();
+    expect(icon.querySelector(".lucide-check")).not.toBeNull();
     expect(button.lastElementChild?.textContent).toBe("Copy");
-    expect(button.querySelector("svg")!.classList.contains("lucide-copy")).toBe(true);
 
     await act(async () => button.click());
 
     expect(writeText).toHaveBeenCalledWith("hello");
     expect(button.classList.contains("copied")).toBe(true);
-    expect(button.querySelector("svg")!.classList.contains("lucide-check")).toBe(true);
     expect(button.textContent).toBe("Copied");
     expect(container.querySelector('[role="status"]')!.textContent).toBe("Copied hello");
 
@@ -54,7 +57,7 @@ describe("CopyButton", () => {
 
     act(() => vi.advanceTimersByTime(100));
     expect(button.classList.contains("copied")).toBe(false);
-    expect(button.querySelector("svg")!.classList.contains("lucide-copy")).toBe(true);
+    expect(button.firstElementChild?.querySelector(".lucide-copy")).not.toBeNull();
     expect(container.querySelector('[role="status"]')!.textContent).toBe("");
   });
 
@@ -71,7 +74,9 @@ describe("CopyButton", () => {
     expect(onFailed).toHaveBeenCalledTimes(1);
     const button = container.querySelector("button")!;
     expect(button.classList.contains("copied")).toBe(false);
-    expect(button.querySelector("svg")!.classList.contains("lucide-check")).toBe(false);
+    expect(button.firstElementChild?.querySelector(".lucide-check")).not.toBeNull();
+    // The checkmark stays mounted (CSS hides it), so the assertion that matters
+    // is that the button never entered the copied state.
   });
 
   it("drops the copied state when the text changes", async () => {

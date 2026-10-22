@@ -183,6 +183,13 @@ describe("filter rules", () => {
     expect(matchesFilterRuleConditions([{ kind: "subject", value: "weekly" }], payload)).toBe(true);
     expect(matchesFilterRuleConditions([{ kind: "has_attachments", value: true }], payload)).toBe(true);
     expect(matchesFilterRuleConditions([{ kind: "has_attachments", value: false }], payload)).toBe(false);
+    // A body image is not an attachment: the rule must agree with the reader,
+    // which renders no attachment section for this message.
+    const inlineOnly = demoPayload({
+      attachments: [{ partId: "2.2", filename: "wordmark.png", contentType: "image/png", size: 9, related: true, disposition: "inline" }],
+    });
+    expect(matchesFilterRuleConditions([{ kind: "has_attachments", value: false }], inlineOnly)).toBe(true);
+    expect(matchesFilterRuleConditions([{ kind: "has_attachments", value: true }], inlineOnly)).toBe(false);
     // All conditions are ANDed.
     expect(matchesFilterRuleConditions([
       { kind: "from", value: "other-sender" },

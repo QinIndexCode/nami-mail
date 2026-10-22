@@ -204,7 +204,11 @@ function persistAppendedDraft(
       ...protectedColumns,
       sentAt: now,
       flagsJson: JSON.stringify(["\\Draft"]),
-      hasAttachments: draft.attachments?.length ? 1 : 0,
+      // The payload stores no attachment metadata yet (APPEND assigns MIME part
+      // ids, so there is nothing downloadable to list). A flag without metadata
+      // is the paperclip-with-empty-reader mismatch; the first sync of Drafts
+      // hydrates the row and re-derives both from the provider's copy.
+      hasAttachments: 0,
       size: rawSize,
       createdAt: now,
     });

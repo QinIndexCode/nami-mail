@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { hasVisibleAttachments, isVisibleAttachment } from "@nami/agent-contracts";
 import { attachmentKindsJson } from "./attachment-kind.js";
 import type { DatabaseHandle } from "./db.js";
 import { redactUrls } from "./message-links.js";
@@ -182,10 +183,11 @@ export function writePendingSentRow(
     // What a provider stores for an accepted send. The synced copy replaces
     // this with the server's own flag set (Gmail may add labels).
     flagsJson: JSON.stringify(["\\Seen"]),
-    hasAttachments: attachments.length ? 1 : 0,
-    // The one plaintext projection of the attachment metadata, and the one the
-    // Attachments view and its sidebar count read: the payload's copy is sealed.
-    attachmentKindsJson: attachmentKindsJson(attachments),
+    hasAttachments: hasVisibleAttachments(attachments) ? 1 : 0,
+    // The plaintext projection of the attachment metadata, and the one the
+    // Attachments view and its sidebar count read: the payload's copy is
+    // sealed. Derived from the same visible subset as the flag.
+    attachmentKindsJson: attachmentKindsJson(attachments.filter(isVisibleAttachment)),
     payloadMetadataReady: 1,
     createdAt: now,
     pendingSend: input.submissionId,

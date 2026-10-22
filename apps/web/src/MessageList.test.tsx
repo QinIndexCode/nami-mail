@@ -466,6 +466,35 @@ describe("mail reader title wrapping", () => {
   });
 });
 
+describe("attachment marker", () => {
+  it("marks only messages whose reader has an attachment section", () => {
+    // A multipart/related inline image is a body resource, not an attachment:
+    // the reader filters it out. The row used to trust the server's
+    // hasAttachments flag, so a message whose only part was such an image got a
+    // paperclip that opened onto nothing. Both rows here carry a stale truthy
+    // flag; only the real file may show the marker.
+    const html = renderList({
+      messages: [
+        message({
+          id: "inline-only",
+          hasAttachments: true,
+          attachments: [{ partId: "2.2", filename: "wordmark.png", contentType: "image/png", size: 915, related: true, disposition: "inline" }],
+        }),
+        message({
+          id: "real-file",
+          hasAttachments: true,
+          attachments: [{ partId: "2", filename: "invoice.pdf", contentType: "application/pdf", size: 7, related: false, disposition: "attachment" }],
+        }),
+      ],
+    });
+    const marker = (id: string) =>
+      rows(html).find((row) => row.dataset.messageId === id)?.querySelector(".lucide-paperclip") ?? null;
+
+    expect(marker("inline-only")).toBeNull();
+    expect(marker("real-file")).not.toBeNull();
+  });
+});
+
 describe("list switching", () => {
   it("keeps the current rows on screen while a switch is still loading", () => {
     // A switch must never replace the rows with a shorter placeholder: the
