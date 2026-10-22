@@ -77,6 +77,12 @@ jobs:
       # GitHub ZIP update assets (the Ed25519 trust record must never embed the
       # release private key).
       - run: node --test "scripts/tests/*.test.mjs"
+      # The two documentation gates also run on their own so a failure names the
+      # claim or the file instead of an assertion diff: docs:claims:check compares
+      # every version and tool count with its source, docs:release-review lists
+      # what this release still has to rewrite.
+      - run: npm run docs:claims:check
+      - run: npm run docs:release-review
       - run: node scripts/build-docs-site.mjs
       - run: node scripts/build-locale-catalog.mjs --check
       - run: npm run lint

@@ -56,6 +56,7 @@ GitHub Actions 使用下列 Secrets：
 - `npm.cmd run sync:version` 会重写不含版本专属文案的副本：`site/index.html` 的 hero 徽标，以及 `docs/cli/examples.*.md` 与 `docs/cli/output-schema.*.md` 中的 `namimail version` 与 `meta.version` 示例输出。
 - 它有意不重写的是每个版本单独撰写的句子。三个 README 都用 `<!-- whats-new: v<version> -->` 钉住自己的版本小节（写在标题上一行），并链接 `docs/releases/v<version>.<lang>.md`；`docs/releases/README.<lang>.md` 列出该版本，本指南则指名当前版本的发布说明。脚本无法凭空生成这些文案——硬套会把某个版本的说明错标成另一个版本，因此必须在版本号变更的同一次提交里手工更新全部位置。
 - `npm.cmd run sync:version:check` 只报错不写入，并在 PR 门禁与发布工作流中运行，因此停留在上一版本的落地页既无法合入、也无法打标签。被发布的版本必须在两种语言下都已存在版本说明，检查才会通过。发布工作流还会额外运行 `node scripts/verify-release-notes.mjs`，它要求存在作为 GitHub Release 正文的 `docs/releases/v<version>.md`。
+- `npm.cmd run docs:release-review` 把上面这些位置合成一份工作清单：**BLOCK** 段是这次发布缺什么（版本说明三件套、三个 README 的 `whats-new` 标记、变更日志的 `[Unreleased]`、发布说明索引条目），**EDIT** 段列出每个 `shipped-as` 标记还停在旧版本的文档——那份清单就是切版本时必须重写的文件，改完再跑一次应当为空。`npm.cmd run docs:claims:check` 则保证文档里的版本号与工具数与事实一致，两者都在 PR 门禁里。
 
 执行与本次改动相关的检查，再执行完整基线：
 

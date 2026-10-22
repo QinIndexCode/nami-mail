@@ -7,6 +7,7 @@ This checklist is a release gate, not a future-work wish list. Do not publish an
 ## Code and documentation
 
 - [ ] Chinese/English documentation pairs, relative links, and commands are checked; planned capabilities are not written as shipped.
+- [ ] `npm.cmd run docs:claims:check` passes silently, and `npm.cmd run docs:release-review` reports an empty BLOCK section with every `shipped-as` file in its EDIT section already bumped to this version in this release's commits. Together these cover the two drifts that used to be found by hand: a document carrying an expired version or tool count, and a behaviour document still describing the previous release.
 - [ ] Agent/RAG/CLI/MCP schemas, error codes, permissions, and user copy are reviewed.
 - [ ] All new code comments are English; no debug keys, test credentials, real mail, or local databases enter version control.
 - [ ] Message translation remains explicitly opt-in and is not an Agent provider.

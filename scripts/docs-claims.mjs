@@ -35,7 +35,7 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const defaultRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+export const defaultRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** The blockquote that opens every CLI/MCP page and the root READMEs. */
 const STATUS_LINE = /^>\s*\*\*(?:当前构建状态|Current-build status)/;
@@ -52,7 +52,7 @@ const TOTAL_TIER = /^(?:工具|tools?)$/;
  * statement about the current release. The marker is what lets the release
  * review list the pages that must be rewritten at the version cut.
  */
-const SCOPED_DOCUMENTS = [
+export const SCOPED_DOCUMENTS = [
   "README.md",
   "README.zh-CN.md",
   "README.en.md",
