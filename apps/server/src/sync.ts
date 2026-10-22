@@ -986,10 +986,8 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
             : null)
             ?? hydratedMessageIds.get(message.uid)
             ?? messageKey(accountId, folder.path, message.uid);
-          // No fabricated subject: the fallback used to be a hard-coded Chinese
-          // "（无主题）" stored in the row, which rendered as Chinese text in
-          // every other UI language. The list and reader localize an empty
-          // subject instead, so nothing locale-specific goes into storage.
+          // Empty, not a hard-coded Chinese "（无主题）": the stored row must not
+          // carry one UI language's placeholder, so the reader localizes it.
           const subject = parsed?.subject ?? message.envelope?.subject ?? "";
           const flags = [...(message.flags ?? [])];
           const attachments = attachmentMetadataFromParsedMail(parsed?.attachments ?? []);
@@ -1179,18 +1177,9 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       const targets = pendingRuleTargets;
       pendingRuleTargets = [];
       // Filter-rule automation must never break the sync result. Failures are
-      // logged and the affected messages remain visible for manual handling;
-      // the per-message lines come from applyFilterRulesToNewMessages, and this
-      // pairing reports how many were affected without throwing.
+      // logged and the affected messages remain visible for manual handling.
       void applyFilterRulesToNewMessages(db, masterKey, accountId, targets, accessTokenProvider, agentEvents)
-        .then((result) => {
-          if (result.failed > 0) {
-            serverLog.warn({ accountId, ...result }, "Nami Mail applied filter rules with failures");
-          }
-        })
-        .catch((error) => {
-          serverLog.warn({ accountId }, "Filter rule application failed", error);
-        });
+        .catch((error) => { serverLog.warn({ accountId }, "Filter rule application failed", error); });
     }
     if (pendingAutoReplyTargets.length > 0) {
       const targets = pendingAutoReplyTargets;

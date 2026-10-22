@@ -73,5 +73,8 @@ export async function applyFilterRulesToNewMessages(
       );
     }
   }
+  // The per-message lines above say which rule failed on which message; this
+  // one line is what makes the count visible without reading the whole log.
+  if (failed > 0) serverLog.warn({ accountId, matched, failed }, "Nami Mail applied filter rules with failures");
   return { matched, failed };
 }
