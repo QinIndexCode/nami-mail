@@ -34,7 +34,7 @@ Fastify 本地服务 (127.0.0.1，桌面版使用动态端口)
 | 位置 | 职责 |
 | --- | --- |
 | `apps/web` | React 界面、主题、邮件阅读/撰写、账户引导和本地 API 客户端。 |
-| `apps/web/src/app/mailStore.ts` † | 前端邮件列表目标态的唯一 store：列表行、合计与侧边栏计数都从同一份 `messages` 派生，写入方只声明邮件发生了什么变化，不再各自维护计数。 |
+| `apps/web/src/app/mailStore.ts` † | 前端邮件列表状态的唯一 store：行级状态（已读/星标/移动/删除/恢复）由它统一持有；合计以最近一次服务端快照为基线做增量修正（`nextMessageTotalForSnapshot` 加少量本地加减），侧边栏徽标直接读 `/api/stats` 返回的 `stats`。写入方只声明邮件发生了什么变化，不再各自维护行状态。 |
 | `apps/server` | Fastify 路由、IMAP/SMTP、OAuth、服务商发现、同步、草稿/发件队列、SQLite 与应用层加密；Agent 服务、工具执行与权限。 |
 | `apps/server/src/tasks/` † | 持久任务层：单张 `tasks` 表、每账户串行调度器，以及按 kind 注册的 runner（`move`/`flags`/`undo`/`send`/`snooze`）把本地已提交的目标态收敛到 IMAP/SMTP，取代已删除的 `operation_queue`/`batch_jobs`；只读进度经 `/api/tasks`（`routes/tasks.ts`）与兼容别名 `/api/batch-jobs` 暴露。 |
 | `apps/server/src/provider/` † | IMAP/SMTP 传输构造的唯一接缝：所有 ImapFlow 与 Nodemailer 实例都经同一工厂创建，测试与桌面宿主可在不改调用点的情况下替换网络实现。 |
@@ -57,7 +57,7 @@ Fastify 本地服务 (127.0.0.1，桌面版使用动态端口)
 - Windows 桌面版主密钥由 Electron `safeStorage` 以当前 Windows 用户的 DPAPI 保护。主进程仅在启动本地运行时时将解封装的密钥以内存形式交给服务端。
 - 服务端对凭据、OAuth 刷新令牌、邮件敏感载荷、发件队列和出站附件使用应用层 AES-256-GCM 加密；这不等同于 SQLite 整库加密，明文元数据及威胁边界详见 [隐私说明](PRIVACY.zh-CN.md)。整库静态加密属于主干新增能力（上表 † 项），尚未随版本发布，本节其余描述仍对应 v0.5.1 的发布行为。
 - 邮件内容、附件名、服务器响应和 OAuth 回调都是不可信输入。修改解析、HTML 展示、附件下载或回调逻辑时，必须保留现有校验、清理和容量限制。
-- 附件可见性只有一个定义：`multipart/related` 内联部件（`related: true`，如正文内嵌图、签名图、追踪像素）属于正文资源，不算附件。`messages.has_attachments`、`attachment_kinds_json`、附件视图与侧边栏计数、过滤规则以及列表的回形针，都必须由同一份「非 related」元数据派生；阅读区展示的附件列表是这条规则的参考实现。
+- † **附件可见性（2026-10 主干新增，未随 v0.5.1 发布；历史邮件的一次性元数据回填随同一批变更交付）**：`multipart/related` 内联部件（`related: true`，如正文内嵌图、签名图、追踪像素）属于正文资源，不算附件。`messages.has_attachments`、`attachment_kinds_json`、附件视图与侧边栏计数、过滤规则以及列表的回形针，都必须由同一份「非 related」元数据派生；阅读区展示的附件列表是这条规则的参考实现。
 - Electron 使用单实例锁。再次打开应用时会恢复并聚焦已有窗口，而不是再启动一套本地服务、数据库或同步任务。
 
 ## 更新与关闭

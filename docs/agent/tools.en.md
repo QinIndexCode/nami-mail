@@ -67,7 +67,7 @@ Address book tools search and curate local contacts. Data is encrypted on disk w
 
 ### 4. Memory Tools (`memory.*`)
 
-Long-term memory tools allow the Agent to store cross-conversation user facts, preferences, and recurring context. Records are device-local, encrypted, and reversible.
+Long-term memory tools allow the Agent to store cross-conversation user facts, preferences, and recurring context. Records are device-local and encrypted and support query, create, update, and delete; **an update overwrites the previous value (no history is kept), and a delete removes the record outright (there is no trash)**. Memory shares its store with the auto-reply ledger, and `memory.update` does not filter by kind, so ledger entries can be rewritten too (see [known limitations](../development/known-limitations.en.md) item 6).
 
 | Tool Identifier | Mode | Required Scopes | External CLI/MCP | Confirmation Policy | Description |
 | --- | --- | --- | --- | --- | --- |

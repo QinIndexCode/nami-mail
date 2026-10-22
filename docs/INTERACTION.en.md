@@ -8,7 +8,7 @@ Cross-module interaction rules. Each one exists because of a real defect that wa
 
 - A bulk action that **succeeds** clears the selection and leaves multi-select; one that **fails** keeps the selection so it can be retried.
 - Why: processed rows that stay selected mean the next click on any row fires a second batch.
-- Where: `batchUpdateFlags` in `App.tsx` (the `applied` flag gates `exitSelectionMode()`) and `exitOnSuccess` on the predicate batch-job path.
+- Where: `batchUpdateFlags` and the `applied` gate live in `apps/web/src/app/useBatchSelection.ts` (extracted out of `App.tsx`, which now only calls them); `exitOnSuccess` stays on the predicate batch-job path.
 - On partial failure, unpin the failed rows **before** the reconciling reload, or their optimistic value overrides the server's truth.
 
 ## 2. Optimistic updates: apply locally, roll back on failure

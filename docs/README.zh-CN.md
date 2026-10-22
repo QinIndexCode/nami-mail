@@ -40,6 +40,12 @@ Nami Mail 当前发布 Windows x64 桌面版。本页按任务整理公开文档
 - [大文件拆分计划（已归档）](development/REFACTORING-PLAN.archive.zh-CN.md)：2026-09 的接缝测绘快照，行号与规模数字已作废，仅保留拆分方法论。
 - [已知限制与取舍](development/known-limitations.zh-CN.md)：已核实的能力边界、刻意不做的取舍和未完成项的唯一清单。
 - [决策记录](development/decisions/README.zh-CN.md)：已生效的结构性取舍——当时的问题、选了哪条路、放弃了什么。
+- 归档开发记录（保留发布、不参与导航）：[Agent 自动回复与长期记忆实施计划](development/auto-reply-plan-progress.archive.zh-CN.md)、[RAG 词法索引持久化计划](development/rag-index-plan-progress.archive.zh-CN.md)。
+
+## 路线图与站点
+
+- [路线图（未排期的 backlog）](ROADMAP.zh-CN.md)：已确认但尚未排期的功能与性能项；已排期项见 CHANGELOG 的 `[Unreleased]` 区块。
+- [官网与交互演示](WEBSITE.zh-CN.md)：`site/` 静态站点、演示数据边界与本地构建方式。
 
 ## 语言与版本
 

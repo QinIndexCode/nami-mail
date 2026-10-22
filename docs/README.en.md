@@ -40,6 +40,12 @@ Nami Mail currently ships a Windows x64 desktop app. This page organizes the pub
 - [Large-file refactoring plan (archived)](development/REFACTORING-PLAN.archive.en.md): the 2026-09 seam mapping, with void line numbers and size figures; only the methodology carries over.
 - [Known limitations and trade-offs](development/known-limitations.en.md): the single list of verified capability boundaries, deliberate trade-offs, and unfinished items.
 - [Decision records](development/decisions/README.en.md): structural trade-offs already in effect — the problem, the path chosen, and what was given up.
+- Archived development notes (published, not part of navigation; Chinese only): [Agent auto-reply and long-term memory plan](development/auto-reply-plan-progress.archive.zh-CN.md), [RAG lexical index persistence plan](development/rag-index-plan-progress.archive.zh-CN.md).
+
+## Roadmap and website
+
+- [Roadmap (unscheduled backlog)](ROADMAP.en.md): features and performance work confirmed but not yet scheduled; scheduled items live in the CHANGELOG `[Unreleased]` section.
+- [Website and interactive demo](WEBSITE.en.md): the `site/` static site, demo-data boundaries, and local build steps.
 
 ## Languages and Versions
 

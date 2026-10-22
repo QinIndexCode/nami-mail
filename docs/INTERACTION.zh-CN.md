@@ -8,7 +8,7 @@
 
 - 多选操作**成功** → 清空选择并退出多选态；**失败** → 保留选择，便于重试。
 - 理由：处理完的选中项若继续保持选中，用户下一次点击任意一行就会再触发一次批量操作。
-- 实现位置：`App.tsx` 的 `batchUpdateFlags`（`applied` 标志控制 `exitSelectionMode()`）、谓词批量任务路径的 `exitOnSuccess`。
+- 实现位置：`apps/web/src/app/useBatchSelection.ts` 的 `batchUpdateFlags`（`applied` 标志控制 `exitSelectionMode()`）、谓词批量任务路径的 `exitOnSuccess`；`App.tsx` 只是调用方。
 - 部分失败时，失败行要在「对账 reload」**之前**解除乐观 pin，否则它的乐观值会压过服务端真相。
 
 ## 2. 乐观更新：先本地生效，失败必须回滚

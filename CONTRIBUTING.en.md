@@ -63,6 +63,8 @@ npm.cmd run typecheck
 npm.cmd run test
 npm.cmd run lint
 npm.cmd run test:e2e
+npm.cmd run docs:claims:check
+npm.cmd run docs:release-review
 npm.cmd --workspace @nami/web run test
 npm.cmd run test:desktop-security
 npm.cmd run build
@@ -75,7 +77,7 @@ See the [Release Guide](docs/RELEASING.en.md) for additional Windows installer, 
 
 1. Fork the upstream repository and create a clearly named feature or fix branch from the latest `main`. Do not push commits directly to upstream `main`.
 2. Commit focused changes in your fork. Do not push `.env`, test accounts, OAuth callback parameters, tokens, app passwords, certificates, build artifacts, or local data.
-3. Run the complete local checks below before submitting. They are the local subset of GitHub's `Validate Pull Request / validate` — CI additionally runs `lint`, `test:e2e`, SQLite load verification, and smoke checks. For documentation-only changes, run the relevant checks at minimum and state any checks not run in the PR.
+3. Run the complete local checks below before submitting. They are the local subset of GitHub's `Validate Pull Request / validate` — CI additionally runs checks outside this list: Node/Electron SQLite load verification, `smoke:server-node`, the script-level invariant suite (`node --test "scripts/tests/*.test.mjs"`), `docs:claims:check`, `docs:release-review`, the docs-site build and locale check, `test:e2e:real`, the Electron ABI check plus desktop smoke, and `npm audit`. For documentation-only changes, run the relevant checks at minimum and state any checks not run in the PR.
 4. Open a pull request against upstream `main`. Use the template to describe the related issue, user-visible changes, validation evidence, and remaining risks. Validation workflows from forks use read-only tokens and cannot read release or signing credentials. Do not ask a PR workflow to expose those credentials.
 5. Wait for `Validate Pull Request / validate` to pass before requesting review. The current `main` rules require a PR, resolved discussions, at least one valid approval, and `validate` based on the latest `main`. New commits dismiss prior approvals. `.github/CODEOWNERS` routes PRs to maintainers automatically, but it does not replace remote rules or human review. Regular collaborators cannot push directly or force-push. Administrators should bypass the rules only in an emergency and leave an auditable follow-up PR.
 
@@ -90,6 +92,8 @@ npm.cmd run build
 npm.cmd run test
 npm.cmd run lint
 npm.cmd run test:e2e
+npm.cmd run docs:claims:check
+npm.cmd run docs:release-review
 npm.cmd --workspace @nami/web run test
 npm.cmd run test:desktop-security
 npm.cmd run smoke:runtime
