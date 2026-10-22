@@ -38,6 +38,8 @@
     "build:site": "node scripts/build-site.mjs",
     "sync:version": "node scripts/sync-site-version.mjs",
     "sync:version:check": "node scripts/sync-site-version.mjs --check",
+    "docs:claims": "node scripts/docs-claims.mjs",
+    "docs:claims:check": "node scripts/docs-claims.mjs --check",
     "sync:demo": "node scripts/sync-site-demo.mjs",
     "screenshots:round": "node scripts/round-screenshots.mjs",
     "screenshots:site": "node scripts/capture-site-screenshots.mjs",
