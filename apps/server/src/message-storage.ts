@@ -564,20 +564,33 @@ export function migrateMessageStorage(db: DatabaseHandle, masterKey: Buffer): { 
  * holds a decryptable payload. A row whose payload cannot be read keeps its
  * previous values: nothing can be derived from it, and inventing zeros would
  * trade one inconsistency for another.
+ *
+ * That exception is counted rather than dropped. The sweep still records its
+ * marker — a permanently unreadable row must not cost a full-table decrypt on
+ * every start — so the returned `unclassified` count is the only trace that the
+ * columns and the derived metadata disagree somewhere, and callers that gain a
+ * diagnostics surface should report it.
  */
-export function ensureAttachmentMetadata(db: DatabaseHandle, masterKey: Buffer): { backfilled: number } {
+export function ensureAttachmentMetadata(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+): { backfilled: number; unclassified: number } {
   const marker = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?").get(ATTACHMENT_METADATA_MIGRATION_ID);
-  if (marker) return { backfilled: 0 };
+  if (marker) return { backfilled: 0, unclassified: 0 };
   const rows = db.prepare("SELECT * FROM messages").all() as MessageStorageRow[];
   const update = db.prepare("UPDATE messages SET has_attachments = ?, attachment_kinds_json = ? WHERE id = ?");
   let backfilled = 0;
+  let unclassified = 0;
   db.transaction(() => {
     for (const row of rows) {
       let payload: MessagePayload;
       try {
         payload = messagePayloadForRow(row, masterKey);
       } catch {
-        continue; // Unreadable payloads cannot be classified either.
+        // Unreadable payloads cannot be classified either; the row keeps the
+        // flag it had, and the count below is what says so.
+        unclassified += 1;
+        continue;
       }
       const visible = (payload.attachments ?? []).filter(isVisibleAttachment);
       update.run(visible.length ? 1 : 0, attachmentKindsJson(visible), row.id);
@@ -588,5 +601,5 @@ export function ensureAttachmentMetadata(db: DatabaseHandle, masterKey: Buffer):
       ON CONFLICT(id) DO UPDATE SET completed_at = excluded.completed_at
     `).run(ATTACHMENT_METADATA_MIGRATION_ID, new Date().toISOString());
   })();
-  return { backfilled };
+  return { backfilled, unclassified };
 }

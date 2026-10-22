@@ -34,9 +34,9 @@
 
 **现状。** 附件可见性统一为“非 `multipart/related` 部分才算附件”后，旧库需要把 `has_attachments` 与 `attachment_kinds_json` 重算一次。`apps/server/src/message-storage.ts` 的 `ensureAttachmentMetadata` 在 `buildApp` 的启动序列里同步执行：读取全表、逐行解密邮件载荷、重算两列，完成后写入 `data_migrations` 标记（`attachment-metadata-v1`）。载荷无法解密的行保留旧值，不阻断启动。
 
-**影响。** 这是一次性的启动阻塞，成本随消息数量与载荷大小增长。本机实测样本：主库文件约 637 MB（2026-10 测量；数据目录合计约 772 MB，含端到端夹具，随邮箱规模变化）。回填完成后，后续启动读到标记即跳过。**当前没有对外计数**：函数返回 `{ backfilled }`，但启动调用处没有记录，`/api/stats` 的字段只有 accounts/messages/unread/starred/snoozed/attachments，不含回填进度或条数。
+**影响。** 这是一次性的启动阻塞，成本随消息数量与载荷大小增长。本机实测样本：主库文件约 637 MB（2026-10 测量；数据目录合计约 772 MB，含端到端夹具，随邮箱规模变化）。回填完成后，后续启动读到标记即跳过——即使有载荷读不出来的行也会写入标记，否则每次启动都要为它们全表解密一次。**仍然没有对外的计数**：函数返回 `{ backfilled, unclassified }`（`unclassified` 是载荷无法读取、因而保留了旧标记的行数），但启动调用处没有记录这个返回值，`/api/stats` 的字段只有 accounts/messages/unread/starred/snoozed/attachments，不含回填进度或条数。
 
-**当前应对。** 接受一次性成本；大邮箱升级时为首次启动预留时间。排障时可观察启动耗时。若需要在界面或日志里观测回填条数，必须先新增日志或指标（目前没有）。
+**当前应对。** 接受一次性成本；大邮箱升级时为首次启动预留时间。排障时可观察启动耗时。`unclassified` 大于 0 说明有行永远无法归类（通常是主密钥与数据库不匹配）；要让它出现在界面或日志里，必须先新增日志或指标（目前没有）。
 
 ## 3. 草稿附件的回形针延迟
 
