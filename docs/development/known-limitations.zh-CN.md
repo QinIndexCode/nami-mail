@@ -4,7 +4,7 @@
 
 本页集中记录 Nami Mail **已核实的能力边界与刻意的取舍**：每条给出代码或文档依据、影响范围，以及当前应对或接受它的理由。它不是路线图（不承诺时间表），也不是缺陷列表（可复现的 bug 请提交 GitHub Issues）。发布说明、审计与排障统一引用本页，不再各自重述。
 
-核实基线：2026-10-22 的工作树（提交 `4913d67`）。代码变动后应同步复核对应条目。
+核实基线：2026-10-22 的工作树（提交 `cd47467`）。代码变动后应同步复核对应条目。
 
 ## 一览
 
@@ -21,6 +21,7 @@
 | 9 | 保留的 `/api/batch-jobs` 兼容别名 | API 兼容 |
 | 10 | 没有稳定版 / 测试版通道与一键回滚 | 发布策略 |
 | 11 | 错误日志：有界文件，没有用户侧错误历史 | 排障 / 隐私 |
+| 12 | 2026-10-22 审计中未修复的项 | 审计 / 未修项 |
 
 ## 1. Outlook / Hotmail 登录受限（issue #120）
 
@@ -34,9 +35,9 @@
 
 **现状。** 附件可见性统一为“非 `multipart/related` 部分才算附件”后，旧库需要把 `has_attachments` 与 `attachment_kinds_json` 重算一次。`apps/server/src/message-storage.ts` 的 `ensureAttachmentMetadata` 在 `buildApp` 的启动序列里同步执行：读取全表、逐行解密邮件载荷、重算两列，完成后写入 `data_migrations` 标记（`attachment-metadata-v1`）。载荷无法解密的行保留旧值，不阻断启动。
 
-**影响。** 这是一次性的启动阻塞，成本随消息数量与载荷大小增长。本机实测样本：主库文件约 637 MB（2026-10 测量；数据目录合计约 772 MB，含端到端夹具，随邮箱规模变化）。回填完成后，后续启动读到标记即跳过——即使有载荷读不出来的行也会写入标记，否则每次启动都要为它们全表解密一次。**仍然没有对外的计数**：函数返回 `{ backfilled, unclassified }`（`unclassified` 是载荷无法读取、因而保留了旧标记的行数），但启动调用处没有记录这个返回值，`/api/stats` 的字段只有 accounts/messages/unread/starred/snoozed/attachments，不含回填进度或条数。
+**影响。** 这是一次性的启动阻塞，成本随消息数量与载荷大小增长。本机实测样本：主库文件约 637 MB（2026-10 测量；数据目录合计约 772 MB，含端到端夹具，随邮箱规模变化）。回填完成后，后续启动读到标记即跳过——即使有载荷读不出来的行也会写入标记，否则每次启动都要为它们全表解密一次。**有日志、没有用户侧界面**：函数返回 `{ backfilled, unclassified }`（`unclassified` 是载荷无法读取、因而保留了旧标记的行数），启动调用处已把返回值写入 `serverLog`（`unclassified > 0` 时记 warn），但 `/api/stats` 的字段只有 accounts/messages/unread/starred/snoozed/attachments，界面没有回填进度或条数。
 
-**当前应对。** 接受一次性成本；大邮箱升级时为首次启动预留时间。排障时可观察启动耗时。`unclassified` 大于 0 说明有行永远无法归类（通常是主密钥与数据库不匹配）；要让它出现在界面或日志里，必须先新增日志或指标（目前没有）。
+**当前应对。** 接受一次性成本；大邮箱升级时为首次启动预留时间。排障时可观察启动耗时。`unclassified` 大于 0 说明有行永远无法归类（通常是主密钥与数据库不匹配）。这个数现在能在服务端日志里看到；要让它出现在界面，仍需新增指标或界面入口（目前没有）。
 
 ## 3. 草稿附件的回形针延迟
 
@@ -113,9 +114,26 @@
 
 **现状。** 服务端日志走标准输出 / 标准错误（pino），应用**没有面向用户的错误历史、日志查看器或导出入口**。打包桌面会把启动阶段、崩溃、未处理拒绝以及子进程 console 输出镜像进 userData 下的**有界**诊断文件：`startup-log.jsonl`、`startup-timings.json`、`runtime-log.jsonl`（行数与单条长度受限；`NAMI_MAIL_NO_STARTUP_LOG=1` 可关闭追加）。数据目录另有有界的 `startup-request-log.jsonl`（只记录 method 与去掉查询串的路径）。发布流程的 `scripts/smoke-diagnostics.mjs` 是**安装 / 打包 smoke** 的诊断写入器（会脱敏敏感环境变量），不是用户排障入口。
 
-**影响。** 用户排障主要靠界面错误提示与上述有界文件；没有“一键导出错误日志”的路径，跨会话的错误历史会被有界轮转覆盖。
+**影响。** 附件回填的 `unclassified`、FTS 的 `skipped` 与过滤规则失败都会写入服务端日志（部分会镜像进上述有界文件），但应用没有面向用户的查看或导出入口。用户排障主要靠界面错误提示与上述有界文件；没有“一键导出错误日志”的路径，跨会话的错误历史会被有界轮转覆盖。
 
 **当前应对。** 接受有界与自动清理，避免无界增长与隐私面扩大。反馈问题时附上界面提示，以及（如需）userData 与数据目录下的诊断文件；发布验证使用 smoke diagnostics。若将来提供用户侧导出，必须同时确定脱敏规则。
+
+## 12. 2026-10-22 审计中未修复的项
+
+**现状。** 2026-10-22 的只读审计复核了 2026-10 重构后的实现。下列问题已确认存在、本轮未修；本轮已修复的项不在此列（修复记录在 CHANGELOG 的 `[Unreleased]` 段）。
+
+| 严重度 | 位置 | 现状与影响 | 为何暂不修 |
+|---|---|---|---|
+| P2 | `apps/web/src/App.tsx:1316-1324` | `threadExtras` / `threadStripMembersRef` 持有列表之外的线程成员整行快照；对只在 extras 里的成员（从线程条打开的旧邮件）执行“标为未读”，API 成功但界面不变，因为 `store.applySeen` 找不到该行。 | 属状态所有权调整，需先把线程成员的读取路径并回单一 store。 |
+| P2 | `apps/web/src/app/useAppRealtimeSync.ts:70-74`、`App.tsx:830-871` | `onTaskSettled` 直接调 `reconcileFromEvents()` → `silentRefresh()`，绕开 `useCoalescedRefresh` 承诺的“窗口隐藏时只标脏”；桌面 `backgroundThrottling: false`，最小化时仍会跑 4 个并行请求。 | 需先决定“任务结算的可见性优先级是否高于窗口隐藏”。 |
+| P2 | `apps/desktop/src/main.mts:2068-2075,2081,2096-2102` | `second-instance` 的入口是 `void (async () => …)()`（或 `.then`）且没有 `catch`；boot 未完成时 `localServer` 还是 `undefined`，不建窗只 `focusWindow()`，用户看到“点了没反应”，错误只进 `runtime-log.jsonl`。 | 要改 Electron 启动生命周期，需真机验证首启与崩溃重启两条时序。 |
+| P2 | `apps/server/src/app.ts:111` | CSP `img-src 'self' data: blob: https: http:` 放行明文 HTTP 与任意外域；正文图片已被 `rewriteRemoteImagesToProxy` 改写成同源代理，唯一外域直连是 `https://` 的 Gravatar。 | 收窄要先枚举全部渲染源，做错会静默丢图；当前无确认利用链。 |
+| P2 | `apps/web/src/realtimeSync.ts:150-151,200-201,222-223` | 先写 `lastSseEventAt` 再解析帧；坏帧被当作“流是活的”，会抑制一轮轮询（间隔 30/60/180/300s 可选）。 | 仅跨版本组合才可能触发，且有手动重连兜底。 |
+| P3 | `apps/server/src/mail.ts:87-104`、`calendar.ts:255`、`message-links.ts:44`、`settings.ts:34` | 零调用导出：`testMailboxConnection`（`testAccountConnection` 的旧子集）、`clearAllCalendarEvents`、`localizeLinks`、`AGENT_ACCESS_LEVELS` 全仓无调用方。 | 删除要确认没有外部脚本依赖，属清理批次。 |
+| 结构性 | `apps/web/src/app/mailStore.ts` | `total` 不是从 `messages` 派生，而是服务端快照 + 5 处本地 ±1（`nextMessageTotalForSnapshot`、`applyMove`、`restoreMove`、`removeMessages`、`restoreMessages`）；本页第 2 节的描述已按现状写。 | 服务端 `total` 是全量匹配数，前端只有已加载页，无法真派生；要改需要服务端提供可增量校验的计数。 |
+| 边界 | `apps/server/src/message-storage.ts`（`verifyEncryptedPayloads`） | 迁移后的校验扫描仍 fail-closed，错误里点名受影响的行 id（最多 50 个），但没有“跳过并继续启动”的开关；FTS 与附件回填遇到坏行会跳过并记录 `skipped` / `unclassified`，同样没有修复入口。 | 刻意保留的失败关闭策略，放宽需要产品决定。 |
+| 残留 | `apps/server/src/sync.ts`（`subject` 派生处） | 新行不再写中文占位“（无主题）”，但已落库的历史行要等下一次 IMAP 重新同步才会变成空主题；在此之前英文界面仍会显示中文。 | 改写历史行需要一次数据迁移，收益低于风险。 |
+| 已缓解 | `apps/server/src/database-encryption.ts`（`recoverInterruptedConversion`） | 写零主库到改名之间崩溃，下次启动可从 `.encrypting` 校验后接管并记 warn；但主库被写零的那几秒内进程若被强杀，本次会话仍需重启恢复。 | 彻底消除需要“先改名再销毁”的重排，属另一批改动。 |
 
 ## 相关文档
 

@@ -4,7 +4,7 @@
 
 This page collects Nami Mail's **verified capability boundaries and deliberate trade-offs** in one place. Each entry states the evidence (a code location or a document), what it affects, and how it is handled today or why we accept it. It is not a roadmap — no dates are promised — and it is not a bug list; report reproducible defects through GitHub Issues. Release notes, audits and troubleshooting all reference this page instead of restating the gaps.
 
-Verified against the working tree of 2026-10-22 (commit `4913d67`). Re-check the relevant entry when the code changes.
+Verified against the working tree of 2026-10-22 (commit `cd47467`). Re-check the relevant entry when the code changes.
 
 ## At a glance
 
@@ -21,6 +21,7 @@ Verified against the working tree of 2026-10-22 (commit `4913d67`). Re-check the
 | 9 | The retained `/api/batch-jobs` compatibility alias | API compatibility |
 | 10 | No stable / beta channel and no one-click rollback | Release policy |
 | 11 | Error logs: bounded files, no user-facing error history | Diagnostics / privacy |
+| 12 | Items from the 2026-10-22 audit that remain unfixed | Audit / open items |
 
 ## 1. Outlook / Hotmail sign-in is limited (issue #120)
 
@@ -34,9 +35,9 @@ Verified against the working tree of 2026-10-22 (commit `4913d67`). Re-check the
 
 **Current state.** After attachment visibility was unified to "a part counts only when it is not `multipart/related`", older databases need `has_attachments` and `attachment_kinds_json` recomputed once. `ensureAttachmentMetadata` in `apps/server/src/message-storage.ts` runs synchronously inside `buildApp`'s startup sequence: it reads the whole table, decrypts each message payload, recomputes both columns, and records a `data_migrations` marker (`attachment-metadata-v1`). A row whose payload cannot be decrypted keeps its previous values and does not block startup.
 
-**Impact.** A one-time startup stall whose cost scales with message count and payload size. Measured sample on this machine: a main database file of about 637 MB (measured 2026-10; the whole data directory is about 772 MB including end-to-end fixtures; both vary with mailbox size). Once the backfill completes, later starts see the marker and skip it — the marker is written even when some payloads stay unreadable, because otherwise every start would have to decrypt the whole table for them. **There is still no externally visible counter**: the function returns `{ backfilled, unclassified }` (`unclassified` counts the rows whose payload could not be read and therefore kept their previous flags), but the startup call site does not record that return value, and `/api/stats` exposes only accounts/messages/unread/starred/snoozed/attachments — no backfill progress or count.
+**Impact.** A one-time startup stall whose cost scales with message count and payload size. Measured sample on this machine: a main database file of about 637 MB (measured 2026-10; the whole data directory is about 772 MB including end-to-end fixtures; both vary with mailbox size). Once the backfill completes, later starts see the marker and skip it — the marker is written even when some payloads stay unreadable, because otherwise every start would have to decrypt the whole table for them. **Logged, but not surfaced in the UI**: the function returns `{ backfilled, unclassified }` (`unclassified` counts the rows whose payload could not be read and therefore kept their previous flags); the startup call site writes that result to `serverLog` (a warn when `unclassified > 0`), but `/api/stats` exposes only accounts/messages/unread/starred/snoozed/attachments — the interface shows no backfill progress or count.
 
-**How it is handled.** We accept the one-time cost; expect a longer first start for a large mailbox. Startup duration is the observable signal. A non-zero `unclassified` means some rows can never be classified (usually a master key that does not match the database); surfacing it in the UI or logs would require adding logging or a metric first (none exists today).
+**How it is handled.** We accept the one-time cost; expect a longer first start for a large mailbox. Startup duration is the observable signal. A non-zero `unclassified` means some rows can never be classified (usually a master key that does not match the database); the number is now visible in the server log; surfacing it in the UI would still require a metric or an interface entry point (neither exists today).
 
 ## 3. Draft attachments get their paperclip late
 
@@ -113,9 +114,26 @@ Verified against the working tree of 2026-10-22 (commit `4913d67`). Re-check the
 
 **Current state.** Server logs go to standard output / standard error (pino); the application has **no user-facing error history, log viewer or export entry point**. The packaged desktop mirrors startup stages, crashes, unhandled rejections and child-process console output into **bounded** diagnostic files under userData: `startup-log.jsonl`, `startup-timings.json`, `runtime-log.jsonl` (bounded line counts and per-message lengths; `NAMI_MAIL_NO_STARTUP_LOG=1` disables appends). The data directory additionally keeps a bounded `startup-request-log.jsonl` (method plus the path with the query string removed). The release pipeline's `scripts/smoke-diagnostics.mjs` is a diagnostic writer for **installer / packaging smoke** (it redacts sensitive environment variables), not a user troubleshooting entry point.
 
-**Impact.** User troubleshooting relies on the interface's error messages plus the bounded files above; there is no "export error logs" path, and cross-session error history is overwritten by the bounded rotation.
+**Impact.** The attachment backfill's `unclassified`, the FTS `skipped` list and filter-rule failures are written to the server log (some also reach the bounded files above), but the application has no user-facing viewer or export entry point. User troubleshooting relies on the interface's error messages plus the bounded files; there is no "export error logs" path, and cross-session error history is overwritten by the bounded rotation.
 
 **How it is handled.** We accept the bounds and automatic cleanup to avoid unbounded growth and a wider privacy surface. When reporting a problem, include the interface message and, if needed, the diagnostic files under userData and the data directory; release verification uses smoke diagnostics. If a user-facing export is added later, the redaction rules must be decided in the same change.
+
+## 12. Items left unfixed by the 2026-10-22 audit
+
+**Current state.** The read-only audit of 2026-10-22 re-checked the implementation after the 2026-10 refactor. The items below were confirmed and deliberately left unfixed this round; fixes that did land are recorded in the CHANGELOG `[Unreleased]` section and are not repeated here.
+
+| Severity | Location | Current state and impact | Why it is not fixed yet |
+|---|---|---|---|
+| P2 | `apps/web/src/App.tsx:1316-1324` | `threadExtras` / `threadStripMembersRef` keep full-row snapshots of thread members outside the list. Marking a member that exists only in extras (an older mail opened from the thread strip) as unread succeeds on the API but leaves the interface unchanged, because `store.applySeen` cannot find that row. | This is a state-ownership change; the thread-member read path first has to move back into the single store. |
+| P2 | `apps/web/src/app/useAppRealtimeSync.ts:70-74`, `App.tsx:830-871` | `onTaskSettled` calls `reconcileFromEvents()` → `silentRefresh()` directly, bypassing `useCoalescedRefresh`'s "mark dirty only while the window is hidden" promise. The desktop sets `backgroundThrottling: false`, so minimising still runs four parallel requests. | The visibility priority of a task settlement versus a hidden window has to be decided first. |
+| P2 | `apps/desktop/src/main.mts:2068-2075,2081,2096-2102` | The `second-instance` entries use `void (async () => …)()` (or `.then`) with no `catch`. When boot has not finished, `localServer` is still `undefined`, so no window is created and only `focusWindow()` runs: the user sees nothing happen, and the error lands only in `runtime-log.jsonl`. | Changing the Electron startup lifecycle needs real-machine verification of first launch and crash-restart orderings. |
+| P2 | `apps/server/src/app.ts:111` | The CSP `img-src 'self' data: blob: https: http:` allows plaintext HTTP and any external origin, while message-body images are already rewritten to the same-origin proxy by `rewriteRemoteImagesToProxy`; the only direct external origin is Gravatar over `https://`. | Narrowing it requires enumerating every render source; a mistake silently drops images. No confirmed exploit chain today. |
+| P2 | `apps/web/src/realtimeSync.ts:150-151,200-201,222-223` | `lastSseEventAt` is written before the frame is parsed, so a malformed frame counts as "the stream is alive" and suppresses one poll round (the interval is selectable at 30/60/180/300s). | Only cross-version combinations can trigger it, and manual reconnect is a fallback. |
+| P3 | `apps/server/src/mail.ts:87-104`, `calendar.ts:255`, `message-links.ts:44`, `settings.ts:34` | Zero-call exports: `testMailboxConnection` (an older subset of `testAccountConnection`), `clearAllCalendarEvents`, `localizeLinks` and `AGENT_ACCESS_LEVELS` have no caller in the repository. | Removing them requires confirming no external script depends on them; it belongs to a cleanup batch. |
+| Structural | `apps/web/src/app/mailStore.ts` | `total` is not derived from `messages`; it is a server snapshot plus five local ±1 sites (`nextMessageTotalForSnapshot`, `applyMove`, `restoreMove`, `removeMessages`, `restoreMessages`). Section 2 above now describes it as it is. | The server `total` is a full match count while the frontend holds only loaded pages, so it cannot be derived locally; changing this needs an incrementally verifiable count from the server. |
+| Boundary | `apps/server/src/message-storage.ts` (`verifyEncryptedPayloads`) | The post-migration verification sweep is still fail-closed: the error names the affected row ids (up to 50), but there is no "skip and keep starting" switch. FTS and the attachment backfill skip bad rows and record `skipped` / `unclassified`, and there is no repair entry point either. | This is a deliberately retained fail-closed policy; relaxing it is a product decision. |
+| Residue | `apps/server/src/sync.ts` (where `subject` is derived) | New rows no longer store the Chinese placeholder "（无主题）", but rows already in the database keep it until the next IMAP re-sync turns it into an empty subject; until then an English interface still shows Chinese text. | Rewriting historical rows needs a data migration whose cost outweighs the benefit. |
+| Mitigated | `apps/server/src/database-encryption.ts` (`recoverInterruptedConversion`) | If the process crashes between zero-overwriting the main file and the rename, the next start can verify the `.encrypting` copy, adopt it and log a warn; but if the process is force-killed during the few seconds while the main file is zeroed, that session still needs a restart to recover. | Eliminating it completely needs the "rename first, destroy later" reordering, which is another batch. |
 
 ## Related documents
 
