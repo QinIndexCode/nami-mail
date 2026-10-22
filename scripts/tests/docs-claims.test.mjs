@@ -220,3 +220,10 @@ test("syncClaimSurfaces does not write when asked to check only", (t) => {
   assert.deepEqual(result.updated, ["docs/cli/README.zh-CN.md"]);
   assert.equal(readFileSync(join(root, "docs/cli/README.zh-CN.md"), "utf8"), original);
 });
+
+test("the repository's own documents match their sources", () => {
+  // This is the assertion that turns the rules into a gate: CI runs every
+  // scripts/tests/*.test.mjs file, so a stale claim fails the pull request
+  // instead of waiting for the next documentation audit.
+  assert.deepEqual(findClaimProblems({ repoRoot }), []);
+});

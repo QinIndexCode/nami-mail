@@ -1,3 +1,4 @@
+<!-- shipped-as: v0.5.1 -->
 <p align="center">
   <a href="https://qinindexcode.github.io/nami-mail/">
     <img src="docs/nami-mail-wordmark.svg" alt="Nami Mail" width="480" />
@@ -101,7 +102,7 @@ The complete set is indexed in [docs/README.en.md](docs/README.en.md), with a Ch
 
 - Data lives in `data/nami-mail.db`; the desktop master key at `data/master.key.dpapi` is wrapped by DPAPI for the current Windows user and never enters a URL, an ordinary environment variable, IPC, or a log.
 - Credentials, OAuth refresh tokens, sensitive mail payloads, the outbound queue, and pending attachments are encrypted with AES-256-GCM. Mail HTML is sanitized before display, stripping remote images, scripts, and forms by default.
-- This is **not** whole-database encryption. Account addresses, folders, UIDs, timestamps, flags, sizes, and ordinary settings can remain plaintext metadata. DPAPI plus application-layer encryption raises the bar well above a plain SQLite file, but it is not the same guarantee as whole-file encryption.
+- This is **not** whole-database encryption. Account addresses, folders, UIDs, timestamps, flags, sizes, and ordinary settings can remain plaintext metadata. DPAPI plus application-layer encryption raises the bar well above a plain SQLite file, but it is not the same guarantee as whole-file encryption. Whole-database encryption at rest has landed on the development trunk and has not shipped, so the release notes will state it when they apply to an installed build.
 - The local service binds to `127.0.0.1` only. A backup must protect the entire data directory, because the wrapped key is bound to the current Windows user.
 
 Read more in [privacy and local data](docs/PRIVACY.en.md).

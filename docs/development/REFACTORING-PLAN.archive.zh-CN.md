@@ -1,6 +1,8 @@
 # 大文件拆分计划
 
-[English](REFACTORING-PLAN.en.md)
+[English](REFACTORING-PLAN.archive.en.md)
+
+> **已归档（2026-10-22）**：本页移入 `docs/development/`，不再出现在现行文档导航的主路径上；行号、规模数字与批次编号全部作废，只保留拆分方法论与耦合判断。
 
 > ## ⚠️ 失效声明（2026-10-07 复核）
 >

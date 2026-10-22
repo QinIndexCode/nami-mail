@@ -1,6 +1,8 @@
 # Large-file refactoring plan
 
-[简体中文](REFACTORING-PLAN.zh-CN.md)
+[简体中文](REFACTORING-PLAN.archive.zh-CN.md)
+
+> **Archived 2026-10-22.** This page now lives in `docs/development/` and is off the main documentation path; every line-number pointer, size figure, and batch number is void. Only the methodology and the coupling judgements carry over.
 
 > ## ⚠️ Status: superseded (reviewed 2026-10-07)
 >

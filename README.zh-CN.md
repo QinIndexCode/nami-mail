@@ -1,4 +1,5 @@
 # Nami Mail
+<!-- shipped-as: v0.5.1 -->
 
 <p align="center">
   <a href="README.en.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
@@ -64,7 +65,7 @@ Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端。它�
 - [邮箱接入指南](docs/EMAIL-PROVIDERS.zh-CN.md)：服务商认证准备、OAuth、手动 IMAP/SMTP 和常见连接问题。
 - [日历与邮件邀请](docs/CALENDAR.zh-CN.md)：邮件邀请横幅、ICS 导入导出（按 UID 去重）与事件提醒。
 - [自动回复](docs/AUTO-REPLY.zh-CN.md)：双模型判定与草稿、范围规则、确认流程与沙盒模拟器。
-- [外部 Mail 接口](docs/EXTERNAL-MAIL-INTERFACE.zh-CN.md)：供已配对本机脚本和 MCP 客户端使用的只读 CLI/MCP 接口与安全边界。
+- [外部 Mail 接口](docs/EXTERNAL-MAIL-INTERFACE.zh-CN.md)：供已配对本机脚本和 MCP 客户端使用的 CLI/MCP 接口（9 个只读 + 7 个写，默认只读，可按档位提升）与安全边界。
 - [CLI 参考](docs/cli/README.zh-CN.md)：`namimail` CLI 的命令、参数、输出格式和示例。
 - [MCP Server](docs/mcp/README.zh-CN.md)：本机 MCP stdio 接入、工具发现和安全边界。
 - [NamiMail Agent 使用指南](docs/agent/usage.zh-CN.md)：对话管理、邮件范围、来源引用与确认流程。
@@ -239,7 +240,7 @@ OAuth 回调会回到本机的 `/api/oauth/google/callback` 或 `/api/oauth/micr
 - **本地备份导出**：一键将全部账户的邮件流式导出为 ZIP 归档
 - **NamiMail Agent**：AI 助手，支持本地检索、来源引用和草稿管理，在明确的账户范围内工作
 - **邮件翻译**：免费翻译（Google/MyMemory）和可选的 AI 翻译，支持流式输出与取消
-- **External Mail v1**：面向已配对本机脚本和 AI 助手的只读 CLI 和 MCP stdio 接口
+- **External Mail v1**：面向已配对本机脚本和 AI 助手的 CLI 和 MCP stdio 接口（9 个只读 + 7 个写，默认只读，可在桌面设置中提升）
 - 系统/浅色/深色主题，完整离线背景预设、自定义背景图片及背景强度
 - 可配置的新邮件 Windows 桌面提醒、前台提醒、系统/柔和/明亮/静音提示音与测试按钮
 - 可配置后台同步周期、账户移除、恢复默认设置，桌面三栏和移动端响应式布局
@@ -254,7 +255,7 @@ OAuth 回调会回到本机的 `/api/oauth/google/callback` 或 `/api/oauth/micr
 - 命令行 Node 开发服务仍使用其隔离的 `MASTER_KEY_PATH` 开发数据路径；它不是 Windows 桌面版的数据保护路径。
 - 凭据和 OAuth 刷新令牌使用 AES-256-GCM 加密后落盘。邮件缓存中的 Message-ID、主题、发件人、收件人、摘要、纯文本/HTML 正文、回复链字段和附件元数据保存在加密载荷中；旧明文字段会在本地 API 启动前迁移、清空，并通过 WAL 截断和 `VACUUM` 清理旧页。
 - 持久发件队列中的主题、收件人、正文、HTML、Message-ID 和诊断详情使用不同用途的派生密钥加密；请求指纹和 Message-ID 查询值使用派生密钥 HMAC。待发送附件的文件内容、文件名和内容类型同样加密后落盘，旧明文附件会在启动时迁移。收件附件字节不复制进本地数据库，用户下载时从邮箱服务商受控流式读取。
-- 这不是 SQLite 整库加密。账户邮箱地址和服务商、文件夹、UID、时间、标志、大小、投递状态、记录标识、普通应用设置及自定义背景图片等运行元数据仍可能以明文保存。DPAPI 与上述应用层加密可显著降低直接读取静态文件或离线复制数据造成的泄露风险，但不能阻止同一 Windows 用户下的恶意进程调用 DPAPI，也不能防御已解锁运行中的应用或管理员读取数据；不能把当前实现表述为 SQLCipher 等价的整库加密。
+- 这不是 SQLite 整库加密。账户邮箱地址和服务商、文件夹、UID、时间、标志、大小、投递状态、记录标识、普通应用设置及自定义背景图片等运行元数据仍可能以明文保存。DPAPI 与上述应用层加密可显著降低直接读取静态文件或离线复制数据造成的泄露风险，但不能阻止同一 Windows 用户下的恶意进程调用 DPAPI，也不能防御已解锁运行中的应用或管理员读取数据；不能把当前实现表述为 SQLCipher 等价的整库加密。整库静态加密已在开发主干引入、尚未随版本发布，它对已安装版本的影响由发布说明在切版时声明。
 - 服务默认只监听 `127.0.0.1`，不会开放给局域网。
 - 主密钥、数据库和出站附件目录都已加入 `.gitignore`。备份时应保护整个数据目录；DPAPI 封装的桌面主密钥还受当前 Windows 用户上下文约束。
 - 邮件 HTML 在展示前经过清理，并默认移除远程图片、脚本、表单和嵌入内容，减少跟踪与脚本风险。

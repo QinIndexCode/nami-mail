@@ -1,4 +1,5 @@
 # 隐私与本地数据说明
+<!-- shipped-as: v0.5.1 -->
 
 [简体中文](PRIVACY.zh-CN.md) | [English](PRIVACY.en.md)
 
@@ -32,6 +33,8 @@
 Windows 桌面版的主密钥由 Electron `safeStorage` 使用当前 Windows 用户的 DPAPI 保护，文件位于用户数据目录的 `data/master.key.dpapi`。桌面版不会回退到新的明文主密钥。开发用命令行服务不同：它根据 `MASTER_KEY_PATH` 使用独立开发数据路径，不能与桌面 DPAPI 保护等同。
 
 这不是 SQLCipher 或全盘加密。应用层加密可降低静态文件被直接读取或离线复制造成的风险，但不能防御管理员、同一 Windows 用户下能调用 DPAPI 的恶意进程，或已经解锁并运行中的应用。
+
+本页描述 **v0.5.1 发布物**的加密边界。开发主干已经引入整库静态加密，尚未随版本发布，因此没有写进上面的表格：服务端改用 SQLite3MultipleCiphers，用主密钥派生的密钥作为 `PRAGMA key` 打开数据库；旧库在启动时由 `ensureDatabaseEncrypted` 通过 `PRAGMA rekey` 复制并校验迁移；桌面主密钥仍由 DPAPI 保护，命令行服务仍使用 `MASTER_KEY_PATH` 的独立开发路径。整库加密改变威胁模型（静态文件不再可被离线直接读取），也带来运维影响（旧库首次启动的迁移成本，以及主密钥丢失后数据不可恢复）。这些行为与影响会在该版本切版时由发布说明逐项声明；在那之前，上表对已安装的 v0.5.1 仍然准确。
 
 ## 本地与界面保护
 

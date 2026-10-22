@@ -1,4 +1,5 @@
 # Nami Mail
+<!-- shipped-as: v0.5.1 -->
 
 <p align="center">
   <a href="README.en.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
@@ -64,7 +65,7 @@ See [Windows installation and updates](docs/INSTALLING.en.md) for first installa
 - [Email provider setup](docs/EMAIL-PROVIDERS.en.md): provider preparation, OAuth, manual IMAP/SMTP, and common connection issues.
 - [Calendar and mail invitations](docs/CALENDAR.en.md): invite banners, ICS import/export with UID dedupe, and event reminders.
 - [Auto-reply](docs/AUTO-REPLY.en.md): dual-model screening and drafting, scope rules, the confirmation flow, and the dry-run sandbox.
-- [External Mail interface](docs/EXTERNAL-MAIL-INTERFACE.en.md): the read-only CLI/MCP interface and security boundary for paired local scripts and MCP clients.
+- [External Mail interface](docs/EXTERNAL-MAIL-INTERFACE.en.md): the CLI/MCP interface (nine read-only plus seven write tools; read-only by default, promoted by access level) and security boundary for paired local scripts and MCP clients.
 - [CLI reference](docs/cli/README.en.md): commands, parameters, output formats, and examples for the `namimail` CLI.
 - [MCP Server](docs/mcp/README.en.md): local MCP stdio integration, tool discovery, and security boundaries.
 - [NamiMail Agent usage](docs/agent/usage.en.md): using the mail assistant — conversations, mail scope, source citations, and confirmations.
@@ -239,7 +240,7 @@ OAuth callbacks return to local `/api/oauth/google/callback` or `/api/oauth/micr
 - **Local backup export**: stream every account's mail into a ZIP archive with one click.
 - **NamiMail Agent**: AI assistant with local retrieval, source citations, and draft management within an explicit account scope.
 - **Mail translation**: free translation (Google/MyMemory) and optional AI-powered translation with streaming output and cancellation.
-- **External Mail v1**: read-only CLI and MCP stdio interface for paired local scripts and AI assistants.
+- **External Mail v1**: CLI and MCP stdio interface for paired local scripts and AI assistants (nine read-only plus seven write tools; read-only by default, promoted in desktop settings).
 - System, light, and dark themes; complete offline background presets, a custom background image, and background intensity.
 - Configurable Windows desktop notifications, foreground alerts, system/soft/bright/silent notification sounds, and a test button.
 - Configurable background-sync period, account removal, restore-default settings, a desktop three-column layout, and responsive mobile layout.

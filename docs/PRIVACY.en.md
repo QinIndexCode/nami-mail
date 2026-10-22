@@ -1,4 +1,5 @@
 # Privacy and Local Data
+<!-- shipped-as: v0.5.1 -->
 
 [简体中文](PRIVACY.zh-CN.md) | [English](PRIVACY.en.md)
 
@@ -32,6 +33,8 @@ The codebase currently contains no Nami Mail analytics SDK, crash-reporting serv
 For the Windows desktop app, Electron `safeStorage` protects the master key with the current Windows user's DPAPI. The file is in the user data directory at `data/master.key.dpapi`. The desktop app does not fall back to creating a new plaintext master key. The command-line development service is different: it uses a separate development data path from `MASTER_KEY_PATH` and is not equivalent to desktop DPAPI protection.
 
 This is not SQLCipher or full-disk encryption. Application-layer encryption reduces the risk of reading static files directly or copying them offline, but it cannot defend against an administrator, a malicious process able to call DPAPI as the same Windows user, or an already unlocked and running app.
+
+This page describes the encryption boundary of the **v0.5.1 release**. The development trunk has since introduced whole-database at-rest encryption, which is not in the table above because it has not shipped yet: the server uses SQLite3MultipleCiphers with a key derived from the master key as its `PRAGMA key`; an existing database is copied and verified through `PRAGMA rekey` by `ensureDatabaseEncrypted` at startup; the desktop master key stays under DPAPI and the command-line service keeps its separate `MASTER_KEY_PATH` development path. Whole-database encryption changes the threat model (the static file can no longer be read offline) and brings operational consequences (a migration cost on the first start of an existing database, and data that cannot be recovered once the master key is lost). Those behaviours and consequences will be stated item by item in the release notes at the version cut. Until then, the table above remains accurate for an installed v0.5.1.
 
 ## Local and UI Protections
 

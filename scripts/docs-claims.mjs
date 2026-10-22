@@ -53,6 +53,7 @@ const TOTAL_TIER = /^(?:工具|tools?)$/;
  * review list the pages that must be rewritten at the version cut.
  */
 const SCOPED_DOCUMENTS = [
+  "README.md",
   "README.zh-CN.md",
   "README.en.md",
   "docs/PRIVACY.zh-CN.md",
@@ -77,7 +78,7 @@ const ABSOLUTE_READ_ONLY = [
   { pattern: /本机、只读/, wording: "本机、只读", approved: "已配对、本机，默认只读" },
   { pattern: /只读\s*(?:的\s*)?CLI/i, wording: "只读 CLI", approved: "默认只读，可在桌面设置中提升" },
   { pattern: /never\s+write\s+mail/i, wording: "never write mail", approved: "read-only by default, promoted in desktop settings" },
-  { pattern: /paired,\s+local,\s+read-only/i, wording: "paired, local, read-only", approved: "paired and local, read-only by default" },
+  { pattern: /paired,\s+local,\s*read-only(?!\s+by default)/i, wording: "paired, local, read-only", approved: "paired and local, read-only by default" },
   { pattern: /read-only\s+CLI/i, wording: "read-only CLI", approved: "read-only by default, promoted in desktop settings" },
 ];
 
@@ -199,7 +200,54 @@ export function trunkDocuments(repoRoot = defaultRepoRoot) {
     }
   };
   walk("docs");
-  return documents.filter(isTrunkDocument).sort();
+  return documents.filter(isTrunkDocument).filter((document) => isPublished(repoRoot, document)).sort();
+}
+
+/**
+ * Whether the repository publishes this page.
+ *
+ * A planning file the author keeps beside the checkout (`.gitignore` names some
+ * of them, such as `/ARCHITECTURE-ROADMAP.zh-CN.md`) is not documentation: it
+ * is never in the repository and never on the site, so rewriting or checking it
+ * would be noise. Anything without git — a fixture — counts as published.
+ */
+function isPublished(repoRoot, document) {
+  const tracked = trackedDocuments(repoRoot);
+  return tracked === undefined || tracked.has(document);
+}
+
+/** One `git ls-files` per root, memoised for the process. */
+const trackedCache = new Map();
+function trackedDocuments(repoRoot) {
+  if (trackedCache.has(repoRoot)) return trackedCache.get(repoRoot);
+  let tracked;
+  try {
+    // Only trust the answer when this directory *is* the repository root: a
+    // checkout nested inside some parent repository (a temp fixture under a
+    // user profile that happens to be one) would otherwise report that parent's
+    // file list and mark every document unpublished.
+    const toplevel = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (resolve(toplevel) !== resolve(repoRoot)) throw new Error("not the repository root");
+    const output = execFileSync("git", ["ls-files", "--", "*.md", "docs"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    tracked = new Set(
+      output
+        .split(/\r?\n/)
+        .filter((line) => line.endsWith(".md"))
+        .map((line) => line.split("\\").join("/")),
+    );
+  } catch {
+    tracked = undefined;
+  }
+  trackedCache.set(repoRoot, tracked);
+  return tracked;
 }
 
 /** The documents a past version owns are not ours to rewrite. */

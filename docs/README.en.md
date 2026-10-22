@@ -4,7 +4,7 @@
 
 Nami Mail currently ships a Windows x64 desktop app. This page organizes the public documentation by task. See the [localization guide](LOCALIZATION.en.md) for UI language packs and documentation translations.
 
-> **External Mail v1: paired, local, read-only.** CLI and MCP access Nami Mail through a Broker reachable only by the current Windows user; they do not reuse the local Fastify token, provide no HTTP/SQLite fallback, and never write mail. Optional free translation and AI translation remain separate and are opt-in through the UI only.
+> **External Mail v1: paired, local, read-only by default.** CLI and MCP access Nami Mail through a Broker reachable only by the current Windows user; they do not reuse the local Fastify token and provide no HTTP/SQLite fallback. The default level withholds the seven write tools; writes only happen after the desktop setting is raised to `send-confirmed` (one desktop confirmation per write) or `full-access` (automatic). Optional free translation and AI translation remain separate and are opt-in through the UI only.
 
 ## Use Nami Mail
 
@@ -37,7 +37,8 @@ Nami Mail currently ships a Windows x64 desktop app. This page organizes the pub
 - [Windows release guide](RELEASING.en.md): maintainer steps for signing, releases, and real update verification.
 - [Agent implementation plan](development/implementation-plan.en.md): module ownership, phases, acceptance criteria, and rollback boundaries.
 - [Interaction conventions](INTERACTION.en.md): cross-module rules for multi-select completion, optimistic updates, immediate feedback, and snapshot merging.
-- [Large-file refactoring plan](REFACTORING-PLAN.en.md): mapped seams, ordering, and verification gates for the four large files.
+- [Large-file refactoring plan (archived)](development/REFACTORING-PLAN.archive.en.md): the 2026-09 seam mapping, with void line numbers and size figures; only the methodology carries over.
+- [Known limitations and trade-offs](development/known-limitations.en.md): the single list of verified capability boundaries, deliberate trade-offs, and unfinished items.
 
 ## Languages and Versions
 
