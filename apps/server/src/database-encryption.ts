@@ -19,7 +19,11 @@ export type DatabaseEncryptionOutcome =
   | { status: "absent" }
   | { status: "empty" }
   | { status: "already-encrypted" }
-  | { status: "encrypted"; bytes: number; verifiedTables: number };
+  | { status: "encrypted"; bytes: number; verifiedTables: number }
+  // A previous conversion was killed after it destroyed the plaintext original
+  // but before the sealed copy reached its final name. The staging file is the
+  // only surviving database and was adopted.
+  | { status: "recovered"; bytes: number; verifiedTables: number };
 
 /** Raw-hex key literal, quoted for `PRAGMA key = <literal>` interpolation. */
 export function databaseKeyLiteral(masterKey: Buffer): string {
@@ -95,6 +99,76 @@ function assertReadableWithKey(databasePath: string, masterKey: Buffer): void {
   } finally {
     db.close();
   }
+}
+
+/**
+ * Tables of a store that opens with `masterKey`, or `undefined` when it does not.
+ * Unlike {@link assertReadableWithKey} this never throws, because recovery has to
+ * answer "is this file usable?" without aborting: the answer decides whether a
+ * leftover staging copy or the main file is authoritative.
+ */
+function readableTablesWithKey(databasePath: string, masterKey: Buffer): string[] | undefined {
+  if (!fs.existsSync(databasePath)) return undefined;
+  const SqliteDatabase = loadDatabaseConstructor();
+  let db: Database | undefined;
+  try {
+    db = new SqliteDatabase(databasePath);
+    db.prepare(`PRAGMA key = ${databaseKeyLiteral(masterKey)}`).run();
+    // Same reason as assertReadableWithKey: only a page read proves the key.
+    db.prepare("SELECT COUNT(*) FROM sqlite_master").pluck().get();
+    return userTables(db);
+  } catch {
+    return undefined;
+  } finally {
+    if (db) {
+      try {
+        db.close();
+      } catch {
+        // Releasing a connection that already failed is not the caller's question.
+      }
+    }
+  }
+}
+
+/**
+ * Adopts an orphaned staging copy when a conversion died between destroying the
+ * plaintext original and the final rename. Discarding it in that state (the
+ * previous behaviour) deleted the only readable database and let the next open
+ * create an empty one, turning a crash into silent total local data loss.
+ *
+ * Returns `undefined` when the main file is authoritative, in which case the
+ * staging leftover has been removed.
+ */
+function recoverInterruptedConversion(
+  databasePath: string,
+  stagingPath: string,
+  masterKey: Buffer,
+): DatabaseEncryptionOutcome | undefined {
+  if (!fs.existsSync(stagingPath)) return undefined;
+  const stagingTables = readableTablesWithKey(stagingPath, masterKey);
+  if (!stagingTables) {
+    // Not a usable copy of this store; the original is authoritative.
+    removeIfExists(stagingPath);
+    return undefined;
+  }
+  if (readableTablesWithKey(databasePath, masterKey)) {
+    // The sealed copy is already in place; this is dead weight from an attempt
+    // that never finished.
+    removeIfExists(stagingPath);
+    return undefined;
+  }
+  if (fs.existsSync(databasePath) && fs.statSync(databasePath).size > 0 && isPlaintextSqlite(readHeader(databasePath))) {
+    // The original is still intact plaintext, so the conversion simply has not
+    // run yet: seal it again rather than trusting a copy it never needed.
+    removeIfExists(stagingPath);
+    return undefined;
+  }
+  // The main file is missing, zero-byte, or already zero-overwritten: the staged
+  // copy is all that is left.
+  removeIfExists(`${databasePath}-wal`);
+  removeIfExists(`${databasePath}-shm`);
+  fs.renameSync(stagingPath, databasePath);
+  return { status: "recovered", bytes: fs.statSync(databasePath).size, verifiedTables: stagingTables.length };
 }
 
 function assertKeylessReadRefused(databasePath: string): void {
@@ -249,9 +323,11 @@ function encryptPlaintextStore(
  */
 export function ensureDatabaseEncrypted(databasePath: string, masterKey: Buffer): DatabaseEncryptionOutcome {
   const stagingPath = `${databasePath}${STAGING_SUFFIX}`;
-  // A crashed run can leave a half-written staging copy behind. The original is
-  // the only authoritative file, so the leftover is discarded before deciding.
-  removeIfExists(stagingPath);
+  // A crashed conversion can leave a staging copy behind. It is normally dead
+  // weight, but when the main file was already destroyed the staged copy is the
+  // only readable database left, so it gets adopted instead of deleted.
+  const recovered = recoverInterruptedConversion(databasePath, stagingPath, masterKey);
+  if (recovered) return recovered;
 
   if (!fs.existsSync(databasePath)) return { status: "absent" };
   // A database created with a key but nothing written yet is a zero-byte file,

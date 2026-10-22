@@ -153,4 +153,70 @@ describe("database encryption at rest", () => {
     // The real key still works: a failed attempt must not damage the store.
     expect(readWithKey(databasePath, masterKey(6))).toBe(CANARY);
   });
+
+  /**
+   * The conversion destroys the plaintext original before the sealed copy takes
+   * its name, so a crash in that window leaves the `.encrypting` file as the only
+   * database that still has the mail in it. Deleting it (what the first
+   * implementation did) turned one crash into total local data loss.
+   */
+  function sealedCopyAsStaging(databasePath: string, sealedPath: string): string {
+    const staging = `${databasePath}.encrypting`;
+    fs.copyFileSync(sealedPath, staging);
+    return staging;
+  }
+
+  it("adopts the staged copy when a conversion died after destroying the original", () => {
+    const databasePath = storePath("interrupted");
+    writePlaintextStore(databasePath, CANARY);
+    ensureDatabaseEncrypted(databasePath, masterKey(8));
+    // A second store provides a known-good sealed copy; the interruption is
+    // reproduced by zeroing the main file the way the converter does.
+    const reference = storePath("interrupted-reference");
+    writePlaintextStore(reference, CANARY);
+    ensureDatabaseEncrypted(reference, masterKey(8));
+    sealedCopyAsStaging(databasePath, reference);
+    const destroyed = fs.readFileSync(databasePath).length;
+    fs.writeFileSync(databasePath, Buffer.alloc(destroyed));
+
+    const outcome = ensureDatabaseEncrypted(databasePath, masterKey(8));
+
+    expect(outcome.status).toBe("recovered");
+    expect(fs.existsSync(`${databasePath}.encrypting`)).toBe(false);
+    expect(fs.readFileSync(databasePath).includes(CANARY)).toBe(false);
+    expect(readWithKey(databasePath, masterKey(8))).toBe(CANARY);
+  });
+
+  it("drops a stale staged copy while the plaintext original is still intact", () => {
+    const databasePath = storePath("stale-staging");
+    writePlaintextStore(databasePath, CANARY);
+    const reference = storePath("stale-staging-reference");
+    writePlaintextStore(reference, CANARY);
+    ensureDatabaseEncrypted(reference, masterKey(9));
+    sealedCopyAsStaging(databasePath, reference);
+
+    const outcome = ensureDatabaseEncrypted(databasePath, masterKey(9));
+
+    expect(outcome.status).toBe("encrypted");
+    expect(fs.existsSync(`${databasePath}.encrypting`)).toBe(false);
+    expect(readWithKey(databasePath, masterKey(9))).toBe(CANARY);
+  });
+
+  it("never adopts a staged copy that does not open with the master key", () => {
+    const databasePath = storePath("staging-wrong-key");
+    writePlaintextStore(databasePath, CANARY);
+    const reference = storePath("staging-wrong-key-reference");
+    writePlaintextStore(reference, CANARY);
+    ensureDatabaseEncrypted(reference, masterKey(10));
+    sealedCopyAsStaging(databasePath, reference);
+    // The main file is destroyed, and the leftover copy belongs to another key:
+    // adopting it would replace one unreadable store with another.
+    const destroyed = fs.readFileSync(databasePath);
+    fs.writeFileSync(databasePath, Buffer.alloc(destroyed.length));
+
+    expect(() => ensureDatabaseEncrypted(databasePath, masterKey(11))).toThrow(
+      /could not be opened with the current master key/u,
+    );
+    expect(fs.existsSync(`${databasePath}.encrypting`)).toBe(false);
+  });
 });

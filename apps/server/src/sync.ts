@@ -986,7 +986,11 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
             : null)
             ?? hydratedMessageIds.get(message.uid)
             ?? messageKey(accountId, folder.path, message.uid);
-          const subject = parsed?.subject ?? message.envelope?.subject ?? "（无主题）";
+          // No fabricated subject: the fallback used to be a hard-coded Chinese
+          // "（无主题）" stored in the row, which rendered as Chinese text in
+          // every other UI language. The list and reader localize an empty
+          // subject instead, so nothing locale-specific goes into storage.
+          const subject = parsed?.subject ?? message.envelope?.subject ?? "";
           const flags = [...(message.flags ?? [])];
           const attachments = attachmentMetadataFromParsedMail(parsed?.attachments ?? []);
           const protectedColumns = protectedMessageColumns(masterKey, id, accountId, {
@@ -1175,8 +1179,15 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       const targets = pendingRuleTargets;
       pendingRuleTargets = [];
       // Filter-rule automation must never break the sync result. Failures are
-      // logged and the affected messages remain visible for manual handling.
+      // logged and the affected messages remain visible for manual handling;
+      // the per-message lines come from applyFilterRulesToNewMessages, and this
+      // pairing reports how many were affected without throwing.
       void applyFilterRulesToNewMessages(db, masterKey, accountId, targets, accessTokenProvider, agentEvents)
+        .then((result) => {
+          if (result.failed > 0) {
+            serverLog.warn({ accountId, ...result }, "Nami Mail applied filter rules with failures");
+          }
+        })
         .catch((error) => {
           serverLog.warn({ accountId }, "Filter rule application failed", error);
         });

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import { deleteMessageFts, indexMessageFts } from "../src/message-search.js";
+import { deleteMessageFts, ftsIndexedMessageCount, indexMessageFts, rebuildMessageFtsIndex } from "../src/message-search.js";
 import { messagePayloadForRow, protectedMessageColumns, type MessageStorageRow } from "../src/message-storage.js";
 
 const MASTER_KEY = Buffer.alloc(32, 19);
@@ -333,9 +333,8 @@ describe("message FTS search", () => {
       ) VALUES (?, 'account-1', 'INBOX', ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, 0, ?, NULL, 0)
     `).run("legacy-1", 1, "Legacy subject", "Old", "old@example.com", "[]", now, "legacy", "legacy body", "", now);
 
-    const { rebuildMessageFtsIndex, ftsIndexedMessageCount } = await import("../src/message-search.js");
     expect(ftsIndexedMessageCount(db)).toBe(0);
-    expect(rebuildMessageFtsIndex(db, MASTER_KEY)).toBe(1);
+    expect(rebuildMessageFtsIndex(db, MASTER_KEY)).toEqual({ indexed: 1, skipped: [] });
     expect(ftsIndexedMessageCount(db)).toBe(1);
 
     const hit = await app.inject({ method: "GET", url: "/api/messages?q=Legacy" });
@@ -361,5 +360,73 @@ describe("message FTS search", () => {
     const payload = messagePayloadForRow(row, MASTER_KEY);
     expect(payload.subject).toBe("Sensitive plan");
     expect(payload.textBody).toBe("secret body");
+  });
+
+  it("skips a row whose payload cannot be decrypted, reports its id, and keeps the rest searchable", async () => {
+    db = openDatabase(":memory:");
+    insertAccount(db);
+    // Build the app before the poisoned row exists: the startup migration's
+    // decryptability proof deliberately refuses a store with an unreadable row,
+    // and this test is about the rebuild's own skip-and-report behaviour.
+    app = await buildApp({ db, masterKey: MASTER_KEY });
+    insertIndexedMessage(db, "good-1", "account-1", "INBOX", 1, {
+      subject: "Searchable subject",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "searchable body",
+    });
+    // Not a NAMIENC envelope: messagePayloadForRow throws on it.
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO messages (id, account_id, mailbox, uid, created_at, encrypted_payload, payload_version)
+      VALUES ('bad-1', 'account-1', 'INBOX', 2, ?, 'not-an-envelope', 1)
+    `).run(now);
+
+    const result = rebuildMessageFtsIndex(db, MASTER_KEY);
+    expect(result).toEqual({ indexed: 1, skipped: ["bad-1"] });
+    expect(ftsIndexedMessageCount(db)).toBe(1);
+
+    const hit = await app.inject({ method: "GET", url: "/api/messages?q=Searchable" });
+    expect(hit.statusCode).toBe(200);
+    expect(hit.json().total).toBe(1);
+    expect(hit.json().items[0].id).toBe("good-1");
+    const skipped = await app.inject({ method: "GET", url: "/api/messages?q=not-an-envelope" });
+    expect(skipped.json().total).toBe(0);
+  });
+
+  it("rebuilds every row when the mailbox is larger than one rebuild page", async () => {
+    db = openDatabase(":memory:");
+    insertAccount(db);
+    app = await buildApp({ db, masterKey: MASTER_KEY });
+    const now = new Date().toISOString();
+    const insert = db.prepare(`
+      INSERT INTO messages (id, account_id, mailbox, uid, created_at, encrypted_payload, payload_version)
+      VALUES (?, 'account-1', 'INBOX', ?, ?, ?, ?)
+    `);
+    db.transaction(() => {
+      for (let index = 0; index < 250; index += 1) {
+        const id = `bulk-${String(index).padStart(3, "0")}`;
+        const columns = protectedMessageColumns(MASTER_KEY, id, "account-1", {
+          messageId: `<${id}@example.com>`,
+          subject: `Bulk subject ${index}`,
+          fromName: "Bulk",
+          fromAddress: "bulk@example.com",
+          to: [],
+          cc: [],
+          inReplyTo: null,
+          references: [],
+          snippet: "",
+          textBody: `bulk body ${index}`,
+          htmlBody: "",
+          attachments: null,
+        });
+        insert.run(id, index + 1, now, columns.encryptedPayload, columns.payloadVersion);
+      }
+    })();
+
+    // 250 > the 200-row page, so this fails unless the keyset advances.
+    const result = rebuildMessageFtsIndex(db, MASTER_KEY);
+    expect(result).toEqual({ indexed: 250, skipped: [] });
+    expect(ftsIndexedMessageCount(db)).toBe(250);
   });
 });

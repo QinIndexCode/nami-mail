@@ -74,7 +74,7 @@ describe("encrypted message storage", () => {
     insertAccount(db);
     insertLegacyMessage(db, "migration-canary");
 
-    expect(migrateMessageStorage(db, key)).toEqual({ migrated: 1, vacuumed: true });
+    expect(migrateMessageStorage(db, key)).toEqual({ migrated: 1, vacuumed: true, unreadable: [] });
     const row = db.prepare("SELECT * FROM messages WHERE id = 'message-1'").get() as MessageStorageRow;
     expect(row).toMatchObject({
       message_id: null,
@@ -96,9 +96,9 @@ describe("encrypted message storage", () => {
       attachments: [expect.objectContaining({ filename: "secret.pdf" })],
     });
 
-    expect(migrateMessageStorage(db, key)).toEqual({ migrated: 0, vacuumed: false });
+    expect(migrateMessageStorage(db, key)).toEqual({ migrated: 0, vacuumed: false, unreadable: [] });
     db.prepare("DELETE FROM data_migrations WHERE id = 'message-payload-v1'").run();
-    expect(migrateMessageStorage(db, key)).toEqual({ migrated: 0, vacuumed: true });
+    expect(migrateMessageStorage(db, key)).toEqual({ migrated: 0, vacuumed: true, unreadable: [] });
     db.close();
   });
 
@@ -337,7 +337,7 @@ describe("encrypted message storage", () => {
     // Marker present and nothing migrated: startup no longer decrypts the
     // mailbox, so the corrupted row does not fail the migration check (and
     // vacuumed stays false because the sweep never counted the row).
-    expect(migrateMessageStorage(db, key)).toEqual({ migrated: 0, vacuumed: false });
+    expect(migrateMessageStorage(db, key)).toEqual({ migrated: 0, vacuumed: false, unreadable: [] });
 
     // The degradation is bounded: the corruption still surfaces on first read.
     const tampered = db.prepare("SELECT * FROM messages WHERE id = 'message-1'").get() as MessageStorageRow;
@@ -363,6 +363,25 @@ describe("encrypted message storage", () => {
     db.close();
   });
 
+  it("names the damaged rows when the decryptability sweep refuses to start", () => {
+    const db = openDatabase(":memory:");
+    const key = randomBytes(32);
+    insertAccount(db);
+    insertLegacyMessage(db, "named-canary");
+    migrateMessageStorage(db, key);
+    const row = db.prepare("SELECT encrypted_payload FROM messages WHERE id = 'message-1'")
+      .get() as { encrypted_payload: string };
+    const replacement = row.encrypted_payload.endsWith("A") ? "B" : "A";
+    db.prepare("UPDATE messages SET encrypted_payload = ? WHERE id = 'message-1'")
+      .run(`${row.encrypted_payload.slice(0, -1)}${replacement}`);
+    db.prepare("DELETE FROM data_migrations WHERE id = 'message-payload-v1'").run();
+
+    // A stack trace with no id left the operator unable to tell "one damaged
+    // message" from "the wrong key": the message has to say which rows.
+    expect(() => migrateMessageStorage(db, key)).toThrow(/message-1/u);
+    expect(() => migrateMessageStorage(db, key)).toThrow(/1 of 1 stored message payload/u);
+    db.close();
+  });
   it("streams the decryptability sweep in pages that cover every row", () => {
     const db = openDatabase(":memory:");
     const key = randomBytes(32);
@@ -371,7 +390,7 @@ describe("encrypted message storage", () => {
     for (let index = 0; index < total; index += 1) {
       insertBulkLegacyMessage(db, index);
     }
-    expect(migrateMessageStorage(db, key)).toEqual({ migrated: total, vacuumed: true });
+    expect(migrateMessageStorage(db, key)).toEqual({ migrated: total, vacuumed: true, unreadable: [] });
 
     const minimalPayload: MessagePayload = {
       messageId: null,
@@ -414,7 +433,7 @@ describe("encrypted message storage", () => {
 
     // After repairs, a forced sweep completes and writes the marker again.
     db.prepare("DELETE FROM data_migrations WHERE id = 'message-payload-v1'").run();
-    expect(migrateMessageStorage(db, key)).toEqual({ migrated: 0, vacuumed: true });
+    expect(migrateMessageStorage(db, key)).toEqual({ migrated: 0, vacuumed: true, unreadable: [] });
     db.close();
   }, 30_000);
 

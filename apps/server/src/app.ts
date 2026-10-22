@@ -222,9 +222,32 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   // for — a test that builds an app with a fake and then builds another without
   // one gets the real factory back instead of silently keeping the fake.
   setProviderFactory(context.providers ?? defaultProviderFactory);
-  migrateMessageStorage(context.db, context.masterKey);
-  ensureAttachmentMetadata(context.db, context.masterKey);
-  ensureMessageFtsIndex(context.db, context.masterKey);
+  const messageMigration = migrateMessageStorage(context.db, context.masterKey);
+  if (messageMigration.unreadable.length > 0) {
+    // serverLog: this runs before the fastify instance exists. The rows are not
+    // fatal (an isolated damaged payload must not keep the app from starting),
+    // but they are the only trace that those messages cannot be opened.
+    serverLog.warn(
+      { unreadable: messageMigration.unreadable },
+      "Some stored message payloads could not be decrypted",
+    );
+  }
+  const attachmentMetadata = ensureAttachmentMetadata(context.db, context.masterKey);
+  if (attachmentMetadata.unclassified > 0) {
+    serverLog.warn(
+      { ...attachmentMetadata },
+      "Some message rows kept stale attachment flags because their payload could not be read",
+    );
+  }
+  const ftsIndex = ensureMessageFtsIndex(context.db, context.masterKey);
+  if (ftsIndex.skipped.length > 0) {
+    // serverLog: this runs before the fastify instance exists. Those messages
+    // are permanently unsearchable, so the ids have to reach a log.
+    serverLog.warn(
+      { indexed: ftsIndex.indexed, skipped: ftsIndex.skipped },
+      "Some messages could not be indexed for search",
+    );
+  }
   backfillRedactMessageSnippets(context.db);
   migrateOutboundAttachments(context.db, outboundAttachmentDirectory(context), context.masterKey);
   migrateCustomBackground(context, context.masterKey);
@@ -443,6 +466,10 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   });
   void scheduler.resume().then((pending) => {
     if (pending) app.log.warn({ pending }, "Resumed interrupted tasks");
+  }).catch((error: unknown) => {
+    // Without this handler a database error during resume becomes an unhandled
+    // rejection, which terminates the process after the server already started.
+    app.log.warn({ error: String(error) }, "Could not resume interrupted tasks");
   });
   const localApiAccessToken = options.localApiAccessToken?.trim() || undefined;
 

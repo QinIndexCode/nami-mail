@@ -384,7 +384,16 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     // rewrites the file, so no connection may hold a handle on it yet. This is
     // also why the key is resolved ahead of `openDatabase` -- opening without it
     // would read the encrypted pages as garbage.
-    ensureDatabaseEncrypted(config.databasePath, runtimeMasterKey);
+    const encryptionOutcome = ensureDatabaseEncrypted(config.databasePath, runtimeMasterKey);
+    if (encryptionOutcome.status === "recovered") {
+      // Loud on purpose: this only happens after a conversion crashed with the
+      // plaintext original already destroyed, and the user should know the store
+      // they are looking at is the copy that survived.
+      serverLog.warn(
+        { ...encryptionOutcome },
+        "Nami Mail adopted the sealed store left by an interrupted encryption conversion",
+      );
+    }
     const database = openDatabase(config.databasePath, { encryptionKey: runtimeMasterKey });
     db = database;
     noteStartupPhase("server:open-database");

@@ -112,29 +112,70 @@ export function ftsIndexedMessageCount(db: DatabaseHandle): number {
 }
 
 /**
- * Rebuilds the search index for every message. Only rows that cannot be
- * decrypted are skipped (they were never readable for search either).
- * Returns the number of messages indexed.
+ * One page of rows read by the rebuild, so peak memory is one page of
+ * ciphertext instead of the whole mailbox — the same reason
+ * `message-storage.ts`'s `VERIFICATION_PAGE_SIZE` paginates its decryptability
+ * proof (~115MB for 2400 x 48KB rows before it was paged).
+ *
+ * The cursor is `messages.rowid`, the physical insertion order: it is the only
+ * keyset that needs no sort, and changing it changes the FTS `rowid` values the
+ * rebuild writes but never a search result, because matches join on
+ * `message_id`. `ORDER BY created_at, id` would need a composite cursor and a
+ * sort per page on a column pair with no index.
  */
-export function rebuildMessageFtsIndex(db: DatabaseHandle, masterKey: Buffer): number {
-  const rows = db.prepare("SELECT * FROM messages ORDER BY created_at, id").all() as MessageStorageRow[];
+const FTS_REBUILD_PAGE_SIZE = 200;
+
+/**
+ * Upper bound on the ids a rebuild reports back. A mailbox whose payloads are
+ * all unreadable must not turn the caller's log line into the whole mailbox.
+ */
+const MAX_REPORTED_SKIPPED_IDS = 50;
+
+/**
+ * Rebuilds the search index for every message, paged by `rowid`, in one
+ * transaction: the DELETE and every page's inserts commit together, so a
+ * failure part-way leaves the previous index intact.
+ *
+ * Only rows whose payload cannot be decrypted are skipped (they were never
+ * readable for search either). The skipped ids are returned rather than logged
+ * here — this module holds no logger — so the caller owns the diagnostic line
+ * and can report the divergence instead of the rows disappearing silently.
+ */
+export function rebuildMessageFtsIndex(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+): { indexed: number; skipped: string[] } {
+  // `rowid` must be selected explicitly: `SELECT *` does not include the hidden
+  // rowid, and a missing cursor would silently stop the rebuild after page one.
+  const page = db.prepare("SELECT rowid, * FROM messages WHERE rowid > ? ORDER BY rowid LIMIT ?");
+  const skipped: string[] = [];
   let indexed = 0;
   db.transaction(() => {
     db.prepare(`DELETE FROM ${MESSAGE_FTS_TABLE}`).run();
     const index = insertStatement(db);
-    for (const row of rows) {
-      let payload: MessagePayload;
-      try {
-        payload = messagePayloadForRow(row, masterKey);
-      } catch {
-        continue; // Unreadable payloads cannot be indexed or searched.
+    let cursor = 0;
+    for (;;) {
+      const rows = page.all(cursor, FTS_REBUILD_PAGE_SIZE) as Array<MessageStorageRow & { rowid: number }>;
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        let payload: MessagePayload;
+        try {
+          payload = messagePayloadForRow(row, masterKey);
+        } catch {
+          // Unreadable payloads cannot be indexed or searched; the id is
+          // reported so the caller can count the divergence.
+          if (skipped.length < MAX_REPORTED_SKIPPED_IDS) skipped.push(row.id);
+          continue;
+        }
+        const text = ftsTextForPayload(payload);
+        index.run(row.id, text.subject, text.fromName, text.fromAddress, text.to, text.cc, text.attachment, text.body);
+        indexed += 1;
       }
-      const text = ftsTextForPayload(payload);
-      index.run(row.id, text.subject, text.fromName, text.fromAddress, text.to, text.cc, text.attachment, text.body);
-      indexed += 1;
+      cursor = rows[rows.length - 1]!.rowid;
+      if (rows.length < FTS_REBUILD_PAGE_SIZE) break;
     }
   })();
-  return indexed;
+  return { indexed, skipped };
 }
 
 /**
@@ -144,15 +185,22 @@ export function rebuildMessageFtsIndex(db: DatabaseHandle, masterKey: Buffer): n
  * are maintained from the sync and draft paths. When the index was built by an
  * older schema, the v2 columns are added in place before the full rebuild, so
  * recipient and attachment searches work for pre-existing mail too.
+ *
+ * The marker means "the index has been built", not "every row was indexed": a
+ * row whose payload cannot be decrypted is still skipped. Those ids travel back
+ * to the caller with the count so the marker never hides them.
  */
-export function ensureMessageFtsIndex(db: DatabaseHandle, masterKey: Buffer): { indexed: number; rebuilt: boolean } {
+export function ensureMessageFtsIndex(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+): { indexed: number; skipped: string[]; rebuilt: boolean } {
   ensureFtsSchemaColumns(db);
   const marker = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?").get(MESSAGE_FTS_MIGRATION_ID);
-  if (marker) return { indexed: 0, rebuilt: false };
-  const indexed = rebuildMessageFtsIndex(db, masterKey);
+  if (marker) return { indexed: 0, skipped: [], rebuilt: false };
+  const result = rebuildMessageFtsIndex(db, masterKey);
   db.prepare(`
     INSERT INTO data_migrations (id, completed_at) VALUES (?, ?)
     ON CONFLICT(id) DO UPDATE SET completed_at = excluded.completed_at
   `).run(MESSAGE_FTS_MIGRATION_ID, new Date().toISOString());
-  return { indexed, rebuilt: true };
+  return { indexed: result.indexed, skipped: result.skipped, rebuilt: true };
 }
