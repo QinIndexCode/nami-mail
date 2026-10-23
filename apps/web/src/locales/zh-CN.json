@@ -832,6 +832,8 @@
     "mail.attachment.previewTooManyEntries": "压缩包内条目超过 {max} 个，已停止预览。",
     "mail.attachment.previewZipBomb": "压缩包内容与声明不符（疑似压缩炸弹），已停止解压。",
     "mail.attachment.previewPageTooLarge": "该页超出渲染上限（尺寸或图像数量），已跳过。",
+    "mail.attachment.previewArchiveCount": "{count} 个条目 · 解压后 {size}",
+    "mail.attachment.previewArchiveNoExtract": "仅列出目录，不解压内容",
     "mail.attachment.previewDemoUnavailable": "演示模式不提供附件预览。",
     "mail.notification.newContact": "新联系人",
     "mail.notification.singleTitle": "{sender} 发来新邮件",

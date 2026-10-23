@@ -344,3 +344,216 @@ color:var(--text)
 outline:2px solid var(--accent);
 outline-offset:2px
 }
+/* N₃ (S3): the document surfaces the <iframe> used to hand to the browser —
+   Office text and sheets, Markdown, and archive listings. Plain text nodes and
+   tables only; nothing in this section styles attacker-authored markup. */
+.attachment-preview-office
+{
+gap:10px;
+flex:1;
+min-height:0;
+overflow:auto;
+flex-direction:column;
+display:flex
+}
+.attachment-preview-office-block
+{
+margin:0;
+color:var(--text-soft);
+white-space:pre-wrap;
+word-break:break-word;
+line-height:1.65;
+font-size:13px
+}
+.attachment-preview-sheets
+{
+gap:16px;
+flex:1;
+min-height:0;
+overflow:auto;
+flex-direction:column;
+display:flex
+}
+.attachment-preview-sheet
+{
+gap:6px;
+flex-direction:column;
+min-width:0;
+display:flex
+}
+.attachment-preview-sheet-name
+{
+margin:0;
+color:var(--text-faint);
+text-transform:uppercase;
+letter-spacing:.04em;
+font-size:11px;
+font-weight:600
+}
+.attachment-preview-sheet-scroll
+{
+border:1px solid var(--line);
+border-radius:var(--radius-md);
+max-height:60vh;
+overflow:auto
+}
+.attachment-preview-sheet-scroll table
+{
+border-collapse:collapse;
+font-size:12px;
+width:100%
+}
+.attachment-preview-sheet-scroll td
+{
+border:1px solid var(--line);
+color:var(--text-soft);
+white-space:pre-wrap;
+word-break:break-word;
+max-width:320px;
+padding:4px 8px;
+vertical-align:top
+}
+.attachment-preview-sheet-scroll tr:nth-child(odd) td
+{
+background:var(--panel-muted)
+}
+.attachment-preview-archive
+{
+gap:8px;
+flex:1;
+min-height:0;
+flex-direction:column;
+display:flex
+}
+.attachment-preview-archive-summary
+{
+margin:0;
+color:var(--text-soft);
+font-size:12px
+}
+.attachment-preview-archive-note
+{
+margin:0;
+color:var(--text-faint);
+font-size:11px
+}
+.attachment-preview-archive-list
+{
+border:1px solid var(--line);
+background:var(--panel-muted);
+border-radius:var(--radius-md);
+flex:1;
+min-height:0;
+margin:0;
+padding:0;
+list-style:none;
+overflow:auto
+}
+.attachment-preview-archive-list li
+{
+border-bottom:1px solid var(--line);
+align-items:baseline;
+justify-content:space-between;
+gap:12px;
+padding:8px 12px;
+font-size:12px;
+display:flex
+}
+.attachment-preview-archive-list li:last-child
+{
+border-bottom:none
+}
+.attachment-preview-archive-path
+{
+color:var(--text-soft);
+text-overflow:ellipsis;
+white-space:nowrap;
+min-width:0;
+font-family:var(--font-mono);
+overflow:hidden
+}
+.attachment-preview-archive-size
+{
+color:var(--text-faint);
+flex:none;
+font-variant-numeric:tabular-nums
+}
+.attachment-preview-markdown
+{
+color:var(--text-soft);
+word-break:break-word;
+flex:1;
+min-height:0;
+line-height:1.7;
+font-size:13px;
+overflow:auto
+}
+.attachment-preview-markdown h1,.attachment-preview-markdown h2,.attachment-preview-markdown h3,.attachment-preview-markdown h4,.attachment-preview-markdown h5,.attachment-preview-markdown h6
+{
+color:var(--text);
+margin:16px 0 6px;
+font-size:15px;
+font-weight:650
+}
+.attachment-preview-markdown h1
+{
+font-size:17px
+}
+.attachment-preview-markdown p,.attachment-preview-markdown ul,.attachment-preview-markdown ol,.attachment-preview-markdown blockquote,.attachment-preview-markdown pre,.attachment-preview-markdown table
+{
+margin:0 0 10px
+}
+.attachment-preview-markdown ul,.attachment-preview-markdown ol
+{
+padding-inline-start:20px
+}
+.attachment-preview-markdown blockquote
+{
+border-inline-start:3px solid var(--line-strong);
+color:var(--text-faint);
+padding-inline-start:12px
+}
+.attachment-preview-markdown code
+{
+background:var(--panel-muted);
+border-radius:var(--radius-sm);
+padding:1px 4px;
+font-family:var(--font-mono);
+font-size:12px
+}
+.attachment-preview-markdown pre
+{
+border:1px solid var(--line);
+background:var(--panel-muted);
+border-radius:var(--radius-md);
+padding:12px;
+overflow:auto
+}
+.attachment-preview-markdown pre code
+{
+background:none;
+padding:0
+}
+.attachment-preview-markdown table
+{
+border-collapse:collapse;
+font-size:12px
+}
+.attachment-preview-markdown th,.attachment-preview-markdown td
+{
+border:1px solid var(--line);
+padding:4px 8px
+}
+.attachment-preview-md-blocked
+{
+color:var(--text-faint);
+text-decoration:underline dotted
+}
+.attachment-preview-md-image
+{
+border:1px dashed var(--line-strong);
+border-radius:var(--radius-sm);
+color:var(--text-faint);
+padding:1px 6px;
+font-size:11px
+}

@@ -117,9 +117,9 @@ describe("runPreview", () => {
     expect(client.decode).not.toHaveBeenCalled();
   });
 
-  it("keeps markdown on the text surface until S3 adds its renderer", async () => {
-    // The S2 shape of decode/index.ts: markdown is classified as its own kind
-    // but decoded by the text decoder, so the drawer shows a <pre> today.
+  it("decodes markdown into its own surface", async () => {
+    // S3 gave markdown a real decoder: the drawer now renders it through
+    // MarkdownSurface instead of the shared <pre>.
     const client = fakeClient({
       decode: decodeAttachment,
       open: async () => reply([new TextEncoder().encode("# title\n\nbody")]),
@@ -128,27 +128,19 @@ describe("runPreview", () => {
       attachment({ filename: "notes.md", contentType: "text/markdown", size: 13 }),
       runOptions({ client }),
     );
-    expect(document.surface.surface).toBe("text");
-    expect(document.surface).toMatchObject({ text: "# title\n\nbody", shown: 13, total: 13 });
+    expect(document.surface).toMatchObject({ surface: "markdown", text: "# title\n\nbody", shown: 13, total: 13 });
   });
 
-  it("degrades office and archive kinds to a download card instead of failing", async () => {
-    // Same intermediate form: these kinds are classified (and fetched under
-    // their own budget) but their decoders arrive with S3. The drawer must show
-    // the download card, not an error, and must not throw.
-    const kinds: [string, string][] = [
-      ["report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
-      ["book.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
-      ["deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"],
-      ["bundle.zip", "application/zip"],
-    ];
-    for (const [filename, contentType] of kinds) {
-      const document = await runPreview(
-        attachment({ filename, contentType, size: 8 }),
-        runOptions({ client: fakeClient({ decode: decodeAttachment, open: async () => reply([new Uint8Array(8)]) }) }),
-      );
-      expect(document.surface, filename).toMatchObject({ surface: "download_only", reason: "unsupported" });
-    }
+  it("decodes archive containers instead of handing them to a download card", async () => {
+    // Office kinds are covered under jsdom in office.test.ts: their decoder
+    // needs DOMParser, which this node-environment suite does not provide.
+    const { makeZip } = await import("./testing/fixtures");
+    const zip = await makeZip([{ name: "readme.txt", data: new TextEncoder().encode("hi") }]);
+    const document = await runPreview(
+      attachment({ filename: "bundle.zip", contentType: "application/zip", size: zip.bytes.byteLength }),
+      runOptions({ client: fakeClient({ decode: decodeAttachment, open: async () => reply([zip.bytes]) }) }),
+    );
+    expect(document.surface.surface).toBe("archive");
   });
 
   it("rejects before fetching when the declared size exceeds the cap", async () => {

@@ -11,7 +11,7 @@ import type { SurfaceProps } from "../document";
 export default function TextSurface({ document }: SurfaceProps) {
   const { t } = useI18n();
   const surface = document.surface;
-  if (surface.surface !== "text" && surface.surface !== "markdown") return null;
+  if (surface.surface !== "text") return null;
   const truncated = surface.shown < surface.total;
   return (
     <div className="attachment-preview-text-wrap">

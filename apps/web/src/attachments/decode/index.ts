@@ -7,12 +7,18 @@ import {
   type PreviewInput,
 } from "../document";
 import { PreviewFailure } from "../failure";
+import { decodeArchive } from "./archive";
 import { decodeImage, sniffImage } from "./image";
+import { decodeMarkdown } from "./markdown";
+import { decodeOffice } from "./office";
 import { decodePdf } from "./pdf";
 import { decodeText } from "./text";
 
 export { decodeText } from "./text";
 export { decodeImage, sniffImage } from "./image";
+export { decodeMarkdown, countMarkdownBlocks } from "./markdown";
+export { decodeOffice } from "./office";
+export { decodeArchive } from "./archive";
 export {
   decodePdf,
   buildPdfOptions,
@@ -56,9 +62,10 @@ function decodeMedia(input: PreviewInput, ctx: DecodeContext): PreviewDocument {
 }
 
 /**
- * The single decode entry point. S2 covers PDF, both image kinds, the three text
- * kinds and media; Office/archive/fallback degrade to a download card until S3
- * adds their decoders.
+ * The single decode entry point. All ten kinds from the catalog are dispatched
+ * here; the `default` branch is unreachable by construction and stays only so
+ * that a future kind added to the union without a decoder degrades to the
+ * download card instead of throwing.
  *
  * A surface mismatch (a `.svg` whose bytes are a JPEG) is `kind_mismatch` — the
  * content and the extension disagree, which is different from "browser has no
@@ -82,10 +89,15 @@ export async function decodeAttachment(input: PreviewInput, ctx: DecodeContext):
     }
     case "text":
     case "code":
-    case "markdown":
-      // Markdown keeps S2's text surface: rendering it as Markdown arrives with
-      // its own decoder and surface in S3.
       return decodeText(input, ctx);
+    case "markdown":
+      return decodeMarkdown(input, ctx);
+    case "office-word":
+    case "office-sheet":
+    case "office-slides":
+      return decodeOffice(input, ctx);
+    case "archive":
+      return decodeArchive(input, ctx);
     case "media-audio":
     case "media-video":
       return decodeMedia(input, ctx);

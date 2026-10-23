@@ -71,9 +71,11 @@ function crc32(data: Uint8Array): number {
 
 async function deflateRaw(data: Uint8Array): Promise<Uint8Array> {
   // `.slice()` narrows the view to an ArrayBuffer-backed buffer, which is what
-  // the DOM `BlobPart` type (and the CompressionStream) wants under TS' typed
-  // array generics.
-  const stream = new Blob([data.slice()]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+  // `Response` wants under TS' typed array generics. `Response(...).body`
+  // rather than `Blob(...).stream()`: jsdom has no `Blob.prototype.stream`.
+  const body = new Response(data.slice()).body;
+  if (!body) throw new Error("deflate fixture: no readable body");
+  const stream = body.pipeThrough(new CompressionStream("deflate-raw"));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 

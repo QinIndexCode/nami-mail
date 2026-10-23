@@ -145,8 +145,16 @@ describe("styles.css size ratchet", () => {
   // -download-reason 取代。实测聚合 17_943 行，阈值取实测 +12 行缓冲。
   // 下一轮 CSS 瘦身时应优先收回：S3/S4 的新表面可以与现有 .attachment-card
   // 共用外壳。
+  // 2026-10-23 S3 的一次上调（17_955 → 18_168）：四类文档表面（Office 段落与
+  // 工作表、Markdown、归档清单）此前由 <iframe> 交给浏览器排版，应用侧零 CSS。
+  // 实测聚合 18_156 行（+213，全部落在 features/attachment-preview.css），阈值
+  // 取实测 +12 行缓冲。+213 明显高于计划 §4.4 的「约 +70」估算：本文件是
+  // 「每个属性一行」的既有格式，多行块（office 18 / sheet 52 / archive 61 /
+  // markdown 79 / 注释 3）按该格式展开后就是这个量级，没有额外装饰规则。
+  // 下一轮 CSS 瘦身时应优先收回：归档清单与工作表滚动区可复用同一套
+  // 「带边框的面板 + 列表行」外壳。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 17_955;
+  const FROZEN_AGGREGATED_MAX_LINES = 18_168;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

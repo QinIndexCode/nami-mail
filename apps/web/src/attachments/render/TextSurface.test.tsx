@@ -46,7 +46,7 @@ describe("TextSurface", () => {
     expect(html).toContain("attachment-preview-text");
   });
 
-  it("renders markdown text through the same surface (S2 has no parser)", () => {
+  it("leaves markdown to MarkdownSurface", () => {
     const html = markup(
       <TextSurface
         document={documentWith(
@@ -57,7 +57,7 @@ describe("TextSurface", () => {
         onDownload={onDownload}
       />,
     );
-    expect(html).toContain("# Title");
+    expect(html).toBe("");
   });
 
   it("copies the retained text", async () => {
