@@ -44,6 +44,7 @@ import {
   cachedUidValidity,
   liveUidValidity,
   uidGenerationAllowsWrite,
+  type UidGenerationEvidence,
 } from "./mailbox-generation.js";
 
 type PendingRow = {
@@ -141,10 +142,22 @@ export type FlagsPushEntry = {
    * at commit time). The payload is sealed, so this is the only evidence that
    * survives until the push: re-reading a "current" value later cannot tell a
    * queued UID from one the provider re-numbered underneath it. Absent on
-   * payloads written before this field existed, and on an entry whose message was
-   * re-positioned to another mailbox since -- both fall back to the cache.
+   * payloads written before this field existed -- such an entry has no
+   * acceptance evidence and is refused whenever the provider reports a
+   * generation, never back-filled from the cache. It is
+   * also ignored for an entry whose message was re-positioned to another
+   * mailbox, which is judged by the cache instead.
    */
   uidValidity?: string | null;
+};
+
+/** One entry as the push will send it, after re-positioning. */
+type PushedFlagsEntry = {
+  id: string;
+  uid: number;
+  add: string[];
+  remove: string[];
+  evidence: UidGenerationEvidence;
 };
 
 /**
@@ -217,8 +230,10 @@ export function flagsPushError(error: unknown): { code?: string; message: string
  * the call resolved: any STORE that the provider did not confirm throws, so a
  * returned `pushed` is the number of entries every STORE covering them accepted.
  * `dropped` is the share the caller stops owing -- a message that left the cache
- * between the commit and the push can never be delivered, and the legacy caller
- * (which ignores this return) left that share unaccounted for in both directions.
+ * between the commit and the push can never be delivered, and neither can one
+ * whose UID generation cannot be proven from the acceptance-time evidence (see
+ * `mailbox-generation.ts`); the legacy caller (which ignores this return) left
+ * that share unaccounted for in both directions.
  */
 export async function pushFlagsRemote(
   deps: FlagsPushDeps,
@@ -247,7 +262,7 @@ export async function pushFlagsRemote(
   if (signal?.aborted) closeOnAbort();
   try {
     await client.connect();
-    const byMailbox = new Map<string, FlagsPushEntry[]>();
+    const byMailbox = new Map<string, PushedFlagsEntry[]>();
     for (const entry of payload.entries) {
       const position = positions.get(entry.id);
       if (!position) {
@@ -255,18 +270,22 @@ export async function pushFlagsRemote(
         continue;
       }
       const group = byMailbox.get(position.mailbox) ?? [];
-      // The position is re-resolved, so the frozen generation only still
-      // describes this mailbox when the message did not move. A re-positioned
-      // entry falls back to the cache (see the lock check below).
+      // The position is re-resolved, so a frozen generation describes this entry
+      // only while it still sits where it was accepted. A re-positioned entry is
+      // judged by the cache instead: its current number was written under the
+      // current generation. A payload that cannot even name its frozen position
+      // (written before those fields existed) has no acceptance evidence at all,
+      // so it is refused rather than judged by the cache.
+      const positioned = typeof entry.mailbox === "string" && Number.isInteger(entry.uid);
+      const stillThere = positioned && entry.mailbox === position.mailbox && entry.uid === position.uid;
       group.push({
         id: entry.id,
-        mailbox: position.mailbox,
         uid: position.uid,
         add: entry.add,
         remove: entry.remove,
-        ...(entry.mailbox === position.mailbox && entry.uidValidity
-          ? { uidValidity: entry.uidValidity }
-          : {}),
+        evidence: positioned && !stillThere
+          ? { source: "current" }
+          : { source: "accepted", value: stillThere ? entry.uidValidity ?? null : null },
       });
       byMailbox.set(position.mailbox, group);
     }
@@ -274,21 +293,26 @@ export async function pushFlagsRemote(
       const lock = await client.getMailboxLock(mailbox);
       try {
         // The generation check (see `mailbox-generation.ts`). The acceptance-time
-        // value wins; an entry without one (a legacy payload, or one whose message
-        // moved since) is judged against the generation the cache recorded for
-        // this mailbox, which is the epoch its UID was last written under. A
-        // mismatch drops the entry rather than sending it: the number now belongs
-        // to a different message, and the caller counts the drop as a failure so
-        // the local state is given back and a sync re-learns the folder.
-        const expectedGeneration = entries.find((entry) => entry.uidValidity)?.uidValidity
-          ?? cachedUidValidity(deps.db, payload.accountId, mailbox);
-        if (!uidGenerationAllowsWrite(expectedGeneration, liveUidValidity(client))) {
-          dropped += entries.length;
-          generationChanged = true;
-          continue;
-        }
-        const byFlagGroup = new Map<string, { add: string[]; remove: string[]; uids: number[] }>();
+        // value wins; an entry that froze none (a payload written before the field
+        // existed) is refused rather than judged by the cache, because the cache
+        // cannot say which epoch that UID belonged to when the task was accepted.
+        // A mismatch drops the entry rather than sending it: the number now
+        // belongs to a different message, and the caller counts the drop as a
+        // failure so the local state is given back and a sync re-learns the
+        // folder.
+        const live = liveUidValidity(client);
+        const cached = cachedUidValidity(deps.db, payload.accountId, mailbox);
+        const permitted: PushedFlagsEntry[] = [];
         for (const entry of entries) {
+          if (uidGenerationAllowsWrite(entry.evidence, live, cached)) permitted.push(entry);
+          else {
+            dropped += 1;
+            generationChanged = true;
+          }
+        }
+        if (permitted.length === 0) continue;
+        const byFlagGroup = new Map<string, { add: string[]; remove: string[]; uids: number[] }>();
+        for (const entry of permitted) {
           const key = `${entry.add.join(",")}\u0000${entry.remove.join(",")}`;
           let group = byFlagGroup.get(key);
           if (!group) {

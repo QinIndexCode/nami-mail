@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from "../../db.js";
+import type { AcceptedUidGeneration } from "../../mailbox-generation.js";
 import { accountById } from "../../account-store.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "../../mail.js";
 import { safeLogout } from "../../imap-logout.js";
@@ -145,22 +146,26 @@ export function pendingMoveItemIds(db: DatabaseHandle, task: TaskRow): string[] 
 }
 
 /**
- * The generation each still-owed id was accepted under, keyed by message id.
+ * The position each still-owed id was accepted at, with the generation its
+ * source mailbox carried then.
  *
- * Only rows that actually froze a generation are returned: an absent key means
- * "no acceptance-time evidence" (a row written before the columns existed, or a
- * mailbox the acceptance could not read), and the move engine then falls back to
- * the cache's current generation for that id.
+ * Every owed id is present, including rows whose acceptance froze no generation
+ * (`uidValidity: null`, or a pre-v4 row with no `origin_mailbox`): the key is
+ * what tells the move engine "this task accepted this id", so an unproven row is
+ * refused instead of being treated like an immediate command and judged by the
+ * cache (`mailbox-generation.ts`).
  */
-export function pendingMoveUidValidity(db: DatabaseHandle, task: TaskRow): Map<string, string> {
+export function pendingMoveAcceptedPositions(db: DatabaseHandle, task: TaskRow): Map<string, AcceptedUidGeneration> {
   const rows = db
     .prepare(`
-      SELECT message_id, origin_uid_validity FROM task_items
+      SELECT message_id, origin_mailbox, origin_uid_validity FROM task_items
       WHERE task_id = ? AND changed = 1 AND failed = 0
-        AND origin_uid_validity IS NOT NULL
     `)
-    .all(task.id) as Array<{ message_id: string; origin_uid_validity: string }>;
-  return new Map(rows.map((row) => [row.message_id, row.origin_uid_validity]));
+    .all(task.id) as Array<{ message_id: string; origin_mailbox: string | null; origin_uid_validity: string | null }>;
+  return new Map(rows.map((row) => [
+    row.message_id,
+    { mailbox: row.origin_mailbox, uidValidity: row.origin_uid_validity },
+  ]));
 }
 
 /** What one call to {@link revertMoveFailures} did. */
@@ -868,10 +873,12 @@ export function createMoveRunner(deps: MoveRunnerDeps): TaskRunner<MoveTaskPaylo
     // claimed, re-goaled, latched) is simply not in the list.
     const ids = pendingMoveItemIds(deps.db, task);
     if (ids.length === 0) return;
-    // The UID generation each id was accepted under. Passed down so the engine
-    // can refuse an id whose mailbox has been rebuilt since -- the message it was
-    // accepted for no longer exists, and the number may already belong to another.
-    const acceptedGenerations = pendingMoveUidValidity(deps.db, task);
+    // The position each id was accepted at, with the generation its source
+    // mailbox carried then. Passed down so the engine can refuse an id whose
+    // mailbox has been rebuilt since -- the message it was accepted for no
+    // longer exists, and the number may already belong to another. An id whose
+    // acceptance froze no generation is refused, not judged by the cache.
+    const acceptedGenerations = pendingMoveAcceptedPositions(deps.db, task);
     const connections = createAccountConnections(deps.db, deps.masterKey, deps.accessTokenProvider, signal);
     // The provider could not confirm these accounts' MOVE outcomes (no UIDPLUS, or
     // a response that never arrived). Collected as the chunks run and kicked once,

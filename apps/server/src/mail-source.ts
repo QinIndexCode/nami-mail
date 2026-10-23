@@ -46,7 +46,11 @@ export async function downloadMessageSource(
     // Same rule as the attachment path: the UID must still belong to the
     // generation this row was synced under, or it may name a different message
     // (`mailbox-generation.ts`).
-    if (!uidGenerationAllowsWrite(cachedUidValidity(db, message.account_id, message.mailbox), liveUidValidity(client))) {
+    if (!uidGenerationAllowsWrite(
+      { source: "current" },
+      liveUidValidity(client),
+      cachedUidValidity(db, message.account_id, message.mailbox),
+    )) {
       throw new Error(UID_GENERATION_CHANGED_ERROR);
     }
     const remoteMessage = await client.fetchOne(message.uid, { uid: true, source: true }, { uid: true });

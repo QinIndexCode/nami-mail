@@ -802,4 +802,27 @@ describe("task undo runner: the UID generation frozen at acceptance", () => {
     expect(heldIn(db, INBOX)).toBe(1);
     expect(syncAccount).not.toHaveBeenCalled();
   });
+
+  it("refuses an entry whose acceptance froze no generation, even when the cache agrees", async () => {
+    // The migrated-row shape: the undo item predates `origin_uid_validity`, so
+    // nothing records which epoch ARCHIVE's UID 1 belonged to when the restore was
+    // accepted. Cache and provider both reading "10" cannot supply that fact after
+    // a rebuild, so the entry must be refused instead of restored.
+    db = openFixture();
+    db.prepare("UPDATE folders SET uid_validity = '10' WHERE account_id = ? AND path = ?").run(ACCOUNT, ARCHIVE);
+    seedMessage(db, "msg-1", 1, ARCHIVE);
+    const parent = moveParent(db, [{ id: "msg-1", origin: INBOX }]);
+    const taskId = acceptUndo(db, parent);
+    db.prepare("UPDATE task_items SET origin_uid_validity = NULL WHERE task_id = ?").run(taskId);
+    client.mailbox = { uidValidity: 10n };
+
+    const deltas: Deltas = [];
+    await attempt(db, taskId, deltas);
+
+    expect(moveCalls).toEqual([]);
+    expect(deltas).toEqual([{ failed: 1 }]);
+    expect(itemState(db, taskId, "msg-1")).toMatchObject({ changed: 1, failed: 1 });
+    expect(messageState(db, "msg-1")).toMatchObject({ mailbox: ARCHIVE, pending_move_destination: null, pending_move_state: null });
+    expect(syncAccount).toHaveBeenCalledTimes(1);
+  });
 });

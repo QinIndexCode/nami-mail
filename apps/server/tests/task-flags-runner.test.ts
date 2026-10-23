@@ -44,6 +44,7 @@ import { jobSnapshot } from "../src/tasks/jobs.js";
 import { createTaskRegistry } from "../src/tasks/registry.js";
 import { startTaskScheduler } from "../src/tasks/scheduler.js";
 import { openTaskPayload, recordTask, reportTaskProgress, taskItems, taskRow } from "../src/tasks/store.js";
+import { sealPayload } from "../src/tasks/envelope.js";
 import type { TaskRow, TaskSpec } from "../src/tasks/types.js";
 
 /**
@@ -223,6 +224,14 @@ const taskRows = (db: DatabaseHandle, except = ""): TaskRow[] =>
 function acceptanceDeps(db: DatabaseHandle): { deps: { db: DatabaseHandle; masterKey: Buffer; scheduler: { start: (id: string) => void } }; started: string[] } {
   const started: string[] = [];
   return { deps: { db, masterKey: MASTER_KEY, scheduler: { start: (id: string) => started.push(id) } }, started };
+}
+
+/** Rewrites a task's sealed payload, the way a descriptor from an older build is simulated. */
+function rewriteTaskPayload(db: DatabaseHandle, taskId: string, payload: Record<string, unknown>): void {
+  const task = taskRow(db, taskId) as TaskRow;
+  const sealed = sealPayload(MASTER_KEY, { id: task.id, accountId: task.account_id }, payload);
+  db.prepare("UPDATE tasks SET payload_ciphertext = ?, payload_fingerprint = ?, payload_version = ? WHERE id = ?")
+    .run(sealed.ciphertext, sealed.fingerprint, sealed.version, taskId);
 }
 
 /** One attempt, driven the way the scheduler drives it: real row, real sealed payload. */
@@ -725,19 +734,63 @@ describe("task flags: the UID generation frozen at acceptance", () => {
     expect(syncAccount).toHaveBeenCalledTimes(1);
   });
 
-  it("pushes when the live generation matches the frozen one", async () => {
+  it("refuses a payload written before the field existed, even when the cache agrees with the provider", async () => {
+    // The FOLLOWUP case. A payload sealed before the acceptance froze the
+    // generation says nothing about which epoch its UID belonged to; the cache
+    // and the provider both reading "10" is exactly what a rebuild looks like
+    // from the outside afterwards. So an entry without acceptance evidence must
+    // be refused, not back-filled from the cache.
     const world = fixture(2);
     db = world.db;
     db.prepare("UPDATE folders SET uid_validity = '10' WHERE account_id = ? AND path = ?").run(ACCOUNT, MAILBOX);
     const { deps } = acceptanceDeps(db);
     const taskId = acceptFlagsTask(deps, { messageIds: world.ids, patch: { seen: true } }).handles[0]!.id;
+    const frozen = openTaskPayload(MASTER_KEY, taskRow(db, taskId) as TaskRow) as FrozenFlagsPayload;
+    rewriteTaskPayload(db, taskId, {
+      accountId: frozen.accountId,
+      entries: frozen.entries.map((entry) => ({
+        id: entry.id,
+        mailbox: entry.mailbox,
+        uid: entry.uid,
+        add: entry.add,
+        remove: entry.remove,
+      })),
+    });
     client.mailbox = { uidValidity: 10n };
 
     const deltas: Deltas = [];
     await attempt(db, taskId, deltas);
 
-    expect(addCalls).toEqual([[1, 2]]);
-    expect(deltas).toEqual([{ updated: 2, failed: 0 }]);
-    expect(syncAccount).not.toHaveBeenCalled();
+    // No STORE at all: the UID could belong to a different message. Each entry
+    // is counted failed once, and the pass that re-learns the folder is asked for.
+    expect(addCalls).toEqual([]);
+    expect(removeCalls).toEqual([]);
+    expect(deltas).toEqual([{ updated: 0, failed: 2 }]);
+    expect(syncAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a payload that cannot even name the position it froze", async () => {
+    // Older still: the descriptor has `entries[].id` and nothing else. Without a
+    // frozen mailbox/uid there is no way to tell "still where it was accepted"
+    // from "re-positioned", so treating it as current evidence would hand the
+    // cache the same power the field above just took away.
+    const world = fixture(2);
+    db = world.db;
+    db.prepare("UPDATE folders SET uid_validity = '10' WHERE account_id = ? AND path = ?").run(ACCOUNT, MAILBOX);
+    const { deps } = acceptanceDeps(db);
+    const taskId = acceptFlagsTask(deps, { messageIds: world.ids, patch: { seen: true } }).handles[0]!.id;
+    const frozen = openTaskPayload(MASTER_KEY, taskRow(db, taskId) as TaskRow) as FrozenFlagsPayload;
+    rewriteTaskPayload(db, taskId, {
+      accountId: frozen.accountId,
+      entries: frozen.entries.map((entry) => ({ id: entry.id, add: entry.add, remove: entry.remove })),
+    });
+    client.mailbox = { uidValidity: 10n };
+
+    const deltas: Deltas = [];
+    await attempt(db, taskId, deltas);
+
+    expect(addCalls).toEqual([]);
+    expect(deltas).toEqual([{ updated: 0, failed: 2 }]);
+    expect(syncAccount).toHaveBeenCalledTimes(1);
   });
 });

@@ -800,4 +800,28 @@ describe("task move runner: the UID generation frozen at acceptance", () => {
     expect(moveCalls).toEqual([[1, 2]]);
     expect(deltas).toEqual([{ updated: 2, failed: 0 }]);
   });
+
+  it("refuses a selection row whose acceptance froze no generation, even when the cache agrees", async () => {
+    // The migrated-row shape: `task_items` exists but `origin_uid_validity` is
+    // NULL, because the acceptance that wrote it predates the column. Nothing
+    // says which epoch UID 1 belonged to, and the cache and the provider agreeing
+    // on "10" is precisely what a rebuild looks like afterwards. Only the frozen
+    // value could tell, so the row must be refused rather than judged by the cache.
+    const world = fixture(2);
+    db = world.db;
+    db.prepare("UPDATE folders SET uid_validity = '10' WHERE account_id = ? AND path = ?").run(ACCOUNT, SOURCE);
+    const taskId = acceptMove(db, world.ids);
+    db.prepare("UPDATE task_items SET origin_uid_validity = NULL WHERE task_id = ?").run(taskId);
+    client.mailbox = { uidValidity: 10n };
+
+    const deltas: Deltas = [];
+    await attempt(db, taskId, deltas);
+
+    expect(moveCalls).toEqual([]);
+    expect(deltas).toEqual([{ updated: 0, failed: 2 }]);
+    for (const id of world.ids) {
+      expect(messageState(db, id)).toEqual({ mailbox: SOURCE, pending_move_destination: null, pending_move_state: null });
+    }
+    expect(syncAccount).toHaveBeenCalledTimes(1);
+  });
 });

@@ -40,7 +40,7 @@ import {
 } from "./sync-locks.js";
 import { accountById } from "./account-store.js";
 import { isRecoverableStaleMove, recoverStaleMoveIntent } from "./move-recovery.js";
-import { UID_GENERATION_CHANGED_ERROR, liveUidValidity, partitionRefusedByGeneration, refuseRebuiltMailbox } from "./mailbox-generation.js";
+import { UID_GENERATION_CHANGED_ERROR, liveUidValidity, moveAcceptanceEvidence, partitionRefusedByGeneration, refuseRebuiltMailbox, type AcceptedUidGeneration } from "./mailbox-generation.js";
 import {
   cachedDestinationCandidateUid,
   moveStatements,
@@ -100,7 +100,7 @@ export type MoveMessageOptions = {
    * cache's current value is used instead -- correct for an immediate move,
    * because the account's write slot keeps a sync from rewriting `folders`
    * between the read and the lock. A queued move passes its acceptance-time
-   * value, which is the only evidence that survives a pass in between.
+   * value; `null` (froze none) is refused, not back-filled.
    */
   expectedUidValidity?: string | null;
 };
@@ -490,7 +490,7 @@ async function moveMessagesInOneCommand(
   agentEvents: AgentMailEventSink | undefined,
   client: Awaited<ReturnType<typeof imapClientForAccount>>,
   /** Acceptance-time generations, keyed by message id (see `batchMoveMessages`). */
-  acceptedGenerations?: ReadonlyMap<string, string>,
+  acceptedGenerations?: ReadonlyMap<string, AcceptedUidGeneration>,
 ): Promise<{ updated: number; failures: Array<{ id: string; message: string }>; pendingAccounts: Set<string> }> {
   const outcome = { updated: 0, failures: [] as Array<{ id: string; message: string }>, pendingAccounts: new Set<string>() };
   const accountId = entries[0]?.account_id;
@@ -559,8 +559,7 @@ async function moveMessagesInOneCommand(
     try {
       // The generation check (see `mailbox-generation.ts`): under this lock and
       // before the command, because the live value only means something once the
-      // mailbox is selected, and an id whose mailbox was rebuilt must not address
-      // the number it was accepted with. Nothing was sent for the refused ids.
+      // mailbox is selected. Nothing was sent for the refused ids.
       const refused = partitionRefusedByGeneration(claimed, liveUidValidity(client), acceptedGenerations);
       if (refused.length > 0) {
         for (const entry of refused) {
@@ -644,10 +643,10 @@ async function moveMessagesInOneCommand(
  * A caller running many batches in a row passes the `connections` cache it
  * owns, paying one connect per account for the whole run instead of per batch.
  *
- * `acceptedGenerations` carries the generation each id's acceptance froze (the
- * `move` task's `task_items`). Ids missing from it fall back to the generation
- * the cache recorded for the row, which is the right evidence for an immediate
- * call: no sync can rewrite `folders` while the account's write slot is held.
+ * `acceptedGenerations` carries what each id's acceptance froze (the `move`
+ * task's `task_items`). An id missing from it is judged by the cache -- the
+ * right evidence for an immediate call -- while one the task accepted without
+ * freezing a generation is refused instead.
  */
 export async function batchMoveMessages(
   db: DatabaseHandle,
@@ -657,7 +656,7 @@ export async function batchMoveMessages(
   accessTokenProvider?: AccountAccessTokenProvider,
   agentEvents?: AgentMailEventSink,
   connections?: Map<string, Awaited<ReturnType<typeof imapClientForAccount>>>,
-  acceptedGenerations?: ReadonlyMap<string, string>,
+  acceptedGenerations?: ReadonlyMap<string, AcceptedUidGeneration>,
 ): Promise<BatchMessageMoveOutcome> {
   const outcome: BatchMessageMoveOutcome = {
     updated: 0,
@@ -759,6 +758,8 @@ export async function batchMoveMessages(
         }
         for (const entry of group) {
           try {
+            // One move at a time: the acceptance evidence must be carried, or a queued id is judged by the cache.
+            const evidence = moveAcceptanceEvidence(entry, acceptedGenerations);
             const result = await moveEntryToDestination(
               db,
               masterKey,
@@ -767,7 +768,7 @@ export async function batchMoveMessages(
               destination,
               accessTokenProvider,
               agentEvents,
-              { client: clientsByAccount.get(accountId) },
+              { client: clientsByAccount.get(accountId), ...(evidence.source === "accepted" ? { expectedUidValidity: evidence.value } : {}) },
             );
             outcome.updated += 1;
             if (result.refreshPending) outcome.pendingAccounts.add(accountId);

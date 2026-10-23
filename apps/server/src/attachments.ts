@@ -209,7 +209,11 @@ export async function downloadMessageAttachment(
     // was written under the generation the cache recorded. A rebuild hands that
     // number to a different message, so the part is refused rather than streamed
     // from a stranger (`mailbox-generation.ts`).
-    if (!uidGenerationAllowsWrite(cachedUidValidity(db, message.account_id, message.mailbox), liveUidValidity(client))) {
+    if (!uidGenerationAllowsWrite(
+      { source: "current" },
+      liveUidValidity(client),
+      cachedUidValidity(db, message.account_id, message.mailbox),
+    )) {
       throw new Error(UID_GENERATION_CHANGED_ERROR);
     }
     const remoteMessage = await client.fetchOne(message.uid, { uid: true, bodyStructure: true }, { uid: true });

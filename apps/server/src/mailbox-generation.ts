@@ -67,44 +67,104 @@ export function liveUidValidity(client: { mailbox?: { uidValidity?: unknown } | 
 }
 
 /**
+ * The two ways a caller can know which generation a cached UID belongs to.
+ *
+ * - `current` is the cache the caller just read while holding the account's
+ *   write slot. For an immediate operation that is the generation the local row
+ *   was written under, because no sync can rewrite `folders` between that read
+ *   and the command.
+ * - `accepted` is the value a task froze when it was accepted. It is the only
+ *   evidence that survives a sync in between, and its absence must not be
+ *   filled in from the cache: comparing two values that are both "current"
+ *   answers "same" precisely after a rebuild re-pointed the UID.
+ */
+export type UidGenerationEvidence =
+  | { readonly source: "accepted"; readonly value: string | null }
+  | { readonly source: "current" };
+
+/**
  * The policy every user-driven command applies once it holds the mailbox lock.
  *
- * A live value that disagrees with the expected one refuses the command, and so
- * does a live value next to a missing expectation (nothing proves which epoch the
- * UID belongs to). A transport that exposes no generation at all cannot prove a
- * rebuild either way, and refusing there would make every command on such a
- * transport fail forever, so it is allowed through -- the same reading `sync.ts`
- * has always used for an absent `UIDVALIDITY`.
+ * A transport that exposes no generation at all cannot prove a rebuild either
+ * way, and refusing there would make every command on such a transport fail
+ * forever, so it is allowed through -- the same reading `sync.ts` has always used
+ * for an absent `UIDVALIDITY`. That grace is about the transport, not about the
+ * acceptance: once the provider does answer, a queued task that froze no
+ * generation is refused, because nothing can prove which epoch its UID belonged
+ * to and the cache cannot supply that fact after the execution has begun. With
+ * evidence in hand, a live value that disagrees refuses the command.
  */
-export function uidGenerationAllowsWrite(expected: string | null | undefined, live: string | undefined): boolean {
+export function uidGenerationAllowsWrite(
+  evidence: UidGenerationEvidence,
+  live: string | undefined,
+  cached: string | null = null,
+): boolean {
   if (!live) return true;
-  return sameUidGeneration(expected, live);
+  if (evidence.source === "accepted") {
+    return Boolean(evidence.value) && sameUidGeneration(evidence.value, live);
+  }
+  return sameUidGeneration(cached, live);
 }
 
 /** The fields of a selection entry the removal below needs. */
 export type GenerationGuardedEntry = {
   id: string;
-  /** The row's cached generation, used when no acceptance-time value is known. */
+  mailbox: string;
+  /**
+   * The generation the cache recorded for {@link mailbox}. Absent or `null` means
+   * no cache value was read, which is judged as no evidence -- fail closed, never
+   * "same".
+   */
   origin_uid_validity?: string | null;
 };
+
+/** What a queued move froze about the position it accepted. */
+export type AcceptedUidGeneration = {
+  /** The mailbox the id was accepted in; `null` when the row predates the column. */
+  mailbox: string | null;
+  /** The generation that mailbox carried then; `null` when acceptance froze none. */
+  uidValidity: string | null;
+};
+
+/**
+ * Which evidence judges one move entry.
+ *
+ * A frozen value is evidence only while the entry still sits in the mailbox it
+ * was accepted in. A known different mailbox means another task re-positioned
+ * the message and the current number was written under the cache's generation;
+ * a `null` mailbox is not "same", it is unknown, and is judged as an acceptance
+ * that froze nothing -- which refuses.
+ */
+export function moveAcceptanceEvidence(
+  entry: { id: string; mailbox: string },
+  accepted?: ReadonlyMap<string, AcceptedUidGeneration>,
+): UidGenerationEvidence {
+  const frozen = accepted?.get(entry.id);
+  if (!frozen) return { source: "current" };
+  if (frozen.mailbox !== null && frozen.mailbox !== entry.mailbox) return { source: "current" };
+  return { source: "accepted", value: frozen.uidValidity };
+}
 
 /**
  * Removes, in place, every entry whose UID generation cannot be proven, and
  * returns them.
  *
- * The acceptance-time generation wins (it is the only value a rebuild cannot have
- * re-written in the meantime); an entry without one falls back to the generation
- * its row carries, which is what an immediate command has. Callers are expected to
- * settle the returned entries as refused and to ask for the sync that gives them a
- * current position.
+ * The acceptance-time value wins because it is the only one a rebuild cannot
+ * have re-written in the meantime; an entry that never froze one is refused
+ * rather than judged by the cache. Callers are expected to settle the returned
+ * entries as refused and to ask for the sync that gives them a current position.
  */
 export function partitionRefusedByGeneration<E extends GenerationGuardedEntry>(
   entries: E[],
   live: string | undefined,
-  acceptedGenerations?: ReadonlyMap<string, string>,
+  accepted?: ReadonlyMap<string, AcceptedUidGeneration>,
 ): E[] {
   const refused = entries.filter((entry) =>
-    !uidGenerationAllowsWrite(acceptedGenerations?.get(entry.id) ?? entry.origin_uid_validity, live));
+    !uidGenerationAllowsWrite(
+      moveAcceptanceEvidence(entry, accepted),
+      live,
+      entry.origin_uid_validity ?? null,
+    ));
   if (refused.length === 0) return refused;
   const allowed = entries.filter((entry) => !refused.includes(entry));
   entries.length = 0;
@@ -116,6 +176,10 @@ export function partitionRefusedByGeneration<E extends GenerationGuardedEntry>(
  * Throws unless the opened mailbox still carries the generation the caller
  * expected. The throw is the whole effect: callers that claimed an intent clear
  * it first, because nothing has been sent.
+ *
+ * `expected` omitted means an immediate operation (the cache is the evidence);
+ * `null` means a queued task froze no generation, which is refused rather than
+ * back-filled whenever the provider reports one.
  */
 export function refuseRebuiltMailbox(
   db: DatabaseHandle,
@@ -124,7 +188,11 @@ export function refuseRebuiltMailbox(
   client: { mailbox?: { uidValidity?: unknown } | false | null },
   expected?: string | null,
 ): void {
-  if (uidGenerationAllowsWrite(expected ?? cachedUidValidity(db, accountId, mailbox), liveUidValidity(client))) return;
+  const live = liveUidValidity(client);
+  const allowed = expected === undefined
+    ? uidGenerationAllowsWrite({ source: "current" }, live, cachedUidValidity(db, accountId, mailbox))
+    : uidGenerationAllowsWrite({ source: "accepted", value: expected }, live);
+  if (allowed) return;
   throw new Error(UID_GENERATION_CHANGED_ERROR);
 }
 
