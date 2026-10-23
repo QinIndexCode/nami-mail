@@ -12,8 +12,14 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 
 import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
+import {
+  MESSAGE_PAYLOAD_VERSION,
+  encryptMessagePayload,
+  type MessagePayload,
+} from "../src/message-storage.js";
 
 const now = "2026-07-18T00:00:00.000Z";
+const masterKey = Buffer.alloc(32, 7);
 // The shape sync derives (`sha256(accountId\0mailbox\0uid)`, first 32 hex
 // characters). This fixture was a uuid, which the route used to require -- the
 // reason the suite stayed green while every real message answered 400.
@@ -79,6 +85,41 @@ function insertAccountAndMessage(db: DatabaseHandle): void {
   );
 }
 
+/**
+ * Rewrites the fixture row into the encrypted shape every sync write produces.
+ * The route resolves attachments through `messagePayloadForRow`, so editing the
+ * `attachments_json` mirror alone leaves it answering 404 for a part that is
+ * right there in the payload.
+ */
+function storeEncryptedAttachments(db: DatabaseHandle, attachments: MessagePayload["attachments"]): void {
+  const payload: MessagePayload = {
+    messageId: null,
+    subject: "Undelivered Mail Returned to Sender",
+    fromName: "Mail Delivery System",
+    fromAddress: "MAILER-DAEMON@example.com",
+    to: [],
+    cc: null,
+    inReplyTo: null,
+    references: null,
+    snippet: "",
+    textBody: "",
+    htmlBody: "",
+    attachments,
+  };
+  db.prepare("UPDATE messages SET encrypted_payload = ?, payload_version = ? WHERE id = ?").run(
+    encryptMessagePayload(masterKey, messageId, "account-1", payload),
+    MESSAGE_PAYLOAD_VERSION,
+    messageId,
+  );
+}
+
+// BODYSTRUCTURE as imapflow reports it: `disposition` is optional because a
+// part is allowed to carry none (RFC 3462's header part is one of those).
+type FetchedStructure = {
+  uid: number;
+  bodyStructure: { type: string; childNodes: Array<{ part: string; type: string; disposition?: string }> };
+};
+
 describe("attachment download API", () => {
   let app: FastifyInstance;
   let db: DatabaseHandle;
@@ -87,7 +128,7 @@ describe("attachment download API", () => {
     usable: true,
     connect: vi.fn(async () => undefined),
     getMailboxLock: vi.fn(async () => lock),
-    fetchOne: vi.fn(async () => ({
+    fetchOne: vi.fn(async (): Promise<FetchedStructure> => ({
       uid: 42,
       bodyStructure: {
         type: "multipart/mixed",
@@ -106,7 +147,7 @@ describe("attachment download API", () => {
     db = openDatabase(":memory:");
     insertAccountAndMessage(db);
     imapClientForAccount.mockReturnValue(client);
-    app = await buildApp({ db, masterKey: Buffer.alloc(32, 7) });
+    app = await buildApp({ db, masterKey });
   });
 
   afterEach(async () => {
@@ -132,6 +173,56 @@ describe("attachment download API", () => {
     expect(client.getMailboxLock).toHaveBeenCalledWith("INBOX");
     expect(client.fetchOne).toHaveBeenCalledWith(42, { uid: true, bodyStructure: true }, { uid: true });
     expect(client.download).toHaveBeenCalledWith(42, "2.4", { uid: true });
+  });
+
+  it("downloads the rejected message's headers inside a delivery report", async () => {
+    // RFC 3462: a bounce carries the original headers as a text part with no
+    // disposition and no name. mailparser lists it as an attachment; the route
+    // used to answer 409 because every text/* leaf without a filename looked
+    // like body text.
+    storeEncryptedAttachments(db, [{
+      partId: "3",
+      filename: "attachment-2",
+      contentType: "text/rfc822-headers",
+      size: 4078,
+      related: false,
+      disposition: "attachment",
+    }]);
+    client.fetchOne.mockResolvedValueOnce({
+      uid: 42,
+      bodyStructure: { type: "multipart/report", childNodes: [{ part: "3", type: "text/rfc822-headers" }] },
+    });
+
+    const response = await app.inject({ method: "GET", url: `/api/messages/${messageId}/attachments/3` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/rfc822-headers");
+    expect(client.download).toHaveBeenCalledWith(42, "3", { uid: true });
+  });
+
+  it("still refuses to stream a body text leaf as an attachment", async () => {
+    storeEncryptedAttachments(db, [{
+      partId: "3",
+      filename: "attachment-2",
+      contentType: "text/plain",
+      size: 12,
+      related: false,
+      disposition: "attachment",
+    }]);
+    client.fetchOne.mockResolvedValueOnce({
+      uid: 42,
+      bodyStructure: { type: "multipart/report", childNodes: [{ part: "3", type: "text/plain" }] },
+    });
+
+    const response = await app.inject({ method: "GET", url: `/api/messages/${messageId}/attachments/3` });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      ok: false,
+      code: "conflict",
+      message: "Attachment is no longer available in this mailbox. Sync this message again.",
+    });
+    expect(client.download).not.toHaveBeenCalled();
   });
 
   it("rejects invalid and unregistered parts before creating an IMAP connection", async () => {

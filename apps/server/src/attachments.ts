@@ -159,7 +159,13 @@ function isDownloadableBodyPart(part: MessageStructureObject): boolean {
   const disposition = part.disposition?.toLowerCase();
   const filename = part.dispositionParameters?.filename ?? part.parameters?.filename ?? part.parameters?.name;
   if (disposition === "attachment" || disposition === "inline" || Boolean(filename)) return true;
-  return !sanitizeAttachmentContentType(part.type).startsWith("text/");
+  const contentType = sanitizeAttachmentContentType(part.type);
+  // RFC 3462 delivery reports carry the rejected message's headers as a text
+  // part with no disposition and no filename. mailparser still lists it as an
+  // attachment, so rejecting text/* leaves here answered 409 for every bounced
+  // message even though the part is right there.
+  if (contentType === "text/rfc822-headers") return true;
+  return !contentType.startsWith("text/");
 }
 
 function isReadable(value: unknown): value is Readable {
