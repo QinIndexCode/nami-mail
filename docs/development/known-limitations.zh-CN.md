@@ -144,6 +144,7 @@
 - **旧版 Office 与专业栅格格式不做解码**：`.doc` / `.xls` / `.ppt`（OLE 复合文档）不在可预览目录内，直接是 tier C 的下载卡片；HEIC / TIFF / PSD 这类"声明为 `image/*` 但不在六种栅格签名内"的文件会按 raster 取数，图头嗅探失败后以 `corrupt` 错误卡片加下载入口结束（`apps/web/src/attachments/decode/image.ts:180-181`），**不会**尝试额外解码。
 - **媒体只用 Chromium 的原生解码器**：音频与视频就地播放，但**没有 Range 流式**——整个部件先取完再交给 blob URL，因此超过 `MAX_INPUT_BYTES.media`（32 MiB，见 `apps/web/src/attachments/budget.ts`）直接拒绝；**没有字幕轨**；容器或编解码不被 Chromium 支持时（如 `avi` / `flv` / `wmv`）回退为下载卡片。
 - **PDF 只保留一个页 canvas**：翻页重新渲染，没有页缓存；`PdfSurface.tsx` 在整份文档上用一个缩放比，因此超大页会先被 `PAGE_PIXELS_MAX` 拒绝而不是缩小显示。
+- **表格只保留 200 行 × 50 列**：解码阶段即按 `MAX_SHEET_ROWS` / `MAX_SHEET_COLUMNS` 截断，窗口外的单元格不进入行数组，跨工作簿的槽位总数另受 `MAX_SHEET_SLOTS` 约束（超出降级为下载卡片）。渲染层本来就只画这个窗口，所以显示上不是新增降级；但“预览里没有”不等于“文件里没有”。
 - **内存账本不是进程内存上限**：`MemoryLease` 只统计本仓库自己的分配；pdf.js 内部结构、浏览器图像与媒体解码器都不在这本账上（`budget.ts` 的注释写明了这一点）。
 - **没有可中断的硬截止**：单个超大 XML 部件的 `DOMParser.parseFromString` 一旦开始就无法中断，Office 路径的元素数预扫在解析之前、字符上限在解析之后，`DECODE_DEADLINE_MS` 只是事后止损。
 - **Markdown 有独立的降级线**：超过 `MAX_MARKDOWN_BYTES`（8 MiB，入口按声明大小先拒）或超过 `MAX_MARKDOWN_BLOCKS`（4,000 个顶层块）时降级为仅下载，而不是截断渲染（`apps/web/src/attachments/decode/markdown.ts:52-77`）。
