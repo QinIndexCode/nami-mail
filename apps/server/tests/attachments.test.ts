@@ -18,6 +18,7 @@ import {
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { PENDING_MOVE_RECONCILIATION_ERROR, messagePayloadForRow, type MessageStorageRow } from "../src/message-storage.js";
 import { UID_GENERATION_CHANGED_ERROR } from "../src/mailbox-generation.js";
+import { downloadMessageSource } from "../src/mail-source.js";
 import { syncAccount } from "../src/sync.js";
 
 const now = "2026-07-18T00:00:00.000Z";
@@ -294,6 +295,70 @@ describe("attachment metadata and IMAP downloads", () => {
       expect(client.download).toHaveBeenCalledWith(42, "2", { uid: true });
       expect(lock.release).toHaveBeenCalledTimes(1);
       expect(client.logout).toHaveBeenCalledTimes(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("refuses to stream a part when a sync rebuilds the mailbox while the connection opens", async () => {
+    // The row was read under generation 10. Opening the connection takes long
+    // enough for a background sync to commit generation 11 and re-point UID 42.
+    // Re-reading the cache after that wait would agree with the provider and let
+    // the stranger's bytes through; the generation read with the row must decide.
+    const db = openDatabase(":memory:");
+    insertAccount(db);
+    insertMessage(db, attachmentJson());
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, uid_validity) VALUES (?, ?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox", "10");
+    const lock = { release: vi.fn() };
+    const client = {
+      usable: true,
+      mailbox: { uidValidity: 11n },
+      connect: vi.fn(async () => {
+        db.prepare("UPDATE folders SET uid_validity = '11' WHERE account_id = ? AND path = ?").run("account-1", "INBOX");
+      }),
+      getMailboxLock: vi.fn(async () => lock),
+      fetchOne: vi.fn(),
+      download: vi.fn(),
+      logout: vi.fn(async () => undefined),
+    };
+    imapClientForAccount.mockReturnValue(client);
+
+    try {
+      await expect(downloadMessageAttachment(db, Buffer.alloc(32, 7), "message-1", "2"))
+        .rejects.toThrow(UID_GENERATION_CHANGED_ERROR);
+      expect(client.fetchOne).not.toHaveBeenCalled();
+      expect(client.download).not.toHaveBeenCalled();
+      expect(lock.release).toHaveBeenCalledTimes(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("refuses an EML export when a sync rebuilds the mailbox while the connection opens", async () => {
+    const db = openDatabase(":memory:");
+    insertAccount(db);
+    insertMessage(db, attachmentJson());
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, uid_validity) VALUES (?, ?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox", "10");
+    const lock = { release: vi.fn() };
+    const client = {
+      usable: true,
+      mailbox: { uidValidity: 11n },
+      connect: vi.fn(async () => {
+        db.prepare("UPDATE folders SET uid_validity = '11' WHERE account_id = ? AND path = ?").run("account-1", "INBOX");
+      }),
+      getMailboxLock: vi.fn(async () => lock),
+      fetchOne: vi.fn(),
+      logout: vi.fn(async () => undefined),
+    };
+    imapClientForAccount.mockReturnValue(client);
+
+    try {
+      await expect(downloadMessageSource(db, Buffer.alloc(32, 7), "message-1"))
+        .rejects.toThrow(UID_GENERATION_CHANGED_ERROR);
+      expect(client.fetchOne).not.toHaveBeenCalled();
+      expect(lock.release).toHaveBeenCalledTimes(1);
     } finally {
       db.close();
     }

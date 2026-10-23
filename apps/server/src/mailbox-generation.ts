@@ -73,10 +73,12 @@ export function liveUidValidity(client: { mailbox?: { uidValidity?: unknown } | 
  *   write slot. For an immediate operation that is the generation the local row
  *   was written under, because no sync can rewrite `folders` between that read
  *   and the command.
- * - `accepted` is the value a task froze when it was accepted. It is the only
- *   evidence that survives a sync in between, and its absence must not be
- *   filled in from the cache: comparing two values that are both "current"
- *   answers "same" precisely after a rebuild re-pointed the UID.
+ * - `accepted` is a value captured together with the identity it judges: the
+ *   value a task froze when it was accepted, or the generation a download read
+ *   in the same statement as the message row. It is the only evidence that
+ *   survives a sync in between, and its absence must not be filled in from the
+ *   cache: comparing two values that are both "current" answers "same"
+ *   precisely after a rebuild re-pointed the UID.
  */
 export type UidGenerationEvidence =
   | { readonly source: "accepted"; readonly value: string | null }

@@ -6,13 +6,12 @@ import type { DatabaseHandle } from "./db.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import { safeLogout } from "./imap-logout.js";
 import {
+  generationStampedMessage,
   moveActionBlockedError,
   messagePayloadForRow,
-  type MessageStorageRow,
 } from "./message-storage.js";
 import {
   UID_GENERATION_CHANGED_ERROR,
-  cachedUidValidity,
   liveUidValidity,
   uidGenerationAllowsWrite,
 } from "./mailbox-generation.js";
@@ -187,9 +186,7 @@ export async function downloadMessageAttachment(
 ): Promise<MessageAttachmentDownload> {
   if (!isValidAttachmentPartId(partId)) throw new Error("Attachment part is invalid.");
 
-  const message = db.prepare(`
-    SELECT * FROM messages WHERE id = ?
-  `).get(messageId) as MessageStorageRow | undefined;
+  const message = generationStampedMessage(db, messageId);
   if (!message) throw new Error("Message not found.");
   const moveBlockedError = moveActionBlockedError(message);
   if (moveBlockedError) throw new Error(moveBlockedError);
@@ -205,14 +202,14 @@ export async function downloadMessageAttachment(
   try {
     await client.connect();
     lock = await client.getMailboxLock(message.mailbox);
-    // A UID only identifies a message inside its generation, and this row's UID
-    // was written under the generation the cache recorded. A rebuild hands that
-    // number to a different message, so the part is refused rather than streamed
-    // from a stranger (`mailbox-generation.ts`).
+    // A UID only identifies a message inside its generation, and the snapshot's
+    // generation was read with the row -- not re-read after this wait, when a
+    // sync may already have rebuilt the mailbox and moved the UID to a stranger.
+    // The part is refused rather than streamed from that stranger
+    // (`message-storage.ts`).
     if (!uidGenerationAllowsWrite(
-      { source: "current" },
+      { source: "accepted", value: message.snapshot_uid_validity },
       liveUidValidity(client),
-      cachedUidValidity(db, message.account_id, message.mailbox),
     )) {
       throw new Error(UID_GENERATION_CHANGED_ERROR);
     }

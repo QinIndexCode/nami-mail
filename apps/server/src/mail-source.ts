@@ -1,10 +1,9 @@
 import type { DatabaseHandle } from "./db.js";
 import { accountById } from "./account-store.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
-import { moveActionBlockedError, messagePayloadForRow, type MessageStorageRow } from "./message-storage.js";
+import { generationStampedMessage, moveActionBlockedError, messagePayloadForRow } from "./message-storage.js";
 import {
   UID_GENERATION_CHANGED_ERROR,
-  cachedUidValidity,
   liveUidValidity,
   uidGenerationAllowsWrite,
 } from "./mailbox-generation.js";
@@ -28,9 +27,7 @@ export async function downloadMessageSource(
   messageId: string,
   accessTokenProvider?: AccountAccessTokenProvider,
 ): Promise<MessageSourceDownload> {
-  const message = db.prepare(`
-    SELECT * FROM messages WHERE id = ?
-  `).get(messageId) as MessageStorageRow | undefined;
+  const message = generationStampedMessage(db, messageId);
   if (!message) throw new Error("Message not found.");
   const moveBlockedError = moveActionBlockedError(message);
   if (moveBlockedError) throw new Error(moveBlockedError);
@@ -43,13 +40,12 @@ export async function downloadMessageSource(
   try {
     await client.connect();
     lock = await client.getMailboxLock(message.mailbox);
-    // Same rule as the attachment path: the UID must still belong to the
-    // generation this row was synced under, or it may name a different message
-    // (`mailbox-generation.ts`).
+    // The generation the row was read with, not one read after the wait: a sync
+    // may have rebuilt the mailbox while the connection opened, and the row (and
+    // its subject) still describes the old message (`message-storage.ts`).
     if (!uidGenerationAllowsWrite(
-      { source: "current" },
+      { source: "accepted", value: message.snapshot_uid_validity },
       liveUidValidity(client),
-      cachedUidValidity(db, message.account_id, message.mailbox),
     )) {
       throw new Error(UID_GENERATION_CHANGED_ERROR);
     }

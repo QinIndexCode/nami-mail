@@ -100,6 +100,32 @@ export type MessageStorageRow = Record<string, unknown> & {
   payload_metadata_ready?: number | null;
 };
 
+/** A message row paired with the generation its mailbox carried in the same read. */
+export type GenerationStampedMessageRow = MessageStorageRow & {
+  snapshot_uid_validity: string | null;
+};
+
+/**
+ * Reads a message row and its mailbox generation as one snapshot.
+ *
+ * Downloads read the row and then spend an arbitrary time opening a connection.
+ * A separate sync can rebuild the mailbox -- atomically rewriting `folders` and
+ * resetting the folder's rows -- while that wait is in progress, so a generation
+ * read *after* the wait would describe the provider's new epoch while the row
+ * still names the old message (and its attachments). SQLite serves one
+ * statement from one snapshot, so this pair always describes the same moment;
+ * the caller compares the stamped value with the live `UIDVALIDITY` after the
+ * mailbox lock and refuses on a mismatch.
+ */
+export function generationStampedMessage(db: DatabaseHandle, messageId: string): GenerationStampedMessageRow | undefined {
+  return db.prepare(`
+    SELECT m.*, f.uid_validity AS snapshot_uid_validity
+    FROM messages AS m
+    LEFT JOIN folders AS f ON f.account_id = m.account_id AND f.path = m.mailbox
+    WHERE m.id = ?
+  `).get(messageId) as GenerationStampedMessageRow | undefined;
+}
+
 function pendingMoveDestinationValue(row: unknown): string | null {
   const destination = row && typeof row === "object"
     ? (row as Record<string, unknown>).pending_move_destination
