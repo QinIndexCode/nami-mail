@@ -3,8 +3,13 @@ import {
   MAX_OFFICE_CHARS,
   MAX_OFFICE_ELEMENTS,
   MAX_OOXML_ENTRIES,
+  MAX_SHEET_COLUMNS,
+  MAX_SHEET_ROWS,
+  MAX_SHEET_SLOTS,
   MAX_UNZIPPED_BYTES,
   MAX_ZIP_ENTRY_BYTES,
+  SHEET_SLOT_BYTES,
+  type MemoryLease,
 } from "../budget";
 import type { Block, DecodeContext, PreviewDocument, PreviewInput, PreviewSurface, Sheet } from "../document";
 import { asDownloadOnly } from "../document";
@@ -43,7 +48,7 @@ const SHARED_STRINGS = "xl/sharedStrings.xml";
 const SLIDE_PATTERN = /^ppt\/slides\/slide(\d+)\.xml$/;
 const WORKSHEET_PATTERN = /^xl\/worksheets\/sheet(\d+)\.xml$/;
 
-type Metered = { blocks: string[]; chars: number; exceeded: boolean };
+type Metered = { blocks: string[]; chars: number; slots: number; exceeded: boolean };
 
 function pushBlock(meter: Metered, text: string): void {
   const trimmed = text.replace(/\s+/g, " ").trim();
@@ -124,7 +129,7 @@ async function wordSurface(reader: ZipReader, input: PreviewInput, context: Deco
     return asDownloadOnly(baseDocument(input), "size").surface;
   }
   const parsed = parsePart(WORD_DOCUMENT, xml);
-  const meter: Metered = { blocks: [], chars: 0, exceeded: false };
+  const meter: Metered = { blocks: [], chars: 0, slots: 0, exceeded: false };
   for (const paragraph of Array.from(parsed.getElementsByTagNameNS(WORD_NS, "p"))) {
     pushBlock(meter, paragraphText(paragraph, "t", WORD_NS));
     if (meter.exceeded) return asDownloadOnly(baseDocument(input), "size").surface;
@@ -150,7 +155,7 @@ async function slidesSurface(reader: ZipReader, input: PreviewInput, context: De
   }
   if (guardParts(parts) === "download") return asDownloadOnly(baseDocument(input), "size").surface;
 
-  const meter: Metered = { blocks: [], chars: 0, exceeded: false };
+  const meter: Metered = { blocks: [], chars: 0, slots: 0, exceeded: false };
   for (const part of parts) {
     const parsed = parsePart(part.name, part.text);
     for (const paragraph of Array.from(parsed.getElementsByTagNameNS(DRAWING_NS, "p"))) {
@@ -162,10 +167,24 @@ async function slidesSurface(reader: ZipReader, input: PreviewInput, context: De
   return { surface: "blocks", blocks };
 }
 
+/**
+ * Zero-based column position of a cell reference, or `MAX_SHEET_COLUMNS` when
+ * the reference falls outside the retained window.
+ *
+ * Parsing stops at the window instead of running on: `r="ZZZZ1"` (475,254) and a
+ * 300-letter reference (which overflows to `Infinity`) both have to leave the
+ * caller with a small number, because the caller grows an array to this index.
+ */
 function columnIndex(reference: string | null): number {
   const letters = (reference ?? "").match(/^[A-Z]+/i)?.[0]?.toUpperCase() ?? "";
+  if (!letters) return 0;
   let index = 0;
-  for (const letter of letters) index = index * 26 + (letter.charCodeAt(0) - 64);
+  for (const letter of letters) {
+    index = index * 26 + (letter.charCodeAt(0) - 64);
+    // The running value is the 1-based column number: `AX` is the 50th and
+    // still inside the window, so the sentinel must be strictly greater.
+    if (index > MAX_SHEET_COLUMNS) return MAX_SHEET_COLUMNS;
+  }
   return Math.max(0, index - 1);
 }
 
@@ -179,10 +198,21 @@ function stringTable(xml: string | null): string[] {
   return values;
 }
 
-function worksheetRows(xml: string, shared: readonly string[], meter: Metered): string[][] {
+/**
+ * Retains at most the 200 × 50 window the renderer shows, charging every row
+ * growth to the memory lease.
+ *
+ * Both ceilings used to live only in the renderer, which slices before drawing.
+ * That kept the *display* bounded but not the allocation: a cell reference only
+ * had to name a far column for the decoder to grow the row to that index, and
+ * empty slots hold no text, so `MAX_OFFICE_CHARS` never saw them. Slots are
+ * therefore counted and charged here, where the array grows.
+ */
+function worksheetRows(xml: string, shared: readonly string[], meter: Metered, lease: MemoryLease): string[][] {
   const parsed = parsePart("worksheet", xml);
   const rows: string[][] = [];
   for (const row of Array.from(parsed.getElementsByTagNameNS(SHEET_NS, "row"))) {
+    if (rows.length >= MAX_SHEET_ROWS) break;
     const values: string[] = [];
     for (const cell of Array.from(row.getElementsByTagNameNS(SHEET_NS, "c"))) {
       const type = cell.getAttribute("t");
@@ -191,7 +221,20 @@ function worksheetRows(xml: string, shared: readonly string[], meter: Metered): 
       if (type === "s") value = shared[Number(raw)] ?? "";
       else if (type === "inlineStr") value = paragraphText(cell, "t", SHEET_NS);
       const index = columnIndex(cell.getAttribute("r"));
-      while (values.length < index) values.push("");
+      // Outside the retained window: the renderer would never draw this cell, so
+      // there is nothing to grow for it.
+      if (index >= MAX_SHEET_COLUMNS) continue;
+      const growth = index + 1 - values.length;
+      if (growth > 0) {
+        if (meter.slots + growth > MAX_SHEET_SLOTS) {
+          meter.exceeded = true;
+          break;
+        }
+        // Charge before the allocation, as every other path in the ledger does.
+        lease.charge(growth * SHEET_SLOT_BYTES, "sheet slots");
+        meter.slots += growth;
+        while (values.length < index) values.push("");
+      }
       values[index] = value;
       meter.chars += value.length;
       if (meter.chars > MAX_OFFICE_CHARS) meter.exceeded = true;
@@ -254,12 +297,12 @@ async function sheetSurface(reader: ZipReader, input: PreviewInput, context: Dec
   if (ordered.length === 0) throw new PreviewFailure("corrupt");
 
   const shared = stringTable(sharedXml);
-  const meter: Metered = { blocks: [], chars: 0, exceeded: false };
+  const meter: Metered = { blocks: [], chars: 0, slots: 0, exceeded: false };
   const sheets: Sheet[] = [];
   for (const [index, sheet] of ordered.entries()) {
     const xml = available.get(sheet.path);
     if (xml === undefined) continue;
-    sheets.push({ name: sheet.name || `Sheet ${index + 1}`, rows: worksheetRows(xml, shared, meter) });
+    sheets.push({ name: sheet.name || `Sheet ${index + 1}`, rows: worksheetRows(xml, shared, meter, context.lease) });
     if (meter.exceeded) return asDownloadOnly(baseDocument(input), "size").surface;
   }
   if (sheets.length === 0) throw new PreviewFailure("corrupt");

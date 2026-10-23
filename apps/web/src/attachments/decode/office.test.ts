@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { MAX_OOXML_ENTRIES } from "../budget";
+import { MAX_OOXML_ENTRIES, MAX_SHEET_COLUMNS, MAX_SHEET_ROWS, MAX_SHEET_SLOTS, SHEET_SLOT_BYTES } from "../budget";
 import { MemoryLease } from "../budget";
 import type { DecodeContext, PreviewInput } from "../document";
 import { ResourceScope } from "../document";
-import { encodeFixtureText, makeDocx, makeDocxBillionLaughs, makePptx, makeXlsx, makeZipEncrypted, type ZipEntryInput } from "../testing/fixtures";
+import { encodeFixtureText, makeDocx, makeDocxBillionLaughs, makePptx, makeXlsx, makeZip, makeZipEncrypted, type ZipEntryInput } from "../testing/fixtures";
 import { decodeOffice } from "./office";
 import { decodeAttachment } from "./index";
+
+const SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
 
 const context = (overrides: Partial<DecodeContext> = {}): DecodeContext => ({
   scope: new ResourceScope(),
@@ -52,6 +55,56 @@ describe("decodeOffice", () => {
       ["Name", "42"],
       ["Alice", "7"],
     ]);
+  });
+
+  it("does not let a far cell reference grow the row past the retained window", async () => {
+    const fixture = await makeZip([
+      { name: "xl/workbook.xml", data: encodeFixtureText(`<workbook xmlns="${SHEET_NS}"/>`) },
+      {
+        name: "xl/worksheets/sheet1.xml",
+        data: encodeFixtureText(
+          `<worksheet xmlns="${SHEET_NS}"><sheetData><row r="1"><c r="ZZZZ1"><v>1</v></c><c r="B1"><v>2</v></c></row></sheetData></worksheet>`,
+        ),
+      },
+    ]);
+    const lease = new MemoryLease(64 * 1024);
+    const document = await decodeOffice(input(fixture.bytes, "office-sheet", "sparse.xlsx"), context({ lease }));
+    expect(document.surface.surface).toBe("sheet");
+    if (document.surface.surface !== "sheet") return;
+    // The out-of-window cell is dropped; its in-window neighbour keeps column B.
+    expect(document.surface.sheets[0]?.rows).toEqual([["", "2"]]);
+    const slots = document.surface.sheets.flatMap((sheet) => sheet.rows).reduce((total, row) => total + row.length, 0);
+    expect(slots).toBeLessThanOrEqual(MAX_SHEET_ROWS * MAX_SHEET_COLUMNS);
+    expect(lease.used).toBeGreaterThanOrEqual(slots * SHEET_SLOT_BYTES);
+  });
+
+  it("degrades a workbook whose sheets together exceed the retained slot ceiling", async () => {
+    const perSheetSlots = MAX_SHEET_ROWS * MAX_SHEET_COLUMNS;
+    const count = Math.ceil(MAX_SHEET_SLOTS / perSheetSlots) + 1;
+    const declared = Array.from({ length: count }, (_, index) => `<sheet name="S${index + 1}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`);
+    const relationships = Array.from({ length: count }, (_, index) => `<Relationship Id="rId${index + 1}" Target="worksheets/sheet${index + 1}.xml"/>`);
+    const worksheet = `<worksheet xmlns="${SHEET_NS}"><sheetData>${Array.from(
+      { length: MAX_SHEET_ROWS },
+      (_, index) => `<row r="${index + 1}"><c r="AX${index + 1}"><v>1</v></c></row>`,
+    ).join("")}</sheetData></worksheet>`;
+    const fixture = await makeZip([
+      {
+        name: "xl/workbook.xml",
+        data: encodeFixtureText(
+          `<workbook xmlns="${SHEET_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${declared.join("")}</sheets></workbook>`,
+        ),
+      },
+      {
+        name: "xl/_rels/workbook.xml.rels",
+        data: encodeFixtureText(`<Relationships xmlns="${RELS_NS}">${relationships.join("")}</Relationships>`),
+      },
+      ...Array.from({ length: count }, (_, index) => ({
+        name: `xl/worksheets/sheet${index + 1}.xml`,
+        data: encodeFixtureText(worksheet),
+      })),
+    ]);
+    const document = await decodeOffice(input(fixture.bytes, "office-sheet", "wide.xlsx"), context());
+    expect(document.surface.surface).toBe("download_only");
   });
 
   it("extracts one block per slide paragraph", async () => {

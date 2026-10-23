@@ -24,6 +24,7 @@ import {
   MAX_PAGE_PIXELS,
   MAX_PAGES,
   MAX_RETAINED_CHARS,
+  MAX_SHEET_SLOTS,
   MAX_UNZIPPED_BYTES,
   MAX_ZIP_ENTRY_BYTES,
   MemoryLease,
@@ -36,6 +37,7 @@ import {
   PDF_OPEN_DEADLINE_MS,
   PDF_PAGE_MS,
   RESERVE_BYTES,
+  SHEET_SLOT_BYTES,
   attachmentTimeoutMsFor,
   canvasMaxAreaInBytes,
   maxImageSize,
@@ -105,7 +107,7 @@ describe("preview budget constants", () => {
 describe("worst-case ledger", () => {
   it("matches the §9.3 formulas branch by branch", () => {
     expect(worstCaseBytes("pdf")).toBe(150_927_360);
-    expect(worstCaseBytes("office")).toBe(77_751_936);
+    expect(worstCaseBytes("office")).toBe(79_351_936);
     expect(worstCaseBytes("image")).toBe(67_239_936);
     expect(worstCaseBytes("text")).toBe(21_358_592);
     expect(worstCaseBytes("markdown")).toBe(9_031_680);
@@ -128,6 +130,7 @@ describe("worst-case ledger", () => {
         + MAX_OFFICE_ELEMENTS * DOM_ELEMENT_BYTES
         + MAX_OFFICE_BLOCKS * BLOCK_BYTES
         + MAX_OFFICE_CHARS * 2
+        + MAX_SHEET_SLOTS * SHEET_SLOT_BYTES
         + BUFFER_BYTES,
     );
     expect(worstCaseBytes("image")).toBe(MAX_INPUT_BYTES.image + MAX_PAGE_PIXELS * 4 + BUFFER_BYTES);

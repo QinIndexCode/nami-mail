@@ -1,17 +1,15 @@
-import { MAX_OFFICE_BLOCKS } from "../budget";
+import { MAX_OFFICE_BLOCKS, MAX_SHEET_COLUMNS, MAX_SHEET_ROWS } from "../budget";
 import type { Block, Sheet, SurfaceProps } from "../document";
 
 /**
  * Office surface (plan §4.4).
  *
  * Blocks are plain text nodes — the decoder never produced markup, and nothing
- * here parses it. Sheets are a table, sliced to the same 200 × 50 window the
- * plan promises; the slice is the render half of the ceiling, next to the
- * decoder's block/character meter.
+ * here parses it. Sheets are a table cut to the 200 × 50 window the plan
+ * promises. The decoder now enforces the same window (and charges every slot to
+ * the memory lease); the slices below remain as defence in depth, taking their
+ * numbers from `budget.ts` so the two halves cannot drift apart.
  */
-
-const MAX_SHEET_ROWS = 200;
-const MAX_SHEET_COLUMNS = 50;
 
 function BlockList({ blocks }: { blocks: readonly Block[] }) {
   if (blocks.length > MAX_OFFICE_BLOCKS) {

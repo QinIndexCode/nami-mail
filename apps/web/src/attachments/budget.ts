@@ -62,6 +62,30 @@ export const MAX_OFFICE_ELEMENTS = 50_000;
 export const MAX_OFFICE_BLOCKS = 4_000;
 export const MAX_OFFICE_CHARS = 1_000_000;
 
+/**
+ * The sheet window one surface retains: 200 rows × 50 columns.
+ *
+ * The renderer has always sliced to this window, but the decoder used to keep
+ * every row and column it read, so a 539-byte package with a single `r="ZZZZ1"`
+ * cell expanded into 475,254 empty array slots that neither `MAX_OFFICE_CHARS`
+ * (they hold no text) nor the element ceiling (one cell) could see. The window
+ * is now enforced where the allocation happens, and the renderer imports these
+ * two numbers instead of restating them, so the halves cannot drift apart.
+ */
+export const MAX_SHEET_ROWS = 200;
+export const MAX_SHEET_COLUMNS = 50;
+/** One retained cell slot is a pointer in a row array; its text is charged separately. */
+export const SHEET_SLOT_BYTES = 8;
+/**
+ * Total retained slots across every sheet of one workbook.
+ *
+ * A package can declare thousands of sheets (entry ceiling is 2,000), each
+ * filling its own 200 × 50 window; per-sheet limits alone would still allow
+ * 20M slots. Ten times one sheet's window covers real workbooks and turns an
+ * absurd one into the download card the character ceiling already uses.
+ */
+export const MAX_SHEET_SLOTS = 200_000;
+
 export const MAX_UNZIPPED_BYTES = 32 * MIB;
 export const MAX_ZIP_ENTRY_BYTES = 16 * MIB;
 export const MAX_ARCHIVE_DECLARED_BYTES = 256 * MIB;
@@ -118,12 +142,14 @@ export function worstCaseBytes(branch: WorstCaseBranch): number {
       return MAX_INPUT_BYTES.pdf + PAGE_BYTES + PDF_IMAGE_FILTER_BYTES + BUFFER_BYTES;
     case "office":
       // One XML part held as a UTF-16 string, the DOM estimate, the counted
-      // blocks and the retained characters are four distinct allocations.
+      // blocks, the retained characters and the sheet slot arrays are five
+      // distinct allocations.
       return MAX_INPUT_BYTES.office
         + MAX_ZIP_ENTRY_BYTES * 2
         + MAX_OFFICE_ELEMENTS * DOM_ELEMENT_BYTES
         + MAX_OFFICE_BLOCKS * BLOCK_BYTES
         + MAX_OFFICE_CHARS * 2
+        + MAX_SHEET_SLOTS * SHEET_SLOT_BYTES
         + BUFFER_BYTES;
     case "image":
       return MAX_INPUT_BYTES.image + MAX_PAGE_PIXELS * 4 + BUFFER_BYTES;
