@@ -22,6 +22,7 @@
 | 10 | 没有稳定版 / 测试版通道与一键回滚 | 发布策略 |
 | 11 | 错误日志：有界文件，没有用户侧错误历史 | 排障 / 隐私 |
 | 12 | 2026-10-22 审计中未修复的项 | 审计 / 未修项 |
+| 13 | 附件在线预览的能力边界 | 附件 / 平台 |
 
 ## 1. Outlook / Hotmail 登录受限（issue #120）
 
@@ -127,13 +128,30 @@
 | P2 | `apps/web/src/App.tsx:1316-1324` | `threadExtras` / `threadStripMembersRef` 持有列表之外的线程成员整行快照；对只在 extras 里的成员（从线程条打开的旧邮件）执行“标为未读”，API 成功但界面不变，因为 `store.applySeen` 找不到该行。 | 属状态所有权调整，需先把线程成员的读取路径并回单一 store。 |
 | P2 | `apps/web/src/app/useAppRealtimeSync.ts:70-74`、`App.tsx:830-871` | `onTaskSettled` 直接调 `reconcileFromEvents()` → `silentRefresh()`，绕开 `useCoalescedRefresh` 承诺的“窗口隐藏时只标脏”；桌面 `backgroundThrottling: false`，最小化时仍会跑 4 个并行请求。 | 需先决定“任务结算的可见性优先级是否高于窗口隐藏”。 |
 | P2 | `apps/desktop/src/main.mts:2068-2075,2081,2096-2102` | `second-instance` 的入口是 `void (async () => …)()`（或 `.then`）且没有 `catch`；boot 未完成时 `localServer` 还是 `undefined`，不建窗只 `focusWindow()`，用户看到“点了没反应”，错误只进 `runtime-log.jsonl`。 | 要改 Electron 启动生命周期，需真机验证首启与崩溃重启两条时序。 |
-| P2 | `apps/server/src/app.ts:111` | CSP `img-src 'self' data: blob: https: http:` 放行明文 HTTP 与任意外域；正文图片已被 `rewriteRemoteImagesToProxy` 改写成同源代理，唯一外域直连是 `https://` 的 Gravatar。 | 收窄要先枚举全部渲染源，做错会静默丢图；当前无确认利用链。 |
 | P2 | `apps/web/src/realtimeSync.ts:150-151,200-201,222-223` | 先写 `lastSseEventAt` 再解析帧；坏帧被当作“流是活的”，会抑制一轮轮询（间隔 30/60/180/300s 可选）。 | 仅跨版本组合才可能触发，且有手动重连兜底。 |
 | P3 | `apps/server/src/mail.ts:87-104`、`calendar.ts:255`、`message-links.ts:44`、`settings.ts:34` | 零调用导出：`testMailboxConnection`（`testAccountConnection` 的旧子集）、`clearAllCalendarEvents`、`localizeLinks`、`AGENT_ACCESS_LEVELS` 全仓无调用方。 | 删除要确认没有外部脚本依赖，属清理批次。 |
 | 结构性 | `apps/web/src/app/mailStore.ts` | `total` 不是从 `messages` 派生，而是服务端快照 + 5 处本地 ±1（`nextMessageTotalForSnapshot`、`applyMove`、`restoreMove`、`removeMessages`、`restoreMessages`）；本页第 2 节的描述已按现状写。 | 服务端 `total` 是全量匹配数，前端只有已加载页，无法真派生；要改需要服务端提供可增量校验的计数。 |
 | 边界 | `apps/server/src/message-storage.ts`（`verifyEncryptedPayloads`） | 迁移后的校验扫描仍 fail-closed，错误里点名受影响的行 id（最多 50 个），但没有“跳过并继续启动”的开关；FTS 与附件回填遇到坏行会跳过并记录 `skipped` / `unclassified`，同样没有修复入口。 | 刻意保留的失败关闭策略，放宽需要产品决定。 |
 | 残留 | `apps/server/src/sync.ts`（`subject` 派生处） | 新行不再写中文占位“（无主题）”，但已落库的历史行要等下一次 IMAP 重新同步才会变成空主题；在此之前英文界面仍会显示中文。 | 改写历史行需要一次数据迁移，收益低于风险。 |
 | 已缓解 | `apps/server/src/database-encryption.ts`（`recoverInterruptedConversion`） | 写零主库到改名之间崩溃，下次启动可从 `.encrypting` 校验后接管并记 warn；但主库被写零的那几秒内进程若被强杀，本次会话仍需重启恢复。 | 彻底消除需要“先改名再销毁”的重排，属另一批改动。 |
+
+## 13. 附件在线预览的能力边界
+
+**现状。** 附件预览是一条显式流水线（见[决策 0002](decisions/0002-2026-10-attachment-preview.zh-CN.md)），以下边界是**刻意**的，不是待修 bug（本条核实于提交 `d5a4e68`）：
+
+- **不自建 Worker / OffscreenCanvas**：解码与渲染都在渲染进程主线程上；pdf.js 自带的 worker 由 `loadingTask.destroy()` 收回，但没有第二个我们自己的线程。长解码期间界面仍可能掉帧。
+- **旧版 Office 与专业栅格格式不做解码**：`.doc` / `.xls` / `.ppt`（OLE 复合文档）不在可预览目录内，直接是 tier C 的下载卡片；HEIC / TIFF / PSD 这类"声明为 `image/*` 但不在六种栅格签名内"的文件会按 raster 取数，图头嗅探失败后以 `corrupt` 错误卡片加下载入口结束（`apps/web/src/attachments/decode/image.ts:180-181`），**不会**尝试额外解码。
+- **媒体只用 Chromium 的原生解码器**：音频与视频就地播放，但**没有 Range 流式**——整个部件先取完再交给 blob URL，因此超过 `MAX_INPUT_BYTES.media`（32 MiB，见 `apps/web/src/attachments/budget.ts`）直接拒绝；**没有字幕轨**；容器或编解码不被 Chromium 支持时（如 `avi` / `flv` / `wmv`）回退为下载卡片。
+- **PDF 只保留一个页 canvas**：翻页重新渲染，没有页缓存；`PdfSurface.tsx` 在整份文档上用一个缩放比，因此超大页会先被 `PAGE_PIXELS_MAX` 拒绝而不是缩小显示。
+- **内存账本不是进程内存上限**：`MemoryLease` 只统计本仓库自己的分配；pdf.js 内部结构、浏览器图像与媒体解码器都不在这本账上（`budget.ts` 的注释写明了这一点）。
+- **没有可中断的硬截止**：单个超大 XML 部件的 `DOMParser.parseFromString` 一旦开始就无法中断，Office 路径的元素数预扫在解析之前、字符上限在解析之后，`DECODE_DEADLINE_MS` 只是事后止损。
+- **Markdown 有独立的降级线**：超过 `MAX_MARKDOWN_BYTES`（8 MiB，入口按声明大小先拒）或超过 `MAX_MARKDOWN_BLOCKS`（4,000 个顶层块）时降级为仅下载，而不是截断渲染（`apps/web/src/attachments/decode/markdown.ts:52-77`）。
+- **两处的文件名处理不一致**：抽屉内的标题与下载名已消毒（`sanitizeDisplayName`，`AttachmentPreviewDrawer.tsx:311-313`），阅读区附件卡片仍按原字符串显示（`MailReader.tsx:471-472`）；后者是本轮未处理的展示面。
+- **有一部分只能靠真机目视验收**：jsdom 没有真实 canvas 与媒体解码，PDF 是否画得出、扫描件是否完整，只能人工打开文件确认；`e2e/attachment-preview.spec.ts` 能证明像素非全白与翻页，但不能替代人眼。
+
+**影响。** 上述边界全部表现为“明确的可下载/可播放/可阅读”，而不是静默空白：打不开的类型给下载卡片，画不出的页给页级错误，超限的输入在入口就被拒绝。代价是某些本可以“显示一部分”的文件（例如含可恢复错误的 PDF）只能下载原文件。
+
+**当前应对。** 接受这些边界并把它们写进发布说明；`done_when` 中的真机验收项（向量文本 PDF、300 DPI 扫描件、多页翻页与宽度拖动）是每次改动预览路径后的必做项。如果将来要突破其中任一条（例如引入 Worker 解码、Range 流式媒体、PSD 解码），应按[决策记录约定](decisions/README.zh-CN.md)另写一份记录，而不是在这条边界上原地放宽。
 
 ## 相关文档
 

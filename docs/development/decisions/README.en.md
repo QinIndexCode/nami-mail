@@ -39,3 +39,4 @@ Not needed: the shape of a single endpoint, UI interaction details, a one-off bu
 | # | Topic | Status | Scope |
 |---|---|---|---|
 | [0001](0001-2026-10-task-layer.en.md) | One task layer and derived counts | accepted (2026-10) | Server write paths, HTTP contract, web list state |
+| [0002](0002-2026-10-attachment-preview.en.md) | A four-stage attachment preview and one budget | accepted (2026-10) | Renderer fetch and preview, preview budgets and failure codes, CSP and top-level navigation |
