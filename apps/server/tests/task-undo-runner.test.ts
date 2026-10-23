@@ -227,6 +227,7 @@ async function attempt(db: DatabaseHandle, taskId: string, deltas: Deltas = []):
     task,
     payload: openTaskPayload<UndoTaskPayload>(MASTER_KEY, task),
     items: taskItems(db, taskId),
+    signal: new AbortController().signal,
     report: (delta) => {
       deltas.push(delta);
       reportTaskProgress(db, taskId, delta, Date.now());

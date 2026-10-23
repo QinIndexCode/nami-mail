@@ -279,6 +279,7 @@ async function attempt(
     task: task as TaskRow,
     payload,
     items: taskItems(db, taskId),
+    signal: new AbortController().signal,
     report: (delta) => {
       deltas.push(delta);
       reportTaskProgress(db, taskId, delta, Date.now());
@@ -675,6 +676,7 @@ describe("task move runner: the background reconcile is per attempt, not per chu
       task: taskRow(db, taskId) as TaskRow,
       payload: { target: "archive" },
       items: taskItems(db, taskId),
+      signal: new AbortController().signal,
       report: (delta) => { reportTaskProgress(db, taskId, delta, Date.now()); },
     });
 

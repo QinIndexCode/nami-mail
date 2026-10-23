@@ -70,6 +70,22 @@ export class TaskAbortError extends Error {
   }
 }
 
+/**
+ * A run that outlived {@link TASK_RUN_TIMEOUT_MS}.
+ *
+ * Typed rather than a bare `Error` with the same wording because the catch has
+ * to tell two cases apart: a runner that failed (it has already stopped) and an
+ * attempt the scheduler stopped waiting for (it has not). The second is the one
+ * that must abort the runner's transport and fence everything it says next, and
+ * matching on the message would make that decision depend on a string.
+ */
+export class TaskRunTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TaskRunTimeoutError";
+  }
+}
+
 type Failure = { retryable: boolean; error: { code?: string; message: string } };
 
 type AttemptOutcome = { kind: "settled" } | { kind: "failed"; failure: Failure };
@@ -95,6 +111,10 @@ export function startTaskScheduler(deps: SchedulerDeps): TaskScheduler {
 
   const chains = new Map<string, Promise<void>>();
   const active = new Set<Promise<void>>();
+  /** One controller per in-flight attempt. Kept so shutdown can abort them: a
+   * runner that outlives the process is exactly the one that must not keep
+   * writing to a provider after the process that owned it has gone. */
+  const attempts = new Set<AbortController>();
   /** Accounts with a drain queued but not yet begun, so a burst of commits does
    * not append one drain per commit. Cleared when the drain STARTS, not when it
    * finishes: a commit arriving while a drain is looping still needs its own
@@ -167,6 +187,21 @@ export function startTaskScheduler(deps: SchedulerDeps): TaskScheduler {
       notifyPermanentFailure(row, payload, error);
       return { kind: "settled" };
     }
+    // One controller per attempt, and one flag beside it. The controller is the
+    // signal the runner hands to its transport, so a timeout can close the socket
+    // instead of merely abandoning the promise; the flag is what makes this
+    // attempt's own callbacks inert once the scheduler has given up on it.
+    //
+    // Both exist because a timed-out runner keeps running. Without them the
+    // abandoned attempt still reports counts into a row a later attempt owns, and
+    // still writes to the provider after the account slot was released -- so a
+    // newer task can land first and then be overwritten by the older one, which
+    // is the inversion the FIFO chain exists to prevent. Closing the transport is
+    // the part that stops new writes; the flag is the part that stops the ones
+    // already decided from being *reported* as this task's outcome.
+    const controller = new AbortController();
+    let live = true;
+    attempts.add(controller);
     let releases: Array<() => void> = [];
     try {
       // The slot is acquired and released here rather than through
@@ -175,26 +210,45 @@ export function startTaskScheduler(deps: SchedulerDeps): TaskScheduler {
       // stop waiting behind it. `releases` starts empty, so the finally block
       // only releases what was actually taken.
       releases = await acquireAccountWriteSlots([row.account_id]);
+      const timeoutMessage = `Task "${row.kind}" timed out after ${TASK_RUN_TIMEOUT_MS / 1000}s.`;
       await withTimeout(
         withHeldWriteSlots([row.account_id], async () => {
           await runner({
             task: row,
             payload: payload as unknown,
             items: taskItems(db, row.id),
+            signal: controller.signal,
             report: (delta) => {
+              // An abandoned attempt's counts are not this row's: the row may
+              // already be running again under a newer attempt, and the legacy
+              // failure this guards against is a batch job reporting more
+              // messages than it selected.
+              if (!live) return;
               reportTaskProgress(db, row.id, delta, now());
               notifyProgress(row.id);
             },
           });
         }),
         TASK_RUN_TIMEOUT_MS,
-        `Task "${row.kind}" timed out after ${TASK_RUN_TIMEOUT_MS / 1000}s.`,
+        timeoutMessage,
+        new TaskRunTimeoutError(timeoutMessage),
       );
       const at = now();
       settleTask(db, row.id, "completed", null, at);
       notifySettled(row, payload, "completed", null);
       return { kind: "settled" };
     } catch (error) {
+      // Shutdown began while this attempt was in flight: the row is durable and
+      // the next start resumes it, so nothing here is written. The abort already
+      // went out from `stop()`, and touching the database now would race the
+      // close the caller is about to perform.
+      if (stopped) return { kind: "settled" };
+      if (error instanceof TaskRunTimeoutError) {
+        // Abort before anything else: this is what closes the runner's socket and
+        // makes the abandoned attempt stop talking to the provider. Its own
+        // rejection is already handled by `withTimeout`, so nothing waits for it.
+        controller.abort();
+      }
       if (error instanceof TaskAbortError) {
         const at = now();
         const recorded = { ...(error.code ? { code: error.code } : {}), message: error.message };
@@ -221,6 +275,11 @@ export function startTaskScheduler(deps: SchedulerDeps): TaskScheduler {
       }
       return { kind: "failed", failure: failureOf(error) };
     } finally {
+      // After this point nothing this attempt calls back can be mistaken for the
+      // row's outcome. Set before the release, so a report that arrives while the
+      // slot is being handed over is already ignored.
+      live = false;
+      attempts.delete(controller);
       // Reverse order, as the acquisition contract requires, and on every path:
       // a slot-wait timeout releases the slot it never took (the array is empty)
       // and a timed-out run releases the one it did, so later tasks on the
@@ -370,10 +429,17 @@ export function startTaskScheduler(deps: SchedulerDeps): TaskScheduler {
     },
     resume,
     /**
-     * Stops dispatching. It does NOT wait for in-flight work, and that is a
-     * deliberate difference from a naive `await drain()`: a chain can be sitting
-     * out a 30s backoff inside a provider call, and shutdown must not hang on it.
-     * Nothing is lost -- the rows are durable, and the next start resumes them.
+     * Stops dispatching and aborts whatever is still running. It does NOT wait
+     * for in-flight work, and that is a deliberate difference from a naive
+     * `await drain()`: a chain can be sitting out a 30s backoff inside a provider
+     * call, and shutdown must not hang on it. Nothing is lost -- the rows are
+     * durable, and the next start resumes them.
+     *
+     * Aborting is the half that costs nothing and prevents something real: a
+     * runner whose socket survives the process keeps writing to the mailbox after
+     * the database it reports into has been closed. The runner sees the abort at
+     * its transport (a closed connection rejects the pending command), and the
+     * scheduler writes nothing further for it (`attemptOnce`'s `stopped` arm).
      * Callers that need the work finished (tests) use `drain()` instead.
      */
     async stop(): Promise<void> {
@@ -382,6 +448,7 @@ export function startTaskScheduler(deps: SchedulerDeps): TaskScheduler {
         clearInterval(tick);
         tick = undefined;
       }
+      for (const controller of attempts) controller.abort();
     },
     drain,
   };

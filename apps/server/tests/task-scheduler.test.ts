@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { createTaskRegistry } from "../src/tasks/registry.js";
 import { recordTask, taskRow } from "../src/tasks/store.js";
-import { TaskAbortError, startTaskScheduler } from "../src/tasks/scheduler.js";
+import { TaskAbortError, TASK_RUN_TIMEOUT_MS, startTaskScheduler } from "../src/tasks/scheduler.js";
 import type { TaskRegistry, TaskRow, TaskRunner } from "../src/tasks/types.js";
 
 /**
@@ -340,6 +340,70 @@ describe("task scheduler: ordering", () => {
   });
 });
 
+describe("task scheduler: abandoned attempts", () => {
+  it("aborts the runner and ignores its reports once the run budget is spent", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness();
+      let seen: { signal: AbortSignal; report: (delta: { updated?: number; failed?: number }) => void } | undefined;
+      const scheduler = h.start(async ({ signal, report }) => {
+        seen = { signal, report };
+        // A runner waiting on a provider that never answers: the abort is the only
+        // way out, exactly as a socket that is closed under a pending command.
+        await new Promise<never>((_, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("connection closed")), { once: true });
+        });
+      });
+      const id = recordTask(h.db, MASTER_KEY, {
+        accountId: "account-1",
+        kind: "move",
+        maxAttempts: 1,
+        payload: { tag: "slow" },
+      });
+      scheduler.start(id);
+      await vi.advanceTimersByTimeAsync(TASK_RUN_TIMEOUT_MS + 1);
+
+      // The attempt was abandoned AND stopped: releasing the slot without closing
+      // the socket would leave it writing behind the next task on the account.
+      expect(seen?.signal.aborted).toBe(true);
+      expect(taskRow(h.db, id)).toMatchObject({ status: "failed", attempt_count: 1, updated: 0 });
+      // The callback a timed-out runner still holds is inert: by now the row may
+      // already belong to a newer attempt, and a report that lands late is a
+      // number nothing produced.
+      seen?.report({ updated: 7, failed: 2 });
+      expect(taskRow(h.db, id)).toMatchObject({ updated: 0, failed: 0 });
+      expect(h.progress).toEqual([]);
+      await scheduler.stop();
+      h.db.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts in-flight runners on stop instead of leaving them talking to the provider", async () => {
+    const h = harness();
+    let signal: AbortSignal | undefined;
+    const scheduler = h.start(async (args) => {
+      signal = args.signal;
+      await new Promise<never>((_, reject) => {
+        args.signal.addEventListener("abort", () => reject(new Error("connection closed")), { once: true });
+      });
+    });
+    const id = recordTask(h.db, MASTER_KEY, { accountId: "account-1", kind: "move", payload: { tag: "slow" } });
+    scheduler.start(id);
+    // Let the chain claim the row and enter the runner.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await scheduler.stop();
+
+    expect(signal?.aborted).toBe(true);
+    // Shutdown writes nothing: the row is durable and the next start resumes it.
+    // `running` here is exactly what `resume()` flips back to pending.
+    expect(taskRow(h.db, id)).toMatchObject({ status: "running", attempt_count: 1 });
+    h.db.close();
+  });
+});
+
 describe("task scheduler: resume", () => {
   it("re-queues the rows a dead process left running", async () => {
     const h = harness();
@@ -360,6 +424,40 @@ describe("task scheduler: resume", () => {
     expect(taskRow(h.db, id)).toMatchObject({ status: "completed", attempt_count: 4 });
     await scheduler.stop();
     h.db.close();
+  });
+
+  it("does not let a newer task run ahead of one that was left waiting out a backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness();
+      const order: string[] = [];
+      const scheduler = h.start(async ({ payload }) => {
+        order.push((payload as { tag: string }).tag);
+      }, { dueTickMs: 1_000 });
+      const older = recordTask(h.db, MASTER_KEY, { accountId: "account-1", kind: "move", payload: { tag: "older" } });
+      // The exact durable state a process leaves when it stops mid-backoff: the
+      // in-memory chain is gone, so only the row says the task is still first.
+      h.db.prepare("UPDATE tasks SET attempt_count = 1, next_attempt_at = ? WHERE id = ?").run(Date.now() + 30_000, older);
+      const newer = recordTask(h.db, MASTER_KEY, { accountId: "account-1", kind: "move", payload: { tag: "newer" } });
+
+      expect(await scheduler.resume()).toBe(2);
+      await scheduler.drain();
+      // `newer` passes every time filter, but running it now would let its write
+      // land after `older`'s retry, which is the inversion the chain prevents.
+      expect(order).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      await scheduler.drain();
+
+      expect(order).toEqual(["older", "newer"]);
+      // The wait cost one already-counted attempt, not a fresh budget.
+      expect(taskRow(h.db, older)).toMatchObject({ status: "completed", attempt_count: 2 });
+      expect(taskRow(h.db, newer)?.status).toBe("completed");
+      await scheduler.stop();
+      h.db.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not re-dispatch an already terminal row", async () => {

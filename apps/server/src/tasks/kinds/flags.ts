@@ -336,12 +336,14 @@ function reversedMessageIds(payload: FlagsTaskPayload): string[] {
  * runner's missing payload.
  */
 export function createFlagsRunner(deps: FlagsTaskDeps): TaskRunner<FlagsTaskPayload> {
-  return async ({ task, payload, report }) => {
+  return async ({ task, payload, report, signal }) => {
     if (!payload) throw new TaskAbortError("failed", `Task "${task.kind}" carries no payload.`, "no_payload");
     const entries = frozenEntries(payload);
     if (entries) {
       try {
-        const { pushed, dropped } = await pushFlagsRemote(flagsPushDeps(deps), { accountId: task.account_id, entries });
+        // The signal goes to the push so a timeout closes the socket instead of
+        // leaving the STORE running under a released account slot.
+        const { pushed, dropped } = await pushFlagsRemote(flagsPushDeps(deps), { accountId: task.account_id, entries }, signal);
         report({ updated: pushed, failed: dropped });
         return;
       } catch (error) {

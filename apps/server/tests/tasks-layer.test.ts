@@ -267,6 +267,41 @@ describe("task layer: the claim", () => {
     });
   });
 
+  it("keeps a retrying row's place across a restart, where no in-memory chain survives", () => {
+    withDb((db) => {
+      // What a process that stopped mid-backoff leaves behind: attempted once,
+      // pending again, and not due for another 29 seconds.
+      const older = recordTask(db, MASTER_KEY, { accountId: "account-1", kind: "flags", now: 1_000 });
+      db.prepare("UPDATE tasks SET status = 'pending', attempt_count = 1, next_attempt_at = ? WHERE id = ?").run(30_000, older);
+      const newer = recordTask(db, MASTER_KEY, { accountId: "account-1", kind: "flags", now: 2_000 });
+
+      // The newer row passes both time filters on its own, but running it now
+      // would let its write land after the older one's retry.
+      expect(claimNextTask(db, "account-1", 5_000)).toBeNull();
+      // The sweep has to agree, or the account is never revisited when the wait
+      // expires.
+      expect(dueAccountIds(db, 5_000)).toEqual([]);
+
+      expect(dueAccountIds(db, 30_000)).toEqual(["account-1"]);
+      expect(claimNextTask(db, "account-1", 30_000)?.id).toBe(older);
+      expect(claimNextTask(db, "account-1", 30_001)?.id).toBe(newer);
+    });
+  });
+
+  it("does not let a scheduled task, which has not written anything yet, hold back the queue", () => {
+    withDb((db) => {
+      // `attempt_count` stays 0 until a claim: a snoozed task is not evidence of
+      // an earlier provider write, so it must not impose ordering.
+      const scheduled = recordTask(db, MASTER_KEY, { accountId: "account-1", kind: "send", dueAt: 50_000, now: 1_000 });
+      const immediate = recordTask(db, MASTER_KEY, { accountId: "account-1", kind: "flags", now: 2_000 });
+      // The sweep still sees the account, because the row that can move is not
+      // behind a row that has touched the provider.
+      expect(dueAccountIds(db, 5_000)).toEqual(["account-1"]);
+      expect(claimNextTask(db, "account-1", 5_000)?.id).toBe(immediate);
+      expect(claimNextTask(db, "account-1", 50_000)?.id).toBe(scheduled);
+    });
+  });
+
   it("keeps one account's queue out of another's", () => {
     withDb((db) => {
       const mine = recordTask(db, MASTER_KEY, { accountId: "account-2", kind: "move", now: 1_000 });

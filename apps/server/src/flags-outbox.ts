@@ -162,6 +162,12 @@ function currentPositions(db: DatabaseHandle, ids: readonly string[]): Map<strin
  * through verbatim. Named so this module's three throws cannot drift apart. */
 const FLAGS_PUSH_UNCONFIRMED = "邮件服务器未确认状态更新，请稍后重试。";
 
+/** Thrown when the attempt's signal arrived before any IMAP command was sent.
+ * Not offered to the user: the scheduler already gave up on this attempt, the
+ * task is retried, and `flagsPushError` translates it like any other socket
+ * failure. */
+const FLAGS_PUSH_ABORTED = "Flags push aborted before it reached the provider.";
+
 /**
  * The user-facing half of a refused flags push, as `{code, message}`.
  *
@@ -203,12 +209,27 @@ export function flagsPushError(error: unknown): { code?: string; message: string
 export async function pushFlagsRemote(
   deps: FlagsPushDeps,
   payload: { accountId: string; entries: FlagsPushEntry[] },
+  /** The task attempt's cancellation signal (`TaskRunner.signal`). Aborting it
+   * closes the connection, which is what rejects an in-flight STORE: the scheduler
+   * releases the account slot on timeout, and an abandoned push that kept the
+   * socket alive would still be writing when the next task on that account runs. */
+  signal?: AbortSignal,
 ): Promise<{ pushed: number; dropped: number }> {
   const account = accountById(deps.db, payload.accountId);
   if (!account) throw new Error("Account not found.");
+  // Nothing has been sent yet, so this is the cheapest place to stop an attempt
+  // the scheduler has already given up on -- and it avoids dialling a server to
+  // immediately hang up on it.
+  if (signal?.aborted) throw new Error(FLAGS_PUSH_ABORTED);
   const positions = currentPositions(deps.db, payload.entries.map((entry) => entry.id));
   let dropped = 0;
   const client = await imapClientForAccount(account, deps.masterKey, deps.accessTokenProvider);
+  // Registered before `connect()`, because the timeout can fire during it. A
+  // signal that flipped between the check above and here is caught by the
+  // immediate replay; otherwise the listener fires once, at abort.
+  const closeOnAbort = () => client.close();
+  signal?.addEventListener("abort", closeOnAbort, { once: true });
+  if (signal?.aborted) closeOnAbort();
   try {
     await client.connect();
     const byMailbox = new Map<string, FlagsPushEntry[]>();
@@ -251,6 +272,10 @@ export async function pushFlagsRemote(
     }
     return { pushed: payload.entries.length - dropped, dropped };
   } finally {
+    // Detached first: after this point the attempt has no more work to cancel,
+    // and leaving the listener on a long-lived signal would close a client the
+    // logout below is already handling.
+    signal?.removeEventListener("abort", closeOnAbort);
     await safeLogout(client);
   }
 }

@@ -626,6 +626,17 @@ const MOVE_CHUNK_SIZE = 100;
 const RETRYABLE_MOVE_FAILURES = new Set([MAILBOX_SYNCING_ERROR, MAIL_MOVE_IN_FLIGHT_ERROR]);
 
 /**
+ * The text an attempt fails with once the scheduler has aborted it.
+ *
+ * Deliberately retryable and deliberately not the provider's: when the abort
+ * closes the socket, `batchMoveMessages` reports the in-flight ids as failed with
+ * a connection error, and treating those as verdicts would hand their goals back
+ * for a task that still owes them. The runner therefore checks the signal before
+ * it reverts anything and fails the attempt instead.
+ */
+const MOVE_ABORTED = "Move task aborted by the scheduler.";
+
+/**
  * Whether a refusal means "wait your turn" rather than "this message is lost".
  *
  * The undo runner builds its own superset on top of this one (§4.7 A ④): the two
@@ -662,8 +673,24 @@ type MoveImapClient = Awaited<ReturnType<typeof imapClientForAccount>>;
  * dialling, log out in `release`), and the legacy kept them in one function for the
  * same reason (`createJobMoveConnections`, `batch-jobs.ts:164-212`, both deleted).
  */
-export function createAccountConnections(db: DatabaseHandle, masterKey: Buffer, accessTokenProvider?: AccountAccessTokenProvider) {
+export function createAccountConnections(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+  accessTokenProvider?: AccountAccessTokenProvider,
+  /**
+   * The task attempt's cancellation signal (`TaskRunner.signal`). On abort every
+   * cached socket is closed, which is what rejects a MOVE already on the wire;
+   * `clientFor` then refuses to dial another one, so an abandoned attempt cannot
+   * open a new connection behind the scheduler's back. Omitted by callers that
+   * are not a task (the undo settles its entry before the next dial).
+   */
+  signal?: AbortSignal,
+) {
   const clients = new Map<string, MoveImapClient>();
+  const closeAll = () => {
+    for (const client of clients.values()) client.close();
+  };
+  signal?.addEventListener("abort", closeAll, { once: true });
   return {
     /** The connection cache `batchMoveMessages` reads and fills. */
     cache: clients,
@@ -673,6 +700,9 @@ export function createAccountConnections(db: DatabaseHandle, masterKey: Buffer, 
      * timeout must not be handed to the next message).
      */
     async clientFor(accountId: string): Promise<MoveImapClient> {
+      // Refused rather than returned: after an abort the attempt has no business
+      // dialling, and the error is retryable like any other connection failure.
+      if (signal?.aborted) throw new Error(MOVE_ABORTED);
       const cached = clients.get(accountId);
       if (cached?.usable) return cached;
       const account = accountById(db, accountId);
@@ -696,6 +726,9 @@ export function createAccountConnections(db: DatabaseHandle, masterKey: Buffer, 
     },
     /** Hangs up every connection the task opened. */
     async release(): Promise<void> {
+      // Detached first: this session is over, and a later abort must not close
+      // a client the logout loop is already handling.
+      signal?.removeEventListener("abort", closeAll);
       const open = [...clients.values()];
       clients.clear();
       for (const client of open) await safeLogout(client);
@@ -788,7 +821,7 @@ export type MoveRunnerDeps = {
  * the only thing that will ever ask for their reconcile.
  */
 export function createMoveRunner(deps: MoveRunnerDeps): TaskRunner<MoveTaskPayload> {
-  return async ({ task, payload, report }) => {
+  return async ({ task, payload, report, signal }) => {
     // One of the two shapes, or nothing to deliver. The payload is sealed at
     // acceptance, so an absent/unknown shape means the row predates or outlived
     // its descriptor.
@@ -810,7 +843,7 @@ export function createMoveRunner(deps: MoveRunnerDeps): TaskRunner<MoveTaskPaylo
     // claimed, re-goaled, latched) is simply not in the list.
     const ids = pendingMoveItemIds(deps.db, task);
     if (ids.length === 0) return;
-    const connections = createAccountConnections(deps.db, deps.masterKey, deps.accessTokenProvider);
+    const connections = createAccountConnections(deps.db, deps.masterKey, deps.accessTokenProvider, signal);
     // The provider could not confirm these accounts' MOVE outcomes (no UIDPLUS, or
     // a response that never arrived). Collected as the chunks run and kicked once,
     // after the loop: starting a pass any earlier would block this task's own next
@@ -828,6 +861,11 @@ export function createMoveRunner(deps: MoveRunnerDeps): TaskRunner<MoveTaskPaylo
           connections.cache,
         );
         for (const accountId of chunk.pendingAccounts) pendingAccounts.add(accountId);
+        // Aborted while this chunk was on the wire: everything it reports is the
+        // cancellation, not the provider's verdict, so nothing is reverted and the
+        // retry still owes every id that did not land. The reconcile kick below
+        // still runs for whatever did.
+        if (signal.aborted) throw new Error(MOVE_ABORTED);
         const waiting = chunk.failures.filter((failure) => RETRYABLE_MOVE_FAILURES.has(failure.message));
         const { latched } = revertMoveFailures(
           deps.db,

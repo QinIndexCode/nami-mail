@@ -559,7 +559,7 @@ class SmtpAttemptTimeoutError extends Error {
  * the same remainder.
  */
 export function createSendRunner(deps: SendTaskDeps): TaskRunner<undefined> {
-  return async ({ task, report }) => {
+  return async ({ task, report, signal }) => {
     // The scheduler's timeout is the outer bound; this one reserves enough of it
     // to record the outcome. A timeout here is the runner's own verdict, so it
     // cannot leave the row `submitting` for the startup recovery to guess at.
@@ -734,12 +734,14 @@ export function createSendRunner(deps: SendTaskDeps): TaskRunner<undefined> {
     // accepted just before the connection went away.
     let result: { messageId: string };
     try {
-      // The race is bounded here rather than left to the scheduler: the scheduler
-      // abandons a runner without cancelling the transport, which would leave the
-      // ledger `submitting` until startup recovery -- and the retry ladder, which
-      // is much shorter than that recovery's trigger, could exhaust into `failed`
-      // first. Timing out ourselves turns the same uncertainty into the correct
-      // terminal verdict, with enough of the run budget left to write it.
+      // The race is bounded here rather than left to the scheduler: when the
+      // scheduler's own timeout fires it only stops waiting, so the ledger would
+      // stay `submitting` until startup recovery -- and the retry ladder, much
+      // shorter than that recovery, could exhaust into `failed` first. Timing out
+      // ourselves turns the same uncertainty into the correct terminal verdict,
+      // with enough of the run budget left to write it. The scheduler's abort
+      // (shutdown) is raced below for the same reason: SMTP cannot be cancelled,
+      // so its only honest verdict is the same "unknown".
       const smtp = sendMail(account, deps.masterKey, {
         to: request.to,
         cc: request.cc,
@@ -750,12 +752,26 @@ export function createSendRunner(deps: SendTaskDeps): TaskRunner<undefined> {
         html: request.html,
         attachments,
       }, deps.accessTokenProvider);
-      result = await withTimeout(
-        smtp,
-        Math.max(1, smtpDeadline - Date.now()),
-        SMTP_ATTEMPT_TIMEOUT_MESSAGE,
-        new SmtpAttemptTimeoutError(),
-      );
+      // Shutdown aborts the attempt before the deadline does. SMTP has no
+      // "cancel this message": once DATA is on the wire the server decides, so the
+      // only honest answer is the one this deadline already gives -- unknown, not
+      // failed -- and the ledger's recovery reconciles it. Racing the signal here
+      // is what keeps the process from exiting while the transport still talks.
+      let rejectAborted: (error: Error) => void = () => undefined;
+      const aborted = new Promise<never>((_, reject) => { rejectAborted = reject; });
+      const onAbort = () => rejectAborted(new SmtpAttemptTimeoutError());
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+      try {
+        result = await withTimeout(
+          Promise.race([smtp, aborted]),
+          Math.max(1, smtpDeadline - Date.now()),
+          SMTP_ATTEMPT_TIMEOUT_MESSAGE,
+          new SmtpAttemptTimeoutError(),
+        );
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
     } catch (error) {
       if (error instanceof SmtpAttemptTimeoutError) {
         // The transport may still be talking to the server when this fires; the

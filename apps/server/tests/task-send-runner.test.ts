@@ -172,6 +172,7 @@ async function attempt(deps: SendTaskDeps, taskId: string, deltas: Deltas): Prom
       task,
       payload: openTaskPayload(MASTER_KEY, task),
       items: taskItems(deps.db, taskId),
+      signal: new AbortController().signal,
       report: (delta) => {
         deltas.push(delta);
         reportTaskProgress(deps.db, taskId, delta, Date.now());

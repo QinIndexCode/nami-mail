@@ -474,11 +474,11 @@ export function failPendingUndoItems(db: DatabaseHandle, task: Pick<TaskRow, "id
  * settle -- which is why the refusal is a throw and not a `continue`.
  */
 export function createUndoRunner(deps: UndoRunnerDeps): TaskRunner<UndoTaskPayload> {
-  return async ({ task, payload, report }) => {
+  return async ({ task, payload, report, signal }) => {
     const entries = pendingUndoItems(deps.db, task.id);
     if (entries.length === 0) return;
     const target = payload?.target;
-    const connections = createAccountConnections(deps.db, deps.masterKey, deps.accessTokenProvider);
+    const connections = createAccountConnections(deps.db, deps.masterKey, deps.accessTokenProvider, signal);
     // The first "not yet" of the attempt, thrown after the loop so the entries
     // after it still get their turn: these refusals are per-message conditions (a
     // move state sync has to reconcile), not the account-level pair the move
@@ -538,6 +538,10 @@ export function createUndoRunner(deps: UndoRunnerDeps): TaskRunner<UndoTaskPaylo
           }
           settleUndoItem(deps.db, task.id, entry.id, "updated", report);
         } catch (error) {
+          // Aborted by the scheduler: this entry was not decided by the provider,
+          // and settling it either way would be reporting the cancellation as an
+          // outcome. Leaving the loop keeps the rest owed for the retry.
+          if (signal.aborted) throw error;
           const text = error instanceof Error ? error.message : "";
           if (isRetryableUndoRefusal(text)) {
             // Nothing is latched and nothing is reported: the entry stays owed and

@@ -52,6 +52,7 @@ describe("snooze storage", () => {
       task,
       payload: openTaskPayload(MASTER_KEY, task),
       items: taskItems(db, taskId),
+      signal: new AbortController().signal,
       report: (delta) => {
         updated += delta.updated ?? 0;
         // What the scheduler's own callback does; without it the row would stay

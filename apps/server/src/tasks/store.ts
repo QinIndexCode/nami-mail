@@ -37,9 +37,40 @@ export const TASK_TERMINAL_ROW_TTL_MS = 24 * 60 * 60 * 1000;
 
 export const TASK_DEFAULT_MAX_ATTEMPTS = 8;
 
-/** The claim predicate, spelled once. `status='pending'` is applied by callers. */
-const CLAIMABLE_SQL =
-  "(next_attempt_at IS NULL OR next_attempt_at <= ?) AND (due_at IS NULL OR due_at <= ?)";
+/**
+ * The claim predicate, spelled once. `status='pending'` is applied by callers.
+ *
+ * The third clause is a durable ordering barrier. The scheduler's per-account
+ * FIFO chain lives in memory, so a restart during a backoff loses the position a
+ * retrying task was holding: the chain that would have waited for it is gone, and
+ * rows are claimed purely by `created_at, rowid` after the time filters. That
+ * would let a newer write overtake an older one that is merely waiting to retry,
+ * and the older write then lands last on the same message -- the exact inversion
+ * the chain exists to prevent.
+ *
+ * So an earlier row on the same account that has already been attempted and is
+ * still waiting out its backoff blocks every later row, whichever process asks.
+ * `attempt_count > 0` is what separates it from a scheduled task (`due_at` in the
+ * future, never run): that one has not touched the provider yet, so nothing it
+ * does can be composed out of order, and blocking behind it would turn a snooze
+ * into a queue stall. `next_attempt_at > ?` keeps the barrier to rows the time
+ * filter is currently excluding; a predecessor whose wait has expired is
+ * claimable itself and the `created_at, rowid` ordering already takes it first.
+ *
+ * Parameters, in order: now (for `next_attempt_at`), now (for `due_at`),
+ * now (for the barrier). The correlated subquery names the enclosing table
+ * `tasks` because both call sites read that table unaliased.
+ */
+const CLAIMABLE_SQL = `(next_attempt_at IS NULL OR next_attempt_at <= ?) AND (due_at IS NULL OR due_at <= ?)
+  AND NOT EXISTS (
+    SELECT 1 FROM tasks AS earlier
+     WHERE earlier.account_id = tasks.account_id
+       AND earlier.status = 'pending'
+       AND earlier.attempt_count > 0
+       AND earlier.next_attempt_at > ?
+       AND (earlier.created_at < tasks.created_at
+            OR (earlier.created_at = tasks.created_at AND earlier.rowid < tasks.rowid))
+  )`;
 
 export type TaskInsert = {
   id: string;
@@ -447,7 +478,10 @@ export function commitTask(deps: CommitTaskDeps, spec: TaskSpec): TaskHandle {
  *
  * The ordering is `created_at, rowid`: FIFO within the account, because two tasks
  * writing the same rows must apply in the order they were committed or their
- * deltas compose backwards.
+ * deltas compose backwards. Ordering alone only covers rows that are claimable at
+ * the same instant, though; the predicate's barrier (`CLAIMABLE_SQL`) is what
+ * keeps a newer row from stepping over an older one that is waiting out a
+ * backoff after a restart dropped its chain.
  *
  * The tie-break is `rowid`, not `id`. Two tasks committed in the same
  * millisecond are the normal case (a batch move and its undo, a burst of flag
@@ -459,7 +493,7 @@ export function commitTask(deps: CommitTaskDeps, spec: TaskSpec): TaskHandle {
 export function claimNextTask(db: DatabaseHandle, accountId?: string, now: number = Date.now()): TaskRow | null {
   const scope = accountId ? "AND account_id = ?" : "";
   const params: unknown[] = [now];
-  params.push(now, now);
+  params.push(now, now, now);
   if (accountId) params.push(accountId);
   const raw = db.prepare(`
     UPDATE tasks
@@ -493,7 +527,10 @@ export function claimTaskRow(db: DatabaseHandle, taskId: string, now: number = D
  *
  * The row keeps its place in the account's FIFO chain: the chain waits out the
  * backoff rather than letting a newer task overtake it. Sequence, not elapsed
- * time, is what makes two writes to the same message compose correctly.
+ * time, is what makes two writes to the same message compose correctly. That
+ * place survives the process too -- `claimNextTask`'s barrier reads exactly this
+ * state (`attempt_count > 0` plus a future `next_attempt_at`), so a restart in
+ * the middle of the wait does not promote the rows behind it.
  *
  * `error` is the failure this attempt produced. It is recorded because the row is
  * the only place a retryable failure can leave a trace: the attempt reported no
@@ -534,12 +571,12 @@ export function settleTask(
  * Adds to the row's progress counters. See `TaskRunner.report`.
  *
  * Each counter stops at `total`. A task cannot have affected more messages than
- * it carries, but the raw sum can claim it did: the run timeout abandons an
- * attempt without stopping it (`scheduler.ts:156-160`), the chain then retries
- * the row, and the retry reports the same ids a second time -- the abandoned
- * attempt's report lands afterwards, on a row that may already be terminal
- * (`settleTask` guards no status). Leaving that in the columns would make it a
- * user-visible claim rather than a counter artefact: the batch-job alias hands
+ * it carries, but the raw sum can claim it did: a runner reports per chunk and an
+ * attempt that fails halfway keeps the counts it already reported, so a retry can
+ * legitimately count an id the previous attempt also counted. The scheduler now
+ * makes an abandoned attempt's report inert (`attemptOnce`'s `live` flag), which
+ * closes the late-write half of this; the clamp stays because the counters are
+ * user-visible regardless: the batch-job alias hands
  * `updated`/`failed` to the partial-failure toast ("N 封操作成功，M 封失败"), and
  * an `N` larger than the job is the one reading it must never produce.
  *
@@ -561,15 +598,19 @@ export function reportTaskProgress(
 /**
  * The accounts with at least one claimable task, for the due-time tick.
  *
- * Only `due_at` genuinely needs a tick: a task waiting out a backoff is held by
- * its chain, which resumes it on its own. The predicate is spelled the same for
- * both so a restart that raced a backoff cannot strand a row.
+ * Two cases need the tick. `due_at` arriving is one. The other is a task that
+ * was left pending with a future `next_attempt_at` by a process that stopped
+ * mid-backoff: there is no chain holding it any more, so its expiry is only
+ * noticed when a sweep runs. The predicate is spelled the same for both, which is
+ * also what keeps the barrier honest -- an account whose only work is blocked
+ * behind a retrying predecessor is not swept until that predecessor is due, and
+ * then it is swept together with it, in order.
  */
 export function dueAccountIds(db: DatabaseHandle, now: number = Date.now()): string[] {
   return db.prepare(`
     SELECT DISTINCT account_id FROM tasks
     WHERE status = 'pending' AND ${CLAIMABLE_SQL}
-  `).pluck().all(now, now) as string[];
+  `).pluck().all(now, now, now) as string[];
 }
 
 /**

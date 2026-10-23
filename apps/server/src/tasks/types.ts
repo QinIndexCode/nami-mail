@@ -327,6 +327,21 @@ export type TaskRunner<P = unknown> = (args: {
    * system are still never nudged (see the contract's I3).
    */
   report: (delta: { updated?: number; failed?: number }) => void;
+  /**
+   * Aborted when the scheduler stops waiting for this attempt -- it exceeded
+   * `TASK_RUN_TIMEOUT_MS`, or the process is shutting down.
+   *
+   * A runner that can reach a transport should hand this to it, so the abort
+   * closes the connection and rejects whatever command is in flight. That is the
+   * difference between "the scheduler stopped waiting" and "the provider stopped
+   * receiving": without it, an abandoned attempt keeps writing after its account
+   * slot was released, and its late write can overwrite a newer task's.
+   *
+   * Abort is cooperative and best-effort. A command that already reached the
+   * provider cannot be recalled; the task is retried and the transfer's real
+   * outcome is reconciled (see the send ledger's `unknown_delivery`).
+   */
+  signal: AbortSignal;
 }) => Promise<void>;
 
 export type TaskRegistry = {
