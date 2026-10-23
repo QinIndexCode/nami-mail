@@ -150,6 +150,14 @@ export type TaskItemRow = {
   origin_mailbox: string | null;
   destination_mailbox: string | null;
   failed: number;
+  /**
+   * The UID this item addressed when the task was accepted, and the generation
+   * of the mailbox that UID belonged to. NULL means the acceptance could not
+   * observe them (or the row predates the columns), and the runner then falls
+   * back to the cache's current generation.
+   */
+  origin_uid: number | null;
+  origin_uid_validity: string | null;
 };
 
 export type TaskItemSpec = {
@@ -158,6 +166,8 @@ export type TaskItemSpec = {
   originMailbox?: string | null;
   destinationMailbox?: string | null;
   failed?: boolean;
+  originUid?: number | null;
+  originUidValidity?: string | null;
 };
 
 /**

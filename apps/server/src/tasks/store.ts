@@ -160,8 +160,9 @@ export function insertTaskRow(db: DatabaseHandle, entry: TaskInsert): void {
 export function insertTaskItems(db: DatabaseHandle, taskId: string, items: readonly TaskItemSpec[]): number {
   if (!items.length) return 0;
   const statement = db.prepare(`
-    INSERT OR IGNORE INTO task_items (task_id, message_id, changed, origin_mailbox, destination_mailbox, failed)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO task_items
+      (task_id, message_id, changed, origin_mailbox, destination_mailbox, failed, origin_uid, origin_uid_validity)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   let inserted = 0;
   for (const item of items) {
@@ -172,6 +173,8 @@ export function insertTaskItems(db: DatabaseHandle, taskId: string, items: reado
       item.originMailbox ?? null,
       item.destinationMailbox ?? null,
       item.failed ? 1 : 0,
+      item.originUid ?? null,
+      item.originUidValidity ?? null,
     );
     inserted += result.changes;
   }

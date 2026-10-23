@@ -34,6 +34,7 @@ import {
 import { accountById } from "./account-store.js";
 import { applyFilterRulesToNewMessages } from "./sync-filter-rules.js";
 import { limitStoredHtmlBody, limitStoredTextBody } from "./message-body-limits.js";
+import { uidValidityValue } from "./mailbox-generation.js";
 import { REMOTE_DELETION_PROBE_BATCH_SIZE, defaultRemoteDeletionProbeState, remoteDeletionProbeCursorKey, type RemoteDeletionProbeState } from "./sync-deletion-probe.js";
 
 /**
@@ -166,13 +167,9 @@ function partialSyncMessage(failedFolders: number): string {
   return `${failedFolders} 个文件夹未完成同步，其他文件夹的邮件仍可使用。`;
 }
 
-function uidValidityValue(value: unknown): string | undefined {
-  if (typeof value === "bigint") return value.toString();
-  // ImapFlow exposes a bigint in production. Accepting an integer here keeps
-  // the cache boundary easy to exercise with small test doubles.
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return String(value);
-  return undefined;
-}
+// `uidValidityValue` lives in `mailbox-generation.ts` now: the user-driven write
+// paths need the same normalisation, and two spellings of "is this the same
+// generation" is exactly how one of them ends up wrong.
 
 export async function syncAccount(
   db: DatabaseHandle,

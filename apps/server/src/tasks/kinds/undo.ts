@@ -4,6 +4,9 @@ import type { AgentMailEventSink } from "../../agent/mail-state-events.js";
 import { MOVE_LOCATION_UNVERIFIED_ERROR, PENDING_MOVE_RECONCILIATION_ERROR } from "../../message-storage.js";
 import { messageFlagNames, type MessageFlagsPatch } from "../../message-flags.js";
 import { moveMessageToFolder } from "../../sync-moves.js";
+import { UID_GENERATION_CHANGED_ERROR } from "../../mailbox-generation.js";
+import type { ServerEventBus } from "../../events.js";
+import { kickAccountSync } from "../kick-sync.js";
 import { resolveMoveDestination, type MessageMoveTarget } from "../../move-destinations.js";
 import type { FlagsPushEntry } from "../../flags-outbox.js";
 import type { TaskKind, TaskItemSpec, TaskRow, TaskRunner } from "../types.js";
@@ -255,12 +258,31 @@ export function undoPreflightRefusal(deps: { masterKey: Buffer }, parent: TaskRo
  * without touching a count.
  */
 function undoItemSpecs(db: DatabaseHandle, parentTaskId: string): TaskItemSpec[] {
+  // The generation is the one the message's mailbox has NOW -- the restore's
+  // source. `origin_mailbox` is where the message is headed, so it cannot answer
+  // this; the row beside it is the position the restore will address, and its
+  // generation is what proves that position still means this message when the
+  // runner later locks the mailbox.
   const rows = db.prepare(`
-    SELECT message_id, origin_mailbox FROM task_items
-    WHERE task_id = ? AND changed = 1 AND origin_mailbox IS NOT NULL
-    ORDER BY rowid
-  `).all(parentTaskId) as Array<{ message_id: string; origin_mailbox: string }>;
-  return rows.map((row) => ({ messageId: row.message_id, changed: true, originMailbox: row.origin_mailbox }));
+    SELECT b.message_id, b.origin_mailbox, m.uid AS origin_uid, f.uid_validity AS origin_uid_validity
+    FROM task_items AS b
+    LEFT JOIN messages AS m ON m.id = b.message_id
+    LEFT JOIN folders AS f ON f.account_id = m.account_id AND f.path = m.mailbox
+    WHERE b.task_id = ? AND b.changed = 1 AND b.origin_mailbox IS NOT NULL
+    ORDER BY b.rowid
+  `).all(parentTaskId) as Array<{
+    message_id: string;
+    origin_mailbox: string;
+    origin_uid: number | null;
+    origin_uid_validity: string | null;
+  }>;
+  return rows.map((row) => ({
+    messageId: row.message_id,
+    changed: true,
+    originMailbox: row.origin_mailbox,
+    originUid: row.origin_uid,
+    originUidValidity: row.origin_uid_validity,
+  }));
 }
 
 /**
@@ -353,6 +375,9 @@ export type UndoRunnerDeps = {
   masterKey: Buffer;
   accessTokenProvider?: AccountAccessTokenProvider;
   agentMailEvents?: AgentMailEventSink;
+  /** The app's event bus and shutdown signal, for the sync kick on a refusal. */
+  serverEvents?: ServerEventBus;
+  syncAbortSignal?: AbortSignal;
 };
 
 /**
@@ -376,12 +401,13 @@ function isRetryableUndoRefusal(message: string): boolean {
 }
 
 /** The ids this undo still owes, in selection order: the same predicate its own latch writes. */
-function pendingUndoItems(db: DatabaseHandle, taskId: string): Array<{ id: string; fromMailbox: string }> {
+function pendingUndoItems(db: DatabaseHandle, taskId: string): Array<{ id: string; fromMailbox: string; uidValidity: string | null }> {
   return db.prepare(`
-    SELECT message_id AS id, origin_mailbox AS fromMailbox FROM task_items
+    SELECT message_id AS id, origin_mailbox AS fromMailbox, origin_uid_validity AS uidValidity
+    FROM task_items
     WHERE task_id = ? AND changed = 1 AND failed = 0 AND origin_mailbox IS NOT NULL
     ORDER BY rowid
-  `).all(taskId) as Array<{ id: string; fromMailbox: string }>;
+  `).all(taskId) as Array<{ id: string; fromMailbox: string; uidValidity: string | null }>;
 }
 
 /**
@@ -484,6 +510,10 @@ export function createUndoRunner(deps: UndoRunnerDeps): TaskRunner<UndoTaskPaylo
     // move state sync has to reconcile), not the account-level pair the move
     // runner stops at.
     let refusal: Error | null = null;
+    // Accounts whose mailbox was rebuilt under an entry. The refusal settled the
+    // entry as failed, and a pass is what re-learns the folder (and hands the
+    // local state back), so each one is kicked once the connection is released.
+    const rebuiltAccounts = new Set<string>();
     try {
       for (const entry of entries) {
         const message = deps.db
@@ -519,7 +549,14 @@ export function createUndoRunner(deps: UndoRunnerDeps): TaskRunner<UndoTaskPaylo
         }
         try {
           const client = await connections.clientFor(message.account_id);
-          const outcome = await moveMessageToFolder(deps.db, deps.masterKey, entry.id, entry.fromMailbox, deps.accessTokenProvider, deps.agentMailEvents, { client });
+          const outcome = await moveMessageToFolder(deps.db, deps.masterKey, entry.id, entry.fromMailbox, deps.accessTokenProvider, deps.agentMailEvents, {
+            client,
+            // The generation this entry's source UID was accepted under. A
+            // rebuild between acceptance and here means that number may now
+            // belong to another message, so the restore refuses instead of
+            // guessing (`mailbox-generation.ts`).
+            expectedUidValidity: entry.uidValidity,
+          });
           if (outcome.uncertain) {
             // The command was issued and the transport died before its answer, so
             // `moveMessageToFolder` does not throw at all: it preserves the intent and
@@ -543,6 +580,11 @@ export function createUndoRunner(deps: UndoRunnerDeps): TaskRunner<UndoTaskPaylo
           // outcome. Leaving the loop keeps the rest owed for the retry.
           if (signal.aborted) throw error;
           const text = error instanceof Error ? error.message : "";
+          // Refused before anything was sent: the source UID no longer belongs to
+          // the generation this entry was accepted under. Counted `failed` below
+          // (no retry can re-prove that generation), and the account is queued for
+          // the pass that gives the entry a current position again.
+          if (text === UID_GENERATION_CHANGED_ERROR) rebuiltAccounts.add(message.account_id);
           if (isRetryableUndoRefusal(text)) {
             // Nothing is latched and nothing is reported: the entry stays owed and
             // the next attempt finds it, which is what keeps the counters from
@@ -582,6 +624,9 @@ export function createUndoRunner(deps: UndoRunnerDeps): TaskRunner<UndoTaskPaylo
       }
       if (refusal) throw refusal;
     } finally {
+      for (const accountId of rebuiltAccounts) {
+        kickAccountSync(deps, accountId, "Background resync after a refused undo failed");
+      }
       await connections.release();
     }
   };

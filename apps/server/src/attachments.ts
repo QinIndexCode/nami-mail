@@ -10,6 +10,12 @@ import {
   messagePayloadForRow,
   type MessageStorageRow,
 } from "./message-storage.js";
+import {
+  UID_GENERATION_CHANGED_ERROR,
+  cachedUidValidity,
+  liveUidValidity,
+  uidGenerationAllowsWrite,
+} from "./mailbox-generation.js";
 
 const attachmentPartIdPattern = /^(?:[1-9]\d*)(?:\.[1-9]\d*)*$/;
 const maxAttachmentPartIdLength = 128;
@@ -199,6 +205,13 @@ export async function downloadMessageAttachment(
   try {
     await client.connect();
     lock = await client.getMailboxLock(message.mailbox);
+    // A UID only identifies a message inside its generation, and this row's UID
+    // was written under the generation the cache recorded. A rebuild hands that
+    // number to a different message, so the part is refused rather than streamed
+    // from a stranger (`mailbox-generation.ts`).
+    if (!uidGenerationAllowsWrite(cachedUidValidity(db, message.account_id, message.mailbox), liveUidValidity(client))) {
+      throw new Error(UID_GENERATION_CHANGED_ERROR);
+    }
     const remoteMessage = await client.fetchOne(message.uid, { uid: true, bodyStructure: true }, { uid: true });
     const remotePart = remoteMessage && remoteMessage.uid === message.uid ? findBodyPart(remoteMessage.bodyStructure, partId) : undefined;
     if (!remotePart || !isDownloadableBodyPart(remotePart)) {

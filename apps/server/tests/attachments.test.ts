@@ -17,6 +17,7 @@ import {
 } from "../src/attachments.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { PENDING_MOVE_RECONCILIATION_ERROR, messagePayloadForRow, type MessageStorageRow } from "../src/message-storage.js";
+import { UID_GENERATION_CHANGED_ERROR } from "../src/mailbox-generation.js";
 import { syncAccount } from "../src/sync.js";
 
 const now = "2026-07-18T00:00:00.000Z";
@@ -293,6 +294,37 @@ describe("attachment metadata and IMAP downloads", () => {
       expect(client.download).toHaveBeenCalledWith(42, "2", { uid: true });
       expect(lock.release).toHaveBeenCalledTimes(1);
       expect(client.logout).toHaveBeenCalledTimes(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("refuses to stream a part from a generation the cache no longer names", async () => {
+    // The cached row says UID 42 in generation 10; the provider is at 11, where 42
+    // is a different message. Streaming it would hand out a stranger's file.
+    const db = openDatabase(":memory:");
+    insertAccount(db);
+    insertMessage(db, attachmentJson());
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, uid_validity) VALUES (?, ?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox", "10");
+    const lock = { release: vi.fn() };
+    const client = {
+      usable: true,
+      mailbox: { uidValidity: 11n },
+      connect: vi.fn(async () => undefined),
+      getMailboxLock: vi.fn(async () => lock),
+      fetchOne: vi.fn(),
+      download: vi.fn(),
+      logout: vi.fn(async () => undefined),
+    };
+    imapClientForAccount.mockReturnValue(client);
+
+    try {
+      await expect(downloadMessageAttachment(db, Buffer.alloc(32, 7), "message-1", "2"))
+        .rejects.toThrow(UID_GENERATION_CHANGED_ERROR);
+      expect(client.fetchOne).not.toHaveBeenCalled();
+      expect(client.download).not.toHaveBeenCalled();
+      expect(lock.release).toHaveBeenCalledTimes(1);
     } finally {
       db.close();
     }

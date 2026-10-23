@@ -315,12 +315,19 @@ export function registerTaskRunners(registry: TaskRegistry, deps: TaskRunnerDeps
     ...(deps.serverEvents ? { serverEvents: deps.serverEvents } : {}),
     ...(deps.syncAbortSignal ? { syncAbortSignal: deps.syncAbortSignal } : {}),
   }));
-  registry.register("undo", createUndoRunner({ ...account, ...agent }));
+  registry.register("undo", createUndoRunner({
+    ...account,
+    ...agent,
+    ...(deps.serverEvents ? { serverEvents: deps.serverEvents } : {}),
+    ...(deps.syncAbortSignal ? { syncAbortSignal: deps.syncAbortSignal } : {}),
+  }));
   registry.register("flags", createFlagsRunner({
     ...account,
     scheduler: starter,
     // `flags` names this dep `agentEvents`, the others `agentMailEvents`.
     ...(agentMailEvents ? { agentEvents: agentMailEvents } : {}),
+    ...(deps.serverEvents ? { serverEvents: deps.serverEvents } : {}),
+    ...(deps.syncAbortSignal ? { syncAbortSignal: deps.syncAbortSignal } : {}),
   }));
   registry.register("send", createSendRunner({
     db,

@@ -172,11 +172,31 @@ function fixture(count: number): { db: DatabaseHandle; ids: string[] } {
  * payload the test is trying not to have.
  */
 function acceptMove(db: DatabaseHandle, ids: readonly string[], payload: MoveTaskPayload | null = { target: "archive" }): string {
+  // The acceptance freezes the UID and the mailbox generation of each id, which
+  // is what the runner proves again under the lock (`mailbox-generation.ts`).
+  // The real acceptance reads the same pair in `rowsByIds`; this helper spells it
+  // out because it writes the rows by hand.
+  const accepted = db.prepare(`
+    SELECT m.uid AS uid, f.uid_validity AS validity
+    FROM messages AS m
+    LEFT JOIN folders AS f ON f.account_id = m.account_id AND f.path = m.mailbox
+    WHERE m.id = ?
+  `);
   const taskId = recordTask(db, MASTER_KEY, {
     accountId: ACCOUNT,
     kind: "move",
     payload: payload ?? undefined,
-    items: ids.map((messageId) => ({ messageId, changed: true, originMailbox: SOURCE, destinationMailbox: DESTINATION })),
+    items: ids.map((messageId) => {
+      const frozen = accepted.get(messageId) as { uid: number; validity: string | null };
+      return {
+        messageId,
+        changed: true,
+        originMailbox: SOURCE,
+        destinationMailbox: DESTINATION,
+        originUid: frozen.uid,
+        originUidValidity: frozen.validity,
+      };
+    }),
   });
   const goal = db.prepare("UPDATE messages SET pending_move_destination = ?, pending_move_state = NULL WHERE id = ?");
   for (const id of ids) goal.run(DESTINATION, id);
@@ -249,6 +269,10 @@ const messageMove = vi.fn(async (uids: number | number[], destination: string) =
 });
 const client = {
   usable: true,
+  // Set by the generation tests: what the selected mailbox reports as its
+  // `UIDVALIDITY`. Left `undefined` everywhere else, which the check reads as
+  // "this transport does not answer" rather than as a mismatch.
+  mailbox: undefined as { uidValidity?: bigint } | undefined,
   connect,
   getMailboxLock: vi.fn(async () => lock),
   messageMove,
@@ -295,6 +319,7 @@ beforeEach(() => {
   timeline.length = 0;
   providerAnswer = "deliver";
   concurrent = null;
+  client.mailbox = undefined;
   // Module-level state in sync-locks: a test that marks an account busy (moving or
   // syncing) must not leave the next one looking at a busy account.
   unmarkAccountMoving(ACCOUNT);
@@ -728,5 +753,51 @@ describe("task move runner: the give-back reports what it latched", () => {
       expect(messageState(db, id)).toEqual({ mailbox: SOURCE, pending_move_destination: null, pending_move_state: null });
     }
     expect(pendingMoveItemIds(db, taskRow(db, taskId) as TaskRow)).toEqual([]);
+  });
+});
+
+describe("task move runner: the UID generation frozen at acceptance", () => {
+  it("refuses ids whose mailbox was rebuilt since, before any MOVE, and kicks a sync", async () => {
+    // The audit's scenario: the acceptance froze `(uid, UIDVALIDITY 10)`, the
+    // provider then changed the mailbox so the same number names a different
+    // message, and every "current" value on both sides agrees anyway. Only the
+    // frozen pair can tell; without it the MOVE would land on a stranger.
+    const world = fixture(2);
+    db = world.db;
+    db.prepare("UPDATE folders SET uid_validity = '10' WHERE account_id = ? AND path = ?").run(ACCOUNT, SOURCE);
+    const taskId = acceptMove(db, world.ids);
+    client.mailbox = { uidValidity: 11n };
+
+    const deltas: Deltas = [];
+    await attempt(db, taskId, deltas);
+
+    // Nothing was sent, both ids were latched (not retried) and the goals came
+    // back, so the list shows the messages where they still are.
+    expect(moveCalls).toEqual([]);
+    expect(deltas).toEqual([{ updated: 0, failed: 2 }]);
+    expect(itemState(db, taskId, "msg-1").failed).toBe(1);
+    expect(itemState(db, taskId, "msg-2").failed).toBe(1);
+    for (const id of world.ids) {
+      expect(messageState(db, id)).toEqual({ mailbox: SOURCE, pending_move_destination: null, pending_move_state: null });
+    }
+    expect(pendingMoveItemIds(db, taskRow(db, taskId) as TaskRow)).toEqual([]);
+    // The refusal is only fixable by re-learning the folder, so the pass is asked
+    // for on the runner's exit path.
+    expect(syncAccount).toHaveBeenCalledTimes(1);
+    expect(syncAccount).toHaveBeenCalledWith(db, MASTER_KEY, ACCOUNT, expect.any(Number), undefined, undefined, undefined);
+  });
+
+  it("accepts the same ids when the live generation matches the frozen one", async () => {
+    const world = fixture(2);
+    db = world.db;
+    db.prepare("UPDATE folders SET uid_validity = '10' WHERE account_id = ? AND path = ?").run(ACCOUNT, SOURCE);
+    const taskId = acceptMove(db, world.ids);
+    client.mailbox = { uidValidity: 10n };
+
+    const deltas: Deltas = [];
+    await attempt(db, taskId, deltas);
+
+    expect(moveCalls).toEqual([[1, 2]]);
+    expect(deltas).toEqual([{ updated: 2, failed: 0 }]);
   });
 });

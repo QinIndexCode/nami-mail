@@ -105,6 +105,14 @@ export const TASKS_SCHEMA_STATEMENTS = [
   // Columns align 1:1 with the legacy batch_job_messages, so the backfill is a
   // column-for-column copy -- row at a time rather than one INSERT ... SELECT,
   // because each job's selection has to be split across the accounts it covers.
+  // `origin_uid`/`origin_uid_validity` freeze the identity the task will act on:
+  // the UID the row had when the task was accepted, and the generation
+  // (`UIDVALIDITY`) of the mailbox that UID belonged to. A UID only means
+  // something inside one generation, so a task that runs after a provider has
+  // rebuilt the mailbox must not address the same number -- it can now belong to
+  // a different message. Both columns are NULL on rows written before this pair
+  // existed (and on rows whose acceptance could not observe a generation), which
+  // the runners treat as "unproven" and resolve against the cache instead.
   `CREATE TABLE IF NOT EXISTS task_items (
   task_id             TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   message_id          TEXT NOT NULL,
@@ -112,6 +120,8 @@ export const TASKS_SCHEMA_STATEMENTS = [
   origin_mailbox      TEXT,
   destination_mailbox TEXT,
   failed              INTEGER NOT NULL DEFAULT 0,
+  origin_uid          INTEGER,
+  origin_uid_validity TEXT,
   PRIMARY KEY (task_id, message_id)
 );`,
   `CREATE INDEX IF NOT EXISTS idx_task_items_message ON task_items(message_id);`,

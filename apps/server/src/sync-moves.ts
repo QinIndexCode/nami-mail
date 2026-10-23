@@ -39,6 +39,8 @@ import {
   withAccountWriteLocks,
 } from "./sync-locks.js";
 import { accountById } from "./account-store.js";
+import { isRecoverableStaleMove, recoverStaleMoveIntent } from "./move-recovery.js";
+import { UID_GENERATION_CHANGED_ERROR, liveUidValidity, partitionRefusedByGeneration, refuseRebuiltMailbox } from "./mailbox-generation.js";
 import {
   cachedDestinationCandidateUid,
   moveStatements,
@@ -93,53 +95,15 @@ export type MoveMessageOptions = {
   client?: Awaited<ReturnType<typeof imapClientForAccount>>;
   /** Overrides how long the move waits for a running sync pass (tests). */
   syncWaitMs?: number;
+  /**
+   * The generation the caller froze when it accepted this move. Omitted, the
+   * cache's current value is used instead -- correct for an immediate move,
+   * because the account's write slot keeps a sync from rewriting `folders`
+   * between the read and the lock. A queued move passes its acceptance-time
+   * value, which is the only evidence that survives a pass in between.
+   */
+  expectedUidValidity?: string | null;
 };
-
-/**
- * Only an 'intent' left behind by an interrupted transfer can be re-probed
- * against the source mailbox and retried. A 'confirmed' move and an
- * unverified location stay blocked until a sync reconciles the target.
- */
-function isRecoverableStaleMove(message: { pending_move_state: string | null; uid: number }): boolean {
-  return message.pending_move_state === "intent" && message.uid > 0;
-}
-
-/**
- * Proves whether the source UID of a stale 'intent' is still live. Present:
- * the interrupted MOVE never executed, so the intent is discarded for a fresh
- * attempt (true). Absent: the MOVE did happen and reconciliation owns the
- * outcome (false).
- */
-async function recoverStaleMoveIntent(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  messageId: string,
-  message: { account_id: string; mailbox: string; uid: number },
-  accessTokenProvider?: AccountAccessTokenProvider,
-  sharedClient?: Awaited<ReturnType<typeof imapClientForAccount>>,
-): Promise<boolean> {
-  const account = accountById(db, message.account_id);
-  if (!account) return false;
-  const client = sharedClient ?? (await imapClientForAccount(account, masterKey, accessTokenProvider));
-  const ownsClient = !sharedClient;
-  try {
-    if (ownsClient) await client.connect();
-    const lock = await client.getMailboxLock(message.mailbox);
-    try {
-      for await (const item of client.fetch([message.uid], { uid: true }, { uid: true })) {
-        if (item.uid === message.uid) {
-          moveStatements(db).clearMoveIntent.run(messageId);
-          return true;
-        }
-      }
-    } finally {
-      lock.release();
-    }
-    return false;
-  } finally {
-    if (ownsClient) await safeLogout(client);
-  }
-}
 
 export async function moveMessage(
   db: DatabaseHandle,
@@ -208,6 +172,12 @@ type MoveMessageFields = {
   remote_id_lookup: string | null;
   pending_move_destination: string | null;
   pending_move_state: string | null;
+  /**
+   * The generation of `mailbox` as the cache recorded it. Read in the same
+   * statement as the row, so it is the generation this UID was last written
+   * under -- falling back to it is the best evidence an immediate move has.
+   */
+  origin_uid_validity?: string | null;
 };
 
 /**
@@ -435,6 +405,13 @@ async function moveMessageCore(
     }
     const lock = await client.getMailboxLock(message.mailbox);
     try {
+      // Nothing has been sent yet, so clearing the intent is the whole rollback.
+      try {
+        refuseRebuiltMailbox(db, message.account_id, message.mailbox, client, options?.expectedUidValidity);
+      } catch (error) {
+        clearMoveIntent.run(messageId);
+        throw error;
+      }
       moveAttempted = true;
       const moved = await client.messageMove(message.uid, destination.path, { uid: true });
       if (!moved) {
@@ -512,6 +489,8 @@ async function moveMessagesInOneCommand(
   accessTokenProvider: AccountAccessTokenProvider | undefined,
   agentEvents: AgentMailEventSink | undefined,
   client: Awaited<ReturnType<typeof imapClientForAccount>>,
+  /** Acceptance-time generations, keyed by message id (see `batchMoveMessages`). */
+  acceptedGenerations?: ReadonlyMap<string, string>,
 ): Promise<{ updated: number; failures: Array<{ id: string; message: string }>; pendingAccounts: Set<string> }> {
   const outcome = { updated: 0, failures: [] as Array<{ id: string; message: string }>, pendingAccounts: new Set<string>() };
   const accountId = entries[0]?.account_id;
@@ -578,6 +557,20 @@ async function moveMessagesInOneCommand(
 
     const lock = await client.getMailboxLock(claimed[0]!.mailbox);
     try {
+      // The generation check (see `mailbox-generation.ts`): under this lock and
+      // before the command, because the live value only means something once the
+      // mailbox is selected, and an id whose mailbox was rebuilt must not address
+      // the number it was accepted with. Nothing was sent for the refused ids.
+      const refused = partitionRefusedByGeneration(claimed, liveUidValidity(client), acceptedGenerations);
+      if (refused.length > 0) {
+        for (const entry of refused) {
+          clearMoveIntent.run(entry.id);
+          outcome.failures.push({ id: entry.id, message: UID_GENERATION_CHANGED_ERROR });
+        }
+        // Also the runner's "kick a sync" channel: a pass is what fixes this.
+        outcome.pendingAccounts.add(accountId);
+        if (claimed.length === 0) return outcome;
+      }
       commandAttempted = true;
       const moved = await client.messageMove(claimed.map((entry) => entry.uid), destination.path, { uid: true });
       if (!moved) {
@@ -650,6 +643,11 @@ async function moveMessagesInOneCommand(
  *
  * A caller running many batches in a row passes the `connections` cache it
  * owns, paying one connect per account for the whole run instead of per batch.
+ *
+ * `acceptedGenerations` carries the generation each id's acceptance froze (the
+ * `move` task's `task_items`). Ids missing from it fall back to the generation
+ * the cache recorded for the row, which is the right evidence for an immediate
+ * call: no sync can rewrite `folders` while the account's write slot is held.
  */
 export async function batchMoveMessages(
   db: DatabaseHandle,
@@ -659,6 +657,7 @@ export async function batchMoveMessages(
   accessTokenProvider?: AccountAccessTokenProvider,
   agentEvents?: AgentMailEventSink,
   connections?: Map<string, Awaited<ReturnType<typeof imapClientForAccount>>>,
+  acceptedGenerations?: ReadonlyMap<string, string>,
 ): Promise<BatchMessageMoveOutcome> {
   const outcome: BatchMessageMoveOutcome = {
     updated: 0,
@@ -740,7 +739,7 @@ export async function batchMoveMessages(
         // already in flight on the same account instead of failing the whole
         // group with a busy error.
         const groupOutcome = await withAccountWriteLocks([accountId], () =>
-          moveMessagesInOneCommand(db, masterKey, group, resolved, accessTokenProvider, agentEvents, client),
+          moveMessagesInOneCommand(db, masterKey, group, resolved, accessTokenProvider, agentEvents, client, acceptedGenerations),
         );
         outcome.updated += groupOutcome.updated;
         outcome.failed += groupOutcome.failures.length;

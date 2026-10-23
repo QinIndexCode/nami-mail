@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 // `openDatabase` is a value import here, and every other test in this file drives
 // the migration by hand: this is the one place the app's real opening path is the
 // subject rather than a stand-in for it.
-import { openDatabase, type DatabaseHandle } from "../src/db.js";
+import { openDatabase, SCHEMA_VERSION, type DatabaseHandle } from "../src/db.js";
 import {
   PAYLOAD_ENVELOPE_VERSION,
   PAYLOAD_VERSION_UNSEALED,
@@ -921,6 +921,37 @@ describe("task migration: the DROP is durable because the opening schema stopped
     });
   });
 
+  it("adds the acceptance-time UID columns to a table that predates them, past the marker check", () => {
+    // A v3 file: the table exists with that release's columns and nothing else.
+    // The migration markers are present too, so the backfill returns early -- and
+    // the column guard has to run ahead of that return, or an upgraded file would
+    // never get the pair and every queued write would be judged "unproven".
+    const db = openDatabase(":memory:");
+    try {
+      db.prepare("DROP TABLE task_items").run();
+      db.prepare(`
+        CREATE TABLE task_items (
+          task_id             TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          message_id          TEXT NOT NULL,
+          changed             INTEGER NOT NULL DEFAULT 0,
+          origin_mailbox      TEXT,
+          destination_mailbox TEXT,
+          failed              INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (task_id, message_id)
+        )
+      `).run();
+
+      expect(migrateTaskStorageInTransaction(db))
+        .toStrictEqual({ ran: false, operationQueue: 0, batchJobs: 0, scheduledSends: 0, items: 0, warnings: [] });
+
+      const columns = db.prepare("PRAGMA table_info(task_items)").all() as Array<{ name: string; type: string }>;
+      expect(columns.filter((column) => column.name === "origin_uid").map((column) => column.type)).toEqual(["INTEGER"]);
+      expect(columns.filter((column) => column.name === "origin_uid_validity").map((column) => column.type)).toEqual(["TEXT"]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("has no writer left to name those stores, while the replacement writes to the same file", () => {
     withMigrated((db) => {
       // The pre-landing pin proved the *mount alone* was a crash: two writers in
@@ -1026,11 +1057,11 @@ describe("task migration: the mount, run through the real opening path", () => {
       expect(countOf(db, "SELECT COUNT(*) FROM task_items")).toBe(23);
       expect(taskIds(db)).toHaveLength(8);
       expect(migrationIds(db)).toEqual(expectedMigrationIds);
-      // The stamp and the migration are one transaction (`db.ts`), so a v3 file
-      // is a file the migration already ran on. The literal is the build's own
+      // The stamp and the migration are one transaction (`db.ts`), so this is a
+      // file the migration already ran on. The stamp is the build's own
       // `SCHEMA_VERSION`; `db.test.ts` owns the bump itself, and this is what
       // catches a bump that forgot the databases already out there.
-      expect(rows(db, "SELECT key, value FROM schema_meta")).toEqual([{ key: "schema_version", value: "3" }]);
+      expect(rows(db, "SELECT key, value FROM schema_meta")).toEqual([{ key: "schema_version", value: String(SCHEMA_VERSION) }]);
 
       // The scheduled send is the row the migration has to get exactly right,
       // because `due_at` is what the scheduler's claim predicate compares: the
@@ -1074,7 +1105,7 @@ describe("task migration: the mount, run through the real opening path", () => {
       expect(migrationIds(second)).toEqual(expectedMigrationIds);
       // Still the same stamp: the second open had nothing to migrate, so it wrote
       // neither a row nor a different version.
-      expect(rows(second, "SELECT key, value FROM schema_meta")).toEqual([{ key: "schema_version", value: "3" }]);
+      expect(rows(second, "SELECT key, value FROM schema_meta")).toEqual([{ key: "schema_version", value: String(SCHEMA_VERSION) }]);
       // And the schedule survives the restart as a schedule: the parked mail is
       // still parked at the instant the user picked, which is what the scheduler
       // claims it by on this launch. A migration that got this right only until

@@ -10,6 +10,8 @@ import {
   type PreparedFlagsChange,
 } from "../../flags-outbox.js";
 import type { MessageFlagsPatch } from "../../message-flags.js";
+import type { ServerEventBus } from "../../events.js";
+import { kickAccountSync } from "../kick-sync.js";
 import { memberTaskId } from "../job-ids.js";
 import { TaskAbortError } from "../scheduler.js";
 import { commitTask, type CommitTaskDeps, type TaskHandle } from "../store.js";
@@ -69,6 +71,9 @@ export type FlagsTaskPayload = FrozenFlagsPayload | ReversedFlagsPayload;
 export type FlagsTaskDeps = CommitTaskDeps & {
   accessTokenProvider?: AccountAccessTokenProvider;
   agentEvents?: AgentMailEventSink;
+  /** The app's event bus and shutdown signal, for the sync kick on a refusal. */
+  serverEvents?: ServerEventBus;
+  syncAbortSignal?: AbortSignal;
 };
 
 export type AcceptFlagsInput = {
@@ -212,6 +217,10 @@ export function acceptFlagsTaskInTransaction(deps: FlagsTaskDeps, input: AcceptF
   const appliedIds = applyPreparedFlagsLocally(deps.db, prepared, deps.agentEvents);
 
   const entriesByAccount = new Map<string, FlagsPushEntry[]>();
+  // One read of the account's generations, not one per entry: the acceptance is
+  // also a statement-count contract (a 200-id selection must compile no more
+  // statements than a 20-id one).
+  const generationsByAccount = new Map<string, Map<string, string | null>>();
   for (const item of prepared) {
     if (!item.add.length && !item.remove.length) continue;
     const accountId = item.message.account_id;
@@ -220,12 +229,27 @@ export function acceptFlagsTaskInTransaction(deps: FlagsTaskDeps, input: AcceptF
       entries = [];
       entriesByAccount.set(accountId, entries);
     }
+    let generations = generationsByAccount.get(accountId);
+    if (!generations) {
+      generations = new Map(
+        (deps.db.prepare("SELECT path, uid_validity FROM folders WHERE account_id = ?").all(accountId) as Array<{
+          path: string;
+          uid_validity: string | null;
+        }>).map((folder) => [folder.path, folder.uid_validity]),
+      );
+      generationsByAccount.set(accountId, generations);
+    }
     entries.push({
       id: item.message.id,
       mailbox: item.message.mailbox,
       uid: item.message.uid,
       add: item.add,
       remove: item.remove,
+      // The generation this UID was synced under. Frozen into the sealed payload
+      // because the push can run minutes later: re-reading the cache then would
+      // answer with whatever the last pass wrote, which is exactly the value a
+      // rebuild changes.
+      uidValidity: generations.get(item.message.mailbox) ?? null,
     });
   }
 
@@ -343,8 +367,12 @@ export function createFlagsRunner(deps: FlagsTaskDeps): TaskRunner<FlagsTaskPayl
       try {
         // The signal goes to the push so a timeout closes the socket instead of
         // leaving the STORE running under a released account slot.
-        const { pushed, dropped } = await pushFlagsRemote(flagsPushDeps(deps), { accountId: task.account_id, entries }, signal);
+        const { pushed, dropped, generationChanged } = await pushFlagsRemote(flagsPushDeps(deps), { accountId: task.account_id, entries }, signal);
         report({ updated: pushed, failed: dropped });
+        // The dropped entries whose mailbox was rebuilt: a pass is what re-learns
+        // the folder (and hands the local state back through the settlement hook),
+        // so it is kicked rather than left to the next scheduled one.
+        if (generationChanged) kickAccountSync(deps, task.account_id, "Background resync after a refused flags push failed");
         return;
       } catch (error) {
         // The same trade the send runner's transport catch makes (contract §十七

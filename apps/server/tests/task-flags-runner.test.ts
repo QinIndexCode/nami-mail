@@ -1,19 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as mailModule from "../src/mail.js";
+import type * as syncModule from "../src/sync.js";
 
 /**
- * The provider is the only collaborator replaced. Everything else is the
- * production object: the acceptance, the local statements, `prepareLocalFlags`,
- * `pushFlagsRemote`, the sealing envelope, the scheduler, the registry, the
- * database. Mocking `pushFlagsRemote` would pin the legacy executor's shape and
- * prove nothing about this port -- the socket is the one thing a test cannot
- * have.
+ * The provider is the only collaborator replaced with a socket-shaped double;
+ * `syncAccount` is stubbed as well, because the one thing a refusal asks for is a
+ * real pass -- a second dial to the same account -- and a test cannot have that.
+ * Everything else is the production object: the acceptance, the local statements,
+ * `prepareLocalFlags`, `pushFlagsRemote`, the sealing envelope, the scheduler, the
+ * registry, the database. Mocking `pushFlagsRemote` would pin the legacy
+ * executor's shape and prove nothing about this port -- the socket is the one
+ * thing a test cannot have.
  */
-const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
+const { imapClientForAccount, syncAccount } = vi.hoisted(() => ({
+  imapClientForAccount: vi.fn(),
+  // The sync a refused generation asks for. Recorded rather than real: the pass
+  // dials the provider, which is the one collaborator this file never has.
+  syncAccount: vi.fn(async () => undefined),
+}));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
   const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
+});
+
+vi.mock("../src/sync.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof syncModule>();
+  return { ...actual, syncAccount };
 });
 
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
@@ -102,6 +115,10 @@ const messageFlagsRemove = vi.fn(async (uids: number | number[]) => {
 });
 const client = {
   usable: true,
+  // Set by the generation test: what the selected mailbox reports as its
+  // `UIDVALIDITY`. Left `undefined` everywhere else, which the check reads as
+  // "this transport does not answer" rather than as a mismatch.
+  mailbox: undefined as { uidValidity?: bigint } | undefined,
   connect,
   getMailboxLock: vi.fn(async () => lock),
   messageFlagsAdd,
@@ -125,9 +142,9 @@ function insertAccount(db: DatabaseHandle): void {
   `).run(ACCOUNT, "demo@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", new Date().toISOString());
 }
 
-function insertFolder(db: DatabaseHandle): void {
-  db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
-    .run(ACCOUNT, MAILBOX, "Inbox", "\\Inbox");
+function insertFolder(db: DatabaseHandle, uidValidity?: string): void {
+  db.prepare("INSERT INTO folders (account_id, path, name, special_use, uid_validity) VALUES (?, ?, ?, ?, ?)")
+    .run(ACCOUNT, MAILBOX, "Inbox", "\\Inbox", uidValidity ?? null);
 }
 
 function insertMessage(db: DatabaseHandle, id: string, uid: number, flags: string[]): void {
@@ -259,6 +276,7 @@ beforeEach(() => {
   addCalls = [];
   removeCalls = [];
   providerAnswer = "confirm";
+  client.mailbox = undefined;
   imapClientForAccount.mockImplementation(async () => client);
 });
 
@@ -665,5 +683,61 @@ describe("task flags runner: payloads it cannot execute", () => {
     expect(await drain(db, taskId)).toEqual([{ id: taskId, status: "failed" }]);
     expect(taskRow(db, taskId)).toMatchObject({ status: "failed", error_code: "no_payload", attempt_count: 1 });
     expect(imapClientForAccount).not.toHaveBeenCalled();
+  });
+});
+
+describe("task flags: the UID generation frozen at acceptance", () => {
+  it("writes the folder's generation into the sealed payload", () => {
+    // The payload is sealed at acceptance, so this value is the only one that
+    // survives until the push. Re-reading the cache then would answer with
+    // whatever the last pass wrote -- exactly the value a rebuild changes.
+    const world = fixture(2);
+    db = world.db;
+    db.prepare("UPDATE folders SET uid_validity = '10' WHERE account_id = ? AND path = ?").run(ACCOUNT, MAILBOX);
+    const { deps } = acceptanceDeps(db);
+
+    const accepted = acceptFlagsTask(deps, { messageIds: world.ids, patch: { seen: true } });
+    const task = taskRow(db, accepted.handles[0]!.id) as TaskRow;
+    const payload = openTaskPayload(MASTER_KEY, task) as FrozenFlagsPayload;
+
+    expect(payload.entries.map((entry) => entry.uidValidity)).toEqual(["10", "10"]);
+  });
+
+  it("refuses the mailbox group, counts it failed and asks for a sync when the generation moved", async () => {
+    // Acceptance froze generation 10; the provider is at 11. Sending the cached
+    // UIDs would flag whichever messages now hold those numbers.
+    const world = fixture(2);
+    db = world.db;
+    db.prepare("UPDATE folders SET uid_validity = '10' WHERE account_id = ? AND path = ?").run(ACCOUNT, MAILBOX);
+    const { deps } = acceptanceDeps(db);
+    const taskId = acceptFlagsTask(deps, { messageIds: world.ids, patch: { seen: true } }).handles[0]!.id;
+    client.mailbox = { uidValidity: 11n };
+
+    const deltas: Deltas = [];
+    await attempt(db, taskId, deltas);
+
+    // No STORE at all, and each entry counted once as failed. The settlement hook
+    // gives the local flags back from the baseline the acceptance recorded, and
+    // the pass that re-learns the folder is asked for here.
+    expect(addCalls).toEqual([]);
+    expect(removeCalls).toEqual([]);
+    expect(deltas).toEqual([{ updated: 0, failed: 2 }]);
+    expect(syncAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("pushes when the live generation matches the frozen one", async () => {
+    const world = fixture(2);
+    db = world.db;
+    db.prepare("UPDATE folders SET uid_validity = '10' WHERE account_id = ? AND path = ?").run(ACCOUNT, MAILBOX);
+    const { deps } = acceptanceDeps(db);
+    const taskId = acceptFlagsTask(deps, { messageIds: world.ids, patch: { seen: true } }).handles[0]!.id;
+    client.mailbox = { uidValidity: 10n };
+
+    const deltas: Deltas = [];
+    await attempt(db, taskId, deltas);
+
+    expect(addCalls).toEqual([[1, 2]]);
+    expect(deltas).toEqual([{ updated: 2, failed: 0 }]);
+    expect(syncAccount).not.toHaveBeenCalled();
   });
 });

@@ -99,13 +99,13 @@ export function deleteMessagesWithBatchFtsCleanup<T>(
 // writing build left them, which is exactly what the 4b migration expects to
 // find when it backfills them into `tasks` and drops them.
 //
-// v3 is the count-column deletion (contract §3.6): `folders.total` and
-// `folders.unseen` are gone and every sidebar number is derived from
-// `messages` instead. It is also the floor below which the two account-scoped
-// list indexes are rebuilt rather than merely created, because
-// `CREATE INDEX IF NOT EXISTS` matches on name alone and an older build may
-// have left a stale shape behind — see schema-migrations.ts.
-export const SCHEMA_VERSION = 3;
+// v3 is the count-column deletion (contract §3.6): sidebar counts come from
+// `messages`, and the two account-scoped list indexes are rebuilt rather than
+// merely created (`CREATE INDEX IF NOT EXISTS` matches on name alone).
+// v4 adds the acceptance-time UID generation to `task_items`: a queued write
+// must prove its UID still belongs to the generation it was accepted in, since
+// a rebuild can hand that number to another message.
+export const SCHEMA_VERSION = 4;
 
 /**
  * Optional behavior for `openDatabase`. The only production caller passes

@@ -85,11 +85,16 @@ describe("IMAP message flag updates", () => {
     fetch: vi.fn(),
     search: vi.fn(),
     fetchOne: vi.fn(),
+    // The selected mailbox as ImapFlow reports it after SELECT. Reset per test:
+    // a test that assigns a generation would otherwise leak it into every test
+    // after it, and the generation guard reads this value on every write.
+    mailbox: false as false | { exists: number; uidValidity: bigint },
   };
 
   beforeEach(() => {
     db = openDatabase(":memory:");
     vi.clearAllMocks();
+    client.mailbox = false;
     client.getMailboxLock.mockImplementation(async () => lock);
     imapClientForAccount.mockReturnValue(client);
     const now = new Date().toISOString();

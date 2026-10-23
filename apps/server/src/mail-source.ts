@@ -2,6 +2,12 @@ import type { DatabaseHandle } from "./db.js";
 import { accountById } from "./account-store.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import { moveActionBlockedError, messagePayloadForRow, type MessageStorageRow } from "./message-storage.js";
+import {
+  UID_GENERATION_CHANGED_ERROR,
+  cachedUidValidity,
+  liveUidValidity,
+  uidGenerationAllowsWrite,
+} from "./mailbox-generation.js";
 
 export type MessageSourceDownload = {
   /** The provider's original RFC822 source for the message. */
@@ -37,6 +43,12 @@ export async function downloadMessageSource(
   try {
     await client.connect();
     lock = await client.getMailboxLock(message.mailbox);
+    // Same rule as the attachment path: the UID must still belong to the
+    // generation this row was synced under, or it may name a different message
+    // (`mailbox-generation.ts`).
+    if (!uidGenerationAllowsWrite(cachedUidValidity(db, message.account_id, message.mailbox), liveUidValidity(client))) {
+      throw new Error(UID_GENERATION_CHANGED_ERROR);
+    }
     const remoteMessage = await client.fetchOne(message.uid, { uid: true, source: true }, { uid: true });
     if (!remoteMessage || remoteMessage.uid !== message.uid || !Buffer.isBuffer(remoteMessage.source)) {
       throw new Error("Message is no longer available in this mailbox. Sync this message again.");

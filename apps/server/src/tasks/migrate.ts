@@ -711,6 +711,18 @@ export function migrateTaskStorageInTransaction(db: DatabaseHandle): TaskMigrati
   // each entry is a single statement by construction, and `exec` would accept a
   // multi-statement blob whose contents a reviewer cannot audit line by line.
   for (const statement of TASKS_SCHEMA_STATEMENTS) db.prepare(statement).run();
+  // Additive columns for files created before the UID-generation pair existed.
+  // `CREATE TABLE IF NOT EXISTS` above cannot add them to an existing table, and
+  // this runs on every open, so the guard has to be the column list rather than a
+  // migration marker. Kept ahead of the marker early-return below: a database
+  // that already carries all four backfill markers still needs the columns.
+  const taskItemColumns = db.prepare("PRAGMA table_info(task_items)").all() as Array<{ name: string }>;
+  if (!taskItemColumns.some((column) => column.name === "origin_uid")) {
+    db.prepare("ALTER TABLE task_items ADD COLUMN origin_uid INTEGER").run();
+  }
+  if (!taskItemColumns.some((column) => column.name === "origin_uid_validity")) {
+    db.prepare("ALTER TABLE task_items ADD COLUMN origin_uid_validity TEXT").run();
+  }
 
   const markerCheck = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?");
   let markersPresent = 0;

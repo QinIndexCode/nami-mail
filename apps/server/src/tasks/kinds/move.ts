@@ -1,10 +1,7 @@
 import type { DatabaseHandle } from "../../db.js";
-import { serverLog } from "../../logging.js";
 import { accountById } from "../../account-store.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "../../mail.js";
 import { safeLogout } from "../../imap-logout.js";
-import { getSyncMessageLimit } from "../../settings.js";
-import { syncAccount } from "../../sync.js";
 import {
   MAILBOX_SYNCING_ERROR,
   MAIL_MOVE_IN_FLIGHT_ERROR,
@@ -15,7 +12,8 @@ import { batchMoveMessages } from "../../sync-moves.js";
 import { resolveFolderDestination, resolveMoveDestination, type MessageMoveTarget } from "../../move-destinations.js";
 import { moveStatements, type MoveDestination } from "../../sync-move-statements.js";
 import type { AgentMailEventSink } from "../../agent/mail-state-events.js";
-import { emitAccountSynced, type ServerEventBus } from "../../events.js";
+import type { ServerEventBus } from "../../events.js";
+import { kickAccountSync } from "../kick-sync.js";
 import { memberTaskId } from "../job-ids.js";
 import { TaskAbortError } from "../scheduler.js";
 import { commitTask, reportTaskProgress, type CommitTaskDeps, type TaskHandle } from "../store.js";
@@ -68,6 +66,14 @@ type MoveItemMessageRow = {
   id: string;
   account_id: string;
   mailbox: string;
+  /** The UID the row carries now; frozen on the item as `origin_uid`. */
+  uid: number;
+  /**
+   * The generation of the row's mailbox, read from `folders` in the same
+   * statement as the row itself. Frozen on the item so the runner can prove the
+   * UID still names this message when it later obtains the mailbox lock.
+   */
+  origin_uid_validity: string | null;
   flags_json: string;
   /** Read by `moveActionBlockedError` below: an unverified location is one refusal. */
   remote_id_lookup: string | null;
@@ -136,6 +142,25 @@ export function pendingMoveItemIds(db: DatabaseHandle, task: TaskRow): string[] 
     `)
     .pluck()
     .all(task.id, task.account_id) as string[];
+}
+
+/**
+ * The generation each still-owed id was accepted under, keyed by message id.
+ *
+ * Only rows that actually froze a generation are returned: an absent key means
+ * "no acceptance-time evidence" (a row written before the columns existed, or a
+ * mailbox the acceptance could not read), and the move engine then falls back to
+ * the cache's current generation for that id.
+ */
+export function pendingMoveUidValidity(db: DatabaseHandle, task: TaskRow): Map<string, string> {
+  const rows = db
+    .prepare(`
+      SELECT message_id, origin_uid_validity FROM task_items
+      WHERE task_id = ? AND changed = 1 AND failed = 0
+        AND origin_uid_validity IS NOT NULL
+    `)
+    .all(task.id) as Array<{ message_id: string; origin_uid_validity: string }>;
+  return new Map(rows.map((row) => [row.message_id, row.origin_uid_validity]));
 }
 
 /** What one call to {@link revertMoveFailures} did. */
@@ -466,7 +491,7 @@ export function acceptMoveTask(deps: CommitTaskDeps, input: AcceptMoveInput): Mo
     const destination = plan.destination;
     if (!destination) {
       plan.refused += 1;
-      plan.items.push({ messageId: id, changed: false, originMailbox: message.mailbox, destinationMailbox: null });
+      plan.items.push({ messageId: id, changed: false, originMailbox: message.mailbox, destinationMailbox: null, originUid: message.uid, originUidValidity: message.origin_uid_validity });
       reasons.set(id, "unavailable");
       continue;
     }
@@ -474,17 +499,17 @@ export function acceptMoveTask(deps: CommitTaskDeps, input: AcceptMoveInput): Mo
       // Already where the move would put it. Counted as done and given no goal:
       // a goal here would be a promise nothing would ever resolve.
       plan.settled += 1;
-      plan.items.push({ messageId: id, changed: false, originMailbox: message.mailbox, destinationMailbox: destination.path });
+      plan.items.push({ messageId: id, changed: false, originMailbox: message.mailbox, destinationMailbox: destination.path, originUid: message.uid, originUidValidity: message.origin_uid_validity });
       continue;
     }
     const blocked = moveActionBlockedError(message);
     if (blocked) {
       plan.refused += 1;
-      plan.items.push({ messageId: id, changed: false, originMailbox: message.mailbox, destinationMailbox: destination.path });
+      plan.items.push({ messageId: id, changed: false, originMailbox: message.mailbox, destinationMailbox: destination.path, originUid: message.uid, originUidValidity: message.origin_uid_validity });
       reasons.set(id, blocked === MOVE_LOCATION_UNVERIFIED_ERROR ? "location_unverified" : "reconciling");
       continue;
     }
-    const item: TaskItemSpec = { messageId: id, changed: true, originMailbox: message.mailbox, destinationMailbox: destination.path };
+    const item: TaskItemSpec = { messageId: id, changed: true, originMailbox: message.mailbox, destinationMailbox: destination.path, originUid: message.uid, originUidValidity: message.origin_uid_validity };
     plan.items.push(item);
     plan.movable.push({ message, item });
   }
@@ -843,6 +868,10 @@ export function createMoveRunner(deps: MoveRunnerDeps): TaskRunner<MoveTaskPaylo
     // claimed, re-goaled, latched) is simply not in the list.
     const ids = pendingMoveItemIds(deps.db, task);
     if (ids.length === 0) return;
+    // The UID generation each id was accepted under. Passed down so the engine
+    // can refuse an id whose mailbox has been rebuilt since -- the message it was
+    // accepted for no longer exists, and the number may already belong to another.
+    const acceptedGenerations = pendingMoveUidValidity(deps.db, task);
     const connections = createAccountConnections(deps.db, deps.masterKey, deps.accessTokenProvider, signal);
     // The provider could not confirm these accounts' MOVE outcomes (no UIDPLUS, or
     // a response that never arrived). Collected as the chunks run and kicked once,
@@ -859,6 +888,7 @@ export function createMoveRunner(deps: MoveRunnerDeps): TaskRunner<MoveTaskPaylo
           deps.accessTokenProvider,
           deps.agentMailEvents,
           connections.cache,
+          acceptedGenerations,
         );
         for (const accountId of chunk.pendingAccounts) pendingAccounts.add(accountId);
         // Aborted while this chunk was on the wire: everything it reports is the
@@ -891,19 +921,7 @@ export function createMoveRunner(deps: MoveRunnerDeps): TaskRunner<MoveTaskPaylo
       // cannot be skipped by the throw -- the ids it reconciles are claimed, so
       // no retry reads them and nothing else will ever ask for this pass.
       for (const accountId of pendingAccounts) {
-        void syncAccount(
-          deps.db,
-          deps.masterKey,
-          accountId,
-          getSyncMessageLimit(deps.db),
-          deps.accessTokenProvider,
-          deps.agentMailEvents,
-          deps.syncAbortSignal,
-        )
-          .then(() => emitAccountSynced(deps.db, deps.serverEvents, accountId))
-          .catch((error) => {
-            serverLog.warn({ taskId: task.id, accountId }, "Background move reconciliation failed", error);
-          });
+        kickAccountSync(deps, accountId, "Background move reconciliation failed");
       }
       await connections.release();
     }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as mailModule from "../src/mail.js";
+import type * as syncModule from "../src/sync.js";
 
 /**
  * The `undo` runner: which messages it restores, which it refuses to touch, and
@@ -40,11 +41,21 @@ import type * as mailModule from "../src/mail.js";
  *      flight is counted `updated`, and the socket is still dropped.
  */
 
-const { imapClientForAccount } = vi.hoisted(() => ({ imapClientForAccount: vi.fn() }));
+const { imapClientForAccount, syncAccount } = vi.hoisted(() => ({
+  imapClientForAccount: vi.fn(),
+  // The pass a refused generation asks for. Recorded rather than real: a test
+  // cannot dial the provider, and the runner's contract is only that it asks.
+  syncAccount: vi.fn(async () => undefined),
+}));
 
 vi.mock("../src/mail.js", async (importOriginal) => {
   const actual = await importOriginal<typeof mailModule>();
   return { ...actual, imapClientForAccount };
+});
+
+vi.mock("../src/sync.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof syncModule>();
+  return { ...actual, syncAccount };
 });
 
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
@@ -208,7 +219,17 @@ const messageMove = vi.fn(async (uids: number | number[], destination: string) =
   // the row is the evidence this went through the real confirm statement.
   return { path: INBOX, destination, uidMap: new Map([[uid, uid + 5_000]]) };
 });
-const client = { usable: true, connect, getMailboxLock, messageMove, logout };
+const client = {
+  usable: true,
+  // Set by the generation test: what the selected mailbox reports as its
+  // `UIDVALIDITY`. Left `undefined` everywhere else, which the check reads as
+  // "this transport does not answer" rather than as a mismatch.
+  mailbox: undefined as { uidValidity?: bigint } | undefined,
+  connect,
+  getMailboxLock,
+  messageMove,
+  logout,
+};
 
 type Deltas = Array<{ updated?: number; failed?: number }>;
 
@@ -241,6 +262,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   moveCalls = [];
   lockFails = false;
+  client.mailbox = undefined;
   // Module-level state in sync-locks: a test that marks the account busy must not
   // leave the next one looking at a busy account.
   unmarkAccountMoving(ACCOUNT);
@@ -736,5 +758,48 @@ describe("task undo runner: the permanent-failure latch", () => {
     // The latch is bookkeeping, not a restore: the message is still sync's to
     // reconcile, and its intent is untouched.
     expect(messageState(db, "msg-2")).toMatchObject({ mailbox: INBOX, pending_move_destination: ARCHIVE, pending_move_state: "intent" });
+  });
+});
+
+describe("task undo runner: the UID generation frozen at acceptance", () => {
+  it("refuses an entry whose source mailbox was rebuilt since, before any MOVE, and asks for a sync", async () => {
+    db = openFixture();
+    // The restore's source is ARCHIVE, so that is the generation the acceptance
+    // freezes -- `undoItemSpecs` reads it beside the message row.
+    db.prepare("UPDATE folders SET uid_validity = '10' WHERE account_id = ? AND path = ?").run(ACCOUNT, ARCHIVE);
+    seedMessage(db, "msg-1", 1, ARCHIVE);
+    const parent = moveParent(db, [{ id: "msg-1", origin: INBOX }]);
+    const taskId = acceptUndo(db, parent);
+    // The provider rebuilt the folder: UID 1 is somebody else now.
+    client.mailbox = { uidValidity: 11n };
+
+    const deltas: Deltas = [];
+    await attempt(db, taskId, deltas);
+
+    // No MOVE was issued. The entry is latched (no retry can re-prove generation
+    // 10), reported as failed, and the message is still where it was.
+    expect(moveCalls).toEqual([]);
+    expect(deltas).toEqual([{ failed: 1 }]);
+    expect(itemState(db, taskId, "msg-1")).toMatchObject({ changed: 1, failed: 1 });
+    expect(messageState(db, "msg-1")).toMatchObject({ mailbox: ARCHIVE, pending_move_destination: null, pending_move_state: null });
+    expect(heldIn(db, ARCHIVE)).toBe(1);
+    expect(syncAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores when the live generation matches the frozen one", async () => {
+    db = openFixture();
+    db.prepare("UPDATE folders SET uid_validity = '10' WHERE account_id = ? AND path = ?").run(ACCOUNT, ARCHIVE);
+    seedMessage(db, "msg-1", 1, ARCHIVE);
+    const parent = moveParent(db, [{ id: "msg-1", origin: INBOX }]);
+    const taskId = acceptUndo(db, parent);
+    client.mailbox = { uidValidity: 10n };
+
+    const deltas: Deltas = [];
+    await attempt(db, taskId, deltas);
+
+    expect(moveCalls).toEqual([{ uid: 1, destination: INBOX }]);
+    expect(deltas).toEqual([{ updated: 1 }]);
+    expect(heldIn(db, INBOX)).toBe(1);
+    expect(syncAccount).not.toHaveBeenCalled();
   });
 });

@@ -40,6 +40,11 @@ import { safeLogout } from "./imap-logout.js";
 import { moveActionBlockedError } from "./message-storage.js";
 import { messageFlagNames, type MessageFlagsPatch } from "./message-flags.js";
 import { accountById } from "./account-store.js";
+import {
+  cachedUidValidity,
+  liveUidValidity,
+  uidGenerationAllowsWrite,
+} from "./mailbox-generation.js";
 
 type PendingRow = {
   id: string;
@@ -131,6 +136,15 @@ export type FlagsPushEntry = {
   uid: number;
   add: string[];
   remove: string[];
+  /**
+   * The generation `mailbox` had when the entry was accepted (`folders.uid_validity`
+   * at commit time). The payload is sealed, so this is the only evidence that
+   * survives until the push: re-reading a "current" value later cannot tell a
+   * queued UID from one the provider re-numbered underneath it. Absent on
+   * payloads written before this field existed, and on an entry whose message was
+   * re-positioned to another mailbox since -- both fall back to the cache.
+   */
+  uidValidity?: string | null;
 };
 
 /**
@@ -214,7 +228,7 @@ export async function pushFlagsRemote(
    * releases the account slot on timeout, and an abandoned push that kept the
    * socket alive would still be writing when the next task on that account runs. */
   signal?: AbortSignal,
-): Promise<{ pushed: number; dropped: number }> {
+): Promise<{ pushed: number; dropped: number; generationChanged: boolean }> {
   const account = accountById(deps.db, payload.accountId);
   if (!account) throw new Error("Account not found.");
   // Nothing has been sent yet, so this is the cheapest place to stop an attempt
@@ -223,6 +237,7 @@ export async function pushFlagsRemote(
   if (signal?.aborted) throw new Error(FLAGS_PUSH_ABORTED);
   const positions = currentPositions(deps.db, payload.entries.map((entry) => entry.id));
   let dropped = 0;
+  let generationChanged = false;
   const client = await imapClientForAccount(account, deps.masterKey, deps.accessTokenProvider);
   // Registered before `connect()`, because the timeout can fire during it. A
   // signal that flipped between the check above and here is caught by the
@@ -240,12 +255,38 @@ export async function pushFlagsRemote(
         continue;
       }
       const group = byMailbox.get(position.mailbox) ?? [];
-      group.push({ ...entry, mailbox: position.mailbox, uid: position.uid });
+      // The position is re-resolved, so the frozen generation only still
+      // describes this mailbox when the message did not move. A re-positioned
+      // entry falls back to the cache (see the lock check below).
+      group.push({
+        id: entry.id,
+        mailbox: position.mailbox,
+        uid: position.uid,
+        add: entry.add,
+        remove: entry.remove,
+        ...(entry.mailbox === position.mailbox && entry.uidValidity
+          ? { uidValidity: entry.uidValidity }
+          : {}),
+      });
       byMailbox.set(position.mailbox, group);
     }
     for (const [mailbox, entries] of byMailbox) {
       const lock = await client.getMailboxLock(mailbox);
       try {
+        // The generation check (see `mailbox-generation.ts`). The acceptance-time
+        // value wins; an entry without one (a legacy payload, or one whose message
+        // moved since) is judged against the generation the cache recorded for
+        // this mailbox, which is the epoch its UID was last written under. A
+        // mismatch drops the entry rather than sending it: the number now belongs
+        // to a different message, and the caller counts the drop as a failure so
+        // the local state is given back and a sync re-learns the folder.
+        const expectedGeneration = entries.find((entry) => entry.uidValidity)?.uidValidity
+          ?? cachedUidValidity(deps.db, payload.accountId, mailbox);
+        if (!uidGenerationAllowsWrite(expectedGeneration, liveUidValidity(client))) {
+          dropped += entries.length;
+          generationChanged = true;
+          continue;
+        }
         const byFlagGroup = new Map<string, { add: string[]; remove: string[]; uids: number[] }>();
         for (const entry of entries) {
           const key = `${entry.add.join(",")}\u0000${entry.remove.join(",")}`;
@@ -270,7 +311,7 @@ export async function pushFlagsRemote(
         lock.release();
       }
     }
-    return { pushed: payload.entries.length - dropped, dropped };
+    return { pushed: payload.entries.length - dropped, dropped, generationChanged };
   } finally {
     // Detached first: after this point the attempt has no more work to cancel,
     // and leaving the listener on a long-lived signal would close a client the

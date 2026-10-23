@@ -227,7 +227,9 @@ const DELETE_MIRROR_ROW_SQL = `
       AND COALESCE(pending_move_destination, '') = ''
       AND pending_move_state IS NULL
   `;
-const ROWS_BY_IDS_SELECT = "SELECT id, account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state";
+const ROWS_BY_IDS_SELECT = `SELECT id, account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state,
+    (SELECT f.uid_validity FROM folders AS f
+      WHERE f.account_id = messages.account_id AND f.path = messages.mailbox) AS origin_uid_validity`;
 /**
  * `resolveMoveDestination`'s folder lookup. The `?` count is the *only* thing
  * that varies — the special-use names are always bound — so one statement per
