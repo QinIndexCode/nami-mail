@@ -1,15 +1,21 @@
 import { createElement } from "react";
 import { FileAudio, FileImage, FileText, FileVideo, type LucideIcon } from "lucide-react";
+import { codeTextExtensions, readableTextExtensions } from "@nami/agent-contracts";
 import type { ModelInputModalities } from "./agentTypes";
-import { codeTextExtensions } from "./attachmentPresentation";
 
+// Capability gates, deliberately *not* the shared classification table: a model
+// that cannot decode HEIC/TIFF must never be handed one just because the
+// contract classifies it as an image. These lists stay narrower than the
+// catalog's image/media rows, and fileProcessor.test.ts pins that subset
+// invariant so a new catalog entry cannot silently widen what we upload.
 export const imageExtensions = new Set(["png", "jpg", "jpeg", "webp", "gif", "bmp", "svg"]);
 export const videoExtensions = new Set(["mp4", "webm", "mov", "avi", "mkv"]);
 export const audioExtensions = new Set(["mp3", "wav", "ogg", "m4a", "aac", "flac"]);
 
-/** Readable text formats on top of the shared code/format extensions. */
-const readableFormatExtensions = new Set(["txt", "md", "markdown", "csv", "tsv", "log", "rtf", "ini", "cfg", "conf"]);
-
+// Readable text formats come from the contract so a format can never be
+// readable here but unknown to the classification table. The only width change
+// against the old local list is `.mdx`.
+const readableFormatExtensions: ReadonlySet<string> = readableTextExtensions;
 const textExtensions = new Set([...codeTextExtensions, ...readableFormatExtensions]);
 
 const maxFileBytes = 10 * 1024 * 1024; // 10 MB

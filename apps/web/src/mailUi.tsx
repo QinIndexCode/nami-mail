@@ -1,6 +1,7 @@
 import { type ReactNode, type RefObject } from "react";
 import { Archive, FilePenLine, Flag, Folder, Inbox, Layers, SendHorizontal, ShieldAlert, Star, Trash2 } from "lucide-react";
 import { FileIcon, defaultStyles, type FileIconProps } from "react-file-icon";
+import { mediaKind } from "./attachments/catalog";
 import type { AttachmentKind } from "./attachmentPresentation";
 import type { OutboundAttachment } from "./types";
 
@@ -54,8 +55,6 @@ export function IconButton({ label, children, onClick, className = "", disabled 
   );
 }
 
-const videoExtensions = new Set(["3gp", "avi", "flv", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "ogv", "webm", "wmv"]);
-
 /** Fallbacks for extensions the icon set does not know, so a `.tsx` or an
  * extensionless file still gets a meaningful page icon instead of a blank one. */
 const fallbackFileStyles: Record<AttachmentKind, FileIconProps> = {
@@ -72,7 +71,9 @@ const fallbackFileStyles: Record<AttachmentKind, FileIconProps> = {
 
 export function AttachmentFileIcon({ kind, filename }: { kind: AttachmentKind; filename: string }) {
   const extension = filename.trim().toLowerCase().match(/\.([a-z0-9]{1,8})$/)?.[1] ?? "";
-  const fallback = kind === "media" && videoExtensions.has(extension)
+  // Which badge fits is decided by the shared catalog, not by a private list
+  // here: a second copy is how a video extension ends up rendering as audio.
+  const fallback = kind === "media" && mediaKind(filename) === "video"
     ? { ...fallbackFileStyles.media, type: "video" as const }
     : fallbackFileStyles[kind];
   const style = defaultStyles[extension] ?? fallback;

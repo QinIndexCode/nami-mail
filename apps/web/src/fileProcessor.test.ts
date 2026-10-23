@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { classifyAttachmentKind, extensionKinds, mediaKind } from "@nami/agent-contracts";
 import {
   attachmentIcon,
+  audioExtensions,
   buildAcceptFilter,
   fileToDataUrl,
   formatMessageAttachments,
+  imageExtensions,
   isSupportedFile,
   processFile,
+  videoExtensions,
 } from "./fileProcessor";
 import { FileAudio, FileImage, FileText, FileVideo } from "lucide-react";
 
@@ -102,6 +106,50 @@ describe("fileProcessor multimodal support", () => {
       expect(isSupportedFile(video, { image: false, video: true, audio: false, pdf: false })).toBe(true);
       expect(isSupportedFile(audio, { image: false, video: false, audio: true, pdf: false })).toBe(true);
       expect(isSupportedFile(pdf, { image: false, video: false, audio: false, pdf: true })).toBe(true);
+    });
+  });
+
+  describe("capability gates vs the classification table", () => {
+    it("keeps image/video/audio gates a subset of the contract kinds", () => {
+      for (const extension of imageExtensions) {
+        expect(classifyAttachmentKind(`file.${extension}`, ""), extension).toBe("image");
+      }
+      for (const extension of videoExtensions) {
+        expect(classifyAttachmentKind(`file.${extension}`, ""), extension).toBe("media");
+        expect(mediaKind(`file.${extension}`), extension).toBe("video");
+      }
+      for (const extension of audioExtensions) {
+        expect(classifyAttachmentKind(`file.${extension}`, ""), extension).toBe("media");
+        expect(mediaKind(`file.${extension}`), extension).toBe("audio");
+      }
+    });
+
+    it("stays narrower than the catalog so models never receive undecodable formats", () => {
+      // The catalog classifies these as images, but no model wired up here can
+      // decode them. Merging the two lists would silently widen what gets
+      // base64-uploaded to a model that cannot read it.
+      for (const extension of ["avif", "heic", "heif", "ico", "tif", "tiff"]) {
+        expect(extensionKinds[extension], extension).toBe("image");
+        expect(imageExtensions.has(extension), extension).toBe(false);
+      }
+      const catalogImages = Object.keys(extensionKinds).filter((extension) => extensionKinds[extension] === "image");
+      const catalogMedia = Object.keys(extensionKinds).filter((extension) => extensionKinds[extension] === "media");
+      expect(catalogImages.length).toBeGreaterThan(imageExtensions.size);
+      expect(catalogMedia.length).toBeGreaterThan(videoExtensions.size + audioExtensions.size);
+    });
+
+    it("reads .mdx as text now that it is a readable text extension", async () => {
+      const file = new File(["# heading"], "notes.mdx", { type: "text/markdown" });
+      expect(isSupportedFile(file)).toBe(true);
+      const processed = await processFile(file);
+      expect(processed.text).toBe("# heading");
+      expect(processed.type).toBe("mdx");
+    });
+
+    it("keeps the previously readable formats readable", () => {
+      for (const extension of ["txt", "md", "markdown", "csv", "tsv", "log", "rtf", "ini", "cfg", "conf"]) {
+        expect(isSupportedFile(new File(["x"], `file.${extension}`, { type: "text/plain" })), extension).toBe(true);
+      }
     });
   });
 
