@@ -16,6 +16,13 @@
  * the inline splash `<style>` block, and this header is its only support in a
  * packaged build. `frame-ancestors 'none'` remains the directive that protects
  * this app from being framed.
+ *
+ * S5 narrows `img-src` to `'self' data: blob:`. Every remote image a message
+ * body or an avatar needs now goes through a same-origin route: message images
+ * through `GET /api/images/proxy` and sender photos through
+ * `GET /api/avatars/gravatar/:hash`. The `https:`/`http:` sources are therefore
+ * dead exceptions, and leaving them would let sanitized mail HTML fetch from
+ * any host the moment an `<img>` slipped past the scrubber.
  */
 export const contentSecurityPolicyDirectives = [
   "default-src 'self'",
@@ -23,7 +30,7 @@ export const contentSecurityPolicyDirectives = [
   "object-src 'none'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https: http:",
+  "img-src 'self' data: blob:",
   "font-src 'self' data:",
   "connect-src 'self'",
   "media-src 'self' blob:",

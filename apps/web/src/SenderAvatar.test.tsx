@@ -74,6 +74,7 @@ describe("SenderAvatar", () => {
     const html = renderTree(<SenderAvatar name="Bob" address="bob@example.com" tone={1} gravatarEnabled={true} bimiEnabled={false} />);
     expect(html).toContain("data:image/jpeg;base64,bbb");
     expect(html).not.toContain("gravatar.com");
+    expect(html).not.toContain("/api/avatars/gravatar/");
   });
 
   it("falls back to initials without a local avatar", () => {
@@ -82,13 +83,17 @@ describe("SenderAvatar", () => {
     expect(html).toContain(">CA<");
   });
 
-  it("keys the Gravatar lookup with the RFC 1321 md5 of the lowercased email", () => {
+  it("keys the Gravatar lookup with the RFC 1321 md5 of the lowercased email, same-origin", () => {
     // Both digests were cross-checked against node:crypto's md5 of the
     // lowercased address; they pin the little-endian digest serialization.
     const apple = renderTree(<SenderAvatar name="Apple News" address="News@InsideApple.Apple.com" tone={0} gravatarEnabled={true} bimiEnabled={false} />);
-    expect(apple).toContain("gravatar.com/avatar/e1a703880d8baa3819ff17f779914ad6");
+    expect(apple).toContain("/api/avatars/gravatar/e1a703880d8baa3819ff17f779914ad6");
     const nyt = renderTree(<SenderAvatar name="NYT" address="nytdirect@nytimes.com" tone={1} gravatarEnabled={true} bimiEnabled={false} />);
-    expect(nyt).toContain("gravatar.com/avatar/cf775fbf8e1b63a401d480d2cbd482be");
+    expect(nyt).toContain("/api/avatars/gravatar/cf775fbf8e1b63a401d480d2cbd482be");
+    // The renderer must never point an <img> at Gravatar itself: the server
+    // proxy builds the upstream URL, and `img-src` would block the direct one.
+    expect(apple).not.toContain("gravatar.com");
+    expect(nyt).not.toContain("gravatar.com");
   });
 
   it("shows the built-in official brand avatar before BIMI and Gravatar", () => {

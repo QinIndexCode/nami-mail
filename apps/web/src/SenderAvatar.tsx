@@ -118,7 +118,9 @@ type SenderAvatarProps = {
  * The built-in brand glyph has no toggle, by design: it resolves from a bundled
  * table and makes no network request, so it is always-on exactly like the local
  * custom avatar. The two network-backed sources (BIMI, Gravatar) are the ones
- * that need an opt-in, because those requests leave the machine.
+ * that need an opt-in, because those requests leave the machine. Gravatar is
+ * fetched through this app's own proxy (`/api/avatars/gravatar/<md5>`), so the
+ * renderer itself never contacts that host.
  *
  * Every branch renders the mark as decoration: the sender's identity is always
  * in adjacent text, so the tiles are hidden from assistive tech rather than
@@ -171,8 +173,13 @@ export function SenderAvatar({
   }
   return (
     <span className={className}>
+      {/*
+        Same-origin proxy, not gravatar.com: the renderer sends only the md5 it
+        already computed, and the server builds the upstream URL itself. Direct
+        requests would also be blocked by `img-src 'self' data: blob:`.
+      */}
       <img
-        src={`https://www.gravatar.com/avatar/${md5(email)}?d=404&s=96`}
+        src={`/api/avatars/gravatar/${md5(email)}`}
         alt=""
         loading="lazy"
         referrerPolicy="no-referrer"

@@ -39,21 +39,54 @@ const directivesAtS2 = [
   "frame-ancestors 'none'",
 ] as const;
 
+/** S5 narrows `img-src`; nothing else moves. */
+const directivesAtS5 = [
+  "default-src 'self'",
+  "base-uri 'none'",
+  "object-src 'none'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "media-src 'self' blob:",
+  "frame-src 'none'",
+  "worker-src 'self'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+] as const;
+
 describe("content security policy", () => {
-  it("changes only frame-src, media-src and worker-src relative to S0", () => {
+  it("narrows img-src at S5 and leaves every other directive as S2 left it", () => {
     expect(contentSecurityPolicyDirectives).toHaveLength(13);
-    expect(contentSecurityPolicyDirectives).toEqual(directivesAtS2);
+    expect(contentSecurityPolicyDirectives).toEqual(directivesAtS5);
     for (const [index, directive] of directivesAtS2.entries()) {
+      if (directive.startsWith("img-src ")) {
+        expect(contentSecurityPolicyDirectives[index]).toBe("img-src 'self' data: blob:");
+        continue;
+      }
       expect(contentSecurityPolicyDirectives[index]).toBe(directive);
     }
-    const added = directivesAtS2.filter((directive) => !(directivesAtS0 as readonly string[]).includes(directive));
-    const removed = directivesAtS0.filter((directive) => !(directivesAtS2 as readonly string[]).includes(directive));
-    expect(added).toEqual(["media-src 'self' blob:", "frame-src 'none'", "worker-src 'self'"]);
-    expect(removed).toEqual(["media-src 'self'", "frame-src blob:"]);
+  });
+
+  it("only frame-src, media-src, worker-src and img-src differ from the S0 baseline", () => {
+    const added = directivesAtS5.filter((directive) => !(directivesAtS0 as readonly string[]).includes(directive));
+    const removed = directivesAtS0.filter((directive) => !(directivesAtS5 as readonly string[]).includes(directive));
+    expect(added).toEqual(["img-src 'self' data: blob:", "media-src 'self' blob:", "frame-src 'none'", "worker-src 'self'"]);
+    expect(removed).toEqual(["img-src 'self' data: blob: https: http:", "media-src 'self'", "frame-src blob:"]);
   });
 
   it("joins the directives with '; ' in order", () => {
-    expect(contentSecurityPolicy).toBe(directivesAtS2.join("; "));
+    expect(contentSecurityPolicy).toBe(directivesAtS5.join("; "));
+  });
+
+  it("no longer lets the renderer fetch images from arbitrary hosts", () => {
+    // Both remote image paths (message bodies and sender avatars) are
+    // same-origin routes now; keeping https:/http: would leave a hole for any
+    // <img> that escaped the sanitizer.
+    expect(contentSecurityPolicy).toContain("img-src 'self' data: blob:");
+    expect(contentSecurityPolicy).not.toContain("https:");
+    expect(contentSecurityPolicy).not.toContain("http:");
   });
 
   it("keeps the inline splash style working and deletes the iframe exception", () => {

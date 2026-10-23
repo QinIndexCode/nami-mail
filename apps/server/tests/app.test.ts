@@ -148,6 +148,26 @@ describe("local API", () => {
     expect(policy).toContain("frame-ancestors 'none'");
   });
 
+  it("lets only the Gravatar proxy choose its own cache policy", async () => {
+    // The blanket `no-store` on `/api/` would make the proxy re-fetch the same
+    // immutable avatar for every message, so that one prefix is exempt.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([1, 2]), { status: 200, headers: { "content-type": "image/png" } })));
+    try {
+      const avatar = await app.inject({ method: "GET", url: `/api/avatars/gravatar/${"b".repeat(32)}` });
+      expect(avatar.statusCode).toBe(200);
+      expect(avatar.headers["cache-control"]).toBe("public, max-age=604800, immutable");
+      expect(avatar.headers["pragma"]).toBeUndefined();
+
+      // Everything else keeps the safe default, including the image proxy
+      // (asserted in image-proxy-route.test.ts).
+      const settings = await app.inject({ method: "GET", url: "/api/settings" });
+      expect(settings.headers["cache-control"]).toBe("no-store");
+      expect(settings.headers["pragma"]).toBe("no-cache");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("rejects confirmation decisions without the auto-reply engine", async () => {
     const unavailable = await app.inject({
       method: "POST",

@@ -469,7 +469,13 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   // sanitized mail HTML from loading code or network resources outside it.
   app.addHook("onSend", async (request, reply, payload) => {
     reply.header("Content-Security-Policy", contentSecurityPolicy);
-    if (request.url.startsWith("/api/")) {
+    // The Gravatar proxy is the one route allowed to choose its own caching: a
+    // response keyed by an address hash never changes, and `no-store` here
+    // would re-fetch the same 96px image for every message that mentions the
+    // sender. The route sets `public, max-age=…` on both the hit and the
+    // negative answer, and `no-store` on every refusal.
+    const isGravatarProxy = request.url.startsWith("/api/avatars/gravatar/");
+    if (request.url.startsWith("/api/") && !isGravatarProxy) {
       // Note that this runs after every route handler, so it also overrides the
       // `Cache-Control` that GET /api/images/proxy sets for its cached images —
       // that header is currently unreachable, and re-reading a message re-fetches
