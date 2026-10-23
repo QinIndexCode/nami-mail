@@ -23,7 +23,7 @@ export default function ImageSurface({ document, onDownload }: SurfaceProps) {
         <p>{t("mail.attachment.previewCorrupt")}</p>
         <button type="button" className="attachment-preview-download" onClick={onDownload}>
           <Download size={14} aria-hidden="true" />
-          {t("mail.attachment.previewDownloadOnly")}
+          {t("mail.attachment.download", { filename: document.filename })}
         </button>
       </div>
     );

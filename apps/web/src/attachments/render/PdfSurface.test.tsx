@@ -75,6 +75,12 @@ describe("PdfSurface", () => {
     );
     await flush();
     expect(container.textContent).toContain(zh("mail.attachment.previewPageOf", { page: 1, total: 3 }));
+    // The toolbar's action is labelled with the filename; the download-only
+    // sentence belongs to the card that has no preview, not to a working one.
+    expect(container.querySelector(".attachment-preview-download")?.textContent).toContain(
+      zh("mail.attachment.download", { filename: "paper.pdf" }),
+    );
+    expect(container.textContent).not.toContain(zh("mail.attachment.previewDownloadOnly"));
     const canvas = container.querySelector("canvas");
     expect(canvas?.getAttribute("role")).toBe("img");
     expect(canvas?.getAttribute("aria-label")).toContain("paper.pdf");

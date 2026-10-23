@@ -149,7 +149,7 @@ export default function PdfSurface({ document, onDownload }: SurfaceProps) {
         </button>
         <button type="button" className="attachment-preview-download" onClick={onDownload}>
           <Download size={14} aria-hidden="true" />
-          {t("mail.attachment.previewDownloadOnly")}
+          {t("mail.attachment.download", { filename: sanitizeDisplayName(document.filename) })}
         </button>
       </div>
       {presentation ? (

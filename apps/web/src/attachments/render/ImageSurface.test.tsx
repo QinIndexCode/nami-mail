@@ -80,6 +80,8 @@ describe("ImageSurface", () => {
     });
     await flush();
     const button = container.querySelector("button");
+    expect(button?.textContent).toContain(zh("mail.attachment.download", { filename: "notes.txt" }));
+    expect(container.textContent).not.toContain(zh("mail.attachment.previewDownloadOnly"));
     await act(async () => button?.click());
     expect(handled).toHaveBeenCalledTimes(1);
     await unmount();
