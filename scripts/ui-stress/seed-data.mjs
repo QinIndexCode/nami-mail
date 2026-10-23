@@ -36,6 +36,7 @@ const masterKeyPath = path.join(dataDir, "master.key");
 
 const { openDatabase } = await import(pathToFileURL(path.join(serverDist, "db.js")).href);
 const { loadOrCreateMasterKey } = await import(pathToFileURL(path.join(serverDist, "crypto.js")).href);
+const { ensureDatabaseEncrypted } = await import(pathToFileURL(path.join(serverDist, "database-encryption.js")).href);
 const { encryptMessagePayload } = await import(pathToFileURL(path.join(serverDist, "message-storage.js")).href);
 const {
   encryptAccountPassword,
@@ -107,8 +108,15 @@ const accountId = "stress-account";
 const accountEmail = "stress@example.test";
 
 const seedStart = performance.now();
-const db = openDatabase(databasePath);
+// The key has to exist before the file is opened. The real server seals the
+// database on its first boot (runtime.ts), so a second seed run would meet a
+// store `openDatabase` cannot read without it and fail with SQLITE_NOTADB.
+// `ensureDatabaseEncrypted` is the same idempotent step the runtime takes: it
+// adopts an already-sealed file, converts a legacy plaintext one, and does
+// nothing when the file is absent.
 const masterKey = loadOrCreateMasterKey(masterKeyPath);
+ensureDatabaseEncrypted(databasePath, masterKey);
+const db = openDatabase(databasePath, { encryptionKey: masterKey });
 
 const existing = db.prepare("SELECT COUNT(*) AS count FROM messages").get();
 if (existing.count > 0) {

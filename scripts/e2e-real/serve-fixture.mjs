@@ -49,11 +49,16 @@ const TRACKING_HTML = '<p>发票与报销单跟进</p><img src="https://tracker.
 async function addTrackingPixelMessage(dir) {
   const { openDatabase } = await import(pathToFileURL(path.join(projectRoot, "apps", "server", "dist", "db.js")).href);
   const { loadOrCreateMasterKey } = await import(pathToFileURL(path.join(projectRoot, "apps", "server", "dist", "crypto.js")).href);
+  const { ensureDatabaseEncrypted } = await import(pathToFileURL(path.join(projectRoot, "apps", "server", "dist", "database-encryption.js")).href);
   const { encryptMessagePayload } = await import(pathToFileURL(path.join(projectRoot, "apps", "server", "dist", "message-storage.js")).href);
 
   const masterKeyPath = path.join(dir, "master.key");
+  const databasePath = path.join(dir, "nami-mail.db");
+  // Same order as the runtime: the seed seals the file, so this second open
+  // needs the key before it can read a single page.
   const masterKey = loadOrCreateMasterKey(masterKeyPath);
-  const db = openDatabase(path.join(dir, "nami-mail.db"));
+  ensureDatabaseEncrypted(databasePath, masterKey);
+  const db = openDatabase(databasePath, { encryptionKey: masterKey });
   try {
     const existing = db.prepare("SELECT COUNT(*) AS count FROM messages WHERE id = ?").get("e2e-tracking-pixel");
     if (existing.count > 0) return;
