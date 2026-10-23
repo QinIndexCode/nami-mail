@@ -123,6 +123,9 @@ export default function PdfSurface({ document, onDownload }: SurfaceProps) {
   if (surface.surface !== "pdf") return null;
 
   const presentation = failure ? failurePresentation(failure) : null;
+  // Shortened by CSS at the drawer's narrow end (min 320px) instead of wrapping
+  // onto a second line; the full name stays in the title and the file heading.
+  const downloadLabel = t("mail.attachment.download", { filename: sanitizeDisplayName(document.filename) });
   return (
     <div className="attachment-preview-pdf">
       <div className="attachment-preview-pdf-toolbar">
@@ -147,9 +150,9 @@ export default function PdfSurface({ document, onDownload }: SurfaceProps) {
         >
           <ChevronRight size={14} aria-hidden="true" />
         </button>
-        <button type="button" className="attachment-preview-download" onClick={onDownload}>
+        <button type="button" className="attachment-preview-download" title={downloadLabel} onClick={onDownload}>
           <Download size={14} aria-hidden="true" />
-          {t("mail.attachment.download", { filename: sanitizeDisplayName(document.filename) })}
+          <span className="attachment-preview-download-label">{downloadLabel}</span>
         </button>
       </div>
       {presentation ? (

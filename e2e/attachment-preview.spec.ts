@@ -75,6 +75,47 @@ test.describe("attachment preview", () => {
     await expect.poll(() => paintedPixels(page), { timeout: 20_000 }).toBeGreaterThan(1_000);
   });
 
+  test("keeps the PDF toolbar on one line at the drawer's narrowest width", async ({ page }) => {
+    // The drawer persists its width, so seeding the minimum is the same path a
+    // user takes after dragging the handle to the left edge.
+    await page.addInitScript(() => {
+      try {
+        window.localStorage.setItem("nami.attachment-preview-width", "320");
+      } catch {
+        // Storage can be unavailable; the drawer would then open at its default.
+      }
+    });
+    await bootDemo(page);
+    await openPreview(page, "Design review", "july-review-notes.pdf");
+
+    const drawer = page.locator(".attachment-preview-drawer");
+    await expect(drawer.locator(".attachment-preview-pdf-page-label")).toHaveText("第 1 / 2 页");
+    const metrics = await drawer.evaluate((node) => {
+      const toolbar = node.querySelector(".attachment-preview-pdf-toolbar") as HTMLElement;
+      const label = node.querySelector(".attachment-preview-pdf-page-label") as HTMLElement;
+      const name = node.querySelector(".attachment-preview-download-label") as HTMLElement;
+      const button = node.querySelector(".attachment-preview-download") as HTMLElement;
+      return {
+        drawerWidth: node.getBoundingClientRect().width,
+        toolbarOverflow: toolbar.scrollWidth - toolbar.clientWidth,
+        toolbarHeight: toolbar.getBoundingClientRect().height,
+        labelHeight: label.getBoundingClientRect().height,
+        buttonHeight: button.getBoundingClientRect().height,
+        nameClipped: name.scrollWidth > name.clientWidth,
+      };
+    });
+
+    expect(Math.round(metrics.drawerWidth)).toBe(320);
+    // One row: wrapping the page label or the download label would push these
+    // past 40px, and the toolbar would scroll sideways.
+    expect(metrics.toolbarOverflow).toBe(0);
+    expect(metrics.toolbarHeight).toBeLessThanOrEqual(40);
+    expect(metrics.buttonHeight).toBeLessThanOrEqual(40);
+    expect(metrics.labelHeight).toBeLessThan(24);
+    // The filename gives way to an ellipsis instead of forcing the row to wrap.
+    expect(metrics.nameClipped).toBe(true);
+  });
+
   test("reports the 201-entry archive as too many entries, without a blank pane", async ({ page }) => {
     await bootDemo(page);
     await openPreview(page, "照片整理好了", "weekend-photos.zip");
