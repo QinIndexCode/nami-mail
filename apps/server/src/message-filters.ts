@@ -61,6 +61,67 @@ export const archivedMessageFilter = `(
   )
 )`;
 
+/**
+ * Preference order for the copy the Attachments view shows for one message.
+ *
+ * Mirrors sync.ts's folder priorities: the same physical message exists as one
+ * row per folder it carries a label in (Gmail stores INBOX, [Gmail]/All Mail,
+ * [Gmail]/Important and Trash copies separately), and the list should open the
+ * copy the user would naturally look at. Inbox first, then the outgoing and
+ * flagged folders, then All Mail, then the places a message is only kept as a
+ * leftover. Unknown folders sort last so a provider-specific label never
+ * outranks a real one.
+ */
+const ATTACHMENT_VIEW_RANK_SQL = `CASE
+    WHEN UPPER(m2.effective_mailbox) = 'INBOX' OR f2.special_use = '\\Inbox' THEN 0
+    WHEN f2.special_use = '\\Sent' THEN 1
+    WHEN f2.special_use = '\\Drafts' THEN 2
+    WHEN f2.special_use = '\\Flagged' THEN 3
+    WHEN f2.special_use = '\\Important' THEN 4
+    WHEN f2.special_use = '\\All' THEN 5
+    WHEN f2.special_use = '\\Archive' THEN 6
+    WHEN f2.special_use IN ('\\Junk', '\\Spam') THEN 7
+    WHEN f2.special_use = '\\Trash' THEN 8
+    ELSE 20
+  END`;
+
+/**
+ * One row per physical message for the Attachments view.
+ *
+ * `remote_id_lookup` is the provider's stable message identity (Gmail's
+ * X-GM-MSGID, keyed per account) and is identical for every folder copy, which
+ * is what makes it the right dedupe key: `remote_id_lookup IS NULL` means the
+ * provider exposes no such identity, and those rows are left alone rather than
+ * grouped. Copies are otherwise invisible to each other — each has its own UID
+ * and folder — so the view used to list the same mail once per label and the
+ * sidebar count counted it just as many times.
+ *
+ * The representative is the best-ranked visible copy of the group. The sibling
+ * scan repeats `has_attachments = 1` so a copy that failed to parse its
+ * attachments can never be chosen and then filtered out by the view itself,
+ * which would drop the whole message. The term is written as a correlated
+ * id-equality rather than a window function because it composes with the
+ * keyset cursor, the FTS join and `countMessageRows` untouched — the list, its
+ * total, and a batch job's "select all" stay one predicate.
+ *
+ * Served by `idx_messages_remote_lookup`; without it, the inner scan would be a
+ * full-table scan per candidate row.
+ */
+export const attachmentViewDedupeFilter = `(
+  m.remote_id_lookup IS NULL
+  OR m.id = (
+    SELECT m2.id
+    FROM messages m2
+    LEFT JOIN folders f2
+      ON f2.account_id = m2.account_id AND f2.path = m2.effective_mailbox
+    WHERE m2.account_id = m.account_id
+      AND m2.remote_id_lookup = m.remote_id_lookup
+      AND m2.has_attachments = 1
+    ORDER BY ${ATTACHMENT_VIEW_RANK_SQL}, m2.sort_key DESC, m2.id DESC
+    LIMIT 1
+  )
+)`;
+
 export type MessageListFilterQuery = {
   accountId?: string;
   folder?: string;
@@ -153,6 +214,7 @@ export function buildMessageListSql(query: MessageListFilterQuery, options: Mess
     params.push(new Date().toISOString());
   } else if (!globalSearch && query.hasAttachments) {
     filters.push("m.has_attachments = 1");
+    filters.push(attachmentViewDedupeFilter);
   } else if (!globalSearch) {
     filters.push(inboxMessageFilter);
     // Snoozed messages are hidden from the unified inbox until due.

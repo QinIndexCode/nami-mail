@@ -219,6 +219,12 @@ export function migrateDatabase(db: DatabaseHandle, options: MigrationOptions): 
   // matter how large the mailbox grows.
   runDdl("CREATE INDEX IF NOT EXISTS idx_messages_has_attachments ON messages(has_attachments) WHERE has_attachments = 1");
   runDdl("CREATE INDEX IF NOT EXISTS idx_messages_account_mailbox_remote_id ON messages(account_id, mailbox, remote_id_lookup)");
+  // The cross-folder Attachments view dedupes a message's per-folder copies by
+  // the provider's stable identity (message-filters.ts attachmentViewDedupeFilter).
+  // The index above cannot serve it: `mailbox` sits between the two columns that
+  // predicate, so only the account prefix would be usable and every candidate
+  // row would re-scan the account.
+  runDdl("CREATE INDEX IF NOT EXISTS idx_messages_remote_lookup ON messages(account_id, remote_id_lookup)");
   // Only a handful of rows are ever a pending Sent placeholder, so the partial
   // index stays tiny while making the settle-time retraction (and the claim's
   // "is this row already spoken for" check) an index lookup instead of a scan.

@@ -30,6 +30,7 @@
  */
 import type { DatabaseHandle } from "./db.js";
 import { FLAGGED_PREDICATE_SQL, UNSEEN_PREDICATE_SQL } from "./message-flag-indexes.js";
+import { attachmentViewDedupeFilter } from "./message-filters.js";
 
 export type FolderCount = { path: string; total: number; unseen: number };
 
@@ -140,7 +141,9 @@ export function mailboxBadges(db: DatabaseHandle, now: number, accountId?: strin
     snoozed: accountId
       ? (db.prepare("SELECT COUNT(*) AS count FROM messages m WHERE m.snoozed_until IS NOT NULL AND m.snoozed_until > ? AND m.account_id = ?").get(nowIso, accountId) as { count: number }).count
       : (db.prepare("SELECT COUNT(*) AS count FROM messages m WHERE m.snoozed_until IS NOT NULL AND m.snoozed_until > ?").get(nowIso) as { count: number }).count,
-    attachments: count(`SELECT COUNT(*) AS count FROM messages m WHERE m.has_attachments = 1${accountId ? " AND m.account_id = ?" : ""}`),
+    // Same dedupe as the view it badges: the count is the number of messages
+    // the Attachments list renders, not the number of per-folder copies.
+    attachments: count(`SELECT COUNT(*) AS count FROM messages m WHERE m.has_attachments = 1 AND ${attachmentViewDedupeFilter}${accountId ? " AND m.account_id = ?" : ""}`),
     accounts: accountId
       ? (db.prepare("SELECT COUNT(*) AS count FROM accounts WHERE id = ?").get(accountId) as { count: number }).count
       : (db.prepare("SELECT COUNT(*) AS count FROM accounts").get() as { count: number }).count,

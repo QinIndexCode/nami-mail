@@ -174,7 +174,17 @@ const recountBadges = (db: DatabaseHandle, accountId?: string) => {
     unread,
     starred: countOf(db, `SELECT COUNT(*) AS count FROM messages WHERE flags_json LIKE '%\\Flagged%'${scope}`, ...params),
     snoozed: countOf(db, `SELECT COUNT(*) AS count FROM messages WHERE snoozed_until IS NOT NULL AND snoozed_until > ?${scope}`, NOW_ISO, ...params),
-    attachments: countOf(db, `SELECT COUNT(*) AS count FROM messages WHERE has_attachments = 1${scope}`, ...params),
+    // The badge counts messages, not per-folder copies: one Gmail mail carries
+    // the same `remote_id_lookup` on every folder row, so the recount groups by
+    // that identity and lets rows without one stand alone.
+    attachments: countOf(
+      db,
+      `SELECT COUNT(*) AS count FROM (
+        SELECT 1 FROM messages WHERE has_attachments = 1${scope}
+        GROUP BY account_id, COALESCE(remote_id_lookup, id)
+      )`,
+      ...params,
+    ),
   };
 };
 
@@ -298,6 +308,29 @@ describe("derived sidebar counts", () => {
       expect(countOf(db, "SELECT COUNT(*) AS count FROM messages WHERE snoozed_until IS NOT NULL")).toBeGreaterThan(0);
       expect(countOf(db, "SELECT COUNT(*) AS count FROM messages WHERE flags_json LIKE '%\\Seen%'")).toBeGreaterThan(0);
       expect(countOf(db, "SELECT COUNT(*) AS count FROM messages WHERE flags_json NOT LIKE '%\\Seen%'")).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("counts one attachment badge per message, not one per folder copy", () => {
+    const db = openDatabase(":memory:");
+    try {
+      seed(db, 1, 0, mulberry32(3));
+      const insertCopy = db.prepare(`
+        INSERT INTO messages (
+          id, account_id, mailbox, uid, remote_id_lookup, flags_json, subject, from_name,
+          from_address, to_json, sent_at, snippet, text_body, html_body, has_attachments, size, created_at
+        ) VALUES (?, ?, ?, ?, ?, '[]', 'Bounce', 'Mailer', 'mailer@example.com', '[]', ?, '', '', '', 1, 0, ?)
+      `);
+      insertCopy.run("copy-inbox", accountIdOf(0), "INBOX", 1, "lookup-shared", NOW_ISO, NOW_ISO);
+      insertCopy.run("copy-archive", accountIdOf(0), "Archive", 2, "lookup-shared", NOW_ISO, NOW_ISO);
+      insertCopy.run("copy-projects", accountIdOf(0), "Projects", 3, "lookup-shared", NOW_ISO, NOW_ISO);
+      // No provider identity, so nothing says it is a copy of another row.
+      insertCopy.run("solo", accountIdOf(0), "Projects", 4, null, NOW_ISO, NOW_ISO);
+
+      expect(mailboxBadges(db, NOW, accountIdOf(0))).toMatchObject({ attachments: 2 });
+      expect(mailboxBadges(db, NOW)).toMatchObject({ attachments: 2 });
     } finally {
       db.close();
     }

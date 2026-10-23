@@ -23,6 +23,7 @@ Verified against the working tree of 2026-10-22 (commit `cd47467`). Re-check the
 | 11 | Error logs: bounded files, no user-facing error history | Diagnostics / privacy |
 | 12 | Items from the 2026-10-22 audit that remain unfixed | Audit / open items |
 | 13 | Capability boundaries of in-app attachment preview | Attachments / platform |
+| 14 | The Attachments view and the inbox attachment filter count different sets | Behaviour / view scope |
 
 ## 1. Outlook / Hotmail sign-in is limited (issue #120)
 
@@ -152,6 +153,14 @@ Verified against the working tree of 2026-10-22 (commit `cd47467`). Re-check the
 **Impact.** Every boundary above surfaces as a clear "downloadable / playable / readable" outcome instead of a silent blank: unopenable types get the download card, undrawable pages get a page-level error, and over-limit input is refused at ingress. The cost is that some files that could show "part of it" (a PDF with recoverable errors, for instance) must be downloaded instead.
 
 **Current mitigation.** Accept the boundaries and state them in release notes; the real-machine acceptance items (a vector-text PDF, a 300 DPI scan, page turning and width dragging) are mandatory after any change to the preview path. To break any of them (a Worker decode, Range-streamed media, PSD decoding), write a new record following the [decision record convention](decisions/README.en.md) rather than loosening this boundary in place.
+
+## 14. The Attachments view and the inbox attachment filter count different sets
+
+**Current state.** The sidebar's Attachments view is account-wide and crosses every folder: its query is `messages.has_attachments = 1` plus a collapse of a message's per-folder copies by the provider's stable message identity (`remote_id_lookup`, Gmail's X-GM-MSGID) — `attachmentViewDedupeFilter` in `apps/server/src/message-filters.ts`, with the sidebar count using the same predicate in `folder-counts.ts`. The inbox toolbar's attachment filter is a purely client-side filter over the **currently loaded** inbox rows (`apps/web/src/App.tsx`); it sends no server query and never reaches outside the inbox.
+
+**Impact.** The two numbers agree only when every attachment-carrying mail is in the inbox and loaded. A message that exists only in Trash, an archive, or a label folder makes the view larger; an inbox longer than the loaded pages makes the filter smaller. The number at the top is the current view's server total and is not filtered, so it is not the filtered count either. The two surfaces share a name but answer different questions: "which mail in this account has attachments" versus "which rows in the inbox I am looking at have attachments".
+
+**Current mitigation.** Accept the difference instead of forcing one number: agreeing exactly would mean moving the inbox filter to the server and deciding whether the view itself is inbox-scoped — a product-rule change that needs its own review.
 
 ## Related documents
 

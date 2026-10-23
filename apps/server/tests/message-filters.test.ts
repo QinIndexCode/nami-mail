@@ -20,19 +20,22 @@ function insertMessage(
   db: DatabaseHandle,
   message: {
     id: string; mailbox: string; sentAt: string; kinds: string[]; hasAttachments: boolean; subject?: string;
+    /** The provider's stable identity: the same value on every folder copy. */
+    remoteIdLookup?: string;
   },
 ): void {
   uidSequence += 1;
   db.prepare(`
     INSERT INTO messages (
-      id, account_id, mailbox, uid, subject, from_name, from_address, to_json,
+      id, account_id, mailbox, uid, remote_id_lookup, subject, from_name, from_address, to_json,
       sent_at, snippet, text_body, html_body, flags_json, has_attachments,
       attachment_kinds_json, size, created_at, encrypted_payload, payload_version
-    ) VALUES (?, 'account-1', ?, ?, ?, 'Sender', 'sender@example.com', '[]', ?, '', '', '', '[]', ?, ?, 0, ?, NULL, 0)
+    ) VALUES (?, 'account-1', ?, ?, ?, ?, 'Sender', 'sender@example.com', '[]', ?, '', '', '', '[]', ?, ?, 0, ?, NULL, 0)
   `).run(
     message.id,
     message.mailbox,
     uidSequence,
+    message.remoteIdLookup ?? null,
     message.subject ?? "",
     message.sentAt,
     message.hasAttachments ? 1 : 0,
@@ -143,5 +146,40 @@ describe("buildMessageListSql", () => {
   it("global search without a query keeps standard view precedence", () => {
     // scope=all with no q is not a search: the inbox restriction still applies.
     expect(listIds(db, { scope: "all" })).toEqual(["photo-mail", "pdf-mail", "mixed-mail", "plain-mail"]);
+  });
+
+  it("collapses a message's folder copies into one Attachments-view row", () => {
+    db.prepare(`
+      INSERT INTO folders (account_id, path, name, special_use) VALUES
+        ('account-1', '[Gmail]/所有邮件', '所有邮件', '\\All'),
+        ('account-1', '[Gmail]/重要', '重要', '\\Important')
+    `).run();
+    // The same physical mail, one row per folder label, with the Inbox copy
+    // older than the All Mail one: the representative has to be chosen by
+    // folder preference, not by recency.
+    insertMessage(db, {
+      id: "copies-inbox", mailbox: "INBOX", sentAt: "2026-09-01T09:00:00.000Z",
+      kinds: ["pdf"], hasAttachments: true, remoteIdLookup: "h1-shared",
+    });
+    insertMessage(db, {
+      id: "copies-all", mailbox: "[Gmail]/所有邮件", sentAt: "2026-09-03T09:00:00.000Z",
+      kinds: ["pdf"], hasAttachments: true, remoteIdLookup: "h1-shared",
+    });
+    insertMessage(db, {
+      id: "copies-important", mailbox: "[Gmail]/重要", sentAt: "2026-09-02T09:00:00.000Z",
+      kinds: ["pdf"], hasAttachments: true, remoteIdLookup: "h1-shared",
+    });
+    // No provider identity: not a copy of anything, so it stays on its own.
+    insertMessage(db, {
+      id: "lookup-less", mailbox: "Archive", sentAt: "2026-09-04T09:00:00.000Z",
+      kinds: ["zip"], hasAttachments: true,
+    });
+
+    expect(listIds(db, { accountId: "account-1", hasAttachments: true })).toEqual([
+      "photo-mail", "pdf-mail", "mixed-mail", "copies-inbox", "lookup-less",
+    ]);
+    // An explicitly selected folder still shows that folder's own copy.
+    expect(listIds(db, { accountId: "account-1", folder: "[Gmail]/所有邮件", hasAttachments: true }))
+      .toEqual(["copies-all"]);
   });
 });
