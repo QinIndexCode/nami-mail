@@ -118,6 +118,15 @@ describe("SelectionToolbar", () => {
     expect(renderToolbar({ visible: true })).toContain('aria-hidden="false"');
   });
 
+  it("shows restore as the only bulk move in Trash, including predicate selections", () => {
+    const markup = renderToolbar({ folderContext: "trash", selectAllPaged: true, selectedCount: 0, matchingCount: 40 });
+    expect(disabled(markup, "mail.action.restore")).toBe(false);
+    for (const key of ["mail.action.archive", "mail.action.reportSpam", "mail.action.moveToTrash"]) {
+      expect(markup).not.toContain(`aria-label="${zh(key)}"`);
+    }
+    expect(disabled(renderToolbar({ folderContext: "trash", busy: true }), "mail.action.restore")).toBe(true);
+  });
+
   it("holds the done button while a request is in flight", () => {
     expect(disabled(renderToolbar({ busy: true }), { classNamePrefix: "selection-done" })).toBe(true);
     expect(disabled(renderToolbar({ busy: false }), { classNamePrefix: "selection-done" })).toBe(false);

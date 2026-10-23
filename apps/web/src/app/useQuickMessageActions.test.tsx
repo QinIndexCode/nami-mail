@@ -137,6 +137,21 @@ afterEach(async () => {
 });
 
 describe("useQuickMessageActions", () => {
+  it("restores Trash mail through the existing inbox API and rolls back a refused restore", async () => {
+    await act(async () => { store.applyMove(["m1"], "Trash"); });
+    mocks.move.mockResolvedValueOnce({ ok: true, destination: "INBOX" });
+    await act(async () => { await current.quickMoveMessage(displayed[0]!, "inbox"); });
+    expect(mocks.move).toHaveBeenLastCalledWith("m1", "inbox");
+    expect(displayed[0]!.mailbox).toBe("INBOX");
+    expect(reconcileCalls).toBe(1);
+
+    await act(async () => { store.applyMove(["m1"], "Trash"); });
+    mocks.move.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => { await current.quickMoveMessage(displayed[0]!, "inbox"); });
+    expect(displayed[0]!.mailbox).toBe("Trash");
+    expect(store.getState().pendingTargets.movedAway.size).toBe(0);
+  });
+
   it("ignores a second star toggle while the first is still in flight", async () => {
     let rejectFirst!: (error: Error) => void;
     mocks.flags.mockImplementationOnce(() => new Promise((_resolve, rejectPromise) => { rejectFirst = rejectPromise; }));

@@ -182,6 +182,24 @@ describe("clampContextMenuPosition", () => {
 });
 
 describe("message list context menu", () => {
+  it("resolves localized Trash metadata for both row shortcuts and the context menu", () => {
+    const onQuickMoveMessage = vi.fn();
+    const html = renderList({
+      accounts: [{ ...account, folders: [{ path: "已删除邮件", name: "已删除邮件", specialUse: "\\Trash", total: 1, unseen: 0 }] }],
+      messages: [message({ id: "m-1", mailbox: "已删除邮件" })],
+      onQuickMoveMessage,
+    });
+    expect(html.querySelector('.row-quick-action[aria-label="恢复到收件箱"]')).not.toBeNull();
+    rightClickRow(html, 0, 300, 120);
+    const menu = html.querySelector('.context-menu')!;
+    const restore = Array.from(menu.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes(zh("mail.action.restore")));
+    expect(restore).toBeDefined();
+    expect(menu.textContent).not.toContain(zh("mail.action.archive"));
+    expect(menu.textContent).not.toContain(zh("mail.action.moveToTrash"));
+    act(() => restore!.click());
+    expect(onQuickMoveMessage).toHaveBeenCalledWith(expect.objectContaining({ id: "m-1" }), "inbox");
+  });
+
   it("opens at the pointer with the expected actions after a right-click on a row", () => {
     const html = renderList({});
     rightClickRow(html, 0, 300, 120);

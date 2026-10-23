@@ -1,7 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type RefObject } from "react";
 import { hasVisibleAttachments } from "@nami/agent-contracts";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
-import { Archive, Layers3, Mail, MailOpen, MousePointerClick, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
+import { Archive, Inbox, Layers3, Mail, MailOpen, MousePointerClick, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
+import type { MoveTarget } from "./api";
+import { messageFolderContext, messageMoveActions, type MessageFolderContext } from "./messageMoveActions";
 import type { MessageListQuery } from "./mailListState";
 import { useI18n } from "./i18n";
 import type { MailErrorPresentation } from "./errorPresentation";
@@ -54,7 +56,7 @@ type MessageListProps = {
   onSelectRange: (ids: string[]) => void;
   onQuickToggleStar: (message: Message) => void;
   onQuickToggleSeen: (message: Message) => void;
-  onQuickMoveMessage: (message: Message, target: "archive" | "trash") => void;
+  onQuickMoveMessage: (message: Message, target: MoveTarget) => void;
 };
 
 export type ContextMenuPosition = { x: number; y: number };
@@ -143,7 +145,8 @@ type MessageListRowProps = {
   onRowClick: (message: Message, index: number, event: MouseEvent<HTMLButtonElement>) => void;
   onOpenContextMenu: (message: Message, x: number, y: number) => void;
   onQuickToggleStar: (message: Message) => void;
-  onQuickMoveMessage: (message: Message, target: "archive" | "trash") => void;
+  onQuickMoveMessage: (message: Message, target: MoveTarget) => void;
+  folderContext?: MessageFolderContext;
 };
 
 /**
@@ -193,8 +196,11 @@ export const MessageListRow = memo(function MessageListRow(props: MessageListRow
       </button>
       <span className="row-quick-actions">
         <button type="button" aria-label={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} data-tooltip={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} className={message.flagged ? "row-quick-action active-star" : "row-quick-action"} onClick={() => onQuickToggleStar(message)}><Star size={15} fill={message.flagged ? "currentColor" : "none"} /></button>
-        <button type="button" aria-label={t("mail.action.archive")} data-tooltip={t("mail.action.archive")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "archive")}><Archive size={15} /></button>
-        <button type="button" aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "trash")}><Trash2 size={15} /></button>
+        {messageMoveActions(props.folderContext ?? "other").map((action) => (
+          <button key={action.target} type="button" aria-label={t(action.labelKey)} data-tooltip={t(action.labelKey)} className="row-quick-action" onClick={() => onQuickMoveMessage(message, action.target)}>
+            {action.target === "inbox" ? <Inbox size={15} /> : action.target === "archive" ? <Archive size={15} /> : <Trash2 size={15} />}
+          </button>
+        ))}
       </span>
     </div>
   );
@@ -577,6 +583,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
               gravatarEnabled={avatarGravatarEnabled}
               bimiEnabled={avatarBimiEnabled}
               accountEmails={accountEmails}
+              folderContext={messageFolderContext(message, accounts)}
               buttonRefs={messageButtonRefs}
               rowVirtualizer={rowVirtualizer}
               onRowClick={handleRowClick}
@@ -602,13 +609,11 @@ function MessageList(props: MessageListProps): React.JSX.Element {
             <button type="button" role="menuitem" className="context-menu-item" onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickToggleStar(target); }}>
               <Star size={15} fill={contextMenu.message.flagged ? "currentColor" : "none"} /><span>{t(contextMenu.message.flagged ? "mail.action.unstar" : "mail.action.star")}</span>
             </button>
-            <button type="button" role="menuitem" className="context-menu-item" onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickMoveMessage(target, "archive"); }}>
-              <Archive size={15} /><span>{t("mail.action.archive")}</span>
-            </button>
-            <div className="context-menu-divider" role="separator" />
-            <button type="button" role="menuitem" className="context-menu-item danger" onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickMoveMessage(target, "trash"); }}>
-              <Trash2 size={15} /><span>{t("mail.action.moveToTrash")}</span>
-            </button>
+            {messageMoveActions(messageFolderContext(contextMenu.message, accounts)).map((action) => (
+              <button key={action.target} type="button" role="menuitem" className={`context-menu-item${action.target === "trash" ? " danger" : ""}`} onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickMoveMessage(target, action.target); }}>
+                {action.target === "inbox" ? <Inbox size={15} /> : action.target === "archive" ? <Archive size={15} /> : <Trash2 size={15} />}<span>{t(action.labelKey)}</span>
+              </button>
+            ))}
           </div>
         </>
       )}

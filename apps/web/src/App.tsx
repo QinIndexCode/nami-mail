@@ -57,6 +57,7 @@ import { useSyncProgressBanner } from "./app/useSyncProgressBanner";
 import { useCoalescedRefresh } from "./useCoalescedRefresh";
 import { resolveScrollAnchor, type ScrollAnchorRow } from "./scrollAnchor";
 import { buildForwardDraft, buildReplyDraft, isOwnSentMessage } from "./mailActions";
+import { messageFolderContext, selectionFolderContext } from "./messageMoveActions";
 // ComposeModal loaded lazily below
 import { sortMessages } from "./mailImportance";
 import { collapseDuplicateMembers, groupMessagesByThread, mergeThreadMembers, mergeThreadSnapshot, shouldCollapseThread, sortThreadByTimeline, type ThreadSnapshot } from "./threads";
@@ -1362,11 +1363,7 @@ export default function App() {
   const threadCollapsible = (selectedThread?.length ?? 0) > 4;
   const threadCollapsed = threadCollapsible && selected !== null && shouldCollapseThread(selectedThread, selected.id, threadCollapsedPref);
   const selectedIsArchived = selected ? isArchivedMessage(selected, accounts) : false;
-  // The "not spam" recovery action only applies while reading inside the
-  // account's SPECIAL-USE Junk folder.
-  const selectedIsInJunk = selected
-    ? accounts.find((account) => account.id === selected.accountId)?.folders.some((folder) => folder.specialUse === "\\Junk" && folder.path === selected.mailbox) ?? false
-    : false;
+  const selectedIsInJunk = selected ? messageFolderContext(selected, accounts) === "junk" : false;
   const selectedMovePending = selected ? selected.movePending === true || pendingArchiveMoves.some((move) => move.id === selected.id) : false;
   const selectedMoveLocationUnverified = selected?.moveLocationUnverified === true;
   const selectedRemoteActionsBlocked = selectedMovePending || selectedMoveLocationUnverified;
@@ -2699,6 +2696,7 @@ const emptyMessageList = useMemo(() => (query.trim()
               selectableCount={filteredMessages.length}
               matchingCount={currentMessageTotal}
               busy={batchBusy}
+              folderContext={selectionFolderContext(selectedFolderRecord?.specialUse, view === "archived", Boolean(query.trim() && searchScope === "all"))}
               onSelectAll={selectAllVisibleMessages}
               onSetSeen={(seen) => void batchUpdateFlags({ seen }, seen ? "mail.selection.markedRead" : "mail.selection.markedUnread")}
               onSetFlagged={(flagged) => void batchUpdateFlags({ flagged }, flagged ? "mail.selection.starred" : "mail.selection.unstarred")}

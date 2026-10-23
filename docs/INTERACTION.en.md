@@ -49,3 +49,7 @@ Close, update-install and start-failure paths all clean up child processes and s
 ## 8. Sidebar folder display mode respects the user's choice
 
 The sidebar supports two folder display modes: focused (the selected account folds the other account rows, folders stay in the bottom list) and tree (every account row stays visible, each account folding its own folders independently via a disclosure chevron). The mode is switched from the accounts heading and stored locally; in tree mode, selecting another account must not collapse already-expanded folder lists, and focused-mode folding keeps its existing semantics.
+
+## 9. Mail actions follow the message's folder
+
+Row shortcuts, context menus, the reader and the selection toolbar share `messageMoveActions.ts`. Trash offers Restore to inbox instead of another delete or archive; Junk offers Not spam and delete; Archive offers Move to inbox and delete; Drafts and Sent omit archive. Restore reuses the existing `inbox` move target and does not promise the historical source folder. Resolve provider folders from `specialUse` metadata rather than display names.

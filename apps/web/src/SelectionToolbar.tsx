@@ -1,4 +1,5 @@
-import { Archive, Mail, MailOpen, ShieldCheck, Star, Trash2 } from "lucide-react";
+import { Archive, Inbox, Mail, MailOpen, ShieldCheck, Star, Trash2 } from "lucide-react";
+import { selectionMoveActions, type MessageFolderContext } from "./messageMoveActions";
 import type { MoveTarget } from "./api";
 import { useI18n } from "./i18n";
 import { IconButton } from "./mailUi";
@@ -15,6 +16,7 @@ export type SelectionToolbarProps = {
   /** A batch request is in flight (the create round trip), so nothing may start
    * a second one over the same rows. */
   busy: boolean;
+  folderContext?: MessageFolderContext;
   onSelectAll: () => void;
   onSetSeen: (seen: boolean) => void;
   onSetFlagged: (flagged: boolean) => void;
@@ -49,6 +51,7 @@ export function SelectionToolbar({
   selectableCount,
   matchingCount,
   busy,
+  folderContext = "other",
   onSelectAll,
   onSetSeen,
   onSetFlagged,
@@ -75,19 +78,11 @@ export function SelectionToolbar({
         <IconButton label={t("mail.action.star")} className="selection-action" onClick={() => onSetFlagged(true)} disabled={actionsDisabled}><Star size={15} /></IconButton>
         <IconButton label={t("mail.action.unstar")} className="selection-action" onClick={() => onSetFlagged(false)} disabled={actionsDisabled}><Star size={15} fill="none" /></IconButton>
         <span className="toolbar-divider" aria-hidden="true" />
-        <IconButton label={t("mail.action.archive")} className="selection-action" onClick={() => onMove("archive")} disabled={actionsDisabled}><Archive size={15} /></IconButton>
-        <IconButton label={t("mail.action.reportSpam")} className="selection-action" onClick={() => onMove("junk")} disabled={actionsDisabled}><ShieldCheck size={15} /></IconButton>
-        <IconButton
-          label={t("mail.action.moveToTrash")}
-          className="selection-action selection-action-danger"
-          onClick={onTrash}
-          // Trash opens a confirmation dialog rather than starting the batch
-          // itself, so it follows the selection directly — but the create round
-          // trip still owns the rows the dialog would act on.
-          disabled={busy || (!selectedCount && !selectAllPaged)}
-        >
-          <Trash2 size={15} />
-        </IconButton>
+        {selectionMoveActions(folderContext).map((action) => (
+          <IconButton key={action.target} label={t(action.labelKey)} className={`selection-action${action.target === "trash" ? " selection-action-danger" : ""}`} onClick={action.target === "trash" ? onTrash : () => onMove(action.target)} disabled={busy || (!selectedCount && !selectAllPaged)}>
+            {action.target === "inbox" ? <Inbox size={15} /> : action.target === "archive" ? <Archive size={15} /> : action.target === "junk" ? <ShieldCheck size={15} /> : <Trash2 size={15} />}
+          </IconButton>
+        ))}
       </div>
       <button className="selection-done" type="button" onClick={onDone} disabled={busy}>{t("mail.selection.done")}</button>
     </div>

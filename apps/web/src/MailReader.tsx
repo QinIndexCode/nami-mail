@@ -53,6 +53,7 @@ import type { DialogRoutingActions, DialogRoutingState } from "./dialogRouting";
 import type { Translate, useI18n } from "./i18n";
 import type { Account, AppSettings, Message } from "./types";
 import { resolveReaderAiIntent, type ReaderAiLaunchIntent } from "./readerAiActions";
+import { canReportSpam, messageFolderContext, messageMoveActions } from "./messageMoveActions";
 
 // The attachment preview drawer is only reachable from the reader, so its lazy
 // boundary lives here instead of App.
@@ -264,6 +265,11 @@ export function MailReader(props: MailReaderProps) {
     && selected.htmlBody === undefined
     && selectedBodyPhase !== "loaded"
     && selectedBodyPhase !== "error";
+  const folderContext = selected && selectedMessageAccount
+    ? messageFolderContext(selected, [selectedMessageAccount])
+    : selectedIsInJunk ? "junk" : selectedIsArchived ? "archive" : "other";
+  const moveActions = messageMoveActions(folderContext);
+  const canSnooze = folderContext === "other" || folderContext === "archive";
 
   return (
     <section className={`reader-column ${selected ? "has-message" : ""}`}>
@@ -278,9 +284,12 @@ export function MailReader(props: MailReaderProps) {
               <span className="toolbar-divider" aria-hidden="true" />
               <IconButton label={selectedMoveActionLabel ?? (selected.seen ? t("mail.action.markUnread") : t("mail.action.markRead"))} onClick={() => void toggleSelectedSeen()} disabled={selectedRemoteActionsBlocked}>{selected.seen ? <Mail size={18} /> : <MailOpen size={18} />}</IconButton>
               <IconButton label={selectedMoveActionLabel ?? (selected.flagged ? t("mail.action.unstar") : t("mail.action.star"))} className={selected.flagged ? "active-star" : ""} onClick={() => void toggleSelectedStar()} disabled={selectedRemoteActionsBlocked}><Star size={18} fill={selected.flagged ? "currentColor" : "none"} /></IconButton>
-              <IconButton label={selectedMoveActionLabel ?? t("mail.action.archive")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("archive")} disabled={selectedRemoteActionsBlocked || selectedIsArchived}><Archive size={18} /></IconButton>
-              <IconButton label={selectedMoveActionLabel ?? t("mail.action.moveToTrash")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("trash")} disabled={selectedRemoteActionsBlocked}><Trash2 size={18} /></IconButton>
-              <div className="reader-snooze" ref={snoozeRef}>
+              {moveActions.map((action) => (
+                <IconButton key={action.target} label={selectedMoveActionLabel ?? t(action.labelKey)} className={action.target === "inbox" ? "" : "reader-action-secondary"} onClick={() => void moveSelectedMessage(action.target)} disabled={selectedRemoteActionsBlocked}>
+                  {action.target === "inbox" ? <Inbox size={18} /> : action.target === "archive" ? <Archive size={18} /> : <Trash2 size={18} />}
+                </IconButton>
+              ))}
+              {canSnooze && <div className="reader-snooze" ref={snoozeRef}>
                 <IconButton label={selectedIsSnoozed ? t("mail.snooze.reschedule") : t("mail.snooze.title")} className={`reader-action-secondary${selectedIsSnoozed ? " snoozed" : ""}`} onClick={() => { if (snoozeOpen) { beginSnoozeClose(); } else { setSnoozeOpen(true); } setSnoozeCustomUntil(""); }} expanded={snoozeOpen} disabled={selectedRemoteActionsBlocked}><Clock size={18} /></IconButton>
                 {snoozeMounted && (
                   <div className={`snooze-menu${snoozeClosing ? " closing" : ""}`} role="menu" aria-label={t("mail.snooze.title")}>
@@ -302,7 +311,7 @@ export function MailReader(props: MailReaderProps) {
                     </div>
                   </div>
                 )}
-              </div>
+              </div>}
               <div className="reader-more" ref={readerMoreRef}>
                 <IconButton label={t("mail.action.more")} className="reader-more-toggle" onClick={() => { if (readerMoreOpen) { beginReaderMoreClose(); } else { setReaderMoreOpen(true); } }} expanded={readerMoreOpen}><MoreHorizontal size={19} /></IconButton>
                 {readerMoreMounted && (
@@ -333,7 +342,11 @@ export function MailReader(props: MailReaderProps) {
                         </button>
                       </>
                     )}
-                    <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked || selectedIsArchived} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />{t("mail.action.archive")}</button>
+                    {moveActions.map((action) => (
+                      <button key={action.target} type="button" role="menuitem" className={action.target === "trash" ? "reader-more-danger" : undefined} disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage(action.target); }}>
+                        {action.target === "inbox" ? <Inbox size={16} /> : action.target === "archive" ? <Archive size={16} /> : <Trash2 size={16} />}{t(action.labelKey)}
+                      </button>
+                    ))}
                     {!bodyLoading && <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void exportSelectedEml(); }}><Download size={16} />{t("mail.action.exportEml")}</button>}
                     <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportContactVcf(); }}><UserRound size={16} />{t("mail.action.saveVcf")}</button>
                     <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportCalendarIcs(); }}><CalendarArrowDown size={16} />{t("mail.action.exportIcs")}</button>
@@ -341,13 +354,9 @@ export function MailReader(props: MailReaderProps) {
                       <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); setForceShowTranslationId(selected.id); }}><Languages size={16} />{t("translation.action", { language: locales.find((item) => item.locale === locale)?.nativeName ?? locale })}</button>
                     )}
                     {!bodyLoading && <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); printSelectedMessage(); }}><Printer size={16} />{t("mail.action.print")}</button>}
-                    {!selectedIsInJunk && (
+                    {canReportSpam(folderContext) && (
                       <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("junk"); }}><ShieldCheck size={16} />{t("mail.action.reportSpam")}</button>
                     )}
-                    {selectedIsInJunk && (
-                      <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("inbox"); }}><Inbox size={16} />{t("mail.action.notSpam")}</button>
-                    )}
-                    <button type="button" role="menuitem" className="reader-more-danger" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("trash"); }}><Trash2 size={16} />{t("mail.action.moveToTrash")}</button>
                   </div>
                 )}
               </div>

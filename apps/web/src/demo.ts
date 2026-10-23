@@ -11,6 +11,7 @@ const DEMO_FOLDER_KEYS: Record<string, string> = {
   INBOX: "demo.folder.inbox",
   Archive: "demo.folder.archive",
   Junk: "demo.folder.junk",
+  Trash: "demo.folder.trash",
   "Sent Messages": "demo.folder.sent",
   Drafts: "demo.folder.drafts",
   "[Gmail]/All Mail": "demo.folder.allMail",
@@ -40,6 +41,7 @@ export function createDemoAccounts(locale: string): Account[] {
         { path: "INBOX", name: folderName("INBOX", "收件箱"), specialUse: "\\Inbox", total: 4, unseen: 3 },
         { path: "Archive", name: folderName("Archive", "归档"), specialUse: "\\Archive", total: 0, unseen: 0 },
         { path: "Junk", name: folderName("Junk", "垃圾邮件"), specialUse: "\\Junk", total: 0, unseen: 0 },
+        { path: "Trash", name: folderName("Trash", "废纸篓"), specialUse: "\\Trash", total: 0, unseen: 0 },
         { path: "Sent Messages", name: folderName("Sent Messages", "已发送"), specialUse: "\\Sent", total: 0, unseen: 0 },
         { path: "Drafts", name: folderName("Drafts", "草稿"), specialUse: "\\Drafts", total: 0, unseen: 0 },
       ],
@@ -58,6 +60,7 @@ export function createDemoAccounts(locale: string): Account[] {
       folders: [
         { path: "INBOX", name: folderName("INBOX", "收件箱"), specialUse: "\\Inbox", total: 7, unseen: 0 },
         { path: "[Gmail]/All Mail", name: folderName("[Gmail]/All Mail", "所有邮件"), specialUse: "\\All", total: 0, unseen: 0 },
+        { path: "[Gmail]/Trash", name: folderName("Trash", "废纸篓"), specialUse: "\\Trash", total: 0, unseen: 0 },
         { path: "[Gmail]/重要", name: folderName("重要", "重要"), specialUse: null, total: 0, unseen: 0 },
       ],
     },

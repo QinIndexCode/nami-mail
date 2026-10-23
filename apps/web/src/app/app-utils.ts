@@ -204,7 +204,7 @@ export const moveTargetSpecialUses: Record<MoveTarget, string[]> = {
 
 export function moveActionKey(target: MoveTarget, selection: boolean): string {
   if (selection) {
-    return target === "archive" ? "mail.selection.archived" : target === "trash" ? "mail.selection.trashed" : "mail.selection.reportedSpam";
+    return target === "archive" ? "mail.selection.archived" : target === "trash" ? "mail.selection.trashed" : target === "junk" ? "mail.selection.reportedSpam" : "mail.selection.restored";
   }
   return target === "archive" ? "mail.action.archived" : target === "trash" ? "mail.action.trashed" : target === "junk" ? "mail.action.reportedSpam" : "mail.action.recoveredFromSpam";
 }

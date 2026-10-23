@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MessageListRow } from "./MessageList";
 import { I18nProvider } from "./i18n";
 import type { Message } from "./types";
+import type { MoveTarget } from "./api";
 
 function makeMessage(overrides: Partial<Message> = {}): Message {
   return {
@@ -46,7 +47,7 @@ describe("MessageListRow", () => {
   let onRowClick: ReturnType<typeof vi.fn<RowClick>>;
   let onOpenContextMenu: ReturnType<typeof vi.fn<(message: Message, x: number, y: number) => void>>;
   let onQuickToggleStar: ReturnType<typeof vi.fn<(message: Message) => void>>;
-  let onQuickMoveMessage: ReturnType<typeof vi.fn<(message: Message, target: "archive" | "trash") => void>>;
+  let onQuickMoveMessage: ReturnType<typeof vi.fn<(message: Message, target: MoveTarget) => void>>;
 
   beforeEach(() => {
     container = document.createElement("div");
@@ -58,7 +59,7 @@ describe("MessageListRow", () => {
     onRowClick = vi.fn<RowClick>();
     onOpenContextMenu = vi.fn<(message: Message, x: number, y: number) => void>();
     onQuickToggleStar = vi.fn<(message: Message) => void>();
-    onQuickMoveMessage = vi.fn<(message: Message, target: "archive" | "trash") => void>();
+    onQuickMoveMessage = vi.fn<(message: Message, target: MoveTarget) => void>();
   });
 
   afterEach(() => {
@@ -160,6 +161,17 @@ describe("MessageListRow", () => {
     expect(onQuickToggleStar).toHaveBeenCalledWith(message);
     expect(onQuickMoveMessage).toHaveBeenNthCalledWith(1, message, "archive");
     expect(onQuickMoveMessage).toHaveBeenNthCalledWith(2, message, "trash");
+  });
+
+  it("offers restore in Trash and sends the existing inbox move target", () => {
+    const message = makeMessage({ mailbox: "Trash" });
+    renderRow(message, { folderContext: "trash" });
+    const restore = container.querySelector<HTMLButtonElement>('.row-quick-action[aria-label="恢复到收件箱"]');
+    expect(restore).not.toBeNull();
+    expect(container.querySelector('[aria-label="移至废纸篓"]')).toBeNull();
+    expect(container.querySelector('[aria-label="归档"]')).toBeNull();
+    act(() => restore!.click());
+    expect(onQuickMoveMessage).toHaveBeenCalledWith(message, "inbox");
   });
 
   it("keeps the ref stable when App replaces the message object with the same id (no re-measure)", () => {

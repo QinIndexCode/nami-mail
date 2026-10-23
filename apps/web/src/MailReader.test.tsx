@@ -2,11 +2,11 @@
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MailReader, type MailReaderProps } from "./MailReader";
 import type { DialogRoutingState } from "./dialogRouting";
 import { I18nProvider, translate } from "./i18n";
-import { defaultAppSettings, type Message } from "./types";
+import { defaultAppSettings, type Account, type Message } from "./types";
 
 const t = ((key: string, values?: Record<string, string | number>) => translate("zh-CN", key, values)) as unknown as MailReaderProps["t"];
 
@@ -176,6 +176,24 @@ describe("MailReader body loading and blank subjects", () => {
   function buttonByText(label: string): HTMLButtonElement | null {
     return Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes(label)) ?? null;
   }
+
+  it("restores Trash mail from both reader action surfaces without offering another delete", () => {
+    const move = vi.fn(async () => {});
+    render(readerProps({
+      selected: makeMessage({ mailbox: "Deleted Items" }),
+      selectedMessageAccount: { id: "acc-1", folders: [{ path: "Deleted Items", name: "已删除", specialUse: "\\Trash" }] } as Account,
+      moveSelectedMessage: move,
+    }));
+    const restore = container.querySelector<HTMLButtonElement>('.reader-actions > button[aria-label="恢复到收件箱"]');
+    const menuRestore = buttonByText(t("mail.action.restore"));
+    expect(restore).not.toBeNull();
+    expect(menuRestore).not.toBeNull();
+    expect(container.querySelector('.reader-actions button[aria-label="移至废纸篓"]')).toBeNull();
+    expect(buttonByText(t("mail.action.moveToTrash"))).toBeNull();
+    expect(buttonByText(t("mail.action.archive"))).toBeNull();
+    act(() => { restore!.click(); menuRestore!.click(); });
+    expect(move.mock.calls).toEqual([["inbox"], ["inbox"]]);
+  });
 
   it("renders a loading state instead of the list row's preview while the body is in flight", () => {
     const message = makeMessage({ snippet: "PREVIEW-SNIPPET", textBody: "" });
