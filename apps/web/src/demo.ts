@@ -462,7 +462,15 @@ export function demoMessageTranslation(message: Message, targetLocale: string): 
 
 export const demoStats: Stats = { accounts: 2, messages: 11, unread: 3, starred: 2, snoozed: 1, attachments: 4 };
 
-// Demo mode is the only build that imports this module (demo-loader.ts does so
-// dynamically), so registering the byte source here keeps the production path —
-// the real `/api/messages/:id/attachments/:partId` request — untouched.
-setAttachmentResponseProvider(demoAttachmentProvider);
+// The fixture byte source is enabled by the demo loader only, which keeps the
+// production path — the real `/api/messages/:id/attachments/:partId` request —
+// untouched.
+//
+// This must be a function the loader calls, not a module-scope side effect:
+// `CalendarDialog` imports `demoTranslate` from this module statically, so a
+// top-level registration would also run in real (non-demo) mode and route every
+// preview through the fixture map, where unknown ids answer 404 without ever
+// reaching the server.
+export function registerDemoAttachmentProvider(): void {
+  setAttachmentResponseProvider(demoAttachmentProvider);
+}

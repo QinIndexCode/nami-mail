@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { previewKindFor, tierFor } from "./attachments/catalog";
+import { PreviewFailure } from "./attachments/failure";
+import { openAttachmentResponse, setAttachmentResponseProvider } from "./attachments/ingress";
+import { registerDemoAttachmentProvider } from "./demo";
 import {
   buildDemoPdf,
   buildDemoPsd,
@@ -141,5 +144,36 @@ describe("the demo attachment provider", () => {
   it("answers 404 for a pair it does not know", async () => {
     const response = await demoAttachmentProvider("m99", "9");
     expect(response.status).toBe(404);
+  });
+});
+
+/**
+ * Regression: the fixtures must be enabled by the demo loader, never by merely
+ * importing `demo.ts`. `CalendarDialog` imports `demoTranslate` from that module
+ * statically, so a module-scope registration ran in real mode too, answering
+ * 404 for every real `{messageId}/{partId}` — the drawer showed "无法预览该附件"
+ * without issuing a single network request.
+ */
+describe("demo byte source registration", () => {
+  afterEach(() => setAttachmentResponseProvider(null));
+
+  it("stays disabled after demo.ts is imported", async () => {
+    await expect(openAttachmentResponse("m2", "2", { cap: 16_000_000 })).rejects.toMatchObject({
+      code: "network",
+    });
+  });
+
+  it("serves the fixtures once the loader registers it", async () => {
+    registerDemoAttachmentProvider();
+    const reply = await openAttachmentResponse("m2", "2", { cap: 16_000_000 });
+    reply.dispose();
+    expect(reply.response.status).toBe(200);
+    expect(reply.response.headers.get("content-type")).toBe("application/pdf");
+  });
+
+  it("maps an unknown pair to a coded network failure, not an exception leak", async () => {
+    registerDemoAttachmentProvider();
+    await expect(openAttachmentResponse("m99", "9", { cap: 16_000_000 })).rejects.toBeInstanceOf(PreviewFailure);
+    await expect(openAttachmentResponse("m99", "9", { cap: 16_000_000 })).rejects.toMatchObject({ code: "network" });
   });
 });
