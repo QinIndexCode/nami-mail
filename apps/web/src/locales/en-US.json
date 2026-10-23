@@ -834,7 +834,6 @@
     "mail.attachment.previewPageTooLarge": "This page exceeds the rendering limit (size or image count) and was skipped.",
     "mail.attachment.previewArchiveCount": "{count} entries · {size} uncompressed",
     "mail.attachment.previewArchiveNoExtract": "Listing only — contents are not extracted",
-    "mail.attachment.previewDemoUnavailable": "Attachment preview isn't available in demo mode.",
     "mail.notification.newContact": "New contact",
     "mail.notification.singleTitle": "New mail from {sender}",
     "mail.notification.multipleTitle": "{count} new messages",

@@ -18,7 +18,9 @@ export default function FallbackSurface({ document, onDownload }: SurfaceProps) 
   const reason = surface.surface === "download_only" ? surface.reason : "unsupported";
   const primaryKey = surface.surface === "download_only" ? surface.messageKey : downloadOnlyMessageKey;
   return (
-    <div className="attachment-preview-download-only">
+    // `role="status"` (plan S4): this is a terminal state, not an error, so it
+    // is announced politely instead of interrupting like the error alert.
+    <div className="attachment-preview-download-only" role="status">
       <p>{t(primaryKey)}</p>
       {reason === "unsupported" && <p className="attachment-preview-download-reason">{t("mail.attachment.previewUnsupported")}</p>}
       {reason === "mime" && <p className="attachment-preview-download-reason">{t("mail.attachment.previewKindMismatch")}</p>}

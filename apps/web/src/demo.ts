@@ -1,6 +1,8 @@
 import type { Account, Message, OutboundSubmission, ProviderInfo, Stats } from "./types";
 import { translate } from "./i18n";
 import { demoProviderCatalog } from "./demoProviderCatalog";
+import { setAttachmentResponseProvider } from "./attachments/ingress";
+import { demoAttachmentFixtures, demoAttachmentProvider } from "./demoAttachmentBytes";
 export { createDemoSourceMessages } from "./agent/agent-demo-data";
 
 export const demoProviders: ProviderInfo[] = demoProviderCatalog;
@@ -158,7 +160,32 @@ export const demoMessages: Message[] = [
     seen: true,
     flagged: true,
     hasAttachments: true,
-    attachments: [{ partId: "2", filename: "july-review-notes.pdf", contentType: "application/pdf", size: 24124, related: false, disposition: "attachment" }],
+    attachments: [
+      {
+        partId: "2",
+        filename: demoAttachmentFixtures["m2/2"].filename,
+        contentType: demoAttachmentFixtures["m2/2"].contentType,
+        size: demoAttachmentFixtures["m2/2"].bytes.byteLength,
+        related: false,
+        disposition: "attachment",
+      },
+      {
+        partId: "3",
+        filename: demoAttachmentFixtures["m2/3"].filename,
+        contentType: demoAttachmentFixtures["m2/3"].contentType,
+        size: demoAttachmentFixtures["m2/3"].bytes.byteLength,
+        related: false,
+        disposition: "attachment",
+      },
+      {
+        partId: "4",
+        filename: demoAttachmentFixtures["m2/4"].filename,
+        contentType: demoAttachmentFixtures["m2/4"].contentType,
+        size: demoAttachmentFixtures["m2/4"].bytes.byteLength,
+        related: false,
+        disposition: "attachment",
+      },
+    ],
     size: 24124,
   },
   {
@@ -227,7 +254,16 @@ export const demoMessages: Message[] = [
     seen: true,
     flagged: false,
     hasAttachments: true,
-    attachments: [{ partId: "2", filename: "weekend-photos.zip", contentType: "application/zip", size: 8842, related: false, disposition: "attachment" }],
+    attachments: [
+      {
+        partId: "2",
+        filename: demoAttachmentFixtures["m5/2"].filename,
+        contentType: demoAttachmentFixtures["m5/2"].contentType,
+        size: demoAttachmentFixtures["m5/2"].bytes.byteLength,
+        related: false,
+        disposition: "attachment",
+      },
+    ],
     size: 8842,
   },
   {
@@ -425,3 +461,8 @@ export function demoMessageTranslation(message: Message, targetLocale: string): 
 }
 
 export const demoStats: Stats = { accounts: 2, messages: 11, unread: 3, starred: 2, snoozed: 1, attachments: 4 };
+
+// Demo mode is the only build that imports this module (demo-loader.ts does so
+// dynamically), so registering the byte source here keeps the production path —
+// the real `/api/messages/:id/attachments/:partId` request — untouched.
+setAttachmentResponseProvider(demoAttachmentProvider);
