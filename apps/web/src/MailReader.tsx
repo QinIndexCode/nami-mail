@@ -34,7 +34,7 @@ import CopyButton from "./CopyButton";
 import { MailTextBody } from "./MailTextBody";
 import { CustomAvatar, SenderAvatar, accountTone } from "./SenderAvatar";
 import DatePicker from "./DatePicker";
-import { canPreviewAttachment } from "./attachmentPreview";
+import { canOpenPreview, previewKindFor } from "./attachments/catalog";
 import { hideFailedMailImages } from "./mailImageFallback";
 import { presentAttachment } from "./attachmentPresentation";
 import { AttachmentFileIcon, formatFileSize, isoFromDatetimeLocal, IconButton } from "./mailUi";
@@ -54,9 +54,9 @@ import type { Translate, useI18n } from "./i18n";
 import type { Account, AppSettings, Message } from "./types";
 import { resolveReaderAiIntent, type ReaderAiLaunchIntent } from "./readerAiActions";
 
-// The attachment preview modal is only reachable from the reader, so its lazy
+// The attachment preview drawer is only reachable from the reader, so its lazy
 // boundary lives here instead of App.
-const AttachmentPreviewModal = lazy(() => import("./AttachmentPreviewModal"));
+const AttachmentPreviewDrawer = lazy(() => import("./AttachmentPreviewDrawer"));
 
 type AttachmentExportsApi = ReturnType<typeof useAttachmentExports>;
 type MailTranslationApi = ReturnType<typeof useMailTranslation>;
@@ -471,7 +471,7 @@ export function MailReader(props: MailReaderProps) {
                         <AttachmentFileIcon kind={presentation.kind} filename={attachment.filename} />
                         <span><strong className="truncated-tooltip" data-tooltip={attachment.filename}><span>{attachment.filename}</span></strong><small className="truncated-tooltip" aria-live="polite" data-tooltip={download?.detail}><span>{downloadDetail}</span></small></span>
                         <div className="attachment-actions">
-                          {canPreviewAttachment(attachment.filename, attachment.contentType) && (
+                          {canOpenPreview(previewKindFor(attachment)) && (
                             <IconButton label={t("mail.attachment.preview", { filename: attachment.filename })} disabled={selectedRemoteActionsBlocked} onClick={() => openAttachmentPreview(selected, attachment)}><Eye size={16} /></IconButton>
                           )}
                           {isIcsAttachment(attachment) && (
@@ -487,7 +487,7 @@ export function MailReader(props: MailReaderProps) {
               )}
               <footer className="quick-reply"><CustomAvatar name={selected.accountEmail} address={selected.accountEmail} tone={accountTone(selected.accountEmail)} size="small" /><button onClick={openReply}>{t("mail.reader.replyTo", { sender: quickReplySender })}</button></footer>
             </article>
-            {state.attachmentPreview && <Suspense fallback={null}><AttachmentPreviewModal messageId={state.attachmentPreview.message.id} attachment={state.attachmentPreview.attachment} onClose={() => actions.closeAttachmentPreview()} /></Suspense>}
+            {state.attachmentPreview && <Suspense fallback={null}><AttachmentPreviewDrawer messageId={state.attachmentPreview.message.id} attachment={state.attachmentPreview.attachment} onClose={() => actions.closeAttachmentPreview()} /></Suspense>}
           </div>
         </ErrorBoundary>
       ) : (

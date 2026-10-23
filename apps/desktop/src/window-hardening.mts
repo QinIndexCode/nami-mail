@@ -92,11 +92,21 @@ export type NavigationGuardDeps = {
   openInBrowser: (url: string) => void | Promise<void>;
 };
 
-/** True only for a well-formed URL whose origin equals this app's origin. Unknown origin = false. */
+/**
+ * True only for a well-formed http(s) URL whose origin equals the app origin.
+ * An unknown origin allows nothing.
+ *
+ * The scheme check is not redundant with the origin check: `blob:<appOrigin>/…`
+ * inherits the app origin, so an origin-only comparison would admit a top-level
+ * navigation to a renderer-authored blob document (`frame-src` does not govern
+ * top-level navigation). Only the schemes the local service can serve pass.
+ */
 export function isLocalNavigationAllowed(url: string, appOrigin: string | undefined): boolean {
   if (appOrigin === undefined) return false;
   try {
-    return new URL(url).origin === new URL(appOrigin).origin;
+    const target = new URL(url);
+    if (target.protocol !== "http:" && target.protocol !== "https:") return false;
+    return target.origin === new URL(appOrigin).origin;
   } catch {
     return false;
   }

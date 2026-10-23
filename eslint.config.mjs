@@ -265,6 +265,69 @@ export default tseslint.config(
     },
   },
 
+  // ---------------------------------------------------------------------------
+  // S2：附件预览管道的两条结构性约束。
+  //
+  // ① URL.createObjectURL 只允许出现在**拥有 revoke 责任**的模块里：
+  //    attachments/document.ts 的 ResourceScope.own() 把创建与撤销绑在一起，
+  //    抽屉的每次尝试都以 scope.dispose() 收尾。散落的 createObjectURL 会留下
+  //    无人撤销的 blob URL（媒体面尤其危险：一个 URL 就是一份常驻内存）。
+  //    两个历史下载路径（SettingsModal 的演示图片、attachmentZip 的一次性下载）
+  //    是单次同步使用、立即 revoke 的旧代码，不在本规则收紧范围内。
+  // ② 解码/渲染层不得直接依赖解码库、node 内建或测试夹具：pdfjs-dist 只许
+  //    decode/pdf.ts 静态导入（其它模块经 decode/pdf 的再导出拿 AnnotationMode，
+  //    见 E4），jszip 属于 S3 的 decode/office 专属，render 层碰它就是把解析
+  //    搬回视图。flat config 里同一条规则的 patterns 是**整条覆盖**，所以下面
+  //    每个对象都重新展开 legacyLayerImportBans，否则 G15 会被静默顶掉。
+  // ---------------------------------------------------------------------------
+  {
+    files: ["apps/web/src/**/*.{ts,tsx}"],
+    ignores: ["apps/web/src/attachments/document.ts", "apps/web/src/SettingsModal.tsx", "apps/web/src/attachmentZip.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "CallExpression[callee.object.name='URL'][callee.property.name='createObjectURL']",
+          message: "URL.createObjectURL 只能经 attachments/document.ts 的 ResourceScope.own() 创建（随 scope.dispose() 撤销）；请把 blob 交给 ResourceScope。",
+        },
+      ],
+    },
+  },
+  {
+    files: ["apps/web/src/attachments/{decode,render,zip}/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            ...legacyLayerImportBans,
+            { group: ["jszip"], message: "jszip 只允许在 decode/office（S3 的归档/Office 解析）里使用；render 层不得自己解压。" },
+            { group: ["pdfjs-dist"], message: "pdfjs-dist 只允许 decode/pdf.ts 静态导入；其它模块请从 ../decode/pdf 再导出取值（如 AnnotationMode）。" },
+            { group: ["node:*"], message: "附件解码/渲染代码运行在浏览器 renderer 里，不得依赖 node 内建模块。" },
+            { group: ["**/test-*"], message: "生产代码不得导入测试夹具；与测试共享的数据请放在 attachments/testing/ 的显式导出里。" },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // decode/pdf.ts 是 pdfjs-dist 的唯一静态导入点（类型与 AnnotationMode 再导出）。
+    files: ["apps/web/src/attachments/decode/pdf.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            ...legacyLayerImportBans,
+            { group: ["jszip"], message: "jszip 只允许在 decode/office（S3 的归档/Office 解析）里使用；pdf 解码不得自己解压。" },
+            { group: ["node:*"], message: "附件解码/渲染代码运行在浏览器 renderer 里，不得依赖 node 内建模块。" },
+            { group: ["**/test-*"], message: "生产代码不得导入测试夹具；与测试共享的数据请放在 attachments/testing/ 的显式导出里。" },
+          ],
+        },
+      ],
+    },
+  },
+
   // 巨型文件冻结：只允许瘦身，不允许继续增长。
   // 阈值 = **实测行数**（第 6 批·棘轮收口时逐条量取），与上方 monolithRatchets 同一
   // 政策、同一原因——见那段注释。App.tsx 的 3117 停在批次 4 抽取之前；前端 store

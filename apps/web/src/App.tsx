@@ -922,7 +922,7 @@ export default function App() {
     void import("./ManagementDialogs");
     void import("./SendingStatusModal");
     void import("./AddAccountModal");
-    void import("./AttachmentPreviewModal");
+    void import("./AttachmentPreviewDrawer");
   };
     if (typeof window.requestIdleCallback === "function") {
       const handle = window.requestIdleCallback(warm);
@@ -2316,9 +2316,9 @@ const emptyMessageList = useMemo(() => (query.trim()
         case "close_mobile_sidebar": actions.closeMobileSidebar(); return;
         // Drives the same state as the preview's own onClose path (the X
         // button / requestClose tail both end in closeAttachmentPreview →
-        // setAttachmentPreview(null)). Normally AttachmentPreviewModal's
+        // setAttachmentPreview(null)). Normally AttachmentPreviewDrawer's
         // capture listener handles Escape first; this case is the shell
-        // fallback (e.g. while the lazy modal is still mounting).
+        // fallback (e.g. while the lazy drawer chunk is still loading).
         case "close_attachment_preview": actions.closeAttachmentPreview(); return;
         case "close_reader": closeReader(true); return;
         case "focus_search": searchInputRef.current?.focus(); return;

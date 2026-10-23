@@ -134,8 +134,19 @@ describe("styles.css size ratchet", () => {
   // opacity/scale，勾淡出、复制图标淡入也有过渡（原实现只给勾做了入场动画，
   // 返回时图标瞬间替换）。buttons.css 由 29 行增至 34 行（+5），实测聚合
   // 17_805 行，余量 7，未上调阈值。
+  // 2026-10-20 有记录的一次上调（17_812 → 17_955）：附件预览从 <iframe> 换成
+  // 组合式抽屉。净变化 = 搬移 187（mail.css）+ 23（auto-reply.css）出、
+  // 新文件 features/attachment-preview.css 的 193 行搬移基底入（+2 是它自己那层
+  // @media 包裹），再加上 N₂ = 153 行新增规则（图片/媒体/PDF/下载卡/文本页脚/
+  // 共享滚动区/焦点环——旧实现里这些由 iframe 内的浏览器渲染，没有任何 CSS）。
+  // 基底是 193 而不是计划里的 212：搬移时丢掉了两条随 iframe 一起作废的规则
+  // （.attachment-preview-frame 9 行、.attachment-preview-unsupported 及其 p
+  // 共 10 行），下载卡已由新增的 .attachment-preview-download-only /
+  // -download-reason 取代。实测聚合 17_943 行，阈值取实测 +12 行缓冲。
+  // 下一轮 CSS 瘦身时应优先收回：S3/S4 的新表面可以与现有 .attachment-card
+  // 共用外壳。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 17_812;
+  const FROZEN_AGGREGATED_MAX_LINES = 17_955;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

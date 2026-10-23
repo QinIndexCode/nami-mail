@@ -80,6 +80,11 @@ test("only same-origin URLs are local navigations, and an unknown origin allows 
   ]) {
     assert.equal(isLocalNavigationAllowed(foreign, localOrigin), false, foreign);
   }
+  assert.equal(isLocalNavigationAllowed(`${localOrigin}/index.html`, localOrigin), true);
+  // Blob documents inherit the app origin, so an origin-only comparison admits
+  // them; the scheme gate is what keeps top-level navigation to http(s).
+  assert.equal(isLocalNavigationAllowed(`blob:${localOrigin}/2a1f-session`, localOrigin), false);
+  assert.equal(isLocalNavigationAllowed("data:text/html,<b>x</b>", localOrigin), false);
   // Before the local service starts there is no app origin; fail closed instead
   // of admitting a placeholder origin.
   assert.equal(isLocalNavigationAllowed(`${localOrigin}/index.html`, undefined), false);

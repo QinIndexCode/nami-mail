@@ -137,15 +137,14 @@ describe("local API", () => {
     expect(response.headers["content-security-policy"]).toContain("default-src 'self'");
   });
 
-  it("frames the attachment preview's blob URL but still forbids being framed", async () => {
+  it("frames nothing, but still forbids being framed", async () => {
     const response = await app.inject({ method: "GET", url: "/api/health" });
     const policy = String(response.headers["content-security-policy"]);
-    // The PDF preview is an iframe over a blob: object URL
-    // (`AttachmentPreviewModal`). `frame-src 'none'` broke it in every packaged
-    // build, where this header is the document's policy; `frame-ancestors` is
-    // the directive that protects the app itself.
-    expect(policy).toContain("frame-src blob:");
-    expect(policy).not.toContain("frame-src 'none'");
+    // S2 replaced the PDF iframe with a composed drawer, so the blob: exception
+    // `frame-src` needed is gone; `frame-ancestors` is the directive that
+    // protects the app itself and must not move.
+    expect(policy).toContain("frame-src 'none'");
+    expect(policy).not.toContain("frame-src blob:");
     expect(policy).toContain("frame-ancestors 'none'");
   });
 

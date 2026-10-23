@@ -23,6 +23,7 @@
 @import "./styles/features/auto-reply.css";
 @import "./styles/components/interactions.css";
 @import "./styles/features/attachments.css";
+@import "./styles/features/attachment-preview.css";
 @import "./styles/base/transitions.css";
 @import "./styles/base/print.css";
 @import "./styles/components/error-boundary.css";

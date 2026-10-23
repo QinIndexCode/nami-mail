@@ -1,0 +1,342 @@
+import { FileText, LoaderCircle, RotateCw, X } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { api } from "./api";
+import { sanitizeDownloadName, triggerBlobDownload } from "./attachmentZip";
+import { sanitizeDisplayName } from "./attachments/catalog";
+import {
+  MAX_ARCHIVE_ENTRIES,
+  MAX_IMAGE_PIXELS_PER_PAGE,
+  MAX_PAGES,
+  DECODE_DEADLINE_MS,
+} from "./attachments/budget";
+import { ResourceScope, type PreviewDocument } from "./attachments/document";
+import { MemoryLease } from "./attachments/budget";
+import { failureFromUnknown, failurePresentation, PreviewCanceled, type FailureCode } from "./attachments/failure";
+import { surfaceComponentFor } from "./attachments/render/registry";
+import { runPreview, type PreviewAttachment as SessionAttachment } from "./attachments/session";
+import { useDismissTransition } from "./hooks/useDismissTransition";
+import { useI18n } from "./i18n";
+import { IconButton } from "./mailUi";
+
+export type PreviewAttachment = {
+  partId: string;
+  filename: string;
+  contentType: string;
+  size: number;
+};
+
+type AttachmentPreviewDrawerProps = {
+  messageId: string;
+  attachment: PreviewAttachment | null;
+  onClose: () => void;
+};
+
+const previewWidthStorageKey = "nami.attachment-preview-width";
+const defaultPreviewWidth = 480;
+const minPreviewWidth = 320;
+const previewWidthStep = 24;
+// Leave the message pane at least ~18% of the window so the drawer never
+// swallows the letter the user is reading.
+const maxPreviewWidthRatio = 0.82;
+
+function previewWidthBounds(): { min: number; max: number } {
+  const viewport = typeof window === "undefined" ? 1440 : window.innerWidth;
+  const max = Math.max(minPreviewWidth, Math.round(viewport * maxPreviewWidthRatio));
+  return { min: minPreviewWidth, max };
+}
+
+function clampPreviewWidth(value: number): number {
+  const { min, max } = previewWidthBounds();
+  return Math.min(Math.max(Math.round(value), min), max);
+}
+
+function storedPreviewWidth(): number {
+  if (typeof window === "undefined") return defaultPreviewWidth;
+  try {
+    const stored = Number(window.localStorage.getItem(previewWidthStorageKey));
+    return Number.isFinite(stored) && stored > 0 ? clampPreviewWidth(stored) : defaultPreviewWidth;
+  } catch {
+    return defaultPreviewWidth;
+  }
+}
+
+/** The interpolation values a failure message needs, chosen by code — never by
+ * the view, so the number and the sentence cannot disagree. */
+function failureValues(code: FailureCode): Record<string, string | number> {
+  switch (code) {
+    case "too_many_pages":
+      return { max: MAX_PAGES };
+    case "too_many_entries":
+      return { max: MAX_ARCHIVE_ENTRIES };
+    case "pixels_too_large":
+    case "image_budget_exceeded":
+      return { max: MAX_IMAGE_PIXELS_PER_PAGE };
+    case "timeout":
+      return { seconds: Math.round(DECODE_DEADLINE_MS / 1_000) };
+    default:
+      return {};
+  }
+}
+
+/**
+ * The preview drawer: an in-flow, non-modal pane beside the message, not a
+ * floating dialog. One attachment at a time, one `ResourceScope`, one
+ * `MemoryLease` per attempt.
+ *
+ * Everything below the header is a surface picked from the document — this
+ * component never asks "is this a PDF?" or "is this an image?", it asks the
+ * registry. That is what keeps extension logic out of the view.
+ */
+export default function AttachmentPreviewDrawer({ messageId, attachment, onClose }: AttachmentPreviewDrawerProps) {
+  const { t } = useI18n();
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const [previewWidth, setPreviewWidth] = useState(storedPreviewWidth);
+  const dragStateRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
+
+  const [attempt, setAttempt] = useState(0);
+  const [previewDocument, setPreviewDocument] = useState<PreviewDocument | null>(null);
+  const [failure, setFailure] = useState<FailureCode | null>(null);
+  const scopeRef = useRef<ResourceScope | null>(null);
+  const attachmentRef = useRef<PreviewAttachment | null>(attachment);
+  attachmentRef.current = attachment;
+  const attachmentKey = attachment ? `${messageId}:${attachment.partId}` : null;
+
+  const persistPreviewWidth = (value: number) => {
+    try {
+      window.localStorage.setItem(previewWidthStorageKey, String(value));
+    } catch {
+      // Storage can be unavailable (private mode, disabled backend): the width
+      // still applies for this session, it just will not be remembered.
+    }
+  };
+
+  const commitPreviewWidth = (value: number) => {
+    const next = clampPreviewWidth(value);
+    setPreviewWidth(next);
+    persistPreviewWidth(next);
+  };
+
+  const beginResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    dragStateRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: previewWidth };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    document.body.classList.add("is-resizing-attachment-preview");
+  };
+
+  const resizeTo = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    // The handle sits on the drawer's left edge, so dragging left widens it.
+    setPreviewWidth(clampPreviewWidth(drag.startWidth + drag.startX - event.clientX));
+  };
+
+  const endResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragStateRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    document.body.classList.remove("is-resizing-attachment-preview");
+    persistPreviewWidth(clampPreviewWidth(previewWidth));
+  };
+
+  useEffect(() => () => {
+    document.body.classList.remove("is-resizing-attachment-preview");
+  }, []);
+
+  const resizeByKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const { min, max } = previewWidthBounds();
+    const step = event.shiftKey ? previewWidthStep * 3 : previewWidthStep;
+    let next: number | null = null;
+    if (event.key === "ArrowLeft") next = previewWidth + step;
+    else if (event.key === "ArrowRight") next = previewWidth - step;
+    else if (event.key === "Home") next = min;
+    else if (event.key === "End") next = max;
+    if (next === null) return;
+    event.preventDefault();
+    commitPreviewWidth(next);
+  };
+
+  // One attempt == one scope + lease + AbortController. Releasing the scope on
+  // every attempt (including unmount) is what keeps object URLs from outliving
+  // the drawer.
+  useEffect(() => {
+    const current = attachmentRef.current;
+    if (!current || !attachmentKey) return undefined;
+    const scope = new ResourceScope();
+    const lease = new MemoryLease();
+    scopeRef.current = scope;
+    const controller = new AbortController();
+    let active = true;
+    setFailure(null);
+    setPreviewDocument(null);
+    const sessionAttachment: SessionAttachment = { messageId, ...current };
+    void runPreview(sessionAttachment, {
+      signal: controller.signal,
+      scope,
+      lease,
+    })
+      .then((previewDocument) => {
+        if (!active) return;
+        setPreviewDocument(previewDocument);
+        setFailure(null);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        const normalized = failureFromUnknown(error);
+        if (normalized instanceof PreviewCanceled) return;
+        setPreviewDocument(null);
+        setFailure(normalized.code);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+      scope.dispose();
+      scopeRef.current = null;
+    };
+  }, [attachmentKey, messageId, attempt]);
+
+  // The preview is a non-modal in-flow pane next to the message (a Gmail-style
+  // reading pane), so focus simply lands on the drawer itself and the reader
+  // stays interactive; no trap is installed.
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const hadAttachmentRef = useRef(false);
+  useEffect(() => {
+    if (!attachment) {
+      if (hadAttachmentRef.current) {
+        hadAttachmentRef.current = false;
+        const target = previousFocusRef.current;
+        previousFocusRef.current = null;
+        if (target?.isConnected) window.requestAnimationFrame(() => target.focus());
+      }
+      return undefined;
+    }
+    if (!hadAttachmentRef.current) {
+      hadAttachmentRef.current = true;
+      previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+    dialogRef.current?.focus();
+    return undefined;
+  }, [attachment]);
+
+  // The reader renders `{state.attachmentPreview && <AttachmentPreviewDrawer …/>}`,
+  // so closing drops the element rather than feeding `attachment={null}`: the
+  // restore branch above would never run on the path the app actually takes.
+  // Restoring here too covers the unmount. The `isConnected` guard is what
+  // keeps this from fighting the reader, which unmounts the drawer as part of
+  // tearing itself down and then focuses the message list on its own.
+  useEffect(() => () => {
+    if (!hadAttachmentRef.current) return;
+    hadAttachmentRef.current = false;
+    const target = previousFocusRef.current;
+    previousFocusRef.current = null;
+    if (target?.isConnected) window.requestAnimationFrame(() => target.focus());
+  }, []);
+
+  const { closing, requestClose } = useDismissTransition(() => {
+    onClose();
+  }, 260);
+
+  useEffect(() => {
+    if (!attachment) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Capture + preventDefault + stopImmediatePropagation, matching the other
+      // shell dialogs: the drawer is the top layer above the reader, so this
+      // Escape closes only the preview and must not also close the reader
+      // behind it in the same keypress.
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      requestClose();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [attachment, requestClose]);
+
+  const download = useCallback(() => {
+    const current = attachmentRef.current;
+    if (!current) return;
+    void api
+      .downloadAttachment(messageId, current.partId)
+      .then((blob) => {
+        triggerBlobDownload(blob, sanitizeDownloadName(current.filename, 120) || "attachment");
+      })
+      .catch(() => undefined);
+  }, [messageId]);
+
+  if (!attachment) return null;
+
+  const widthBounds = previewWidthBounds();
+  const scope = scopeRef.current;
+  const Surface = previewDocument ? surfaceComponentFor(previewDocument.surface.surface) : null;
+  const presentation = failure ? failurePresentation(failure) : null;
+
+  return (
+    <section
+      ref={dialogRef}
+      className={`attachment-preview-drawer${closing ? " closing" : ""}`}
+      style={{ "--attachment-preview-width": `${previewWidth}px` } as CSSProperties}
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby="attachment-preview-title"
+      tabIndex={-1}
+    >
+      <div
+        className="attachment-preview-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t("mail.attachment.previewResize")}
+        aria-valuemin={widthBounds.min}
+        aria-valuemax={widthBounds.max}
+        aria-valuenow={previewWidth}
+        tabIndex={0}
+        onPointerDown={beginResize}
+        onPointerMove={resizeTo}
+        onPointerUp={endResize}
+        onPointerCancel={endResize}
+        onKeyDown={resizeByKeyboard}
+        onDoubleClick={() => commitPreviewWidth(defaultPreviewWidth)}
+      />
+      <header className="modal-heading attachment-preview-heading">
+        <div className="attachment-preview-title-copy">
+          <h2 id="attachment-preview-title">{t("mail.attachment.previewTitle")}</h2>
+          <small className="truncated-tooltip" data-tooltip={sanitizeDisplayName(attachment.filename)}>
+            <span>{sanitizeDisplayName(attachment.filename)}</span>
+          </small>
+        </div>
+        <div className="attachment-preview-heading-actions">
+          <IconButton label={t("common.close")} onClick={requestClose}>
+            <X size={18} />
+          </IconButton>
+        </div>
+      </header>
+      <div className="attachment-preview-body">
+        {presentation && failure ? (
+          <div className="attachment-preview-error" role="alert">
+            <FileText size={30} aria-hidden="true" />
+            <p>{t(presentation.messageKey, failureValues(failure))}</p>
+            <button type="button" className="attachment-preview-retry" onClick={() => setAttempt((current) => current + 1)}>
+              <RotateCw size={14} aria-hidden="true" />
+              {t("mail.attachment.previewRetry")}
+            </button>
+          </div>
+        ) : previewDocument && Surface && scope ? (
+          <Surface document={previewDocument} scope={scope} onDownload={download} />
+        ) : (
+          <div className="attachment-preview-loading" role="status">
+            <LoaderCircle className="spin" size={20} aria-hidden="true" />
+            <span>{t("mail.attachment.previewLoading")}</span>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
