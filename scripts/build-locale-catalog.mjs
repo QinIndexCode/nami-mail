@@ -51,6 +51,16 @@ const nativeCopyKeys = {
   externalConfirmReject: "native.externalConfirm.reject",
   externalAccessDriftTitle: "native.externalAccess.drift.title",
   externalAccessDriftBody: "native.externalAccess.drift.body",
+  externalPairAllowMessage: "native.externalPair.allow.message",
+  externalPairAllowFingerprint: "native.externalPair.allow.fingerprint",
+  externalPairAllowAccounts: "native.externalPair.allow.accounts",
+  externalPairAllowBoundary: "native.externalPair.allow.boundary",
+  externalPairAllowButton: "native.externalPair.allow.button",
+  externalPairRevokeMessage: "native.externalPair.revoke.message",
+  externalPairRevokeEffect: "native.externalPair.revoke.effect",
+  externalPairRevokeButton: "native.externalPair.revoke.button",
+  externalPairCancel: "common.cancel",
+  externalPairNoAccounts: "native.externalPair.noAccounts",
 };
 export function canonicalLocale(value) {
   if (typeof value !== "string") return null;

@@ -48,172 +48,112 @@ export type SettingsConnectionsSectionProps = {
 type IdePreset = "claude" | "cursor" | "vscode" | "windsurf" | "generic";
 type ShellKind = "powershell" | "cmd" | "bash";
 
+/**
+ * One stanza for every preset: the mcpServers block is byte-identical across
+ * clients, only the file it lives in differs, so a copied config never depends
+ * on which preset generated it.
+ */
+const IDE_MCP_SERVER_JSON = JSON.stringify(
+  {
+    mcpServers: {
+      namimail: {
+        command: "cmd.exe",
+        args: ["/d", "/s", "/c", "namimail mcp start"],
+      },
+    },
+  },
+  null,
+  2,
+);
+
 const IDE_CONFIGS: Record<IdePreset, {
   labelKey: string;
   pathHint: string;
   filename: string;
-  json: string;
 }> = {
   claude: {
     labelKey: "settings.connections.mcp.clientClaude",
     pathHint: "%APPDATA%\\Claude\\claude_desktop_config.json",
     filename: "claude_desktop_config.json",
-    json: JSON.stringify(
-      {
-        mcpServers: {
-          namimail: {
-            command: "cmd.exe",
-            args: ["/d", "/s", "/c", "namimail mcp start"],
-          },
-        },
-      },
-      null,
-      2,
-    ),
   },
   cursor: {
     labelKey: "settings.connections.mcp.clientCursor",
     pathHint: ".cursor/mcp.json",
     filename: "mcp.json",
-    json: JSON.stringify(
-      {
-        mcpServers: {
-          namimail: {
-            command: "cmd.exe",
-            args: ["/d", "/s", "/c", "namimail mcp start"],
-          },
-        },
-      },
-      null,
-      2,
-    ),
   },
   vscode: {
     labelKey: "settings.connections.mcp.clientVscode",
     pathHint: ".vscode/mcp.json",
     filename: "mcp.json",
-    json: JSON.stringify(
-      {
-        mcpServers: {
-          namimail: {
-            command: "cmd.exe",
-            args: ["/d", "/s", "/c", "namimail mcp start"],
-          },
-        },
-      },
-      null,
-      2,
-    ),
   },
   windsurf: {
     labelKey: "settings.connections.mcp.clientWindsurf",
     pathHint: "~/.codeium/windsurf/mcp_config.json",
     filename: "mcp_config.json",
-    json: JSON.stringify(
-      {
-        mcpServers: {
-          namimail: {
-            command: "cmd.exe",
-            args: ["/d", "/s", "/c", "namimail mcp start"],
-          },
-        },
-      },
-      null,
-      2,
-    ),
   },
   generic: {
     labelKey: "settings.connections.mcp.clientGeneric",
     pathHint: "mcpServers.json",
     filename: "mcpServers.json",
-    json: JSON.stringify(
-      {
-        mcpServers: {
-          namimail: {
-            command: "cmd.exe",
-            args: ["/d", "/s", "/c", "namimail mcp start"],
-          },
-        },
-      },
-      null,
-      2,
-    ),
   },
 };
 
+/**
+ * The tool catalogue the settings page shows. Names mirror the External Mail
+ * v1 contract tables one-for-one (the installer smoke pins that contract at
+ * exactly sixteen tools); descriptions live in the locale catalog under
+ * `settings.connections.mcp.tool.<key>.desc` so they pass the parity check
+ * like every other piece of user-facing copy.
+ */
 const EXPOSED_TOOLS = [
-  { name: "namimail_accounts_list", type: "read", descZh: "列出已获批授权的邮箱账户与同步状态", descEn: "List configured email accounts and sync state" },
-  { name: "namimail_folders_list", type: "read", descZh: "列出指定账户的邮箱文件夹与树状层级", descEn: "List folders and mailbox tree for an account" },
-  { name: "namimail_messages_list", type: "read", descZh: "查询指定文件夹的邮件列表（支持分页、未读筛选）", descEn: "List messages in a folder with paging and filters" },
-  { name: "namimail_messages_search", type: "read", descZh: "全文检索邮件（支持发件人、主题、正文、时间范围）", descEn: "Search messages by sender, subject, body, or date range" },
-  { name: "namimail_mail_summarize", type: "read", descZh: "分析邮件并提取摘要与待办待处理事项", descEn: "Analyze email content and generate structured summary" },
-  { name: "namimail_message_get", type: "read", descZh: "读取指定邮件的完整正文内容与元数据", descEn: "Fetch full message content, body, and headers" },
-  { name: "namimail_messages_batch_get", type: "read", descZh: "单次批量读取多封邮件内容（最多 10 封）", descEn: "Batch fetch multiple messages in a single call (up to 10)" },
-  { name: "namimail_threads_get", type: "read", descZh: "读取完整邮件来往会话线程与上下文", descEn: "Retrieve complete email conversation thread" },
-  { name: "namimail_attachments_list", type: "read", descZh: "查询指定邮件的附件元数据列表", descEn: "List attachment metadata for a given message" },
-  { name: "namimail_draft_create", type: "write", descZh: "创建新邮件草稿", descEn: "Create a new draft message" },
-  { name: "namimail_draft_update", type: "write", descZh: "更新草稿的主题、收件人或正文内容", descEn: "Update subject, recipients, or body of a draft" },
-  { name: "namimail_draft_delete", type: "write", descZh: "删除指定草稿", descEn: "Delete an existing draft message" },
-  { name: "namimail_messages_move", type: "write", descZh: "将邮件移动到其他文件夹（如归档、废纸篓）", descEn: "Move message to folder (archive, trash, etc.)" },
-  { name: "namimail_messages_set_flag", type: "write", descZh: "修改邮件标志（标为已读/未读、星标）", descEn: "Set message flags (read, unread, starred)" },
-  { name: "namimail_messages_send", type: "write", descZh: "直接发送新邮件", descEn: "Send an email immediately" },
-  { name: "namimail_mail_reply", type: "write", descZh: "基于原邮件生成并发送回复", descEn: "Reply to an email thread directly" },
+  { name: "namimail_accounts_list", type: "read", key: "accountsList" },
+  { name: "namimail_folders_list", type: "read", key: "foldersList" },
+  { name: "namimail_messages_list", type: "read", key: "messagesList" },
+  { name: "namimail_messages_search", type: "read", key: "messagesSearch" },
+  { name: "namimail_mail_summarize", type: "read", key: "mailSummarize" },
+  { name: "namimail_message_get", type: "read", key: "messageGet" },
+  { name: "namimail_messages_batch_get", type: "read", key: "messagesBatchGet" },
+  { name: "namimail_threads_get", type: "read", key: "threadsGet" },
+  { name: "namimail_attachments_list", type: "read", key: "attachmentsList" },
+  { name: "namimail_draft_create", type: "write", key: "draftCreate" },
+  { name: "namimail_draft_update", type: "write", key: "draftUpdate" },
+  { name: "namimail_draft_delete", type: "write", key: "draftDelete" },
+  { name: "namimail_messages_move", type: "write", key: "messagesMove" },
+  { name: "namimail_messages_set_flag", type: "write", key: "messagesSetFlag" },
+  { name: "namimail_messages_send", type: "write", key: "messagesSend" },
+  { name: "namimail_mail_reply", type: "write", key: "mailReply" },
 ] as const;
 
-const SHELL_SCRIPTS: Record<ShellKind, string> = {
-  powershell: `# 1. 检查宿主状态与当前配对活跃情况
-namimail status
-
-# 2. 为当前终端发起客户端配对授权（首次需在桌面窗口批准）
-namimail pair
-
-# 3. 列出已授权的邮箱账户
-namimail accounts list
-
-# 4. 全文检索最近邮件
-namimail messages search "发票" --limit 5
-
-# 5. 调用本地 AI 生成邮件内容摘要
-namimail mail summarize --message <message_id>`,
-
-  cmd: `rem 1. 检查宿主状态
-namimail status
-
-rem 2. 为当前终端发起客户端配对授权
-namimail pair
-
-rem 3. 列出授权的邮箱账户
-namimail accounts list
-
-rem 4. 全文检索最近邮件
-namimail messages search "发票" --limit 5`,
-
-  bash: `# 1. Check AgentHost status and active pairings
-namimail status
-
-# 2. Authorize terminal pairing with Nami Mail desktop
-namimail pair
-
-# 3. List authorized accounts
-namimail accounts list
-
-# 4. Search recent messages
-namimail messages search "invoice" --limit 5`,
+const SHELL_LABEL_KEYS: Record<ShellKind, string> = {
+  powershell: "settings.connections.cli.shellPowershell",
+  cmd: "settings.connections.cli.shellCmd",
+  bash: "settings.connections.cli.shellBash",
 };
 
+/** Pairing status → its locale key, so the row renderer cannot compose a key
+ * the locale catalog does not carry. */
+const PAIRING_STATUS_KEYS: Record<"active" | "revoked" | "expired", string> = {
+  active: "settings.connections.pairings.statusActive",
+  revoked: "settings.connections.pairings.statusRevoked",
+  expired: "settings.connections.pairings.statusExpired",
+};
+
+/** The full quick-start script per shell, localized (comments included). */
+const shellScriptKey = (shell: ShellKind): string => `settings.connections.cli.script.${shell}`;
+
 const COMMON_CLI_COMMANDS = [
-  { cmd: "namimail status", descZh: "查看 AgentHost 运行状态与配对活跃情况", descEn: "Check AgentHost status and active pairings" },
-  { cmd: "namimail pair", descZh: "为当前终端发起客户端配对授权（必要前置）", descEn: "Pair current terminal client with desktop broker" },
-  { cmd: "namimail doctor", descZh: "全面诊断本地数据库、网络与 Broker 通信", descEn: "Diagnose local database, broker, and network" },
-  { cmd: "namimail accounts list", descZh: "列出已获批授权的全部邮箱账户及同步状态", descEn: "List all authorized accounts and sync states" },
-  { cmd: "namimail folders list", descZh: "查询指定邮箱账户的文件夹与树状层级", descEn: "List mailbox folders for an account" },
-  { cmd: "namimail messages list", descZh: "查询最近收到的邮件元数据列表", descEn: "List recent messages in mailbox" },
-  { cmd: "namimail messages search", descZh: "全文检索邮件（支持主题、发件人、正文）", descEn: "Search messages across mailbox" },
-  { cmd: "namimail mail summarize", descZh: "调用本地 AI 提取邮件要点与待办事项", descEn: "Summarize a message using local AI" },
-  { cmd: "namimail draft create", descZh: "在指定账户中创建新邮件草稿", descEn: "Create a new draft in mailbox" },
-  { cmd: "namimail messages send", descZh: "发送邮件（需对应写操作权限许可）", descEn: "Send an email (requires write permissions)" },
-  { cmd: "namimail service start", descZh: "在无界面环境中显式启动后台服务（AgentHost）", descEn: "Start headless AgentHost background service" },
-  { cmd: "namimail service stop", descZh: "停止后台运行的 AgentHost 服务", descEn: "Stop headless AgentHost background service" },
+  { cmd: "namimail status", key: "status" },
+  { cmd: "namimail pair", key: "pair" },
+  { cmd: "namimail doctor", key: "doctor" },
+  { cmd: "namimail accounts list", key: "accountsList" },
+  { cmd: "namimail folders list", key: "foldersList" },
+  { cmd: "namimail messages list", key: "messagesList" },
+  { cmd: "namimail messages search", key: "messagesSearch" },
+  { cmd: "namimail mail summarize", key: "mailSummarize" },
+  { cmd: "namimail draft create", key: "draftCreate" },
+  { cmd: "namimail messages send", key: "messagesSend" },
+  { cmd: "namimail service start", key: "serviceStart" },
+  { cmd: "namimail service stop", key: "serviceStop" },
 ] as const;
 
 export default function SettingsConnectionsSection({
@@ -251,7 +191,7 @@ export default function SettingsConnectionsSection({
       const res = await api.agentPairings();
       setPairings(res.pairings);
     } catch (err) {
-      setPairingsError(t("settings.connections.pairings.revokeFailed", { error: String(err) }));
+      setPairingsError(t("settings.connections.pairings.loadFailed", { error: String(err) }));
     } finally {
       setPairingsLoading(false);
     }
@@ -275,7 +215,7 @@ export default function SettingsConnectionsSection({
   }, [isBusy, onBusyChange]);
 
   const handleDownloadConfig = (preset: IdePreset) => {
-    triggerBlobDownload(new Blob([IDE_CONFIGS[preset].json], { type: "application/json;charset=utf-8" }), IDE_CONFIGS[preset].filename);
+    triggerBlobDownload(new Blob([IDE_MCP_SERVER_JSON], { type: "application/json;charset=utf-8" }), IDE_CONFIGS[preset].filename);
   };
 
   const handleRevokePairing = async (clientId: string) => {
@@ -305,7 +245,10 @@ export default function SettingsConnectionsSection({
     return pairings?.filter((p) => p.status === "active").length ?? 0;
   }, [pairings]);
 
-  const isZh = t("settings.nav.connections.title") === "外部连接";
+  /** Write tools answer to the entry point's tier, so the catalogue can say
+   * *why* a write tool is listed but not callable instead of leaving the user
+   * to discover the tier gate through a failed call. */
+  const mcpWritesLocked = currentSettings.agentMcpAccessLevel === "read-only";
 
   return (
     <section className="settings-section" data-settings-nav="connections" aria-labelledby="connections-settings">
@@ -422,6 +365,11 @@ export default function SettingsConnectionsSection({
                 <span className="connections-step-num">1</span>
                 <span className="connections-step-text">
                   <span>{t("settings.connections.mcp.step1Title")}</span>
+                  {activePairingsCount > 0 ? (
+                    <span className="external-pairing-status" aria-label={t("settings.connections.mcp.step1Done")}>
+                      {t("settings.connections.mcp.step1Done")}
+                    </span>
+                  ) : null}
                   <span
                     className="field-help-icon"
                     data-tooltip={t("settings.connections.mcp.step1Desc")}
@@ -525,7 +473,7 @@ export default function SettingsConnectionsSection({
                 />
                 <CopyButton
                   className="secondary-button settings-copy-btn"
-                  text={IDE_CONFIGS[selectedIde].json}
+                  text={IDE_MCP_SERVER_JSON}
                   ariaLabel={t("settings.connections.mcp.copyJson")}
                   copiedAriaLabel={t("settings.connections.mcp.copiedJson")}
                   label={t("settings.connections.mcp.copyJson")}
@@ -544,7 +492,7 @@ export default function SettingsConnectionsSection({
               </div>
             </div>
             <pre className="connections-code-block">
-              <code>{IDE_CONFIGS[selectedIde].json}</code>
+              <code>{IDE_MCP_SERVER_JSON}</code>
             </pre>
           </div>
 
@@ -573,11 +521,16 @@ export default function SettingsConnectionsSection({
                   <div key={tool.name} className="connections-tool-card">
                     <div className="connections-tool-head">
                       <span className="connections-tool-name">{tool.name}</span>
-                      <span className={`connections-tool-badge ${tool.type}`}>
-                        {tool.type === "read" ? t("settings.connections.mcp.tagRead") : t("settings.connections.mcp.tagWrite")}
-                      </span>
+                      <span
+                      className={`connections-tool-badge ${tool.type}`}
+                      title={tool.type === "write" && mcpWritesLocked ? t("settings.connections.mcp.writeLocked") : undefined}
+                    >
+                      {tool.type === "read"
+                        ? t("settings.connections.mcp.tagRead")
+                        : `${t("settings.connections.mcp.tagWrite")}${mcpWritesLocked ? ` · ${t("settings.connections.mcp.writeLocked")}` : ""}`}
+                    </span>
                     </div>
-                    <span className="connections-tool-desc">{isZh ? tool.descZh : tool.descEn}</span>
+                    <span className="connections-tool-desc">{t(`settings.connections.mcp.tool.${tool.key}.desc`)}</span>
                   </div>
                 ))}
               </div>
@@ -615,7 +568,7 @@ export default function SettingsConnectionsSection({
                     className={`secondary-button connections-shell-tab${active ? " active" : ""}`}
                     onClick={() => setSelectedShell(shell)}
                   >
-                    {t(`settings.connections.cli.shell${shell.charAt(0).toUpperCase() + shell.slice(1)}` as any)}
+                    {t(SHELL_LABEL_KEYS[shell])}
                   </button>
                 );
               })}
@@ -650,7 +603,7 @@ export default function SettingsConnectionsSection({
           <div className="connections-shell-wrap">
             <CopyButton
               className="secondary-button connections-shell-copy-btn settings-copy-btn"
-              text={SHELL_SCRIPTS[selectedShell]}
+              text={t(shellScriptKey(selectedShell))}
               ariaLabel={t("settings.connections.cli.copyScript")}
               copiedAriaLabel={t("settings.connections.cli.copiedScript")}
               label={t("settings.connections.cli.copyScript")}
@@ -659,7 +612,7 @@ export default function SettingsConnectionsSection({
               size={12}
             />
             <pre className="connections-code-block">
-              <code>{SHELL_SCRIPTS[selectedShell]}</code>
+              <code>{t(shellScriptKey(selectedShell))}</code>
             </pre>
           </div>
 
@@ -688,7 +641,7 @@ export default function SettingsConnectionsSection({
                   <div key={item.cmd} className="connections-cmd-row">
                     <div className="connections-cmd-left">
                       <code className="connections-cmd-code">{item.cmd}</code>
-                      <span className="connections-cmd-desc">{isZh ? item.descZh : item.descEn}</span>
+                      <span className="connections-cmd-desc">{t(`settings.connections.cli.cmd.${item.key}.desc`)}</span>
                     </div>
                     <CopyButton
                       className="secondary-button settings-copy-btn"
@@ -798,7 +751,7 @@ export default function SettingsConnectionsSection({
                           {pairing.clientId.slice(0, 22)}…
                         </span>
                         <span className="external-pairing-status">
-                          {t(`settings.connections.pairings.status${pairing.status.charAt(0).toUpperCase() + pairing.status.slice(1)}` as any)}
+                          {t(PAIRING_STATUS_KEYS[pairing.status])}
                         </span>
                         {drifted && (
                           <span className="external-pairing-drift">

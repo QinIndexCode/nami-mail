@@ -1229,7 +1229,7 @@ async function processAgentPairingRequest(requestId: string): Promise<void> {
     await dialog.showMessageBox(window, {
       type: "info",
       title: "NamiMail Agent",
-      message: "Connect a mail account before approving external Agent access.",
+      message: nativeCopy("externalPairNoAccounts"),
       buttons: ["OK"],
     });
     await recordPairingFailure(requestId);
@@ -1239,17 +1239,24 @@ async function processAgentPairingRequest(requestId: string): Promise<void> {
   const decision = await dialog.showMessageBox(window, {
     type: "question",
     title: "NamiMail Agent",
-    message: isRevocation
-      ? `Revoke external access for profile “${request.profile}”?`
-      : `Allow external read-only access for profile “${request.profile}”?`,
+    message: nativeCopy(
+      isRevocation ? "externalPairRevokeMessage" : "externalPairAllowMessage",
+      { profile: request.profile },
+    ),
     detail: isRevocation
-      ? `Profile fingerprint: ${fingerprint}\n\nThe profile will no longer be able to read mail through NamiMail.`
+      ? [
+        nativeCopy("externalPairAllowFingerprint", { fingerprint }),
+        nativeCopy("externalPairRevokeEffect"),
+      ].join("\n\n")
       : [
-        `Profile fingerprint: ${fingerprint}`,
-        `Authorized account snapshot: ${accountIds.length} connected account${accountIds.length === 1 ? "" : "s"}.`,
-        "The external interface can only list or read bounded mail data. It cannot send, move, delete, or change mail.",
+        nativeCopy("externalPairAllowFingerprint", { fingerprint }),
+        nativeCopy("externalPairAllowAccounts", { count: accountIds.length }),
+        nativeCopy("externalPairAllowBoundary"),
       ].join("\n\n"),
-    buttons: [isRevocation ? "Revoke access" : "Allow read-only access", "Cancel"],
+    buttons: [
+      nativeCopy(isRevocation ? "externalPairRevokeButton" : "externalPairAllowButton"),
+      nativeCopy("externalPairCancel"),
+    ],
     defaultId: 1,
     cancelId: 1,
     noLink: true,
