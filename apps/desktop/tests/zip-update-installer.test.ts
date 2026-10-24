@@ -328,7 +328,9 @@ test("Windows helper launches from a cache path containing cmd metacharacters", 
     return;
   }
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-installer-metachar-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  // The helper reaches its restart stage holding a read lock on the fixture
+  // executable, so cleanup must wait for that handle to unwind.
+  t.after(() => removeFixtureDirectoryAfterWindowsHandleRelease(directory));
   // A bare "&" inside an unquoted token splits the cmd.exe command line, so a
   // cache path like "A&B" proves the launcher quotes every token: before the
   // explicit quoting, the launcher exited with code 1 and the helper never ran.
