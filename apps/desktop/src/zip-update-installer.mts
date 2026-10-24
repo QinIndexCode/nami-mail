@@ -396,18 +396,25 @@ export async function launchZipUpdateInstaller(plan: ZipUpdateInstallerPlan): Pr
     // host initialization and exit silently with code 0 before running the script.
     // The `start ""` shell command launches the PowerShell process with its own
     // independent console session, detached from Node and surviving parent exit.
-    const child = spawn(comspecPath(), [
-      "/d",
-      "/s",
-      "/c",
+    //
+    // Node only quotes spawn arguments that contain whitespace, so a token such
+    // as "C:\Users\A&B\...\install.ps1" used to reach cmd.exe unquoted and the
+    // bare "&" split the command there: the launcher exited 1 and the helper
+    // never started (auto-updates stayed unavailable for such users). The
+    // command line is therefore assembled explicitly with every token quoted —
+    // Windows paths cannot contain double quotes, so plain quoting disarms the
+    // cmd metacharacters — and handed over verbatim.
+    const commandLine = [
       "start",
       '""',
-      powershellPath(),
-      ...psArguments,
-    ], {
+      `"${powershellPath()}"`,
+      ...psArguments.map((argument) => `"${argument}"`),
+    ].join(" ");
+    const child = spawn(comspecPath(), ["/d", "/s", "/c", commandLine], {
       env: minimalSpawnEnvironment(),
       stdio: "ignore",
       windowsHide: true,
+      windowsVerbatimArguments: true,
     });
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {

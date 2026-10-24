@@ -321,3 +321,56 @@ test("Windows helper installs a verified ZIP payload and removes transient updat
   await assert.rejects(fs.access(resultPath), /ENOENT/);
   await assert.rejects(fs.access(versionDirectory), /ENOENT/);
 });
+
+test("Windows helper launches from a cache path containing cmd metacharacters", async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("The update helper is a Windows PowerShell script.");
+    return;
+  }
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-installer-metachar-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  // A bare "&" inside an unquoted token splits the cmd.exe command line, so a
+  // cache path like "A&B" proves the launcher quotes every token: before the
+  // explicit quoting, the launcher exited with code 1 and the helper never ran.
+  const cacheDirectory = path.join(directory, "A&B");
+  const versionDirectory = path.join(cacheDirectory, "9.9.9");
+  await fs.mkdir(versionDirectory, { recursive: true });
+  const archivePath = path.join(versionDirectory, "Nami-Mail-Setup.exe.zip");
+  const archiveBytes = Buffer.from("cmd-metacharacter-path fixture");
+  await fs.writeFile(archivePath, archiveBytes);
+  const archiveSha512 = createHash("sha512").update("mismatching-digest").digest("base64");
+  const currentExecutablePath = path.join(directory, "app-current.zzz");
+  await fs.writeFile(currentExecutablePath, "not-a-real-executable");
+  const resultPath = path.join(cacheDirectory, "install-result.json");
+
+  const launched = await launchZipUpdateInstaller({
+    cacheDirectory,
+    archivePath,
+    archiveSize: archiveBytes.byteLength,
+    archiveSha512,
+    targetVersion: "9.9.9",
+    installerName: "Nami-Mail-Setup.exe",
+    currentExecutablePath,
+    trust: { kind: "ed25519" },
+    parentProcessId: 2147483647,
+  });
+  assert.equal(launched, true);
+
+  // The helper must actually run: with the deliberately mismatching digest it
+  // fails at the archive integrity stage and records that failure, which is the
+  // deterministic signal that the helper started through the metacharacter path.
+  const deadline = Date.now() + 20_000;
+  while (true) {
+    try {
+      await fs.access(resultPath);
+      break;
+    } catch {
+      if (Date.now() >= deadline) {
+        throw new Error("Timed out waiting for the helper's integrity-failure record.");
+      }
+      await sleep(50);
+    }
+  }
+  const record = JSON.parse(await fs.readFile(resultPath, "utf8")) as { version: string };
+  assert.equal(record.version, "9.9.9");
+});
