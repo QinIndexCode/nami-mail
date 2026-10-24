@@ -28,9 +28,8 @@ export {
   codeTextExtensions,
   extensionKinds,
   mediaKind,
-  sniffSignature,
 } from "@nami/agent-contracts";
-export type { AttachmentKind, AttachmentSignature } from "@nami/agent-contracts";
+export type { AttachmentKind } from "@nami/agent-contracts";
 
 /**
  * The renderer-level shape. One kind can be shown by several surfaces and vice

@@ -57,10 +57,9 @@ const SVG_HOSTILE = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="
 
 async function renderDocument(document: PreviewDocument, name: Parameters<typeof surfaceComponentFor>[0]) {
   const Surface = surfaceComponentFor(name);
-  const scope = new ResourceScope();
   // `createElement` rather than JSX so the file keeps the planned `.ts` path.
-  const mounted = await mount(createElement(Surface, { document, scope, onDownload: () => undefined }));
-  return { ...mounted, scope };
+  const mounted = await mount(createElement(Surface, { document, onDownload: () => undefined }));
+  return mounted;
 }
 
 beforeEach(() => {
@@ -78,7 +77,7 @@ describe("injection", () => {
       input(encodeFixtureText(MARKDOWN_HOSTILE), "markdown", "hostile.md", "text/markdown"),
       context(),
     );
-    const { container, unmount, scope } = await renderDocument(document, "markdown");
+    const { container, unmount } = await renderDocument(document, "markdown");
 
     expect(container.querySelector("script")).toBeNull();
     expect(container.querySelector("img")).toBeNull();
@@ -87,7 +86,6 @@ describe("injection", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
 
     await unmount();
-    scope.dispose();
   });
 
   it("Office: renders attacker text as text nodes, never as markup", async () => {
@@ -97,7 +95,7 @@ describe("injection", () => {
       input(fixture.bytes, "office-word", "hostile.docx", "application/vnd.openxmlformats-officedocument"),
       context(),
     );
-    const { container, unmount, scope } = await renderDocument(document, "blocks");
+    const { container, unmount } = await renderDocument(document, "blocks");
 
     expect(container.querySelector("script")).toBeNull();
     expect(container.querySelector("img")).toBeNull();
@@ -106,7 +104,6 @@ describe("injection", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
 
     await unmount();
-    scope.dispose();
   });
 
   it("SVG: sanitizes script and onload before the blob URL is minted", async () => {
@@ -124,7 +121,7 @@ describe("injection", () => {
     expect(sanitized).not.toContain("onload");
     expect(sanitized).not.toContain("javascript:");
 
-    const { container, unmount, scope } = await renderDocument(document, "vector");
+    const { container, unmount } = await renderDocument(document, "vector");
     const image = container.querySelector("img");
     expect(image?.getAttribute("src")).toBe("blob:svg-under-test");
     expect(container.querySelector("script")).toBeNull();
@@ -132,6 +129,5 @@ describe("injection", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
 
     await unmount();
-    scope.dispose();
   });
 });

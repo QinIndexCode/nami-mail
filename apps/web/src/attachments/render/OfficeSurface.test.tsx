@@ -1,11 +1,9 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { MAX_OFFICE_BLOCKS } from "../budget";
-import { ResourceScope } from "../document";
 import { documentWith, markup } from "../testing/surfaceHarness";
 import OfficeSurface from "./OfficeSurface";
 
-const scope = new ResourceScope();
 const onDownload = () => undefined;
 
 describe("OfficeSurface", () => {
@@ -16,7 +14,6 @@ describe("OfficeSurface", () => {
           { surface: "blocks", blocks: [{ text: "first paragraph" }, { text: "second paragraph" }] },
           { kind: "office-word", filename: "notes.docx" },
         )}
-        scope={scope}
         onDownload={onDownload}
       />,
     );
@@ -32,7 +29,6 @@ describe("OfficeSurface", () => {
           { surface: "sheet", sheets: [{ name: "Sheet1", rows }] },
           { kind: "office-sheet", filename: "book.xlsx" },
         )}
-        scope={scope}
         onDownload={onDownload}
       />,
     );
@@ -48,7 +44,6 @@ describe("OfficeSurface", () => {
       markup(
         <OfficeSurface
           document={documentWith({ surface: "blocks", blocks }, { kind: "office-word" })}
-          scope={scope}
           onDownload={onDownload}
         />,
       ),
@@ -59,7 +54,6 @@ describe("OfficeSurface", () => {
     const html = markup(
       <OfficeSurface
         document={documentWith({ surface: "blocks", blocks: [{ text: "<script>alert(1)</script>" }] }, { kind: "office-word" })}
-        scope={scope}
         onDownload={onDownload}
       />,
     );

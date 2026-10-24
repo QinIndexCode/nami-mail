@@ -2,7 +2,6 @@
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PAGE_PIXELS_MAX } from "../budget";
-import { ResourceScope } from "../document";
 import { PageFailure } from "../failure";
 import { documentWith, flush, mount, zh } from "../testing/surfaceHarness";
 import PdfSurface from "./PdfSurface";
@@ -71,7 +70,7 @@ describe("PdfSurface", () => {
   it("renders the page label, a named canvas and a disabled previous button", async () => {
     const { handle } = pdfDocument();
     const { container, unmount } = await mount(
-      <PdfSurface document={pdfSurface(handle)} scope={scope()} onDownload={() => undefined} />,
+      <PdfSurface document={pdfSurface(handle)} onDownload={() => undefined} />,
     );
     await flush();
     expect(container.textContent).toContain(zh("mail.attachment.previewPageOf", { page: 1, total: 3 }));
@@ -94,7 +93,7 @@ describe("PdfSurface", () => {
   it("renders with annotations disabled and a canvas sized from the viewport", async () => {
     const { handle, pages } = pdfDocument();
     const { container, unmount } = await mount(
-      <PdfSurface document={pdfSurface(handle)} scope={scope()} onDownload={() => undefined} />,
+      <PdfSurface document={pdfSurface(handle)} onDownload={() => undefined} />,
     );
     await flush();
     const canvas = container.querySelector("canvas");
@@ -121,7 +120,6 @@ describe("PdfSurface", () => {
           { surface: "pdf", documentId: "pdf-test", pageCount: 1, page: 1 },
           { kind: "pdf", filename: "tall.pdf", pdf: handle },
         )}
-        scope={scope()}
         onDownload={() => undefined}
       />,
     );
@@ -138,7 +136,7 @@ describe("PdfSurface", () => {
     mocks.pageBudgetFailure.mockReturnValue(new PageFailure("image_budget_exceeded"));
     const { handle } = pdfDocument();
     const { container, unmount } = await mount(
-      <PdfSurface document={pdfSurface(handle)} scope={scope()} onDownload={() => undefined} />,
+      <PdfSurface document={pdfSurface(handle)} onDownload={() => undefined} />,
     );
     await flush();
     const status = container.querySelector('[role="status"]');
@@ -150,7 +148,7 @@ describe("PdfSurface", () => {
   it("releases the page when the drawer unmounts", async () => {
     const { handle, pages } = pdfDocument();
     const { unmount } = await mount(
-      <PdfSurface document={pdfSurface(handle)} scope={scope()} onDownload={() => undefined} />,
+      <PdfSurface document={pdfSurface(handle)} onDownload={() => undefined} />,
     );
     await flush();
     await unmount();
@@ -172,7 +170,6 @@ describe("PdfSurface", () => {
           { surface: "pdf", documentId: "pdf-test", pageCount: 1, page: 1 },
           { kind: "pdf", filename: "late.pdf", pdf: handle },
         )}
-        scope={scope()}
         onDownload={() => undefined}
       />,
     );
@@ -185,4 +182,3 @@ describe("PdfSurface", () => {
   });
 });
 
-const scope = () => new ResourceScope();

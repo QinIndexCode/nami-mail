@@ -1,10 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { ResourceScope } from "../document";
 import { documentWith, markup, zh } from "../testing/surfaceHarness";
 import ArchiveSurface from "./ArchiveSurface";
 
-const scope = new ResourceScope();
 const onDownload = () => undefined;
 
 describe("ArchiveSurface", () => {
@@ -19,7 +17,6 @@ describe("ArchiveSurface", () => {
             { path: "images/logo.png", bytes: 2048 },
           ],
         })}
-        scope={scope}
         onDownload={onDownload}
       />,
     );
@@ -44,7 +41,6 @@ describe("ArchiveSurface", () => {
             { path: "safe/file.txt", bytes: 5 },
           ],
         })}
-        scope={scope}
         onDownload={onDownload}
       />,
     );

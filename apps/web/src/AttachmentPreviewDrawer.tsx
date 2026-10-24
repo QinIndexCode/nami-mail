@@ -275,7 +275,6 @@ export default function AttachmentPreviewDrawer({ messageId, attachment, onClose
   if (!attachment) return null;
 
   const widthBounds = previewWidthBounds();
-  const scope = scopeRef.current;
   const Surface = previewDocument ? surfaceComponentFor(previewDocument.surface.surface) : null;
   const presentation = failure ? failurePresentation(failure) : null;
 
@@ -328,8 +327,8 @@ export default function AttachmentPreviewDrawer({ messageId, attachment, onClose
               {t("mail.attachment.previewRetry")}
             </button>
           </div>
-        ) : previewDocument && Surface && scope ? (
-          <Surface document={previewDocument} scope={scope} onDownload={download} />
+        ) : previewDocument && Surface ? (
+          <Surface document={previewDocument} onDownload={download} />
         ) : (
           <div className="attachment-preview-loading" role="status">
             <LoaderCircle className="spin" size={20} aria-hidden="true" />

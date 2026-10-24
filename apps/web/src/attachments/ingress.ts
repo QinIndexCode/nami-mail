@@ -1,4 +1,4 @@
-import { ApiError, apiError, requestResponse } from "../apiTransport";
+import { apiError, requestResponse } from "../apiTransport";
 import { MAX_INPUT_BYTES, attachmentTimeoutMsFor } from "./budget";
 import { PreviewCanceled, PreviewFailure } from "./failure";
 
@@ -103,7 +103,8 @@ export async function openAttachmentResponse(
     if (timedOut) throw new PreviewFailure("timeout", { cause: error });
     if (controller.signal.aborted) throw new PreviewCanceled();
     if (error instanceof PreviewFailure) throw error;
-    if (error instanceof ApiError) throw new PreviewFailure("network", { cause: error });
+    // An ApiError and any other transport failure share the vocabulary's one
+    // word for them; the response's own detail rides along as the cause.
     throw new PreviewFailure("network", { cause: error });
   }
 }
@@ -151,39 +152,4 @@ export async function readBody(reply: AttachmentReply, cap: number): Promise<Uin
     reply.dispose();
   }
   return bytesOf(chunks, total);
-}
-
-export type ReadTextOptions = { maxChars: number };
-
-/** Streams a body as text, keeping at most `maxChars` code points. */
-export async function readText(reply: AttachmentReply, options: ReadTextOptions): Promise<string> {
-  const decoder = new TextDecoder("utf-8", { fatal: false });
-  const body = reply.response.body;
-  if (!body) return "";
-  const reader = body.getReader();
-  let text = "";
-  let shown = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (reply.timedOut()) throw new PreviewFailure("timeout");
-      if (reply.signal.aborted) throw new PreviewCanceled();
-      if (done) break;
-      if (!value) continue;
-      const chunk = decoder.decode(value, { stream: true });
-      for (const codePoint of chunk) {
-        if (shown >= options.maxChars) continue;
-        text += codePoint;
-        shown += 1;
-      }
-    }
-  } catch (error) {
-    if (reply.timedOut()) throw new PreviewFailure("timeout", { cause: error });
-    if (reply.signal.aborted) throw new PreviewCanceled();
-    if (error instanceof PreviewFailure || error instanceof PreviewCanceled) throw error;
-    throw new PreviewFailure("network", { cause: error });
-  } finally {
-    reply.dispose();
-  }
-  return text;
 }

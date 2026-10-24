@@ -1,16 +1,14 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { ResourceScope } from "../document";
 import { documentWith, markup, zh } from "../testing/surfaceHarness";
 import TextSurface from "./TextSurface";
 
-const scope = new ResourceScope();
 const onDownload = () => undefined;
 
 describe("TextSurface", () => {
   it("renders the retained text as a text node, never as markup", () => {
     const document = documentWith({ surface: "text", text: "<script>alert(1)</script>", shown: 25, total: 25 });
-    const html = markup(<TextSurface document={document} scope={scope} onDownload={onDownload} />);
+    const html = markup(<TextSurface document={document} onDownload={onDownload} />);
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script>");
   });
@@ -19,7 +17,6 @@ describe("TextSurface", () => {
     const truncated = markup(
       <TextSurface
         document={documentWith({ surface: "text", text: "abc", shown: 3, total: 9_000 })}
-        scope={scope}
         onDownload={onDownload}
       />,
     );
@@ -27,7 +24,6 @@ describe("TextSurface", () => {
     const whole = markup(
       <TextSurface
         document={documentWith({ surface: "text", text: "abc", shown: 3, total: 3 })}
-        scope={scope}
         onDownload={onDownload}
       />,
     );
@@ -38,7 +34,6 @@ describe("TextSurface", () => {
     const html = markup(
       <TextSurface
         document={documentWith({ surface: "text", text: "abc", shown: 3, total: 3 })}
-        scope={scope}
         onDownload={onDownload}
       />,
     );
@@ -53,7 +48,6 @@ describe("TextSurface", () => {
           { surface: "markdown", text: "# Title", shown: 7, total: 7 },
           { kind: "markdown", filename: "notes.md", contentType: "text/markdown" },
         )}
-        scope={scope}
         onDownload={onDownload}
       />,
     );
@@ -67,7 +61,6 @@ describe("TextSurface", () => {
       mount(
         <TextSurface
           document={documentWith({ surface: "text", text: "copy me", shown: 7, total: 7 })}
-          scope={scope}
           onDownload={onDownload}
         />,
       ),

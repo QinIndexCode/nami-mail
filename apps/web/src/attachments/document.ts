@@ -47,13 +47,7 @@ export type PreviewDocument = {
 
 export type SurfaceProps = {
   document: PreviewDocument;
-  scope: ResourceScope;
   onDownload: () => void;
-  /**
-   * Media only: the browser's own decoder said no (an unsupported container),
-   * so the surface swaps itself for the download card. Absent elsewhere.
-   */
-  onFallback?: (reason: DownloadOnlyReason) => void;
 };
 
 /** What ingress hands to the decoder: the classified input plus its bytes. */

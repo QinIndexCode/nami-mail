@@ -5,7 +5,6 @@ import { ResourceScope } from "../document";
 import { documentWith, flush, markup, mount, zh } from "../testing/surfaceHarness";
 import MediaSurface from "./MediaSurface";
 
-const scope = new ResourceScope();
 const onDownload = () => undefined;
 
 describe("MediaSurface", () => {
@@ -16,7 +15,6 @@ describe("MediaSurface", () => {
           { surface: "media", url: "blob:app/a", mediaKind: "audio", filename: "voice.mp3" },
           { kind: "media-audio", filename: "voice.mp3", contentType: "audio/mpeg", size: 1024 },
         )}
-        scope={scope}
         onDownload={onDownload}
       />,
     );
@@ -41,7 +39,6 @@ describe("MediaSurface", () => {
           { surface: "media", url: "blob:app/v", mediaKind: "video", filename: "clip.mp4" },
           { kind: "media-video", filename: "clip.mp4", contentType: "video/mp4", size: 1024 },
         )}
-        scope={scope}
         onDownload={onDownload}
       />,
     );
@@ -55,16 +52,13 @@ describe("MediaSurface", () => {
   });
 
   it("swaps to the download card when the browser refuses the container", async () => {
-    const onFallback = vi.fn();
     const { container, unmount } = await mount(
       <MediaSurface
         document={documentWith(
           { surface: "media", url: "blob:app/a", mediaKind: "audio", filename: "voice.opus" },
           { kind: "media-audio", filename: "voice.opus", contentType: "audio/opus", size: 1024 },
         )}
-        scope={scope}
         onDownload={onDownload}
-        onFallback={onFallback}
       />,
     );
     const element = container.querySelector("audio");
@@ -73,7 +67,6 @@ describe("MediaSurface", () => {
       element?.dispatchEvent(new Event("error"));
     });
     await flush();
-    expect(onFallback).toHaveBeenCalledWith("unsupported");
     expect(container.textContent).toContain(zh("mail.attachment.previewUnsupported"));
     expect(container.querySelector("audio")).toBeNull();
     await unmount();
@@ -92,7 +85,6 @@ describe("MediaSurface", () => {
           { surface: "media", url, mediaKind: "audio", filename: "voice.ogg" },
           { kind: "media-audio", filename: "voice.ogg", contentType: "audio/ogg", size: 4 },
         )}
-        scope={mediaScope}
         onDownload={onDownload}
       />,
     );
@@ -108,7 +100,6 @@ describe("MediaSurface", () => {
       markup(
         <MediaSurface
           document={documentWith({ surface: "text", text: "x", shown: 1, total: 1 })}
-          scope={scope}
           onDownload={onDownload}
         />,
       ),

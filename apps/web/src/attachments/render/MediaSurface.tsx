@@ -11,12 +11,12 @@ import FallbackSurface from "./FallbackSurface";
  * download card with reason `unsupported` — the honest answer, since the format
  * was classified correctly but has no player here.
  */
-export default function MediaSurface({ document, scope, onDownload, onFallback }: SurfaceProps) {
+export default function MediaSurface({ document, onDownload }: SurfaceProps) {
   const [failed, setFailed] = useState(false);
   const surface = document.surface;
   if (surface.surface !== "media") return null;
   if (failed) {
-    return <FallbackSurface document={asDownloadOnly(document, "unsupported")} scope={scope} onDownload={onDownload} />;
+    return <FallbackSurface document={asDownloadOnly(document, "unsupported")} onDownload={onDownload} />;
   }
   const shared = {
     className: "attachment-preview-media",
@@ -24,10 +24,7 @@ export default function MediaSurface({ document, scope, onDownload, onFallback }
     controls: true,
     preload: "metadata",
     "aria-label": surface.filename,
-    onError: () => {
-      setFailed(true);
-      onFallback?.("unsupported");
-    },
+    onError: () => setFailed(true),
   } as const;
   return (
     <div className="attachment-preview-media-wrap" data-media-kind={surface.mediaKind}>

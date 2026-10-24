@@ -1,12 +1,11 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { INGRESS_BASE_MS } from "./budget";
-import { PreviewCanceled, PreviewFailure } from "./failure";
+import { PreviewCanceled } from "./failure";
 import {
   attachmentContentPath,
   openAttachmentResponse,
   readBody,
-  readText,
   setAttachmentResponseProvider,
 } from "./ingress";
 
@@ -128,25 +127,3 @@ describe("openAttachmentResponse + readBody", () => {
   });
 });
 
-describe("readText", () => {
-  it("keeps at most maxChars code points and never splits a surrogate pair", async () => {
-    setAttachmentResponseProvider(async () => new Response(streamOf([bytes("😀😀😀")])));
-    const reply = await openAttachmentResponse("m", "p");
-    await expect(readText(reply, { maxChars: 2 })).resolves.toBe("😀😀");
-  });
-
-  it("propagates a failure while streaming", async () => {
-    setAttachmentResponseProvider(
-      async () =>
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.error(new Error("socket reset"));
-            },
-          }),
-        ),
-    );
-    const reply = await openAttachmentResponse("m", "p");
-    await expect(readText(reply, { maxChars: 10 })).rejects.toBeInstanceOf(PreviewFailure);
-  });
-});

@@ -1,11 +1,9 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { ResourceScope } from "../document";
 import { documentWith, flush, markup, mount, zh } from "../testing/surfaceHarness";
 import ImageSurface from "./ImageSurface";
 
-const scope = new ResourceScope();
 const onDownload = () => undefined;
 
 describe("ImageSurface", () => {
@@ -19,7 +17,6 @@ describe("ImageSurface", () => {
           height: 480,
           alt: "photo.png",
         })}
-        scope={scope}
         onDownload={onDownload}
       />,
     );
@@ -37,7 +34,6 @@ describe("ImageSurface", () => {
           { surface: "vector", url: "blob:app/2", width: 300, height: 150 },
           { kind: "image-vector", filename: "logo.svg", contentType: "image/svg+xml" },
         )}
-        scope={scope}
         onDownload={onDownload}
       />,
     );
@@ -49,7 +45,6 @@ describe("ImageSurface", () => {
     const { container, unmount } = await mount(
       <ImageSurface
         document={documentWith({ surface: "raster", url: "blob:app/3", width: 10, height: 10, alt: "x.png" })}
-        scope={scope}
         onDownload={onDownload}
       />,
     );
@@ -70,7 +65,6 @@ describe("ImageSurface", () => {
     const { container, unmount } = await mount(
       <ImageSurface
         document={documentWith({ surface: "raster", url: "blob:app/4", width: 10, height: 10, alt: "x.png" })}
-        scope={scope}
         onDownload={handled}
       />,
     );

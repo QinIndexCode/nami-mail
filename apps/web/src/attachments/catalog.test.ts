@@ -10,7 +10,6 @@ import {
   previewKinds,
   previewSurfaceNames,
   sanitizeDisplayName,
-  sniffSignature,
   surfaceFor,
   tierFor,
   type AttachmentMetadata,
@@ -89,7 +88,6 @@ describe("attachment preview kind derivation", () => {
     expect(attachmentKinds).toBe(contract.attachmentKinds);
     expect(codeTextExtensions).toBe(contract.codeTextExtensions);
     expect(extensionKinds).toBe(contract.extensionKinds);
-    expect(sniffSignature).toBe(contract.sniffSignature);
   });
 
   it("maps every catalog extension to exactly one preview kind and surface", () => {
@@ -170,24 +168,6 @@ describe("attachment preview kind derivation", () => {
     for (const kind of previewKinds) {
       expect(canOpenPreview(kind)).toBe(true);
     }
-  });
-});
-
-describe("sniffSignature input to the kind-mismatch gate", () => {
-  it("reports the container the bytes actually are", () => {
-    expect(sniffSignature(new TextEncoder().encode("%PDF-1.7\n"))).toBe("pdf");
-    expect(sniffSignature(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe("png");
-    expect(sniffSignature(new Uint8Array([0x50, 0x4b, 0x03, 0x04]))).toBe("zip");
-  });
-
-  it("exposes a mismatch when the extension and the bytes disagree", () => {
-    // `.png` declares a raster image but the bytes are a PDF: the S2 gate
-    // compares `sniffSignature` against the extension-derived expectation and
-    // must refuse to decode.
-    const declared = previewKindFor({ filename: "photo.png", contentType: "image/png" });
-    expect(declared).toBe("image-raster");
-    expect(sniffSignature(new TextEncoder().encode("%PDF-1.7"))).toBe("pdf");
-    expect(sniffSignature(new TextEncoder().encode("%PDF-1.7"))).not.toBe("png");
   });
 });
 

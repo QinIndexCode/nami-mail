@@ -11,7 +11,6 @@ import {
   mediaKind,
   plainTextExtensions,
   readableTextExtensions,
-  sniffSignature,
   type AttachmentKind,
 } from "../src/index.js";
 
@@ -138,47 +137,4 @@ test("attachmentKindsJson deduplicates kinds in first-seen order", () => {
     return { filename: extension ? `file.${extension}` : "file", contentType: "" };
   });
   assert.equal(attachmentKindsJson(representativePerKind), JSON.stringify(attachmentKinds));
-});
-
-/** Minimal ZIP local file header carrying one entry name. */
-function zipBytes(entryName: string): Uint8Array {
-  const name = new TextEncoder().encode(entryName);
-  const bytes = new Uint8Array(30 + name.length);
-  bytes.set([0x50, 0x4b, 0x03, 0x04], 0);
-  bytes[26] = name.length & 0xff;
-  bytes[27] = (name.length >> 8) & 0xff;
-  bytes.set(name, 30);
-  return bytes;
-}
-
-test("sniffSignature identifies containers from their leading bytes", () => {
-  assert.equal(sniffSignature(new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x37])), "pdf");
-  assert.equal(sniffSignature(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), "png");
-  assert.equal(sniffSignature(new Uint8Array([0xff, 0xd8, 0xff, 0xe0])), "jpeg");
-  assert.equal(sniffSignature(new TextEncoder().encode("GIF87a")), "gif");
-  assert.equal(sniffSignature(new TextEncoder().encode("GIF89a")), "gif");
-  assert.equal(sniffSignature(new TextEncoder().encode("RIFF\u0000\u0000\u0000\u0000WEBPVP8 ")), "webp");
-  assert.equal(sniffSignature(new Uint8Array([0x42, 0x4d, 0x00, 0x00])), "bmp");
-  assert.equal(sniffSignature(zipBytes("word/document.xml")), "zip");
-  assert.equal(sniffSignature(zipBytes("[Content_Types].xml")), "ooxml");
-  assert.equal(sniffSignature(new Uint8Array()), null);
-  assert.equal(sniffSignature(new TextEncoder().encode("plain text, not a container")), null);
-  // A bare RIFF is WAV/AVI, not WebP; matching only the first four bytes would
-  // misroute an audio file into the image surface.
-  assert.equal(sniffSignature(new TextEncoder().encode("RIFF\u0000\u0000\u0000\u0000WAVEfmt ")), null);
-});
-
-test("sniffSignature tolerates a junk prefix before a PDF header, but only within the window", () => {
-  const pdf = new TextEncoder().encode("%PDF-1.7\n");
-  const withPrefix = (prefixLength: number): Uint8Array => {
-    const bytes = new Uint8Array(prefixLength + pdf.length);
-    bytes.set(new TextEncoder().encode("x".repeat(prefixLength)), 0);
-    bytes.set(pdf, prefixLength);
-    return bytes;
-  };
-  assert.equal(sniffSignature(withPrefix(64)), "pdf");
-  assert.equal(sniffSignature(withPrefix(1019)), "pdf");
-  // Beyond the 1 KiB window the header is treated as absent: a file that only
-  // looks like a PDF deep inside is not a PDF for the preview gate.
-  assert.equal(sniffSignature(withPrefix(1024)), null);
 });

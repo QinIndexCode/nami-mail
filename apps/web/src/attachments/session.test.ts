@@ -3,18 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import { DECODE_DEADLINE_MS, MAX_INPUT_BYTES, MemoryLease } from "./budget";
 import { decodeAttachment } from "./decode";
 import { ResourceScope, type PreviewDocument } from "./document";
-import { PreviewCanceled, PreviewFailure, failurePresentation } from "./failure";
+import { PreviewCanceled, PreviewFailure } from "./failure";
 import type { AttachmentReply } from "./ingress";
 import {
-  cancel,
-  initialState,
   inputCapFor,
-  previewReducer,
-  retry,
   runPreview,
   type PreviewAttachment,
   type PreviewClient,
-  type PreviewSessionState,
 } from "./session";
 
 const attachment = (overrides: Partial<PreviewAttachment> = {}): PreviewAttachment => ({
@@ -182,83 +177,3 @@ describe("runPreview", () => {
   });
 });
 
-const ready: PreviewSessionState = {
-  ...initialState,
-  status: "ready",
-  attachment: attachment(),
-  document: textDocument(),
-};
-
-describe("previewReducer", () => {
-  it("opens onto loading and keeps the attempt's scope and lease", () => {
-    const scope = new ResourceScope();
-    const lease = new MemoryLease();
-    const next = previewReducer(initialState, { type: "open", attachment: attachment(), scope, lease });
-    expect(next).toMatchObject({ status: "loading", attachment: attachment(), page: 1, scope, lease });
-    expect(next.document).toBeNull();
-    expect(next.failure).toBeNull();
-  });
-
-  it("ignores a duplicate open of the attachment already being previewed", () => {
-    const scope = new ResourceScope();
-    const lease = new MemoryLease();
-    const opened = previewReducer(initialState, { type: "open", attachment: attachment(), scope, lease });
-    expect(previewReducer(opened, { type: "open", attachment: attachment(), scope: new ResourceScope(), lease: new MemoryLease() })).toBe(opened);
-  });
-
-  it("maps every failure code onto its own state, never a blank page", () => {
-    for (const code of ["too_large", "encrypted", "corrupt", "timeout", "unsupported"] as const) {
-      const next = previewReducer(ready, { type: "failed", code });
-      expect(next.status).toBe(failurePresentation(code).state);
-      expect(next.failure).toBe(code);
-      expect(next.document).toBeNull();
-    }
-  });
-
-  it("resets to the initial state on close", () => {
-    expect(previewReducer(ready, { type: "close" })).toEqual(initialState);
-  });
-
-  it("keeps the attachment on retry so the drawer can re-open the same part", () => {
-    const failed = previewReducer(ready, { type: "failed", code: "timeout" });
-    const retried = previewReducer(failed, { type: "retry" });
-    expect(retried).toMatchObject({ status: "loading", failure: null, document: null, attachment: failed.attachment });
-  });
-
-  it("ignores retry with nothing to retry", () => {
-    expect(previewReducer(initialState, { type: "retry" })).toBe(initialState);
-  });
-
-  it("validates page turns against the document", () => {
-    const pdfReady: PreviewSessionState = {
-      ...initialState,
-      status: "ready",
-      attachment: attachment({ filename: "a.pdf", contentType: "application/pdf" }),
-      document: {
-        ...textDocument(),
-        surface: { surface: "pdf", documentId: "pdf-1", pageCount: 2, page: 1 },
-        pdf: { documentId: "pdf-1", pageCount: 2, pdf: {} as never, loadingTask: {} as never },
-      },
-    };
-    expect(previewReducer(pdfReady, { type: "set_page", page: 2 }).page).toBe(2);
-    expect(previewReducer(pdfReady, { type: "set_page", page: 3 })).toBe(pdfReady);
-    expect(previewReducer(pdfReady, { type: "set_page", page: 0 })).toBe(pdfReady);
-    expect(previewReducer(ready, { type: "set_page", page: 2 })).toBe(ready);
-  });
-});
-
-describe("cancel/retry", () => {
-  it("disposes the attempt's scope before closing", () => {
-    const scope = new ResourceScope();
-    const dispose = vi.spyOn(scope, "dispose");
-    const state = previewReducer(initialState, { type: "open", attachment: attachment(), scope, lease: new MemoryLease() });
-    expect(cancel(state)).toEqual(initialState);
-    expect(dispose).toHaveBeenCalledTimes(1);
-  });
-
-  it("is idempotent when there is no scope", () => {
-    expect(cancel(initialState)).toEqual(initialState);
-    const failed = previewReducer(ready, { type: "failed", code: "corrupt" });
-    expect(retry(failed).status).toBe("loading");
-  });
-});

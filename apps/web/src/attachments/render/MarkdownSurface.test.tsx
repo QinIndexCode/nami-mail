@@ -1,10 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { ResourceScope } from "../document";
 import { documentWith, markup, mount } from "../testing/surfaceHarness";
 import MarkdownSurface from "./MarkdownSurface";
 
-const scope = new ResourceScope();
 const onDownload = () => undefined;
 
 const surface = (text: string) =>
@@ -16,7 +14,7 @@ const surface = (text: string) =>
 
 describe("MarkdownSurface", () => {
   it("renders the Markdown subset it is given", () => {
-    const html = markup(<MarkdownSurface document={surface("# Title\n\n**bold**")} scope={scope} onDownload={onDownload} />);
+    const html = markup(<MarkdownSurface document={surface("# Title\n\n**bold**")} onDownload={onDownload} />);
     expect(html).toContain("<h1>Title</h1>");
     expect(html).toContain("<strong>bold</strong>");
   });
@@ -24,7 +22,7 @@ describe("MarkdownSurface", () => {
   it("intercepts an external link and hands it to the opener instead of navigating", async () => {
     const opener = vi.fn();
     const { container, unmount } = await mount(
-      <MarkdownSurface document={surface("[docs](https://example.com/guide)")} scope={scope} onDownload={onDownload} openExternal={opener} />,
+      <MarkdownSurface document={surface("[docs](https://example.com/guide)")} onDownload={onDownload} openExternal={opener} />,
     );
     const anchor = container.querySelector("a");
     expect(anchor?.getAttribute("href")).toBe("https://example.com/guide");
@@ -41,7 +39,7 @@ describe("MarkdownSurface", () => {
   it("leaves mailto to the app's own handler", async () => {
     const opener = vi.fn();
     const { container, unmount } = await mount(
-      <MarkdownSurface document={surface("[mail](mailto:someone@example.com)")} scope={scope} onDownload={onDownload} openExternal={opener} />,
+      <MarkdownSurface document={surface("[mail](mailto:someone@example.com)")} onDownload={onDownload} openExternal={opener} />,
     );
     const anchor = container.querySelector("a");
     expect(anchor?.getAttribute("href")).toBe("mailto:someone@example.com");
@@ -61,7 +59,7 @@ describe("MarkdownSurface", () => {
 
   it("turns any other scheme into text", () => {
     const html = markup(
-      <MarkdownSurface document={surface("[run](javascript:alert(1)) [file](file:///etc/passwd)")} scope={scope} onDownload={onDownload} />,
+      <MarkdownSurface document={surface("[run](javascript:alert(1)) [file](file:///etc/passwd)")} onDownload={onDownload} />,
     );
     expect(html).not.toContain("<a");
     expect(html).not.toContain("javascript:");
@@ -71,7 +69,7 @@ describe("MarkdownSurface", () => {
 
   it("never loads a remote image", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const html = markup(<MarkdownSurface document={surface("![chart](https://evil.example/pixel.png)")} scope={scope} onDownload={onDownload} />);
+    const html = markup(<MarkdownSurface document={surface("![chart](https://evil.example/pixel.png)")} onDownload={onDownload} />);
     expect(html).not.toContain("<img");
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(html).toContain('aria-label="chart"');
@@ -82,7 +80,6 @@ describe("MarkdownSurface", () => {
     const html = markup(
       <MarkdownSurface
         document={surface('<script>alert(1)</script><img src="x" onerror="alert(2)">')}
-        scope={scope}
         onDownload={onDownload}
       />,
     );

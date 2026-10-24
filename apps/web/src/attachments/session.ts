@@ -3,7 +3,7 @@ import { previewKindFor, tierFor, type PreviewKind } from "./catalog";
 import { decodeAttachment } from "./decode";
 import { withTimeout } from "./decode/deadline";
 import { downloadOnlySurface, type PreviewDocument, type PreviewInput, type ResourceScope } from "./document";
-import { PreviewCanceled, PreviewFailure, failurePresentation, type FailureCode, type PreviewStateId } from "./failure";
+import { PreviewCanceled, PreviewFailure } from "./failure";
 import { openAttachmentResponse, readBody, type AttachmentReply } from "./ingress";
 
 export type PreviewAttachment = {
@@ -110,90 +110,4 @@ export async function runPreview(attachment: PreviewAttachment, options: RunPrev
     () => undefined,
     { signal: options.signal },
   );
-}
-
-/** The part of the drawer that outlives a single attempt. */
-export type PreviewSessionState = {
-  status: PreviewStateId;
-  attachment: PreviewAttachment | null;
-  document: PreviewDocument | null;
-  failure: FailureCode | null;
-  page: number;
-  scope: ResourceScope | null;
-  lease: MemoryLease | null;
-};
-
-export const initialState: PreviewSessionState = {
-  status: "idle",
-  attachment: null,
-  document: null,
-  failure: null,
-  page: 1,
-  scope: null,
-  lease: null,
-};
-
-export type PreviewEvent =
-  | { type: "open"; attachment: PreviewAttachment; scope: ResourceScope; lease: MemoryLease }
-  | { type: "phase"; phase: PreviewPhase }
-  | { type: "ready"; document: PreviewDocument }
-  | { type: "failed"; code: FailureCode }
-  | { type: "close" }
-  | { type: "retry" }
-  | { type: "set_page"; page: number };
-
-const isActive = (status: PreviewStateId): boolean =>
-  status === "loading" || status === "receiving" || status === "decoding" || status === "ready";
-
-/**
- * Pure state machine over the 13 state ids.
- *
- * Two invariants live here rather than in the component: an `open` for the
- * attachment already being previewed is a no-op (one attachment, one lease), and
- * a failure always lands on the state its code maps to, so no branch can invent
- * an error state.
- */
-export function previewReducer(state: PreviewSessionState, event: PreviewEvent): PreviewSessionState {
-  switch (event.type) {
-    case "open": {
-      if (state.attachment?.partId === event.attachment.partId && isActive(state.status)) return state;
-      return {
-        ...state,
-        status: "loading",
-        attachment: event.attachment,
-        document: null,
-        failure: null,
-        page: 1,
-        scope: event.scope,
-        lease: event.lease,
-      };
-    }
-    case "phase":
-      return { ...state, status: event.phase };
-    case "ready":
-      return { ...state, status: "ready", document: event.document, failure: null, page: 1 };
-    case "failed":
-      return { ...state, status: failurePresentation(event.code).state, failure: event.code, document: null };
-    case "close":
-      return { ...initialState };
-    case "retry":
-      if (state.attachment === null) return state;
-      return { ...state, status: "loading", failure: null, document: null };
-    case "set_page":
-      if (state.status !== "ready" || state.document?.pdf === undefined) return state;
-      if (event.page < 1 || event.page > state.document.pdf.pageCount) return state;
-      return { ...state, page: event.page };
-    default:
-      return state;
-  }
-}
-
-/** `retry` and `cancel` are the two transitions that also own resources. */
-export function retry(state: PreviewSessionState): PreviewSessionState {
-  return previewReducer(state, { type: "retry" });
-}
-
-export function cancel(state: PreviewSessionState): PreviewSessionState {
-  state.scope?.dispose();
-  return previewReducer(state, { type: "close" });
 }
